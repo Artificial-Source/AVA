@@ -444,7 +444,7 @@ std::filesystem::path const& AnchorOpen::relative() const noexcept
 
 Result<AnchorOpen> open_writable(AnchorSet const& anchors, std::filesystem::path const& candidate, int flags, mode_t mode)
 {
-  DoutEntering(dc::core, "open_writable(" << anchors << ", " << candidate << ", " << NAMESPACE_DEBUG::PosixMode(flags) << ", " << std::oct << mode << ")");
+  DoutEntering(dc::avacore, "open_writable(" << anchors << ", " << candidate << ", " << NAMESPACE_DEBUG::PosixMode(flags) << ", " << std::oct << mode << ")");
 
   auto ref = anchors.find_anchor(candidate);
   if (!ref)
@@ -459,7 +459,7 @@ Result<AnchorOpen> open_writable(AnchorSet const& anchors, std::filesystem::path
 
 Result<AnchorOpen> open_readable(AnchorSet const& anchors, std::filesystem::path const& candidate, int flags, mode_t mode)
 {
-  DoutEntering(dc::core, "open_readable(" << anchors << ", " << candidate << ", " << NAMESPACE_DEBUG::PosixMode(flags) << ", " << std::oct << mode << ")");
+  DoutEntering(dc::avacore, "open_readable(" << anchors << ", " << candidate << ", " << NAMESPACE_DEBUG::PosixMode(flags) << ", " << std::oct << mode << ")");
 
   if ((flags & O_ACCMODE) != O_RDONLY)
     return std::unexpected(Error(ErrorCategory::InvalidArgument, "open_readable requires O_RDONLY access flags"));

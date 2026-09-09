@@ -12,7 +12,7 @@ Channel rpc("RPC");
 Channel runtime("RUNTIME");
 Channel config("CONFIG");
 Channel context("CONTEXT");
-Channel core("CORE");
+Channel avacore("AVACORE");
 Channel json("JSON");
 Channel lsp("LSP");
 Channel mcp("MCP");

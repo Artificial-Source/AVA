@@ -79,7 +79,7 @@ Result<TrustedAccount> read_trusted_account_from_env()
 // stored for use with `cached_trusted_account` after the freeze.
 Result<TrustedAccount> resolve_trusted_account()
 {
-  DoutEntering(dc::core|continued_cf, "resolve_trusted_account() -> ");
+  DoutEntering(dc::avacore|continued_cf, "resolve_trusted_account() -> ");
 
   auto account = read_trusted_account_from_env();
   if (!account)
@@ -118,7 +118,7 @@ TrustedAccount const& cached_trusted_account()
 
 ava::core::VoidResult load_account_once_and_freeze()
 {
-  DoutEntering(dc::core, "load_account_once_and_freeze()");
+  DoutEntering(dc::avacore, "load_account_once_and_freeze()");
 
   // No-op if already frozen.
   if (g_account_frozen.is_transitory_false())

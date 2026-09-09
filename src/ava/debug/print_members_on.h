@@ -69,7 +69,7 @@ extern Channel rpc;
 extern Channel runtime;
 extern Channel config;
 extern Channel context;
-extern Channel core;
+extern Channel avacore;
 extern Channel json;
 extern Channel lsp;
 extern Channel mcp;

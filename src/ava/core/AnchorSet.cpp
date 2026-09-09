@@ -121,7 +121,7 @@ AnchorSet::~AnchorSet()
 
 ava::core::Result<std::shared_ptr<AnchorSet>> AnchorSet::open(std::vector<std::filesystem::path> const& roots)
 {
-  DoutEntering(dc::core, "AnchorSet::open(" << roots << ")");
+  DoutEntering(dc::avacore, "AnchorSet::open(" << roots << ")");
 
   auto set = std::shared_ptr<AnchorSet>(new AnchorSet());
   for (auto const& root : roots)
@@ -145,13 +145,13 @@ ava::core::Result<std::shared_ptr<AnchorSet>> AnchorSet::open(std::vector<std::f
   if (set->anchors_.empty())
     return std::unexpected(anchor_error("no anchor directories could be opened", {}));
 
-  Dout(dc::core, "Returning set: " << *set);
+  Dout(dc::avacore, "Returning set: " << *set);
   return set;
 }
 
 ava::core::Result<AnchorSet::AnchorRef> AnchorSet::find_anchor(std::filesystem::path const& candidate) const
 {
-  DoutEntering(dc::core, "AnchorSet::find_anchor(" << candidate << ")");
+  DoutEntering(dc::avacore, "AnchorSet::find_anchor(" << candidate << ")");
 
 //  if (std::ranges::find(candidate, "physical") != candidate.end())
 //    Debug(attach_gdb());

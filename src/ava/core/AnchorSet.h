@@ -103,7 +103,7 @@ class AnchorSet
    public:
     AnchorRef(Anchor const& best, std::filesystem::path const& relative) : anchor_(best), relative_(normalize_relative(relative))
     {
-      DoutEntering(dc::core, "AnchorRef::AnchorRef(" << best << ", " << relative << ")");
+      DoutEntering(dc::avacore, "AnchorRef::AnchorRef(" << best << ", " << relative << ")");
     }
 
     Anchor const& anchor() const { return anchor_; }
