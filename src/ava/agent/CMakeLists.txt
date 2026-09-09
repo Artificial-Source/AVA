@@ -60,6 +60,7 @@ target_link_libraries(ava_agent
     AVA::diagnostics
     AVA::mcp
     AVA::plugin
+    AVA::session
     nlohmann_json::nlohmann_json
 )
 ava_apply_debugging(ava_agent)
