@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import contextlib
 import copy
 import hashlib
@@ -11,6 +12,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,162 @@ def load_module(path: pathlib.Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+_FIXTURE_GIT_OUTPUT_LIMIT = 2048
+_FIXTURE_GIT_ISOLATION = None
+_TERMINAL_CONTROL_RE = re.compile(
+    r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|].*?(?:\x07|\x1b\\))"
+)
+
+
+def sanitize_fixture_git_output(text: str, *, limit: int = _FIXTURE_GIT_OUTPUT_LIMIT) -> str:
+    if not text:
+        return ""
+    without_sequences = _TERMINAL_CONTROL_RE.sub("", text)
+    cleaned = "".join(
+        ch
+        if ch in "\t\n" or (ord(ch) >= 32 and ord(ch) != 127 and not (0x80 <= ord(ch) <= 0x9F))
+        else " "
+        for ch in without_sequences
+    )
+    collapsed = re.sub(r"[^\S\n]+\n", "\n", cleaned).strip()
+    if len(collapsed) > limit:
+        return collapsed[:limit]
+    return collapsed
+
+
+class FixtureGitError(RuntimeError):
+    def __init__(self, operation: str, path: str, exit_code: int, stderr: str) -> None:
+        self.operation = operation
+        self.path = path
+        self.exit_code = exit_code
+        self.stderr = stderr
+        super().__init__(
+            f"fixture git {operation} failed for {path} (exit {exit_code}): {stderr}"
+        )
+
+
+class _FixtureGitIsolation:
+    def __init__(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory(prefix="ava-bench-fixture-git-")
+        self.root = pathlib.Path(self._temporary.name)
+        self.hooks_dir = self.root / "hooks"
+        self.hooks_dir.mkdir()
+        self.global_config = self.root / "global.gitconfig"
+        self.system_config = self.root / "system.gitconfig"
+        self.system_config.write_text("", encoding="utf-8")
+        self.global_config.write_text(
+            "\n".join(
+                (
+                    "[core]",
+                    f"\thooksPath = {self.hooks_dir}",
+                    "[commit]",
+                    "\tgpgSign = false",
+                    "[tag]",
+                    "\tgpgSign = false",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        atexit.register(self._temporary.cleanup)
+
+
+def _fixture_git_isolation() -> _FixtureGitIsolation:
+    global _FIXTURE_GIT_ISOLATION
+    if _FIXTURE_GIT_ISOLATION is None:
+        _FIXTURE_GIT_ISOLATION = _FixtureGitIsolation()
+    return _FIXTURE_GIT_ISOLATION
+
+
+def fixture_git_environment() -> dict[str, str]:
+    isolation = _fixture_git_isolation()
+    environment = os.environ.copy()
+    for name in list(environment):
+        if name.startswith("GIT_") or name in {
+            "SSH_ASKPASS",
+            "SSH_ASKPASS_REQUIRE",
+            "GPG_TTY",
+            "GNUPGHOME",
+            "GCM_INTERACTIVE",
+        }:
+            environment.pop(name, None)
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": str(isolation.global_config),
+            "GIT_CONFIG_SYSTEM": str(isolation.system_config),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_ASKPASS": "",
+            "GIT_PAGER": "cat",
+            "GIT_EDITOR": "true",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GCM_INTERACTIVE": "never",
+            "GIT_AUTHOR_NAME": "AVA Benchmark Fixture",
+            "GIT_AUTHOR_EMAIL": "benchmark-fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "AVA Benchmark Fixture",
+            "GIT_COMMITTER_EMAIL": "benchmark-fixture@example.invalid",
+        }
+    )
+    return environment
+
+
+def run_fixture_git(
+    directory: pathlib.Path | str,
+    *arguments: str,
+    check: bool = True,
+    allow_file_protocol: bool = False,
+) -> str:
+    if allow_file_protocol and (not arguments or arguments[0] != "submodule"):
+        raise ValueError("protocol.file.allow is only permitted for fixture submodule commands")
+    isolation = _fixture_git_isolation()
+    command = [
+        "git",
+        "-c",
+        f"core.hooksPath={isolation.hooks_dir}",
+        "-c",
+        "commit.gpgSign=false",
+        "-c",
+        "tag.gpgSign=false",
+        "-c",
+        "init.templateDir=",
+    ]
+    if allow_file_protocol:
+        command.extend(["-c", "protocol.file.allow=always"])
+    command.extend(["-C", str(directory), *arguments])
+    operation = sanitize_fixture_git_output(" ".join(arguments), limit=256) or "git"
+    path = sanitize_fixture_git_output(str(directory), limit=512) or str(directory)
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            env=fixture_git_environment(),
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        stderr = error.stderr if isinstance(error.stderr, str) else ""
+        if not check:
+            return ""
+        raise FixtureGitError(operation, path, -1, sanitize_fixture_git_output(stderr or "timeout")) from None
+    except OSError as error:
+        if not check:
+            return ""
+        raise FixtureGitError(operation, path, -1, sanitize_fixture_git_output(str(error))) from None
+    if check and completed.returncode != 0:
+        raise FixtureGitError(
+            operation,
+            path,
+            completed.returncode,
+            sanitize_fixture_git_output(completed.stderr),
+        )
+    return completed.stdout.strip()
 
 
 class BenchmarkHarnessTests(unittest.TestCase):
@@ -424,14 +582,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
         after_commit = "2a30f40ec562b49915c3b09369cf4e6897de3d4d"
 
         def git(*arguments: str) -> str:
-            completed = subprocess.run(
-                ["git", "-C", str(repository), *arguments],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
-            )
-            return completed.stdout.strip()
+            return run_fixture_git(repository, *arguments)
 
         harness_commit = git("rev-parse", "HEAD^{commit}")
         with tempfile.TemporaryDirectory() as temporary:
@@ -484,19 +635,12 @@ class BenchmarkHarnessTests(unittest.TestCase):
             finally:
                 for path in worktrees:
                     if path.exists():
-                        subprocess.run(
-                            [
-                                "git",
-                                "-C",
-                                str(repository),
-                                "worktree",
-                                "remove",
-                                "--force",
-                                str(path),
-                            ],
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
+                        run_fixture_git(
+                            repository,
+                            "worktree",
+                            "remove",
+                            "--force",
+                            str(path),
                             check=False,
                         )
 
@@ -992,14 +1136,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             repository.mkdir()
 
             def git(*arguments: str) -> str:
-                completed = subprocess.run(
-                    ["git", "-C", str(repository), *arguments],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=True,
-                )
-                return completed.stdout.strip()
+                return run_fixture_git(repository, *arguments)
 
             git("init")
             git("config", "user.name", "Benchmark Self Test")
@@ -1101,14 +1238,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             repository.mkdir()
 
             def git(*arguments: str) -> str:
-                completed = subprocess.run(
-                    ["git", "-C", str(repository), *arguments],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=True,
-                )
-                return completed.stdout.strip()
+                return run_fixture_git(repository, *arguments)
 
             git("init")
             git("config", "user.name", "Benchmark Self Test")
@@ -1211,14 +1341,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             repository.mkdir()
 
             def run_git(directory: pathlib.Path, *arguments: str) -> str:
-                completed = subprocess.run(
-                    ["git", "-C", str(directory), *arguments],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=True,
-                )
-                return completed.stdout.strip()
+                return run_fixture_git(directory, *arguments)
 
             for directory in (submodule, repository):
                 run_git(directory, "init")
@@ -1227,43 +1350,25 @@ class BenchmarkHarnessTests(unittest.TestCase):
             (submodule / "fixture.txt").write_text("fixture\n", encoding="utf-8")
             run_git(submodule, "add", "fixture.txt")
             run_git(submodule, "commit", "-m", "fixture")
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(repository),
-                    "-c",
-                    "protocol.file.allow=always",
-                    "submodule",
-                    "add",
-                    str(submodule),
-                    "vendor/fixture",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
+            run_fixture_git(
+                repository,
+                "submodule",
+                "add",
+                str(submodule),
+                "vendor/fixture",
+                allow_file_protocol=True,
             )
             run_git(repository, "commit", "-am", "superproject")
             config_before = run_git(repository, "config", "--local", "--get-regexp", r"^submodule\.")
 
             run_git(repository, "worktree", "add", "--detach", str(linked), "HEAD")
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(linked),
-                    "-c",
-                    "protocol.file.allow=always",
-                    "submodule",
-                    "update",
-                    "--init",
-                    "--recursive",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
+            run_fixture_git(
+                linked,
+                "submodule",
+                "update",
+                "--init",
+                "--recursive",
+                allow_file_protocol=True,
             )
             self.assertTrue((linked / "vendor/fixture/fixture.txt").is_file())
             self.assertEqual(run_git(linked, "status", "--porcelain", "--untracked-files=normal"), "")
@@ -1648,20 +1753,12 @@ class BenchmarkHarnessTests(unittest.TestCase):
                 live_documents
             )
             repository = pathlib.Path(self.script).resolve().parents[1]
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(repository),
-                    "worktree",
-                    "remove",
-                    "--force",
-                    str(before_root),
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True,
+            run_fixture_git(
+                repository,
+                "worktree",
+                "remove",
+                "--force",
+                str(before_root),
             )
             comparison = self.compare_with_live_provenance(live_before, live_after)
             self.assertEqual(
@@ -1797,20 +1894,12 @@ class BenchmarkHarnessTests(unittest.TestCase):
             def remove_after_static(document, cohort):
                 mismatches = static_validator(document, cohort)
                 if cohort == "after":
-                    subprocess.run(
-                        [
-                            "git",
-                            "-C",
-                            str(repository),
-                            "worktree",
-                            "remove",
-                            "--force",
-                            str(before_root),
-                        ],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        check=True,
+                    run_fixture_git(
+                        repository,
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(before_root),
                     )
                 return mismatches
 

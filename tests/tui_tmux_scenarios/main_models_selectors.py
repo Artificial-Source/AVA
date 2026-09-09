@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from tui_smoke_helpers import (
     SmokeContext,
@@ -24,6 +25,52 @@ from tui_smoke_helpers import (
 from .common import _finish_main, _main_session, _wait_for_normal_turn_request_count
 
 
+def _wait_for_selected_modal(
+    tmux_exe: object,
+    session: str,
+    required_pattern: str,
+    label: str,
+    *,
+    selected_row_pattern: str | None = None,
+    geometry: tuple[int, int] | None = None,
+) -> str:
+    """Wait until the required modal text and its selected row share a frame."""
+
+    def modal_is_ready(screen: str) -> bool:
+        if re.search(required_pattern, screen) is None:
+            return False
+        selected_row = selected_modal_row(screen)
+        if not selected_row:
+            return False
+        if (
+            selected_row_pattern is not None
+            and re.search(selected_row_pattern, selected_modal_identity(selected_row)) is None
+        ):
+            return False
+        if geometry is None:
+            return True
+        width, height = geometry
+        dimensions = tmux(
+            tmux_exe,
+            "display-message",
+            "-p",
+            "-t",
+            session,
+            "#{window_width},#{window_height},#{pane_width},#{pane_height}",
+        ).stdout.strip()
+        if dimensions != f"{width},{height},{width},{height}":
+            return False
+        lines = screen.split("\n")
+        return len(lines) == height and all(len(line) <= width for line in lines)
+
+    expectation = f"{label} with a selected modal row"
+    if selected_row_pattern is not None:
+        expectation += f" matching /{selected_row_pattern}/"
+    if geometry is not None:
+        expectation += f" at {geometry[0]}x{geometry[1]} window/pane geometry"
+    return wait_for_screen_state(tmux_exe, session, modal_is_ready, expectation)
+
+
 def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     tmux_exe, root, workspace, ava_config, env_prefix, session = _main_session(ctx)
     scoped_persist_session = ctx.session_name("scoped-persist")
@@ -41,7 +88,9 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     send_literal(tmux_exe, session, "/models")
     wait_for(tmux_exe, session, r"/models", "exact models selector draft")
     send_keys(tmux_exe, session, "Enter")
-    command_model_selector = wait_for(tmux_exe, session, r"Select model|Search models", "exact models selector")
+    command_model_selector = _wait_for_selected_modal(
+        tmux_exe, session, r"Select model|Search models", "exact models selector", geometry=(82, 10)
+    )
     if "Select model" not in command_model_selector and "Search models" not in command_model_selector:
         raise RuntimeError(f"Exact /models did not bypass autocomplete and open the model selector\nscreen:\n{command_model_selector}")
     selected_row = selected_modal_row(command_model_selector)
@@ -52,11 +101,13 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     initial_model_selector = command_model_selector
     wheel_down = "\x1b[<65;4;6M"
     send_literal(tmux_exe, session, wheel_down * 12 + "/")
-    wheel_burst_selector = wait_for(
+    wheel_burst_selector = _wait_for_selected_modal(
         tmux_exe,
         session,
         r"filter\s+/",
         "model selector wheel burst queue synchronization",
+        selected_row_pattern=rf"^(?!{re.escape(initial_selected_identity)}$)",
+        geometry=(82, 10),
     )
     wheel_burst_row = selected_modal_row(wheel_burst_selector)
     if not wheel_burst_row or selected_modal_identity(wheel_burst_row) == initial_selected_identity:
@@ -65,8 +116,13 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
             f"before:\n{command_model_selector}\nafter:\n{wheel_burst_selector}"
         )
     send_keys(tmux_exe, session, "BSpace")
-    wheel_burst_cleared = wait_for(
-        tmux_exe, session, r"filter\s+Search models", "model selector wheel burst filter cleared"
+    wheel_burst_cleared = _wait_for_selected_modal(
+        tmux_exe,
+        session,
+        r"filter\s+Search models",
+        "model selector wheel burst filter cleared",
+        selected_row_pattern=re.escape(selected_modal_identity(wheel_burst_row)),
+        geometry=(82, 10),
     )
     cleared_burst_row = selected_modal_row(wheel_burst_cleared)
     if not cleared_burst_row or selected_modal_identity(cleared_burst_row) != selected_modal_identity(wheel_burst_row):
@@ -85,7 +141,14 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
         )
     save_evidence(root, "model-selector-wheel-burst-governed", wheel_burst_selector)
     tmux(tmux_exe, "resize-window", "-t", session, "-x", "82", "-y", "11")
-    resized_model_selector = wait_for(tmux_exe, session, r"Select model|Search models", "resized compact model selector")
+    resized_model_selector = _wait_for_selected_modal(
+        tmux_exe,
+        session,
+        r"Select model|Search models",
+        "resized compact model selector",
+        selected_row_pattern=re.escape(selected_modal_identity(selected_row)),
+        geometry=(82, 11),
+    )
     resized_selected_row = selected_modal_row(resized_model_selector)
     if not resized_selected_row or selected_modal_identity(resized_selected_row) != selected_modal_identity(selected_row):
         raise RuntimeError(
@@ -120,8 +183,13 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     send_literal(tmux_exe, session, "\x1b[1;1:3B/")
     wait_for(tmux_exe, session, r"filter\s+/", "Ghostty Kitty release queue synchronization")
     send_keys(tmux_exe, session, "BSpace")
-    ghostty_release_screen = wait_for(
-        tmux_exe, session, r"filter\s+Search models", "Ghostty Kitty release synchronization cleared"
+    ghostty_release_screen = _wait_for_selected_modal(
+        tmux_exe,
+        session,
+        r"filter\s+Search models",
+        "Ghostty Kitty release synchronization cleared",
+        selected_row_pattern=re.escape(ghostty_press_identity),
+        geometry=(82, 11),
     )
     ghostty_release_row = selected_modal_row(ghostty_release_screen)
     if not ghostty_release_row or selected_modal_identity(ghostty_release_row) != ghostty_press_identity:
@@ -167,7 +235,9 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     send_literal(tmux_exe, session, "/connect")
     wait_for(tmux_exe, session, r"/connect", "provider modal command draft")
     send_keys(tmux_exe, session, "Enter")
-    provider_modal = wait_for(tmux_exe, session, r"Connect a provider|Select provider", "provider question modal")
+    provider_modal = _wait_for_selected_modal(
+        tmux_exe, session, r"Connect a provider|Select provider", "provider question modal", geometry=(82, 10)
+    )
     provider_selected_row = selected_modal_row(provider_modal)
     if not provider_selected_row:
         raise RuntimeError(f"Provider question modal did not expose a selected row\nscreen:\n{provider_modal}")
@@ -189,7 +259,14 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
         tmux_exe, session, r"(?s)filter\s+5\.5█.*›\s+GPT-5\.5", "configurable model selector row"
     )
     send_keys(tmux_exe, session, "Enter")
-    chained_thinking = wait_for(tmux_exe, session, r"Select thinking mode", "staged thinking-mode selector")
+    chained_thinking = _wait_for_selected_modal(
+        tmux_exe,
+        session,
+        r"(?s)Select thinking mode.*Esc keep default",
+        "staged thinking-mode selector",
+        selected_row_pattern=r"Default",
+        geometry=(120, 32),
+    )
     chained_row = selected_modal_row(chained_thinking)
     if not chained_row or "Default" not in chained_row or "Esc keep default" not in chained_thinking:
         raise RuntimeError(
@@ -203,7 +280,14 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     if "GPT-5.5" not in escaped_thinking:
         raise RuntimeError(f"Esc from staged thinking selector rolled back the selected model\nscreen:\n{escaped_thinking}")
     send_keys(tmux_exe, session, "C-t")
-    direct_thinking = wait_for(tmux_exe, session, r"Select thinking mode", "direct thinking-mode selector")
+    direct_thinking = _wait_for_selected_modal(
+        tmux_exe,
+        session,
+        r"(?s)Select thinking mode.*Esc cancel",
+        "direct thinking-mode selector",
+        selected_row_pattern=r"Default",
+        geometry=(120, 32),
+    )
     direct_row = selected_modal_row(direct_thinking)
     if not direct_row or "Default" not in direct_row or "Esc cancel" not in direct_thinking:
         raise RuntimeError(f"Ctrl+T did not reopen the same selector with Default current\nscreen:\n{direct_thinking}")
@@ -216,14 +300,28 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     send_keys(tmux_exe, session, "Enter")
     wait_for_absent(tmux_exe, session, r"Select thinking mode", "thinking-mode Low selection closed")
     send_keys(tmux_exe, session, "C-t")
-    reopened_low = wait_for(tmux_exe, session, r"Select thinking mode", "thinking-mode explicit current reopen")
+    reopened_low = _wait_for_selected_modal(
+        tmux_exe,
+        session,
+        r"Select thinking mode",
+        "thinking-mode explicit current reopen",
+        selected_row_pattern=r"Low",
+        geometry=(120, 32),
+    )
     reopened_low_row = selected_modal_row(reopened_low)
     if not reopened_low_row or "Low" not in reopened_low_row:
         raise RuntimeError(f"Concrete thinking-mode selection was not authoritative on reopen\nscreen:\n{reopened_low}")
     send_keys(tmux_exe, session, "Up", "Enter")
     wait_for_absent(tmux_exe, session, r"Select thinking mode", "thinking-mode Default selection closed")
     send_keys(tmux_exe, session, "C-t")
-    reopened_default = wait_for(tmux_exe, session, r"Select thinking mode", "thinking-mode Default current reopen")
+    reopened_default = _wait_for_selected_modal(
+        tmux_exe,
+        session,
+        r"Select thinking mode",
+        "thinking-mode Default current reopen",
+        selected_row_pattern=r"Default",
+        geometry=(120, 32),
+    )
     reopened_default_row = selected_modal_row(reopened_default)
     if not reopened_default_row or "Default" not in reopened_default_row:
         raise RuntimeError(f"Default thinking-mode selection was not authoritative on reopen\nscreen:\n{reopened_default}")

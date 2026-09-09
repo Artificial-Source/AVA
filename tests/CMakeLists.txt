@@ -798,6 +798,12 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.sidebar_drawer_reflow_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
+    NAME ava_tests.model_selector_wait
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/model_selector_wait_test.py)
+  set_tests_properties(ava_tests.model_selector_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
     NAME ava_benchmark.harness_self_test
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_test.py
@@ -837,6 +843,12 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 30
     LABELS "benchmark;process;offline;self-test"
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
+    NAME ava_tests.benchmark_driver
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_driver_test.py)
+  set_tests_properties(ava_tests.benchmark_driver PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   set(AVA_BENCHMARK_PROCESS_FIXTURE_ARGS)
   if(TARGET ava_fake_process_child)
