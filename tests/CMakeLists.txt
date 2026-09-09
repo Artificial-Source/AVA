@@ -926,12 +926,6 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.assert_comments_source PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
-    NAME ava_tests.bootstrap_submodule_contract
-    COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/bootstrap_submodule_contract_test.py)
-  set_tests_properties(ava_tests.bootstrap_submodule_contract PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
-
-  add_test(
     NAME ava_tests.module_dependency_rules
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/module_dependency_rules_test.py

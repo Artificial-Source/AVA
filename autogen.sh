@@ -11,33 +11,25 @@ if test "$(realpath $0)" != "$(realpath $(pwd)/autogen.sh)"; then
 fi
 
 if test -d .git; then
-  # Initialize missing submodules only at the commits pinned by this checkout.
-  if ! SUBMODULE_STATUS="$(git submodule status --recursive)"; then
-    echo "Error: unable to inspect pinned submodules."
-    exit 1
+  # Take care of git submodule related stuff.
+  MAINTAINER_HASH=dcc3e4640e3ff4769e3cee4a2ab8e5eb
+  # If this was a clone without --recursive, fix that fact.
+  if test ! -e cmake/aicxx/scripts/real_maintainer.sh; then
+    git submodule update --init --recursive
   fi
-  if printf '%s\n' "$SUBMODULE_STATUS" | grep -E '^[+U]' >/dev/null; then
-    echo "Error: a submodule does not match the commit pinned by this checkout."
-    echo "Run: git submodule update --init --checkout --recursive"
-    exit 1
+  # If new git submodules were added by someone else, get them.
+  if git submodule status --recursive | grep '^-' >/dev/null; then
+    git submodule update --init --recursive
   fi
-  if printf '%s\n' "$SUBMODULE_STATUS" | grep '^-' >/dev/null; then
-    if ! git submodule update --init --checkout --recursive; then
-      echo "Error: unable to initialize submodules at their pinned commits."
-      exit 1
+  # Update autogen.sh and cmake/aicxx itself if we are the real maintainer.
+  if test -f cmake/aicxx/scripts/real_maintainer.sh; then
+    cmake/aicxx/scripts/real_maintainer.sh $MAINTAINER_HASH
+    RET=$?
+    # A return value of 2 means we need to continue below.
+    # Otherwise, abort/stop returning that value.
+    if test $RET -ne 2; then
+      exit $RET
     fi
-    if ! SUBMODULE_STATUS="$(git submodule status --recursive)"; then
-      echo "Error: unable to verify initialized submodules."
-      exit 1
-    fi
-  fi
-  if printf '%s\n' "$SUBMODULE_STATUS" | grep -E '^[+U]' >/dev/null; then
-    echo "Error: a submodule does not match the commit pinned by this checkout."
-    exit 1
-  fi
-  if printf '%s\n' "$SUBMODULE_STATUS" | grep '^-' >/dev/null; then
-    echo "Error: one or more pinned submodules remain uninitialized."
-    exit 1
   fi
 else
   if test ! -e cmake/aicxx/scripts/real_maintainer.sh; then
@@ -50,18 +42,10 @@ fi
 
 # Do some git sanity checks.
 if test -d .git; then
-  PUSH_RECURSESUBMODULES="$(git config --get push.recurseSubmodules)"
-  CONFIG_RET=$?
-  if test $CONFIG_RET -ne 0 && test $CONFIG_RET -ne 1; then
-    echo "Error: unable to inspect push.recurseSubmodules configuration."
-    exit 1
-  fi
+  PUSH_RECURSESUBMODULES="$(git config push.recurseSubmodules)"
   if test -z "$PUSH_RECURSESUBMODULES"; then
     # Use this as default for now.
-    if ! git config push.recurseSubmodules check; then
-      echo "Error: unable to set push.recurseSubmodules safety default."
-      exit 1
-    fi
+    git config push.recurseSubmodules check
     echo -e "\n*** WARNING: git config push.recurseSubmodules was not set!"
     echo "***      To prevent pushing a project that references unpushed submodules,"
     echo "***      this config was set to 'check'. Use instead the command"

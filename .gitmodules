@@ -2,14 +2,17 @@
 	path = cwds
 	url = https://github.com/CarloWood/cwds.git
 	update = checkout
+	branch = master
 [submodule "cmake/aicxx"]
 	path = cmake/aicxx
 	url = https://github.com/CarloWood/cmake-aicxx.git
 	update = checkout
+	branch = master
 [submodule "utils"]
 	path = utils
 	url = https://github.com/CarloWood/ai-utils.git
 	update = checkout
+	branch = master
 [submodule "enchantum"]
 	path = enchantum
 	url = https://github.com/ZXShady/enchantum.git
@@ -22,7 +25,8 @@
 	path = threadsafe
 	url = https://github.com/CarloWood/threadsafe.git
 	update = checkout
+	branch = master
 [submodule "memory"]
 	path = memory
 	url = https://github.com/CarloWood/memory.git
-	update = checkout
+	branch = master
