@@ -12,49 +12,28 @@ namespace {
 // after app::run returns with all app::run-owned workers joined.
 Application const* registered_application = nullptr;
 
-#define AVA_REQUIRE_APPLICATION_LIFECYCLE(condition)                                                                                  \
-  do                                                                                                                                  \
-  {                                                                                                                                   \
-    if (!(condition))                                                                                                                 \
-    {                                                                                                                                 \
-      /* Invalid Application lifecycle or argv: use one instance, initialize once with valid main arguments, then destroy it last. */ \
-      ASSERT(condition);                                                                                                              \
-      std::abort();                                                                                                                   \
-    }                                                                                                                                 \
-  } while (false)
-
-}  // namespace
+} // namespace
 
 Application::Application() : mpp_(Vec8Alloc::mpp_block_size), vec8alloc_(mpp_)
 {
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(registered_application == nullptr);
+  // Instantiate only one `Application` object derived from ava::core::Application.
+  ASSERT(registered_application == nullptr);
   registered_application = this;
 }
 
 Application::~Application() noexcept
 {
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(registered_application == this);
-  initialized_ = false;
   registered_application = nullptr;
-}
-
-void Application::initialize(int argc, char** argv)
-{
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(registered_application == this);
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(!initialized_);
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(argc >= 0);
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(argv != nullptr);
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(argv[argc] == nullptr);
-  for (int argument_index = 0; argument_index < argc; ++argument_index) AVA_REQUIRE_APPLICATION_LIFECYCLE(argv[argument_index] != nullptr);
-
-  // Publication is the final initialization operation.
-  initialized_ = true;
+  // Prints to dc::memory that memory::NodeMemoryResource::deinit() is called, which in turn silences the destructor.
+  // The latter is necessary because by the time that the NodeMemoryResource objects are destructed we have destructed
+  // the mutex used by the debug output ostream.
+  Vec8Alloc::deinit();
 }
 
 Application const& Application::instance()
 {
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(registered_application != nullptr);
-  AVA_REQUIRE_APPLICATION_LIFECYCLE(registered_application->initialized_);
+  // Create an `Application` object, derived from ava::core::Application at the top of main, after any debug initialization.
+  ASSERT(registered_application != nullptr);
   return *registered_application;
 }
 

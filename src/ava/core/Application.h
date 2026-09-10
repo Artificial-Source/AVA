@@ -25,7 +25,6 @@ class Application
   Application& operator=(Application&&) = delete;
   virtual ~Application() noexcept;
 
-  void initialize(int argc, char** argv);
   Vec8Alloc vec8alloc() const { return vec8alloc_; }
 
   [[nodiscard]] static Application const& instance();

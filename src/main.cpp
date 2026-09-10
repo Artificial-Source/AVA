@@ -16,7 +16,6 @@ int main(int argc, char** argv)
 {
   Debug(ava::app::initialize_debug());
   ava::app::Application application;
-  application.initialize(argc, argv);
 
   std::shared_ptr<ava::process::Supervisor> supervisor;
   std::optional<ava::process::ProcessScopeV1> application_process_scope;

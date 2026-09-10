@@ -203,15 +203,6 @@ void run_suite(TestSuite const& suite)
   }
 }
 
-// Initialize the process-wide test Application with a minimal synthetic
-// command line so test-runner suite arguments never become application input.
-void initialize_test_process_application(ava::app::Application& application)
-{
-  char executable[] = "ava_tests";
-  char* application_argv[] = {executable, nullptr};
-  application.initialize(1, application_argv);
-}
-
 int print_failures()
 {
   int const failures = ava::tests::failures();
@@ -295,10 +286,7 @@ int main(int argc, char** argv)
       if (suite.name == requested_suite)
       {
         if (suite.name != "core_mode")
-        {
           application.emplace();
-          initialize_test_process_application(*application);
-        }
         run_suite(suite);
         if (ava::tests::failures() == 0 && ava::tests::skip_requested())
           return 77;
@@ -322,7 +310,6 @@ int main(int argc, char** argv)
       suite.run();
   }
   application.emplace();
-  initialize_test_process_application(*application);
   for (auto const& suite : kTestSuites)
   {
     if (suite.name == "core_mode")

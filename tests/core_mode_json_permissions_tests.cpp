@@ -192,13 +192,6 @@ void expect_lifecycle_death(void (*child_action)(), std::string_view description
   expect(WIFSIGNALED(result.status) && WTERMSIG(result.status) == SIGABRT, "Application lifecycle invariant aborts: " + std::string(description));
 }
 
-void initialize_test_application(ava::core::Application& application)
-{
-  char executable[] = "ava-test";
-  char* argv[] = {executable, nullptr};
-  application.initialize(1, argv);
-}
-
 void child_instance_before_initialize()
 {
   static_cast<void>(ava::core::Application::instance());
@@ -208,7 +201,6 @@ void child_instance_after_destruction()
 {
   {
     TestApplication application;
-    initialize_test_application(application);
   }
   static_cast<void>(ava::core::Application::instance());
 }
@@ -221,13 +213,6 @@ void child_duplicate_live_application()
   static_cast<void>(second);
 }
 
-void child_repeated_initialize()
-{
-  TestApplication application;
-  initialize_test_application(application);
-  initialize_test_application(application);
-}
-
 void child_invalid_main_arguments()
 {
 #ifdef __linux__
@@ -237,14 +222,12 @@ void child_invalid_main_arguments()
     _exit(lifecycle_child_still_dumpable);
 #endif
   TestApplication application;
-  application.initialize(0, nullptr);
 }
 
 void test_application_lifecycle()
 {
   {
     ava::app::Application application;
-    initialize_test_application(application);
     auto const& instance = ava::core::Application::instance();
     expect(&instance == &application && instance.application_name() == "AVA",
            "Application publishes its initialized concrete AVA instance and virtual application name");
@@ -253,7 +236,6 @@ void test_application_lifecycle()
   expect_lifecycle_death(child_instance_before_initialize, "instance access before initialize");
   expect_lifecycle_death(child_instance_after_destruction, "instance access after destruction");
   expect_lifecycle_death(child_duplicate_live_application, "duplicate live Application construction");
-  expect_lifecycle_death(child_repeated_initialize, "repeated Application initialization");
   expect_lifecycle_death(child_invalid_main_arguments, "invalid standard main argument shape");
 }
 
