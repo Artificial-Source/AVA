@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "terminal/Context.h"
 #include "terminal/Pad.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,15 @@
 #include <mutex>
 #include <string_view>
 #include "debug.h"
+
+class Application : public ava::core::Application
+{
+ public:
+  [[nodiscard]] std::string_view application_name() const noexcept override { return "linux08-pad"; }
+
+  // Can't print ava::core::Application.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
 
 namespace terminal = ava::tui::terminal;
 
@@ -141,6 +151,7 @@ int main()
   std::ofstream log("debug.out");
   Debug(libcw_do.set_ostream(&log, &log_mutex));
 
+  [[maybe_unused]] Application application;
   terminal::Context terminal_context;
   terminal::BasicWindow const& stdscr = terminal_context.stdscr();
 
