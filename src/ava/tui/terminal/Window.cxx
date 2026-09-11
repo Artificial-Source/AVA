@@ -20,7 +20,7 @@ Window::Window(Dimension size, Position pos, Border const& border) : outer_windo
 
   // Start the outer and inner surfaces with the border rendition. Call set_background after construction to choose a
   // different writable-area background.
-  outer_window_.set_background({border_.rendition()}, false);
+  outer_window_.set_background({border_.colors(0)}, false);
   InnerWindow::operator=(outer_window_.derwin(border_.margin()));
   draw_border();
 

@@ -1399,7 +1399,6 @@ void BasicWindow::setscrreg(int top, int bot)
 
 void BasicWindow::set_border(Border const& border)
 {
-  Rendition const border_rendition = border.rendition();
   // Perpare a mask that represents the existence of a margin.
   Margin const margin = border.margin();
   int margin_mask = (margin.top > 0 ? Box::ts : 0) | (margin.bottom > 0 ? Box::bs : 0) | (margin.left > 0 ? Box::ls : 0) | (margin.right > 0 ? Box::rs : 0);
@@ -1408,7 +1407,7 @@ void BasicWindow::set_border(Border const& border)
   for (int i = 0; i < 8; ++i)
   {
     int pos = Box::index_to_pos[i] & margin_mask;
-    complex_characters[i] = convert_to_cchar(border.box_characters().get_complex_character(pos, border_rendition));
+    complex_characters[i] = convert_to_cchar(border.box_characters().get_complex_character(pos, Rendition{border.colors(i)}));
   }
   impl_->border_set(complex_characters);
 }

@@ -34,7 +34,7 @@ void test_margin_aware_window_geometry_and_lifetime()
   for (int iteration = 0; iteration != 3; ++iteration)
   {
     terminal::Margin const margin{.top = 1, .bottom = 2, .left = 3, .right = 1};
-    terminal::Window window({8, 12}, {2, 4}, {margin, terminal::Rendition{terminal::ColorPair{}}});
+    terminal::Window window({8, 12}, {2, 4}, {margin, terminal::ColorPair{}});
 
     terminal::Dimension const inner_size = window.getmaxyx();
     terminal::Position const inner_origin = window.getbegyx();

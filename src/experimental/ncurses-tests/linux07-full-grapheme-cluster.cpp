@@ -55,14 +55,14 @@ int main()
     // where setcchar needs a temporary terminator and getcchar writes one extra
     // wchar_t beyond ncurses' fixed cchar_t payload.
     terminal::Context terminal_context;
-    terminal::Rendition const green_rendition(terminal_context.create_color_pair({}, {0x008800}));
-    terminal_context.stdscr().set_background({green_rendition});
+    terminal::ColorPair const green_colorpair = terminal_context.create_color_pair({}, {0x008800});
+    terminal_context.stdscr().set_background({green_colorpair});
     terminal::Dimension screen_size = terminal_context.size();
     terminal::Position offset{screen_size.height() / 4, screen_size.width() / 4};
     terminal::BasicWindow window{screen_size / 2, offset};
     window.set_background(source);
     terminal::Margin margin{.top = 1, .bottom = 1, .left = 1, .right = 1};
-    window.set_border({margin, green_rendition});
+    window.set_border({margin, green_colorpair});
     terminal::ComplexChar const round_trip = window.get_background();
     round_trip_ok =
         require(same_storage(round_trip.cell_character(), expected_full_cluster), "BasicWindow background round-trip should preserve full cluster storage") &&
