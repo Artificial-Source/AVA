@@ -102,7 +102,8 @@ LibcwdOutputSink::LibcwdOutputSink(std::string const log_stem) : impl_(std::make
     return;
   }
 
-  while (output_directory != output_directory.root_path() && output_directory.filename().empty()) output_directory = output_directory.parent_path();
+  while (output_directory != output_directory.root_path() && output_directory.filename().empty())
+    output_directory = output_directory.parent_path();
   if (output_directory.filename().empty())
   {
     impl_->error = "AVA_DEBUG_OUTPUT_DIR must name a final directory component: '" + output_directory.string() + "'";
@@ -230,7 +231,6 @@ LibcwdOutputSink::LibcwdOutputSink(std::string const log_stem) : impl_(std::make
   impl_->file_stream = std::make_unique<std::ostream>(impl_->file_buffer.get());
   *impl_->file_stream << std::unitbuf;
   Debug(libcw_do.set_ostream(impl_->file_stream.get()));
-  Debug(*impl_->file_stream << "AVA libcwd routing marker: test=" << log_stem);
   impl_->enabled = true;
 }
 

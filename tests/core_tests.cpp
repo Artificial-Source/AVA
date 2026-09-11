@@ -1,19 +1,16 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
-#include "ava/app/Application.h"
+#include "ava/core/Application.h"
 #include "ava/core/path.h"
 #include "ava/core/trusted_home.h"
 #ifdef CWDEBUG
 #include "ava/debug/libcwd_output_sink.h"
 #endif
 
-#ifdef DEBUGGLOBAL
-#include "utils/GlobalObjectManager.h"
-#endif
-
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -164,6 +161,65 @@ constexpr std::array kTestSuites{
 #endif
 };
 
+// Own the test executable's Application lifecycle and install its per-suite
+// libcwd sink before core::Application initializes debugging and allocators.
+//
+// The suite token determines the private log filename in CWDEBUG builds. The
+// sink remains process-owned while the Application may be temporarily absent
+// so the core_mode suite can exercise Application lifecycle invariants.
+class TestRunnerApplication final : public ava::core::Application
+{
+ public:
+  explicit TestRunnerApplication(CWDEBUG_ONLY(std::string_view debug_suite_token)) : ava::core::Application(CWDEBUG_ONLY(prepare_debug(debug_suite_token)))
+  {
+#ifdef CWDEBUG
+    if (s_marker_pending_)
+    {
+      Dout(dc::notice, "AVA libcwd routing marker: suite=" << debug_suite_token);
+      s_marker_pending_ = false;
+    }
+#endif
+  }
+
+  [[nodiscard]] std::string_view application_name() const noexcept override { return "ava_tests"; }
+
+#ifdef CWDEBUG
+  // Return false only when the requested private debug destination could not be prepared safely.
+  [[nodiscard]] static bool debug_setup_succeeded() noexcept { return s_output_sink_->setup_succeeded(); }
+
+  // Return the private debug destination setup error, or an empty string after successful setup.
+  [[nodiscard]] static std::string const& debug_setup_error() noexcept { return s_output_sink_->setup_error(); }
+#endif
+
+  // Can't print ava::core::Application.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+#ifdef CWDEBUG
+  // Install or reuse the process-owned per-suite sink and return whether it
+  // requires libcwd initialization. Reuse avoids truncating the log when the
+  // core_mode suite temporarily releases and restores the Application.
+  static bool prepare_debug(std::string_view debug_suite_token)
+  {
+    if (s_output_sink_)
+      return false;
+    s_output_sink_ = std::make_unique<ava::debug::LibcwdOutputSink>("ava_tests." + std::string(debug_suite_token));
+    s_marker_pending_ = s_output_sink_->enabled();
+    return s_output_sink_->enabled();
+  }
+
+  static std::unique_ptr<ava::debug::LibcwdOutputSink> s_output_sink_;
+  static bool s_marker_pending_;
+#endif
+};
+
+#ifdef CWDEBUG
+//static
+std::unique_ptr<ava::debug::LibcwdOutputSink> TestRunnerApplication::s_output_sink_;
+//static
+bool TestRunnerApplication::s_marker_pending_ = false;
+#endif
+
 // Derive the per-suite token used to name the libcwd log file
 // (ava_tests.<token>.libcwd.log). "all" when no suite argument is given,
 // the suite name when it matches a registered suite, "invalid" otherwise
@@ -217,36 +273,28 @@ int print_failures()
 
 int main(int argc, char** argv)
 {
+#ifdef CWDEBUG
+  std::string_view const debug_suite_token = libcwd_suite_token(argc, argv);
+#endif
+
+  // Construct the process Application before other startup work. Its base
+  // initializes debugging before constructing the allocator-owned members.
+  std::optional<TestRunnerApplication> application;
+  application.emplace(CWDEBUG_ONLY(debug_suite_token));
+
+#ifdef CWDEBUG
+  if (!TestRunnerApplication::debug_setup_succeeded())
+  {
+    std::cerr << "failed to configure libcwd test output: " << TestRunnerApplication::debug_setup_error() << '\n';
+    return 2;
+  }
+#endif
+
   if (argc > 2)
   {
     std::cerr << "usage: ava_tests [suite]\n";
     return 2;
   }
-
-#ifdef DEBUGGLOBAL
-  // Keep GlobalObjectManager's transition to main as the first operation.
-  GlobalObjectManager::main_entered();
-#endif
-
-#ifdef CWDEBUG
-  std::string_view const debug_suite_token = libcwd_suite_token(argc, argv);
-  ava::debug::LibcwdOutputSink libcwd_output("ava_tests." + std::string(debug_suite_token));
-//FIXME: we don't have debug_init anymore
-//  Debug(ava::app::debug_init(libcwd_output.enabled()));
-  if (!libcwd_output.setup_succeeded())
-  {
-    std::cerr << "failed to configure libcwd test output: " << libcwd_output.setup_error() << '\n';
-    return 2;
-  }
-
-  Dout(dc::notice, "AVA libcwd routing marker: suite=" << debug_suite_token);
-#endif
-
-  // Give every ordinary test suite the same process-lifetime Application that
-  // production constructs before entering app::run. The core_mode suite owns
-  // temporary Application instances in order to test the lifecycle contract,
-  // so it must run before this process-wide instance is published.
-  std::optional<ava::app::Application> application;
 
   // CTest may change the working directory without updating $PWD, which
   // would cause logical_cwd() to throw. Verify and fix $PWD to match the
@@ -285,8 +333,8 @@ int main(int argc, char** argv)
     {
       if (suite.name == requested_suite)
       {
-        if (suite.name != "core_mode")
-          application.emplace();
+        if (suite.name == "core_mode")
+          application.reset();
         run_suite(suite);
         if (ava::tests::failures() == 0 && ava::tests::skip_requested())
           return 77;
@@ -307,9 +355,12 @@ int main(int argc, char** argv)
   for (auto const& suite : kTestSuites)
   {
     if (suite.name == "core_mode")
+    {
+      application.reset();
       suite.run();
+    }
   }
-  application.emplace();
+  application.emplace(CWDEBUG_ONLY(debug_suite_token));
   for (auto const& suite : kTestSuites)
   {
     if (suite.name == "core_mode")

@@ -24,7 +24,7 @@ class Application final : public core::Application
 #endif
 
  public:
-  Application() : core::Application(CWDEBUG_ONLY(prepare_debug())) { }
+  Application();
   ~Application();
 
   [[nodiscard]] std::string_view application_name() const noexcept override { return "AVA"; }

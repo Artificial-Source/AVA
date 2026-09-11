@@ -2,7 +2,6 @@
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
-#include "ava/app/Application.h"
 #include "ava/app/commands.h"
 #include "ava/app/headless_policy.h"
 #include "ava/app/print_mode.h"
@@ -217,10 +216,10 @@ void child_duplicate_live_application()
 void test_application_lifecycle()
 {
   {
-    ava::app::Application application;
+    TestApplication application;
     auto const& instance = ava::core::Application::instance();
-    expect(&instance == &application && instance.application_name() == "AVA",
-           "Application publishes its initialized concrete AVA instance and virtual application name");
+    expect(&instance == &application && instance.application_name() == "test application",
+           "Application publishes its initialized concrete instance and virtual application name");
   }
 
   expect_lifecycle_death(child_instance_before_initialize, "instance access before initialize");
@@ -238,7 +237,8 @@ std::string nested_json_object(std::size_t depth)
 {
   std::string json;
   json.reserve(depth * 6 + 1);
-  for (std::size_t index = 0; index < depth; ++index) json += "{\"x\":";
+  for (std::size_t index = 0; index < depth; ++index)
+    json += "{\"x\":";
   json += '0';
   json.append(depth, '}');
   return json;

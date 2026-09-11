@@ -11,6 +11,18 @@
 
 namespace ava::app {
 
+// Construct the AVA process Application after preparing its optional private
+// test sink. The core base initializes libcwd before constructing allocators;
+// the constructor body then records the routing marker through libcwd itself.
+Application::Application() : core::Application(CWDEBUG_ONLY(prepare_debug()))
+{
+#ifdef CWDEBUG
+  char const* test_name = std::getenv("AVA_TEST_NAME");
+  if (test_name != nullptr && test_name[0] != '\0')
+    Dout(dc::notice, "AVA libcwd routing marker: test=" << test_name);
+#endif
+}
+
 Application::~Application() = default;
 
 #ifdef CWDEBUG
