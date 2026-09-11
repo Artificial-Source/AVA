@@ -1,14 +1,32 @@
 #pragma once
 
 #include "ava/core/Application.h"
+
 #include <string_view>
 #include "debug.h"
+#ifdef CWDEBUG
+#include <memory>
+#endif
+
+namespace ava::debug {
+// Forward declaration.
+class LibcwdOutputSink;
+} // namespace ava::debug
 
 namespace ava::app {
 
-class Application final : public ava::core::Application
+class Application final : public core::Application
 {
+#ifdef CWDEBUG
+ private:
+  static std::unique_ptr<debug::LibcwdOutputSink> s_output_sink_;
+  static bool prepare_debug();
+#endif
+
  public:
+  Application() : core::Application(CWDEBUG_ONLY(prepare_debug())) { }
+  ~Application();
+
   [[nodiscard]] std::string_view application_name() const noexcept override { return "AVA"; }
 
   // Can't print ava::core::Application.

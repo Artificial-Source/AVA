@@ -14,7 +14,13 @@ Application const* registered_application = nullptr;
 
 } // namespace
 
-Application::Application() : mpp_(Vec8Alloc::mpp_block_size), vec8alloc_(mpp_)
+Application::Application(CWDEBUG_ONLY(bool debug_init_arg))
+    :
+#ifdef CWDEBUG
+      DebugInit(debug_init_arg),
+#endif
+      mpp_(Vec8Alloc::mpp_block_size),
+      vec8alloc_(mpp_)
 {
   // Instantiate only one `Application` object derived from ava::core::Application.
   ASSERT(registered_application == nullptr);

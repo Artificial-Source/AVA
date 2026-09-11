@@ -15,6 +15,7 @@ target_sources(ava_app
     "acp/transport.cpp"
     "acp_mode.cpp"
     "app.cpp"
+    "Application.cpp"
     "browser_open.cpp"
     "branch_summary_coordinator.cpp"
     "clipboard_image.cpp"
@@ -95,13 +96,6 @@ target_sources(ava_app
     "runtime/markdown_files.cpp"
     "runtime/command_names.cpp"
 )
-
-if (OptionEnableLibcwd)
-  target_sources(ava_app
-    PRIVATE
-      "ava_debug.cpp"
-  )
-endif ()
 
 target_include_directories(ava_app
   PRIVATE

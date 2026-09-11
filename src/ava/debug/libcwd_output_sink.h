@@ -20,7 +20,7 @@ namespace ava::debug {
 class LibcwdOutputSink final
 {
  public:
-  explicit LibcwdOutputSink(std::string_view log_stem);
+  explicit LibcwdOutputSink(std::string const log_stem);
   ~LibcwdOutputSink();
 
   LibcwdOutputSink(LibcwdOutputSink const&) = delete;

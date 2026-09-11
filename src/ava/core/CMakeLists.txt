@@ -21,6 +21,7 @@ target_sources(ava_core
 if (OptionEnableLibcwd)
   target_sources(ava_core
     PRIVATE
+      "DebugInit.cxx"
       "thread.cpp"
   )
 endif ()

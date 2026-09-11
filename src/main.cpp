@@ -3,7 +3,6 @@
 #include "ava/process/supervisor.h"
 #include "ava/app/Application.h"
 #include "ava/app/app.h"
-#include "ava/app/ava_debug.h"
 
 #include <chrono>
 #include <iostream>
@@ -14,7 +13,6 @@
 
 int main(int argc, char** argv)
 {
-  Debug(ava::app::initialize_debug());
   ava::app::Application application;
 
   std::shared_ptr<ava::process::Supervisor> supervisor;

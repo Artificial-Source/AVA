@@ -10,6 +10,7 @@
 class Application : public ava::core::Application
 {
  public:
+  Application() : ava::core::Application(true) { }
   [[nodiscard]] std::string_view application_name() const noexcept override { return "linux09-layout"; }
 
   // Can't print ava::core::Application.

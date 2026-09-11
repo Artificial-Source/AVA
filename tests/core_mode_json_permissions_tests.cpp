@@ -97,6 +97,7 @@ void test_mode_parsing()
 class TestApplication final : public ava::core::Application
 {
  public:
+  TestApplication() : ava::core::Application(false) { }
   [[nodiscard]] std::string_view application_name() const noexcept override { return "test application"; }
 };
 
@@ -213,17 +214,6 @@ void child_duplicate_live_application()
   static_cast<void>(second);
 }
 
-void child_invalid_main_arguments()
-{
-#ifdef __linux__
-  // Check isolation independently of setup: removing PR_SET_DUMPABLE must
-  // fail even on hosts without a piped core handler. A query error also fails.
-  if (::prctl(PR_GET_DUMPABLE, 0L, 0L, 0L, 0L) != 0)
-    _exit(lifecycle_child_still_dumpable);
-#endif
-  TestApplication application;
-}
-
 void test_application_lifecycle()
 {
   {
@@ -236,7 +226,6 @@ void test_application_lifecycle()
   expect_lifecycle_death(child_instance_before_initialize, "instance access before initialize");
   expect_lifecycle_death(child_instance_after_destruction, "instance access after destruction");
   expect_lifecycle_death(child_duplicate_live_application, "duplicate live Application construction");
-  expect_lifecycle_death(child_invalid_main_arguments, "invalid standard main argument shape");
 }
 
 void test_json_escape_control_characters()

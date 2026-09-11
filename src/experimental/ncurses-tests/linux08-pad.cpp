@@ -16,10 +16,21 @@
 class Application : public ava::core::Application
 {
  public:
+  Application() : ava::core::Application(prepare_debug()) { }
+
   [[nodiscard]] std::string_view application_name() const noexcept override { return "linux08-pad"; }
 
   // Can't print ava::core::Application.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  static bool prepare_debug()
+  {
+    static std::mutex log_mutex;
+    std::ofstream log("debug.out");
+    Debug(libcw_do.set_ostream(&log, &log_mutex));
+    return true;
+  }
 };
 
 namespace terminal = ava::tui::terminal;
@@ -29,13 +40,6 @@ constexpr int paragraph_repetitions = 20;
 
 int main()
 {
-  Debug(NAMESPACE_DEBUG::init());
-  Debug(libcw_do.always_flush_on());
-
-  std::mutex log_mutex;
-  std::ofstream log("debug.out");
-  Debug(libcw_do.set_ostream(&log, &log_mutex));
-
   [[maybe_unused]] Application application;
 
   namespace terminal = ava::tui::terminal;

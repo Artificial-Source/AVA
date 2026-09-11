@@ -83,7 +83,7 @@ struct LibcwdOutputSink::Impl
 
 // Redirect libcwd before its initialization can emit parser diagnostics, then
 // safely create the configured private destination when one was requested.
-LibcwdOutputSink::LibcwdOutputSink(std::string_view log_stem) : impl_(std::make_unique<Impl>())
+LibcwdOutputSink::LibcwdOutputSink(std::string const log_stem) : impl_(std::make_unique<Impl>())
 {
   char const* configured_directory = std::getenv("AVA_DEBUG_OUTPUT_DIR");
   if (configured_directory == nullptr || configured_directory[0] == '\0')
@@ -91,7 +91,7 @@ LibcwdOutputSink::LibcwdOutputSink(std::string_view log_stem) : impl_(std::make_
 
   if (!valid_log_stem(log_stem))
   {
-    impl_->error = "libcwd log stem must contain only ASCII letters, digits, '.', '_' or '-': '" + std::string(log_stem) + "'";
+    impl_->error = "libcwd log stem must contain only ASCII letters, digits, '.', '_' or '-': '" + log_stem + "'";
     return;
   }
 
@@ -180,7 +180,7 @@ LibcwdOutputSink::LibcwdOutputSink(std::string_view log_stem) : impl_(std::make_
     return;
   }
 
-  std::string const filename = std::string(log_stem) + ".libcwd.log";
+  std::string const filename = log_stem + ".libcwd.log";
   std::filesystem::path const display_path = output_directory / filename;
   UniqueFd output_fd(::openat(directory_fd.get(), filename.c_str(), O_WRONLY | O_CREAT | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC, 0600));
   if (output_fd.get() < 0)
@@ -230,6 +230,7 @@ LibcwdOutputSink::LibcwdOutputSink(std::string_view log_stem) : impl_(std::make_
   impl_->file_stream = std::make_unique<std::ostream>(impl_->file_buffer.get());
   *impl_->file_stream << std::unitbuf;
   Debug(libcw_do.set_ostream(impl_->file_stream.get()));
+  Debug(*impl_->file_stream << "AVA libcwd routing marker: test=" << log_stem);
   impl_->enabled = true;
 }
 

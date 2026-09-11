@@ -43,5 +43,5 @@ target_link_libraries(linux08 PRIVATE AVA::terminal)
 add_executable(linux09 linux09-layout.cpp)
 target_link_libraries(linux09 PRIVATE AVA::terminal)
 
-add_executable(linux10 linux10-input-area.cpp)
+add_executable(linux10 linux10-composer-area.cpp lorem_ipsum_paragraphs.cpp)
 target_link_libraries(linux10 PRIVATE AVA::terminal)

@@ -1,7 +1,6 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
 #include "ava/app/Application.h"
-#include "ava/app/ava_debug.h"
 #include "ava/core/path.h"
 #include "ava/core/trusted_home.h"
 #ifdef CWDEBUG
@@ -218,6 +217,12 @@ int print_failures()
 
 int main(int argc, char** argv)
 {
+  if (argc > 2)
+  {
+    std::cerr << "usage: ava_tests [suite]\n";
+    return 2;
+  }
+
 #ifdef DEBUGGLOBAL
   // Keep GlobalObjectManager's transition to main as the first operation.
   GlobalObjectManager::main_entered();
@@ -226,7 +231,8 @@ int main(int argc, char** argv)
 #ifdef CWDEBUG
   std::string_view const debug_suite_token = libcwd_suite_token(argc, argv);
   ava::debug::LibcwdOutputSink libcwd_output("ava_tests." + std::string(debug_suite_token));
-  Debug(ava::app::debug_init(libcwd_output.enabled()));
+//FIXME: we don't have debug_init anymore
+//  Debug(ava::app::debug_init(libcwd_output.enabled()));
   if (!libcwd_output.setup_succeeded())
   {
     std::cerr << "failed to configure libcwd test output: " << libcwd_output.setup_error() << '\n';
@@ -236,11 +242,11 @@ int main(int argc, char** argv)
   Dout(dc::notice, "AVA libcwd routing marker: suite=" << debug_suite_token);
 #endif
 
-  if (argc > 2)
-  {
-    std::cerr << "usage: ava_tests [suite]\n";
-    return 2;
-  }
+  // Give every ordinary test suite the same process-lifetime Application that
+  // production constructs before entering app::run. The core_mode suite owns
+  // temporary Application instances in order to test the lifecycle contract,
+  // so it must run before this process-wide instance is published.
+  std::optional<ava::app::Application> application;
 
   // CTest may change the working directory without updating $PWD, which
   // would cause logical_cwd() to throw. Verify and fix $PWD to match the
@@ -271,12 +277,6 @@ int main(int argc, char** argv)
   // the first.
   if (auto result = ava::core::load_account_once_and_freeze(); !result)
     std::cerr << "warning: failed to load trusted account: " << result.error().format() << '\n';
-
-  // Give every ordinary test suite the same process-lifetime Application that
-  // production constructs before entering app::run. The core_mode suite owns
-  // temporary Application instances in order to test the lifecycle contract,
-  // so it must run before this process-wide instance is published.
-  std::optional<ava::app::Application> application;
 
   if (argc == 2)
   {

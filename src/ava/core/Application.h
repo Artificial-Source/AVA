@@ -2,13 +2,20 @@
 
 #include "memory/MemoryPagePool.h"
 #include "memory/VectorAllocator.h"
+
 #include <string_view>
 #include "debug.h"
+#ifdef CWDEBUG
+#include "ava/core/DebugInit.h"
+#endif
 
 namespace ava::core {
 
 // Process-lifetime interface published by the production composition root.
 class Application
+#ifdef CWDEBUG
+    : public DebugInit
+#endif
 {
  public:
   using Vec8Alloc = memory::VectorAllocator<char>;
@@ -18,7 +25,7 @@ class Application
   Vec8Alloc vec8alloc_;                 // A geometric allocator for sizes 8, 16, 32, 64, ...
 
  public:
-  Application();
+  Application(CWDEBUG_ONLY(bool debug_init_arg));
   Application(Application const&) = delete;
   Application& operator=(Application const&) = delete;
   Application(Application&&) = delete;
