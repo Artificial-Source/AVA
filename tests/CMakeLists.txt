@@ -804,6 +804,12 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.model_selector_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
+    NAME ava_tests.sequencing_wait
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/sequencing_wait_test.py)
+  set_tests_properties(ava_tests.sequencing_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
     NAME ava_benchmark.harness_self_test
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_test.py
