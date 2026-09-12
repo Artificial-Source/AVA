@@ -3,6 +3,9 @@
 #include "src/ava/debug/print_members_on.h"
 
 #include <cstdint>
+#ifdef CWDEBUG
+#include <iostream>
+#endif
 
 namespace ava::tui::terminal {
 
@@ -39,7 +42,18 @@ struct Margin
   columns_t width() const { return left + right; }
   bool empty() const { return (top | bottom | left | right) == 0; }
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // We have a custom print_on.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const
+  {
+    os << "top:" << static_cast<uint32_t>(top)
+       << ", bottom:" << static_cast<uint32_t>(bottom)
+       << ", left:" << static_cast<uint32_t>(left)
+       << ", right:" << static_cast<uint32_t>(right);
+  }
+#endif
 };
 
 } // namespace ava::tui::terminal
