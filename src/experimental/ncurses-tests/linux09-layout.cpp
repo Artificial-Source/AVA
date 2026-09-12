@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "Application.h"
 #include "terminal/Context.h"
 #include "terminal/HorizontalLayout.h"
 #include "terminal/Pad.h"
@@ -7,30 +8,11 @@
 
 #include "debug.h"
 
-class Application : public ava::core::Application
-{
- public:
-  Application() : ava::core::Application(true) { }
-  [[nodiscard]] std::string_view application_name() const noexcept override { return "linux09-layout"; }
-
-  // Can't print ava::core::Application.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
-
 namespace terminal = ava::tui::terminal;
 
 int main()
 {
-  Debug(NAMESPACE_DEBUG::init());
-  Debug(libcw_do.always_flush_on());
-
-#ifdef CWDEBUG
-  std::mutex log_mutex;
-  std::ofstream log("debug.out");
-  Debug(libcw_do.set_ostream(&log, &log_mutex));
-#endif
-
-  [[maybe_unused]] Application application;
+  Application application("linux09-layout");
 
   terminal::Context terminal_context;
   terminal::HorizontalLayout horizontal_layout1;

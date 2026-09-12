@@ -37,11 +37,11 @@ target_link_libraries(linux06 PRIVATE AVA::terminal)
 add_executable(linux07 linux07-full-grapheme-cluster.cpp)
 target_link_libraries(linux07 PRIVATE AVA::terminal)
 
-add_executable(linux08 linux08-pad.cpp lorem_ipsum_paragraphs.cpp)
+add_executable(linux08 linux08-pad.cpp lorem_ipsum_paragraphs.cpp Application.cpp)
 target_link_libraries(linux08 PRIVATE AVA::terminal)
 
-add_executable(linux09 linux09-layout.cpp)
+add_executable(linux09 linux09-layout.cpp Application.cpp)
 target_link_libraries(linux09 PRIVATE AVA::terminal)
 
-add_executable(linux10 linux10-composer-area.cpp lorem_ipsum_paragraphs.cpp)
+add_executable(linux10 linux10-composer-area.cpp lorem_ipsum_paragraphs.cpp Application.cpp)
 target_link_libraries(linux10 PRIVATE AVA::terminal)

@@ -1,18 +1,9 @@
 #include "sys.h"
+#include "Application.h"
 #include "lorem_ipsum_paragraphs.h"
 #include "terminal/Context.h"
 #include "terminal/Window.h"
 #include "terminal/Pad.h"
-
-class Application : public ava::core::Application
-{
- public:
-  Application() : ava::core::Application(true) { }
-  [[nodiscard]] std::string_view application_name() const noexcept override { return "linux10-composer-area"; }
-
-  // Can't print ava::core::Application.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
 
 namespace terminal = ava::tui::terminal;
 
@@ -22,7 +13,7 @@ namespace terminal = ava::tui::terminal;
 /// The terminal must be at least five rows and six columns so the positioned window and its margin leave a writable interior.
 int main()
 {
-  [[maybe_unused]] Application application;
+  Application application("linux10-composer-area");
 
   terminal::Context terminal_context;
   terminal::Rendition const terminal_background(terminal_context.create_color_pair({}, {0x0a0a0a}));
@@ -50,7 +41,7 @@ int main()
     pad.append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
 
   // Generate the content of the pad for a window with the given width.
-  pad.generate(composer_area_width);
+  pad.generate(composer_area.getmaxyx().width());
 
   composer_area.move({0, 0});
   terminal_context.stdscr().refresh();
