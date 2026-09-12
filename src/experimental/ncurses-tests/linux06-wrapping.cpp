@@ -18,12 +18,11 @@ int main()
     terminal::Rendition const dark_blue_rendition(terminal_context.create_color_pair({}, {0x000044}));
     auto long_line = u8"Dark red window: αβγ this line is longer than the width of the window.";
 
-    terminal::Window window1(size, top_left, {margin, dark_red_colorpair});
-    window1.set_background(dark_blue_rendition);
+    terminal::Window window1(size, top_left, dark_blue_rendition, {margin, dark_red_colorpair});
     window1.addstr(long_line);
 
     {
-      terminal::Window window2(size, top_left + terminal::Margin{.top = 5, .left = 5}, {margin, dark_red_colorpair});
+      terminal::Window window2(size, top_left + terminal::Margin{.top = 5, .left = 5}, dark_blue_rendition, {margin, dark_red_colorpair});
       window2.addstr(long_line);
 
       window1.refresh();

@@ -30,11 +30,12 @@ void test_margin_aware_window_geometry_and_lifetime()
 
   ScopedEnvVar term_guard("TERM", "xterm-256color");
   terminal::Context terminal_context(output, input);
+  terminal::Rendition const background_rendition{{}};
 
   for (int iteration = 0; iteration != 3; ++iteration)
   {
     terminal::Margin const margin{.top = 1, .bottom = 2, .left = 3, .right = 1};
-    terminal::Window window({8, 12}, {2, 4}, {margin, terminal::ColorPair{}});
+    terminal::Window window({8, 12}, {2, 4}, background_rendition, {margin, terminal::ColorPair{}});
 
     terminal::Dimension const inner_size = window.getmaxyx();
     terminal::Position const inner_origin = window.getbegyx();
@@ -50,7 +51,7 @@ void test_margin_aware_window_geometry_and_lifetime()
   }
 
   {
-    terminal::Window window({4, 7}, {1, 2});
+    terminal::Window window({4, 7}, {1, 2}, background_rendition);
     expect(!window.is_subwin(), "an empty-margin Window must not create an ncurses subwindow");
     expect(&window.outer_window() == static_cast<terminal::BasicWindow*>(&window),
            "an empty-margin Window must use one BasicWindow wrapper for inner and outer access");

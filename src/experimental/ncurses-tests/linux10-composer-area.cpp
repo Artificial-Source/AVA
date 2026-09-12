@@ -29,7 +29,7 @@ int main()
   uint32_t const composer_area_width = terminal_context.cols() - 4;
   terminal::Dimension const size{composer_area_height, composer_area_width};
   terminal::Position const top_left{terminal_context.rows() - size.height() - 2, 2};
-  terminal::Window composer_area(size, top_left,
+  terminal::Window composer_area(size, top_left, normal_rendition,
                               {terminal::Margin{.top = 1, .bottom = 2, .left = 3, .right = 2}, border_colorpair, border_lhs_colorpair, left_border});
   composer_area.outer_window().set_background(normal_rendition);
   composer_area.set_background(normal_rendition);

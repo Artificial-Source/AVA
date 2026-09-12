@@ -24,11 +24,13 @@ class Window : public InnerWindow
   bool need_border_refresh_ = false;    // True iff the outer border must be staged before refreshing the writable area.
 
  public:
-  // Construct an owned Window of `size` at screen position `pos`, using the immutable margin and styling in `border`.
-  //
+  // Construct a Window of `size` at screen position `pos`, using the immutable margin and styling in `border`.
+  // `rendition` is used to clear the whole window, including the margin, before drawing the one-character border around
+  // the window.
+
   // The inherited BasicWindow coordinates and dimensions describe the writable interior. The border is drawn on the
   // margin-inclusive outer window. `border.margin()` must leave at least one interior row and column.
-  Window(Dimension size, Position pos, Border const& border = {});
+  Window(Dimension size, Position pos, Rendition rendition, Border const& border = {});
 
   Window(Window const&) = delete;
   Window& operator=(Window const&) = delete;
