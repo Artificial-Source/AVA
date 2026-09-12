@@ -22,7 +22,7 @@ class GraphemeSurface;
 //
 class Pad
 {
- private:
+ protected:
   using horizontal_layouts_type = std::vector<HorizontalLayout, core::Application::Vec8Alloc::rebind<HorizontalLayout>::other>;
 
   horizontal_layouts_type horizontal_layouts_;          // The HorizontalLayout's that make up the content of this pad, in order.

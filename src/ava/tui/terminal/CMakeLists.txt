@@ -19,6 +19,8 @@ target_sources(ava_terminal
     "Paragraph.cxx"
     "TextSpan.cxx"
     "Window.cxx"
+    "WindowBorder.cxx"
+    "WindowPad.cxx"
     "private_convert.cxx"
 )
 

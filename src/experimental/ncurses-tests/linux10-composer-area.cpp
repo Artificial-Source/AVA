@@ -2,8 +2,7 @@
 #include "Application.h"
 #include "lorem_ipsum_paragraphs.h"
 #include "terminal/Context.h"
-#include "terminal/Window.h"
-#include "terminal/Pad.h"
+#include "terminal/WindowPad.h"
 
 namespace terminal = ava::tui::terminal;
 
@@ -29,22 +28,21 @@ int main()
   uint32_t const composer_area_width = terminal_context.cols() - 4;
   terminal::Dimension const size{composer_area_height, composer_area_width};
   terminal::Position const top_left{terminal_context.rows() - size.height() - 2, 2};
-  terminal::Window composer_area(size, top_left, normal_rendition,
-                              {terminal::Margin{.top = 1, .bottom = 2, .left = 3, .right = 2}, border_colorpair, border_lhs_colorpair, left_border});
-  composer_area.outer_window().set_background(normal_rendition);
-  composer_area.set_background(normal_rendition);
-  composer_area.draw_border();
+  terminal::Margin const margin{.top = 1, .bottom = 2, .left = 3, .right = 2};
+  terminal::Border const border{margin, border_colorpair, border_lhs_colorpair, left_border};
+  terminal::Dimension const inner_size = size - margin;
 
-  terminal::Pad pad;
+  terminal::WindowPad composer_area(size, top_left, normal_rendition, border);
+
   int const total_paragraph_count = 2;
   for (int paragraph_number = 0; paragraph_number < total_paragraph_count; ++paragraph_number)
-    pad.append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
+    composer_area.append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
 
   // Generate the content of the pad for a window with the given width.
-  pad.generate(composer_area.getmaxyx().width());
+  composer_area.generate(inner_size.width());
 
-  composer_area.move({0, 0});
   terminal_context.stdscr().refresh();
-  composer_area.refresh();
+  // Show the contents of `pad` in the (inner) window of `composer_area`.
+  composer_area.prefresh(terminal::ScrollPosition::end);
   terminal_context.get_wch();
 }

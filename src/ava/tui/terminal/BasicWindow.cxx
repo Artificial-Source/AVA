@@ -1985,11 +1985,10 @@ void BasicWindow::addspaces(columns_t n, Rendition const& rendition)
 }
 
 #ifdef CWDEBUG
-void BasicWindow::print_on(std::ostream& os) const
+void BasicWindow::print_members(std::ostream& os, char const* prefix) const
 {
-  os << '{';
+  os << prefix;
   impl_->print_members(os, "impl_->");
-  os << '}';
 }
 #endif
 

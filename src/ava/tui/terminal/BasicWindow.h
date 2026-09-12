@@ -25,6 +25,7 @@ namespace ava::tui::terminal {
 // Forward declarations.
 class Context;
 class Window;
+class Pad;
 
 // Inclusive top and bottom rows of a Window scrolling region.
 struct ScrollRegion
@@ -431,12 +432,8 @@ class BasicWindow
       attr_set(original_rendition);
   }
 
-#ifdef CWDEBUG
-  void print_on(std::ostream& os) const;
-#endif
-
-  // We have a custom print_on.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // We have a custom print_members.
+  AVA_PRINT_ON_MEMBERS
 };
 
 } // namespace ava::tui::terminal
