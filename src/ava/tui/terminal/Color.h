@@ -46,7 +46,20 @@ class Color
   bool is_default() const { return rgb_ == default_terminal_color; }
   int as_int() const { return static_cast<int>(static_cast<int32_t>(rgb_)); }
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const
+  {
+    os << "{rgb:";
+    if (rgb_ == default_terminal_color)
+      os << "<default-terminal-color>";
+    else
+      os << std::hex << std::setfill('0') << std::setw(6) << rgb_ << std::dec;
+    os << "}";
+  }
+#endif
+
+  // We have a custom print_on.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 } // namespace ava::tui::terminal

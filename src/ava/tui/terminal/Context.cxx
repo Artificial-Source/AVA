@@ -15,6 +15,8 @@ namespace ava::tui::terminal {
 
 Context::Context(FILE* outfd, FILE* infd) : output_file_(outfd == nullptr ? stdout : outfd), default_rendition_(ColorPair{{}, 0})
 {
+  DoutEntering(dc::notice, "Context::Context(" << outfd << ", " << infd << ")");
+
   setlocale(LC_ALL, "");
 
   // From https://invisible-island.net/ncurses/man/curs_util.3x.html
@@ -130,6 +132,8 @@ int Context::terminal_color_index(Color color)
 
 ColorPair Context::create_color_pair(Color foreground, Color background)
 {
+  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << foreground << ", " << background << ") = ");
+
   int foreground_index = terminal_color_index(foreground);
   int background_index = terminal_color_index(background);
   // terminal_color_index returns -1 for "default color"s.
@@ -157,7 +161,10 @@ ColorPair Context::create_color_pair(Color foreground, Color background)
   ASSERT(status == OK);
 
   color_pairs_.push_back(ConvertToColorPair{color_pair_index});
-  return color_pairs_.back();
+  ColorPair result = color_pairs_.back();
+
+  Dout(dc::finish, result);
+  return result;
 }
 
 //static

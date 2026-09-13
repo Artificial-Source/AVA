@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "GraphemeSurface.h"
 #include "Pad.h"
+#include "ava/tui/config.h"
 
 #include <iterator>
 #include "debug.h"
@@ -26,13 +27,20 @@ void Pad::generate(columns_t columns, bool blank_line_between_block_rows)
 {
   GraphemeSurface surface = generate_grapheme_surface(columns);
 
+  // Initialize the number of content rows.
+  content_rows_ = surface.height() + (blank_line_between_block_rows ? surface.number_of_blocks_rows() - 1 : 0);
+
+  // Determine some initial value for the height of the pad.
+  uint32_t const pad_height = std::max(config::max_composer_viewport_height, content_rows_ + growth_slack_rows);
+
   // (Re)create the ncurses pad; the assignment destroys the previously generated pad, if any.
-  pad_ = BasicWindow::newpad({surface.height() + (blank_line_between_block_rows ? surface.number_of_blocks_rows() - 1 : 0), surface.width()});
+  pad_ = BasicWindow::newpad({pad_height, surface.width()});
 
   // Existing Paragraph rows use their Paragraph default rendition, including alignment filler.
   // Standalone items, missing rows below shorter blocks, and space to the right of a narrower block
   // row use the rendition of the newly created pad.
   Rendition const pad_default_rendition = pad_->current_rendition();
+  Dout(dc::notice, "pad_default_rendition = " << pad_default_rendition);
   uint32_t pad_row = 0;
   auto horizontal_layout = horizontal_layouts_.begin();
   auto const& block_rows = surface.blocks_rows();
@@ -64,16 +72,16 @@ void Pad::generate(columns_t columns, bool blank_line_between_block_rows)
       ++pad_row;
     }
 
-    if (blank_line_between_block_rows && std::next(block_row) != block_rows.end())
+    if (blank_line_between_block_rows)
       ++pad_row;
   }
 }
 
-void Pad::prefresh(Position pad_pos, Position screen_pos, Dimension screen_size)
+void Pad::prefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
 {
   // Call `generate` before calling this function.
   ASSERT(pad_.has_value());
-  pad_->prefresh(pad_pos, screen_pos, screen_size);
+  pad_->prefresh(pad_pos, screen_pos, viewport_size);
 }
 
 Dimension Pad::dimension() const

@@ -23,10 +23,15 @@ class GraphemeSurface;
 class Pad
 {
  protected:
+  static constexpr uint32_t growth_slack_rows = 16;
+
+ protected:
   using horizontal_layouts_type = std::vector<HorizontalLayout, core::Application::Vec8Alloc::rebind<HorizontalLayout>::other>;
 
   horizontal_layouts_type horizontal_layouts_;          // The HorizontalLayout's that make up the content of this pad, in order.
   std::optional<BasicWindow> pad_;                      // The ncurses pad created by the last generate() call, if any.
+  uint32_t content_rows_{};                             // The number rows of content: the height of the GraphemeSurface returned
+                                                        // by generate_grapheme_surface, or somehow updated equivalent of that.
 
  private:
   // Generate all block rows fitted to `columns` without creating or writing an ncurses pad.
@@ -63,10 +68,13 @@ class Pad
   void generate(columns_t columns, bool blank_line_between_block_rows = true);
 
   // Calls pad_.prefresh.
-  void prefresh(Position pad_pos, Position screen_pos, Dimension screen_size);
+  void prefresh(Position pad_pos, Position screen_pos, Dimension viewport_size);
 
   // Accessor.
   horizontal_layouts_type const& horizontal_layouts() const { return horizontal_layouts_; }
+
+  // Return the number of terminal rows of content.
+  uint32_t content_rows() const { return content_rows_; }
 
   // Return the dimensions of the generated ncurses pad.
   Dimension dimension() const;

@@ -829,22 +829,22 @@ struct BasicWindow::Handle
     return ::subpad(handle_, size.height(), size.width(), pos.row(), pos.col());
   }
 
-  int prefresh(Position pad_pos, Position screen_pos, Dimension screen_size)
+  int prefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
   {
     // https://invisible-island.net/ncurses/man/curs_pad.3x.html
     //
     // prefresh copies a rectangle from the pad, starting at pad_pos, to an inclusive rectangle on the physical screen.
-    return ::prefresh(handle_, pad_pos.row(), pad_pos.col(), screen_pos.row(), screen_pos.col(), screen_max_row(screen_pos, screen_size),
-                      screen_max_col(screen_pos, screen_size));
+    return ::prefresh(handle_, pad_pos.row(), pad_pos.col(), screen_pos.row(), screen_pos.col(), screen_max_row(screen_pos, viewport_size),
+                      screen_max_col(screen_pos, viewport_size));
   }
 
-  int pnoutrefresh(Position pad_pos, Position screen_pos, Dimension screen_size)
+  int pnoutrefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
   {
     // https://invisible-island.net/ncurses/man/curs_pad.3x.html
     //
     // pnoutrefresh stages a pad rectangle on the virtual screen; doupdate performs the physical update later.
-    return ::pnoutrefresh(handle_, pad_pos.row(), pad_pos.col(), screen_pos.row(), screen_pos.col(), screen_max_row(screen_pos, screen_size),
-                          screen_max_col(screen_pos, screen_size));
+    return ::pnoutrefresh(handle_, pad_pos.row(), pad_pos.col(), screen_pos.row(), screen_pos.col(), screen_max_row(screen_pos, viewport_size),
+                          screen_max_col(screen_pos, viewport_size));
   }
 
   int pechochar(ComplexChar const& complex_char)
@@ -1780,17 +1780,17 @@ BasicWindow BasicWindow::subpad(Dimension size, Position pos)
   return BasicWindow(std::make_unique<Handle>(res));
 }
 
-void BasicWindow::prefresh(Position pad_pos, Position screen_pos, Dimension screen_size)
+void BasicWindow::prefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
 {
-  [[maybe_unused]] int res = impl_->prefresh(pad_pos, screen_pos, screen_size);
-  // prefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, screen_pos, and screen_size to valid ranges.
+  [[maybe_unused]] int res = impl_->prefresh(pad_pos, screen_pos, viewport_size);
+  // prefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, screen_pos, and viewport_size to valid ranges.
   ASSERT(res != ERR);
 }
 
-void BasicWindow::pnoutrefresh(Position pad_pos, Position screen_pos, Dimension screen_size)
+void BasicWindow::pnoutrefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
 {
-  [[maybe_unused]] int res = impl_->pnoutrefresh(pad_pos, screen_pos, screen_size);
-  // pnoutrefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, screen_pos, and screen_size to valid ranges.
+  [[maybe_unused]] int res = impl_->pnoutrefresh(pad_pos, screen_pos, viewport_size);
+  // pnoutrefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, screen_pos, and viewport_size to valid ranges.
   ASSERT(res != ERR);
 }
 

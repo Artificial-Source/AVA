@@ -30,19 +30,18 @@ void WindowPad::pnoutrefresh(ScrollPosition scroll_position)
     // Generate the content of the pad for a window with the given width.
     Dimension const window_dimension = outer_window_.getmaxyx() - border_.margin();
     generate(window_dimension.width());
+    pad_->set_background(outer_window_.get_background(), false);
   }
-  Dimension pad_dimension = pad_->getmaxyx();
-  // Call Pad::generate with the correct number of columns, the width of this window, before calling this function.
-  ASSERT(pad_dimension.width() == window_dimension.width());
-  if (pad_dimension.height() < window_dimension.height())
+  uint32_t const content_rows = Pad::content_rows();
+  if (content_rows < window_dimension.height())
     scroll_position = ScrollPosition::begin;
 
   // We always start appending from the top-left.
   pad_->move({0, 0});
   if (scroll_position == ScrollPosition::begin)
-    do_pnoutrefresh(0, std::min(pad_dimension.height(), window_dimension.height()));
+    do_pnoutrefresh(0, std::min(content_rows, window_dimension.height()));
   else
-    do_pnoutrefresh(pad_dimension.height() - window_dimension.height(), window_dimension.height());
+    do_pnoutrefresh(content_rows - window_dimension.height(), window_dimension.height());
 }
 
 } // namespace ava::tui::terminal
