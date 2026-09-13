@@ -160,6 +160,12 @@ ColorPair Context::create_color_pair(Color foreground, Color background)
   return color_pairs_.back();
 }
 
+//static
+void Context::doupdate()
+{
+  ::doupdate();
+}
+
 bool Context::has_colors() const
 {
   return ::has_colors();

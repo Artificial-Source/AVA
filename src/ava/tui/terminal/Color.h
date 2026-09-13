@@ -33,7 +33,7 @@ class Color
   Color() : rgb_(default_terminal_color) { }
 
   // Construct a Color by RGB value (0x000000 (black) till 0xffffff (white)).
-  Color(uint32_t rgb) : rgb_(rgb)
+  constexpr Color(uint32_t rgb) : rgb_(rgb)
   {
     if (rgb_ < 8)
       rgb_ = 0;

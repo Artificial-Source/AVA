@@ -20,6 +20,7 @@ __pycache__/
 .plans/
 /.tasks/
 /.env
+debug.out
 
 # Local reference repositories used for comparison only
 docs/reference-code/

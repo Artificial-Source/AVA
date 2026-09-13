@@ -14,35 +14,60 @@ int main()
 {
   Application application("linux10-composer-area");
 
+  constexpr terminal::Color tui_background = 0x0a0a0a;
+  constexpr terminal::Color composer_foreground = 0xeeeeee;
+  constexpr terminal::Color composer_background = 0x1e1e1e;
+  constexpr terminal::Color info_color = 0x56b6c2;              // This is used for the accent bar below.
+
   terminal::Context terminal_context;
-  terminal::Rendition const terminal_background(terminal_context.create_color_pair({}, {0x0a0a0a}));
-  terminal_context.stdscr().set_background(terminal_background);
+  terminal_context.stdscr().set_background(terminal_context.create_color_pair({}, tui_background));
 
-  terminal::Rendition const normal_rendition(terminal_context.create_color_pair({0xeeeeee}, {0x1e1e1e}));
-  terminal::ColorPair const border_colorpair = terminal_context.create_color_pair({0x1e1e1e}, {0x0a0a0a});
-  terminal::ColorPair const border_lhs_colorpair = terminal_context.create_color_pair({0x56b6c2}, {0x0a0a0a});
-  terminal::Box const left_border{L"┃██"
-                                  L"┃ █"
-                                  L"╹▀▀"};
-  uint32_t const composer_area_height = 5;
-  uint32_t const composer_area_width = terminal_context.cols() - 4;
-  terminal::Dimension const size{composer_area_height, composer_area_width};
-  terminal::Position const top_left{terminal_context.rows() - size.height() - 2, 2};
-  terminal::Margin const margin{.top = 1, .bottom = 2, .left = 3, .right = 2};
-  terminal::Border const border{margin, border_colorpair, border_lhs_colorpair, left_border};
-  terminal::Dimension const inner_size = size - margin;
+  terminal::Box const composer_box{L"┃██"
+                                   L"┃ █"
+                                   L"╹▀▀"};
+  //                     accent bar--^
+  //                                  ^^-- top, right and bottom.
 
-  terminal::WindowPad composer_area(size, top_left, normal_rendition, border);
+  // The colors used for the left-most column of the border.
+  terminal::ColorPair const accent_bar_color_pair = terminal_context.create_color_pair(info_color, tui_background);
+  // The colors used for the remaining box characters of the border.
+  terminal::ColorPair const border_color_pair = terminal_context.create_color_pair(composer_background, tui_background);
+  // The rendition used for the margin and the pad viewport.
+  terminal::Rendition const composer_rendition(terminal_context.create_color_pair(composer_foreground, composer_background));
 
-  int const total_paragraph_count = 2;
+  // The margin used by the composer:
+  //
+  //  ╳  123 (left)                      (right) 12  ╳
+  //  ╳  ╾─╼                                     ╾╼  ╳
+  //  ╳  ┃█████████████████████████████████████████]1╳ (top)    █ : composer_box characters
+  //  ╳  ┃░░·← 0,0▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█  ╳          ░ : additional composer_margin area
+  //  ╳╾╼┃░░▒▒▒▒▒▒▒▒▒▒▒pad viewport▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█╾╼╳          ▒ : pad viewport area
+  //  ╳12┃░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█12╳          ╳ : terminal edge
+  //  ╳  ┃░░Coder░·░GPT-5.6░Sol░OpenAI░░░░░░░░░░░░█⎤2╳ (bottom)
+  //  ╳  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀⎦1╳
+  //  ╳  /project/path          2 (screen margin)    ╳
+  //  ╳  ↑ accent bar           1                    ╳
+  //  ╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳
+  constexpr terminal::Margin const screen_margin{.top = 0, .bottom = 2, .left = 2, .right = 2};
+  constexpr terminal::Margin const composer_margin{.top = 1, .bottom = 2, .left = 3, .right = 2};
+
+  uint32_t const composer_area_height = 10;
+  uint32_t const composer_area_width = terminal_context.cols() - screen_margin.width();
+  terminal::Dimension const composer_dimension{composer_area_height, composer_area_width};
+  terminal::Position const top_left{terminal_context.rows() - composer_area_height - screen_margin.bottom, screen_margin.left};
+  terminal::Border const composer_border{composer_margin, border_color_pair, accent_bar_color_pair, composer_box};
+  terminal::WindowPad composer_area(composer_dimension, top_left, composer_rendition, composer_border);
+
+  constexpr int total_paragraph_count = 2;
   for (int paragraph_number = 0; paragraph_number < total_paragraph_count; ++paragraph_number)
     composer_area.append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
 
-  // Generate the content of the pad for a window with the given width.
-  composer_area.generate(inner_size.width());
+  // Write the background color to the virtual screen (erase it).
+  terminal_context.stdscr().wnoutrefresh();
+  // Show the contents of `pad` in the pad viewport of `composer_area`.
+  composer_area.pnoutrefresh(terminal::ScrollPosition::end);
 
-  terminal_context.stdscr().refresh();
-  // Show the contents of `pad` in the (inner) window of `composer_area`.
-  composer_area.prefresh(terminal::ScrollPosition::end);
+  // Publish the virtual screen to the physical screen and wait for a key press.
+  terminal_context.doupdate();
   terminal_context.get_wch();
 }

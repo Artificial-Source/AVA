@@ -62,7 +62,7 @@ class Context final
   int get_wch() const;                                                  // get_wch
 
   // Synchronize the virtual screen with the physical screen.
-  void doupdate();                                                      // doupdate
+  static void doupdate();                                               // doupdate
 
   bool has_colors() const;                                              // has_colors
   bool can_change_colors() const;

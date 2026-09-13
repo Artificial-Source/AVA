@@ -1,7 +1,8 @@
 #pragma once
 
-#include "WindowBorder.h"
+#include "Context.h"
 #include "Pad.h"
+#include "WindowBorder.h"
 
 namespace ava::tui::terminal {
 
@@ -20,7 +21,13 @@ class WindowPad : public WindowBorder, public Pad
   // Show a portion of pad with its first line in the top row of this window (ScrollPosition::begin),
   // or with its bottom line in the bottom row of this window (ScrollPosition::end), unless the height
   // of the pad is less than the height of the window; in that case ScrollPosition::begin is used.
-  void prefresh(ScrollPosition scroll_position = ScrollPosition::begin);
+  void pnoutrefresh(ScrollPosition scroll_position = ScrollPosition::begin);
+
+  void prefresh(ScrollPosition scroll_position = ScrollPosition::begin)
+  {
+    pnoutrefresh(scroll_position);
+    Context::doupdate();
+  }
 
  private:
   // Show `n` rows of this pad, starting with `pad_row`. Called by prefresh.
