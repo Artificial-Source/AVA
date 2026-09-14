@@ -51,7 +51,7 @@ int main()
   constexpr terminal::Margin const screen_margin{.top = 0, .bottom = 2, .left = 2, .right = 2};
   constexpr terminal::Margin const composer_margin{.top = 1, .bottom = 2, .left = 3, .right = 2};
 
-  uint32_t const composer_area_height = 20;
+  uint32_t const composer_area_height = 10;
   uint32_t const composer_area_width = terminal_context.cols() - screen_margin.width();
   terminal::Dimension const composer_dimension{composer_area_height, composer_area_width};
   terminal::Position const top_left{terminal_context.rows() - composer_area_height - screen_margin.bottom, screen_margin.left};

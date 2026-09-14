@@ -29,7 +29,8 @@ void WindowPad::pnoutrefresh(ScrollPosition scroll_position)
   {
     // Generate the content of the pad for a window with the given width.
     Dimension const window_dimension = outer_window_.getmaxyx() - border_.margin();
-    generate(window_dimension.width());
+    generate_grapheme_surface(window_dimension.width());
+    generate();
     pad_->set_background(outer_window_.get_background(), false);
   }
   uint32_t const content_rows = Pad::content_rows();

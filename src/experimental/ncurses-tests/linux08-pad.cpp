@@ -15,6 +15,14 @@ namespace terminal = ava::tui::terminal;
 constexpr uint32_t pad_line_width = 120;
 constexpr int paragraph_repetitions = 20;
 
+struct TestPad : public terminal::Pad
+{
+  void generate_grapheme_surface(terminal::columns_t columns, bool blank_line_between_block_rows)
+  {
+    terminal::Pad::generate_grapheme_surface(columns, blank_line_between_block_rows);
+  }
+};
+
 int main()
 {
   Application application("linux08-pad");
@@ -25,15 +33,18 @@ int main()
 
   // Fill the Pad's with the lorem ipsum paragraphs, cycling through them (and through the
   // paragraph default renditions) to get enough content to scroll through.
-  std::array<terminal::Pad, 3> pads;
+  std::array<TestPad, 3> pads;
   int const total_paragraph_count = paragraph_repetitions * static_cast<int>(lorem_ipsum_paragraphs.size());
   for (int paragraph_number = 0; paragraph_number < total_paragraph_count; ++paragraph_number)
     for (int p = 0; p < pads.size(); ++p)
       pads[p].append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
 
+  for (int p = 0; p < pads.size(); ++p)
+    pads[p].generate_grapheme_surface(pad_line_width, true);
+
   // Wrap the content at pad_line_width cells and create the ncurses pad from it.
   for (int p = 0; p < pads.size(); ++p)
-    pads[p].generate(pad_line_width);
+    pads[p].generate();
 
   uint32_t const pad_view_height = 17;
   terminal::Position const top_left_first_pad_view{1, 5};

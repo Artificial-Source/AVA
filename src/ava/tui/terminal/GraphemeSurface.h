@@ -21,9 +21,20 @@ class GraphemeSurface
 
  public:
   // Construct an empty GraphemeSurface pre-allocating a capacity of `reserve_blocks` GraphemeBlockRow's.
-  GraphemeSurface(std::size_t reserve_blocks) : blocks_rows_(core::Application::instance().vec8alloc())
+  GraphemeSurface(std::size_t reserve_blocks = 0) : blocks_rows_(core::Application::instance().vec8alloc())
   {
-    blocks_rows_.reserve(core::Application::Vec8Alloc::optimal_capacity(reserve_blocks));
+    if (reserve_blocks != 0)
+      blocks_rows_.reserve(core::Application::Vec8Alloc::optimal_capacity(reserve_blocks));
+  }
+
+  void reset(std::size_t reserve_blocks)
+  {
+    blocks_rows_.clear();
+    std::size_t optimal_capacity = core::Application::Vec8Alloc::optimal_capacity(reserve_blocks);
+    if (optimal_capacity > blocks_rows_.capacity())
+      blocks_rows_.reserve(optimal_capacity);
+    height_ = 0;
+    width_ = 0;
   }
 
   void append(GraphemeBlockRow&& block_row)

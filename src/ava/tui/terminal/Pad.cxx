@@ -8,7 +8,7 @@
 
 namespace ava::tui::terminal {
 
-GraphemeSurface Pad::generate_grapheme_surface(columns_t columns)
+void Pad::generate_grapheme_surface(columns_t columns, bool blank_line_between_block_rows)
 {
   // Pass at least one terminal column so wrapping can always make progress.
   ASSERT(columns > 0);
@@ -17,24 +17,30 @@ GraphemeSurface Pad::generate_grapheme_surface(columns_t columns)
 
   // Fit every HorizontalLayout first. GraphemeSurface records the widest resulting block row so
   // narrower rows can remain composed entirely of their real LayoutItem content.
-  GraphemeSurface fitted_horizontal_layouts(horizontal_layouts_.size());
+  fitted_horizontal_layouts_.reset(horizontal_layouts_.size());
   for (HorizontalLayout const& horizontal_layout : horizontal_layouts_)
-    fitted_horizontal_layouts.append(horizontal_layout.create_grapheme_block_row(columns));
-  return fitted_horizontal_layouts;
-}
-
-void Pad::generate(columns_t columns, bool blank_line_between_block_rows)
-{
-  GraphemeSurface surface = generate_grapheme_surface(columns);
+    fitted_horizontal_layouts_.append(horizontal_layout.create_grapheme_block_row(columns));
 
   // Initialize the number of content rows.
-  content_rows_ = surface.height() + (blank_line_between_block_rows ? surface.number_of_blocks_rows() - 1 : 0);
+  content_rows_ = fitted_horizontal_layouts_.height() + (blank_line_between_block_rows ? fitted_horizontal_layouts_.number_of_blocks_rows() - 1 : 0);
+
+  // Remember if content_rows_ includes blank lines between the block rows.
+  blank_line_between_block_rows_ = blank_line_between_block_rows;
+
+  // Mark up-to-date.
+  fitted_horizontal_layouts_up_to_date_ = true;
+}
+
+void Pad::generate()
+{
+  // Call generate_grapheme_surface before calling this function.
+  ASSERT(fitted_horizontal_layouts_up_to_date_);
 
   // Determine some initial value for the height of the pad.
   uint32_t const pad_height = std::max(config::max_composer_viewport_height, content_rows_ + growth_slack_rows);
 
   // (Re)create the ncurses pad; the assignment destroys the previously generated pad, if any.
-  pad_ = BasicWindow::newpad({pad_height, surface.width()});
+  pad_ = BasicWindow::newpad({pad_height, fitted_horizontal_layouts_.width()});
 
   // Existing Paragraph rows use their Paragraph default rendition, including alignment filler.
   // Standalone items, missing rows below shorter blocks, and space to the right of a narrower block
@@ -43,7 +49,7 @@ void Pad::generate(columns_t columns, bool blank_line_between_block_rows)
   Dout(dc::notice, "pad_default_rendition = " << pad_default_rendition);
   uint32_t pad_row = 0;
   auto horizontal_layout = horizontal_layouts_.begin();
-  auto const& block_rows = surface.blocks_rows();
+  auto const& block_rows = fitted_horizontal_layouts_.blocks_rows();
   for (auto block_row = block_rows.begin(); block_row != block_rows.end(); ++block_row, ++horizontal_layout)
   {
     auto const& blocks = block_row->blocks();
@@ -67,12 +73,12 @@ void Pad::generate(columns_t columns, bool blank_line_between_block_rows)
         else
           pad_->addspaces(width_of(block), pad_default_rendition);
       }
-      if (block_row->width() < surface.width())
-        pad_->addspaces(surface.width() - block_row->width(), pad_default_rendition);
+      if (block_row->width() < fitted_horizontal_layouts_.width())
+        pad_->addspaces(fitted_horizontal_layouts_.width() - block_row->width(), pad_default_rendition);
       ++pad_row;
     }
 
-    if (blank_line_between_block_rows)
+    if (blank_line_between_block_rows_)
       ++pad_row;
   }
 }

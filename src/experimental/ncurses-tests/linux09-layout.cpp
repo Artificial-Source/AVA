@@ -10,6 +10,14 @@
 
 namespace terminal = ava::tui::terminal;
 
+struct TestPad : public terminal::Pad
+{
+  void generate_grapheme_surface(terminal::columns_t columns, bool blank_line_between_block_rows)
+  {
+    terminal::Pad::generate_grapheme_surface(columns, blank_line_between_block_rows);
+  }
+};
+
 int main()
 {
   Application application("linux09-layout");
@@ -35,9 +43,10 @@ int main()
     Dout(dc::notice, "horizontal_layout1 = " << horizontal_layout1);
   }
 
-  terminal::Pad pad;
+  TestPad pad;
   pad.append(std::move(horizontal_layout1));
-  pad.generate(17, false);
+  pad.generate_grapheme_surface(47, false);
+  pad.generate();
   pad.prefresh({0, 0}, {5, 5}, pad.dimension());
 
   //... allow resizing with keyboard

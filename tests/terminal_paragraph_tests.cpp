@@ -164,6 +164,15 @@ std::array<ExpectedPadRow, 16> const& expected_pad_rows()
   return rows;
 }
 
+struct TestPad : public terminal::Pad
+{
+  void generate(terminal::columns_t columns, bool blank_line_between_block_rows)
+  {
+    generate_grapheme_surface(columns, blank_line_between_block_rows);
+    terminal::Pad::generate();
+  }
+};
+
 // Check Pad::generate(9) for the comment example: the ncurses pad must contain, for every cell, the expected
 // character and the expected rendition (styled, or Paragraph default).
 //
@@ -197,9 +206,9 @@ void test_pad_generate_comment_example()
     terminal::ColorPair styled_pair = terminal_context.create_color_pair(0x111111, 0x888888);
     terminal::Rendition const styled_rendition{styled_pair, terminal::Attribute::bold};
 
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(make_comment_paragraph(styled_rendition));
-    pad.generate(9);
+    pad.generate(9, true);
 
     std::array<ExpectedPadRow, 16> const& expected = expected_pad_rows();
 
@@ -253,9 +262,9 @@ void test_pad_generate_comment_example()
                "right alignment must retain every source character and its GraphemeRun ownership");
       }
 
-      terminal::Pad right_aligned_pad;
+      TestPad right_aligned_pad;
       right_aligned_pad.append(std::move(right_aligned));
-      right_aligned_pad.generate(6);
+      right_aligned_pad.generate(6, true);
 
       std::array<terminal::ComplexChar, 6> right_aligned_cells;
       right_aligned_pad.basic_window().instr({0, 0}, right_aligned_cells.data(), static_cast<int>(right_aligned_cells.size()));
@@ -269,9 +278,9 @@ void test_pad_generate_comment_example()
     // Centered alignment deliberately keeps its prior behavior: retained trailing spaces participate in centering.
     auto centered = terminal::Paragraph::create({.alignment = terminal::HorizontalAlignment::centered});
     centered->append(terminal::TextSpan::create(u8"ab   "));
-    terminal::Pad centered_pad;
+    TestPad centered_pad;
     centered_pad.append(std::move(centered));
-    centered_pad.generate(6);
+    centered_pad.generate(6, true);
     std::array<terminal::ComplexChar, 6> centered_cells;
     centered_pad.basic_window().instr({0, 0}, centered_cells.data(), static_cast<int>(centered_cells.size()));
     std::wstring centered_text;

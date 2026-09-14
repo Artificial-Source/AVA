@@ -125,6 +125,15 @@ void test_large_item_count_layout()
     expect_assigned_width(*items[index], 1, "large-count item " + std::to_string(index));
 }
 
+struct TestPad : public terminal::Pad
+{
+  void generate(terminal::columns_t columns, bool blank_line_between_block_rows)
+  {
+    generate_grapheme_surface(columns, blank_line_between_block_rows);
+    terminal::Pad::generate();
+  }
+};
+
 // Verify that TextSpan truncation counts terminal columns rather than wide characters when rendering mixed-width text.
 //
 // Runs ncurses against temporary files and inspects both left- and right-aligned output. The rocket cannot fit in the
@@ -166,7 +175,7 @@ void test_mixed_width_text_span_rendering()
     horizontal_layout.append(std::move(item0));
     horizontal_layout.append(std::move(item2));
     horizontal_layout.append(std::move(item1));
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(std::move(horizontal_layout));
     pad.generate(32, false);
     expect(pad.dimension().height() == 1 && pad.dimension().width() == 32, "a one-row HorizontalLayout assignment must generate a 1 x 32 pad");
@@ -233,7 +242,7 @@ void test_mixed_width_text_span_rendering()
   {
     terminal::HorizontalLayout horizontal_layout;
     horizontal_layout.append(terminal::TextSpan::create(u8"ab  ", {.alignment = terminal::HorizontalAlignment::right}));
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(std::move(horizontal_layout));
     pad.generate(6, false);
 
@@ -247,7 +256,7 @@ void test_mixed_width_text_span_rendering()
   {
     terminal::HorizontalLayout horizontal_layout;
     horizontal_layout.append(terminal::TextSpan::create(u8"🚀", {.minimum_width = 1}));
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(std::move(horizontal_layout));
     pad.generate(1, false);
 
@@ -260,7 +269,7 @@ void test_mixed_width_text_span_rendering()
     paragraph->append(terminal::TextSpan::create(invalid_utf8));
     paragraph->initialize_cached_natural_width();
 
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(std::move(paragraph));
     pad.generate(3, false);
 
@@ -284,10 +293,10 @@ void test_mixed_width_text_span_rendering()
     terminal::HorizontalLayout second_row;
     second_row.append(std::move(ending));
 
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(std::move(first_row));
     pad.append(std::move(second_row));
-    pad.generate(5);
+    pad.generate(5, true);
 
     expect(pad.dimension().height() == 4 && pad.dimension().width() == 5,
            "two HorizontalLayout block rows must include their tallest blocks and one separating blank row");
@@ -306,7 +315,7 @@ void test_mixed_width_text_span_rendering()
     terminal::HorizontalLayout wider;
     wider.append(terminal::Spacer::create({.minimum_width = 9}));
 
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(std::move(narrower));
     pad.append(std::move(wider));
     pad.generate(2, false);
@@ -330,7 +339,7 @@ void test_mixed_width_text_span_rendering()
     terminal::GraphemeBlockRow block_row = horizontal_layout.create_grapheme_block_row(3);
     expect(block_row.blocks()[0].size() == 1 && block_row.blocks()[1].size() == 2,
            "GraphemeBlockRow must not extend a shorter GraphemeBlock with synthetic rows");
-    terminal::Pad pad;
+    TestPad pad;
     pad.append(std::move(horizontal_layout));
     pad.generate(3, false);
 

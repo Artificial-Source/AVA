@@ -4,6 +4,11 @@
 
 namespace ava::tui::terminal {
 
+// class Spacer
+//
+// A LayoutItem that, like any LayItem, can be appended to a HorizontalLayout representing
+// a number of spaces. The rendition used is ...
+//
 class Spacer final : public LayoutItem
 {
  private:
