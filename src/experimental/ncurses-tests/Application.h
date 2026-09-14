@@ -13,6 +13,7 @@ class Application : public ava::core::Application
   static std::mutex log_mutex_;
   std::string application_name_;
 
+#ifdef CWDEBUG
  private:
   static bool prepare_debug()
   {
@@ -20,9 +21,10 @@ class Application : public ava::core::Application
     Debug(libcw_do.set_ostream(&log_, &log_mutex_));
     return true;
   }
+#endif
 
  public:
-  Application(std::string application_name) : ava::core::Application(prepare_debug()), application_name_(std::move(application_name)) { }
+  Application(std::string application_name) : ava::core::Application(CWDEBUG_ONLY(prepare_debug())), application_name_(std::move(application_name)) { }
 
   [[nodiscard]] std::string_view application_name() const noexcept override { return application_name_; }
 

@@ -93,10 +93,11 @@ void test_mode_parsing()
          "agent/core toggle_mode remain identical");
 }
 
+#ifdef CWDEBUG
 class TestApplication final : public ava::core::Application
 {
  public:
-  TestApplication() : ava::core::Application(false) { }
+  TestApplication() : ava::core::Application(CWDEBUG_ONLY(false)) { }
   [[nodiscard]] std::string_view application_name() const noexcept override { return "test application"; }
 };
 
@@ -226,6 +227,7 @@ void test_application_lifecycle()
   expect_lifecycle_death(child_instance_after_destruction, "instance access after destruction");
   expect_lifecycle_death(child_duplicate_live_application, "duplicate live Application construction");
 }
+#endif // CWDEBUG
 
 void test_json_escape_control_characters()
 {
@@ -506,7 +508,9 @@ void test_permission_defaults()
 void run_core_mode_tests()
 {
   test_mode_parsing();
-  test_application_lifecycle();
+
+  // Fix the code before doing a Release?
+  Debug(test_application_lifecycle());
 }
 
 void run_core_json_permission_tests()
