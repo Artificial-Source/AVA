@@ -11,6 +11,8 @@ struct PositionOffset
 {
   uint32_t row_offset_;
   uint32_t col_offset_;
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // class Position

@@ -178,7 +178,7 @@ void test_mixed_width_text_span_rendering()
     TestPad pad;
     pad.append(std::move(horizontal_layout));
     pad.generate(32, false);
-    expect(pad.dimension().height() == 1 && pad.dimension().width() == 32, "a one-row HorizontalLayout assignment must generate a 1 x 32 pad");
+    expect(pad.content_rows() == 1 && pad.dimension().width() == 32, "a one-row HorizontalLayout assignment must generate a 1 x 32 pad");
     std::wstring expected_output = L"   abcdefghijklmαβ😀γδ 123456789";
     terminal::columns_t col = 0;
     for (size_t i = 0; i != expected_output.size(); ++i)
@@ -273,7 +273,7 @@ void test_mixed_width_text_span_rendering()
     pad.append(std::move(paragraph));
     pad.generate(3, false);
 
-    expect(pad.dimension().height() == 1 && pad.dimension().width() == 3, "a Paragraph containing only an invalid TextSpan must remain a renderable blank row");
+    expect(pad.content_rows() == 1 && pad.dimension().width() == 3, "a Paragraph containing only an invalid TextSpan must remain a renderable blank row");
     expect_character(pad.basic_window(), {0, 0}, L' ', "an invalid TextSpan in a Paragraph must render as empty space");
   }
 
@@ -298,7 +298,7 @@ void test_mixed_width_text_span_rendering()
     pad.append(std::move(second_row));
     pad.generate(5, true);
 
-    expect(pad.dimension().height() == 4 && pad.dimension().width() == 5,
+    expect(pad.content_rows() == 4 && pad.dimension().width() == 5,
            "two HorizontalLayout block rows must include their tallest blocks and one separating blank row");
     expect_character(pad.basic_window(), {0, 0}, L'a', "the first block row must contain the first wrapped paragraph row");
     expect_character(pad.basic_window(), {0, 3}, L'B', "an adjacent one-row item must be written on the first surface row");
@@ -319,8 +319,8 @@ void test_mixed_width_text_span_rendering()
     pad.append(std::move(narrower));
     pad.append(std::move(wider));
     pad.generate(2, false);
-    expect(pad.dimension().height() == 2 && pad.dimension().width() == 9,
-           "Pad must size itself to the widest block row, got " + std::to_string(pad.dimension().height()) + " x " + std::to_string(pad.dimension().width()));
+    expect(pad.content_rows() == 2 && pad.dimension().width() == 9,
+           "Pad must size itself to the widest block row, got " + std::to_string(pad.content_rows()) + " x " + std::to_string(pad.dimension().width()));
   }
 
   {
