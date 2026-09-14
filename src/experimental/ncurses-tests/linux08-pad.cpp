@@ -44,7 +44,7 @@ int main()
 
   // Wrap the content at pad_line_width cells and create the ncurses pad from it.
   for (int p = 0; p < pads.size(); ++p)
-    pads[p].generate();
+    pads[p].build();
 
   uint32_t const pad_view_height = 17;
   terminal::Position const top_left_first_pad_view{1, 5};

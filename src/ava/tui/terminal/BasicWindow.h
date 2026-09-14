@@ -50,6 +50,8 @@ class BasicWindow
   // These are called before ncurses is initialized by the constructor of Context.
   friend class Context;
   friend class Window;
+  friend class WindowBorder;
+  friend class Pad;
   BasicWindow();                // Construct a BasicWindow that has impl_ == nullptr.
   void init_as_stdscr();        // Initialize a default constructed window with stdscr.
 
@@ -58,7 +60,15 @@ class BasicWindow
 
  public:
   // Construct a new BasicWindow with its top-left cell at `pos` with dimension `size`.
-  BasicWindow(Dimension size, Position pos); // newwin
+  BasicWindow(Dimension size, Position pos);            // newwin
+
+  // Call initialize(size, pos) to finish construction of a default constructed BasicWindow.
+  void initialize(Dimension size, Position pos);        // newwin
+
+  bool is_initialized() const
+  {
+    return impl_.get();
+  }
 
   // Construct a new off-screen pad with dimension `size`; pads require explicit pad refresh rectangles.
   static BasicWindow newpad(Dimension size); // newpad
@@ -360,9 +370,9 @@ class BasicWindow
   // Create a pad subwindow of `size` with top-left position `pos` relative to this pad.
   BasicWindow subpad(Dimension size, Position pos);                     // subpad
   // Refresh a pad rectangle starting at `pad_pos` into a screen rectangle.
-  void prefresh(Position pad_pos, Position screen_pos, Dimension viewport_size); // prefresh
+  void prefresh(Position pad_pos, Position viewport_pos, Dimension viewport_size); // prefresh
   // Stage a pad rectangle starting at `pad_pos` into a screen rectangle without updating the terminal.
-  void pnoutrefresh(Position pad_pos, Position screen_pos, Dimension viewport_size); // pnoutrefresh
+  void pnoutrefresh(Position pad_pos, Position viewport_pos, Dimension viewport_size); // pnoutrefresh
   // Add `complex_char` to a pad and refresh the pad using ncurses' remembered pad viewport.
   void pechochar(ComplexChar const& complex_char);                      // pecho_wchar
 

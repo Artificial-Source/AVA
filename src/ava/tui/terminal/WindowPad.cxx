@@ -3,46 +3,48 @@
 
 namespace ava::tui::terminal {
 
-WindowPad::WindowPad(Dimension window_size, Position window_pos, Rendition rendition, Border border) : WindowBorder(window_size, window_pos, rendition, border)
+WindowPad::WindowPad(columns_t window_width, Position window_bottom_left, Rendition rendition, Border border)
+  : WindowBorder(window_width, window_bottom_left, rendition, border)
 {
 }
 
-void WindowPad::do_pnoutrefresh(uint32_t pad_row, uint32_t n)
+void WindowPad::do_pnoutrefresh(uint32_t pad_row)
 {
-  DoutEntering(dc::terminal, "WindowPad::do_prefresh(" << pad_row << ", " << n << ")");
+  DoutEntering(dc::terminal, "WindowPad::do_prefresh(" << pad_row << ")");
+
+  if (!pad_.is_initialized())
+  {
+    // Construct the ncurses pad and write the grapheme clusters to it.
+    build();
+    pad_.set_background(outer_window_.get_background(), false);
+  }
+
   Margin const margin{border_.margin()};
   Position const pos = outer_window_.getbegyx() + margin;
-  Dimension const window_dimension = outer_window_.getmaxyx() - border_.margin();
-  Dimension const screen_dimension{n, window_dimension.width()};
+  Dimension const viewport_size = outer_window_.getmaxyx() - border_.margin();
   if (need_border_refresh_)
   {
     outer_window_.wnoutrefresh();
     need_border_refresh_ = false;
   }
-  pad_->pnoutrefresh({pad_row, 0}, pos, screen_dimension);
+  pad_.pnoutrefresh({pad_row, 0}, pos, viewport_size);
 }
 
 void WindowPad::pnoutrefresh(ScrollPosition scroll_position)
 {
-  Dimension window_dimension = outer_window_.getmaxyx() - border_.margin();
-  if (!pad_.has_value())
-  {
-    // Generate the content of the pad for a window with the given width.
-    Dimension const window_dimension = outer_window_.getmaxyx() - border_.margin();
-    generate_grapheme_surface(window_dimension.width());
-    generate();
-    pad_->set_background(outer_window_.get_background(), false);
-  }
+  // Call set_height before calling this function.
+  ASSERT(outer_window_.is_initialized());
+
+  uint32_t const viewport_height = outer_window_.getmaxyx().height() - border_.margin().height();
   uint32_t const content_rows = Pad::content_rows();
-  if (content_rows < window_dimension.height())
+  if (content_rows < viewport_height)
     scroll_position = ScrollPosition::begin;
 
   // We always start appending from the top-left.
-  pad_->move({0, 0});
   if (scroll_position == ScrollPosition::begin)
-    do_pnoutrefresh(0, std::min(content_rows, window_dimension.height()));
+    do_pnoutrefresh(0);
   else
-    do_pnoutrefresh(content_rows - window_dimension.height(), window_dimension.height());
+    do_pnoutrefresh(content_rows - viewport_height);
 }
 
 } // namespace ava::tui::terminal

@@ -27,14 +27,14 @@ class GraphemeSurface
       blocks_rows_.reserve(core::Application::Vec8Alloc::optimal_capacity(reserve_blocks));
   }
 
-  void reset(std::size_t reserve_blocks)
+  void reset(std::size_t reserve_blocks, columns_t width)
   {
     blocks_rows_.clear();
     std::size_t optimal_capacity = core::Application::Vec8Alloc::optimal_capacity(reserve_blocks);
     if (optimal_capacity > blocks_rows_.capacity())
       blocks_rows_.reserve(optimal_capacity);
     height_ = 0;
-    width_ = 0;
+    width_ = width;
   }
 
   void append(GraphemeBlockRow&& block_row)

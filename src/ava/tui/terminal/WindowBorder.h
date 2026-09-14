@@ -9,7 +9,23 @@ namespace ava::tui::terminal {
 
 class WindowBorder
 {
+ public:
+  struct DelayedInitializationData
+  {
+    columns_t window_width_;
+    Position window_bottom_left_;
+    Rendition rendition_;
+
+    // Construct a DelayedInitializationData object that won't be used.
+    DelayedInitializationData() : rendition_{{}} {}
+    DelayedInitializationData(columns_t window_width, Position window_bottom_left, Rendition rendition) :
+      window_width_(window_width), window_bottom_left_(window_bottom_left), rendition_(rendition) { }
+
+    AVA_DEBUG_PRINT_MEMBERS_ON
+  };
+
  protected:
+  DelayedInitializationData data_;      // Data used to construct outer_window_ once set_height is being called.
   BasicWindow outer_window_;            // The margin-inclusive parent, or an empty wrapper when the margin is empty.
   Border const border_;                 // The immutable border and margin configuration.
   bool need_border_refresh_ = false;    // True iff the outer border must be staged before refreshing the writable area.
@@ -22,6 +38,14 @@ class WindowBorder
   // The inherited BasicWindow coordinates and dimensions describe the writable interior. The border is drawn on the
   // margin-inclusive outer window. `border.margin()` must leave at least one interior row and column.
   WindowBorder(Dimension size, Position pos, Rendition rendition, Border const& border);
+
+  // Construct a WindowBorder for Window with width `window_width` and its bottom-left corner at `window_bottom_left`.
+  // `rendition` and `border` as above. The outer_window_ is not created yet. Call set_height to (re)create outer_window_.
+  WindowBorder(uint32_t window_width, Position window_bottom_left, Rendition rendition, Border const& border);
+
+  // Change, or set the height of the window. This might create the window, or move/resize it, keeping its bottom-left
+  // corner in the same place.
+  void set_height(uint32_t window_height);
 
   WindowBorder(WindowBorder const&) = delete;
   WindowBorder& operator=(WindowBorder const&) = delete;

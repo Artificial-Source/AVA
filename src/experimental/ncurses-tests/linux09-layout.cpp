@@ -46,7 +46,7 @@ int main()
   TestPad pad;
   pad.append(std::move(horizontal_layout1));
   pad.generate_grapheme_surface(47, false);
-  pad.generate();
+  pad.build();
   pad.prefresh({0, 0}, {5, 5}, pad.dimension());
 
   //... allow resizing with keyboard

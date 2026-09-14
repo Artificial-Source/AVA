@@ -20,18 +20,18 @@ struct BasicWindow::Handle
   WINDOW* handle_;
 
  private:
-  static int screen_max_row(Position screen_pos, Dimension screen_size)
+  static int viewport_max_row(Position viewport_pos, Dimension viewport_size)
   {
     // The caller must pass a positive screen height; a zero height would compute an inclusive maximum row above the window.
-    ASSERT(screen_size.height() > 0);
-    return static_cast<int>(screen_pos.row() + screen_size.height() - 1);
+    ASSERT(viewport_size.height() > 0);
+    return static_cast<int>(viewport_pos.row() + viewport_size.height() - 1);
   }
 
-  static int screen_max_col(Position screen_pos, Dimension screen_size)
+  static int viewport_max_col(Position viewport_pos, Dimension viewport_size)
   {
     // The caller must pass a positive screen width; a zero width would compute an inclusive maximum column left of the window.
-    ASSERT(screen_size.width() > 0);
-    return static_cast<int>(screen_pos.col() + screen_size.width() - 1);
+    ASSERT(viewport_size.width() > 0);
+    return static_cast<int>(viewport_pos.col() + viewport_size.width() - 1);
   }
 
   static std::vector<cchar_t> convert_to_cchar_vector(ComplexChar const* str, int n)
@@ -829,22 +829,22 @@ struct BasicWindow::Handle
     return ::subpad(handle_, size.height(), size.width(), pos.row(), pos.col());
   }
 
-  int prefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
+  int prefresh(Position pad_pos, Position viewport_pos, Dimension viewport_size)
   {
     // https://invisible-island.net/ncurses/man/curs_pad.3x.html
     //
     // prefresh copies a rectangle from the pad, starting at pad_pos, to an inclusive rectangle on the physical screen.
-    return ::prefresh(handle_, pad_pos.row(), pad_pos.col(), screen_pos.row(), screen_pos.col(), screen_max_row(screen_pos, viewport_size),
-                      screen_max_col(screen_pos, viewport_size));
+    return ::prefresh(handle_, pad_pos.row(), pad_pos.col(), viewport_pos.row(), viewport_pos.col(), viewport_max_row(viewport_pos, viewport_size),
+                      viewport_max_col(viewport_pos, viewport_size));
   }
 
-  int pnoutrefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
+  int pnoutrefresh(Position pad_pos, Position viewport_pos, Dimension viewport_size)
   {
     // https://invisible-island.net/ncurses/man/curs_pad.3x.html
     //
     // pnoutrefresh stages a pad rectangle on the virtual screen; doupdate performs the physical update later.
-    return ::pnoutrefresh(handle_, pad_pos.row(), pad_pos.col(), screen_pos.row(), screen_pos.col(), screen_max_row(screen_pos, viewport_size),
-                          screen_max_col(screen_pos, viewport_size));
+    return ::pnoutrefresh(handle_, pad_pos.row(), pad_pos.col(), viewport_pos.row(), viewport_pos.col(), viewport_max_row(viewport_pos, viewport_size),
+                          viewport_max_col(viewport_pos, viewport_size));
   }
 
   int pechochar(ComplexChar const& complex_char)
@@ -1151,6 +1151,13 @@ BasicWindow::BasicWindow(std::unique_ptr<Handle> impl) : impl_(std::move(impl))
 }
 
 BasicWindow::BasicWindow() = default;
+
+void BasicWindow::initialize(Dimension size, Position pos)
+{
+  // Only call this function on a default constructed BasicWindow. Only call it once.
+  ASSERT(!impl_);
+  impl_ = std::make_unique<Handle>(size, pos);
+}
 
 void BasicWindow::init_as_stdscr()
 {
@@ -1780,17 +1787,17 @@ BasicWindow BasicWindow::subpad(Dimension size, Position pos)
   return BasicWindow(std::make_unique<Handle>(res));
 }
 
-void BasicWindow::prefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
+void BasicWindow::prefresh(Position pad_pos, Position viewport_pos, Dimension viewport_size)
 {
-  [[maybe_unused]] int res = impl_->prefresh(pad_pos, screen_pos, viewport_size);
-  // prefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, screen_pos, and viewport_size to valid ranges.
+  [[maybe_unused]] int res = impl_->prefresh(pad_pos, viewport_pos, viewport_size);
+  // prefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, viewport_pos, and viewport_size to valid ranges.
   ASSERT(res != ERR);
 }
 
-void BasicWindow::pnoutrefresh(Position pad_pos, Position screen_pos, Dimension viewport_size)
+void BasicWindow::pnoutrefresh(Position pad_pos, Position viewport_pos, Dimension viewport_size)
 {
-  [[maybe_unused]] int res = impl_->pnoutrefresh(pad_pos, screen_pos, viewport_size);
-  // pnoutrefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, screen_pos, and viewport_size to valid ranges.
+  [[maybe_unused]] int res = impl_->pnoutrefresh(pad_pos, viewport_pos, viewport_size);
+  // pnoutrefresh returns ERR when the requested rectangles fall outside the pad or the screen; clamp pad_pos, viewport_pos, and viewport_size to valid ranges.
   ASSERT(res != ERR);
 }
 

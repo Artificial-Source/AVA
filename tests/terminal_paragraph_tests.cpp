@@ -169,7 +169,7 @@ struct TestPad : public terminal::Pad
   void generate(terminal::columns_t columns, bool blank_line_between_block_rows)
   {
     generate_grapheme_surface(columns, blank_line_between_block_rows);
-    terminal::Pad::generate();
+    build();
   }
 };
 

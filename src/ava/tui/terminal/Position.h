@@ -7,6 +7,12 @@
 
 namespace ava::tui::terminal {
 
+struct PositionOffset
+{
+  uint32_t row_offset_;
+  uint32_t col_offset_;
+};
+
 // class Position
 //
 // The coordinates of the top-left cell of a block of terminal cell-characters in (row, col).
@@ -33,7 +39,38 @@ class Position
   uint32_t row() const { return row_; }
   uint32_t col() const { return col_; }
 
-  friend Position operator+(Position pos, Margin margin) { return {pos.row_ + margin.top, pos.col_ + margin.left}; }
+  Position operator+(Margin margin) const
+  {
+    return {row_ + margin.top, col_ + margin.left};
+  }
+
+  Position& operator+=(PositionOffset delta)
+  {
+    row_ += delta.row_offset_;
+    col_ += delta.col_offset_;
+    return *this;
+  }
+
+  Position& operator-=(PositionOffset delta)
+  {
+    row_ -= delta.row_offset_;
+    col_ -= delta.col_offset_;
+    return *this;
+  }
+
+  Position operator+(PositionOffset delta)
+  {
+    Position result(*this);
+    result += delta;
+    return result;
+  }
+
+  Position operator-(PositionOffset delta)
+  {
+    Position result(*this);
+    result -= delta;
+    return result;
+  }
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

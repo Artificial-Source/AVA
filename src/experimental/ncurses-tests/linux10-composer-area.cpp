@@ -43,24 +43,26 @@ int main()
   //  ╳  ┃░░·← 0,0▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█  ╳          ░ : additional composer_margin area
   //  ╳╾╼┃░░▒▒▒▒▒▒▒▒▒▒▒pad viewport▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█╾╼╳          ▒ : pad viewport area
   //  ╳12┃░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█12╳          ╳ : terminal edge
+  //  ╳  ┃░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░█  ╳
   //  ╳  ┃░░Coder░·░GPT-5.6░Sol░OpenAI░░░░░░░░░░░░█⎤2╳ (bottom)
   //  ╳  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀⎦1╳
   //  ╳  /project/path          2 (screen margin)    ╳
   //  ╳  ↑ accent bar           1                    ╳
   //  ╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳
   constexpr terminal::Margin const screen_margin{.top = 0, .bottom = 2, .left = 2, .right = 2};
-  constexpr terminal::Margin const composer_margin{.top = 1, .bottom = 2, .left = 3, .right = 2};
+  constexpr terminal::Margin const composer_margin{.top = 1, .bottom = 3, .left = 3, .right = 2};
 
-  uint32_t const composer_area_height = 10;
-  uint32_t const composer_area_width = terminal_context.cols() - screen_margin.width();
-  terminal::Dimension const composer_dimension{composer_area_height, composer_area_width};
-  terminal::Position const top_left{terminal_context.rows() - composer_area_height - screen_margin.bottom, screen_margin.left};
+  terminal::columns_t const composer_area_width = terminal_context.cols() - screen_margin.width();
+  terminal::Position const bottom_left{terminal_context.rows() - screen_margin.bottom, screen_margin.left};
   terminal::Border const composer_border{composer_margin, border_color_pair, accent_bar_color_pair, composer_box};
-  terminal::WindowPad composer_area(composer_dimension, top_left, composer_rendition, composer_border);
+  terminal::WindowPad composer_area(composer_area_width, bottom_left, composer_rendition, composer_border);
 
   constexpr int total_paragraph_count = 2;
   for (int paragraph_number = 0; paragraph_number < total_paragraph_count; ++paragraph_number)
     composer_area.append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
+
+  // Generate the content of the pad.
+  composer_area.generate();
 
   // Write the background color to the virtual screen (erase it).
   terminal_context.stdscr().wnoutrefresh();
