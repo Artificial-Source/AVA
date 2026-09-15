@@ -61,7 +61,7 @@ int main()
   for (int paragraph_number = 0; paragraph_number < total_paragraph_count; ++paragraph_number)
     composer_area.append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
 
-  // Generate the content of the pad.
+  // Generate the graphemes content of the pad, determine the required window height and create the window.
   composer_area.generate();
 
   // Write the background color to the virtual screen (erase it).
