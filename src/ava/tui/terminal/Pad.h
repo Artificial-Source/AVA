@@ -33,6 +33,7 @@ class Pad
   GraphemeSurface fitted_horizontal_layouts_;           // The grapheme clusters that make up this pad; (re)initialized by a call to generate_grapheme_surface.
   bool blank_line_between_block_rows_;                  // The last blank_line_between_block_rows used with generate_grapheme_surface.
   bool fitted_horizontal_layouts_up_to_date_{false};    // True iff fitted_horizontal_layouts_ is up to date.
+  bool has_cursor_{false};                              // True iff this pad must show a cursor when updating its viewport.
   BasicWindow pad_;                                     // The ncurses pad created by the last build() call, if any.
   uint32_t content_rows_{};                             // The number rows of content: the height of the GraphemeSurface returned
                                                         // by generate_grapheme_surface, or somehow updated equivalent of that.

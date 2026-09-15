@@ -36,6 +36,10 @@ Context::Context(FILE* outfd, FILE* infd) : output_file_(outfd == nullptr ? stdo
     first_screen_ = std::move(first_screen);
   }
 
+  // Determine available capabilities.
+  char* cap = tigetstr("cvvis");
+  has_cvvis_cap_ = cap != nullptr && cap != reinterpret_cast<char*>(-1);
+
   // Initialize the stdsrc_ handle.
   stdscr_.init_as_stdscr();
 
@@ -52,6 +56,7 @@ Context::Context(FILE* outfd, FILE* infd) : output_file_(outfd == nullptr ? stdo
   noecho();
   nl();                 // Always translate the Enter key to a linefeed.
   meta(::stdscr, TRUE); // Always return 8-bit character codes.
+  curs_set(FALSE);      // The cursor is turned on as soon as the composer area is created.
 
   // Refresh stdscr once to consume its initial all-touched state, and to clear
   // whatever the previous program left on the physical terminal.

@@ -62,7 +62,7 @@ int main()
     composer_area.append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
 
   // Generate the graphemes content of the pad, determine the required window height and create the window.
-  composer_area.generate();
+  composer_area.generate(true, true);
 
   // Write the background color to the virtual screen (erase it).
   terminal_context.stdscr().wnoutrefresh();

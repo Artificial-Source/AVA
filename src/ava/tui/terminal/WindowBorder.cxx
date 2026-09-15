@@ -18,6 +18,14 @@ WindowBorder::WindowBorder(uint32_t window_width, Position window_bottom_left, R
 {
 }
 
+void WindowBorder::draw_border()
+{
+  // Do not call this function on a window with an empty margin.
+  ASSERT(has_margin());
+  outer_window_.set_border(border_);
+  need_border_refresh_ = true;
+}
+
 void WindowBorder::set_height(uint32_t window_height)
 {
   // Implement updating.
@@ -30,14 +38,6 @@ void WindowBorder::set_height(uint32_t window_height)
 
   if (has_margin())
     draw_border();
-}
-
-void WindowBorder::draw_border()
-{
-  // Do not call this function on a window with an empty margin.
-  ASSERT(has_margin());
-  outer_window_.set_border(border_);
-  need_border_refresh_ = true;
 }
 
 } // namespace ava::tui::terminal

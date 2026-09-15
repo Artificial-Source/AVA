@@ -5,6 +5,7 @@
 #include "Color.h"
 #include "ColorPair.h"
 #include "ComplexChar.h"
+#include "Cursor.h"
 
 #include <memory>
 #include <optional>
@@ -24,13 +25,15 @@ class Context final
   friend class ColorPalette;
 
  private:
-  BasicScreen first_screen_;                                            // Owns the screen iff `outfd` and `infd` are passed to the constructor.
-  BasicWindow stdscr_;                                                  // The entire surface of the current terminal screen.
-  FILE* output_file_;                                                   // Non-owning stream connected to the terminal emulator.
-  Rendition default_rendition_;                                         // The rendition to use for text that doesn't have any defined of its own.
-  bool default_colors_enabled_ = false;                                 // Whether -1 selects the terminal's default colors.
-  std::vector<ColorPair> color_pairs_;                                  // All registered foreground/background color pairs so far.
-  std::unique_ptr<ColorPalette> color_palette_;                         // The live color palette of stdscr if the terminal isn't direct-color.
+  BasicScreen first_screen_;                                    // Owns the screen iff `outfd` and `infd` are passed to the constructor.
+  BasicWindow stdscr_;                                          // The entire surface of the current terminal screen.
+  FILE* output_file_;                                           // Non-owning stream connected to the terminal emulator.
+  Rendition default_rendition_;                                 // The rendition to use for text that doesn't have any defined of its own.
+  bool has_cvvis_cap_;                                          // True iff the current TERM supports cvvis, meaning that `cursor_visibility = 2` can be used.
+  bool default_colors_enabled_ = false;                         // Whether -1 selects the terminal's default colors.
+  std::vector<ColorPair> color_pairs_;                          // All registered foreground/background color pairs so far.
+  std::unique_ptr<ColorPalette> color_palette_;                 // The live color palette of stdscr if the terminal isn't direct-color.
+  CursorState cursor_state_;                                    // The current cursor state, corresponding to the last call to apply_cursor_settings.
 
  public:
   Context(FILE* outfd = nullptr, FILE* infd = nullptr);
@@ -66,6 +69,11 @@ class Context final
 
   bool has_colors() const;                                              // has_colors
   bool can_change_colors() const;
+
+  // Cursor control.
+
+  void apply_cursor_settings(CursorSettings const& settings) { cursor_state_.apply(settings); }
+  CursorSettings const& cursor_settings() const { return cursor_state_.cursor_settings_; }
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 

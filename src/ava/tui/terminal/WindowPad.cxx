@@ -12,21 +12,49 @@ void WindowPad::do_pnoutrefresh(uint32_t pad_row)
 {
   DoutEntering(dc::terminal, "WindowPad::do_prefresh(" << pad_row << ")");
 
+  // pad_row must be a valid row, or point to one beyond the last content row.
+  ASSERT(pad_row <= content_rows_);
+
   if (!pad_.is_initialized())
   {
     // Construct the ncurses pad and write the grapheme clusters to it.
     build();
     pad_.set_background(outer_window_.get_background(), false);
+    if (has_cursor_)
+    {
+      // This pad is the compose area. Keep the cursor inside and make it visible.
+      pad_.leaveok(false);
+      pad_.curs_set(config::cursor_visibility);
+    }
   }
 
   Margin const margin{border_.margin()};
   Position const pos = outer_window_.getbegyx() + margin;
   Dimension const viewport_size = outer_window_.getmaxyx() - border_.margin();
+
+  // 0: ╳ row 0             ⎤
+  // 1: ╳ row 1             ⎥
+  // 2: ╳                   ⎥- content_rows_ = 8
+  // 3: ╳                   ⎥
+  // 4: ╳╳╳viewport:╳╳╳╳╳╳╳╳⎥╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳
+  // 5: ╳pad_row: text      ⎥                     ⎤  pad_row = 5
+  // 6: ╳pad_row+1: text    ⎥                     ⎥
+  // 7: ╳pad_row+2: text    ⎦                     ⎥- viewport_size.height()
+  // 8: ╳             <empty line>                ⎦
+  // 9: ╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳
+  //
+  bool const empty_line_available = content_rows_ - pad_row > viewport_size.height();
+
+  // Make room for the cursor if the last line spans the full width.
+  if (has_cursor_ && last_line_is_full_ && !empty_line_available)
+    ++pad_row;
+
   if (need_border_refresh_)
   {
     outer_window_.wnoutrefresh();
     need_border_refresh_ = false;
   }
+
   pad_.pnoutrefresh({pad_row, 0}, pos, viewport_size);
 }
 

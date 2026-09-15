@@ -227,7 +227,7 @@ void test_mixed_width_text_span_rendering()
              "right-alignment rendering must not remove the source GraphemeRun's trailing spaces");
 
       terminal::BasicWindow pad = terminal::BasicWindow::newpad({1, 9});
-      rows.front().write_to(pad, terminal::Rendition{terminal::ColorPair{}});
+      rows.front().write_to(pad, terminal::Rendition{terminal::ColorPair{}}, true);
       terminal::Position const cursor = pad.getyx();
       expect(cursor.row() == 0 && cursor.col() == 7, "right-aligned mixed-width output must advance by exactly seven columns");
       expect_character(pad, {0, 0}, L' ', "right-aligned mixed-width output must begin with filler space");

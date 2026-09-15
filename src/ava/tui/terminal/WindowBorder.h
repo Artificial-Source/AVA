@@ -43,14 +43,19 @@ class WindowBorder
   // `rendition` and `border` as above. The outer_window_ is not created yet. Call set_height to (re)create outer_window_.
   WindowBorder(uint32_t window_width, Position window_bottom_left, Rendition rendition, Border const& border);
 
-  // Change, or set the height of the window. This might create the window, or move/resize it, keeping its bottom-left
-  // corner in the same place.
-  void set_height(uint32_t window_height);
-
   WindowBorder(WindowBorder const&) = delete;
   WindowBorder& operator=(WindowBorder const&) = delete;
   WindowBorder(WindowBorder&&) = delete;
   WindowBorder& operator=(WindowBorder&&) = delete;
+
+  // Redraw the configured border on the margin-inclusive outer window.
+  //
+  // Calling this on a Window with an empty margin is a programming error because no separate outer window exists.
+  void draw_border();
+
+  // Change, or set the height of the window. This might create the window, or move/resize it, keeping its bottom-left
+  // corner in the same place.
+  void set_height(uint32_t window_height);
 
   // Accessors.
 
@@ -58,11 +63,6 @@ class WindowBorder
 
   // Return true if this Window has a margin (and border).
   bool has_margin() const { return !border_.empty(); }
-
-  // Redraw the configured border on the margin-inclusive outer window.
-  //
-  // Calling this on a Window with an empty margin is a programming error because no separate outer window exists.
-  void draw_border();
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

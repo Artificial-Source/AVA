@@ -218,7 +218,9 @@ GraphemeSpan::GraphemeSpan(TextSpan const& source, columns_t max_columns, Horizo
 // Trailing white-space is still written - it carries the background color of its rendition - but is clipped
 // at `max_columns_` terminal columns. A GraphemeSpan can only go beyond its `max_columns_` with spaces,
 // therefore only spaces might get clipped. Retained trailing white-space is written with its source rendition
-// when it falls inside `max_columns_`, while extra filler space is written using the default rendition.
+// when it falls inside `max_columns_`, while extra filler space is written using the default rendition,
+// unless write_trailing_filler_spaces is false, which should only be the case for the last GraphemeSpan of
+// a Paragraph.
 //
 // In the case of right alignment the width through the last non-white-space grapheme is used, so no trailing
 // white-space is visible.
@@ -229,9 +231,9 @@ GraphemeSpan::GraphemeSpan(TextSpan const& source, columns_t max_columns, Horizo
 // That is the benign ncurses corner case tolerated by BasicWindow::addstr (even though ncurses `addstr` returns
 // ERR because it can't advance the cursor).
 //
-void GraphemeSpan::write_to(BasicWindow& basic_window, Rendition const& default_rendition) const
+void GraphemeSpan::write_to(BasicWindow& basic_window, Rendition const& default_rendition, bool write_trailing_filler_spaces) const
 {
-  DoutEntering(dc::terminal, "GraphemeSpan::write_to(" << basic_window << ", " << default_rendition << ")");
+  DoutEntering(dc::terminal, "GraphemeSpan::write_to(" << basic_window << ", " << default_rendition << ", " << write_trailing_filler_spaces << ")");
   Dout(dc::terminal, "Contents of this GraphemeSpan: " << *this);
 
   // Track the rendition that ncurses would still use, starting from the current one,
@@ -318,7 +320,7 @@ void GraphemeSpan::write_to(BasicWindow& basic_window, Rendition const& default_
   }
 
   // Write the trailing spaces, if any.
-  if (remaining_columns > 0)
+  if (write_trailing_filler_spaces && remaining_columns > 0)
     basic_window.addspaces(remaining_columns, default_rendition);
 
   // Restore the rendition that the basic_window had before writing this row.

@@ -15,13 +15,26 @@ enum class ScrollPosition
 
 class WindowPad : public WindowBorder, public Pad
 {
+ private:
+  // The following, as well as Pad::has_cursor_, is only valid after calling generate.
+  bool last_line_is_full_;      // Set to true iff `has_cursor` was true and the bottom line has a width equal to the grapheme surface.
+
  public:
   WindowPad(columns_t window_width, Position window_bottom_left, Rendition rendition, Border border);
 
-  void generate(bool blank_line_between_block_rows = true)
+  void generate(bool has_cursor, bool blank_line_between_block_rows)
   {
-    generate_grapheme_surface(data_.window_width_, blank_line_between_block_rows);
+    has_cursor_ = has_cursor;
+    columns_t const viewport_width = data_.window_width_ - border_.margin().width();
+    generate_grapheme_surface(viewport_width, blank_line_between_block_rows);
+
     uint32_t window_height = std::min(std::max(1U, content_rows_), config::max_composer_viewport_height) + border_.margin().height();
+    last_line_is_full_ = fitted_horizontal_layouts_.width_last_line() == viewport_width;
+
+    // Make room for the cursor if the last line spans the full width and the window can grow.
+    if (has_cursor && last_line_is_full_ && window_height < config::max_composer_viewport_height)
+      ++window_height;
+
     set_height(window_height);
   }
 

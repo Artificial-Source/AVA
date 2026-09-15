@@ -12,9 +12,10 @@ namespace ava::tui::terminal {
 //
 class GraphemeSurface
 {
- private:
+ public:
   using blocks_rows_type = std::vector<GraphemeBlockRow, core::Application::Vec8Alloc::rebind<GraphemeBlockRow>::other>;
 
+ private:
   blocks_rows_type blocks_rows_;
   uint32_t height_{};                           // The height of the surface, in terminal rows.
   columns_t width_{};                           // The width of the widest block row, in terminal columns.
@@ -53,6 +54,17 @@ class GraphemeSurface
   // Convenience accessors.
   Dimension dimension() const { return {height_, width_}; }
   uint32_t number_of_blocks_rows() const { return static_cast<uint32_t>(blocks_rows_.size()); }
+
+  columns_t width_last_line() const
+  {
+    columns_t width = 0;
+    if (!blocks_rows_.empty())
+    {
+      GraphemeBlockRow const& last_block_row = blocks_rows_.back();
+      width = last_block_row.width_last_line();
+    }
+    return width;
+  }
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

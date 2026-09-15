@@ -88,7 +88,7 @@ class GraphemeSpan
   GraphemeRun append(GraphemeRun&& source);
 
   // Write the span to a BasicWindow at the current cursor position.
-  void write_to(BasicWindow& basic_window, Rendition const& default_rendition) const;
+  void write_to(BasicWindow& basic_window, Rendition const& default_rendition, bool write_trailing_spaces) const;
 
   // Accessors.
   columns_t max_columns() const { return max_columns_; }

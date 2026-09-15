@@ -10,6 +10,8 @@ namespace ava::tui::terminal {
 
 void Pad::generate_grapheme_surface(columns_t columns, bool blank_line_between_block_rows)
 {
+  DoutEntering(dc::notice, "Pad::generate_grapheme_surface(" << columns << ", " << blank_line_between_block_rows << ")");
+
   // Pass at least one terminal column so wrapping can always make progress.
   ASSERT(columns > 0);
 
@@ -21,6 +23,7 @@ void Pad::generate_grapheme_surface(columns_t columns, bool blank_line_between_b
 
   // Initialize the number of content rows.
   content_rows_ = fitted_horizontal_layouts_.height() + (blank_line_between_block_rows ? std::max(1U, fitted_horizontal_layouts_.number_of_blocks_rows()) - 1 : 0);
+  Dout(dc::notice, "content_rows_ set to " << content_rows_);
 
   // Remember if content_rows_ includes blank lines between the block rows.
   blank_line_between_block_rows_ = blank_line_between_block_rows;
@@ -47,32 +50,46 @@ void Pad::build()
   Dout(dc::notice, "pad_default_rendition = " << pad_default_rendition);
   uint32_t pad_row = 0;
   auto horizontal_layout = horizontal_layouts_.begin();
-  auto const& block_rows = fitted_horizontal_layouts_.blocks_rows();
+  GraphemeSurface::blocks_rows_type const& block_rows = fitted_horizontal_layouts_.blocks_rows();
+  // Run over all GraphemeBlockRow's of the fitted_horizontal_layouts_ GraphemeSurface.
   for (auto block_row = block_rows.begin(); block_row != block_rows.end(); ++block_row, ++horizontal_layout)
   {
-    auto const& blocks = block_row->blocks();
-    auto const& layout_items = horizontal_layout->layout_items();
+    GraphemeBlockRow::blocks_type const& blocks = block_row->blocks();
+    HorizontalLayout::layout_items_type const& layout_items = horizontal_layout->layout_items();
     // Every generated block corresponds to exactly one source LayoutItem in display order.
     ASSERT(blocks.size() == layout_items.size());
 
+    // Run vertically over all terminal rows in this block_row.
     for (uint32_t row_in_block = 0; row_in_block < block_row->height(); ++row_in_block)
     {
-      pad_.move(Position{pad_row, 0});
+      bool const last_row = row_in_block == block_row->height() - 1;
+      columns_t last_pad_col = -1;
+      columns_t pad_col = 0;
+      // Run horizontally over all GraphemeBlock's in the block_row.
       for (std::size_t block_index = 0; block_index < blocks.size(); ++block_index)
       {
+        if (pad_col != last_pad_col)
+        {
+          pad_.move(Position{pad_row, pad_col});
+          last_pad_col = pad_col;
+        }
         GraphemeBlock const& block = blocks[block_index];
         GraphemeBlockIndex const grapheme_row{row_in_block};
+        // Is the height of this block large enough to have a terminal row at this grapheme_row?
+        pad_col += width_of(block);
         if (grapheme_row < block.iend())
         {
           Paragraph const* paragraph = dynamic_cast<Paragraph const*>(layout_items[block_index].get());
           Rendition const& default_rendition = paragraph ? paragraph->default_rendition() : pad_default_rendition;
-          block[grapheme_row].write_to(pad_, default_rendition);
+          bool const write_trailing_filler_spaces = !last_row || block_index != blocks.size() - 1;
+          block[grapheme_row].write_to(pad_, default_rendition, write_trailing_filler_spaces);
+          // The cursor is now at pad_col, unless write_trailing_filler_spaces is false, but then
+          // we'll leave both loops anyway and won't be using last_pad_col anymore.
+          last_pad_col = pad_col;
         }
-        else
-          pad_.addspaces(width_of(block), pad_default_rendition);
       }
-      if (block_row->width() < fitted_horizontal_layouts_.width())
-        pad_.addspaces(fitted_horizontal_layouts_.width() - block_row->width(), pad_default_rendition);
+      //if (block_row->width() < fitted_horizontal_layouts_.width())
+      //  pad_.addspaces(fitted_horizontal_layouts_.width() - block_row->width(), pad_default_rendition);
       ++pad_row;
     }
 

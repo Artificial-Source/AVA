@@ -77,6 +77,10 @@ struct BasicWindow::Handle
     res = ::notimeout(handle_, FALSE);
     // notimeout returns ERR when the WINDOW handle is invalid; this initializer requires a live ncurses window.
     ASSERT(res == OK);
+    // By default no window has a cursor.
+    res  = ::leaveok(handle_, TRUE);
+    // leaveok returns ERR only when the window handle is invalid; call leaveok on a live Window.
+    ASSERT(res != ERR);
   }
 
  public:
@@ -1749,7 +1753,11 @@ void BasicWindow::curs_set(int visibility)
 {
   [[maybe_unused]] int res = Handle::curs_set(visibility);
   // curs_set returns ERR when the terminal does not support the requested cursor visibility; check the cursor-visibility capability before requesting a change.
-  ASSERT(res != ERR);
+  if (res == ERR)
+  {
+    Dout(dc::warning, "Call to `curs_set(" << visibility << ")` failed. Failing back to curs_set(1).");
+    Handle::curs_set(1);
+  }
 }
 
 void BasicWindow::printw(char const* fmt, ...)

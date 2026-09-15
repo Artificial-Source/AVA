@@ -14,8 +14,10 @@ class GraphemeBlockRow;
 //
 class HorizontalLayout
 {
- private:
+ public:
   using layout_items_type = std::vector<std::unique_ptr<LayoutItem>, core::Application::Vec8Alloc::rebind<std::unique_ptr<LayoutItem>>::other>;
+
+ private:
   layout_items_type layout_items_;
 
  public:
