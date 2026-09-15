@@ -39,9 +39,6 @@ class Application
 
   // Can't print mpp_.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  bool initialized_ = false;
 };
 
 }  // namespace ava::core
