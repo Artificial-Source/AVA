@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -22,8 +23,10 @@
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -114,23 +117,49 @@ std::optional<ava::process::ExitStatusV1> wait_for(ava::process::Supervisor& sup
   return status ? std::optional(*status) : std::nullopt;
 }
 
-bool write_all(int descriptor, void const* data, std::size_t size) noexcept
+bool read_exact_until(int descriptor, void* buffer, std::size_t size, std::chrono::steady_clock::time_point deadline) noexcept
 {
-  auto const* bytes = static_cast<unsigned char const*>(data);
+  auto* bytes = static_cast<unsigned char*>(buffer);
   std::size_t offset = 0;
-  while (offset < size)
+  while (offset < size && std::chrono::steady_clock::now() < deadline)
   {
-    auto const result = ::write(descriptor, bytes + offset, size - offset);
-    if (result > 0)
-    {
-      offset += static_cast<std::size_t>(result);
+    pollfd item{.fd = descriptor, .events = POLLIN, .revents = 0};
+    int result = -1;
+    do
+      result = ::poll(&item, 1, 50);
+    while (result < 0 && errno == EINTR && std::chrono::steady_clock::now() < deadline);
+    if (result <= 0)
       continue;
-    }
-    if (result < 0 && errno == EINTR)
+    auto const count = ::read(descriptor, bytes + offset, size - offset);
+    if (count < 0 && errno == EINTR)
       continue;
-    return false;
+    if (count <= 0)
+      return false;
+    offset += static_cast<std::size_t>(count);
   }
-  return true;
+  return offset == size;
+}
+
+bool wait_for_exact_child(pid_t process, int& status, std::chrono::steady_clock::time_point deadline) noexcept
+{
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    pid_t result = -1;
+    do
+      result = ::waitpid(process, &status, WNOHANG);
+    while (result < 0 && errno == EINTR);
+    if (result == process)
+      return true;
+    if (result < 0)
+      return false;
+    static_cast<void>(::poll(nullptr, 0, 10));
+  }
+  static_cast<void>(::kill(process, SIGKILL));
+  pid_t result = -1;
+  do
+    result = ::waitpid(process, &status, 0);
+  while (result < 0 && errno == EINTR);
+  return false;
 }
 
 bool read_byte(int descriptor, char expected, std::chrono::steady_clock::time_point deadline) noexcept
@@ -204,6 +233,178 @@ bool one_launch_error(ava::process::ProcessSnapshotRecordV1 const& record, ava::
 {
   return record.reason == reason && record.exit_kind == ava::process::ExitKindV1::LaunchError && record.cleanup == ava::process::CleanupStateV1::Complete &&
          record.settlement_count == 1;
+}
+
+// These test-only atfork globals exist only in the isolated regression subprocess.
+sig_atomic_t volatile leader_barrier_armed = 0;
+int leader_pid_read_descriptor = -1;
+int leader_pid_write_descriptor = -1;
+int leader_release_read_descriptor = -1;
+int leader_release_write_descriptor = -1;
+
+void disarm_leader_barrier_in_parent() noexcept
+{
+  leader_barrier_armed = 0;
+}
+
+void hold_leader_before_child_setpgid() noexcept
+{
+  if (leader_barrier_armed == 0)
+    return;
+
+  static_cast<void>(::close(leader_pid_read_descriptor));
+  static_cast<void>(::close(leader_release_write_descriptor));
+  pid_t const process = ::getpid();
+  ssize_t count = -1;
+  do
+    count = ::write(leader_pid_write_descriptor, &process, sizeof(process));
+  while (count < 0 && errno == EINTR);
+  static_cast<void>(::close(leader_pid_write_descriptor));
+  if (count != static_cast<ssize_t>(sizeof(process)))
+    _exit(125);
+
+  char release = '\0';
+  do
+    count = ::read(leader_release_read_descriptor, &release, 1);
+  while (count < 0 && errno == EINTR);
+  static_cast<void>(::close(leader_release_read_descriptor));
+  if (count != 1 || release != 'G')
+    _exit(125);
+}
+
+struct LeaderGroupRaceReport
+{
+  std::uint8_t setup = 0;
+  std::uint8_t leader_reported = 0;
+  std::uint8_t parent_group_created = 0;
+  std::uint8_t sentinel_forked = 0;
+  std::uint8_t adopted = 0;
+  std::uint8_t natural_exit = 0;
+  std::array<char, 768> diagnostic{};
+};
+
+LeaderGroupRaceReport run_leader_group_race_fixture()
+{
+  LeaderGroupRaceReport report;
+  std::array<int, 2> leader_pid{-1, -1};
+  std::array<int, 2> leader_release{-1, -1};
+  bool const leader_pid_ready = ::pipe2(leader_pid.data(), O_CLOEXEC) == 0;
+  bool const leader_release_ready = leader_pid_ready && ::pipe2(leader_release.data(), O_CLOEXEC) == 0;
+  if (!leader_release_ready)
+  {
+    auto const message = std::string("fixture pipe setup failed: ") + std::to_string(errno);
+    std::copy_n(message.data(), std::min(message.size(), report.diagnostic.size() - 1), report.diagnostic.data());
+    if (leader_pid_ready)
+    {
+      static_cast<void>(::close(leader_pid[0]));
+      static_cast<void>(::close(leader_pid[1]));
+    }
+    return report;
+  }
+
+  leader_pid_read_descriptor = leader_pid[0];
+  leader_pid_write_descriptor = leader_pid[1];
+  leader_release_read_descriptor = leader_release[0];
+  leader_release_write_descriptor = leader_release[1];
+  leader_barrier_armed = 1;
+  int const atfork_error = ::pthread_atfork(nullptr, disarm_leader_barrier_in_parent, hold_leader_before_child_setpgid);
+  if (atfork_error != 0)
+  {
+    auto const message = std::string("pthread_atfork setup failed: ") + std::to_string(atfork_error);
+    std::copy_n(message.data(), std::min(message.size(), report.diagnostic.size() - 1), report.diagnostic.data());
+    static_cast<void>(::close(leader_pid[0]));
+    static_cast<void>(::close(leader_pid[1]));
+    static_cast<void>(::close(leader_release[0]));
+    static_cast<void>(::close(leader_release[1]));
+    return report;
+  }
+  report.setup = 1;
+
+  auto application = application_owner();
+  ava::process::Supervisor supervisor;
+  int executable = ::open(AVA_FAKE_PROCESS_CHILD_PATH, O_RDONLY | O_CLOEXEC);
+  auto reservation = supervisor.reserve(operation_owner(application), ava::process::ProcessRoleV1::Bash);
+  auto gate = reservation ? supervisor.begin_secure_adoption(std::move(*reservation), bash_spec())
+                          : ava::core::Result<ava::process::AdoptionGate>(std::unexpected(reservation.error()));
+  auto branch = gate ? gate->fork_leader() : ava::core::Result<ava::process::AdoptionForkBranchV1>(std::unexpected(gate.error()));
+  if (branch && *branch == ava::process::AdoptionForkBranchV1::Child)
+  {
+    static_cast<void>(::close(leader_pid[0]));
+    static_cast<void>(::close(leader_pid[1]));
+    static_cast<void>(::close(leader_release[0]));
+    static_cast<void>(::close(leader_release[1]));
+    gate->child_exec_descriptor(executable);
+  }
+
+  leader_barrier_armed = 0;
+  static_cast<void>(::close(leader_pid[1]));
+  static_cast<void>(::close(leader_release[0]));
+  pid_t held_leader = -1;
+  report.leader_reported = read_exact_until(leader_pid[0], &held_leader, sizeof(held_leader), std::chrono::steady_clock::now() + 2s);
+  static_cast<void>(::close(leader_pid[0]));
+  pid_t const observed_group = report.leader_reported != 0 ? ::getpgid(held_leader) : -1;
+  report.parent_group_created = report.leader_reported != 0 && held_leader > 1 && observed_group == held_leader && observed_group != ::getpgrp();
+
+  auto sentinel = gate ? gate->fork_sentinel() : ava::core::VoidResult(std::unexpected(gate.error()));
+  report.sentinel_forked = sentinel.has_value();
+  bool const released = write_all_to_descriptor_for_test(leader_release[1], "G", 1);
+  static_cast<void>(::close(leader_release[1]));
+  if (executable >= 0)
+    static_cast<void>(::close(executable));
+  auto adopted = gate ? supervisor.adopt(std::move(*gate)) : ava::core::Result<ava::process::ProcessHandle>(std::unexpected(gate.error()));
+  report.adopted = adopted.has_value();
+  auto status = adopted ? wait_for(supervisor, *adopted) : std::nullopt;
+  report.natural_exit = status && status->reason == ava::process::TerminationReasonV1::NaturalExit && status->cleanup == ava::process::CleanupStateV1::Complete;
+
+  std::string diagnostic;
+  if (!branch)
+    diagnostic += "fork_leader: " + branch.error().format();
+  if (!sentinel)
+    diagnostic += (diagnostic.empty() ? "" : "; ") + std::string("fork_sentinel: ") + sentinel.error().format();
+  if (!released)
+    diagnostic += (diagnostic.empty() ? "" : "; ") + std::string("leader release pipe failed");
+  if (!adopted)
+    diagnostic += (diagnostic.empty() ? "" : "; ") + std::string("adopt: ") + adopted.error().format();
+  std::copy_n(diagnostic.data(), std::min(diagnostic.size(), report.diagnostic.size() - 1), report.diagnostic.data());
+  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  return report;
+}
+
+void test_parent_establishes_leader_group_before_sentinel_fork()
+{
+  std::array<int, 2> result_pipe{-1, -1};
+  bool const pipe_ready = ::pipe2(result_pipe.data(), O_CLOEXEC) == 0;
+  pid_t const fixture = pipe_ready ? ::fork() : -1;
+  if (fixture == 0)
+  {
+    static_cast<void>(::close(result_pipe[0]));
+    auto const report = run_leader_group_race_fixture();
+    bool const written = write_all_to_descriptor_for_test(result_pipe[1], &report, sizeof(report));
+    static_cast<void>(::close(result_pipe[1]));
+    _exit(written ? 0 : 126);
+  }
+
+  LeaderGroupRaceReport report;
+  if (pipe_ready)
+    static_cast<void>(::close(result_pipe[1]));
+  bool const report_received = fixture > 1 && read_exact_until(result_pipe[0], &report, sizeof(report), std::chrono::steady_clock::now() + 8s);
+  if (pipe_ready)
+    static_cast<void>(::close(result_pipe[0]));
+  int fixture_status = 0;
+  bool const reaped = fixture > 1 && wait_for_exact_child(fixture, fixture_status, std::chrono::steady_clock::now() + 8s);
+  bool const exact = pipe_ready && report_received && reaped && WIFEXITED(fixture_status) && WEXITSTATUS(fixture_status) == 0 && report.setup != 0 &&
+                     report.leader_reported != 0 && report.parent_group_created != 0 && report.sentinel_forked != 0 && report.adopted != 0 &&
+                     report.natural_exit != 0;
+  std::string message = "fork_leader establishes the exact isolated leader group before a held leader can run setpgid, allowing sentinel join and adoption";
+  if (!exact)
+  {
+    message += "; fixture setup=" + std::to_string(report.setup) + ", leader_reported=" + std::to_string(report.leader_reported) +
+               ", parent_group_created=" + std::to_string(report.parent_group_created) + ", sentinel_forked=" + std::to_string(report.sentinel_forked) +
+               ", adopted=" + std::to_string(report.adopted) + ", natural_exit=" + std::to_string(report.natural_exit);
+    if (report.diagnostic.front() != '\0')
+      message += "; " + std::string(report.diagnostic.data());
+  }
+  expect(exact, message);
 }
 
 void test_adoption_argv_rejected_before_fork()
@@ -333,7 +534,7 @@ void test_required_containment_exact_environment_sentinel_and_confirmation()
     static_cast<void>(::close(ready[0]));
     static_cast<void>(::close(proceed[1]));
     static_cast<void>(::close(output[0]));
-    if (::dup2(output[1], STDOUT_FILENO) < 0 || !write_all(ready[1], "R", 1))
+    if (::dup2(output[1], STDOUT_FILENO) < 0 || !write_all_to_descriptor_for_test(ready[1], "R", 1))
       gate->child_launch_failed(ava::process::AdoptionChildFailureStageV1::Streams, errno);
     char release = '\0';
     ssize_t count = -1;
@@ -370,16 +571,26 @@ void test_required_containment_exact_environment_sentinel_and_confirmation()
     std::lock_guard lock(result_mutex);
     returned_before_confirmation = adoption_returned;
   }
-  bool const continued = write_all(proceed[1], "C", 1);
+  bool const continued = child_released && write_all_to_descriptor_for_test(proceed[1], "C", 1);
   static_cast<void>(::close(proceed[1]));
   bool const exact_environment = read_until(output[0], "CLEAN\n", std::chrono::steady_clock::now() + 3s);
   adopter.join();
 
   auto status = adopted && *adopted ? wait_for(supervisor, **adopted) : std::nullopt;
-  expect(pipes_ready && branch && *branch == ava::process::AdoptionForkBranchV1::Parent && sentinel && child_released && !returned_before_confirmation &&
-             continued && exact_environment && adopted && *adopted && status && status->reason == ava::process::TerminationReasonV1::NaturalExit &&
-             status->cleanup == ava::process::CleanupStateV1::Complete,
-         "required Bash containment, exact environment, sentinel hygiene, and CLOEXEC confirmation complete before adopt returns");
+  bool const exact = pipes_ready && branch && *branch == ava::process::AdoptionForkBranchV1::Parent && sentinel && child_released &&
+                     !returned_before_confirmation && continued && exact_environment && adopted && *adopted && status &&
+                     status->reason == ava::process::TerminationReasonV1::NaturalExit && status->cleanup == ava::process::CleanupStateV1::Complete;
+  std::string message = "required Bash containment, exact environment, sentinel hygiene, and CLOEXEC confirmation complete before adopt returns";
+  if (!exact)
+  {
+    if (!branch)
+      message += "; fork_leader: " + branch.error().format();
+    if (!sentinel)
+      message += "; fork_sentinel: " + sentinel.error().format();
+    if (adopted && !*adopted)
+      message += "; adopt: " + adopted->error().format();
+  }
+  expect(exact, message);
   static_cast<void>(::close(ready[0]));
   static_cast<void>(::close(output[0]));
   static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
@@ -451,7 +662,7 @@ void test_cancellation_after_release_before_confirmation()
   {
     static_cast<void>(::close(reached[0]));
     static_cast<void>(::close(hold[1]));
-    if (!write_all(reached[1], "R", 1))
+    if (!write_all_to_descriptor_for_test(reached[1], "R", 1))
       gate->child_launch_failed(ava::process::AdoptionChildFailureStageV1::Streams, errno);
     char value = '\0';
     while (::read(hold[0], &value, 1) < 0 && errno == EINTR)
@@ -543,7 +754,7 @@ void test_sentinel_descriptor_hygiene_while_leader_runs()
   auto adopted = gate ? supervisor.adopt(std::move(*gate)) : ava::core::Result<ava::process::ProcessHandle>(std::unexpected(gate.error()));
   bool const output_eof = read_eof(output[0], std::chrono::steady_clock::now() + 2s);
   bool const unrelated_eof = read_eof(unrelated[0], std::chrono::steady_clock::now() + 2s);
-  bool const released = write_all(control[1], "X", 1);
+  bool const released = output_eof && write_all_to_descriptor_for_test(control[1], "X", 1);
   static_cast<void>(::close(control[1]));
   auto status = adopted ? wait_for(supervisor, *adopted) : std::nullopt;
   expect(pipes_ready && sentinel && adopted && output_eof && unrelated_eof && released && status &&
@@ -651,6 +862,7 @@ void run_process_adoption_posix_tests()
 #if defined(_WIN32)
   ava::tests::request_skip("secure process adoption is compile-time unsupported on Windows");
 #else
+  test_parent_establishes_leader_group_before_sentinel_fork();
   test_adoption_argv_rejected_before_fork();
   test_eof_child_stages_and_invalid_image();
   test_required_containment_exact_environment_sentinel_and_confirmation();

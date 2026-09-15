@@ -42,6 +42,25 @@ using agent_loop_test::sse_response;
 using agent_loop_test::tool_call_sse;
 using agent_loop_test::TraceCollector;
 
+namespace {
+std::vector<ava::agent::SubagentCoordinatorJobSnapshot> wait_for_published_running_job(ava::agent::SubagentCoordinator const& coordinator,
+                                                                                       std::string const& parent_session_id, std::size_t expected_total_count)
+{
+  auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (true)
+  {
+    auto jobs = coordinator.list(parent_session_id);
+    // Transport request readiness does not guarantee coordinator publication.
+    if (jobs.size() == expected_total_count &&
+        std::ranges::any_of(jobs, [](auto const& snapshot) { return snapshot.job.execution == ava::agent::SubagentExecutionState::Running; }))
+      return jobs;
+    if (std::chrono::steady_clock::now() >= deadline)
+      return jobs;
+    std::this_thread::yield();
+  }
+}
+} // namespace
+
 void test_agent_loop_private_task_launch_follows_public_running_and_stays_private()
 {
   auto const root = create_empty_root("agent-private-task-launch-order");
@@ -423,7 +442,7 @@ void test_agent_loop_coordinated_foreground_uses_fresh_worker_and_preserves_resu
   auto resumed_parent =
       std::async(std::launch::async, [&] { return loop.run_turn("resume coordinated child", store, parent_provider, resume_parent_transport); });
   expect(resume_state->wait_for_request(std::chrono::milliseconds(1000)), "completed child session starts a later foreground worker with the same task_id");
-  auto resumed_jobs = coordinator->list(store.session_id());
+  auto resumed_jobs = wait_for_published_running_job(*coordinator, store.session_id(), 2);
   auto resumed_job =
       std::ranges::find_if(resumed_jobs, [](auto const& snapshot) { return snapshot.job.execution == ava::agent::SubagentExecutionState::Running; });
   expect(resumed_jobs.size() == 2 && resumed_job != resumed_jobs.end() && resumed_job->job.identity.task_id == task_id &&
@@ -509,7 +528,7 @@ void test_agent_loop_foreground_promotion_wakes_parent_without_restarting_child(
 
   auto parent = std::async(std::launch::async, [&] { return loop.run_turn("delegate then promote", store, parent_provider, parent_transport); });
   expect(child_state->wait_for_request(std::chrono::milliseconds(1000)), "foreground promotion child reaches its fresh transport");
-  auto jobs = coordinator->list(store.session_id());
+  auto jobs = wait_for_published_running_job(*coordinator, store.session_id(), 1);
   expect(jobs.size() == 1, "foreground promotion publishes one stable job before waiting");
   ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot> promoted =
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing promotion job"));
@@ -597,7 +616,7 @@ void test_agent_loop_promoted_failure_persists_sanitized_child_error()
 
   auto parent = std::async(std::launch::async, [&] { return loop.run_turn("delegate promoted failure", store, parent_provider, parent_transport); });
   expect(child_state->wait_for_request(std::chrono::milliseconds(1000)), "promoted failure child reaches transport");
-  auto jobs = coordinator->list(store.session_id());
+  auto jobs = wait_for_published_running_job(*coordinator, store.session_id(), 1);
   if (jobs.empty())
   {
     child_state->release_success();

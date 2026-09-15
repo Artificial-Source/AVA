@@ -8,6 +8,7 @@ import time
 
 from tui_smoke_helpers import (
     SmokeContext,
+    TmuxClient,
     capture,
     capture_styled,
     save_evidence,
@@ -56,6 +57,50 @@ def _numbered_window(screen: str, label: str) -> list[int]:
     numbers = [int(value) for value in _NUMBERED_LINE.findall(screen)]
     if len(numbers) < 10 or numbers != list(range(numbers[0], numbers[-1] + 1)):
         raise RuntimeError(f"{label} did not contain a contiguous numbered stream window\nnumbers: {numbers}\nscreen:\n{screen}")
+    return numbers
+
+
+def _numbered_window_moved_up(screen: str, before: list[int], draft: str) -> bool:
+    if draft not in screen:
+        return False
+    numbers = [int(value) for value in _NUMBERED_LINE.findall(screen)]
+    if len(numbers) < 10 or numbers != list(range(numbers[0], numbers[-1] + 1)):
+        return False
+    return numbers[0] < before[0]
+
+
+def _wait_for_preparatory_up_steps(
+    tmux_exe: TmuxClient,
+    session: str,
+    start_numbers: list[int],
+    draft: str,
+    *,
+    steps: int,
+    keyboard_scroll_rows: int,
+) -> list[int]:
+    numbers = start_numbers
+    screen = ""
+    for step in range(1, steps + 1):
+        before = numbers
+        send_keys(tmux_exe, session, "Up")
+        screen = wait_for_screen_state(
+            tmux_exe,
+            session,
+            lambda captured, current_before=before: _numbered_window_moved_up(captured, current_before, draft),
+            f"streaming-scroll preparatory Up {step} of {steps} moved numbered window upward",
+        )
+        numbers = _numbered_window(screen, f"preparatory Up {step} of {steps} numbered window")
+    if (
+        draft not in screen
+        or "STREAM COMPLETE" in screen
+        or numbers[0] < keyboard_scroll_rows
+        or numbers[-1] > 59 - keyboard_scroll_rows
+    ):
+        raise RuntimeError(
+            "streaming-scroll detached numbered region before plain arrow scroll checks "
+            "did not keep the draft and a contiguous window with room for a keyboard-step Up/Down\n"
+            f"numbers: {numbers}\nscreen:\n{screen}"
+        )
     return numbers
 
 
@@ -327,20 +372,17 @@ def scenario_streaming_scroll(ctx: SmokeContext) -> None:
 
     # Leave live-tail chrome so ordinary Up/Down can be measured as the keyboard scroll step
     # (3 transcript rows) without colliding with live-tail chrome or the oldest boundary.
+    # Send each preparatory Up individually so a later exact 3-row check cannot snapshot a
+    # 2/3-key intermediate window from a 4-key burst.
     keyboard_scroll_rows = 3
-    send_keys(tmux_exe, session, *(["Up"] * 4))
-    detached_numbered = wait_for_screen_state(
+    before_up = _wait_for_preparatory_up_steps(
         tmux_exe,
         session,
-        lambda screen: complete_draft in screen
-        and "STREAM COMPLETE" not in screen
-        and (numbers := [int(value) for value in _NUMBERED_LINE.findall(screen)])
-        and len(numbers) >= 10
-        and numbers[0] >= keyboard_scroll_rows
-        and numbers[-1] <= 59 - keyboard_scroll_rows,
-        "streaming-scroll detached numbered region before plain arrow scroll checks",
+        ctrl_end_numbers,
+        complete_draft,
+        steps=4,
+        keyboard_scroll_rows=keyboard_scroll_rows,
     )
-    before_up = _numbered_window(detached_numbered, "detached numbered region before plain Up")
 
     def keyboard_step_up(screen: str) -> bool:
         numbers = [int(value) for value in _NUMBERED_LINE.findall(screen)]

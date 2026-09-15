@@ -366,6 +366,20 @@ ava::core::Result<AdoptionForkBranchV1> AdoptionGate::fork_leader()
     return AdoptionForkBranchV1::Child;
   }
   gate.leader = process;
+  // Establish the group before the sentinel fork even when the leader has not run yet.
+  bool const leader_group_set = set_exact_process_group(process, process);
+  int const leader_group_error = leader_group_set ? 0 : errno;
+  pid_t const parent_group = ::getpgrp();
+  pid_t const observed_leader_group = ::getpgid(process);
+  int const observed_group_error = observed_leader_group >= 0 ? 0 : errno;
+  if (!leader_group_set || observed_leader_group != process || parent_group <= 0 || observed_leader_group == parent_group)
+  {
+    int const error_number = !leader_group_set ? leader_group_error : observed_leader_group < 0 ? observed_group_error : EIO;
+    auto error =
+        detail::io_error("failed to establish and prove the secure-adoption leader process group before sentinel fork", error_number > 0 ? error_number : EIO);
+    abandon();
+    return std::unexpected(std::move(error));
+  }
   // The forked leader has its own inherited cwd authority. Drop every parent
   // cwd/route copy before a caller can request the optional sentinel.
   gate.anchored_cwd = AnchoredWorkingDirectoryV1{};

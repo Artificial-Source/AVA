@@ -219,6 +219,19 @@ def _invoke(ctx: SmokeContext, session: str, command: str) -> None:
     send_keys(ctx.tmux, session, "Enter")
 
 
+def _dismiss_plugin_command_settlement(ctx: SmokeContext, session: str, command: str) -> None:
+    # Modal teardown and child death can precede the host settlement overlay.
+    # Typing the next slash during that gap leaves the command in the draft.
+    wait_for(
+        ctx.tmux,
+        session,
+        rf"(?s)Command /plugin.*com\.example\.plugin-ui:{command}.*Enter/Esc close",
+        f"{command} plugin command settlement",
+    )
+    send_keys(ctx.tmux, session, "Escape")
+    wait_for_absent(ctx.tmux, session, r"Command /plugin", f"{command} plugin command output closed")
+
+
 def scenario_plugin_ui(ctx: SmokeContext) -> None:
     paths = _write_plugin_fixture(ctx)
     session = ctx.session_name("plugin-ui")
@@ -308,6 +321,7 @@ def scenario_plugin_ui(ctx: SmokeContext) -> None:
     send_keys(ctx.tmux, session, "C-c")
     wait_for_absent(ctx.tmux, session, r"Ctrl\+C cleanup invocation|Stop this process now", "plugin presentation cleanup after Ctrl+C")
     _wait_for_process_exit(paths["pid_log"], 2, "Ctrl+C plugin child cleanup")
+    _dismiss_plugin_command_settlement(ctx, session, "ctrlc")
 
     # Child-exit cleanup is independent of Ctrl+C: expose a status, release the
     # deterministic gate, then require process-exit teardown to clear it.
@@ -316,14 +330,7 @@ def scenario_plugin_ui(ctx: SmokeContext) -> None:
     paths["continue_exit"].write_text("exit\n", encoding="utf-8")
     wait_for_absent(ctx.tmux, session, r"Child exit cleanup surface", "plugin presentation cleanup after child exit")
     _wait_for_process_exit(paths["pid_log"], 3, "exited plugin child cleanup")
-    wait_for(
-        ctx.tmux,
-        session,
-        r"(?s)Command /plugin.*com\.example\.plugin-ui:exit.*Enter/Esc close",
-        "exited plugin command settlement",
-    )
-    send_keys(ctx.tmux, session, "Escape")
-    wait_for_absent(ctx.tmux, session, r"Command /plugin", "exited plugin command output closed")
+    _dismiss_plugin_command_settlement(ctx, session, "exit")
 
     # Escaped ESC/OSC, C1, bidi, and ordinary controls must fail before any
     # terminal bytes or raw UI fields become public. The TUI remains usable.
