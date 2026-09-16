@@ -41,18 +41,4 @@ bool operator<(Width w1, Width w2)
   return w1.columns_ < w2.columns_;
 }
 
-#ifdef CWDEBUG
-void Width::print_on(std::ostream& os) const
-{
-  os << "{columns:";
-  if (columns_ == unknown)
-    os << "<unknown>";
-  else if (columns_ == unlimited)
-    os << "<unlimited>";
-  else
-    os << columns_;
-  os << '}';
-}
-#endif
-
 } // namespace ava::tui::terminal

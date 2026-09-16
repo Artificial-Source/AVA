@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ava/debug/print_members_on.h"
+#include "debug.h"
 
 // ava/core/thread.h
 //
@@ -169,7 +169,7 @@ void init_thread(std::string const& label);
 inline void assert_no_session_lock_held(std::string_view operation, std::source_location location = std::source_location::current())
 {
   if (SessionDebugMutex::current_thread_holds_session_lock())
-    DoutFatal(dc::coredump,
+    DoutFatal(dc::core,
               "Potentially blocking operation while holding one or more session locks [" <<
               detail::long_wait_incompatible_locks << "] while: " << operation << " at " << location.file_name() << ':' << location.line());
 }
@@ -183,7 +183,7 @@ inline void assert_session_unlocked(UnlockedSession const& unlocked_session, std
                                     std::source_location location = std::source_location::current())
 {
   if (unlocked_session.mutex().is_self_locked())
-    DoutFatal(dc::coredump, "Session mutex [" << (void*)&unlocked_session.mutex() <<
+    DoutFatal(dc::core, "Session mutex [" << (void*)&unlocked_session.mutex() <<
               "] still locked while: " << operation << " at " << location.file_name() << ':' << location.line());
 }
 

@@ -1999,12 +1999,4 @@ void BasicWindow::addspaces(columns_t n, Rendition const& rendition)
   }
 }
 
-#ifdef CWDEBUG
-void BasicWindow::print_members(std::ostream& os, char const* prefix) const
-{
-  os << prefix;
-  impl_->print_members(os, "impl_->");
-}
-#endif
-
 } // namespace ava::tui::terminal

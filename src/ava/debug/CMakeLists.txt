@@ -272,10 +272,11 @@ set_source_files_properties(${_ava_generated_source_files} PROPERTIES GENERATED 
 # Combine everything into a library.
 #
 add_library(ava_debug
-  "print_members_on.cpp"
+  "debug_channels.cpp"
   "maxlen.cpp"
   "debug_ostream_operators.cpp"
   "libcwd_output_sink.cpp"
+  "${CMAKE_SOURCE_DIR}/src/ava/tui/terminal/print_members.cpp"  # Manually written print_members / print_on methods.
   ${_ava_generated_source_files}
 )
 
@@ -293,7 +294,6 @@ target_include_directories(ava_debug
 # uses a `to_string`. These should be added when encountered.
 target_link_libraries(ava_debug
   PUBLIC
-    AVA::terminal       # ava::tui::terminal::GraphemeCluster::print_members
     AVA::agent          # ava::agent::to_string
     AVA::app            # ava::app::runtime::to_string
     AVA::lsp            # ava::lsp::to_string

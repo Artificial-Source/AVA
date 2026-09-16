@@ -55,32 +55,4 @@
 #define AVA_DEBUG_PRINT_MEMBERS_ON_BASE(base_class) AVA_PRINT_ON_BASE_MEMBERS(base_class)
 #define AVA_DEBUG_PURE_VIRTUAL_PRINT_MEMBERS AVA_PURE_VIRTUAL_PRINT_ON_MEMBERS
 
-// Forward declarations.
-namespace libcwd { class Channel; class FatalChannel; }
-
-#include "NAMESPACE_DEBUG.h"            // NAMESPACE_DEBUG_CHANNELS_START/END
-
-namespace LIBCWD_DEBUG_CHANNELS::dc {
-using libcwd::Channel;
-extern Channel ava;
-extern Channel agent;
-extern Channel app;
-extern Channel rpc;
-extern Channel runtime;
-extern Channel config;
-extern Channel context;
-extern Channel avacore;
-extern Channel json;
-extern Channel lsp;
-extern Channel mcp;
-extern Channel permissions;
-extern Channel plugin;
-extern Channel provider;
-extern Channel session;
-extern Channel tools;
-extern Channel tui;
-extern Channel terminal;
-extern libcwd::FatalChannel const& coredump;
-} // namespace LIBCWD_DEBUG_CHANNELS::dc
-
 #endif // CWDEBUG
