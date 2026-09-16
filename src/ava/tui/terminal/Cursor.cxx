@@ -27,4 +27,9 @@ void CursorState::apply(Context* context, CursorSettings const& cursor_settings)
   cursor_settings_ = cursor_settings;
 }
 
+void CursorState::reapply(Context* context) const
+{
+  context->write_raw_sequence(cursor_style_sequence(cursor_settings_));
+}
+
 } // namespace ava::tui::terminal

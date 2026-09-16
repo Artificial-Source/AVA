@@ -25,7 +25,7 @@ void WindowPad::do_pnoutrefresh(uint32_t pad_row)
       // This pad is the compose area. Keep the cursor inside and make it visible.
       pad_.leaveok(false);
       pad_.curs_set(config::cursor_visibility);
-      core::Application::instance().reapply_cursor_settings();
+      core::Application::instance().terminal_context().reapply_cursor_settings();
     }
   }
 

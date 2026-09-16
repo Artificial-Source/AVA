@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/config.h"
+
 #include "debug.h"
 
 namespace ava::tui::terminal {
@@ -36,6 +37,9 @@ struct CursorState
   CursorSettings cursor_settings_{CursorStyle::Default};                // The last CursorSettings that were applied.
 
   void apply(Context* context, CursorSettings const& cursor_settings);
+
+  // Repeat the last sequence of a call to `apply`. Called by terminal::Context::reapply_cursor_settings.
+  void reapply(Context* context) const;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

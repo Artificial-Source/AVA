@@ -2,10 +2,11 @@
 #include "terminal/ColorPair.h"
 #include "terminal/Context.h"
 #include "terminal/Window.h"
-#include "ava/core/Application.h"
 #include "tests/support/test_harness.h"
+#include "ava/core/Application.h"
 
 #include <cstdio>
+#include <string_view>
 
 namespace terminal = ava::tui::terminal;
 
@@ -32,6 +33,23 @@ void test_margin_aware_window_geometry_and_lifetime()
   ScopedEnvVar term_guard("TERM", "xterm-256color");
   terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
   terminal_context.initialize(output, input);
+
+  // A visibility change can reset DECSCUSR state without changing the retained settings. Verify that Application's repair path
+  // emits the retained sequence on every call instead of letting CursorState's ordinary duplicate suppression hide it.
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
+  long const reapply_begin = std::ftell(output);
+  ava::core::Application::instance().terminal_context().reapply_cursor_settings();
+  ava::core::Application::instance().terminal_context().reapply_cursor_settings();
+  long const reapply_end = std::ftell(output);
+  char reapplied_sequences[10]{};
+  bool const positions_valid = reapply_begin >= 0 && reapply_end >= reapply_begin;
+  bool const seek_succeeded = positions_valid && std::fseek(output, reapply_begin, SEEK_SET) == 0;
+  std::size_t const bytes_read = seek_succeeded ? std::fread(reapplied_sequences, 1, sizeof(reapplied_sequences), output) : 0;
+  expect(positions_valid && reapply_end - reapply_begin == static_cast<long>(sizeof(reapplied_sequences)) && bytes_read == sizeof(reapplied_sequences) &&
+             std::string_view{reapplied_sequences, sizeof(reapplied_sequences)} == "\x1b[6 q\x1b[6 q",
+         "reapplying cursor settings must always emit the retained shape and blink sequence");
+  static_cast<void>(std::fseek(output, 0, SEEK_END));
+
   terminal::Rendition const background_rendition{{}};
 
   for (int iteration = 0; iteration != 3; ++iteration)
@@ -59,6 +77,7 @@ void test_margin_aware_window_geometry_and_lifetime()
            "an empty-margin Window must use one BasicWindow wrapper for inner and outer access");
   }
 
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Default});
   static_cast<void>(std::fclose(input));
   static_cast<void>(std::fclose(output));
 }

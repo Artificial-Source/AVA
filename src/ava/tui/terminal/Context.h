@@ -86,6 +86,10 @@ class Context final
   // Cursor control.
 
   void apply_cursor_settings(CursorSettings const& settings) { cursor_state_.apply(this, settings); }
+  // Emit the retained cursor settings even when they have not changed.
+  //
+  // Use this after terminal operations such as curs_set that can alter cursor shape or blinking behind CursorState's back.
+  void reapply_cursor_settings() { cursor_state_.reapply(this); }
   CursorSettings const& cursor_settings() const { return cursor_state_.cursor_settings_; }
 
   AVA_DEBUG_PRINT_MEMBERS_ON

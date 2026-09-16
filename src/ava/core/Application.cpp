@@ -45,10 +45,4 @@ Application& Application::instance()
   return *registered_application;
 }
 
-void Application::reapply_cursor_settings()
-{
-  //FIXME: implement
-  ASSERT(false);
-}
-
 }  // namespace ava::core
