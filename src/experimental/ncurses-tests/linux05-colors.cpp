@@ -1,4 +1,6 @@
+#include "sys.h"
 #include "terminal/Context.h"
+#include "Application.h"
 
 #include <array>
 #include <iostream>
@@ -7,7 +9,9 @@
 
 int main()
 {
-  ava::tui::terminal::Context terminal_context;
+  Application application("linux05-colors");
+  ava::tui::terminal::Context& terminal_context = application.terminal_context();
+  terminal_context.initialize();
 
   move(10, 0);
 

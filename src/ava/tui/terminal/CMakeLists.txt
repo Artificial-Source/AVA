@@ -10,6 +10,7 @@ target_sources(ava_terminal
     "ComplexChar.cxx"
     "ColorPalette.cxx"
     "Context.cxx"
+    "Cursor.cxx"
     "GraphemeRun.cxx"
     "GraphemeSpan.cxx"
     "HorizontalLayout.cxx"

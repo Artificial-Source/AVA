@@ -13,9 +13,20 @@
 
 namespace ava::tui::terminal {
 
-Context::Context(FILE* outfd, FILE* infd) : output_file_(outfd == nullptr ? stdout : outfd), default_rendition_(ColorPair{{}, 0})
+Context::Context(utils::Badge<core::Application>) : default_rendition_(ColorPair{{}, 0})
 {
-  DoutEntering(dc::notice, "Context::Context(" << outfd << ", " << infd << ")");
+}
+
+Context::Context(FILE* outfd, FILE* infd) : default_rendition_(ColorPair{{}, 0})
+{
+  // This constructor is intended for CTests; pass appropriate FILE*'s.
+  ASSERT(outfd != nullptr && infd != nullptr);
+  initialize(outfd, infd);
+}
+
+void Context::initialize(FILE* outfd, FILE* infd)
+{
+  DoutEntering(dc::notice, "Context::initialize(" << outfd << ", " << infd << ")");
 
   setlocale(LC_ALL, "");
 
@@ -25,8 +36,11 @@ Context::Context(FILE* outfd, FILE* infd) : output_file_(outfd == nullptr ? stdo
   ::use_env(TRUE);
   ::use_tioctl(TRUE);
 
+  // If one of the arguments is nullptr then so must be the other one.
+  ASSERT((outfd == nullptr) == (infd == nullptr));
   // Use initscr or newterm?
-  bool use_initscr = outfd == nullptr && infd == nullptr;
+  bool use_initscr = outfd == nullptr;
+  output_file_ = use_initscr ? stdout : outfd;
 
   if (use_initscr)
     initscr();
@@ -77,6 +91,8 @@ Context::Context(FILE* outfd, FILE* infd) : output_file_(outfd == nullptr ? stdo
 
 Context::~Context()
 {
+  // Restore the cursor to its default value.
+  apply_cursor_settings({CursorStyle::Default});
   // Restore mutable palette entries before endwin returns terminal presentation to the invoking process.
   color_palette_.reset();
   endwin();
@@ -176,6 +192,11 @@ ColorPair Context::create_color_pair(Color foreground, Color background)
 void Context::doupdate()
 {
   ::doupdate();
+}
+
+bool Context::write_raw_sequence(std::string_view sequence)
+{
+  return std::fwrite(sequence.data(), 1, sequence.size(), output_file_) == sequence.size() && std::fflush(output_file_) == 0;
 }
 
 bool Context::has_colors() const

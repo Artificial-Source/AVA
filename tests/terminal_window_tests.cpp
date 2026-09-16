@@ -2,6 +2,7 @@
 #include "terminal/ColorPair.h"
 #include "terminal/Context.h"
 #include "terminal/Window.h"
+#include "ava/core/Application.h"
 #include "tests/support/test_harness.h"
 
 #include <cstdio>
@@ -29,7 +30,8 @@ void test_margin_aware_window_geometry_and_lifetime()
   }
 
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  terminal::Context terminal_context(output, input);
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
+  terminal_context.initialize(output, input);
   terminal::Rendition const background_rendition{{}};
 
   for (int iteration = 0; iteration != 3; ++iteration)

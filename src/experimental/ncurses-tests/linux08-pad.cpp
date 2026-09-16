@@ -26,10 +26,10 @@ struct TestPad : public terminal::Pad
 int main()
 {
   Application application("linux08-pad");
+  application.terminal_context().initialize();
 
   namespace terminal = ava::tui::terminal;
-  terminal::Context terminal_context;
-  terminal::BasicWindow const& stdscr = terminal_context.stdscr();
+  terminal::BasicWindow const& stdscr = application.terminal_context().stdscr();
 
   // Fill the Pad's with the lorem ipsum paragraphs, cycling through them (and through the
   // paragraph default renditions) to get enough content to scroll through.
@@ -37,7 +37,7 @@ int main()
   int const total_paragraph_count = paragraph_repetitions * static_cast<int>(lorem_ipsum_paragraphs.size());
   for (int paragraph_number = 0; paragraph_number < total_paragraph_count; ++paragraph_number)
     for (int p = 0; p < pads.size(); ++p)
-      pads[p].append(make_lorem_ipsum_paragraph(terminal_context, paragraph_number));
+      pads[p].append(make_lorem_ipsum_paragraph(application.terminal_context(), paragraph_number));
 
   for (int p = 0; p < pads.size(); ++p)
     pads[p].generate_grapheme_surface(pad_line_width, true);

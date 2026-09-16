@@ -33,6 +33,7 @@ target_include_directories(ava_core
 
 target_link_libraries(ava_core
   PRIVATE
+    AVA::terminal
     nlohmann_json::nlohmann_json
 )
 

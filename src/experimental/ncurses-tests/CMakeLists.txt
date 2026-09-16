@@ -23,18 +23,18 @@ add_executable(linux03 linux03-panels.cpp)
 target_include_directories(linux03 PRIVATE ${CURSES_INCLUDE_DIRS})
 target_link_libraries(linux03 PRIVATE ${CURSES_LIBRARIES} ${CURSES_PANELW_LIBRARY})
 
-add_executable(linux04 linux04-attributes.cpp)
+add_executable(linux04 linux04-attributes.cpp Application.cpp)
 target_include_directories(linux04 PRIVATE ${CURSES_INCLUDE_DIRS})
 target_link_libraries(linux04 PRIVATE AVA::terminal)
 
-add_executable(linux05 linux05-colors.cpp)
+add_executable(linux05 linux05-colors.cpp Application.cpp)
 target_include_directories(linux05 PRIVATE ${CURSES_INCLUDE_DIRS})
 target_link_libraries(linux05 PRIVATE AVA::terminal)
 
-add_executable(linux06 linux06-wrapping.cpp)
+add_executable(linux06 linux06-wrapping.cpp Application.cpp)
 target_link_libraries(linux06 PRIVATE AVA::terminal)
 
-add_executable(linux07 linux07-full-grapheme-cluster.cpp)
+add_executable(linux07 linux07-full-grapheme-cluster.cpp Application.cpp)
 target_link_libraries(linux07 PRIVATE AVA::terminal)
 
 add_executable(linux08 linux08-pad.cpp lorem_ipsum_paragraphs.cpp Application.cpp)

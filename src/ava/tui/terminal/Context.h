@@ -6,10 +6,16 @@
 #include "ColorPair.h"
 #include "ComplexChar.h"
 #include "Cursor.h"
+#include "utils/Badge.h"
 
 #include <memory>
 #include <optional>
 #include <vector>
+
+namespace ava::core {
+// Forward declaration.
+class Application;
+} // namespace ava::core
 
 namespace ava::tui::terminal {
 
@@ -36,7 +42,11 @@ class Context final
   CursorState cursor_state_;                                    // The current cursor state, corresponding to the last call to apply_cursor_settings.
 
  public:
-  Context(FILE* outfd = nullptr, FILE* infd = nullptr);
+  Context(utils::Badge<core::Application>);
+  void initialize(FILE* outfd = nullptr, FILE* infd = nullptr);
+
+  // Used by the testsuite.
+  Context(FILE* outfd, FILE* infd);
   ~Context();
 
   Rendition const& default_rendition() const { return default_rendition_; }
@@ -67,12 +77,15 @@ class Context final
   // Synchronize the virtual screen with the physical screen.
   static void doupdate();                                               // doupdate
 
+  // Write a raw sequence of characters to the terminal and flush it. Returns true upon success.
+  bool write_raw_sequence(std::string_view sequence);
+
   bool has_colors() const;                                              // has_colors
   bool can_change_colors() const;
 
   // Cursor control.
 
-  void apply_cursor_settings(CursorSettings const& settings) { cursor_state_.apply(settings); }
+  void apply_cursor_settings(CursorSettings const& settings) { cursor_state_.apply(this, settings); }
   CursorSettings const& cursor_settings() const { return cursor_state_.cursor_settings_; }
 
   AVA_DEBUG_PRINT_MEMBERS_ON

@@ -196,7 +196,8 @@ void test_pad_generate_comment_example()
   // This will be read by the terminal::Context constructor.
   write_OSC4_reply(input, 256);
   std::rewind(input);
-  terminal::Context terminal_context(output, input);
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
+  terminal_context.initialize(output, input);
 
   bool const color_support = terminal_context.has_colors();
   expect(color_support, "TERM=xterm-256color must provide colors for the terminal::Pad test");

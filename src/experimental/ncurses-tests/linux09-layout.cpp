@@ -21,15 +21,15 @@ struct TestPad : public terminal::Pad
 int main()
 {
   Application application("linux09-layout");
+  application.terminal_context().initialize();
 
-  terminal::Context terminal_context;
   terminal::HorizontalLayout horizontal_layout1;
 
   {
-    terminal::Rendition const rendition(terminal_context.create_color_pair(0xeeddcc, 0x335500));
+    terminal::Rendition const rendition(application.terminal_context().create_color_pair(0xeeddcc, 0x335500));
     auto exit_text = terminal::TextSpan::create(u8"Exit the app", rendition, {.priority = 1});
     auto spacer = terminal::Spacer::create();
-    terminal::Rendition const rendition2(terminal_context.create_color_pair(0xeeddcc, 0x006655));
+    terminal::Rendition const rendition2(application.terminal_context().create_color_pair(0xeeddcc, 0x006655));
     auto shortcuts = terminal::Paragraph::create(rendition2, {.priority = 2, .alignment = terminal::HorizontalAlignment::right});
     auto shortcuts_text = terminal::TextSpan::create(u8"ctrl+c, ctrl+d, ctrl+x q");
     shortcuts->append(std::move(shortcuts_text));
@@ -51,5 +51,5 @@ int main()
 
   //... allow resizing with keyboard
 
-  [[maybe_unused]] int wch = terminal_context.get_wch();
+  [[maybe_unused]] int wch = application.terminal_context().get_wch();
 }

@@ -1,3 +1,5 @@
+#include "sys.h"
+#include "Application.h"
 #include "terminal/Context.h"
 #include "terminal/Window.h"
 
@@ -7,10 +9,12 @@ namespace terminal = ava::tui::terminal;
 
 int main()
 {
+  Application application("linux06-wrapping");
+  terminal::Context& terminal_context = application.terminal_context();
+  terminal_context.initialize();
+
   int wch;
   {
-    terminal::Context terminal_context;
-
     terminal::Dimension const size{15, 20};
     terminal::Position const top_left{(terminal_context.rows() - size.height()) / 2, 10};
     terminal::Margin const margin{.top = 1, .bottom = 1, .left = 1, .right = 1};

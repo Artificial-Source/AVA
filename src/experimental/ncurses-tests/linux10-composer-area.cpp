@@ -13,13 +13,15 @@ namespace terminal = ava::tui::terminal;
 int main()
 {
   Application application("linux10-composer-area");
+  application.terminal_context().initialize();
 
   constexpr terminal::Color tui_background = 0x0a0a0a;
   constexpr terminal::Color composer_foreground = 0xeeeeee;
   constexpr terminal::Color composer_background = 0x1e1e1e;
   constexpr terminal::Color info_color = 0x56b6c2;              // This is used for the accent bar below.
 
-  terminal::Context terminal_context;
+  terminal::Context& terminal_context = application.terminal_context();
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Block, true});
   terminal_context.stdscr().set_background(terminal_context.create_color_pair({}, tui_background));
 
   terminal::Box const composer_box{L"┃██"

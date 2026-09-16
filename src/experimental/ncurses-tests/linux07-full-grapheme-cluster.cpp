@@ -1,3 +1,5 @@
+#include "sys.h"
+#include "Application.h"
 #include "terminal/Attributes.h"
 #include "terminal/ComplexChar.h"
 #include "terminal/GraphemeCluster.h"
@@ -35,6 +37,10 @@ bool same_storage(terminal::GraphemeCluster const& grapheme_cluster, Storage con
 
 int main()
 {
+  Application application("linux07-full-grapheme-cluster");
+  terminal::Context& terminal_context = application.terminal_context();
+  terminal_context.initialize();
+
   Storage const expected_full_cluster = {L'a', L'\u0301', L'\u0302', L'\u0303', L'\u0308'};
 
   terminal::GraphemeCluster const full_cluster{L"a\u0301\u0302\u0303\u0308"};
@@ -54,7 +60,6 @@ int main()
     // it back with getcchar.  This specifically guards the CCHARW_MAX edge case
     // where setcchar needs a temporary terminator and getcchar writes one extra
     // wchar_t beyond ncurses' fixed cchar_t payload.
-    terminal::Context terminal_context;
     terminal::ColorPair const green_colorpair = terminal_context.create_color_pair({}, {0x008800});
     terminal_context.stdscr().set_background({green_colorpair});
     terminal::Dimension screen_size = terminal_context.size();

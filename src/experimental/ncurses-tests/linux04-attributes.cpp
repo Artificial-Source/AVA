@@ -1,3 +1,5 @@
+#include "sys.h"
+#include "Application.h"
 #include "terminal/Attributes.h"
 #include "terminal/Context.h"
 
@@ -14,10 +16,12 @@ void add_text(std::string& text, char const* attr_str)
 
 int main()
 {
+  Application application("linux04-attributes");
+  ava::tui::terminal::Context& terminal_context = application.terminal_context();
+  terminal_context.initialize();
+
   wint_t wch;
   {
-    ava::tui::terminal::Context terminal_context;
-
     move(10, 0);
 
     // A_STANDOUT, A_UNDERLINE, A_BOLD, A_BLINK

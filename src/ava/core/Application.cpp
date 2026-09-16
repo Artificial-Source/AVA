@@ -10,7 +10,7 @@ namespace {
 // These process-lifecycle values are non-atomic by design. main publishes the
 // initialized Application before app::run starts workers, and revokes it only
 // after app::run returns with all app::run-owned workers joined.
-Application const* registered_application = nullptr;
+Application* registered_application = nullptr;
 
 } // namespace
 
@@ -20,7 +20,8 @@ Application::Application(CWDEBUG_ONLY(bool debug_init_arg))
       DebugInit(debug_init_arg),
 #endif
       mpp_(Vec8Alloc::mpp_block_size),
-      vec8alloc_(mpp_)
+      vec8alloc_(mpp_),
+      terminal_context_({})
 {
   // Instantiate only one `Application` object derived from ava::core::Application.
   ASSERT(registered_application == nullptr);
@@ -36,13 +37,18 @@ Application::~Application() noexcept
   Vec8Alloc::deinit();
 }
 
-Application const& Application::instance()
+//FIXME: Add mutex for access.
+Application& Application::instance()
 {
   // Create an `Application` object, derived from ava::core::Application at the top of main, after any debug initialization.
   ASSERT(registered_application != nullptr);
   return *registered_application;
 }
 
-#undef AVA_REQUIRE_APPLICATION_LIFECYCLE
+void Application::reapply_cursor_settings()
+{
+  //FIXME: implement
+  ASSERT(false);
+}
 
 }  // namespace ava::core
