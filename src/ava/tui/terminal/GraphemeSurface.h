@@ -10,6 +10,20 @@ namespace ava::tui::terminal {
 // A complete two-dimensional result ready to be written to a BasicWindow.
 // The (required) size of window or pad can be obtained with `dimension`.
 //
+//                       width_
+//   ┊◄-----------------------------------------------►┊
+//   ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━┓  ┄
+//   ┃              GraphemeBlockRow              │🯟🯝🯟🯝┃  ▲
+//   ┃                                            │🯟🯝🯟🯝┃  ┆
+//   ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┷━━━━┫  ┆
+//   ┃   the widest GraphemeBlockRow                   ┃  ┆
+//   ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫  ┆ height_
+//   ┇                     ┊                         🯟🯝┇  ┆
+//   ┃              GraphemeBlockRow's                 ┃  ┆
+//   ┃                     ┊                     🯟🯝🯟🯝🯟🯝┃  ┆
+//   ┇                     ┊                         🯟🯝┇  ▼
+//   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛  ┄
+//
 class GraphemeSurface
 {
  public:
@@ -41,7 +55,14 @@ class GraphemeSurface
   void append(GraphemeBlockRow&& block_row)
   {
     height_ += block_row.height();
-    width_ = std::max(width_, block_row.width());
+    if (AI_UNLIKELY(block_row.width() > width_))
+    {
+      // The width that each GraphemeBlockRow is fitted to should be the same as what was passed to reset,
+      // therefore block_row.width() can only be larger than width_ if block_row couldn't be fitted to that width.
+      Dout(dc::warning, "Growing GraphemeSurface [" << this << "] from " << width_ << " to " << block_row.width() <<
+          " because of GraphemeBlockRow [" << &block_row << "].");
+      width_ = block_row.width();
+    }
     blocks_rows_.emplace_back(std::move(block_row));
   }
 

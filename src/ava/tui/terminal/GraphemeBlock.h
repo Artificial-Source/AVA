@@ -5,10 +5,23 @@
 
 namespace ava::tui::terminal {
 
-// A GraphemeBlock is a non-empty vertical sequence of equally wide GraphemeSpan rows.
+// A GraphemeBlock is a non-empty vertical sequence of GraphemeSpan rows
+// sharing the same max_columns_ (allocated layout width).
+//
+//                       max_columns_
+//   ┊◄-----------------------------------------------►┊
+//   ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━┯━━┓
+//   ┃             ⋯ GraphemeRun's ⋯           ╎ WS │🯟🯝┃                Each GraphemeSpan::columns_ can be less than max_columns_.
+//   ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┷━━┯━┷━━╉───────┐        Each GraphemeSpan may end on whitespace.
+//   ┃             ⋯ GraphemeRun's ⋯              ╎ whitespace │        The whitespace might extend beyond max_columns_.
+//   ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┷━━━━╉───────┘
+//   ┇                     ┊                           ┇
+//   ┃               GraphemeSpan's                    ┃
+//   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 //
 // The block retains views into its source TextSpan objects, so those objects must outlive
 // the block and any GraphemeSurface containing it.
+
 struct GraphemeBlockCategory
 {
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

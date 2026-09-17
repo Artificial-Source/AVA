@@ -22,8 +22,8 @@ class Rendition;
 //   ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━┯━━┓
 //   ┃                                         ╎ WS │🯟🯝┃
 //   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┷━━━━┷━━┛
-//   ┊◄--------------------------------------------►┊
-//                       columns_
+//   ┊◄--------------------columns_----------------►┊
+//   ┊◄-columns_excluding_trailing_whitespace_►┊
 //
 // It is also possible that the last GraphemeRun (or GraphemeRun's if the latter contain of only spaces)
 // go beyond the end of the GraphemeSpan:
@@ -33,8 +33,8 @@ class Rendition;
 //   ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━┱───────┐
 //   ┃                                            ╎ whitespace │
 //   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┷━━━━┹───────┘
-//   ┊◄-------------------------------------------------------►┊
-//                              columns_
+//   ┊◄-------------------------columns_----------------------►┊
+//   ┊◄--columns_excluding_trailing_whitespace_--►┊
 //
 // The `columns_` in the above examples are the concatenation of all the GraphemeRun::str_ wstring's.
 // `columns_excluding_trailing_whitespace_` excludes only the trailing white-space from `str_` so right
