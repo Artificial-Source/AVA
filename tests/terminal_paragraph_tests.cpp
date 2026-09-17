@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "support/terminal_test_support.h"
+#include "support/test_harness.h"
 #include "terminal/Attributes.h"
 #include "terminal/BasicScreen.h"
 #include "terminal/BasicWindow.h"
@@ -11,7 +12,6 @@
 #include "terminal/Pad.h"
 #include "terminal/Rendition.h"
 #include "terminal/TextSpan.h"
-#include "tests/support/test_harness.h"
 
 #include <array>
 #include <clocale>
@@ -180,24 +180,14 @@ struct TestPad : public terminal::Pad
 // the pad is inspected through Window::instr.
 void test_pad_generate_comment_example()
 {
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    expect(false, "tmpfile must be available for the terminal::Pad test");
-    return;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
   ScopedEnvVar term_guard("TERM", "xterm-256color");
   // This will be read by the terminal::Context constructor.
-  write_OSC4_reply(input, 256);
-  std::rewind(input);
-  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
-  terminal_context.initialize(output, input);
+  write_OSC4_reply(input.get(), 256);
+  std::rewind(input.get());
+  terminal::Context terminal_context(output.get(), input.get());
 
   bool const color_support = terminal_context.has_colors();
   expect(color_support, "TERM=xterm-256color must provide colors for the terminal::Pad test");
@@ -289,9 +279,6 @@ void test_pad_generate_comment_example()
       centered_text += cell.cell_character().data()[0];
     expect(centered_text == L"ab    ", "trailing spaces must continue to participate in centered alignment");
   }
-
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
 }
 
 // Check compact grapheme metadata for combining marks, flags, emoji modifiers, variation selectors, and ZWJ sequences.
@@ -344,8 +331,8 @@ void expect_compact_clusters_stay_whole(std::u8string const& text, uint32_t colu
   terminal::GraphemeBlock const rows = paragraph->create_grapheme_block(columns);
   expect(!rows.empty(), name + " must produce at least one wrapped row");
   if (!rows.empty())
-    expect(rows.front().columns() == expected_first_row_columns, name + " first row must occupy " + std::to_string(expected_first_row_columns) +
-                                                                     " columns, got " + std::to_string(rows.front().columns()));
+    expect(rows.front().columns() == expected_first_row_columns,
+           name + " first row must occupy " + std::to_string(expected_first_row_columns) + " columns, got " + std::to_string(rows.front().columns()));
 
   for (auto row = rows.ibegin(); row != rows.iend(); ++row)
   {

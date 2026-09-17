@@ -1,9 +1,8 @@
 #include "sys.h"
+#include "support/test_harness.h"
 #include "terminal/ColorPair.h"
 #include "terminal/Context.h"
 #include "terminal/Window.h"
-#include "tests/support/test_harness.h"
-#include "ava/core/Application.h"
 
 #include <cstdio>
 #include <string_view>
@@ -18,37 +17,27 @@ namespace {
 // without writing to a real terminal.
 void test_margin_aware_window_geometry_and_lifetime()
 {
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    expect(false, "tmpfile must be available for terminal::Window tests");
-    return;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
-  terminal_context.initialize(output, input);
+  terminal::Context terminal_context(output.get(), input.get());
 
-  // A visibility change can reset DECSCUSR state without changing the retained settings. Verify that Application's repair path
+  // A visibility change can reset DECSCUSR state without changing the retained settings. Verify that Context's repair path
   // emits the retained sequence on every call instead of letting CursorState's ordinary duplicate suppression hide it.
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
-  long const reapply_begin = std::ftell(output);
-  ava::core::Application::instance().terminal_context().reapply_cursor_settings();
-  ava::core::Application::instance().terminal_context().reapply_cursor_settings();
-  long const reapply_end = std::ftell(output);
+  long const reapply_begin = std::ftell(output.get());
+  terminal_context.reapply_cursor_settings();
+  terminal_context.reapply_cursor_settings();
+  long const reapply_end = std::ftell(output.get());
   char reapplied_sequences[10]{};
   bool const positions_valid = reapply_begin >= 0 && reapply_end >= reapply_begin;
-  bool const seek_succeeded = positions_valid && std::fseek(output, reapply_begin, SEEK_SET) == 0;
-  std::size_t const bytes_read = seek_succeeded ? std::fread(reapplied_sequences, 1, sizeof(reapplied_sequences), output) : 0;
+  bool const seek_succeeded = positions_valid && std::fseek(output.get(), reapply_begin, SEEK_SET) == 0;
+  std::size_t const bytes_read = seek_succeeded ? std::fread(reapplied_sequences, 1, sizeof(reapplied_sequences), output.get()) : 0;
   expect(positions_valid && reapply_end - reapply_begin == static_cast<long>(sizeof(reapplied_sequences)) && bytes_read == sizeof(reapplied_sequences) &&
              std::string_view{reapplied_sequences, sizeof(reapplied_sequences)} == "\x1b[6 q\x1b[6 q",
          "reapplying cursor settings must always emit the retained shape and blink sequence");
-  static_cast<void>(std::fseek(output, 0, SEEK_END));
+  static_cast<void>(std::fseek(output.get(), 0, SEEK_END));
 
   terminal::Rendition const background_rendition{{}};
 
@@ -78,8 +67,6 @@ void test_margin_aware_window_geometry_and_lifetime()
   }
 
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Default});
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
 }
 
 } // namespace

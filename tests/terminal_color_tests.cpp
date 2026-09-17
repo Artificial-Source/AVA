@@ -1,8 +1,8 @@
 #include "sys.h"
+#include "support/terminal_test_support.h"
+#include "support/test_harness.h"
 #include "terminal/ColorPalette.h"
 #include "terminal/Context.h"
-#include "tests/support/terminal_test_support.h"
-#include "tests/support/test_harness.h"
 
 #include <array>
 #include <cstdio>
@@ -87,20 +87,11 @@ void test_osc4_palette_protocol()
 // Verify mutable-prefix detection, exact-color reuse, programming of free entries, and destruction-time restoration.
 void test_mutable_palette_probe()
 {
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    expect(false, "tmpfile must be available for mutable palette probing");
-    return;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
   // This will be read by the terminal::Context constructor.
-  write_OSC4_reply(input, 16);
+  write_OSC4_reply(input.get(), 16);
 
   // Prepare mock replies for this tests probes.
   std::string replies;
@@ -108,12 +99,12 @@ void test_mutable_palette_probe()
     replies += "\x1b]4;" + std::to_string(index) + ";rgb:10/20/30\x1b\\";
   replies += "\x1b]4;7;rgb:ef/df/cf\x1b\\";  // The complemented test color was accepted.
   replies += "\x1b]4;15;rgb:10/20/30\x1b\\"; // The second assignment was ignored.
-  expect(std::fwrite(replies.data(), 1, replies.size(), input) == replies.size(), "all simulated OSC 4 replies must be written");
-  std::rewind(input);
+  expect(std::fwrite(replies.data(), 1, replies.size(), input.get()) == replies.size(), "all simulated OSC 4 replies must be written");
+  std::rewind(input.get());
 
   {
     ScopedEnvVar term_guard("TERM", "xterm-16color");
-    terminal::Context terminal_context(output, input);
+    terminal::Context terminal_context(output.get(), input.get());
     std::unique_ptr<terminal::ColorPalette> const palette = terminal::ColorPalette::create(terminal_context);
     expect(palette != nullptr, "a complete OSC 4 exchange must create a live ColorPalette");
     if (palette)
@@ -133,8 +124,8 @@ void test_mutable_palette_probe()
     }
   }
 
-  std::fflush(output);
-  std::string const emitted = read_all(output);
+  std::fflush(output.get());
+  std::string const emitted = read_all(output.get());
   expect(emitted.find("\x1b]4;7;rgb:ef/df/cf\x1b\\\x1b]4;7;?\x1b\\\x1b]4;7;rgb:10/20/30\x1b\\") != std::string::npos,
          "a successful mutability probe must assign, verify, and restore the boundary color");
   expect(emitted.find("\x1b]4;15;rgb:ef/df/cf\x1b\\\x1b]4;15;?\x1b\\\x1b]4;15;rgb:10/20/30\x1b\\") != std::string::npos,
@@ -146,9 +137,6 @@ void test_mutable_palette_probe()
   expect(count_occurrences(emitted, "\x1b]4;6;rgb:10/20/30\x1b\\") == 1, "destruction must restore every other application-programmed entry");
   expect(emitted.find("\x1b]4;0;rgb:") == std::string::npos, "an exact mutable entry already returned to a caller must never be overwritten");
   expect(emitted.find("rgb:ab/cd/ef") == std::string::npos, "palette exhaustion must use a nearest entry instead of overwriting a reserved one");
-
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
 }
 
 // Read all bytes emitted to `file`, rewinding it first and leaving it at end-of-file.
@@ -182,25 +170,16 @@ std::size_t count_occurrences(std::string_view haystack, std::string_view needle
 // requested green and blue must map to their nearby cube colors rather than basic yellow and black or unmodified grayscale slots.
 void test_xterm_indexed_colors_use_standard_palette()
 {
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    expect(false, "tmpfile must be available for terminal indexed-color tests");
-    return;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
   // This will be read by the terminal::Context constructor.
-  write_OSC4_reply(input, 256);
-  std::rewind(input);
+  write_OSC4_reply(input.get(), 256);
+  std::rewind(input.get());
 
   {
     ScopedEnvVar term_guard("TERM", "xterm-256color");
-    terminal::Context terminal_context(output, input);
+    terminal::Context terminal_context(output.get(), input.get());
     expect(!terminal::ColorPaletteTestAccess::probe(terminal_context, 224), "a single-index probe with no OSC 4 reply must return no Color");
     expect(terminal::ColorPaletteTestAccess::probe(terminal_context, 224, 3).empty(), "a batched probe with no OSC 4 replies must return no colors");
     expect(!terminal::ColorPalette::create(terminal_context), "an input stream with no OSC 4 replies must produce no live ColorPalette");
@@ -211,16 +190,13 @@ void test_xterm_indexed_colors_use_standard_palette()
     window.refresh();
   }
 
-  std::fflush(output);
-  std::string const emitted = read_all(output);
+  std::fflush(output.get());
+  std::string const emitted = read_all(output.get());
   expect(emitted.find("\x1b]4;224;?\x1b\\") != std::string::npos, "the single-index probe must emit an OSC 4 query for its passed index");
   expect(emitted.find("38;5;149") != std::string::npos, "xterm-256color must map green 0xa8e050 to nearby green cube entry 149");
   expect(emitted.find("48;5;17") != std::string::npos, "xterm-256color must map blue 0x102850 to nearby blue cube entry 17");
   expect(emitted.find("rgb:a8/e0/50") == std::string::npos && emitted.find("rgb:10/28/50") == std::string::npos,
          "indexed-color rendering must not reprogram a fixed palette with either requested application color");
-
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
 }
 
 } // namespace

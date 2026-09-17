@@ -7,7 +7,9 @@
 #include "ava/core/AnchorSet.h"
 #include "ava/core/error.h"
 
+#include <cerrno>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -15,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -61,6 +64,38 @@ class ScopedEnvVar
  private:
   std::string name_;
   std::optional<std::string> previous_ = std::nullopt;
+};
+
+// Owns one std::tmpfile stream: get() borrows its FILE*, destruction closes it,
+// and construction throws std::system_error with errno when allocation fails.
+class ScopedTmpFile
+{
+ public:
+  ScopedTmpFile()
+  {
+    file_ptr_ = std::tmpfile();
+    if (!file_ptr_)
+    {
+      int const error = errno;
+      throw std::system_error(error, std::generic_category(), "std::tmpfile");
+    }
+  }
+
+  ScopedTmpFile(ScopedTmpFile const&) = delete;
+  ScopedTmpFile& operator=(ScopedTmpFile const&) = delete;
+  ScopedTmpFile(ScopedTmpFile&& other) noexcept : file_ptr_(std::exchange(other.file_ptr_, nullptr)) { }
+  ScopedTmpFile& operator=(ScopedTmpFile&&) = delete;
+
+  ~ScopedTmpFile() noexcept
+  {
+    if (file_ptr_)
+      static_cast<void>(std::fclose(file_ptr_));
+  }
+
+  FILE* get() const { return file_ptr_; }
+
+ private:
+  FILE* file_ptr_ = nullptr;
 };
 
 std::string strip_sgr(std::string_view text);

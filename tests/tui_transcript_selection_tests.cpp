@@ -789,9 +789,9 @@ void run_tui_transcript_selection_tests()
         copy_range ? ava::tui::extract_transcript_selection_text(frozen_private_cache.layout, *copy_range, 64 * 1024).text : std::string{};
     auto const expected_sequence = ava::tui::runtime_transcript::try_build_osc52_clipboard_sequence(expected_text);
 
-    auto* output = std::tmpfile();
-    auto const saved_stdout = output ? dup(STDOUT_FILENO) : -1;
-    auto redirected = saved_stdout >= 0 && std::fflush(stdout) == 0 && dup2(fileno(output), STDOUT_FILENO) >= 0;
+    ScopedTmpFile output;
+    auto const saved_stdout = dup(STDOUT_FILENO);
+    auto redirected = saved_stdout >= 0 && std::fflush(stdout) == 0 && dup2(fileno(output.get()), STDOUT_FILENO) >= 0;
     auto copied = false;
     if (redirected)
       copied = copy_state.copy_selection(copy_snapshot, frozen_private_cache);
@@ -802,19 +802,15 @@ void run_tui_transcript_selection_tests()
       static_cast<void>(close(saved_stdout));
     }
     std::string captured;
-    if (output)
+    if (std::fflush(output.get()) == 0 && std::fseek(output.get(), 0, SEEK_END) == 0)
     {
-      if (std::fflush(output) == 0 && std::fseek(output, 0, SEEK_END) == 0)
+      auto const size = std::ftell(output.get());
+      if (size >= 0 && std::fseek(output.get(), 0, SEEK_SET) == 0)
       {
-        auto const size = std::ftell(output);
-        if (size >= 0 && std::fseek(output, 0, SEEK_SET) == 0)
-        {
-          captured.resize(static_cast<std::size_t>(size));
-          if (!captured.empty() && std::fread(captured.data(), 1, captured.size(), output) != captured.size())
-            captured.clear();
-        }
+        captured.resize(static_cast<std::size_t>(size));
+        if (!captured.empty() && std::fread(captured.data(), 1, captured.size(), output.get()) != captured.size())
+          captured.clear();
       }
-      static_cast<void>(std::fclose(output));
     }
 
     expect(copy_range && expected_sequence && expected_text.find("rdinary header") != std::string::npos &&

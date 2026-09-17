@@ -95,7 +95,16 @@ Context::~Context()
   apply_cursor_settings({CursorStyle::Default});
   // Restore mutable palette entries before endwin returns terminal presentation to the invoking process.
   color_palette_.reset();
-  endwin();
+  bool use_initscr = output_file_ == stdout;
+  if (use_initscr)
+  {
+    // Attempt to restore the terminal.
+    [[maybe_unused]] int res = endwin();
+#ifdef CWDEBUG
+    if (res == ERR)
+      Dout(dc::warning, "Context::~Context(): endwin() unsuccessful: terminal possibly not restored.");
+#endif
+  }
 }
 
 uint32_t Context::rows() const

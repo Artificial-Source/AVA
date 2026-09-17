@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "support/test_harness.h"
 #include "terminal/BasicWindow.h"
 #include "terminal/ColorPair.h"
 #include "terminal/Context.h"
@@ -8,7 +9,6 @@
 #include "terminal/Paragraph.h"
 #include "terminal/Spacer.h"
 #include "terminal/TextSpan.h"
-#include "tests/support/test_harness.h"
 
 #include <clocale>
 #include <cstdint>
@@ -141,20 +141,11 @@ struct TestPad : public terminal::Pad
 // right-aligned Paragraph, leading filler moves that prefix to the right edge and all retained trailing spaces are clipped.
 void test_mixed_width_text_span_rendering()
 {
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    expect(false, "tmpfile must be available for mixed-width TextSpan rendering");
-    return;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  terminal::Context terminal_context(output, input);
+  terminal::Context terminal_context(output.get(), input.get());
 
   bool const color_support = terminal_context.has_colors();
   expect(color_support, "TERM=xterm-256color must provide colors for the terminal::Pad test");
@@ -348,9 +339,6 @@ void test_mixed_width_text_span_rendering()
     expect(cell.cell_character().data()[0] == L' ' && cell.rendition().attributes().mask() == terminal::Attributes{}.mask(),
            "empty space below a short Paragraph must use the BasicWindow default rendition");
   }
-
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
 }
 
 } // namespace

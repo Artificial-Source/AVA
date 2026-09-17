@@ -10,7 +10,7 @@ namespace ava::tui::terminal {
 struct BasicScreen::Handle
 {
  private:
-  SCREEN* handle_;
+  SCREEN* handle_{};
 
  public:
   Handle(char const* type, FILE* outfd, FILE* infd) : handle_(newterm(const_cast<char*>(type), outfd, infd))
@@ -21,11 +21,11 @@ struct BasicScreen::Handle
 
   ~Handle()
   {
-    [[maybe_unused]] int res = endwin();
-#ifdef CWDEBUG
-    if (res == ERR)
-      Dout(dc::warning, "BasicScreen::Handle::~Handle(): endwin() unsuccessful.");
-#endif
+    if (!handle_)
+      return;
+    // It is normal that this fails if `outfd` and `infd` are not a TTY, as is always the case
+    // because this object is only constructed from the testsuite.
+    static_cast<void>(endwin());
     delscreen(handle_);
   }
 

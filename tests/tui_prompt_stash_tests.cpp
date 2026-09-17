@@ -126,22 +126,11 @@ void test_prompt_stash_store_semantics()
 
 void test_prompt_stash_runtime_controller()
 {
-  auto* input = std::tmpfile();
-  auto* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    expect(false, "prompt stash runtime test creates private terminal streams");
-    return;
-  }
-  auto* screen = newterm("xterm-256color", output, input);
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  auto* screen = newterm("xterm-256color", output.get(), input.get());
   if (!screen)
   {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     expect(false, "prompt stash runtime test creates a private curses screen");
     return;
   }
@@ -217,8 +206,6 @@ void test_prompt_stash_runtime_controller()
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
 }
 
 void test_latest_assistant_copy_decisions()

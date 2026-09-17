@@ -1,7 +1,7 @@
 #include "sys.h"
-#include "tests/support/test_harness.h"
-#include "tests/support/test_timeout.h"
-#include "tests/support/tui_test_support.h"
+#include "support/test_harness.h"
+#include "support/test_timeout.h"
+#include "support/tui_test_support.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
@@ -48,24 +48,12 @@ namespace {
 bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -138,32 +126,18 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return direct_refresh_passed && scheduled_render_passed && full_sync_passed;
 }
 
 bool test_changed_session_snapshot_resets_presentation()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -298,32 +272,18 @@ bool test_changed_session_snapshot_resets_presentation()
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return changed_state_ok && unchanged_state_ok && jobs_still_available;
 }
 
 bool test_active_run_session_transition_discards_prior_session_events()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -442,32 +402,18 @@ bool test_active_run_session_transition_discards_prior_session_events()
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return passed;
 }
 
 bool test_atomic_search_input_prompt_precedence()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -579,32 +525,18 @@ bool test_atomic_search_input_prompt_precedence()
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return passed;
 }
 
 bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -756,32 +688,18 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return passed;
 }
 
 bool test_detached_completion_publish_preserves_numbered_window()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -843,8 +761,6 @@ bool test_detached_completion_publish_preserves_numbered_window()
   {
     static_cast<void>(endwin());
     delscreen(screen);
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
   }
 
@@ -858,8 +774,6 @@ bool test_detached_completion_publish_preserves_numbered_window()
   {
     static_cast<void>(endwin());
     delscreen(screen);
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
   }
 
@@ -872,8 +786,6 @@ bool test_detached_completion_publish_preserves_numbered_window()
   {
     static_cast<void>(endwin());
     delscreen(screen);
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
   }
 
@@ -908,32 +820,18 @@ bool test_detached_completion_publish_preserves_numbered_window()
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return passed;
 }
 
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -990,8 +888,6 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
 
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return empty_ok && fitting_ok;
 }
 
@@ -1030,23 +926,11 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ScopedEnvVar term_guard("TERM", "xterm-256color");
   ScopedEnvVar no_color_guard("NO_COLOR", "");
   ScopedEnvVar theme_env_guard("AVA_TUI_THEME", "");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
-  SCREEN* screen = newterm(nullptr, output, input);
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   static_cast<void>(set_term(screen));
   if (has_colors())
   {
@@ -1155,31 +1039,17 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ava::tui::set_tui_config_theme(std::nullopt);
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return applied_signal && hydrate_kept_prior_overlay && staged_before_render && rendered && esc_restores_new_authority && unchanged_signal;
 }
 
 bool test_display_settings_reload_rebuilds_open_startup_overview()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return false;
-  }
-  SCREEN* screen = newterm(nullptr, output, input);
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   if (!screen)
-  {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     return false;
-  }
   set_term(screen);
   if (has_colors())
   {
@@ -1265,8 +1135,6 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   ava::tui::set_tui_config_theme(std::nullopt);
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return rebuilt && rendered;
 }
 

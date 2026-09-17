@@ -1,6 +1,6 @@
 #include "sys.h"
-#include "tests/support/test_harness.h"
-#include "tests/support/tui_test_support.h"
+#include "support/test_harness.h"
+#include "support/tui_test_support.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
@@ -821,7 +821,8 @@ void run_tui_terminal_input_tests_part_2()
   expect(!history_index && draft_input.empty(), "tui input history browsing state clears when the draft is edited");
 
   std::vector<std::string> capped_history;
-  for (int index = 0; index < 105; ++index) static_cast<void>(ava::tui::push_composer_input_history(capped_history, "item " + std::to_string(index)));
+  for (int index = 0; index < 105; ++index)
+    static_cast<void>(ava::tui::push_composer_input_history(capped_history, "item " + std::to_string(index)));
   expect(capped_history.size() == 100 && capped_history.front() == "item 5" && capped_history.back() == "item 104",
          "tui input history keeps the newest 100 entries");
 
@@ -1302,19 +1303,10 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
   ScopedEnvVar no_color_guard("NO_COLOR", profile.no_color ? "1" : "");
 
   VirtualTerminalResult result;
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  expect(input != nullptr && output != nullptr, "ncurses smoke test can create temporary streams for " + profile.name);
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    return result;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   result.screen_created = screen != nullptr;
   if (screen)
   {
@@ -1441,7 +1433,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
       ava::tui::detail::TranscriptLayoutCache transcript_cache;
       ava::tui::detail::ScreenRowCache screen_cache;
       auto const saved_stdout = dup(STDOUT_FILENO);
-      if (saved_stdout < 0 || std::fflush(stdout) != 0 || dup2(fileno(output), STDOUT_FILENO) < 0)
+      if (saved_stdout < 0 || std::fflush(stdout) != 0 || dup2(fileno(output.get()), STDOUT_FILENO) < 0)
       {
         if (saved_stdout >= 0)
           static_cast<void>(close(saved_stdout));
@@ -1453,23 +1445,23 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
         static_cast<void>(close(saved_stdout));
       };
       auto draw_and_capture = [&]() -> std::optional<std::string> {
-        if (std::fflush(stdout) != 0 || std::fflush(output) != 0 || std::fseek(output, 0, SEEK_END) != 0)
+        if (std::fflush(stdout) != 0 || std::fflush(output.get()) != 0 || std::fseek(output.get(), 0, SEEK_END) != 0)
           return std::nullopt;
-        auto const before = std::ftell(output);
+        auto const before = std::ftell(output.get());
         if (before < 0 ||
             !ava::tui::detail::draw_screen_cached(graphic_snapshot, completion_cache, graphic_snapshot.file_references_generation, transcript_cache,
                                                   graphic_snapshot.transcript_generation, screen_cache) ||
-            std::fflush(stdout) != 0 || std::fflush(output) != 0)
+            std::fflush(stdout) != 0 || std::fflush(output.get()) != 0)
         {
           return std::nullopt;
         }
-        auto const after = std::ftell(output);
-        if (after < before || std::fseek(output, before, SEEK_SET) != 0)
+        auto const after = std::ftell(output.get());
+        if (after < before || std::fseek(output.get(), before, SEEK_SET) != 0)
           return std::nullopt;
         std::string captured(static_cast<std::size_t>(after - before), '\0');
-        if (!captured.empty() && std::fread(captured.data(), 1, captured.size(), output) != captured.size())
+        if (!captured.empty() && std::fread(captured.data(), 1, captured.size(), output.get()) != captured.size())
           return std::nullopt;
-        if (std::fseek(output, 0, SEEK_END) != 0)
+        if (std::fseek(output.get(), 0, SEEK_END) != 0)
           return std::nullopt;
         return captured;
       };
@@ -1503,7 +1495,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
                                                               .dimensions = ava::tui::ImageDimensions{.width_px = 20, .height_px = 20},
                                                               .image_id = 31337}}};
       auto const saved_stdout = dup(STDOUT_FILENO);
-      if (saved_stdout < 0 || std::fflush(stdout) != 0 || dup2(fileno(output), STDOUT_FILENO) < 0)
+      if (saved_stdout < 0 || std::fflush(stdout) != 0 || dup2(fileno(output.get()), STDOUT_FILENO) < 0)
       {
         if (saved_stdout >= 0)
           static_cast<void>(close(saved_stdout));
@@ -1519,8 +1511,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
         restore_stdout();
         return false;
       }
-      static_cast<void>(std::fflush(output));
-      auto const output_before_footer = std::ftell(output);
+      static_cast<void>(std::fflush(output.get()));
+      auto const output_before_footer = std::ftell(output.get());
       auto const footer_canvas = ava::tui::composer_canvas_layout(footer_snapshot);
       auto const expected_footer_column = footer_canvas.left + ava::tui::detail::input_cursor_column(footer_snapshot, footer_canvas.content_width);
       ava::tui::detail::CompletionMatchCache completion_cache;
@@ -1544,15 +1536,15 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
           return false;
         }
       }
-      static_cast<void>(std::fflush(output));
-      auto const output_after_footer = std::ftell(output);
+      static_cast<void>(std::fflush(output.get()));
+      auto const output_after_footer = std::ftell(output.get());
       std::string footer_output;
       bool footer_output_read = false;
-      if (output_before_footer >= 0 && output_after_footer >= output_before_footer && std::fseek(output, output_before_footer, SEEK_SET) == 0)
+      if (output_before_footer >= 0 && output_after_footer >= output_before_footer && std::fseek(output.get(), output_before_footer, SEEK_SET) == 0)
       {
         footer_output.resize(static_cast<std::size_t>(output_after_footer - output_before_footer));
-        footer_output_read = std::fread(footer_output.data(), 1, footer_output.size(), output) == footer_output.size();
-        static_cast<void>(std::fseek(output, 0, SEEK_END));
+        footer_output_read = std::fread(footer_output.data(), 1, footer_output.size(), output.get()) == footer_output.size();
+        static_cast<void>(std::fseek(output.get(), 0, SEEK_END));
       }
       restore_stdout();
       auto const footer_output_is_quiet = footer_output_read && footer_output.find("\x1b[?25l") == std::string::npos &&
@@ -1583,8 +1575,6 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     delscreen(screen);
   }
 
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   return result;
 }
 
@@ -1890,25 +1880,13 @@ void test_osc11_handler_arming_and_virtual_probe()
   std::string const previous_locale = previous_locale_value == nullptr ? "C" : previous_locale_value;
   static_cast<void>(std::setlocale(LC_ALL, ""));
 
-  FILE* input = std::tmpfile();
-  FILE* output = std::tmpfile();
-  expect(input != nullptr && output != nullptr, "OSC 11 virtual probe can create temporary streams");
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
-    return;
-  }
+  ScopedTmpFile input;
+  ScopedTmpFile output;
 
-  SCREEN* screen = newterm(nullptr, output, input);
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
   expect(screen != nullptr, "OSC 11 virtual probe creates an ncurses screen");
   if (!screen)
   {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
     static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
     return;
   }
@@ -1975,8 +1953,6 @@ void test_osc11_handler_arming_and_virtual_probe()
   ava::tui::reset_detected_terminal_background_appearance();
   static_cast<void>(endwin());
   delscreen(screen);
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
   static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
 }
 
@@ -2045,52 +2021,32 @@ void test_osc11_query_writer_and_environment_gate_seam()
   auto const expected_query = std::string(ava::tui::terminal_background_query_sequence());
   expect(expected_query == "\x1b]11;?\x1b\\", "query writer seam uses the ST-terminated OSC 11 probe bytes");
 
-  FILE* allowed = std::tmpfile();
-  expect(allowed != nullptr, "query writer tests can create an allowed temporary stream");
-  if (!allowed)
-    return;
+  ScopedTmpFile allowed;
 
-  expect(ava::tui::write_terminal_background_query(allowed), "query writer reports success after writing the OSC 11 probe");
-  expect(read_tmpfile_bytes(allowed) == expected_query, "query writer emits exact OSC 11 query bytes");
+  expect(ava::tui::write_terminal_background_query(allowed.get()), "query writer reports success after writing the OSC 11 probe");
+  expect(read_tmpfile_bytes(allowed.get()) == expected_query, "query writer emits exact OSC 11 query bytes");
   expect(!ava::tui::write_terminal_background_query(nullptr), "query writer fails closed on a null stream");
 
-  FILE* skipped_tmux = std::tmpfile();
-  FILE* skipped_term = std::tmpfile();
-  FILE* allowed_emit = std::tmpfile();
-  expect(skipped_tmux != nullptr && skipped_term != nullptr && allowed_emit != nullptr, "query gate seam tests can create temporary streams");
-  if (!skipped_tmux || !skipped_term || !allowed_emit)
-  {
-    static_cast<void>(std::fclose(allowed));
-    if (skipped_tmux)
-      static_cast<void>(std::fclose(skipped_tmux));
-    if (skipped_term)
-      static_cast<void>(std::fclose(skipped_term));
-    if (allowed_emit)
-      static_cast<void>(std::fclose(allowed_emit));
-    return;
-  }
+  ScopedTmpFile skipped_tmux;
+  ScopedTmpFile skipped_term;
+  ScopedTmpFile allowed_emit;
 
-  expect(!ava::tui::emit_terminal_background_query_if_environment_allows("/tmp/tmux-1000/default,1,0", "xterm-256color", skipped_tmux) &&
-             read_tmpfile_bytes(skipped_tmux).empty(),
+  expect(!ava::tui::emit_terminal_background_query_if_environment_allows("/tmp/tmux-1000/default,1,0", "xterm-256color", skipped_tmux.get()) &&
+             read_tmpfile_bytes(skipped_tmux.get()).empty(),
          "emit seam writes nothing when TMUX suppresses the query");
-  expect(
-      !ava::tui::emit_terminal_background_query_if_environment_allows(std::nullopt, "tmux-256color", skipped_term) && read_tmpfile_bytes(skipped_term).empty(),
-      "emit seam writes nothing when TERM=tmux* suppresses the query");
-  expect(ava::tui::emit_terminal_background_query_if_environment_allows(std::nullopt, "xterm-256color", allowed_emit) &&
-             read_tmpfile_bytes(allowed_emit) == expected_query,
+  expect(!ava::tui::emit_terminal_background_query_if_environment_allows(std::nullopt, "tmux-256color", skipped_term.get()) &&
+             read_tmpfile_bytes(skipped_term.get()).empty(),
+         "emit seam writes nothing when TERM=tmux* suppresses the query");
+  expect(ava::tui::emit_terminal_background_query_if_environment_allows(std::nullopt, "xterm-256color", allowed_emit.get()) &&
+             read_tmpfile_bytes(allowed_emit.get()) == expected_query,
          "emit seam writes exact OSC 11 bytes for a direct xterm environment");
-
-  static_cast<void>(std::fclose(allowed));
-  static_cast<void>(std::fclose(skipped_tmux));
-  static_cast<void>(std::fclose(skipped_term));
-  static_cast<void>(std::fclose(allowed_emit));
 }
 
 struct VirtualOsc11Screen
 {
   SCREEN* screen = nullptr;
-  FILE* input = nullptr;
-  FILE* output = nullptr;
+  ScopedTmpFile input;
+  ScopedTmpFile output;
   std::string previous_locale;
 
   explicit operator bool() const { return screen != nullptr; }
@@ -2103,29 +2059,10 @@ VirtualOsc11Screen enter_virtual_osc11_screen(char const* purpose)
   state.previous_locale = previous_locale_value == nullptr ? "C" : previous_locale_value;
   static_cast<void>(std::setlocale(LC_ALL, ""));
 
-  state.input = std::tmpfile();
-  state.output = std::tmpfile();
-  expect(state.input != nullptr && state.output != nullptr, std::string(purpose) + " can create temporary streams");
-  if (!state.input || !state.output)
-  {
-    if (state.input)
-      static_cast<void>(std::fclose(state.input));
-    if (state.output)
-      static_cast<void>(std::fclose(state.output));
-    state.input = nullptr;
-    state.output = nullptr;
-    static_cast<void>(std::setlocale(LC_ALL, state.previous_locale.c_str()));
-    return state;
-  }
-
-  state.screen = newterm(nullptr, state.output, state.input);
+  state.screen = newterm(nullptr, state.output.get(), state.input.get());
   expect(state.screen != nullptr, std::string(purpose) + " creates an ncurses screen");
   if (!state.screen)
   {
-    static_cast<void>(std::fclose(state.input));
-    static_cast<void>(std::fclose(state.output));
-    state.input = nullptr;
-    state.output = nullptr;
     static_cast<void>(std::setlocale(LC_ALL, state.previous_locale.c_str()));
     return state;
   }
@@ -2149,16 +2086,6 @@ void leave_virtual_osc11_screen(VirtualOsc11Screen& state)
     static_cast<void>(endwin());
     delscreen(state.screen);
     state.screen = nullptr;
-  }
-  if (state.input)
-  {
-    static_cast<void>(std::fclose(state.input));
-    state.input = nullptr;
-  }
-  if (state.output)
-  {
-    static_cast<void>(std::fclose(state.output));
-    state.output = nullptr;
   }
   static_cast<void>(std::setlocale(LC_ALL, state.previous_locale.c_str()));
 }
@@ -2955,7 +2882,8 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
 
   expect(LINES == static_cast<int>(size.ws_row) && COLS == static_cast<int>(size.ws_col), "same-size geometry baseline matches the controlled PTY winsize");
 
-  for (int i = 0; i < 8; ++i) ava::tui::refresh_terminal_geometry_from_kernel();
+  for (int i = 0; i < 8; ++i)
+    ava::tui::refresh_terminal_geometry_from_kernel();
 
   auto const same_size_resizes = drain_resize_events();
   expect(same_size_resizes == 0, "same-size repeated geometry refresh must not inject KEY_RESIZE (got " + std::to_string(same_size_resizes) + ")");
