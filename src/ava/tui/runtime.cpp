@@ -196,7 +196,7 @@ void clear_reasoning_feedback_for_user_input(ComposerSnapshot& snapshot)
   snapshot.local_command_feedback.reset();
 }
 
-void do_beep(terminal::Context& terminal_context)
+void do_beep(terminal::Context& UNUSED_ARG(terminal_context))
 {
   static_cast<void>(beep());
 }
