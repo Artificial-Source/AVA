@@ -203,6 +203,16 @@ void Context::doupdate()
   ::doupdate();
 }
 
+int Context::beep()
+{
+  return ::beep();
+}
+
+int Context::flash()
+{
+  return ::flash();
+}
+
 bool Context::write_raw_sequence(std::string_view sequence)
 {
   return std::fwrite(sequence.data(), 1, sequence.size(), output_file_) == sequence.size() && std::fflush(output_file_) == 0;

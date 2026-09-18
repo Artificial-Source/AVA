@@ -77,6 +77,11 @@ class Context final
   // Synchronize the virtual screen with the physical screen.
   static void doupdate();                                               // doupdate
 
+  // Sound the terminal's audible alarm.
+  int beep();                                                           // beep
+  // Alert the terminal user by visibly attracting attention.
+  int flash();                                                          // flash
+
   // Write a raw sequence of characters to the terminal and flush it. Returns true upon success.
   bool write_raw_sequence(std::string_view sequence);
 
