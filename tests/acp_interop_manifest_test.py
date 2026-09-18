@@ -350,6 +350,11 @@ def main():
     assert "AVA_ENABLE_ACPX_INTEROP=ON" in workflow
     assert "workflow_dispatch:" in workflow and "run_acpx:" in workflow
     assert "env -i" in workflow
+    sanitizer_job = workflow.split("\n  sanitizer:\n", 1)[1].split("\n  acp-sdk-interop:", 1)[0]
+    assert "id: sanitizer-test" in sanitizer_job
+    assert "if: always() && steps.sanitizer-test.outcome != 'skipped'" in sanitizer_job
+    assert "summarize-test-results.py" in sanitizer_job
+    assert "ava-junit-sanitize.xml" in sanitizer_job
 
     print("ACP M6 interoperability package locks, metadata, CMake, and CI are consistent")
     return 0

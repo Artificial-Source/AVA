@@ -24,6 +24,13 @@ target_link_libraries(ava
     ${AVA_FRONTEND_LIBRARIES}
     ${AVA_BACKEND_LIBRARIES}
 )
+if (OptionEnableLibcwd)
+  # Frontend lists AVA::terminal before ava_debug, so CMake's static-cycle
+  # expansion ends on debug. GNU ld will not extract TextSpan typeinfo for
+  # print_members.cpp.o pulled from that last debug visit unless the pair is
+  # rescanned.
+  target_link_libraries(ava PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
+endif()
 
 install(TARGETS ava RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT ava)
 

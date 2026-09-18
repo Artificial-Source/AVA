@@ -301,6 +301,10 @@ endif()
 
 add_executable(ava_tests ${AVA_TESTS_SOURCES})
 target_link_libraries(ava_tests PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ava_tui_test_support ${AICXX_OBJECTS_LIST})
+if (OptionEnableLibcwd)
+  # Same GNU ld TextSpan typeinfo rescan as the ava executable.
+  target_link_libraries(ava_tests PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
+endif()
 target_include_directories(ava_tests PRIVATE ${CURSES_INCLUDE_DIRS})
 add_dependencies(ava_tests ava_fake_lsp_server ava_fake_mcp_server ava_fake_process_child ava_fake_curl_child ava_fake_clipboard_child ava_fake_plugin_child ava_fake_mermaid_helper ava_fake_provider_server)
 target_compile_definitions(ava_tests PRIVATE AVA_FAKE_LSP_SERVER_PATH="$<TARGET_FILE:ava_fake_lsp_server>")
