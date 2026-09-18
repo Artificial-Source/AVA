@@ -287,6 +287,7 @@ set(AVA_TESTS_SOURCES
   "tui_transcript_search_tests.cpp"
   "terminal_color_tests.cpp"
   "terminal_horizontal_layout_tests.cpp"
+  "terminal_keyboard_input_mode_tests.cpp"
   "terminal_paragraph_tests.cpp"
   "terminal_window_tests.cpp"
   "run_observer_tests.cpp"
@@ -379,6 +380,7 @@ set(AVA_TEST_SUITES
   permission_rules
   tui_composer
   terminal_color
+  terminal_keyboard_input_mode
   terminal_horizontal_layout
   terminal_paragraph
   terminal_window

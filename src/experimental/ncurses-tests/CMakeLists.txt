@@ -17,7 +17,7 @@ find_library(CURSES_PANELW_LIBRARY
 
 add_executable(linux02 linux02-screen-resizing.cpp)
 target_include_directories(linux02 PRIVATE ${CURSES_INCLUDE_DIRS})
-target_link_libraries(linux02 PRIVATE ${CURSES_LIBRARIES})
+target_link_libraries(linux02 PRIVATE AVA::terminal)
 
 add_executable(linux03 linux03-panels.cpp)
 target_include_directories(linux03 PRIVATE ${CURSES_INCLUDE_DIRS})

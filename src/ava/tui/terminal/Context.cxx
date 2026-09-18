@@ -2,11 +2,16 @@
 #include "ColorPalette.h"
 #include "Context.h"
 
+#include <algorithm>
 #include <array>
+#include <cerrno>
+#include <chrono>
 #include <clocale>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <poll.h>
+#include <unistd.h>
 
 // This header must be included last.
 #include "private_convert.h"
@@ -40,6 +45,7 @@ void Context::initialize(FILE* outfd, FILE* infd)
   ASSERT((outfd == nullptr) == (infd == nullptr));
   // Use initscr or newterm?
   bool use_initscr = outfd == nullptr;
+  input_file_ = use_initscr ? stdin : infd;
   output_file_ = use_initscr ? stdout : outfd;
 
   if (use_initscr)
@@ -66,9 +72,9 @@ void Context::initialize(FILE* outfd, FILE* infd)
     default_colors_enabled_ = ::use_default_colors() == OK;
   }
 
-  cbreak();
+  raw();                // Prefer to receive ctrl-c, ctrl-s, ctrl-q etc as key codes instead of signals.
   noecho();
-  nl();                 // Always translate the Enter key to a linefeed.
+  nonl();               // Do not translate the Enter key to a linefeed.
   meta(::stdscr, TRUE); // Always return 8-bit character codes.
   curs_set(FALSE);      // The cursor is turned on as soon as the composer area is created.
 
@@ -87,23 +93,33 @@ void Context::initialize(FILE* outfd, FILE* infd)
   // Initialize default_rendition_ after creating the color_palette_ (if any).
   if (has_colors())
     default_rendition_ = Rendition{create_color_pair({}, {})};
+
+  // Start keyboard input mode to disambiguate escape codes, most notably to
+  // be able to tell the difference between Enter and cntrl-Enter.
+  keyboard_disambiguation_.start(*this);
+
+  // Tell the destructor that initialized was called.
+  initialized_ = true;
 }
 
 Context::~Context()
 {
-  // Restore the cursor to its default value.
-  apply_cursor_settings({CursorStyle::Default});
-  // Restore mutable palette entries before endwin returns terminal presentation to the invoking process.
-  color_palette_.reset();
-  bool use_initscr = output_file_ == stdout;
-  if (use_initscr)
+  if (initialized_)
   {
-    // Attempt to restore the terminal.
-    [[maybe_unused]] int res = endwin();
+    // Restore the cursor to its default value.
+    apply_cursor_settings({CursorStyle::Default});
+    // Restore mutable palette entries before endwin returns terminal presentation to the invoking process.
+    color_palette_.reset();
+    bool use_initscr = output_file_ == stdout;
+    if (use_initscr)
+    {
+      // Attempt to restore the terminal.
+      [[maybe_unused]] int res = endwin();
 #ifdef CWDEBUG
-    if (res == ERR)
-      Dout(dc::warning, "Context::~Context(): endwin() unsuccessful: terminal possibly not restored.");
+      if (res == ERR)
+        Dout(dc::warning, "Context::~Context(): endwin() unsuccessful: terminal possibly not restored.");
 #endif
+    }
   }
 }
 
@@ -215,7 +231,61 @@ int Context::flash()
 
 bool Context::write_raw_sequence(std::string_view sequence)
 {
+  if (!output_file_)
+    return false;
   return std::fwrite(sequence.data(), 1, sequence.size(), output_file_) == sequence.size() && std::fflush(output_file_) == 0;
+}
+
+// Read a bounded raw byte batch from the configured terminal input descriptor.
+//
+// EINTR retries consume the original absolute deadline rather than restarting the caller's timeout. All failures intentionally
+// collapse to an empty result; callers use this only for optional terminal-feature negotiation.
+std::string Context::read_raw_input_for(std::chrono::milliseconds timeout) const
+{
+  constexpr std::size_t kMaximumRawRead = 4096;
+
+  if (!input_file_)
+    return {};
+  int const descriptor = ::fileno(input_file_);
+  if (descriptor < 0)
+    return {};
+
+  using Clock = std::chrono::steady_clock;
+  auto const nonnegative_timeout = std::max(timeout, std::chrono::milliseconds::zero());
+  auto const deadline = Clock::now() + nonnegative_timeout;
+  pollfd item{descriptor, POLLIN, 0};
+
+  while (true)
+  {
+    auto const remaining = deadline - Clock::now();
+    auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(remaining);
+    if (remaining > std::chrono::steady_clock::duration::zero() && wait < remaining)
+      ++wait;
+    int const poll_timeout = remaining <= Clock::duration::zero() ? 0 : static_cast<int>(std::min<long long>(wait.count(), std::numeric_limits<int>::max()));
+
+    int const ready = ::poll(&item, 1, poll_timeout);
+    if (ready < 0 && errno == EINTR)
+    {
+      if (Clock::now() >= deadline)
+        return {};
+      continue;
+    }
+    if (ready <= 0 || (item.revents & (POLLIN | POLLHUP)) == 0)
+      return {};
+
+    std::array<char, kMaximumRawRead> bytes;
+    ssize_t const count = ::read(descriptor, bytes.data(), bytes.size());
+    if (count < 0 && errno == EINTR)
+    {
+      if (Clock::now() >= deadline)
+        return {};
+      item.revents = 0;
+      continue;
+    }
+    if (count <= 0)
+      return {};
+    return std::string(bytes.data(), static_cast<std::size_t>(count));
+  }
 }
 
 bool Context::has_colors() const

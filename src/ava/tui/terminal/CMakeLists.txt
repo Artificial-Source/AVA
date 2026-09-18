@@ -14,6 +14,7 @@ target_sources(ava_terminal
     "GraphemeRun.cxx"
     "GraphemeSpan.cxx"
     "HorizontalLayout.cxx"
+    "KeyboardInputMode.cxx"
     "LayoutItem.cxx"
     "Spacer.cxx"
     "Pad.cxx"

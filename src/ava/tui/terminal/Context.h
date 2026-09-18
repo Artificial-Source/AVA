@@ -6,10 +6,14 @@
 #include "ColorPair.h"
 #include "ComplexChar.h"
 #include "Cursor.h"
+#include "KeyboardInputMode.h"
 #include "utils/Badge.h"
 
+#include <chrono>
+#include <cstdio>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace ava::core {
@@ -33,13 +37,16 @@ class Context final
  private:
   BasicScreen first_screen_;                                    // Owns the screen iff `outfd` and `infd` are passed to the constructor.
   BasicWindow stdscr_;                                          // The entire surface of the current terminal screen.
-  FILE* output_file_;                                           // Non-owning stream connected to the terminal emulator.
+  FILE* input_file_ = nullptr;                                  // Non-owning stream from the terminal emulator.
+  FILE* output_file_ = nullptr;                                 // Non-owning stream connected to the terminal emulator.
   Rendition default_rendition_;                                 // The rendition to use for text that doesn't have any defined of its own.
-  bool has_cvvis_cap_;                                          // True iff the current TERM supports cvvis, meaning that `cursor_visibility = 2` can be used.
+  bool has_cvvis_cap_ = false;                                  // True iff the current TERM supports cvvis, meaning that `cursor_visibility = 2` can be used.
   bool default_colors_enabled_ = false;                         // Whether -1 selects the terminal's default colors.
+  bool initialized_ = false;                                    // Whether ncurses initialization reached a state that requires terminal restoration.
   std::vector<ColorPair> color_pairs_;                          // All registered foreground/background color pairs so far.
   std::unique_ptr<ColorPalette> color_palette_;                 // The live color palette of stdscr if the terminal isn't direct-color.
   CursorState cursor_state_;                                    // The current cursor state, corresponding to the last call to apply_cursor_settings.
+  KeyboardInputMode keyboard_disambiguation_;                   // RAI object to bring terminal into state to disambiguate escape codes.
 
  public:
   Context(utils::Badge<core::Application>);
@@ -84,6 +91,13 @@ class Context final
 
   // Write a raw sequence of characters to the terminal and flush it. Returns true upon success.
   bool write_raw_sequence(std::string_view sequence);
+
+  // Read at most 4096 raw bytes currently available from the configured terminal input, waiting no longer than `timeout`.
+  //
+  // This directly polls and reads the input stream descriptor without changing its blocking flags. It is intended only for short
+  // startup protocol negotiation before normal ncurses input begins and must not run concurrently with ncurses reads. Timeout, EOF,
+  // invalid streams, and poll/read errors all return an empty string because this best-effort startup seam has no error channel.
+  std::string read_raw_input_for(std::chrono::milliseconds timeout) const;
 
   bool has_colors() const;                                              // has_colors
   bool can_change_colors() const;
