@@ -27,6 +27,7 @@
 #include "ava/tui/terminal.h"
 #include "ava/tui/theme.h"
 #include "ava/tui/tool_cards.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <cctype>
@@ -195,6 +196,11 @@ void clear_reasoning_feedback_for_user_input(ComposerSnapshot& snapshot)
   snapshot.local_command_feedback.reset();
 }
 
+void do_beep(terminal::Context& terminal_context)
+{
+  static_cast<void>(beep());
+}
+
 int run_interactive_composer(TuiRuntimeOptions options)
 {
   RuntimeBeforeShutdownGuard before_shutdown(options);
@@ -211,6 +217,9 @@ int run_interactive_composer(TuiRuntimeOptions options)
     std::cerr << curses.error().format() << '\n';
     return 1;
   }
+  terminal::Context& terminal_context = core::Application::instance().terminal_context();
+  //terminal_context.initialize();
+
   ComposerTerminalGraphicsGuard graphics_cleanup;
   apply_terminal_cursor_settings(options.cursor);
   // Probe the direct terminal background once after enter and before first paint.
@@ -770,7 +779,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
     {
       auto const handled = subagent_workspace.handle_input(input.event);
       if (handled.beep)
-        static_cast<void>(beep());
+        do_beep(terminal_context);
       if (handled.changed && !renderer.request_render())
       {
         terminal_write_failed = true;
@@ -793,7 +802,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           success = confirm_branch_summary();
           break;
         case BranchSummaryInputIntent::Block:
-          static_cast<void>(beep());
+          do_beep(terminal_context);
           break;
       }
       if (!success)
@@ -1034,7 +1043,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           if (!options.on_reload_key_bindings)
           {
             snapshot.status = "reload unavailable";
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
           else
           {
@@ -1042,7 +1051,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
             if (!reloaded)
             {
               snapshot.status = reloaded.error().format();
-              static_cast<void>(beep());
+              do_beep(terminal_context);
             }
             else
             {
@@ -1087,7 +1096,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         else if (selected_value.empty() || (selected_item && !selected_item->enabled))
         {
           snapshot.status = "settings action unavailable from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else if (options.on_settings_selected)
         {
@@ -1121,7 +1130,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
             begin_settings_preview_baseline();
             settings_nav.preview.apply_image_overlay(snapshot);
             snapshot.status = selected.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
         else
@@ -1136,12 +1145,12 @@ int run_interactive_composer(TuiRuntimeOptions options)
         if (!selected_item || !selected_item->enabled || selected_item->value.empty())
         {
           snapshot.status = "scoped model cannot be toggled from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else if (!options.on_scoped_model_toggled)
         {
           snapshot.status = "scoped model toggle unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1153,7 +1162,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = updated.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
       }
@@ -1162,7 +1171,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         if (!options.on_scoped_model_enable_all)
         {
           snapshot.status = "scoped model enable-all unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1174,7 +1183,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = updated.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
       }
@@ -1183,7 +1192,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         if (!options.on_scoped_model_clear_all)
         {
           snapshot.status = "scoped model clear-all unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1195,7 +1204,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = updated.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
       }
@@ -1206,12 +1215,12 @@ int run_interactive_composer(TuiRuntimeOptions options)
         if (!selected_item || selected_item->value.empty())
         {
           snapshot.status = "provider toggle unavailable from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else if (!options.on_scoped_model_toggle_provider)
         {
           snapshot.status = "provider toggle unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1223,7 +1232,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = updated.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
       }
@@ -1234,12 +1243,12 @@ int run_interactive_composer(TuiRuntimeOptions options)
         if (!selected_item || selected_item->value.empty())
         {
           snapshot.status = "scoped model reorder unavailable from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else if (!options.on_scoped_model_reorder)
         {
           snapshot.status = "scoped model reorder unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1252,7 +1261,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = updated.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
       }
@@ -1261,7 +1270,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         if (!options.on_scoped_model_save)
         {
           snapshot.status = "scoped model save unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1273,7 +1282,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = saved.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
       }
@@ -1284,7 +1293,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
             snapshot.select_list->items[input_result.selected_item_index].value.empty())
         {
           snapshot.status = "parent summary is unavailable from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1343,7 +1352,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         else
         {
           snapshot.status = "session cannot be renamed from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
       }
       else if (input_result.action == SelectListInputAction::Label && active_select_list == ActiveSelectList::Session && snapshot.select_list)
@@ -1365,7 +1374,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         else
         {
           snapshot.status = "session cannot be labeled from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
       }
       else if ((input_result.action == SelectListInputAction::BranchParent || input_result.action == SelectListInputAction::BranchChild) &&
@@ -1376,17 +1385,17 @@ int run_interactive_composer(TuiRuntimeOptions options)
         if (!selected_item || !selected_item->enabled || selected_item->value.empty())
         {
           snapshot.status = "session branch navigation unavailable from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else if (input_result.action == SelectListInputAction::BranchParent && !options.on_session_selector_branch_parent)
         {
           snapshot.status = "session parent navigation unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else if (input_result.action == SelectListInputAction::BranchChild && !options.on_session_selector_branch_child)
         {
           snapshot.status = "session child navigation unavailable";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1404,7 +1413,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = opened.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
       }
@@ -1423,7 +1432,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         {
           session_archive_confirmation.reset();
           snapshot.status = "session cannot be archived or restored from this row";
-          static_cast<void>(beep());
+          do_beep(terminal_context);
         }
         else
         {
@@ -1432,19 +1441,19 @@ int run_interactive_composer(TuiRuntimeOptions options)
           {
             session_archive_confirmation.reset();
             snapshot.status = "switch sessions before archiving the active session";
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
           else if (archive && !options.on_session_selector_archive)
           {
             session_archive_confirmation.reset();
             snapshot.status = "session archive unavailable";
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
           else if (!archive && !options.on_session_selector_unarchive)
           {
             session_archive_confirmation.reset();
             snapshot.status = "session restore unavailable";
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
           else if (session_archive_confirmation && session_archive_confirmation->session_id == selected_item->value &&
                    session_archive_confirmation->archive == archive)
@@ -1458,7 +1467,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
             else
             {
               snapshot.status = updated.error().format();
-              static_cast<void>(beep());
+              do_beep(terminal_context);
             }
           }
           else
@@ -1528,7 +1537,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           if (!options.on_reload_key_bindings)
           {
             snapshot.status = "reload unavailable";
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
           else
           {
@@ -1536,7 +1545,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
             if (!reloaded)
             {
               snapshot.status = reloaded.error().format();
-              static_cast<void>(beep());
+              do_beep(terminal_context);
             }
             else
             {
@@ -1562,7 +1571,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = selected.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
         else if (resolved_list == ActiveSelectList::Reasoning && options.on_reasoning_selected)
@@ -1577,7 +1586,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = selected.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
         else if (resolved_list == ActiveSelectList::Session && options.on_session_selected)
@@ -1590,7 +1599,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = selected.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
         else if (resolved_list == ActiveSelectList::ForkUserTurn && options.on_fork_user_turn_selected)
@@ -1626,7 +1635,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           {
             snapshot.status = std::move(decision.status);
             if (decision.beep)
-              static_cast<void>(beep());
+              do_beep(terminal_context);
           }
         }
         else if (resolved_list == ActiveSelectList::CopyUserTurn && options.on_read_user_turn_text)
@@ -1634,7 +1643,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           auto decision = evaluate_copy_user_turn_selection(selected_value, options.on_read_user_turn_text, copy_text_to_terminal_clipboard);
           settle_local_command_status(snapshot, decision.status);
           if (decision.beep)
-            static_cast<void>(beep());
+            do_beep(terminal_context);
         }
         else if (resolved_list == ActiveSelectList::Settings && options.on_settings_selected)
         {
@@ -1647,7 +1656,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
           else
           {
             snapshot.status = selected.error().format();
-            static_cast<void>(beep());
+            do_beep(terminal_context);
           }
         }
         else
@@ -1678,7 +1687,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
       if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index))
       {
         snapshot.status = "command disabled: " + *disabled_reason;
-        static_cast<void>(beep());
+        do_beep(terminal_context);
         return;
       }
       draft_state.clear_selection();
@@ -1696,7 +1705,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
       if (auto const disabled_reason = selected_completion_disabled_reason(selected_slash_command_index))
       {
         snapshot.status = "reference disabled: " + *disabled_reason;
-        static_cast<void>(beep());
+        do_beep(terminal_context);
         return;
       }
       auto selection = selected_completion_text(selected_slash_command_index);
@@ -1714,7 +1723,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
       if (auto const disabled_reason = selected_completion_disabled_reason(selected_slash_command_index))
       {
         snapshot.status = "path disabled: " + *disabled_reason;
-        static_cast<void>(beep());
+        do_beep(terminal_context);
         return;
       }
       auto selection = selected_completion_text(selected_slash_command_index);
@@ -1748,7 +1757,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         {
           path_completion_force_active = false;
           snapshot.status = "path disabled: " + *disabled_reason;
-          static_cast<void>(beep());
+          do_beep(terminal_context);
           return true;
         }
         auto selection = selected_completion_text(0);
