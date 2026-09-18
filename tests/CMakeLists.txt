@@ -302,7 +302,7 @@ endif()
 add_executable(ava_tests ${AVA_TESTS_SOURCES})
 target_link_libraries(ava_tests PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ava_tui_test_support ${AICXX_OBJECTS_LIST})
 if (OptionEnableLibcwd)
-  # Same GNU ld TextSpan typeinfo rescan as the ava executable.
+  # Same mutually-referencing static archive rescan as the ava executable.
   target_link_libraries(ava_tests PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
 endif()
 target_include_directories(ava_tests PRIVATE ${CURSES_INCLUDE_DIRS})
