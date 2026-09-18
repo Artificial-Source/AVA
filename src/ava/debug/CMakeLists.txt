@@ -276,7 +276,6 @@ add_library(ava_debug
   "maxlen.cpp"
   "debug_ostream_operators.cpp"
   "libcwd_output_sink.cpp"
-  "${CMAKE_SOURCE_DIR}/src/ava/tui/terminal/print_members.cpp"  # Manually written print_members / print_on methods.
   ${_ava_generated_source_files}
 )
 
@@ -290,10 +289,14 @@ target_include_directories(ava_debug
 # (e.g. ComplexChar.h, which pulls in GraphemeCluster.h). GraphemeCluster and
 # Border use AVA_PRINT_ON_MEMBERS — a hand-written print_members — so the
 # generated .o files reference but do not define their print_members.
+# Those hand-written printers and typeinfo/vtables for terminal types
+# (e.g. TextSpan) live in ava_terminal. GNU ld only extracts those archive
+# members when ava_debug depends on AVA::terminal.
 # Other dependencies might exist if, for example, a generated print_members
 # uses a `to_string`. These should be added when encountered.
 target_link_libraries(ava_debug
   PUBLIC
+    AVA::terminal       # typeinfo/vtable for terminal types used by print_members
     AVA::agent          # ava::agent::to_string
     AVA::app            # ava::app::runtime::to_string
     AVA::lsp            # ava::lsp::to_string

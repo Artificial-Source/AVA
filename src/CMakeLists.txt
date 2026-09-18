@@ -24,6 +24,11 @@ target_link_libraries(ava
     ${AVA_FRONTEND_LIBRARIES}
     ${AVA_BACKEND_LIBRARIES}
 )
+if (OptionEnableLibcwd)
+  # ava_debug and AVA::terminal are mutually referencing static archives.
+  # GNU ld will not resolve the cycle unless the pair is rescanned.
+  target_link_libraries(ava PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
+endif()
 
 install(TARGETS ava RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT ava)
 

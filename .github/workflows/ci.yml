@@ -352,10 +352,11 @@ jobs:
         run: ccache -s
 
       - name: Test
+        id: sanitizer-test
         run: scripts/run-tests.sh --build-dir build-sanitize --jobs 2 --output-junit "${{ runner.temp }}/ava-junit-sanitize.xml"
 
       - name: Summarize test results
-        if: always()
+        if: always() && steps.sanitizer-test.outcome != 'skipped'
         run: python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-sanitize.xml"
 
   acp-sdk-interop:
