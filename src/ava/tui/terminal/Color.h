@@ -8,6 +8,40 @@
 
 namespace ava::tui::terminal {
 
+// Identify one of the eight portable terminal palette entries by its ncurses-compatible index.
+enum class ColorIndex : uint32_t
+{
+  black = 0,
+  red = 1,
+  green = 2,
+  yellow = 3,
+  blue = 4,
+  magenta = 5,
+  cyan = 6,
+  white = 7,
+};
+
+// The red, green, and blue intensities reported for one terminal palette entry.
+//
+// Each component uses ncurses' inclusive 0 through 1000 scale rather than an eight-bit channel.
+struct ColorContent
+{
+  int red;
+  int green;
+  int blue;
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
+// The terminal color indexes assigned to one ColorPair.
+struct ColorPairContent
+{
+  int foreground_index;
+  int background_index;
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
 // class Color
 //
 // A wrapper for the direct-color RGB terminal values.

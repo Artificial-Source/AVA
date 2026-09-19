@@ -2,6 +2,7 @@
 #include "ColorPalette.h"
 #include "Context.h"
 #include "ava/tui/config.h"
+#include "utils/to_string.h"
 
 #include <algorithm>
 #include <array>
@@ -196,14 +197,36 @@ int Context::terminal_color_index(Color color)
 ColorPair Context::create_color_pair(Color foreground, Color background)
 {
   DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << foreground << ", " << background << ") = ");
+  return priv_create_color_pair(terminal_color_index(foreground), terminal_color_index(background));
+}
 
-  int foreground_index = terminal_color_index(foreground);
-  int background_index = terminal_color_index(background);
-  // terminal_color_index returns -1 for "default color"s.
-  // Replace that with a "random" white or black if default colors are not supported by this terminal.
+// Create a pair from one portable palette foreground and one resolved RGB/default background.
+ColorPair Context::create_color_pair(ColorIndex foreground, Color background)
+{
+  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << utils::to_string(foreground) << ", " << background << ") = ");
+  return priv_create_color_pair(static_cast<int>(foreground), terminal_color_index(background));
+}
+
+// Create a pair from one resolved RGB/default foreground and one portable palette background.
+ColorPair Context::create_color_pair(Color foreground, ColorIndex background)
+{
+  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << foreground << ", " << utils::to_string(background) << ") = ");
+  return priv_create_color_pair(terminal_color_index(foreground), static_cast<int>(background));
+}
+
+// Create a pair directly from two portable palette indexes.
+ColorPair Context::create_color_pair(ColorIndex foreground, ColorIndex background)
+{
+  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << utils::to_string(foreground) << ", " << utils::to_string(background) << ") = ");
+  return priv_create_color_pair(static_cast<int>(foreground), static_cast<int>(background));
+}
+
+// Register a pair after reserving any mutable indexed-palette entries that it exposes.
+ColorPair Context::priv_create_color_pair(int foreground_index, int background_index)
+{
+  // Replace default-color sentinels with a dark-theme fallback if ncurses could not enable terminal defaults.
   if (!default_colors_enabled_)
   {
-    // Assume a dark theme for now.
     if (foreground_index == -1)
       foreground_index = COLOR_WHITE;
     if (background_index == -1)
@@ -227,6 +250,25 @@ ColorPair Context::create_color_pair(Color foreground, Color background)
   ColorPair result = color_pairs_.back();
 
   Dout(dc::finish, result);
+  return result;
+}
+
+// Read the terminal color indexes currently registered for a ColorPair.
+std::optional<ColorPairContent> Context::color_pair_content(ColorPair color_pair) const
+{
+  int foreground_index = 0;
+  int background_index = 0;
+  if (::extended_pair_content(static_cast<int>(color_pair.index()), &foreground_index, &background_index) == ERR)
+    return std::nullopt;
+  return ColorPairContent{foreground_index, background_index};
+}
+
+// Read ncurses' scaled RGB components for one terminal color index.
+std::optional<ColorContent> Context::color_content(int color_index) const
+{
+  ColorContent result{};
+  if (::extended_color_content(color_index, &result.red, &result.green, &result.blue) == ERR)
+    return std::nullopt;
   return result;
 }
 

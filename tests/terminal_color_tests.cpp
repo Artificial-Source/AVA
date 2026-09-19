@@ -201,6 +201,36 @@ void test_xterm_indexed_colors_use_standard_palette()
          "indexed-color rendering must not reprogram a fixed palette with either requested application color");
 }
 
+// Verify that portable palette indexes remain exact across every typed ColorIndex pair overload.
+void test_portable_color_index_pairs()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
+  std::rewind(input.get());
+
+  ScopedEnvVar term_guard("TERM", "xterm-direct");
+  terminal::Context terminal_context(output.get(), input.get());
+  using enum terminal::ColorIndex;
+
+  std::array<terminal::ColorPair, 3> const pairs{
+      terminal_context.create_color_pair(red, black),
+      terminal_context.create_color_pair(red, terminal::Color{}),
+      terminal_context.create_color_pair(terminal::Color{}, black),
+  };
+  std::array<terminal::ColorPairContent, 3> const expected{
+      terminal::ColorPairContent{1, 0},
+      terminal::ColorPairContent{1, -1},
+      terminal::ColorPairContent{-1, 0},
+  };
+  for (std::size_t index = 0; index != pairs.size(); ++index)
+  {
+    auto const content = terminal_context.color_pair_content(pairs[index]);
+    expect(content && content->foreground_index == expected[index].foreground_index && content->background_index == expected[index].background_index,
+           "typed ColorIndex pair creation must preserve portable and default terminal color indexes");
+  }
+}
+
 } // namespace
 
 void run_terminal_color_tests()
@@ -209,4 +239,5 @@ void run_terminal_color_tests()
   test_osc4_palette_protocol();
   test_mutable_palette_probe();
   test_xterm_indexed_colors_use_standard_palette();
+  test_portable_color_index_pairs();
 }

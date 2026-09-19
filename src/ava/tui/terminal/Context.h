@@ -64,7 +64,20 @@ class Context final
   // colors otherwise. Mutable indexed palettes are programmed on demand when no exact entry exists.
   //
   // The terminal must support colors and have room for another color pair. The default terminal color is preserved on both paths.
-  ColorPair create_color_pair(Color foreground, Color background);      // init_extended_pair
+  ColorPair create_color_pair(Color foreground, Color background);              // init_extended_pair
+  ColorPair create_color_pair(ColorIndex foreground, Color background);         // init_extended_pair
+  ColorPair create_color_pair(Color foreground, ColorIndex background);         // init_extended_pair
+  ColorPair create_color_pair(ColorIndex foreground, ColorIndex background);    // init_extended_pair
+
+  // Return the terminal foreground and background indexes assigned to `color_pair`.
+  //
+  // An empty result means ncurses rejected the pair index.
+  std::optional<ColorPairContent> color_pair_content(ColorPair color_pair) const;    // extended_pair_content
+
+  // Return the terminal-reported RGB intensities for `color_index`.
+  //
+  // Components use the inclusive 0 through 1000 ncurses scale. An empty result means the terminal does not expose that index.
+  std::optional<ColorContent> color_content(int color_index) const;                  // extended_color_content
 
   BasicScreen const& first_screen() const { return first_screen_; }
   BasicScreen& first_screen() { return first_screen_; }
@@ -123,6 +136,9 @@ class Context final
 
   // Convert `color` to a direct color or stable palette index. Called by create_color_pair.
   int terminal_color_index(Color color);
+
+  // Register one pair from already resolved terminal color indexes.
+  ColorPair priv_create_color_pair(int foreground_index, int background_index);
 };
 
 } // namespace ava::tui::terminal
