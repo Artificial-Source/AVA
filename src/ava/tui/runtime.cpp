@@ -42,7 +42,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-#include <curses.h>
 
 namespace ava::tui {
 using runtime_input::printable_jump_target;
@@ -196,9 +195,9 @@ void clear_reasoning_feedback_for_user_input(ComposerSnapshot& snapshot)
   snapshot.local_command_feedback.reset();
 }
 
-void do_beep(terminal::Context& UNUSED_ARG(terminal_context))
+void do_beep(terminal::Context& terminal_context)
 {
-  static_cast<void>(beep());
+  terminal_context.beep();
 }
 
 int run_interactive_composer(TuiRuntimeOptions options)
@@ -211,14 +210,8 @@ int run_interactive_composer(TuiRuntimeOptions options)
   }
 
   clear_terminal_signal();
-  auto curses = CursesSession::enter();
-  if (!curses)
-  {
-    std::cerr << curses.error().format() << '\n';
-    return 1;
-  }
   terminal::Context& terminal_context = core::Application::instance().terminal_context();
-  //terminal_context.initialize();
+  terminal_context.initialize();
 
   ComposerTerminalGraphicsGuard graphics_cleanup;
   apply_terminal_cursor_settings(options.cursor);
