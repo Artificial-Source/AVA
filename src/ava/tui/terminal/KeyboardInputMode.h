@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ava/debug/print_members_on.h"
 #include "utils/macros.h"
+#include "ava/debug/print_members_on.h"
 
 #include <string>
 
@@ -35,10 +35,12 @@ class KeyboardInputMode final
   // Best-effort restore any mode that start may have activated; safe to call repeatedly and performs no work while inactive.
   ~KeyboardInputMode() noexcept;
 
-  // Start one bounded negotiation on `context`, preferring Kitty disambiguation flag 1 and otherwise requesting modifyOtherKeys level 2.
+  // Start bounded, device-attributes-fenced negotiations on `context`, preferring Kitty disambiguation flag 1 and otherwise requesting
+  // and querying modifyOtherKeys level 2.
   //
-  // The call performs terminal I/O and waits up to a short fixed deadline. Complete Kitty and device-attributes replies are consumed;
-  // all other bytes are retained for try_get_wch. A second call before stop is a programmer contract violation.
+  // Each phase performs terminal I/O and waits up to a short fixed deadline. Complete expected query and device-attributes replies are
+  // consumed only through that phase's fence; all other bytes are retained for a later phase or try_get_wch. A second call before stop
+  // is a programmer contract violation.
   void start(Context& context);
 
   // Disable requested modifyOtherKeys state, then pop a possibly successful Kitty push, using best-effort writes.

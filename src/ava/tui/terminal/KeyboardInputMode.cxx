@@ -13,11 +13,11 @@ namespace {
 
 constexpr std::chrono::milliseconds kKeyboardNegotiationTimeout{50};
 constexpr std::string_view kKittyPushQueryAndDeviceAttributes = "\x1b[>1u\x1b[?u\x1b[c";
-constexpr std::string_view kModifyOtherKeysLevel2 = "\x1b[>4;2m";
+constexpr std::string_view kModifyOtherKeysSetQueryAndDeviceAttributes = "\x1b[>4;2m\x1b[?4m\x1b[c";
 constexpr std::string_view kDisableModifyOtherKeys = "\x1b[>4;0m";
 constexpr std::string_view kPopKittyKeyboard = "\x1b[<u";
 
-// Return whether `character` is a decimal digit accepted in a Kitty flags reply.
+// Return whether `character` is a decimal digit accepted in a keyboard protocol parameter.
 bool is_decimal_digit(char character)
 {
   return character >= '0' && character <= '9';
@@ -41,11 +41,11 @@ bool is_decimal_parameter_list(std::string_view parameters)
   return !parameters.empty() && !expecting_digit;
 }
 
-// Remove complete expected Kitty flags and primary device-attributes replies from `bytes`, retaining every unrelated byte in place.
+// Remove complete expected Kitty flags replies through the first primary device-attributes fence from `bytes`.
 //
-// `kitty_enabled` becomes true after any nonzero flags reply and is never reset by a later zero reply. `device_attributes_seen` records a
-// syntactically valid primary DA reply. Incomplete and malformed candidates remain buffered for later input or timeout replay.
-void consume_expected_replies(std::string& bytes, bool& kitty_enabled, bool& device_attributes_seen)
+// `kitty_enabled` becomes true after any nonzero flags reply and is never reset by a later zero reply. The return value reports whether
+// the fence was consumed. Bytes after that fence, plus incomplete, malformed, and unrelated bytes, remain in place for a later phase or input.
+bool consume_kitty_phase_replies(std::string& bytes, bool& kitty_enabled)
 {
   std::size_t position = 0;
   while ((position = bytes.find("\x1b[?", position)) != std::string::npos)
@@ -55,7 +55,7 @@ void consume_expected_replies(std::string& bytes, bool& kitty_enabled, bool& dev
     while (cursor < bytes.size() && (is_decimal_digit(bytes[cursor]) || bytes[cursor] == ';'))
       ++cursor;
     if (cursor == bytes.size())
-      return;
+      return false;
 
     std::string_view const parameters{bytes.data() + parameter_begin, cursor - parameter_begin};
     bool const valid_parameters = is_decimal_parameter_list(parameters);
@@ -74,11 +74,66 @@ void consume_expected_replies(std::string& bytes, bool& kitty_enabled, bool& dev
         nonzero = nonzero || digit != '0';
       kitty_enabled = kitty_enabled || nonzero;
     }
-    else if (device_attributes_reply)
-      device_attributes_seen = true;
+    bytes.erase(position, cursor - position + 1);
+    if (device_attributes_reply)
+      return true;
+  }
+  return false;
+}
+
+// Return whether `parameters` identifies an XTMODKEYS query reply for modifyOtherKeys with one decimal level.
+bool is_modify_other_keys_reply(std::string_view parameters)
+{
+  if (!parameters.starts_with("4;") || parameters.size() == 2)
+    return false;
+  for (char const character : parameters.substr(2))
+  {
+    if (!is_decimal_digit(character))
+      return false;
+  }
+  return true;
+}
+
+// Remove complete XTMODKEYS query replies through the first primary device-attributes fence from `bytes`.
+//
+// The return value reports whether the fence was consumed. Bytes after that fence, plus incomplete, malformed, and unrelated bytes,
+// remain in place for normal input replay.
+bool consume_modify_other_keys_phase_replies(std::string& bytes)
+{
+  std::size_t position = 0;
+  while ((position = bytes.find("\x1b[", position)) != std::string::npos)
+  {
+    if (position + 2 >= bytes.size())
+      return false;
+
+    char const selector = bytes[position + 2];
+    if (selector != '?' && selector != '>')
+    {
+      ++position;
+      continue;
+    }
+
+    std::size_t cursor = position + 3;
+    std::size_t const parameter_begin = cursor;
+    while (cursor < bytes.size() && (is_decimal_digit(bytes[cursor]) || bytes[cursor] == ';'))
+      ++cursor;
+    if (cursor == bytes.size())
+      return false;
+
+    std::string_view const parameters{bytes.data() + parameter_begin, cursor - parameter_begin};
+    bool const device_attributes_reply = selector == '?' && is_decimal_parameter_list(parameters) && bytes[cursor] == 'c';
+    bool const modify_other_keys_reply = selector == '>' && is_modify_other_keys_reply(parameters) && bytes[cursor] == 'm';
+    if (!device_attributes_reply && !modify_other_keys_reply)
+    {
+      ++position;
+      continue;
+    }
 
     bytes.erase(position, cursor - position + 1);
+    if (device_attributes_reply)
+      return true;
   }
+  return false;
 }
 
 } // namespace
@@ -89,7 +144,7 @@ KeyboardInputMode::~KeyboardInputMode() noexcept
   stop();
 }
 
-// Negotiate Kitty keyboard reporting, preserving all bytes outside recognized protocol replies.
+// Negotiate fenced Kitty or modifyOtherKeys keyboard reporting, preserving all bytes outside recognized phase replies.
 void KeyboardInputMode::start(Context& context)
 {
   if (context_)
@@ -106,8 +161,8 @@ void KeyboardInputMode::start(Context& context)
   using Clock = std::chrono::steady_clock;
   auto const deadline = Clock::now() + kKeyboardNegotiationTimeout;
   bool kitty_enabled = false;
-  bool device_attributes_seen = false;
-  while (Clock::now() < deadline)
+  bool kitty_fence_seen = consume_kitty_phase_replies(buffered_input_, kitty_enabled);
+  while (!kitty_fence_seen && Clock::now() < deadline)
   {
     auto const remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
     std::string bytes = context.read_raw_input_for(remaining);
@@ -118,16 +173,30 @@ void KeyboardInputMode::start(Context& context)
       break;
     }
     buffered_input_ += bytes;
-    consume_expected_replies(buffered_input_, kitty_enabled, device_attributes_seen);
-    if (kitty_enabled && device_attributes_seen)
-      break;
+    kitty_fence_seen = consume_kitty_phase_replies(buffered_input_, kitty_enabled);
   }
 
   if (!kitty_enabled)
   {
     // Record the request before writing because a short or failed write may still have changed the terminal mode.
     modify_other_keys_requested_ = true;
-    static_cast<void>(context.write_raw_sequence(kModifyOtherKeysLevel2));
+    static_cast<void>(context.write_raw_sequence(kModifyOtherKeysSetQueryAndDeviceAttributes));
+
+    auto const modify_other_keys_deadline = Clock::now() + kKeyboardNegotiationTimeout;
+    bool modify_other_keys_fence_seen = consume_modify_other_keys_phase_replies(buffered_input_);
+    while (!modify_other_keys_fence_seen && Clock::now() < modify_other_keys_deadline)
+    {
+      auto const remaining = std::chrono::duration_cast<std::chrono::milliseconds>(modify_other_keys_deadline - Clock::now());
+      std::string bytes = context.read_raw_input_for(remaining);
+      if (bytes.empty())
+      {
+        // Regular files report EOF immediately; preserve the same bounded negotiation deadline used for terminal descriptors.
+        std::this_thread::sleep_until(modify_other_keys_deadline);
+        break;
+      }
+      buffered_input_ += bytes;
+      modify_other_keys_fence_seen = consume_modify_other_keys_phase_replies(buffered_input_);
+    }
   }
 
   remaining_buffered_input_ = buffered_input_;

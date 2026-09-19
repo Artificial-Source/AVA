@@ -1,6 +1,6 @@
 #include "sys.h"
-#include "support/test_harness.h"
 #include "support/terminal_test_support.h"
+#include "support/test_harness.h"
 #include "terminal/Context.h"
 #include "terminal/KeyboardInputMode.h"
 
@@ -14,6 +14,8 @@ namespace terminal = ava::tui::terminal;
 namespace {
 
 constexpr std::string_view kModifyOtherKeysLevel2 = "\x1b[>4;2m";
+constexpr std::string_view kQueryModifyOtherKeys = "\x1b[?4m";
+constexpr std::string_view kRequestDeviceAttributes = "\x1b[c";
 constexpr std::string_view kDisableModifyOtherKeys = "\x1b[>4;0m";
 constexpr std::string_view kPopKittyKeyboard = "\x1b[<u";
 
@@ -54,7 +56,7 @@ void test_kitty_reply_selects_kitty()
   terminal::Context context(output.get(), input.get());
   reset_output_file(output.get());
 
-  // This will be read by the terminal::KeyboardInputMode::start.
+  // Context starts its owned KeyboardInputMode, so prepare fresh input only after construction for this separate negotiation.
   write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
   std::rewind(input.get());
   terminal::KeyboardInputMode mode;
@@ -68,21 +70,25 @@ void test_kitty_reply_selects_kitty()
   expect(emitted.find(kDisableModifyOtherKeys) == std::string::npos, "Kitty-only cleanup must not disable modifyOtherKeys");
 }
 
-// Verify that an absent reply reaches the bounded fallback and cleanup reverses both possible activations.
-void test_timeout_uses_modify_other_keys_fallback()
+// Verify that fenced unsupported replies select the fallback and cleanup reverses both possible activations.
+void test_unsupported_replies_use_modify_other_keys_fallback()
 {
   ScopedTmpFile input;
   ScopedTmpFile output;
   terminal::Context context(output.get(), input.get());
   reset_output_file(output.get());
 
-  prepare_input(input.get(), {});
+  // Context starts its owned KeyboardInputMode, so prepare fresh input only after construction for this separate negotiation.
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::None);
+  std::rewind(input.get());
   terminal::KeyboardInputMode mode;
   mode.start(context);
   mode.stop();
 
   std::string const emitted = read_output(output.get());
   expect(count_occurrences(emitted, kModifyOtherKeysLevel2) == 1, "missing Kitty replies must request modifyOtherKeys level 2 once");
+  expect(emitted.find(std::string(kModifyOtherKeysLevel2) + std::string(kQueryModifyOtherKeys) + std::string(kRequestDeviceAttributes)) != std::string::npos,
+         "the modifyOtherKeys fallback must set level 2, query it, and request its device-attributes fence");
   expect(count_occurrences(emitted, kDisableModifyOtherKeys) == 1, "fallback cleanup must disable requested modifyOtherKeys once");
   expect(count_occurrences(emitted, kPopKittyKeyboard) == 1, "fallback cleanup must still pop a Kitty push that may have succeeded");
   expect(emitted.find(std::string(kDisableModifyOtherKeys) + std::string(kPopKittyKeyboard)) != std::string::npos,
@@ -98,6 +104,34 @@ std::string take_buffered_input(terminal::KeyboardInputMode& mode)
   return buffer_content;
 }
 
+// Verify that one preloaded read can cross phase boundaries while each parser consumes only its own fenced replies.
+void test_modify_other_keys_reply_is_consumed()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
+  std::string const before = "before\x1b[>4;;2m";
+  std::string const after = "after\x1b[>";
+  expect(std::fwrite(before.data(), 1, before.size(), input.get()) == before.size(), "all leading keyboard negotiation input must be written");
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::ModifyOtherKeys);
+  expect(std::fwrite(after.data(), 1, after.size(), input.get()) == after.size(), "all trailing keyboard negotiation input must be written");
+  std::rewind(input.get());
+
+  terminal::KeyboardInputMode mode;
+  mode.start(context);
+  expect(take_buffered_input(mode) == before + after,
+         "valid fallback replies must be consumed while malformed, unrelated, and incomplete bytes remain byte-for-byte");
+  mode.stop();
+
+  std::string const emitted = read_output(output.get());
+  expect(emitted.find(std::string(kModifyOtherKeysLevel2) + std::string(kQueryModifyOtherKeys) + std::string(kRequestDeviceAttributes)) != std::string::npos,
+         "supported modifyOtherKeys negotiation must emit one ordered set, query, and fence request");
+  expect(count_occurrences(emitted, kDisableModifyOtherKeys) == 1,
+         "a requested modifyOtherKeys level must be disabled even when its query response confirms support");
+}
+
 // Verify that only complete expected protocol replies are consumed and all other raw bytes remain replayable exactly once.
 void test_unrelated_input_is_buffered()
 {
@@ -106,7 +140,7 @@ void test_unrelated_input_is_buffered()
   terminal::Context context(output.get(), input.get());
   reset_output_file(output.get());
 
-  // Prepare input for mode.start.
+  // Context starts its owned KeyboardInputMode, so these are fresh replies for mode.start below.
   std::string const unrelated1 = "text\x1b[31m\x1b[?xu\x1b[?1;;2c";
   std::string const unrelated2 = "\x1b[";
   std::string const unrelated = unrelated1 + unrelated2;
@@ -166,7 +200,8 @@ void run_terminal_keyboard_input_mode_tests()
 {
   ScopedEnvVar term_guard("TERM", "xterm-direct");
   test_kitty_reply_selects_kitty();
-  test_timeout_uses_modify_other_keys_fallback();
+  test_unsupported_replies_use_modify_other_keys_fallback();
+  test_modify_other_keys_reply_is_consumed();
   test_unrelated_input_is_buffered();
   test_stop_is_idempotent();
   test_destructor_stops_active_mode();

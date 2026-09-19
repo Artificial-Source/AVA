@@ -101,9 +101,9 @@ void write_KeyboardInputMode_reply(FILE* file, SupportedMode mode)
 {
   static constexpr char const* kKittyProtocolReply = "\x1b[?1u";
   static constexpr char const* kDeviceAttributesReply = "\x1b[?1;2c";
-//  static constexpr char const* kModifyOtherKeysReply = "\x1b[>4;2m";
+  static constexpr char const* kModifyOtherKeysReply = "\x1b[>4;2m";
 
-  // The reply to the Kitty protocol probe:
+  // The Kitty query reply, when supported, is followed by its device-attributes phase fence.
   if (mode == SupportedMode::KittyProtocol)
     std::fprintf(file, kKittyProtocolReply);
   std::fprintf(file, kDeviceAttributesReply);
@@ -111,14 +111,10 @@ void write_KeyboardInputMode_reply(FILE* file, SupportedMode mode)
   if (mode == SupportedMode::KittyProtocol)
     return;     // No other probes follow.
 
-  // The reply to the ModifyOtherKeys probe:
+  // A fallback XTMODKEYS query reply, when supported, is followed by its own device-attributes phase fence.
   if (mode == SupportedMode::ModifyOtherKeys)
-  {
-    // This would be the reply if we also sent "\x1b[?4m"
-    //std::fprintf(file, kModifyOtherKeysReply);
-  }
-  // This would be the reply if we also sent "\x1b[c".
-  //std::fprintf(file, kDeviceAttributesReply);
+    std::fprintf(file, kModifyOtherKeysReply);
+  std::fprintf(file, kDeviceAttributesReply);
 
   // No other probes follow.
 }
