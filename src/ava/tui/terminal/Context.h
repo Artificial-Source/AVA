@@ -7,6 +7,7 @@
 #include "ComplexChar.h"
 #include "Cursor.h"
 #include "KeyboardInputMode.h"
+#include "MouseInputMode.h"
 #include "utils/Badge.h"
 
 #include <chrono>
@@ -47,6 +48,7 @@ class Context final
   std::unique_ptr<ColorPalette> color_palette_;                 // The live color palette of stdscr if the terminal isn't direct-color.
   CursorState cursor_state_;                                    // The current cursor state, corresponding to the last call to apply_cursor_settings.
   KeyboardInputMode keyboard_disambiguation_;                   // RAI object to bring terminal into state to disambiguate escape codes.
+  MouseInputMode mouse_input_;                                  // RAI object enabling mouse reporting and bracketed paste while Context is active.
 
  public:
   Context(utils::Badge<core::Application>);

@@ -16,6 +16,7 @@ target_sources(ava_terminal
     "HorizontalLayout.cxx"
     "KeyboardInputMode.cxx"
     "LayoutItem.cxx"
+    "MouseInputMode.cxx"
     "Spacer.cxx"
     "Pad.cxx"
     "Paragraph.cxx"

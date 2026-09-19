@@ -104,6 +104,9 @@ void Context::initialize(FILE* outfd, FILE* infd)
   // be able to tell the difference between Enter and cntrl-Enter.
   keyboard_disambiguation_.start(*this);
 
+  // Enable mouse reporting and bracketed paste for the lifetime of this Context.
+  mouse_input_.start(*this);
+
   // Tell the destructor that initialized was called.
   initialized_ = true;
 }
@@ -112,6 +115,8 @@ Context::~Context()
 {
   if (initialized_)
   {
+    // Disable terminal input protocols before ncurses restores the terminal.
+    mouse_input_.stop();
     // Restore the cursor to its default value.
     apply_cursor_settings({CursorStyle::Default});
     // Restore mutable palette entries before endwin returns terminal presentation to the invoking process.
