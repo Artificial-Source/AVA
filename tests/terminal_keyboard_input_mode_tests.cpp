@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "support/test_harness.h"
+#include "support/terminal_test_support.h"
 #include "terminal/Context.h"
 #include "terminal/KeyboardInputMode.h"
 
@@ -50,9 +51,12 @@ void test_kitty_reply_selects_kitty()
 {
   ScopedTmpFile input;
   ScopedTmpFile output;
-  prepare_input(input.get(), "\x1b[?1u\x1b[?1;2c");
-
   terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
+  // This will be read by the terminal::KeyboardInputMode::start.
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
+  std::rewind(input.get());
   terminal::KeyboardInputMode mode;
   mode.start(context);
   mode.stop();
@@ -69,9 +73,10 @@ void test_timeout_uses_modify_other_keys_fallback()
 {
   ScopedTmpFile input;
   ScopedTmpFile output;
-  prepare_input(input.get(), {});
-
   terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
+  prepare_input(input.get(), {});
   terminal::KeyboardInputMode mode;
   mode.start(context);
   mode.stop();
@@ -84,19 +89,36 @@ void test_timeout_uses_modify_other_keys_fallback()
          "cleanup must disable the later fallback before popping the earlier Kitty request");
 }
 
+std::string take_buffered_input(terminal::KeyboardInputMode& mode)
+{
+  std::string buffer_content;
+  wint_t wch;
+  while (mode.try_get_wch(&wch))
+    buffer_content += static_cast<char>(wch);
+  return buffer_content;
+}
+
 // Verify that only complete expected protocol replies are consumed and all other raw bytes remain replayable exactly once.
 void test_unrelated_input_is_buffered()
 {
   ScopedTmpFile input;
   ScopedTmpFile output;
-  std::string const unrelated = "text\x1b[31m\x1b[?xu\x1b[?1;;2c\x1b[";
-  prepare_input(input.get(), std::string("text\x1b[31m\x1b[?xu\x1b[?1;;2c") + "\x1b[?1u\x1b[?1;2c\x1b[");
-
   terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
+  // Prepare input for mode.start.
+  std::string const unrelated1 = "text\x1b[31m\x1b[?xu\x1b[?1;;2c";
+  std::string const unrelated2 = "\x1b[";
+  std::string const unrelated = unrelated1 + unrelated2;
+  expect(std::fwrite(unrelated1.data(), 1, unrelated1.size(), input.get()) == unrelated1.size(), "all unrelated1 keyboard negotiation input must be written");
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
+  expect(std::fwrite(unrelated2.data(), 1, unrelated2.size(), input.get()) == unrelated2.size(), "all unrelated2 keyboard negotiation input must be written");
+  std::rewind(input.get());
+
   terminal::KeyboardInputMode mode;
   mode.start(context);
-  expect(mode.take_buffered_input() == unrelated, "ordinary, malformed, unrelated, and incomplete escape input must survive negotiation byte-for-byte");
-  expect(mode.take_buffered_input().empty(), "taking buffered negotiation input must clear it");
+  expect(take_buffered_input(mode) == unrelated, "ordinary, malformed, unrelated, and incomplete escape input must survive negotiation byte-for-byte");
+  expect(take_buffered_input(mode).empty(), "taking buffered negotiation input must clear it");
 }
 
 // Verify that explicit repeated shutdown emits each required restoration sequence only once.
@@ -104,9 +126,10 @@ void test_stop_is_idempotent()
 {
   ScopedTmpFile input;
   ScopedTmpFile output;
-  prepare_input(input.get(), {});
-
   terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
+  prepare_input(input.get(), {});
   terminal::KeyboardInputMode mode;
   mode.start(context);
   mode.stop();
@@ -122,10 +145,11 @@ void test_destructor_stops_active_mode()
 {
   ScopedTmpFile input;
   ScopedTmpFile output;
-  prepare_input(input.get(), {});
-
   terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
   {
+    prepare_input(input.get(), {});
     terminal::KeyboardInputMode mode;
     mode.start(context);
   }

@@ -129,6 +129,8 @@ void KeyboardInputMode::start(Context& context)
     modify_other_keys_requested_ = true;
     static_cast<void>(context.write_raw_sequence(kModifyOtherKeysLevel2));
   }
+
+  remaining_buffered_input_ = buffered_input_;
 }
 
 // Best-effort reverse mode requests in the opposite order from activation.
@@ -144,12 +146,6 @@ void KeyboardInputMode::stop() noexcept
     static_cast<void>(context->write_raw_sequence(kDisableModifyOtherKeys));
   if (pop_kitty)
     static_cast<void>(context->write_raw_sequence(kPopKittyKeyboard));
-}
-
-// Transfer ownership of input bytes that the negotiation did not consume.
-std::string KeyboardInputMode::take_buffered_input()
-{
-  return std::exchange(buffered_input_, {});
 }
 
 } // namespace ava::tui::terminal

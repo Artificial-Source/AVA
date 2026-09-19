@@ -92,6 +92,7 @@ void test_mutable_palette_probe()
 
   // This will be read by the terminal::Context constructor.
   write_OSC4_reply(input.get(), 16);
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
 
   // Prepare mock replies for this tests probes.
   std::string replies;
@@ -175,6 +176,7 @@ void test_xterm_indexed_colors_use_standard_palette()
 
   // This will be read by the terminal::Context constructor.
   write_OSC4_reply(input.get(), 256);
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
   std::rewind(input.get());
 
   {

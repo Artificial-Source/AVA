@@ -2,6 +2,10 @@
 #include "terminal_test_support.h"
 
 #include <array>
+#include <cerrno>
+#include <cstdio>
+#include <system_error>
+#include <unistd.h>
 #include "debug.h"
 
 namespace {
@@ -13,6 +17,20 @@ constexpr std::array<unsigned int, 16> xterm_16color = {0x000000, 0xb21818, 0x18
 constexpr std::array<unsigned int, 6> xterm_cube_levels = {0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff};
 
 } // namespace
+
+void reset_output_file(FILE* file)
+{
+  if (std::fflush(file) != 0)
+    throw std::system_error(errno, std::generic_category(), "flush test output");
+
+  if (::ftruncate(::fileno(file), 0) != 0)
+    throw std::system_error(errno, std::generic_category(), "truncate test output");
+
+  if (std::fseek(file, 0, SEEK_SET) != 0)
+    throw std::system_error(errno, std::generic_category(), "rewind test output");
+
+  std::clearerr(file);
+}
 
 // Write the ordered OSC 4 replies for a fixed xterm-style 16- or 256-color palette and its subsequent write-test probes to `file`.
 //
@@ -77,4 +95,30 @@ void write_OSC4_reply(FILE* file, int number_of_colors)
       write_reply(index, gray, gray, gray);
     }
   }
+}
+
+void write_KeyboardInputMode_reply(FILE* file, SupportedMode mode)
+{
+  static constexpr char const* kKittyProtocolReply = "\x1b[?1u";
+  static constexpr char const* kDeviceAttributesReply = "\x1b[?1;2c";
+//  static constexpr char const* kModifyOtherKeysReply = "\x1b[>4;2m";
+
+  // The reply to the Kitty protocol probe:
+  if (mode == SupportedMode::KittyProtocol)
+    std::fprintf(file, kKittyProtocolReply);
+  std::fprintf(file, kDeviceAttributesReply);
+
+  if (mode == SupportedMode::KittyProtocol)
+    return;     // No other probes follow.
+
+  // The reply to the ModifyOtherKeys probe:
+  if (mode == SupportedMode::ModifyOtherKeys)
+  {
+    // This would be the reply if we also sent "\x1b[?4m"
+    //std::fprintf(file, kModifyOtherKeysReply);
+  }
+  // This would be the reply if we also sent "\x1b[c".
+  //std::fprintf(file, kDeviceAttributesReply);
+
+  // No other probes follow.
 }

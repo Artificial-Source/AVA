@@ -115,7 +115,7 @@ class Context final
 
  private:
   // Return the next input value, or -1 when the configured stdscr timeout expires or input fails.
-  static int try_get_wch();                                             // get_wch
+  int try_get_wch();                                                    // get_wch
 
   // Convert `color` to a direct color or stable palette index. Called by create_color_pair.
   int terminal_color_index(Color color);

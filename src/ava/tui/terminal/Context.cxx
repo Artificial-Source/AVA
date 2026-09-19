@@ -153,12 +153,18 @@ int Context::get_wch() const
   return static_cast<int>(wch);
 }
 
-//static
 int Context::try_get_wch()
 {
   wint_t wch = 0;
+
+  // First try if there is still any input buffered on keyboard_disambiguation_.
+  if (AI_UNLIKELY(keyboard_disambiguation_.try_get_wch(&wch)))
+    return static_cast<int>(wch);
+
+  // If not, try reading a character directly from the terminal.
   if (::get_wch(&wch) == ERR)
     return -1;
+
   return static_cast<int>(wch);
 }
 
