@@ -1,54 +1,53 @@
 #include "sys.h"
-#include "terminal/Context.h"
 #include "Application.h"
+#include "terminal/Context.h"
 
 #include <array>
-#include <iostream>
 #include <sstream>
-#include <curses.h>
+
+namespace terminal = ava::tui::terminal;
 
 int main()
 {
   Application application("linux05-colors");
-  ava::tui::terminal::Context& terminal_context = application.terminal_context();
+  terminal::Context& terminal_context = application.terminal_context();
   terminal_context.initialize();
 
-  move(10, 0);
+  terminal::BasicWindow& window = terminal_context.stdscr();
+  window.move({10, 0});
 
-  std::array<int, 7> color_pair_index = {1, 2, 3, 4, 5, 6, 7};
-  init_extended_pair(color_pair_index[0], COLOR_RED, COLOR_BLACK);
-  init_extended_pair(color_pair_index[1], COLOR_GREEN, COLOR_BLACK);
-  init_extended_pair(color_pair_index[2], COLOR_YELLOW, COLOR_BLACK);
-  init_extended_pair(color_pair_index[3], COLOR_BLUE, COLOR_BLACK);
-  init_extended_pair(color_pair_index[4], COLOR_MAGENTA, COLOR_BLACK);
-  init_extended_pair(color_pair_index[5], COLOR_CYAN, COLOR_BLACK);
-  init_extended_pair(color_pair_index[6], COLOR_WHITE, COLOR_BLACK);
+  using enum terminal::ColorIndex;
+  std::array<terminal::ColorPair, 7> color_pairs{
+      terminal_context.create_color_pair(red, black),   terminal_context.create_color_pair(green, black),   terminal_context.create_color_pair(yellow, black),
+      terminal_context.create_color_pair(blue, black),  terminal_context.create_color_pair(magenta, black), terminal_context.create_color_pair(cyan, black),
+      terminal_context.create_color_pair(white, black),
+  };
 
-  for (int i = 0; i != color_pair_index.size(); ++i)
+  for (terminal::ColorPair color_pair : color_pairs)
   {
-    wattr_set(stdscr, A_NORMAL, 0, &color_pair_index[i]);
+    window.color_set(color_pair);
     std::ostringstream ss;
-    int foreground, background;
-    extended_pair_content(color_pair_index[i], &foreground, &background);         // Returns COLOR_RED, COLOR_BLACK etc.
-    int R, G, B;
-    extended_color_content(foreground, &R, &G, &B);
-    ss << foreground << ": " << R << ", " << G << ", " << B << "; ";
-    extended_color_content(background, &R, &G, &B);
-    ss << background << ": " << R << ", " << G << ", " << B << '\n';
-    addstr(ss.str().c_str());
+    if (auto const pair_content = terminal_context.color_pair_content(color_pair))
+    {
+      if (auto const foreground = terminal_context.color_content(pair_content->foreground_index))
+        ss << pair_content->foreground_index << ": " << foreground->red << ", " << foreground->green << ", " << foreground->blue << "; ";
+      if (auto const background = terminal_context.color_content(pair_content->background_index))
+        ss << pair_content->background_index << ": " << background->red << ", " << background->green << ", " << background->blue;
+    }
+    ss << '\n';
+    window.addstr(ss.str().c_str());
   }
 
-  int color_redish = 0xfe0000;
-  int pair_redish = 2;
-  init_extended_pair(pair_redish, color_redish, COLOR_BLACK);
-  wattr_set(stdscr, A_NORMAL, 0, &pair_redish);
-  waddstr(stdscr, "Hello world\n");
+  terminal::ColorPair const reddish_pair = terminal_context.create_color_pair(terminal::Color{0xfe0000}, black);
+  window.color_set(reddish_pair);
+  window.addstr("Hello world\n");
 
-  int r, g, b;
-  if (extended_color_content(color_redish, &r, &g, &b) == OK)
-    printw("%d: %d, %d, %d\n", color_redish, r, g, b);
+  if (auto const pair_content = terminal_context.color_pair_content(reddish_pair))
+  {
+    if (auto const reddish = terminal_context.color_content(pair_content->foreground_index))
+      window.printw("%d: %d, %d, %d\n", pair_content->foreground_index, reddish->red, reddish->green, reddish->blue);
+  }
 
-  refresh();
-  wint_t wch;
-  get_wch(&wch);
+  window.refresh();
+  static_cast<void>(terminal_context.get_wch());
 }

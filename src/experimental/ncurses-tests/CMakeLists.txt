@@ -28,7 +28,6 @@ target_include_directories(linux04 PRIVATE ${CURSES_INCLUDE_DIRS})
 target_link_libraries(linux04 PRIVATE AVA::terminal)
 
 add_executable(linux05 linux05-colors.cpp Application.cpp)
-target_include_directories(linux05 PRIVATE ${CURSES_INCLUDE_DIRS})
 target_link_libraries(linux05 PRIVATE AVA::terminal)
 
 add_executable(linux06 linux06-wrapping.cpp Application.cpp)
