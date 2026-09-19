@@ -46,6 +46,11 @@ class Attributes
     return *this;
   }
 
+  bool operator==(Attribute attr) const
+  {
+    return mask_ == static_cast<attr_t>(attr);
+  }
+
   // Accessor.
   attr_t mask() const { return mask_; }
   attr_t& mask() { return mask_; }
