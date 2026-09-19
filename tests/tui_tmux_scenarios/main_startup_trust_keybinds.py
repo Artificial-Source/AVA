@@ -571,7 +571,10 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
     wait_for(tmux_exe, session, r"/trust status", "trust status draft")
     send_keys(tmux_exe, session, "Enter")
     trust_status = wait_for(
-        tmux_exe, session, r"(?s)Project trust:.*decision=unknown.*project_resources=skipped", "trust status command"
+        tmux_exe,
+        session,
+        r"(?s)Command /trust.*Project trust:.*decision=unknown.*project_resources=skipped.*protected_resources=3.*prompt_commands.*plugins.*system_prompt.*Enter/Esc close",
+        "complete trust status command modal",
     )
     if (
         "protected_resources=3" not in trust_status
@@ -650,7 +653,10 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
     wait_for_absent(tmux_exe, session, r"Create \$XDG_CONFIG_HOME/ava/keybinds\.json", "keybindings existing init palette dismissed")
     send_keys(tmux_exe, session, "Enter")
     keybindings_init_existing = wait_for(
-        tmux_exe, session, r"keybindings file already exists", "keybindings starter overwrite refusal"
+        tmux_exe,
+        session,
+        r"(?s)Command /keybindings.*keybindings file already exists.*Use /keybindings init --force.*Enter/Esc close",
+        "complete keybindings starter overwrite refusal modal",
     )
     if "--force" not in keybindings_init_existing:
         raise RuntimeError(

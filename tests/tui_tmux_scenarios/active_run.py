@@ -30,6 +30,28 @@ def scenario_active_run(ctx: SmokeContext) -> None:
     root = ctx.root
     active_workspace = ctx.active_workspace
 
+    def wait_for_command_output_closed(
+        session: str,
+        title_pattern: str,
+        forbidden: tuple[str, ...],
+        required: tuple[str, ...],
+        label: str,
+    ) -> str:
+        """Wait for one fully repainted composer frame after closing command output."""
+
+        def command_output_is_closed(screen: str) -> bool:
+            return (
+                re.search(title_pattern, screen) is None
+                and re.search(r"Enter(?:/Esc)? close", screen) is None
+                and all(text not in screen for text in forbidden)
+                and all(text in screen for text in required)
+                and re.search(r"(?m)^[ \t]*│[ \t]+Type a message\.\.\.", screen) is not None
+            )
+
+        # Tmux can observe doupdate midway through clearing the modal. A title
+        # disappearing does not prove that lower body and footer rows are gone.
+        return wait_for_screen_state(tmux_exe, session, command_output_is_closed, f"{label} fully closed")
+
     # A delayed provider-backed /compact remains an initial local command even
     # when Alt+Enter queues a genuine ordinary follow-up under the same active run.
     compact_session = ctx.session_name("compact-follow-up")
@@ -77,19 +99,21 @@ def scenario_active_run(ctx: SmokeContext) -> None:
     compact_output = wait_for(
         tmux_exe,
         compact_session,
-        r"(?s)Command /compact.*compaction summary recorded",
+        r"(?s)Command /compact.*compaction summary recorded.*Enter/Esc close",
         "compact local output retained beside queued conversation",
         timeout=14.0,
     )
     save_evidence(root, "active-run-compact-queued-output", compact_output)
     send_keys(tmux_exe, compact_session, "Escape")
-    compact_closed = wait_for(
-        tmux_exe,
+    compact_forbidden = ("/compact", "compaction summary recorded", "compaction completed", "LOCAL-TOOL-MUST-NOT-LEAK")
+    compact_closed = wait_for_command_output_closed(
         compact_session,
-        r"(?s)queued after compact.*after compact queued answer|after compact queued answer",
+        r"Command /compact",
+        compact_forbidden,
+        ("queued after compact", "after compact queued answer"),
         "compact queued conversation after local output close",
     )
-    for forbidden in ("/compact", "compaction summary recorded", "compaction completed", "LOCAL-TOOL-MUST-NOT-LEAK"):
+    for forbidden in compact_forbidden:
         if forbidden in compact_closed:
             raise RuntimeError(f"compact local activity remained in chat after output close ({forbidden!r})\nscreen:\n{compact_closed}")
     save_evidence(root, "active-run-compact-queued-transcript", compact_closed)
@@ -132,19 +156,13 @@ def scenario_active_run(ctx: SmokeContext) -> None:
     failed_compact_output = wait_for(
         tmux_exe,
         compact_session,
-        r"(?s)Command /compact.*compaction summary recorded.*Moonshot HTTP request failed with status 400.*read_file.*restore tmux smoke context",
+        r"(?s)Command /compact.*compaction summary recorded.*Moonshot HTTP request failed with status 400.*read_file.*restore tmux smoke context.*Enter/Esc close",
         "compact output retained beside actionable queued failure and completed tool",
         timeout=14.0,
     )
     save_evidence(root, "active-run-compact-queued-failure-output", failed_compact_output)
     send_keys(tmux_exe, compact_session, "Escape")
-    failed_compact_closed = wait_for_absent(
-        tmux_exe,
-        compact_session,
-        r"Command /compact|Moonshot HTTP request failed with status 400",
-        "failing compact output closed",
-    )
-    for forbidden in (
+    failed_compact_forbidden = (
         "/compact",
         "compaction summary recorded",
         "compaction completed",
@@ -153,7 +171,15 @@ def scenario_active_run(ctx: SmokeContext) -> None:
         "HTTP request failed with status 400",
         "read_file",
         "restore tmux smoke context",
-    ):
+    )
+    failed_compact_closed = wait_for_command_output_closed(
+        compact_session,
+        r"Command /compact|Moonshot HTTP request failed with status 400",
+        failed_compact_forbidden,
+        ("queued after compact", "after compact queued answer"),
+        "failing compact output close",
+    )
+    for forbidden in failed_compact_forbidden:
         if forbidden in failed_compact_closed:
             raise RuntimeError(
                 f"failed compact request gained chat projection authority ({forbidden!r})\nscreen:\n{failed_compact_closed}"

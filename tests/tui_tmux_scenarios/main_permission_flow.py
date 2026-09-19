@@ -15,6 +15,7 @@ from tui_smoke_helpers import (
     wait_for,
     wait_for_absent,
     wait_for_screen_change,
+    wait_for_screen_state,
 )
 from .common import _finish_main, _main_session
 
@@ -42,7 +43,19 @@ def scenario_main_permission_flow(ctx: SmokeContext) -> None:
 
     def close_command_output(title_pattern: str, forbidden: tuple[str, ...], label: str) -> str:
         send_keys(tmux_exe, session, "Escape")
-        closed = wait_for_absent(tmux_exe, session, title_pattern, f"{label} closed")
+
+        def command_output_is_closed(screen: str) -> bool:
+            return (
+                re.search(title_pattern, screen) is None
+                and re.search(r"Enter(?:/Esc)? close", screen) is None
+                and all(not text or text not in screen for text in forbidden)
+                and re.search(r"(?m)^[ \t]*│[ \t]+Type a message\.\.\.", screen) is not None
+            )
+
+        # Tmux can capture ncurses' repaint after the title row is cleared but
+        # before lower modal rows disappear. Require one fully restored composer
+        # frame rather than treating title absence alone as a close boundary.
+        closed = wait_for_screen_state(tmux_exe, session, command_output_is_closed, f"{label} fully closed")
         leaked = [text for text in forbidden if text and text in closed]
         if leaked:
             raise RuntimeError(f"{label} remained in transcript after close: {leaked}\nscreen:\n{closed}")
