@@ -1,6 +1,5 @@
 #include "sys.h"
-#include "ava/tui/terminal/Context.h"
-#include "ava/tui/terminal/KeyboardInputMode.h"
+#include "Application.h"
 #include <cctype>
 #include <clocale>
 #include <cstring>
@@ -10,12 +9,11 @@
 
 // Test resizing of terminal windows and being notified.
 
-namespace terminal = ava::tui::terminal;
+#undef NO_KITTY_PROTOCOL
 
 int main()
 {
-#if 0
-  // See linux00-initialization.cpp
+#ifdef NO_KITTY_PROTOCOL
   setlocale(LC_ALL, "");
   // From https://man7.org/linux/man-pages/man3/resizeterm.3x.html:
   //
@@ -24,11 +22,21 @@ int main()
   // ncurses establishes a SIGWINCH handler that notifies the library
   // when a window-resizing event has occurred.  The library checks for
   // this notification.
+
+  // From https://invisible-island.net/ncurses/man/curs_util.3x.html
+  // use_env   use_tioctl   Summary
+  // TRUE      TRUE         ncurses updates LINES and COLUMNS based on operating system calls.
+  ::use_env(TRUE);
+  ::use_tioctl(TRUE);
+
   initscr();
+#else
+  Application application("linux04-attributes");
+  ava::tui::terminal::Context& terminal_context = application.terminal_context();
+  terminal_context.initialize();
+  noraw();
+  curs_set(TRUE);
 #endif
-  terminal::Context terminal_context(stdout, stdin);
-  terminal::KeyboardInputMode kim;
-  kim.start(terminal_context);
 
   // IMPORTANT: if `nocbreak()` is used then *instead* of returning KEY_RESIZE,
   // the input buffer in flushed with a synthesized newline added.
@@ -70,12 +78,14 @@ int main()
     {
       case 0:
       {
+        noraw();
         cbreak();
         addstr("cbreak/");
         break;
       }
       case 1:
       {
+        nocbreak();
         raw();
         addstr("raw/");
         break;
@@ -139,8 +149,7 @@ int main()
     }
   }
 
-  //---------------------------------------------------------------------------
-
-  // See linux00-initialization.cpp
+#ifdef NO_KITTY_PROTOCOL
   endwin();
+#endif
 }
