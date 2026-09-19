@@ -88,6 +88,8 @@ class Context final
   int beep();                                                           // beep
   // Alert the terminal user by visibly attracting attention.
   int flash();                                                          // flash
+  // Return the ESC delay being used.
+  int get_escdelay() const;                                             // get_escdelay
 
   // Write a raw sequence of characters to the terminal and flush it. Returns true upon success.
   bool write_raw_sequence(std::string_view sequence);

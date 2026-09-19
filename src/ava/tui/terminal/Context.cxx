@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ColorPalette.h"
 #include "Context.h"
+#include "ava/tui/config.h"
 
 #include <algorithm>
 #include <array>
@@ -55,6 +56,11 @@ void Context::initialize(FILE* outfd, FILE* infd)
     BasicScreen first_screen(nullptr, outfd, infd);
     first_screen_ = std::move(first_screen);
   }
+
+  // Preserve ncurses' environment-derived value when the user explicitly configured ESCDELAY.
+  // Otherwise replace its one-second default with AVA's shorter standalone-Escape delay.
+  if (std::getenv("ESCDELAY") == nullptr)
+    static_cast<void>(::set_escdelay(config::default_terminal_escape_delay_ms));
 
   // Determine available capabilities.
   char* cap = tigetstr("cvvis");
@@ -233,6 +239,11 @@ int Context::beep()
 int Context::flash()
 {
   return ::flash();
+}
+
+int Context::get_escdelay() const
+{
+  return ::get_escdelay();
 }
 
 bool Context::write_raw_sequence(std::string_view sequence)

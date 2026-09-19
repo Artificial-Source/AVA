@@ -3,9 +3,12 @@
 #include "support/test_harness.h"
 #include "terminal/Context.h"
 #include "terminal/KeyboardInputMode.h"
+#include "ava/tui/config.h"
 
 #include <array>
 #include <cstdio>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -18,6 +21,54 @@ constexpr std::string_view kQueryModifyOtherKeys = "\x1b[?4m";
 constexpr std::string_view kRequestDeviceAttributes = "\x1b[c";
 constexpr std::string_view kDisableModifyOtherKeys = "\x1b[>4;0m";
 constexpr std::string_view kPopKittyKeyboard = "\x1b[<u";
+
+// Temporarily remove one environment variable and restore its exact prior state on destruction.
+class ScopedUnsetEnvVar
+{
+ public:
+  explicit ScopedUnsetEnvVar(char const* name) : name_(name)
+  {
+    if (char const* value = std::getenv(name))
+      previous_ = value;
+    static_cast<void>(unsetenv(name));
+  }
+
+  ScopedUnsetEnvVar(ScopedUnsetEnvVar const&) = delete;
+  ScopedUnsetEnvVar& operator=(ScopedUnsetEnvVar const&) = delete;
+
+  ~ScopedUnsetEnvVar()
+  {
+    if (previous_)
+      static_cast<void>(setenv(name_.c_str(), previous_->c_str(), 1));
+    else
+      static_cast<void>(unsetenv(name_.c_str()));
+  }
+
+ private:
+  std::string name_;
+  std::optional<std::string> previous_;
+};
+
+// Verify that Context applies AVA's default only when ESCDELAY does not provide an explicit ncurses value.
+void test_context_escape_delay_configuration()
+{
+  {
+    ScopedUnsetEnvVar escdelay_guard("ESCDELAY");
+    ScopedTmpFile input;
+    ScopedTmpFile output;
+    terminal::Context context(output.get(), input.get());
+    expect(context.get_escdelay() == ava::tui::config::default_terminal_escape_delay_ms, "Context must use AVA's short Escape delay when ESCDELAY is unset");
+  }
+
+  {
+    constexpr int configured_delay_ms = 2.25 * ava::tui::config::default_terminal_escape_delay_ms;
+    ScopedEnvVar escdelay_guard("ESCDELAY", std::to_string(configured_delay_ms));
+    ScopedTmpFile input;
+    ScopedTmpFile output;
+    terminal::Context context(output.get(), input.get());
+    expect(context.get_escdelay() == configured_delay_ms, "an explicit ESCDELAY must take precedence over AVA's default");
+  }
+}
 
 // Replace the contents of `file` with `bytes` and rewind it for Context input.
 void prepare_input(FILE* file, std::string_view bytes)
@@ -199,6 +250,7 @@ void test_destructor_stops_active_mode()
 void run_terminal_keyboard_input_mode_tests()
 {
   ScopedEnvVar term_guard("TERM", "xterm-direct");
+  test_context_escape_delay_configuration();
   test_kitty_reply_selects_kitty();
   test_unsupported_replies_use_modify_other_keys_fallback();
   test_modify_other_keys_reply_is_consumed();
