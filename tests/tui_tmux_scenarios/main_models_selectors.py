@@ -248,6 +248,10 @@ def scenario_main_models_selectors(ctx: SmokeContext) -> None:
     save_evidence(root, "provider-modal-arrow-navigation", provider_modal_after_arrow)
     send_keys(tmux_exe, session, "Escape")
     wait_for_absent(tmux_exe, session, r"Connect a provider|Select provider", "provider question modal canceled")
+    # The question overlay is cleared before its cancellation reaches the asynchronous
+    # /connect command. Wait until that command leaves active-run input handling;
+    # otherwise Ctrl+L can be consumed as unavailable between turns and never retried.
+    wait_for(tmux_exe, session, r"(?m)^[ \t]*command complete[ \t]*$", "canceled connect command completion")
     tmux(tmux_exe, "resize-window", "-t", session, "-x", "120", "-y", "32")
     wait_for(tmux_exe, session, r"Type a message|live session", "restored frame after compact modal navigation")
     send_keys(tmux_exe, session, "C-l")
