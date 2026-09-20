@@ -85,11 +85,14 @@ class SequencedProviderTransport final : public ava::http::Transport
     auto response = take_response();
     if (!response)
       return std::unexpected(std::move(response.error()));
-    auto const midpoint = response->body.size() / 2;
-    if (auto first = on_body_chunk(std::string_view(response->body).substr(0, midpoint)); !first)
-      return std::unexpected(std::move(first.error()));
-    if (auto second = on_body_chunk(std::string_view(response->body).substr(midpoint)); !second)
-      return std::unexpected(std::move(second.error()));
+    if (response->status_code >= 200 && response->status_code < 300 && on_body_chunk)
+    {
+      auto const midpoint = response->body.size() / 2;
+      if (auto first = on_body_chunk(std::string_view(response->body).substr(0, midpoint)); !first)
+        return std::unexpected(std::move(first.error()));
+      if (auto second = on_body_chunk(std::string_view(response->body).substr(midpoint)); !second)
+        return std::unexpected(std::move(second.error()));
+    }
     return response;
   }
 

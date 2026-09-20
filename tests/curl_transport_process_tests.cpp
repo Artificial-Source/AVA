@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -64,6 +65,40 @@ class CurlFixture final
   ava::process::ProcessScopeV1 scope;
   ava::http::CurlCliTransport transport;
   ava::process::ProcessSnapshotV1 snapshot;
+};
+
+class SequencedCurlTransport final : public ava::http::Transport
+{
+ public:
+  SequencedCurlTransport(ava::process::ProcessScopeV1 scope, std::vector<std::string> paths) : transport_(std::move(scope)), paths_(paths.begin(), paths.end())
+  {
+    auto installed = ava::http::testing::CurlTransportTestAccess::set_executable(transport_, AVA_FAKE_CURL_CHILD_PATH);
+    if (!installed)
+      throw std::runtime_error(installed.error().format());
+  }
+
+  [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override { return transport_.send(request); }
+
+  [[nodiscard]] bool supports_streaming() const noexcept override { return true; }
+
+  [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send_streaming(ava::http::HttpRequest const& request, BodyChunkSink on_body_chunk,
+                                                                          CancelCallback cancel_requested) override
+  {
+    if (paths_.empty())
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "missing fake curl response"));
+    auto sequenced = request;
+    sequenced.url = "https://curl.test" + paths_.front();
+    paths_.pop_front();
+    ++attempts_;
+    return transport_.send_streaming(sequenced, std::move(on_body_chunk), std::move(cancel_requested));
+  }
+
+  [[nodiscard]] std::size_t attempts() const noexcept { return attempts_; }
+
+ private:
+  ava::http::CurlCliTransport transport_;
+  std::deque<std::string> paths_;
+  std::size_t attempts_ = 0;
 };
 
 class EnvironmentRestore final
@@ -206,6 +241,239 @@ void test_stream_separation_hup_and_callbacks()
            "streaming curl preserves callback order while withholding a split status marker");
     expect(settled_record(fixture.only_record(), ava::process::TerminationReasonV1::NaturalExit),
            "streaming completion waits for both output streams and exact process settlement");
+  }
+}
+
+void test_streaming_retry_with_nonempty_error_body()
+{
+  for (auto const status : {429, 503})
+  {
+    auto supervisor = std::make_shared<ava::process::Supervisor>();
+    SequencedCurlTransport inner(require_application_scope(supervisor), {status == 429 ? "/retry-429" : "/retry-503", "/retry-success"});
+    std::vector<ava::http::RetryOptions::Event> retry_events;
+    ava::http::RetryTransport retry(inner, ava::http::RetryOptions{.max_attempts = 2,
+                                                                   .base_delay_ms = status == 429 ? 50 : 0,
+                                                                   .on_retry =
+                                                                       [&retry_events](ava::http::RetryOptions::Event const& event) {
+                                                                         retry_events.push_back(event);
+                                                                         return ava::core::VoidResult{};
+                                                                       },
+                                                                   .response_retry_decision =
+                                                                       [](ava::http::HttpResponse const& response) {
+                                                                         return response.status_code == 429   ? ava::http::ResponseRetryDecision::RateLimited
+                                                                                : response.status_code == 503 ? ava::http::ResponseRetryDecision::Transient
+                                                                                                              : ava::http::ResponseRetryDecision::NoRetry;
+                                                                       }});
+    std::string accepted;
+    auto response = retry.send_streaming(request_for("/unused"), [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+      accepted.append(chunk);
+      return {};
+    });
+    expect(response && response->status_code == 200 && response->body == "accepted response" && inner.attempts() == 2 && accepted == "accepted response" &&
+               retry_events.size() == 1 && (status != 429 || retry_events.front().delay_ms == 0),
+           "streaming curl withholds nonempty retryable errors, retains final Retry-After headers, and publishes only accepted response bytes");
+  }
+}
+
+void test_streaming_error_bodies_and_retry_exhaustion()
+{
+  for (auto const& path : {"/retry-quota", "/retry-auth"})
+  {
+    auto supervisor = std::make_shared<ava::process::Supervisor>();
+    SequencedCurlTransport inner(require_application_scope(supervisor), {path, "/retry-success"});
+    ava::http::RetryTransport retry(
+        inner, ava::http::RetryOptions{.max_attempts = 2, .base_delay_ms = 0, .response_retry_decision = [](ava::http::HttpResponse const& response) {
+                                         if (response.status_code == 429 && response.body.find("insufficient_quota") == std::string::npos)
+                                           return ava::http::ResponseRetryDecision::RateLimited;
+                                         return ava::http::ResponseRetryDecision::NoRetry;
+                                       }});
+    std::string accepted;
+    auto response = retry.send_streaming(request_for("/unused"), [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+      accepted.append(chunk);
+      return {};
+    });
+    expect(response && inner.attempts() == 1 && accepted.empty() &&
+               ((response->status_code == 429 && response->body == "insufficient_quota: billing hard limit") ||
+                (response->status_code == 401 && response->body == "authentication failed")),
+           "streaming curl retains quota and authentication error bodies for classification without publishing them");
+  }
+
+  auto supervisor = std::make_shared<ava::process::Supervisor>();
+  SequencedCurlTransport inner(require_application_scope(supervisor), {"/retry-429", "/retry-503"});
+  ava::http::RetryTransport retry(
+      inner, ava::http::RetryOptions{.max_attempts = 2, .base_delay_ms = 0, .response_retry_decision = [](ava::http::HttpResponse const& response) {
+                                       return response.status_code == 429 ? ava::http::ResponseRetryDecision::RateLimited
+                                                                          : ava::http::ResponseRetryDecision::Transient;
+                                     }});
+  std::string accepted;
+  auto response = retry.send_streaming(request_for("/unused"), [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+    accepted.append(chunk);
+    return {};
+  });
+  expect(response && response->status_code == 503 && response->body == "transient response" && inner.attempts() == 2 && accepted.empty(),
+         "exhausted streaming retries return the final error body without sink publication");
+
+  auto cancel_supervisor = std::make_shared<ava::process::Supervisor>();
+  SequencedCurlTransport cancel_inner(require_application_scope(cancel_supervisor), {"/retry-429", "/retry-success"});
+  bool cancel_backoff = false;
+  ava::http::RetryTransport cancel_retry(
+      cancel_inner,
+      ava::http::RetryOptions{.max_attempts = 2,
+                              .base_delay_ms = 10,
+                              .on_retry =
+                                  [&cancel_backoff](ava::http::RetryOptions::Event const&) {
+                                    cancel_backoff = true;
+                                    return ava::core::VoidResult{};
+                                  },
+                              .cancel_requested = [&cancel_backoff] { return cancel_backoff; },
+                              .response_retry_decision = [](ava::http::HttpResponse const&) { return ava::http::ResponseRetryDecision::RateLimited; }});
+  auto canceled = cancel_retry.send_streaming(request_for("/unused"), [](std::string_view) -> ava::core::VoidResult { return {}; });
+  expect(!canceled && canceled.error().message() == "transport retry canceled" && cancel_inner.attempts() == 1,
+         "streaming retry cancellation interrupts backoff after a withheld nonempty error body");
+}
+
+void test_streaming_sink_failure_stops_retry_and_cleans_up()
+{
+  auto supervisor = std::make_shared<ava::process::Supervisor>();
+  SequencedCurlTransport inner(require_application_scope(supervisor), {"/stream", "/retry-success"});
+  ava::http::RetryTransport retry(inner, ava::http::RetryOptions{.max_attempts = 2, .base_delay_ms = 0});
+  auto response = retry.send_streaming(request_for("/unused", 60000), [](std::string_view) -> ava::core::VoidResult {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "sink IO rejection"));
+  });
+  auto const snapshot = supervisor->snapshot();
+  auto const* record = snapshot.records.size() == 1 ? &snapshot.records.front() : nullptr;
+  expect(!response && response.error().message() == "sink IO rejection" && inner.attempts() == 1 &&
+             settled_record(record, ava::process::TerminationReasonV1::ProtocolFailure),
+         "streaming sink errors prevent retry and preserve supervised child cleanup");
+}
+
+void test_streaming_response_framing()
+{
+  {
+    CurlFixture fixture;
+    std::string accepted;
+    auto response = fixture.transport.send_streaming(request_for("/stream-http-trailers"), [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+      accepted.append(chunk);
+      return {};
+    });
+    expect(response && response->status_code == 200 && response->headers["Trailer"] == "X-Trace, data" && response->body == "expected body" &&
+               accepted == "expected body" && response->body.find("malicious trailer event") == std::string::npos,
+           "streaming curl never publishes HTTP chunked trailers emitted by curl as response metadata");
+  }
+  for (auto const& path : {"/stream-stderr-eof-first", "/stream-stdout-eof-first"})
+  {
+    CurlFixture fixture;
+    std::string accepted;
+    auto response = fixture.transport.send_streaming(request_for(path), [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+      accepted.append(chunk);
+      return {};
+    });
+    auto const expected_body = path == std::string_view("/stream-stderr-eof-first") ? "headers-first body" : "body-pipe-first body";
+    expect(response && response->status_code == 200 && response->body == expected_body && accepted == expected_body,
+           "streaming curl gates body bytes until metadata across either stdout/stderr EOF ordering");
+  }
+  {
+    CurlFixture fixture;
+    std::string accepted;
+    auto response = fixture.transport.send_streaming(request_for("/stream-missing-metadata"), [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+      accepted.append(chunk);
+      return {};
+    });
+    expect(!response && response.error().message().find("final HTTP response head") != std::string::npos && accepted.empty(),
+           "streaming curl fails closed without response metadata and never publishes pending body bytes");
+  }
+  {
+    CurlFixture fixture;
+    std::string accepted;
+    auto response =
+        fixture.transport.send_streaming(request_for("/stream-prefix-diagnostic-failure"), [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+          accepted.append(chunk);
+          return {};
+        });
+    expect(!response && response.error().message() == "curl transport failed" && accepted.empty(),
+           "streaming curl does not search diagnostics for a later HTTP prefix and preserves curl process failure classification");
+  }
+  {
+    CurlFixture fixture;
+    auto request = request_for("/stream-head-chain");
+    request.follow_redirects = true;
+    std::string accepted;
+    auto response = fixture.transport.send_streaming(request, [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+      accepted.append(chunk);
+      return {};
+    });
+    expect(response && response->status_code == 200 && response->headers["X-Final"] == "yes" && response->body == "chain body" && accepted == "chain body",
+           "streaming curl skips split 100, 103, and followed arbitrary 3xx heads before the final response");
+  }
+  for (auto const& path : {"/stream-upgrade", "/stream-final-redirect", "/stream-disabled-redirect"})
+  {
+    CurlFixture fixture;
+    auto request = request_for(path);
+    request.follow_redirects = path == std::string_view("/stream-final-redirect");
+    std::string accepted;
+    auto response = fixture.transport.send_streaming(request, [&accepted](std::string_view chunk) -> ava::core::VoidResult {
+      accepted.append(chunk);
+      return {};
+    });
+    expect(response && (response->status_code == 101 || response->status_code == 399) && response->body.find("HTTP/1.1 200 Fake") != std::string::npos &&
+               accepted.empty(),
+           "101, final no-location, and redirect-disabled 3xx bodies are retained without fake HTTP body reparsing or sink publication");
+  }
+  for (auto const& path : {"/stream-missing-trailer", "/stream-malformed-trailer", "/stream-mismatched-trailer"})
+  {
+    CurlFixture fixture;
+    auto response = fixture.transport.send_streaming(request_for(path), [](std::string_view) -> ava::core::VoidResult { return {}; });
+    expect(!response && response.error().message().find("status") != std::string::npos,
+           "streaming curl fails closed on missing, malformed, and mismatched status trailers");
+  }
+}
+
+void test_streaming_incremental_gate_limits_and_cancellation()
+{
+  {
+    CurlFixture fixture;
+    auto const token = std::to_string(::getpid());
+    auto const gate = "/tmp/ava-curl-stream-gate-" + token;
+    static_cast<void>(::unlink(gate.c_str()));
+    bool opened_gate = false;
+    auto response = fixture.transport.send_streaming(request_for("/stream-gate-" + token, 5000), [&](std::string_view) -> ava::core::VoidResult {
+      int const descriptor = ::open(gate.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, S_IRUSR | S_IWUSR);
+      if (descriptor >= 0)
+      {
+        static_cast<void>(::close(descriptor));
+        opened_gate = true;
+      }
+      return {};
+    });
+    static_cast<void>(::unlink(gate.c_str()));
+    expect(response && opened_gate && response->body == "incremental accepted body before gate|after gate",
+           "streaming curl publishes accepted bytes before the child can pass its deterministic completion gate");
+  }
+  for (auto const& path : {"/stream-header-limit", "/stream-output-limit"})
+  {
+    CurlFixture fixture;
+    auto response = fixture.transport.send_streaming(request_for(path, 60000), [](std::string_view) -> ava::core::VoidResult { return {}; });
+    fixture.capture_snapshot();
+    expect(!response && response.error().message().find("exceeded byte limit") != std::string::npos &&
+               settled_record(fixture.only_record(), path == std::string_view("/stream-output-limit") ? ava::process::TerminationReasonV1::OutputLimit
+                                                                                                      : ava::process::TerminationReasonV1::ProtocolFailure),
+           "streaming curl independently enforces bounded cumulative headers and the existing body cap");
+  }
+  {
+    CurlFixture fixture;
+    auto const started = std::chrono::steady_clock::now();
+    std::size_t sink_bytes = 0;
+    auto response = fixture.transport.send_streaming(
+        request_for("/stream-error-cancel", 60000),
+        [&sink_bytes](std::string_view chunk) -> ava::core::VoidResult {
+          sink_bytes += chunk.size();
+          return {};
+        },
+        [started] { return std::chrono::steady_clock::now() - started > 40ms; });
+    fixture.capture_snapshot();
+    expect(!response && response.error().message() == "transport request canceled" && sink_bytes == 0 &&
+               settled_record(fixture.only_record(), ava::process::TerminationReasonV1::Canceled),
+           "cancellation during a withheld error body performs supervised cleanup without sink publication");
   }
 }
 
@@ -463,6 +731,11 @@ void run_curl_transport_process_tests()
   test_exact_argv_config_body_and_success();
   test_exact_environment_capture();
   test_stream_separation_hup_and_callbacks();
+  test_streaming_retry_with_nonempty_error_body();
+  test_streaming_error_bodies_and_retry_exhaustion();
+  test_streaming_sink_failure_stops_retry_and_cleans_up();
+  test_streaming_response_framing();
+  test_streaming_incremental_gate_limits_and_cancellation();
   test_prelaunch_checkpoints_and_empty_body();
   test_stop_reasons_and_limits();
   test_group_cleanup_and_stderr_truncation();

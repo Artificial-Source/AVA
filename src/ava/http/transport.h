@@ -50,6 +50,10 @@ struct TransportObservation
 class Transport
 {
  public:
+  // Streaming transports invoke this sink only for bytes from the final 2xx
+  // response after its authoritative status is known. Bytes may already have
+  // been accepted if a later stream, sink, or process failure is returned.
+  // HttpResponse::body is retained for every status.
   using BodyChunkSink = std::function<ava::core::VoidResult(std::string_view)>;
   using CancelCallback = std::function<bool()>;
 

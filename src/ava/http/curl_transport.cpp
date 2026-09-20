@@ -31,6 +31,7 @@ using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 
 constexpr std::size_t kMaxCurlResponseBytes = 8 * 1024 * 1024;
+constexpr std::size_t kMaxCurlStreamingHeaderBytes = 64 * 1024;
 constexpr std::size_t kMaxCurlStderrBytes = 64 * 1024;
 constexpr std::string_view kStatusMarker = "\nAVA_HTTP_STATUS:";
 constexpr std::string_view kWriteOut = "\nAVA_HTTP_STATUS:%{http_code}";
@@ -180,7 +181,7 @@ std::string curl_config_escape(std::string_view value)
   return escaped;
 }
 
-std::string build_curl_config(HttpRequest const& request, std::string const& body_path)
+std::string build_curl_config(HttpRequest const& request, std::string const& body_path, bool streaming)
 {
   std::string config;
   config += "url = \"" + curl_config_escape(request.url) + "\"\n";
@@ -192,6 +193,11 @@ std::string build_curl_config(HttpRequest const& request, std::string const& bod
   config += "proto-redir = \"=http,https\"\n";
   if (request.include_response_headers)
     config += "include\n";
+  if (streaming)
+  {
+    config += "dump-header = \"/dev/stderr\"\n";
+    config += "suppress-connect-headers\n";
+  }
   for (auto const& override : request.resolve_hosts)
     config += "resolve = \"" + curl_config_escape(override) + "\"\n";
   if (!request.resolve_hosts.empty())
@@ -237,6 +243,67 @@ int http_status_line_code(std::string_view line)
     code = (code * 10) + (ch - '0');
   }
   return code;
+}
+
+struct StreamingResponseHead
+{
+  int status_code = 0;
+  std::map<std::string, std::string> headers;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+ava::core::Result<StreamingResponseHead> parse_streaming_response_head(std::string_view header_text)
+{
+  auto const status_end = header_text.find('\n');
+  auto status_line = header_text.substr(0, status_end);
+  if (!status_line.empty() && status_line.back() == '\r')
+    status_line.remove_suffix(1);
+  if (!is_http_status_line(status_line))
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "curl streaming response had a malformed HTTP status line"));
+  auto const status_space = status_line.find(' ');
+  if (status_space + 4 < status_line.size() && status_line[status_space + 4] != ' ' && status_line[status_space + 4] != '\t')
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "curl streaming response had a malformed HTTP status line"));
+  auto const status = http_status_line_code(status_line);
+  if (status < 100 || status > 999)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "curl streaming response had an invalid HTTP status"));
+
+  std::map<std::string, std::string> headers;
+  auto line_start = status_end == std::string_view::npos ? header_text.size() : status_end + 1;
+  while (line_start < header_text.size())
+  {
+    auto const line_end = header_text.find('\n', line_start);
+    auto line = header_text.substr(line_start, line_end == std::string_view::npos ? header_text.size() - line_start : line_end - line_start);
+    if (!line.empty() && line.back() == '\r')
+      line.remove_suffix(1);
+    if (!line.empty())
+    {
+      auto const colon = line.find(':');
+      if (colon == std::string_view::npos || colon == 0)
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "curl streaming response had a malformed HTTP header"));
+      auto value = line.substr(colon + 1);
+      while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+        value.remove_prefix(1);
+      while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r'))
+        value.remove_suffix(1);
+      headers[std::string(line.substr(0, colon))] = std::string(value);
+    }
+    if (line_end == std::string_view::npos)
+      break;
+    line_start = line_end + 1;
+  }
+  return StreamingResponseHead{.status_code = status, .headers = std::move(headers)};
+}
+
+bool has_nonempty_header(std::map<std::string, std::string> const& headers, std::string_view expected_name)
+{
+  return std::ranges::any_of(headers, [expected_name](auto const& entry) {
+    if (entry.second.empty() || entry.first.size() != expected_name.size())
+      return false;
+    return std::ranges::equal(entry.first, expected_name, [](char lhs, char rhs) {
+      return std::tolower(static_cast<unsigned char>(lhs)) == std::tolower(static_cast<unsigned char>(rhs));
+    });
+  });
 }
 
 ava::core::Result<HttpResponse> parse_curl_output(std::string output, bool include_response_headers)
@@ -406,7 +473,7 @@ class CurlRequest final
       body_file.emplace(std::move(*created));
       body_path = body_file->path();
     }
-    auto config = build_curl_config(request_, body_path);
+    auto config = build_curl_config(request_, body_path, streaming_);
 
     if (auto checkpoint = prelaunch_checkpoint(); !checkpoint)
       return std::unexpected(std::move(checkpoint.error()));
@@ -498,9 +565,9 @@ class CurlRequest final
       }
       request_cleanup();
 
-      drain_stdout(supervisor, handle, output, output_open, failure);
-      request_cleanup();
       drain_stderr(supervisor, handle, error_output, error_open, failure);
+      request_cleanup();
+      drain_stdout(supervisor, handle, output, output_open, failure);
       request_cleanup();
 
       auto waited = supervisor.try_wait(handle);
@@ -514,11 +581,11 @@ class CurlRequest final
         terminal_status = **waited;
       }
 
-      if (terminal_status && output_open)
-        drain_stdout(supervisor, handle, output, output_open, failure);
-      request_cleanup();
       if (terminal_status && error_open)
         drain_stderr(supervisor, handle, error_output, error_open, failure);
+      request_cleanup();
+      if (terminal_status && output_open)
+        drain_stdout(supervisor, handle, output, output_open, failure);
       request_cleanup();
 
       if (terminal_status && !output_open && !error_open)
@@ -567,16 +634,17 @@ class CurlRequest final
       set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure, protocol_error("failed to settle curl process cleanup"));
       request_cleanup();
     }
-    while (output_open)
+    while (error_open)
     {
-      auto const progressed = drain_stdout(supervisor, handle, output, output_open, failure);
+      auto const progressed = drain_stderr(supervisor, handle, error_output, error_open, failure);
       request_cleanup();
       if (!progressed)
         break;
     }
-    while (error_open)
+    while (output_open)
     {
-      auto const progressed = drain_stderr(supervisor, handle, error_output, error_open, failure);
+      auto const progressed = drain_stdout(supervisor, handle, output, output_open, failure);
+      request_cleanup();
       if (!progressed)
         break;
     }
@@ -597,8 +665,12 @@ class CurlRequest final
       return std::unexpected(generic_transport_error(&*terminal_status, stdout_bytes_, stderr_bytes_));
     }
 
+    if (streaming_ && streaming_metadata_error_)
+      return std::unexpected(std::move(*streaming_metadata_error_));
     if (!parsed_response_)
       return std::unexpected(protocol_error("curl response streams closed without a parsed result"));
+    if (streaming_ && parsed_response_->status_code == 0)
+      return std::unexpected(protocol_error("curl streaming response ended before a final HTTP response head"));
     if (streaming_)
       parsed_response_->body = std::move(streamed_body_);
     return std::move(*parsed_response_);
@@ -714,14 +786,14 @@ class CurlRequest final
     }
   }
 
-  [[nodiscard]] ava::core::VoidResult deliver_body(std::string_view chunk)
+  [[nodiscard]] ava::core::VoidResult retain_streaming_body(std::string_view chunk)
   {
     if (chunk.empty())
       return {};
     if (streamed_body_.size() > kMaxCurlResponseBytes || chunk.size() > kMaxCurlResponseBytes - streamed_body_.size())
       return std::unexpected(output_limit_error());
     streamed_body_.append(chunk);
-    if (!body_sink_)
+    if (!streaming_head_ || streaming_head_->status_code < 200 || streaming_head_->status_code >= 300 || !body_sink_)
       return {};
     try
     {
@@ -731,6 +803,89 @@ class CurlRequest final
     {
       return std::unexpected(protocol_error("curl streaming sink failed"));
     }
+  }
+
+  [[nodiscard]] ava::core::VoidResult publish_pending_streaming_body()
+  {
+    if (!streaming_head_ || pending_stdout_.size() <= kStatusTailReserve)
+      return {};
+    auto const body_bytes = pending_stdout_.size() - kStatusTailReserve;
+    auto retained = retain_streaming_body(std::string_view(pending_stdout_).substr(0, body_bytes));
+    if (!retained)
+      return std::unexpected(std::move(retained.error()));
+    pending_stdout_.erase(0, body_bytes);
+    return {};
+  }
+
+  [[nodiscard]] ava::core::VoidResult consume_streaming_stdout(std::string_view bytes)
+  {
+    if (pending_stdout_.size() > kMaxCurlResponseBytes + kStatusTailReserve ||
+        bytes.size() > kMaxCurlResponseBytes + kStatusTailReserve - pending_stdout_.size())
+    {
+      return std::unexpected(output_limit_error());
+    }
+    pending_stdout_.append(bytes);
+    return publish_pending_streaming_body();
+  }
+
+  [[nodiscard]] ava::core::VoidResult consume_streaming_metadata(std::string_view bytes)
+  {
+    if (streaming_head_ || streaming_metadata_rejected_ || streaming_metadata_error_)
+      return {};
+    pending_streaming_metadata_.append(bytes);
+
+    constexpr std::string_view prefix = "HTTP/";
+    if (!pending_streaming_metadata_.starts_with(prefix))
+    {
+      if (prefix.starts_with(pending_streaming_metadata_))
+        return {};
+      streaming_metadata_rejected_ = true;
+      pending_streaming_metadata_.clear();
+      return {};
+    }
+
+    while (!streaming_head_)
+    {
+      auto header_end = pending_streaming_metadata_.find("\r\n\r\n");
+      std::size_t separator_size = 4;
+      if (header_end == std::string::npos)
+      {
+        header_end = pending_streaming_metadata_.find("\n\n");
+        separator_size = 2;
+      }
+      if (header_end == std::string::npos)
+      {
+        if (streaming_header_bytes_ > kMaxCurlStreamingHeaderBytes ||
+            pending_streaming_metadata_.size() > kMaxCurlStreamingHeaderBytes - streaming_header_bytes_)
+        {
+          return std::unexpected(protocol_error("curl streaming response headers exceeded byte limit"));
+        }
+        return {};
+      }
+
+      auto const block_bytes = header_end + separator_size;
+      if (streaming_header_bytes_ > kMaxCurlStreamingHeaderBytes || block_bytes > kMaxCurlStreamingHeaderBytes - streaming_header_bytes_)
+        return std::unexpected(protocol_error("curl streaming response headers exceeded byte limit"));
+      auto parsed = parse_streaming_response_head(std::string_view(pending_streaming_metadata_).substr(0, header_end));
+      if (!parsed)
+      {
+        streaming_metadata_error_ = std::move(parsed.error());
+        pending_streaming_metadata_.clear();
+        return {};
+      }
+      streaming_header_bytes_ += block_bytes;
+      pending_streaming_metadata_.erase(0, block_bytes);
+
+      bool const informational = parsed->status_code >= 100 && parsed->status_code < 200 && parsed->status_code != 101;
+      bool const followed_redirect =
+          request_.follow_redirects && parsed->status_code >= 300 && parsed->status_code < 400 && has_nonempty_header(parsed->headers, "location");
+      if (informational || followed_redirect)
+        continue;
+      streaming_head_ = std::move(*parsed);
+      pending_streaming_metadata_.clear();
+    }
+
+    return publish_pending_streaming_body();
   }
 
   bool drain_stdout(ava::process::Supervisor& supervisor, ava::process::ProcessHandle const& handle, ava::process::PipeEndpoint& endpoint, bool& open,
@@ -752,7 +907,8 @@ class CurlRequest final
         break;
       if (read->state == ava::process::PipeIoStateV1::EndOfStream)
       {
-        finalize_stdout(failure);
+        stdout_eof_ = true;
+        maybe_finalize_stdout(failure);
         endpoint.close();
         open = false;
         progressed = true;
@@ -767,7 +923,7 @@ class CurlRequest final
 
       if (!failure)
       {
-        if (stdout_bytes_ > kMaxCurlResponseBytes + kStatusTailReserve)
+        if (!streaming_ && stdout_bytes_ > kMaxCurlResponseBytes + kStatusTailReserve)
         {
           truncated = true;
           set_failure(failure, ava::process::TerminationReasonV1::OutputLimit, output_limit_error());
@@ -778,14 +934,12 @@ class CurlRequest final
         }
         else
         {
-          pending_stdout_.append(buffer.data(), bytes);
-          if (pending_stdout_.size() > kStatusTailReserve)
+          auto consumed = consume_streaming_stdout(std::string_view(buffer.data(), bytes));
+          if (!consumed)
           {
-            auto const emit_size = pending_stdout_.size() - kStatusTailReserve;
-            auto delivered = deliver_body(std::string_view(pending_stdout_).substr(0, emit_size));
-            if (!delivered)
-              set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure, std::move(delivered.error()));
-            pending_stdout_.erase(0, emit_size);
+            truncated = consumed.error().message() == output_limit_error().message();
+            set_failure(failure, truncated ? ava::process::TerminationReasonV1::OutputLimit : ava::process::TerminationReasonV1::ProtocolFailure,
+                        std::move(consumed.error()));
           }
         }
       }
@@ -797,28 +951,69 @@ class CurlRequest final
     return progressed;
   }
 
+  void maybe_finalize_stdout(std::optional<RequestFailure>& failure)
+  {
+    if (!stdout_eof_ || (streaming_ && !streaming_head_ && !stderr_eof_))
+      return;
+    finalize_stdout(failure);
+  }
+
   void finalize_stdout(std::optional<RequestFailure>& failure)
   {
     if (stdout_finalized_ || failure)
       return;
     stdout_finalized_ = true;
-    auto parsed = parse_curl_output(streaming_ ? std::move(pending_stdout_) : std::move(stdout_output_), request_.include_response_headers && !streaming_);
-    if (!parsed)
+    if (!streaming_)
     {
-      set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure, std::move(parsed.error()));
-      return;
-    }
-    if (streaming_)
-    {
-      auto delivered = deliver_body(parsed->body);
-      if (!delivered)
+      auto parsed = parse_curl_output(std::move(stdout_output_), request_.include_response_headers);
+      if (!parsed)
       {
-        set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure, std::move(delivered.error()));
+        set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure, std::move(parsed.error()));
         return;
       }
-      parsed->body.clear();
+      parsed_response_ = std::move(*parsed);
+      return;
     }
-    parsed_response_ = std::move(*parsed);
+
+    if (!streaming_head_)
+    {
+      pending_stdout_.clear();
+      parsed_response_ = HttpResponse{};
+      return;
+    }
+    if (pending_stdout_.size() < kStatusTailReserve)
+    {
+      set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure,
+                  protocol_error("curl streaming response did not include an exact HTTP status trailer"));
+      return;
+    }
+    auto const trailer_start = pending_stdout_.size() - kStatusTailReserve;
+    auto const trailer = std::string_view(pending_stdout_).substr(trailer_start);
+    if (!trailer.starts_with(kStatusMarker) || !std::ranges::all_of(trailer.substr(kStatusMarker.size()), [](char ch) { return ch >= '0' && ch <= '9'; }))
+    {
+      set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure,
+                  protocol_error("curl streaming response did not include an exact HTTP status trailer"));
+      return;
+    }
+    int trailer_status = 0;
+    for (char const ch : trailer.substr(kStatusMarker.size()))
+      trailer_status = trailer_status * 10 + (ch - '0');
+    if (trailer_status != streaming_head_->status_code)
+    {
+      set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure,
+                  protocol_error("curl streaming response status trailer did not match its final response head"));
+      return;
+    }
+    auto retained = retain_streaming_body(std::string_view(pending_stdout_).substr(0, trailer_start));
+    if (!retained)
+    {
+      auto const output_limited = retained.error().message() == output_limit_error().message();
+      set_failure(failure, output_limited ? ava::process::TerminationReasonV1::OutputLimit : ava::process::TerminationReasonV1::ProtocolFailure,
+                  std::move(retained.error()));
+      return;
+    }
+    pending_stdout_.clear();
+    parsed_response_ = HttpResponse{.status_code = streaming_head_->status_code, .headers = std::move(streaming_head_->headers), .body = {}};
   }
 
   bool drain_stderr(ava::process::Supervisor& supervisor, ava::process::ProcessHandle const& handle, ava::process::PipeEndpoint& endpoint, bool& open,
@@ -840,6 +1035,8 @@ class CurlRequest final
         break;
       if (read->state == ava::process::PipeIoStateV1::EndOfStream)
       {
+        stderr_eof_ = true;
+        maybe_finalize_stdout(failure);
         endpoint.close();
         open = false;
         progressed = true;
@@ -851,6 +1048,18 @@ class CurlRequest final
       auto const retained_before = stderr_output_.size();
       append_bounded(stderr_output_, buffer.data(), read->bytes, kMaxCurlStderrBytes);
       bool const truncated = retained_before + read->bytes > kMaxCurlStderrBytes;
+      if (streaming_ && !failure)
+      {
+        auto consumed = consume_streaming_metadata(std::string_view(buffer.data(), read->bytes));
+        if (!consumed)
+        {
+          set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure, std::move(consumed.error()));
+        }
+        else
+        {
+          maybe_finalize_stdout(failure);
+        }
+      }
       stderr_bytes_ =
           stderr_bytes_ > std::numeric_limits<std::uint64_t>::max() - read->bytes ? std::numeric_limits<std::uint64_t>::max() : stderr_bytes_ + read->bytes;
       if (auto accounted = supervisor.account_output(handle, ava::process::StreamKindV1::StandardError, read->bytes, truncated); !accounted && !failure)
@@ -874,9 +1083,16 @@ class CurlRequest final
   std::string pending_stdout_;
   std::string streamed_body_;
   std::string stderr_output_;
+  std::string pending_streaming_metadata_;
+  std::optional<StreamingResponseHead> streaming_head_;
+  std::optional<ava::core::Error> streaming_metadata_error_;
   std::optional<HttpResponse> parsed_response_;
+  std::size_t streaming_header_bytes_ = 0;
   std::uint64_t stdout_bytes_ = 0;
   std::uint64_t stderr_bytes_ = 0;
+  bool streaming_metadata_rejected_ = false;
+  bool stdout_eof_ = false;
+  bool stderr_eof_ = false;
   bool stdout_finalized_ = false;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

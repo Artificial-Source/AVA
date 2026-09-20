@@ -113,7 +113,7 @@ class CallbackPollingTransport final : public ava::http::Transport
     ++streaming_calls;
     poll(cancel_requested);
     auto response = next_response();
-    if (response && on_body_chunk && !response->body.empty())
+    if (response && response->status_code >= 200 && response->status_code < 300 && on_body_chunk && !response->body.empty())
     {
       if (auto delivered = on_body_chunk(response->body); !delivered)
         return std::unexpected(std::move(delivered.error()));
