@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavioral regressions for plugin settlement and preparatory-Up sequencing.
+"""Behavioral regressions for plugin settlement, preparatory-Up, and idle-arrow sequencing.
 
 Scripted pane captures and a fake monotonic clock model event-driven waits without
 real sleeps.
@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import tui_smoke_helpers
-from tui_tmux_scenarios import plugin_ui, streaming_scroll
+from tui_tmux_scenarios import main_session_mgmt, plugin_ui, streaming_scroll
 
 CLIENT = object()
 SESSION = "unit-test-session"
@@ -295,6 +295,296 @@ class PreparatoryUpSequencingTests(unittest.TestCase):
         self.assertIn("room for a keyboard-step Up/Down", str(raised.exception))
         self.assertIn(f"numbers: {list(range(29, 60))}", str(raised.exception))
         self.assertEqual(fake_tmux.sends, [("Up",)] * 4)
+
+
+AUTH_MARKER = "slash tool commands still work offline."
+NAME_DRAFT = "│  /name TUI smoke"
+LIVE_START = 11
+LIVE_END = 30
+SESSION_LIVE_NUMBERS = list(range(LIVE_START, LIVE_END + 1))
+
+
+def _session_seed_screen(
+    start: int,
+    end: int,
+    *,
+    receipt: bool = True,
+    receipt_complete: bool = True,
+    elapsed: str = "4ms",
+    auth_path: str = "/tmp/ava/auth.json",
+    composer: bool = True,
+    draft: str | None = None,
+    name_title: bool = False,
+    name_set: bool = False,
+    enter_close: bool = False,
+    skip: tuple[int, ...] = (),
+) -> str:
+    lines = [f"    SESSION SCROLLBACK LINE {index:02d}" for index in range(start, end + 1) if index not in skip]
+    if name_title:
+        lines.append("Command /name")
+    if name_set:
+        lines.append('session name set: "TUI smoke"')
+    if enter_close:
+        lines.append("Enter/Esc close")
+    if receipt:
+        lines.append("  Auth is required for provider openai.")
+        if receipt_complete:
+            lines.extend(
+                [
+                    "  Connect with /connect or /login in this TUI, or run ava connect openai --headless-oauth.",
+                    "  Environment setup also works with OPENAI_API_KEY.",
+                    "  Auth file:",
+                    f"  {auth_path}",
+                    f"  {AUTH_MARKER}",
+                    f"  │ * Build · GPT-5.5 · {elapsed}",
+                ]
+            )
+    if composer:
+        composer_text = draft if draft is not None else "Type a message..."
+        lines.extend(["│", f"│  {composer_text}", "│  GPT-5.5 · ctx 518 (0.2%)"])
+    return "\n".join(lines)
+
+
+SESSION_LIVE = _session_seed_screen(LIVE_START, LIVE_END)
+SESSION_UP_1 = _session_seed_screen(LIVE_START - 1, LIVE_END)
+SESSION_UP_2 = _session_seed_screen(LIVE_START - 2, LIVE_END)
+SESSION_UP_3 = _session_seed_screen(LIVE_START - KEYBOARD_SCROLL_ROWS, LIVE_END)
+SESSION_DOWN_NOISY = _session_seed_screen(
+    LIVE_START,
+    LIVE_END,
+    elapsed="9ms",
+    auth_path="/tmp/ava/config/ava/auth.json",
+)
+TITLE_FREE_PARTIAL = _session_seed_screen(20, LIVE_END, receipt=False, enter_close=True)
+DELAYED_SEED = _session_seed_screen(LIVE_START, LIVE_END, receipt=False)
+PARTIAL_RECEIPT = _session_seed_screen(LIVE_START, LIVE_END, receipt_complete=False)
+NAME_MODAL = _session_seed_screen(LIVE_START, LIVE_END, name_title=True, name_set=True, enter_close=True, receipt=False)
+
+
+class IdleArrowRoundtripPane:
+    """Serve partial Up frames, then a noisy Down tail, and reject a premature Down."""
+
+    def __init__(self, up_frames: list[str], down: str) -> None:
+        self.live = SESSION_LIVE
+        self.up_queue = list(up_frames)
+        self.full_up = up_frames[-1]
+        self.down = down
+        self.phase = "live"
+        self.last = SESSION_LIVE
+        self.saw_full_up = False
+
+    def __call__(self, tmux_client: object, session: str) -> str:
+        if self.phase == "up":
+            if self.up_queue:
+                self.last = self.up_queue.pop(0)
+            else:
+                self.last = self.full_up
+            if self.last == self.full_up:
+                self.saw_full_up = True
+            return self.last
+        if self.phase == "down":
+            self.last = self.down
+            return self.last
+        self.last = self.live
+        return self.last
+
+    def on_send(self, payload: tuple[str, ...]) -> None:
+        if payload == ("Up",):
+            self.phase = "up"
+            return
+        if payload == ("Down",):
+            if not self.saw_full_up:
+                raise AssertionError("sent Down before the finished 3-row Up step was captured")
+            self.phase = "down"
+            return
+        raise AssertionError(f"unexpected keys: {payload}")
+
+
+def _old_up_any_row_difference(baseline_rows: tuple[str, ...]):
+    return lambda screen: tuple(screen.splitlines()[:-3]) != baseline_rows and NAME_DRAFT not in screen
+
+
+def _old_down_exact_rows(baseline_rows: tuple[str, ...]):
+    return lambda screen: tuple(screen.splitlines()[:-3]) == baseline_rows and NAME_DRAFT not in screen
+
+
+class MainSessionIdleArrowSequencingTests(unittest.TestCase):
+    def test_old_line_30_wait_accepts_seed_before_auth_receipt(self) -> None:
+        pane = FakePane([DELAYED_SEED])
+        fake_tmux, _, stack = _harness(pane)
+        with stack:
+            screen = tui_smoke_helpers.wait_for(
+                CLIENT, SESSION, r"SESSION SCROLLBACK LINE 30", "session-management ordinary scrollback seed"
+            )
+        self.assertEqual(screen, DELAYED_SEED)
+        self.assertNotIn(AUTH_MARKER, screen)
+        self.assertEqual(fake_tmux.sends, [])
+
+    def test_old_name_absence_accepts_title_free_partial_frame(self) -> None:
+        pane = FakePane([TITLE_FREE_PARTIAL])
+        fake_tmux, _, stack = _harness(pane)
+        with stack:
+            screen = tui_smoke_helpers.wait_for_absent(
+                CLIENT, SESSION, r"Command /name|session name set", "session name output closed"
+            )
+        self.assertEqual(screen, TITLE_FREE_PARTIAL)
+        self.assertIn("Enter/Esc close", screen)
+        self.assertNotIn(AUTH_MARKER, screen)
+        self.assertEqual(fake_tmux.sends, [])
+
+    def test_old_up_any_difference_accepts_partial_one_row_step(self) -> None:
+        baseline = tuple(SESSION_LIVE.splitlines()[:-3])
+        pane = FakePane([SESSION_UP_1])
+        fake_tmux, _, stack = _harness(pane)
+        with stack:
+            screen = tui_smoke_helpers.wait_for_screen_state(
+                CLIENT,
+                SESSION,
+                _old_up_any_row_difference(baseline),
+                "idle Up arrow transcript movement without history recall",
+            )
+        self.assertEqual(screen, SESSION_UP_1)
+        self.assertEqual(fake_tmux.sends, [])
+
+    def test_old_down_exact_row_baseline_times_out_on_settled_receipt(self) -> None:
+        # GitHub #72: an earlier incomplete baseline never matches the later settled
+        # live tail (lines 11..30 plus the completed offline auth receipt).
+        baseline = tuple(DELAYED_SEED.splitlines()[:-3])
+        pane = FakePane([SESSION_LIVE])
+        fake_tmux, clock, stack = _harness(pane)
+        with stack, self.assertRaises(RuntimeError) as raised:
+            tui_smoke_helpers.wait_for_screen_state(
+                CLIENT,
+                SESSION,
+                _old_down_exact_rows(baseline),
+                "idle Down arrow return to live tail",
+            )
+        message = str(raised.exception)
+        self.assertIn("idle Down arrow return to live tail", message)
+        self.assertIn(AUTH_MARKER, message)
+        self.assertIn("SESSION SCROLLBACK LINE 11", message)
+        self.assertEqual(fake_tmux.sends, [])
+        self.assertGreater(clock.now, 0)
+
+    def test_old_down_exact_row_baseline_times_out_on_elapsed_noise(self) -> None:
+        baseline = tuple(SESSION_LIVE.splitlines()[:-3])
+        pane = FakePane([SESSION_DOWN_NOISY])
+        fake_tmux, clock, stack = _harness(pane)
+        with stack, self.assertRaises(RuntimeError) as raised:
+            tui_smoke_helpers.wait_for_screen_state(
+                CLIENT,
+                SESSION,
+                _old_down_exact_rows(baseline),
+                "idle Down arrow return to live tail",
+            )
+        self.assertIn("idle Down arrow return to live tail", str(raised.exception))
+        self.assertEqual(fake_tmux.sends, [])
+        self.assertGreater(clock.now, 0)
+
+    def test_new_seed_wait_rejects_persistent_delayed_auth_receipt(self) -> None:
+        pane = FakePane([DELAYED_SEED])
+        fake_tmux, clock, stack = _harness(pane)
+        with stack, self.assertRaises(RuntimeError) as raised:
+            main_session_mgmt._wait_for_ordinary_scrollback_seed(CLIENT, SESSION)
+        self.assertIn("session-management ordinary scrollback seed", str(raised.exception))
+        self.assertIn(DELAYED_SEED, str(raised.exception))
+        self.assertEqual(fake_tmux.sends, [])
+        self.assertGreater(clock.now, 0)
+
+    def test_new_name_close_rejects_persistent_title_free_partial_frame(self) -> None:
+        pane = FakePane([TITLE_FREE_PARTIAL])
+        fake_tmux, clock, stack = _harness(pane)
+        with stack, self.assertRaises(RuntimeError) as raised:
+            main_session_mgmt._wait_for_session_name_output_closed(CLIENT, SESSION)
+        self.assertIn("session name output fully closed", str(raised.exception))
+        self.assertIn(TITLE_FREE_PARTIAL, str(raised.exception))
+        self.assertEqual(fake_tmux.sends, [])
+        self.assertGreater(clock.now, 0)
+
+    def test_ordinary_seed_waits_through_delayed_auth_receipt(self) -> None:
+        pane = FakePane([DELAYED_SEED, PARTIAL_RECEIPT, SESSION_LIVE])
+        fake_tmux, _, stack = _harness(pane)
+        with stack:
+            numbers = main_session_mgmt._wait_for_ordinary_scrollback_seed(CLIENT, SESSION)
+        self.assertEqual(numbers, SESSION_LIVE_NUMBERS)
+        self.assertEqual(pane.last, SESSION_LIVE)
+        self.assertEqual(fake_tmux.sends, [])
+
+    def test_name_close_waits_through_title_free_partial_frame(self) -> None:
+        pane = FakePane([NAME_MODAL, TITLE_FREE_PARTIAL, SESSION_LIVE])
+        fake_tmux, _, stack = _harness(pane)
+        with stack:
+            numbers = main_session_mgmt._wait_for_session_name_output_closed(CLIENT, SESSION)
+        self.assertEqual(numbers, SESSION_LIVE_NUMBERS)
+        self.assertEqual(pane.last, SESSION_LIVE)
+        self.assertEqual(fake_tmux.sends, [])
+
+    def test_idle_up_waits_through_partial_one_and_two_row_frames(self) -> None:
+        pane = FakePane([SESSION_UP_1, SESSION_UP_2, SESSION_UP_3])
+        fake_tmux, _, stack = _harness(pane)
+        with stack:
+            screen = main_session_mgmt._wait_for_idle_up_keyboard_step(CLIENT, SESSION, SESSION_LIVE_NUMBERS)
+        self.assertEqual(screen, SESSION_UP_3)
+        self.assertEqual(fake_tmux.sends, [("Up",)])
+        self.assertEqual(fake_tmux.screen_at_send, [SESSION_UP_1])
+
+    def test_idle_arrow_roundtrip_does_not_send_down_before_finished_up_step(self) -> None:
+        pane = IdleArrowRoundtripPane([SESSION_UP_1, SESSION_UP_2, SESSION_UP_3], SESSION_DOWN_NOISY)
+        fake_tmux, _, stack = _harness(pane, on_send=pane.on_send)
+        with stack:
+            up_screen = main_session_mgmt._wait_for_idle_up_keyboard_step(CLIENT, SESSION, SESSION_LIVE_NUMBERS)
+            down_screen = main_session_mgmt._wait_for_idle_down_live_tail(CLIENT, SESSION, SESSION_LIVE_NUMBERS)
+        self.assertEqual(up_screen, SESSION_UP_3)
+        self.assertEqual(down_screen, SESSION_DOWN_NOISY)
+        self.assertEqual(fake_tmux.sends, [("Up",), ("Down",)])
+        self.assertEqual(fake_tmux.screen_at_send, [SESSION_LIVE, SESSION_UP_3])
+
+    def test_idle_down_accepts_elapsed_status_and_path_noise(self) -> None:
+        pane = FakePane([SESSION_DOWN_NOISY])
+        fake_tmux, _, stack = _harness(pane)
+        with stack:
+            screen = main_session_mgmt._wait_for_idle_down_live_tail(CLIENT, SESSION, SESSION_LIVE_NUMBERS)
+        self.assertEqual(screen, SESSION_DOWN_NOISY)
+        self.assertEqual(fake_tmux.sends, [("Down",)])
+        self.assertTrue(main_session_mgmt._idle_down_restored_live_tail(SESSION_DOWN_NOISY, SESSION_LIVE_NUMBERS))
+
+    def test_wrong_scroll_and_draft_mutations_time_out_after_one_key(self) -> None:
+        up_cases = {
+            "unchanged": SESSION_LIVE,
+            "one row": SESSION_UP_1,
+            "two rows": SESSION_UP_2,
+            "draft mutated": _session_seed_screen(LIVE_START - KEYBOARD_SCROLL_ROWS, LIVE_END, draft="/name TUI smoke"),
+            "noncontiguous": _session_seed_screen(LIVE_START - KEYBOARD_SCROLL_ROWS, LIVE_END, skip=(15,)),
+            "composer missing": _session_seed_screen(LIVE_START - KEYBOARD_SCROLL_ROWS, LIVE_END, composer=False),
+        }
+        for name, screen in up_cases.items():
+            with self.subTest(gate="up", name=name):
+                pane = FakePane([screen])
+                fake_tmux, clock, stack = _harness(pane)
+                with stack, self.assertRaises(RuntimeError) as raised:
+                    main_session_mgmt._wait_for_idle_up_keyboard_step(CLIENT, SESSION, SESSION_LIVE_NUMBERS)
+                self.assertIn("idle Up arrow transcript movement without history recall", str(raised.exception))
+                self.assertIn(f"last screen:\n{screen}", str(raised.exception))
+                self.assertEqual(fake_tmux.sends, [("Up",)])
+                self.assertGreater(clock.now, 0)
+
+        down_cases = {
+            "still scrolled": SESSION_UP_3,
+            "missing receipt": _session_seed_screen(LIVE_START, LIVE_END, receipt=False),
+            "draft mutated": _session_seed_screen(LIVE_START, LIVE_END, draft="/name TUI smoke"),
+            "composer missing": _session_seed_screen(LIVE_START, LIVE_END, composer=False),
+            "wrong window": _session_seed_screen(LIVE_START + 1, LIVE_END),
+        }
+        for name, screen in down_cases.items():
+            with self.subTest(gate="down", name=name):
+                pane = FakePane([screen])
+                fake_tmux, clock, stack = _harness(pane)
+                with stack, self.assertRaises(RuntimeError) as raised:
+                    main_session_mgmt._wait_for_idle_down_live_tail(CLIENT, SESSION, SESSION_LIVE_NUMBERS)
+                self.assertIn("idle Down arrow return to live tail", str(raised.exception))
+                self.assertIn(f"last screen:\n{screen}", str(raised.exception))
+                self.assertEqual(fake_tmux.sends, [("Down",)])
+                self.assertGreater(clock.now, 0)
 
 
 if __name__ == "__main__":

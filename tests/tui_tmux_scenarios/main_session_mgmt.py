@@ -24,6 +24,90 @@ from .common import (
     assert_title_first_new_receipt,
 )
 
+_KEYBOARD_SCROLL_ROWS = 3
+_SESSION_SCROLL_LINE = re.compile(r"SESSION SCROLLBACK LINE (\d{2})")
+_AUTH_RECEIPT_MARKER = "slash tool commands still work offline."
+_COMPOSER_EMPTY = re.compile(r"(?m)^\s*│\s+Type a message\.\.\.")
+_NAME_DRAFT = "│  /name TUI smoke"
+_NAME_OR_MODAL = re.compile(r"Command /name|session name set|Enter(?:/Esc)? close")
+
+
+def _ordinary_seed_live_tail_is_settled(screen: str) -> bool:
+    """True when the no-credentials seed shows a completed receipt and idle composer."""
+
+    if _AUTH_RECEIPT_MARKER not in screen:
+        return False
+    if _COMPOSER_EMPTY.search(screen) is None:
+        return False
+    if _NAME_OR_MODAL.search(screen) is not None or _NAME_DRAFT in screen:
+        return False
+    numbers = [int(value) for value in _SESSION_SCROLL_LINE.findall(screen)]
+    return len(numbers) >= 10 and numbers[-1] == 30 and numbers == list(range(numbers[0], numbers[-1] + 1))
+
+
+def _numbered_seed_window(screen: str, label: str) -> list[int]:
+    numbers = [int(value) for value in _SESSION_SCROLL_LINE.findall(screen)]
+    if len(numbers) < 10 or numbers != list(range(numbers[0], numbers[-1] + 1)):
+        raise RuntimeError(
+            f"{label} did not contain a contiguous numbered seed window\nnumbers: {numbers}\nscreen:\n{screen}"
+        )
+    return numbers
+
+
+def _wait_for_ordinary_scrollback_seed(tmux_exe: object, session: str) -> list[int]:
+    screen = wait_for_screen_state(
+        tmux_exe,
+        session,
+        _ordinary_seed_live_tail_is_settled,
+        "session-management ordinary scrollback seed",
+    )
+    return _numbered_seed_window(screen, "session-management ordinary scrollback seed")
+
+
+def _wait_for_session_name_output_closed(tmux_exe: object, session: str) -> list[int]:
+    screen = wait_for_screen_state(
+        tmux_exe,
+        session,
+        _ordinary_seed_live_tail_is_settled,
+        "session name output fully closed",
+    )
+    return _numbered_seed_window(screen, "session name output fully closed")
+
+
+def _idle_up_finished_keyboard_step(screen: str, before: list[int]) -> bool:
+    if _COMPOSER_EMPTY.search(screen) is None or _NAME_DRAFT in screen:
+        return False
+    numbers = [int(value) for value in _SESSION_SCROLL_LINE.findall(screen)]
+    if len(numbers) < 10 or numbers != list(range(numbers[0], numbers[-1] + 1)):
+        return False
+    return numbers[0] == before[0] - _KEYBOARD_SCROLL_ROWS
+
+
+def _idle_down_restored_live_tail(screen: str, live_numbers: list[int]) -> bool:
+    if not _ordinary_seed_live_tail_is_settled(screen):
+        return False
+    return [int(value) for value in _SESSION_SCROLL_LINE.findall(screen)] == live_numbers
+
+
+def _wait_for_idle_up_keyboard_step(tmux_exe: object, session: str, live_numbers: list[int]) -> str:
+    send_keys(tmux_exe, session, "Up")
+    return wait_for_screen_state(
+        tmux_exe,
+        session,
+        lambda screen: _idle_up_finished_keyboard_step(screen, live_numbers),
+        "idle Up arrow transcript movement without history recall",
+    )
+
+
+def _wait_for_idle_down_live_tail(tmux_exe: object, session: str, live_numbers: list[int]) -> str:
+    send_keys(tmux_exe, session, "Down")
+    return wait_for_screen_state(
+        tmux_exe,
+        session,
+        lambda screen: _idle_down_restored_live_tail(screen, live_numbers),
+        "idle Down arrow return to live tail",
+    )
+
 
 def scenario_main_session_mgmt(ctx: SmokeContext) -> None:
     tmux_exe, root, workspace, ava_config, env_prefix, session = _main_session(ctx)
@@ -34,33 +118,25 @@ def scenario_main_session_mgmt(ctx: SmokeContext) -> None:
     )
     send_literal(tmux_exe, session, f"\x1b[200~{scroll_seed}\x1b[201~")
     send_keys(tmux_exe, session, "Enter")
-    wait_for(tmux_exe, session, r"SESSION SCROLLBACK LINE 30", "session-management ordinary scrollback seed")
+    # No-credentials ordinary turns finish with the offline auth receipt. Wait for
+    # that completed receipt and an idle composer before /name so later scroll
+    # gates are not baselined from a partial seed paint.
+    _wait_for_ordinary_scrollback_seed(tmux_exe, session)
     send_literal(tmux_exe, session, "/name TUI smoke")
     send_keys(tmux_exe, session, "Enter")
     name_output = wait_for(tmux_exe, session, r"(?s)Command /name.*session name set: \"TUI smoke\"", "session name command output")
     if "/name TUI smoke" in name_output:
         raise RuntimeError(f"session name invocation leaked into transcript\nscreen:\n{name_output}")
     send_keys(tmux_exe, session, "Escape")
-    session_live_tail = wait_for_absent(tmux_exe, session, r"Command /name|session name set", "session name output closed")
-    session_live_rows = tuple(session_live_tail.splitlines()[:-3])
-    send_keys(tmux_exe, session, "Up")
-    arrow_scrollback = wait_for_screen_state(
-        tmux_exe,
-        session,
-        lambda screen: tuple(screen.splitlines()[:-3]) != session_live_rows and "│  /name TUI smoke" not in screen,
-        "idle Up arrow transcript movement without history recall",
-    )
+    # Tmux can observe doupdate after the /name title row clears but before the
+    # composer and numbered seed window are restored. Require one settled live tail.
+    live_numbers = _wait_for_session_name_output_closed(tmux_exe, session)
+    arrow_scrollback = _wait_for_idle_up_keyboard_step(tmux_exe, session, live_numbers)
     # /help scrollback intentionally lists the jump_to_bottom keybinding name; only
     # treat the deleted detached-chrome phrases as failures here.
     if any(text in arrow_scrollback for text in ("scrollback detached", "updates below")):
         raise RuntimeError(f"idle Up arrow surfaced deleted detached chrome\nscreen:\n{arrow_scrollback}")
-    send_keys(tmux_exe, session, "Down")
-    wait_for_screen_state(
-        tmux_exe,
-        session,
-        lambda screen: tuple(screen.splitlines()[:-3]) == session_live_rows and "│  /name TUI smoke" not in screen,
-        "idle Down arrow return to live tail",
-    )
+    _wait_for_idle_down_live_tail(tmux_exe, session, live_numbers)
 
     for index in range(1, 7):
         send_keys(tmux_exe, session, "C-u")
