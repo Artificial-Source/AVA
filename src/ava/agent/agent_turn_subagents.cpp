@@ -131,12 +131,6 @@ std::pair<std::vector<std::filesystem::path>, bool> bounded_deduplicated_authori
 ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskSubagentRequest const& request)
 {
   auto const session_root = store_.session_path().parent_path().parent_path();
-  if (request.background && request.task_id)
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "background task cannot resume an existing session");
-    error.with_context("task_id", *request.task_id);
-    return std::unexpected(std::move(error));
-  }
   bool const has_provider_factory = static_cast<bool>(options_.background_provider_factory);
   bool const has_transport_factory = static_cast<bool>(options_.background_transport_factory);
   bool const has_coordinator = static_cast<bool>(options_.subagent_coordinator);
@@ -187,6 +181,20 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
   auto child_lease = std::move(*child_lease_result);
   if (request.task_id)
   {
+    // Ownership is checked against the exact leased recoverable prefix before
+    // any recovery or append can mutate the requested child session.
+    auto ownership_entries = child_store.load_recoverable_prefix_bounded(child_lease, options_.session_read_limits, options_.cancel_requested);
+    if (!ownership_entries)
+      return std::unexpected(std::move(ownership_entries.error()));
+    auto ownership = ava::session::session_metadata_from_entries(child_store.session_id(), *ownership_entries);
+    if (!ownership)
+      return std::unexpected(std::move(ownership.error()));
+    if (ownership->parent_session_id != store_.session_id())
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::NotFound, "task child session is not owned by the current parent session");
+      error.with_context("task_id", *request.task_id);
+      return std::unexpected(std::move(error));
+    }
     auto recovered = child_store.recover_torn_tail(child_lease, options_.session_read_limits, options_.cancel_requested);
     if (!recovered)
       return std::unexpected(std::move(recovered.error()));
@@ -220,7 +228,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
   child_options.session_read_authority = std::move(*child_read_authority);
   child_options.model.system_prompt = subagent_system_prompt(options_.model.system_prompt, request.subagent_system_prompt);
   child_options.tool_visibility = subagent_tool_visibility(options_.tool_visibility, request.tool_preset);
-  child_options.max_tool_iterations = std::min<std::size_t>(child_options.max_tool_iterations, 6);
+  child_options.max_tool_iterations = request.max_tool_iterations.value_or(options_.max_tool_iterations);
+  child_options.child_execution = true;
   // Child history is independent. Never inherit a parent append callback:
   // it may capture parent run/session ownership and would both mix histories
   // and outlive the parent.
@@ -293,6 +302,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
       std::unique_ptr<ava::http::Transport> transport_instance;
       std::shared_ptr<SubagentInteractionGate> interaction_gate;
     };
+    auto steering_queue = SubagentSteeringQueue::create();
+    child_options.take_steering_messages = [queue = steering_queue] { return queue->take(); };
     auto run_state = std::make_shared<CoordinatedTaskRunState>(CoordinatedTaskRunState{.child_store = std::move(child_store),
                                                                                        .child_lease = std::move(child_lease),
                                                                                        .child_options = std::move(child_options),
@@ -320,6 +331,11 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
       if (!request.task_id)
         ava::session::rollback_created_session_with_context(run_state->child_store, run_state->child_lease, error);
       return std::unexpected(std::move(error));
+    }
+    if (run_state->child_options.child_compaction_blueprint)
+    {
+      run_state->child_options.child_compaction_binding =
+          ChildContextCompactionBinding{.blueprint = *run_state->child_options.child_compaction_blueprint, .append_target = *child_target};
     }
     auto child_append_target = *child_target;
     run_state->child_options.append_entry = [target = child_append_target](ava::session::SessionEntry entry) { return target->append(entry); };
@@ -377,7 +393,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
         SubagentCoordinatorStartRequest{.parent_session_id = store_.session_id(),
                                         .mode = request.background ? SubagentJobMode::Background : SubagentJobMode::Foreground,
                                         .job = std::move(start_options),
-                                        .launch_display = run_state->child_options.subagent_launch.display},
+                                        .launch_display = run_state->child_options.subagent_launch.display,
+                                        .steering_queue = std::move(steering_queue)},
         std::move(worker), interaction_gate, std::move(*inspection_source));
     if (!coordinated)
     {
@@ -467,6 +484,11 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
       !reconciled)
   {
     return std::unexpected(std::move(reconciled.error()));
+  }
+  if (child_options.child_compaction_blueprint)
+  {
+    child_options.child_compaction_binding =
+        ChildContextCompactionBinding{.blueprint = *child_options.child_compaction_blueprint, .append_target = *child_target};
   }
   auto child_append_target = *child_target;
   child_options.append_entry = [target = child_append_target](ava::session::SessionEntry entry) { return target->append(entry); };

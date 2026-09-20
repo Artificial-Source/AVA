@@ -51,6 +51,62 @@ ava::core::Result<ava::http::HttpResponse> SharedFakeTransport::send(ava::http::
   return response;
 }
 
+void BlockingSequenceTransport::State::release_success()
+{
+  {
+    std::lock_guard lock(mutex);
+    release = true;
+  }
+  changed.notify_all();
+}
+
+bool BlockingSequenceTransport::State::wait_for_requests(std::size_t count, std::chrono::milliseconds timeout)
+{
+  std::unique_lock lock(mutex);
+  return changed.wait_for(lock, timeout, [&] { return requests.size() >= count; });
+}
+
+bool BlockingSequenceTransport::State::wait_for_cancel(std::chrono::milliseconds timeout)
+{
+  std::unique_lock lock(mutex);
+  return changed.wait_for(lock, timeout, [&] { return cancel_observed; });
+}
+
+std::vector<ava::http::HttpRequest> BlockingSequenceTransport::State::requests_snapshot()
+{
+  std::lock_guard lock(mutex);
+  return requests;
+}
+
+BlockingSequenceTransport::BlockingSequenceTransport(std::shared_ptr<State> state, std::vector<ava::http::HttpResponse> responses)
+    : state_(std::move(state)), responses_(std::move(responses))
+{
+}
+
+ava::core::Result<ava::http::HttpResponse> BlockingSequenceTransport::send(ava::http::HttpRequest const& request)
+{
+  return send(request, nullptr);
+}
+
+ava::core::Result<ava::http::HttpResponse> BlockingSequenceTransport::send(ava::http::HttpRequest const& request, CancelCallback cancel_requested)
+{
+  std::unique_lock lock(state_->mutex);
+  auto const index = state_->requests.size();
+  state_->requests.push_back(request);
+  state_->changed.notify_all();
+  while (index == state_->blocked_request_index && !state_->release && !(cancel_requested && cancel_requested()))
+    state_->changed.wait_for(lock, std::chrono::milliseconds(1));
+  if (cancel_requested && cancel_requested())
+  {
+    state_->cancel_observed = true;
+    state_->changed.notify_all();
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+  }
+  if (index >= responses_.size())
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "blocking sequence transport has no response"));
+  return responses_[index];
+}
+
 void BlockingBackgroundTransport::State::release_success()
 {
   {

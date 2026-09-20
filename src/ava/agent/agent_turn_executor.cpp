@@ -142,6 +142,27 @@ ava::core::VoidResult AgentTurnExecutor::initialize_tools()
   return {};
 }
 
+ava::core::VoidResult AgentTurnExecutor::settle_wrap_up_tool_calls(ParsedAssistantTurn const& turn, PendingCommittedToolResults& pending_results)
+{
+  for (auto const& call : turn.tool_calls)
+  {
+    auto assistant_output_entry_id = pending_results.output_binding_for(call);
+    if (!assistant_output_entry_id)
+      return std::unexpected(std::move(assistant_output_entry_id.error()));
+    ToolDispatchResult rejected{
+        .call_id = call.id,
+        .name = call.name,
+        .success = false,
+        .result_text =
+            "{\"ok\":false,\"error\":{\"code\":\"child_tool_limit_reached\",\"message\":\"Tool calls are disabled during the final child summary.\"}}"};
+    auto appended = session_.append_tool_result(rejected, *assistant_output_entry_id);
+    pending_results.mark_result_durable(call, appended);
+    if (!appended)
+      return std::unexpected(std::move(appended.error()));
+  }
+  return {};
+}
+
 ava::core::Result<AgentLoopResult> AgentTurnExecutor::run()
 {
   auto finalized_ids_result = session_.persisted_provider_tool_call_ids();
@@ -152,7 +173,7 @@ ava::core::Result<AgentLoopResult> AgentTurnExecutor::run()
   if (auto not_canceled = session_.check_canceled("before_turn_start"); !not_canceled)
     return std::unexpected(std::move(not_canceled.error()));
   pre_turn_compacted_ = false;
-  if (options_.compact_context)
+  if (options_.compact_context || options_.child_compaction_binding)
   {
     auto compacted = compact_context("auto");
     if (!compacted)
@@ -190,6 +211,21 @@ ava::core::Result<AgentLoopResult> AgentTurnExecutor::run()
     if (auto persisted = persist_assistant_turn(*provider_turn, pending_tool_results); !persisted)
       return std::unexpected(std::move(persisted.error()));
 
+    if (finalizing_after_tool_limit_)
+    {
+      if (!turn.tool_calls.empty())
+      {
+        if (auto settled = settle_wrap_up_tool_calls(turn, pending_tool_results); !settled)
+          return std::unexpected(std::move(settled.error()));
+      }
+      result_.final_text = turn.text;
+      result_.tool_iterations = tool_iterations_;
+      if (auto phase = publish_phase(RunPhase::Completing); !phase)
+        return std::unexpected(std::move(phase.error()));
+      result_.outcome = ava::core::RuntimeTerminalOutcome::MaxTurnRequests;
+      return result_;
+    }
+
     if (turn.tool_calls.empty())
     {
       result_.final_text = turn.text;
@@ -224,10 +260,23 @@ ava::core::Result<AgentLoopResult> AgentTurnExecutor::run()
       result_.tool_iterations = tool_iterations_;
       if (tool_iterations_ >= options_.max_tool_iterations)
       {
-        if (auto phase = publish_phase(RunPhase::Completing); !phase)
-          return std::unexpected(std::move(phase.error()));
-        result_.outcome = ava::core::RuntimeTerminalOutcome::MaxTurnRequests;
-        return result_;
+        if (options_.child_execution)
+        {
+          if (auto appended = append_active_turn_user_message(
+                  "The child tool-round limit has been reached. Do not call tools. Return one concise final summary of findings and unfinished work.", {});
+              !appended)
+          {
+            return std::unexpected(std::move(appended.error()));
+          }
+          finalizing_after_tool_limit_ = true;
+        }
+        else
+        {
+          if (auto phase = publish_phase(RunPhase::Completing); !phase)
+            return std::unexpected(std::move(phase.error()));
+          result_.outcome = ava::core::RuntimeTerminalOutcome::MaxTurnRequests;
+          return result_;
+        }
       }
       if (auto phase = publish_phase(RunPhase::AwaitingProvider); !phase)
         return std::unexpected(std::move(phase.error()));
@@ -244,10 +293,23 @@ ava::core::Result<AgentLoopResult> AgentTurnExecutor::run()
     result_.tool_iterations = tool_iterations_;
     if (tool_iterations_ >= options_.max_tool_iterations)
     {
-      if (auto phase = publish_phase(RunPhase::Completing); !phase)
-        return std::unexpected(std::move(phase.error()));
-      result_.outcome = ava::core::RuntimeTerminalOutcome::MaxTurnRequests;
-      return result_;
+      if (options_.child_execution)
+      {
+        if (auto appended = append_active_turn_user_message(
+                "The child tool-round limit has been reached. Do not call tools. Return one concise final summary of findings and unfinished work.", {});
+            !appended)
+        {
+          return std::unexpected(std::move(appended.error()));
+        }
+        finalizing_after_tool_limit_ = true;
+      }
+      else
+      {
+        if (auto phase = publish_phase(RunPhase::Completing); !phase)
+          return std::unexpected(std::move(phase.error()));
+        result_.outcome = ava::core::RuntimeTerminalOutcome::MaxTurnRequests;
+        return result_;
+      }
     }
     if (auto phase = publish_phase(RunPhase::AwaitingProvider); !phase)
       return std::unexpected(std::move(phase.error()));

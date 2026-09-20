@@ -145,7 +145,7 @@ ava::core::Result<ProviderTurn> AgentTurnExecutor::request_provider_turn()
     {
       skip_auto_compaction_after_overflow_retry_ = false;
     }
-    else if (options_.compact_context && result_.provider_iterations == 0 && !pre_turn_compacted_)
+    else if (options_.child_compaction_binding || (options_.compact_context && result_.provider_iterations == 0 && !pre_turn_compacted_))
     {
       auto compacted = compact_context("auto");
       if (!compacted)
@@ -162,15 +162,23 @@ ava::core::Result<ProviderTurn> AgentTurnExecutor::request_provider_turn()
     auto messages = build_messages();
     if (!messages)
       return std::unexpected(messages.error());
-    auto const tool_schemas = options_.model.supports_tools ? dispatcher.registered_tool_schemas_json() : std::vector<std::string>{};
+    auto const tool_schemas =
+        options_.model.supports_tools && !finalizing_after_tool_limit_ ? dispatcher.registered_tool_schemas_json() : std::vector<std::string>{};
+    auto max_output_tokens = options_.model.max_output_tokens;
+    auto reasoning = options_.model.reasoning;
+    if (finalizing_after_tool_limit_)
+    {
+      max_output_tokens = std::min<long long>(max_output_tokens.value_or(2048), 2048);
+      reasoning = std::nullopt;
+    }
     ava::provider::ProviderRequest provider_request{.provider_id = options_.model.provider_id,
                                                     .model_id = options_.model.model_id,
                                                     .system_prompt = options_.model.system_prompt,
                                                     .messages = messages->messages,
                                                     .tools_json = tool_schemas,
                                                     .stream = options_.model.stream && options_.model.supports_streaming,
-                                                    .max_output_tokens = options_.model.max_output_tokens,
-                                                    .reasoning = options_.model.reasoning,
+                                                    .max_output_tokens = max_output_tokens,
+                                                    .reasoning = reasoning,
                                                     .compatibility_quirks = options_.model.compatibility_quirks};
     bool const model_supports_images =
         std::find(options_.model.input_modalities.begin(), options_.model.input_modalities.end(), "image") != options_.model.input_modalities.end();

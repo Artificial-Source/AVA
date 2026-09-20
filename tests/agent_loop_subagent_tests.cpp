@@ -14,6 +14,7 @@
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <expected>
@@ -29,6 +30,7 @@
 #include <ranges>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -70,8 +72,7 @@ void test_agent_loop_private_task_launch_follows_public_running_and_stays_privat
       ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "parent-private-launch"});
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   ava::tests::FakeTransport transport(
-      {sse_response(tool_call_sse("call_private_launch", "task",
-                                  R"({"description":"private launch","prompt":"return child","subagent_type":"general"})") +
+      {sse_response(tool_call_sse("call_private_launch", "task", R"({"description":"private launch","prompt":"return child","subagent_type":"general"})") +
                     "data: [DONE]\n\n"),
        sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child done\"}\n\ndata: [DONE]\n\n"),
        sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent done\"}\n\ndata: [DONE]\n\n")});
@@ -83,17 +84,19 @@ void test_agent_loop_private_task_launch_follows_public_running_and_stays_privat
       .mode = ava::agent::Mode::Build,
       .model = agent_loop_test::model_invocation_options(),
       .access_token = "token",
-      .on_tool_event = [&order](ava::agent::ToolTimelineEntry const& entry) {
-        if (entry.status == ava::agent::ToolTimelineStatus::Running)
-          order.emplace_back("public_running");
-      },
+      .on_tool_event =
+          [&order](ava::agent::ToolTimelineEntry const& entry) {
+            if (entry.status == ava::agent::ToolTimelineStatus::Running)
+              order.emplace_back("public_running");
+          },
       .subagent_launch = {.display = display,
                           .request_id = "request-private",
                           .correlation_id = "correlation-private",
-                          .sink = [&order, &launches](ava::agent::SubagentLaunchNotification const& launch) {
-                            order.emplace_back("private_launch");
-                            launches.push_back(launch);
-                          }},
+                          .sink =
+                              [&order, &launches](ava::agent::SubagentLaunchNotification const& launch) {
+                                order.emplace_back("private_launch");
+                                launches.push_back(launch);
+                              }},
       .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
         return ava::permissions::PermissionResolution::Allow;
       },
@@ -107,8 +110,8 @@ void test_agent_loop_private_task_launch_follows_public_running_and_stays_privat
   bool session_private = entries.has_value();
   if (entries)
     for (auto const& entry : *entries)
-      session_private = session_private && entry.data_json.find("MODEL_SENTINEL_PRIVATE") == std::string::npos &&
-                        entry.data_json.find("LEVEL_SENTINEL") == std::string::npos;
+      session_private =
+          session_private && entry.data_json.find("MODEL_SENTINEL_PRIVATE") == std::string::npos && entry.data_json.find("LEVEL_SENTINEL") == std::string::npos;
   bool timeline_private = result.has_value();
   if (result)
     for (auto const& entry : result->tool_timeline)
@@ -254,6 +257,195 @@ void test_agent_loop_task_subagent_runs_child_session()
   }
   expect(trace.valid && starts.size() == 2 && starts == terminals && child_parent_correlation,
          "observed foreground task has separate parent/child lifecycles, fresh child session IDs, and typed parent correlation");
+}
+
+void test_agent_loop_task_subagent_limit_precedence_exceeds_parent_budget()
+{
+  auto const root = create_empty_root("agent-task-child-limit-precedence");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+
+  auto run_case = [&](std::string const& session_id, std::optional<std::size_t> task_override, std::size_t expected_rounds) {
+    ava::session::SessionStore store(ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = session_id});
+    std::string task_arguments = R"({"description":"exercise child budget","prompt":"keep using glob","subagent_type":"general"})";
+    if (task_override)
+      task_arguments.insert(task_arguments.size() - 1, ",\"max_tool_iterations\":" + std::to_string(*task_override));
+
+    std::vector<ava::http::HttpResponse> responses;
+    responses.push_back(sse_response(tool_call_sse("call_task", "task", task_arguments) + "data: [DONE]\n\n"));
+    for (std::size_t index = 0; index < expected_rounds; ++index)
+      responses.push_back(sse_response(tool_call_sse("call_glob_" + std::to_string(index), "glob", R"({"pattern":"*"})") + "data: [DONE]\n\n"));
+    responses.push_back(sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"bounded child wrap-up\"}\n\ndata: [DONE]\n\n"));
+    ava::tests::FakeTransport transport(std::move(responses));
+
+    auto definitions = ava::agent::builtin_subagents();
+    for (auto& definition : definitions)
+      if (definition.name == "general")
+        definition.max_tool_iterations = 7;
+    ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+        .workspace_dir = workspace,
+        .mode = ava::agent::Mode::Build,
+        .model = agent_loop_test::model_invocation_options(),
+        .access_token = "token",
+        .max_tool_iterations = 1,
+        .subagents = std::move(definitions),
+        .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+          return ava::permissions::PermissionResolution::Allow;
+        },
+        .append_entry = append_route_for_test(store),
+        .append_batch = append_batch_route_for_test(store),
+        .session_read_authority = read_authority_for_test(store),
+    });
+
+    auto result = loop.run_turn("delegate bounded work", store, provider, transport);
+    bool const tool_free_wrap = transport.requests().size() == expected_rounds + 2 &&
+                                transport.requests().back().body.find("\"tools\":[]") != std::string::npos &&
+                                transport.requests().back().body.find("Do not call tools") != std::string::npos;
+    auto entries = store.load();
+    bool persisted_count = false;
+    if (entries)
+      for (auto const& entry : *entries)
+        persisted_count = persisted_count || (entry.type == ava::session::EntryType::ToolResult &&
+                                              entry.data_json.find("\\\"tool_iterations\\\":" + std::to_string(expected_rounds)) != std::string::npos);
+    return result && result->outcome == ava::core::RuntimeTerminalOutcome::MaxTurnRequests && result->tool_iterations == 1 && tool_free_wrap && persisted_count;
+  };
+
+  expect(run_case("parent-override-eight", 8, 8),
+         "task max_tool_iterations override permits eight child tool rounds plus one tool-free wrap-up while parent maximum remains one");
+  expect(run_case("parent-definition-seven", std::nullopt, 7),
+         "subagent definition max_tool_iterations is the default when the task omits an override and is independent of the parent budget");
+}
+
+void test_agent_loop_task_spawned_child_compaction_isolated_and_resumable()
+{
+  auto const root = create_empty_root("agent-task-child-compaction-wiring");
+  auto const workspace = root / "workspace";
+  auto const session_root = root / "sessions";
+  std::filesystem::create_directories(workspace);
+  {
+    std::ofstream large(workspace / "large.txt", std::ios::binary | std::ios::trunc);
+    large << std::string(8192, 'x');
+  }
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::session::CompactionConfig config;
+  config.auto_threshold_tokens = 500;
+  config.auto_threshold_tokens_explicit = true;
+  config.keep_recent_tokens = 50;
+  config.provider_id = "openai";
+  config.model_id = "gpt-5.5";
+  int parent_compactor_calls = 0;
+  ava::session::SessionStore parent(ava::session::SessionStoreOptions{.root_dir = session_root, .workspace_dir = workspace, .session_id = "compaction-parent"});
+  ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .mode = ava::agent::Mode::Build,
+      .model = agent_loop_test::model_invocation_options(),
+      .access_token = "token",
+      .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        return ava::permissions::PermissionResolution::Allow;
+      },
+      .compact_context = [&parent_compactor_calls](ava::session::SessionReadAuthority, std::string_view,
+                                                   std::vector<std::string> const&) -> ava::core::Result<bool> {
+        ++parent_compactor_calls;
+        return false;
+      },
+      .child_compaction_blueprint = ava::agent::ChildContextCompactionBlueprint{.config = config, .context_window_tokens = 4096},
+      .append_entry = append_route_for_test(parent),
+      .append_batch = append_batch_route_for_test(parent),
+      .session_read_authority = read_authority_for_test(parent),
+  });
+  auto const read_call = tool_call_sse("call_large_read", "read_file", R"({"path":"large.txt"})") + "data: [DONE]\n\n";
+  ava::tests::FakeTransport first_transport(
+      {sse_response(tool_call_sse("call_compacting_task", "task",
+                                  R"({"description":"compact child","prompt":"read the large file","subagent_type":"general","max_tool_iterations":1})") +
+                    "data: [DONE]\n\n"),
+       sse_response(read_call),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"# Goal\\nPreserve child findings CHECKPOINT_SENTINEL\\n# Constraints / "
+                    "Preferences\\nNone\\n# Decisions\\nNone\\n# Files Read or Modified\\nlarge.txt\\n# Unresolved Tasks\\nWrap up\\n# Next "
+                    "Steps\\nReport\"}\n\ndata: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child wrap after one tool\"}\n\ndata: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent received compacted child\"}\n\ndata: [DONE]\n\n")});
+  auto first_result = loop.run_turn("delegate compacting child", parent, provider, first_transport);
+
+  auto sessions = ava::session::SessionStore::list_sessions(workspace, session_root);
+  std::optional<std::string> child_id;
+  if (sessions)
+    for (auto const& summary : *sessions)
+      if (summary.session_id != parent.session_id())
+        child_id = summary.session_id;
+  auto child_store = child_id
+                         ? ava::session::SessionStore::open(workspace, *child_id, session_root)
+                         : ava::core::Result<ava::session::SessionStore>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing child")));
+  auto child_entries =
+      child_store
+          ? child_store->load()
+          : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing child")));
+  auto parent_entries = parent.load();
+  auto const child_checkpoints =
+      child_entries ? std::ranges::count_if(*child_entries, [](auto const& entry) { return entry.type == ava::session::EntryType::Compaction; }) : 0;
+  auto const parent_checkpoints =
+      parent_entries ? std::ranges::count_if(*parent_entries, [](auto const& entry) { return entry.type == ava::session::EntryType::Compaction; }) : 0;
+  bool const compacted_request_shape = first_transport.requests().size() == 5 && first_transport.requests()[2].body.find("large.txt") != std::string::npos &&
+                                       first_transport.requests()[3].body.find("CHECKPOINT_SENTINEL") != std::string::npos &&
+                                       first_transport.requests()[3].body.find("\"tools\":[]") != std::string::npos;
+  expect(first_result && first_result->final_text == "parent received compacted child" && child_checkpoints == 1 && parent_checkpoints == 0 &&
+             parent_compactor_calls == 2 && compacted_request_shape,
+         "real task spawn binds automatic compaction to the child only, clears the parent callback, and preserves the one-round tool ceiling through wrap-up");
+
+  if (child_id)
+  {
+    auto const resume_json =
+        std::string(R"({"description":"resume compacted child","prompt":"continue after checkpoint","subagent_type":"general","task_id":")") + *child_id +
+        "\"}";
+    ava::tests::FakeTransport resume_transport(
+        {sse_response(tool_call_sse("call_resume_compacted", "task", resume_json) + "data: [DONE]\n\n"),
+         sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"resumed from child checkpoint\"}\n\ndata: [DONE]\n\n"),
+         sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent saw resumed child\"}\n\ndata: [DONE]\n\n")});
+    auto resumed = loop.run_turn("resume compacted child", parent, provider, resume_transport);
+    expect(resumed && resume_transport.requests().size() == 3 && resume_transport.requests()[1].body.find("CHECKPOINT_SENTINEL") != std::string::npos &&
+               resume_transport.requests()[1].body.find("continue after checkpoint") != std::string::npos,
+           "task_id resume restores the child-owned compaction checkpoint into the next child provider request");
+  }
+
+  ava::session::CompactionConfig disabled = config;
+  disabled.auto_threshold_tokens = 0;
+  disabled.auto_threshold_tokens_explicit = true;
+  ava::session::SessionStore disabled_parent(
+      ava::session::SessionStoreOptions{.root_dir = session_root, .workspace_dir = workspace, .session_id = "disabled-compaction-parent"});
+  ava::tests::FakeTransport disabled_transport(
+      {sse_response(tool_call_sse(
+                        "call_disabled_task", "task",
+                        R"({"description":"disabled compaction","prompt":"read large without compaction","subagent_type":"general","max_tool_iterations":2})") +
+                    "data: [DONE]\n\n"),
+       sse_response(tool_call_sse("call_disabled_read", "read_file", R"({"path":"large.txt"})") + "data: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child without checkpoint\"}\n\ndata: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent disabled done\"}\n\ndata: [DONE]\n\n")});
+  ava::agent::AgentLoop disabled_loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .mode = ava::agent::Mode::Build,
+      .model = agent_loop_test::model_invocation_options(),
+      .access_token = "token",
+      .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        return ava::permissions::PermissionResolution::Allow;
+      },
+      .child_compaction_blueprint = ava::agent::ChildContextCompactionBlueprint{.config = disabled, .context_window_tokens = 4096},
+      .append_entry = append_route_for_test(disabled_parent),
+      .append_batch = append_batch_route_for_test(disabled_parent),
+      .session_read_authority = read_authority_for_test(disabled_parent),
+  });
+  auto disabled_result = disabled_loop.run_turn("delegate without compaction", disabled_parent, provider, disabled_transport);
+  auto all_sessions = ava::session::SessionStore::list_sessions(workspace, session_root);
+  bool disabled_child_has_checkpoint = false;
+  if (all_sessions)
+    for (auto const& summary : *all_sessions)
+      if (summary.session_id != parent.session_id() && summary.session_id != disabled_parent.session_id() && (!child_id || summary.session_id != *child_id))
+        if (auto store = ava::session::SessionStore::open(workspace, summary.session_id, session_root))
+          if (auto entries = store->load())
+            disabled_child_has_checkpoint = disabled_child_has_checkpoint ||
+                                            std::ranges::any_of(*entries, [](auto const& entry) { return entry.type == ava::session::EntryType::Compaction; });
+  expect(
+      disabled_result && disabled_result->final_text == "parent disabled done" && disabled_transport.requests().size() == 4 && !disabled_child_has_checkpoint,
+      "explicit child auto_threshold_tokens zero disables task-spawned child summarization and checkpoint writes");
 }
 
 void test_agent_loop_foreground_task_child_uses_parent_permission_resolver()
@@ -877,6 +1069,7 @@ void test_subagent_config_loads_project_definitions()
             "name: reviewer\n"
             "description: Review implementation details.\n"
             "tools: read-only\n"
+            "max_tool_iterations: 14\n"
             "---\n"
             "Inspect files and return concise review findings.";
   }
@@ -897,6 +1090,16 @@ void test_subagent_config_loads_project_definitions()
             "---\n"
             "PROJECT PRIMARY INSTRUCTIONS";
   }
+  std::array<std::string_view, 5> const invalid_limits{"true", "1.5", "0", "-1", "18446744073709551616"};
+  for (std::size_t index = 0; index < invalid_limits.size(); ++index)
+  {
+    std::ofstream file(agent_dir / ("invalid-limit-" + std::to_string(index) + ".md"), std::ios::binary | std::ios::trunc);
+    file << "---\nname: invalid-limit-" << index << "\ndescription: Invalid limit.\nmax_tool_iterations: " << invalid_limits[index] << "\n---\nINVALID";
+  }
+  {
+    std::ofstream file(agent_dir / "invalid-limit-duplicate.md", std::ios::binary | std::ios::trunc);
+    file << "---\nname: invalid-limit-duplicate\ndescription: Invalid duplicate limit.\nmax_tool_iterations: 2\nmax_tool_iterations: 3\n---\nINVALID";
+  }
   {
     std::ofstream file(agent_dir / "primary-only.md", std::ios::binary | std::ios::trunc);
     file << "---\n"
@@ -911,7 +1114,8 @@ void test_subagent_config_loads_project_definitions()
   auto const* reviewer = ava::agent::find_subagent(loaded.subagents, "reviewer");
   auto const* general = ava::agent::find_subagent(loaded.subagents, "general");
   expect(reviewer && reviewer->description == "Review implementation details." && reviewer->tool_preset == ava::agent::SubagentToolPreset::ReadOnly &&
-             reviewer->system_prompt.find("Inspect files") != std::string::npos && reviewer->provenance == ava::agent::SubagentDefinitionProvenance::Project,
+             reviewer->max_tool_iterations == 14 && reviewer->system_prompt.find("Inspect files") != std::string::npos &&
+             reviewer->provenance == ava::agent::SubagentDefinitionProvenance::Project,
          "subagent config loads project-defined read-only subagents with explicit project provenance");
   expect(general && general->provenance == ava::agent::SubagentDefinitionProvenance::Builtin,
          "subagent config keeps builtin subagents from project override with explicit builtin provenance");
@@ -931,6 +1135,11 @@ void test_subagent_config_loads_project_definitions()
                diagnostic.str().find("PROJECT PRIMARY") == std::string::npos && diagnostic.str().find(agent_dir.string()) == std::string::npos,
            "primary-definition diagnostics expose typed provenance without names, prompt content, or source paths");
   }
+  bool invalid_limits_rejected = true;
+  for (std::size_t index = 0; index < invalid_limits.size(); ++index)
+    invalid_limits_rejected = invalid_limits_rejected && ava::agent::find_subagent(loaded.subagents, "invalid-limit-" + std::to_string(index)) == nullptr;
+  invalid_limits_rejected = invalid_limits_rejected && ava::agent::find_subagent(loaded.subagents, "invalid-limit-duplicate") == nullptr;
+  expect(invalid_limits_rejected, "agent definitions strictly reject boolean, fractional, zero, negative, overflowing, and duplicate tool limits");
   expect(ava::agent::find_subagent(loaded.subagents, "coder") != nullptr, "mode-all definitions are task-subagent visible");
   expect(ava::agent::find_subagent(loaded.subagents, "primary-only") == nullptr, "primary-mode definitions are not task-subagent visible");
   expect(!ava::agent::resolve_primary_agent(loaded, "reviewer"), "subagent-mode definitions are not primary selectable");

@@ -3,10 +3,12 @@
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_task.h"
 #include "ava/core/json.h"
+#include "ava/core/strict_json.h"
 
 #include <optional>
 #include <string>
 #include <string_view>
+#include <nlohmann/json.hpp>
 
 namespace ava::agent {
 namespace {
@@ -18,6 +20,9 @@ constexpr std::size_t kMaxTaskPromptBytes = 64 * 1024;
 constexpr std::size_t kMaxTaskSubagentTypeBytes = 128;
 constexpr std::size_t kMaxTaskIdBytes = 256;
 constexpr std::size_t kMaxTaskCommandBytes = 1024;
+constexpr std::size_t kMaxTaskToolIterations = 1000;
+
+using Json = nlohmann::json;
 
 std::string xml_escape(std::string_view value)
 {
@@ -76,6 +81,53 @@ ava::core::Result<std::optional<std::string>> optional_task_string_arg(std::stri
   return std::optional<std::string>{std::move(*value)};
 }
 
+bool is_allowed_task_field(std::string_view key)
+{
+  return key == "description" || key == "prompt" || key == "subagent_type" || key == "task_id" || key == "command" || key == "mode" || key == "background" ||
+         key == "max_tool_iterations";
+}
+
+ava::core::Result<std::optional<std::size_t>> task_max_tool_iterations(std::string_view arguments, std::string_view tool_name)
+{
+  auto const strict = ava::core::validate_strict_json(arguments, ava::core::json::kMaxNestingDepth);
+  if (strict == ava::core::StrictJsonStatus::DuplicateObjectKey)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task arguments contain duplicate member names"));
+  if (strict != ava::core::StrictJsonStatus::Valid)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task arguments must be one valid JSON object"));
+  auto root = Json::parse(arguments.begin(), arguments.end(), nullptr, false, true);
+  if (root.is_discarded() || !root.is_object())
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task arguments must be one valid JSON object"));
+  for (auto const& [key, _] : root.items())
+  {
+    if (!is_allowed_task_field(key))
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task arguments contain an unknown field");
+      error.with_context("tool", std::string(tool_name)).with_context("argument", key);
+      return std::unexpected(std::move(error));
+    }
+  }
+  if (!root.contains("max_tool_iterations"))
+    return std::optional<std::size_t>{};
+  if (!root["max_tool_iterations"].is_number_integer())
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "max_tool_iterations must be an integer from 1 through 1000"));
+  }
+  long long value = 0;
+  try
+  {
+    value = root["max_tool_iterations"].get<long long>();
+  }
+  catch (...)
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "max_tool_iterations must be an integer from 1 through 1000"));
+  }
+  if (value < 1 || value > static_cast<long long>(kMaxTaskToolIterations))
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "max_tool_iterations must be an integer from 1 through 1000"));
+  }
+  return std::optional<std::size_t>{static_cast<std::size_t>(value)};
+}
+
 ava::core::Result<bool> task_background_mode(std::string_view arguments, std::string_view tool_name)
 {
   auto background = optional_bool_arg(arguments, "background", false, tool_name);
@@ -129,9 +181,9 @@ void publish_subagent_launch_best_effort(ToolDispatchServices const& services, s
   try
   {
     services.subagent_launch.sink(SubagentLaunchNotification{.tool_call_id = std::string(tool_call_id),
-                                                              .request_id = services.subagent_launch.request_id,
-                                                              .correlation_id = services.subagent_launch.correlation_id,
-                                                              .display = services.subagent_launch.display});
+                                                             .request_id = services.subagent_launch.request_id,
+                                                             .correlation_id = services.subagent_launch.correlation_id,
+                                                             .display = services.subagent_launch.display});
   }
   catch (...)
   {
@@ -143,6 +195,9 @@ void publish_subagent_launch_best_effort(ToolDispatchServices const& services, s
 
 ToolDispatchResult task_result(ava::tools::ToolContext const& context, ToolDispatchServices const& services, ProviderToolCall const& call)
 {
+  auto max_tool_iterations = task_max_tool_iterations(call.arguments_json, call.name);
+  if (!max_tool_iterations)
+    return tool_error_result(call, max_tool_iterations.error());
   auto description = required_safe_string_arg(call.arguments_json, "description", call.name);
   if (!description)
     return tool_error_result(call, description.error());
@@ -195,14 +250,16 @@ ToolDispatchResult task_result(ava::tools::ToolContext const& context, ToolDispa
     return tool_error_result(call, permission.error());
   }
 
-  auto run = services.task_subagent_runner(TaskSubagentRequest{.description = *description,
-                                                               .prompt = *prompt,
-                                                               .subagent_type = *subagent_type,
-                                                               .subagent_system_prompt = subagent->system_prompt,
-                                                               .tool_preset = subagent->tool_preset,
-                                                               .task_id = *task_id,
-                                                               .command = command->value_or(""),
-                                                               .background = *background});
+  auto run = services.task_subagent_runner(
+      TaskSubagentRequest{.description = *description,
+                          .prompt = *prompt,
+                          .subagent_type = *subagent_type,
+                          .subagent_system_prompt = subagent->system_prompt,
+                          .tool_preset = subagent->tool_preset,
+                          .max_tool_iterations = max_tool_iterations->has_value() ? *max_tool_iterations : subagent->max_tool_iterations,
+                          .task_id = *task_id,
+                          .command = command->value_or(""),
+                          .background = *background});
   if (!run)
     return tool_error_result(call, run.error());
 

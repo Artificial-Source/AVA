@@ -423,6 +423,17 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
     };
   }
 
+  auto child_compaction_config = ava::session::load_compaction_config(paths_copy);
+  if (!child_compaction_config)
+    return fail_run(std::move(child_compaction_config.error()));
+  child_compaction_config->provider_id = provider_id_copy;
+  child_compaction_config->model_id = [&] {
+    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    return session_r->model().model_id;
+  }();
+  child_compaction_config->provider_explicit = false;
+  child_compaction_config->model_explicit = false;
+
   std::optional<ava::agent::AgentLoop> loop;
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
@@ -533,6 +544,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
           return runtime::compact_runtime_context(unlocked_session, std::move(read_authority), trigger, provider, *runtime_transport, runtime_options,
                                                   replayed_user_messages);
         },
+        .child_compaction_blueprint =
+            ava::agent::ChildContextCompactionBlueprint{.config = *child_compaction_config, .context_window_tokens = session_r->model().context_window_tokens},
         .background_provider_factory = [&provider_catalog = provider_catalog_copy, &paths = paths_copy,
                                         &provider_id = provider_id_copy]() -> ava::core::Result<std::unique_ptr<ava::provider::Provider>> {
           auto ensured = ava::provider::ensure_provider_catalog(provider_catalog, paths);

@@ -26,6 +26,9 @@ constexpr std::size_t kMaxDisplayTitleBytes = 256;
 constexpr std::size_t kMaxDisplaySubagentTypeBytes = 128;
 constexpr std::size_t kMaxAccountingValue = 1024U * 1024U;
 constexpr std::size_t kMaxIdentityGenerationAttempts = 8;
+constexpr std::size_t kMaxSteeringMessages = 16;
+constexpr std::size_t kMaxSteeringMessageBytes = 16U * 1024U;
+constexpr std::size_t kMaxSteeringQueueBytes = 64U * 1024U;
 constexpr std::string_view kPublicationCommitStateContext = "subagent_publication_commit_state";
 
 ava::core::Error coordinator_maintenance_error(std::string_view conflict)
@@ -258,6 +261,56 @@ BackgroundJobCompletion normalize_completion(std::string const& job_id, Backgrou
 
 }  // namespace
 
+std::shared_ptr<SubagentSteeringQueue> SubagentSteeringQueue::create()
+{
+  return std::make_shared<SubagentSteeringQueue>();
+}
+
+ava::core::VoidResult SubagentSteeringQueue::enqueue(std::string message)
+{
+  if (message.empty() || message.size() > kMaxSteeringMessageBytes || !ava::core::json::is_valid_utf8(message) ||
+      has_forbidden_text_control(message))
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "steering message is empty, too long, or invalid");
+    error.with_context("max_bytes", std::to_string(kMaxSteeringMessageBytes));
+    return std::unexpected(std::move(error));
+  }
+  std::lock_guard lock(mutex_);
+  if (closed_)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "subagent job no longer accepts steering"));
+  if (messages_.size() >= kMaxSteeringMessages || message.size() > kMaxSteeringQueueBytes - std::min(queued_bytes_, kMaxSteeringQueueBytes))
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::Tool, "subagent steering queue is full");
+    error.with_context("job_error_code", "steering_queue_full");
+    return std::unexpected(std::move(error));
+  }
+  queued_bytes_ += message.size();
+  messages_.push_back(std::move(message));
+  return {};
+}
+
+ava::core::Result<std::vector<std::string>> SubagentSteeringQueue::take()
+{
+  std::lock_guard lock(mutex_);
+  std::vector<std::string> result;
+  result.reserve(messages_.size());
+  while (!messages_.empty())
+  {
+    result.push_back(std::move(messages_.front()));
+    messages_.pop_front();
+  }
+  queued_bytes_ = 0;
+  return result;
+}
+
+void SubagentSteeringQueue::close()
+{
+  std::lock_guard lock(mutex_);
+  closed_ = true;
+  messages_.clear();
+  queued_bytes_ = 0;
+}
+
 SubagentInteractionGate::SubagentInteractionGate(SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver,
                                                  QuestionResolver question_resolver)
     : mode_(mode),
@@ -392,6 +445,7 @@ struct SubagentCoordinator::JobState
   std::condition_variable changed;
   std::shared_ptr<SubagentInteractionGate> interaction_gate = nullptr;
   std::shared_ptr<SubagentLiveInspectionSource> inspection_source = nullptr;
+  std::shared_ptr<SubagentSteeringQueue> steering_queue = nullptr;
   // Latest successfully published path-free frame + the fingerprint it was
   // projected from. Survives freeze_pending so racing inspect never sees a gap.
   std::shared_ptr<SubagentInspectorFrame const> published_inspection = nullptr;
@@ -578,6 +632,7 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::start(Sub
   auto const mode = request.mode;
   auto options = std::move(request.job);
   auto launch_display = std::move(request.launch_display);
+  auto steering_queue = std::move(request.steering_queue);
   if (!worker)
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "background job worker is unavailable");
@@ -690,6 +745,7 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::start(Sub
                            .display_subagent_type = make_display_field(options.subagent_type, kMaxDisplaySubagentTypeBytes),
                            .launch_display = launch_display};
     candidate->interaction_gate = interaction_gate;
+    candidate->steering_queue = steering_queue;
     // Store the source before registry start/publication so inspect can observe
     // the child as soon as the job becomes visible.
     candidate->inspection_source = inspection_source;
@@ -878,6 +934,8 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
       state->snapshot.delivery_pending_at = now;
       state->terminal_notification_pending = true;
     }
+    if (state->steering_queue)
+      state->steering_queue->close();
     // Terminal inspection handoff: move the source local, bump source epoch so
     // late live publishes cannot store, preserve the latest successful live
     // frame through freeze_pending, and never reacquire by path.
@@ -1097,6 +1155,29 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::cancel(st
     }
   }
   std::lock_guard state_lock(state->mutex);
+  return public_snapshot_locked(*state);
+}
+
+ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::steer(std::string_view parent_session_id, std::string_view job_id,
+                                                                               std::string message)
+{
+  std::shared_ptr<JobState> state;
+  {
+    std::lock_guard lock(mutex_);
+    state = find_owned_locked(parent_session_id, job_id);
+  }
+  if (!state)
+    return std::unexpected(not_found(job_id));
+
+  std::lock_guard state_lock(state->mutex);
+  if (terminal(state->snapshot.execution))
+    return std::unexpected(invalid_transition("cannot steer a terminal subagent job", job_id));
+  if (state->snapshot.cancel_requested)
+    return std::unexpected(invalid_transition("cannot steer a subagent after cancellation was requested", job_id));
+  if (state->snapshot.execution != SubagentExecutionState::Running || !state->steering_queue)
+    return std::unexpected(invalid_transition("subagent job does not accept steering", job_id));
+  if (auto queued = state->steering_queue->enqueue(std::move(message)); !queued)
+    return std::unexpected(std::move(queued.error()));
   return public_snapshot_locked(*state);
 }
 
@@ -1497,6 +1578,8 @@ void SubagentCoordinator::shutdown()
         state->source_epoch = 1;
       state->inspection_source = nullptr;
       state->freeze_pending = false;
+      if (state->steering_queue)
+        state->steering_queue->close();
       if (!terminal(state->snapshot.execution))
       {
         state->snapshot.cancel_requested = true;

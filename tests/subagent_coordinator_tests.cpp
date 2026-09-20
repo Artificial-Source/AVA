@@ -1519,6 +1519,42 @@ void test_parent_maintenance_serializes_start_and_live_jobs()
   expect(after && after->active(), "parent maintenance becomes available after the running job reaches terminal state");
 }
 
+void test_owner_checked_bounded_steering_fifo()
+{
+  auto coordinator = coordinator_with();
+  if (!coordinator)
+    return;
+  auto worker = std::make_shared<BlockingWorker>();
+  auto queue = ava::agent::SubagentSteeringQueue::create();
+  auto started = coordinator->start(
+      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "steer_owner",
+                                                   .mode = ava::agent::SubagentJobMode::Background,
+                                                   .job = {.child_session_id = "steer_child"},
+                                                   .steering_queue = queue},
+      [worker](auto const& context) { return worker->run(context); });
+  expect(started && worker->wait_started(), "steering fixture starts with a child-owned queue");
+  if (!started)
+    return;
+  auto const job_id = started->job.identity.job_id;
+  auto hidden = coordinator->steer("wrong_owner", job_id, "hidden");
+  auto first = coordinator->steer("steer_owner", job_id, "first");
+  auto second = coordinator->steer("steer_owner", job_id, "second");
+  auto drained = queue->take();
+  auto replay = queue->take();
+  bool filled = true;
+  for (std::size_t index = 0; index < 16; ++index)
+    filled = filled && coordinator->steer("steer_owner", job_id, "queued-" + std::to_string(index)).has_value();
+  auto full = coordinator->steer("steer_owner", job_id, "overflow");
+  auto canceled = coordinator->cancel("steer_owner", job_id);
+  auto after_cancel = coordinator->steer("steer_owner", job_id, "too late");
+  auto terminal = coordinator->wait("steer_owner", job_id, std::chrono::seconds(2));
+  auto after_terminal = coordinator->steer("steer_owner", job_id, "terminal");
+  expect(!hidden && hidden.error().category() == ava::core::ErrorCategory::NotFound && first && second && drained &&
+             *drained == std::vector<std::string>({"first", "second"}) && replay && replay->empty() && filled && !full && canceled && !after_cancel &&
+             terminal && terminal->job.execution == ava::agent::SubagentExecutionState::Canceled && !after_terminal,
+         "steering is owner-checked FIFO, drains exactly once, rejects overflow, and closes on cancellation or terminal state");
+}
+
 void test_safe_bounds_attempt_validation_and_shutdown()
 {
   auto coordinator = coordinator_with();
@@ -1580,5 +1616,6 @@ void run_subagent_coordinator_tests()
   test_live_inspection_path_free_refresh_failures();
   test_live_inspection_eviction_and_freeze_failure();
   test_parent_maintenance_serializes_start_and_live_jobs();
+  test_owner_checked_bounded_steering_fifo();
   test_safe_bounds_attempt_validation_and_shutdown();
 }

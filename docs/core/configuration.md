@@ -348,7 +348,7 @@ Optional compaction config file: `$XDG_CONFIG_HOME/ava/compaction.json`.
 
 `/compact` generates a provider-backed summary and records an append-only compaction boundary. Manual, automatic, and context-overflow compaction summarize only the active context at and after the latest valid boundary, then retain the same bounded recent-turn projection. Physical session history is not rewritten.
 
-The summary call uses the active provider and model by default. A `model` override selects that model on the active provider. A `provider` plus `model` selects that exact configured pair, including a cross-provider pair, through the normal registry and credential path. `provider` without `model` is invalid. Explicit selections are revalidated for every compaction and by `/reload compaction`; AVA does not silently fall back.
+The summary call uses the active provider and model by default. A `model` override selects that model on the active provider. A `provider` plus `model` selects that exact configured pair, including a cross-provider pair, through the normal registry and credential path. `provider` without `model` is invalid. Explicit selections are revalidated for every parent-session compaction and by `/reload compaction`; AVA does not silently fall back. Task children snapshot threshold and retention settings at launch but deliberately summarize with the child's active provider/model, so a parent-global compaction model override does not silently change child summary identity.
 
 Automatic compaction defaults to `auto_threshold_percent: 80`, applied to the active conversation model's context window. When that window is unknown, AVA uses a conservative 100,000-token effective window (80,000 tokens at the default percentage). Percent values must be integers from 1 through 95. The legacy absolute `auto_threshold_tokens` remains supported; explicit `0` disables automatic compaction. The percent and token forms cannot appear together.
 
@@ -453,11 +453,12 @@ name: reviewer
 description: Review a focused implementation change.
 mode: all
 tools: read-only
+max_tool_iterations: 14
 ---
 Inspect the requested files and return concise findings with file references.
 ```
 
-`name` defaults to the file stem when omitted and must use letters, digits, `.`, `_`, or `-`. Names are capped at 128 bytes, cannot contain consecutive separators, and cannot end with a separator. `description` is required. `mode: subagent` (the default) is usable only by `task`, `mode: primary` is selectable only by `--agent`, and `mode: all` is available in both catalogs. `tools` accepts inherit/default forms or `read-only`, `read_only`, `readonly`, or `explore`; invalid presets make a definition non-primary-selectable (legacy task definitions retain inherited visibility). `hidden: true`, `yes`, or `1` keeps a task subagent out of the prompt's visible `available_subagents` list while preserving explicit lookup.
+`name` defaults to the file stem when omitted and must use letters, digits, `.`, `_`, or `-`. Names are capped at 128 bytes, cannot contain consecutive separators, and cannot end with a separator. `description` is required. `mode: subagent` (the default) is usable only by `task`, `mode: primary` is selectable only by `--agent`, and `mode: all` is available in both catalogs. `tools` accepts inherit/default forms or `read-only`, `read_only`, `readonly`, or `explore`; invalid presets make a definition non-primary-selectable (legacy task definitions retain inherited visibility). Optional `max_tool_iterations` must appear at most once and be an integer from 1 through 1000. It supplies the task-child default and can be overridden by the model's validated `task.max_tool_iterations`; without either value the child inherits the parent loop's configured limit. `hidden: true`, `yes`, or `1` keeps a task subagent out of the prompt's visible `available_subagents` list while preserving explicit lookup.
 
 For task children, inherit starts from parent visibility and still removes `task`, `job`, and `todowrite`. For a selected primary, inherit leaves startup tool visibility unchanged, including those tools. A read-only primary narrows visibility to AVA's built-in `read_file`, `list_directory`, `glob`, and `grep` set by intersection with `--tools`, `--exclude-tools`, `--no-builtin-tools`, and `--no-tools`; it never grants permission or widens CLI visibility.
 
