@@ -352,8 +352,9 @@ int main(int argc, char** argv)
     static_cast<void>(write_all(STDERR_FILENO, "HTTP/1.1 200 OK\r\nX-Large: "));
     static_cast<void>(write_all(STDERR_FILENO, std::string(65U * 1024U, 'h')));
     static_cast<void>(write_all(STDERR_FILENO, "\r\n\r\n"));
-    write_status(200);
-    return 0;
+    // Keep the child alive until the transport rejects the oversized header;
+    // a natural exit can otherwise win settlement when the pipe holds it all.
+    idle_forever();
   }
   if (url.find("/stream") != std::string::npos)
   {
