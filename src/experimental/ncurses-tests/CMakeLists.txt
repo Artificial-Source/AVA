@@ -1,5 +1,5 @@
 # CURSES_NEED_WIDE was added to 3.10
-cmake_minimum_required(VERSION 3.10...4.3.2)
+cmake_minimum_required(VERSION 3.10...4.4.2)
 
 project(ava-ncurses-tests
         VERSION 0.0
@@ -9,11 +9,6 @@ project(ava-ncurses-tests
 
 set(CURSES_NEED_WIDE TRUE)
 find_package(Curses REQUIRED)
-
-find_library(CURSES_PANELW_LIBRARY
-  NAMES panelw
-  REQUIRED
-)
 
 add_executable(linux02 linux02-screen-resizing.cpp Application.cpp)
 target_include_directories(linux02 PRIVATE ${CURSES_INCLUDE_DIRS})
