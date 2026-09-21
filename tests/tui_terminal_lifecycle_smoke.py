@@ -238,6 +238,51 @@ def require_order(data: bytes, sequences: list[tuple[str, bytes]]) -> None:
         previous = position
 
 
+def cursor_visibility(output: bytes) -> bool | None:
+    """Return the last explicit cursor visibility in accumulated xterm PTY output.
+
+    Shape/blink changes do not affect visibility. Return None when no show/hide
+    sequence was observed; callers must accumulate chunks before checking state.
+    """
+
+    show_at = output.rfind(CURSOR_SHOW)
+    hide_at = output.rfind(CURSOR_HIDE)
+    if show_at < 0 and hide_at < 0:
+        return None
+    return show_at > hide_at
+
+
+def hide_cursor_for_teardown(master_fd: int, process: subprocess.Popen[bytes], label: str) -> bytes:
+    """Open AVA's local model selector and wait for its ncurses-owned hidden cursor.
+
+    Ctrl+L requests an actual UI redraw which calls curs_set(0) inside AVA. Sending
+    a cursor-hide escape into the PTY instead would only feed AVA input, not alter
+    its ncurses state. Leave the selector open for signal-driven teardown.
+    """
+
+    os.write(master_fd, b"\x0c")
+    return read_until(
+        master_fd,
+        process,
+        lambda output: b"Select model" in output and b"Esc close" in output and cursor_visibility(output) is False,
+        f"{label} model selector with hidden cursor",
+    )
+
+
+def require_cursor_restored(before_teardown: bytes, teardown: bytes, label: str) -> None:
+    """Require a visible final cursor, allowing no-op restoration when already visible.
+
+    A hidden pre-teardown cursor still requires a later show. Inspect both phases
+    together so a missing or subsequently reversed restoration cannot pass.
+    """
+
+    if cursor_visibility(before_teardown + teardown) is not True:
+        raise RuntimeError(
+            f"{label} did not leave the cursor visible; "
+            f"before_teardown_visible={cursor_visibility(before_teardown)!r}; teardown={teardown!r}"
+        )
+
+
 def run_case(
     ava_exe: pathlib.Path,
     case_root: pathlib.Path,
@@ -367,9 +412,15 @@ def run_case(
             if MODIFY_OTHER_KEYS_ENABLE not in negotiation:
                 raise RuntimeError("device-attributes response did not enable modifyOtherKeys fallback")
 
+        cursor_setup = b""
         if teardown_method == "ctrl_d":
+            # The idle composer already shows the cursor. Cleanup may be a no-op.
             os.write(master_fd, b"\x04")
         elif teardown_method == "sigterm":
+            # Reuse the existing signal cases to exercise real hidden-to-visible
+            # restoration without another AVA launch. Ctrl+D would only dismiss
+            # this selector, so its normal-exit cases stay on the idle composer.
+            cursor_setup = hide_cursor_for_teardown(master_fd, process, case)
             os.kill(process.pid, signal.SIGTERM)
         else:
             raise RuntimeError(f"unsupported teardown method: {teardown_method}")
@@ -392,7 +443,7 @@ def run_case(
         require_order(teardown, teardown_protocols)
 
         if direct_alacritty:
-            lifecycle = startup + negotiation + teardown
+            lifecycle = startup + negotiation + cursor_setup + teardown
             if (
                 lifecycle.count(KITTY_KEYBOARD_PUSH_FLAGS_5) != 1
                 or lifecycle.count(KITTY_KEYBOARD_PUSH_FLAGS_7) != 1
@@ -403,16 +454,12 @@ def run_case(
         if ALT_SCREEN_ENTER in startup and ALT_SCREEN_EXIT not in teardown:
             raise RuntimeError(f"xterm alternate-screen entry was not paired with exit; teardown={teardown!r}")
         cursor_show_at = teardown.find(CURSOR_SHOW)
-        if cursor_show_at < 0:
-            raise RuntimeError(
-                f"{case} teardown did not explicitly restore the cursor with {CURSOR_SHOW!r}; "
-                f"teardown={teardown!r}"
-            )
+        require_cursor_restored(startup + negotiation + cursor_setup, teardown, case)
         if forced_cursor:
             if teardown.count(CURSOR_STYLE_RESET) != 1:
                 raise RuntimeError(f"{case} did not reset the forced cursor exactly once during teardown; teardown={teardown!r}")
         else:
-            for phase, captured in (("negotiation", negotiation), ("teardown", teardown)):
+            for phase, captured in (("negotiation", negotiation), ("cursor setup", cursor_setup), ("teardown", teardown)):
                 for sequence in CURSOR_STYLE_SEQUENCES:
                     if sequence in captured:
                         raise RuntimeError(

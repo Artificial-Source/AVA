@@ -101,12 +101,12 @@ void Context::initialize(FILE* outfd, FILE* infd)
   if (has_colors())
     default_rendition_ = Rendition{create_color_pair({}, {})};
 
-  // Start keyboard input mode to disambiguate escape codes, most notably to
-  // be able to tell the difference between Enter and cntrl-Enter.
-  keyboard_disambiguation_.start(*this);
-
   // Enable mouse reporting and bracketed paste for the lifetime of this Context.
   mouse_input_.start(*this);
+
+  // Start keyboard input mode to disambiguate escape codes, most notably to
+  // be able to tell the difference between Enter and cntrl-Enter.
+  keyboard_protocols_.start(*this);
 
   // Tell the destructor that initialized was called.
   initialized_ = true;
@@ -116,10 +116,14 @@ Context::~Context()
 {
   if (initialized_)
   {
+    // Stop keyboard protocols before ncurses restores the terminal.
+    keyboard_protocols_.stop();
     // Disable terminal input protocols before ncurses restores the terminal.
     mouse_input_.stop();
     // Restore the cursor to its default value.
     apply_cursor_settings({CursorStyle::Default});
+    // Restore cursor visibility.
+    curs_set(TRUE);
     // Restore mutable palette entries before endwin returns terminal presentation to the invoking process.
     color_palette_.reset();
     bool use_initscr = output_file_ == stdout;
@@ -169,8 +173,8 @@ int Context::try_get_wch()
 {
   wint_t wch = 0;
 
-  // First try if there is still any input buffered on keyboard_disambiguation_.
-  if (AI_UNLIKELY(keyboard_disambiguation_.try_get_wch(&wch)))
+  // First try if there is still any input buffered on keyboard_protocols_.
+  if (AI_UNLIKELY(keyboard_protocols_.try_get_wch(&wch)))
     return static_cast<int>(wch);
 
   // If not, try reading a character directly from the terminal.

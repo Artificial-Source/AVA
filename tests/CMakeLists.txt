@@ -812,6 +812,12 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.model_selector_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
+    NAME ava_tests.terminal_lifecycle_cursor
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tui_terminal_lifecycle_cursor_test.py)
+  set_tests_properties(ava_tests.terminal_lifecycle_cursor PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
     NAME ava_tests.sequencing_wait
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/sequencing_wait_test.py)

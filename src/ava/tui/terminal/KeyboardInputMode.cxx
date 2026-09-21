@@ -12,7 +12,7 @@ namespace ava::tui::terminal {
 namespace {
 
 constexpr std::chrono::milliseconds kKeyboardNegotiationTimeout{50};
-constexpr std::string_view kKittyPushQueryAndDeviceAttributes = "\x1b[>1u\x1b[?u\x1b[c";
+constexpr std::string_view kKittyPushQueryAndDeviceAttributes = "\x1b[>7u\x1b[?u\x1b[c";
 constexpr std::string_view kModifyOtherKeysSetQueryAndDeviceAttributes = "\x1b[>4;2m\x1b[?4m\x1b[c";
 constexpr std::string_view kDisableModifyOtherKeys = "\x1b[>4;0m";
 constexpr std::string_view kPopKittyKeyboard = "\x1b[<u";

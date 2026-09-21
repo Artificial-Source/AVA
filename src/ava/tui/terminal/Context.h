@@ -47,8 +47,8 @@ class Context final
   std::vector<ColorPair> color_pairs_;                          // All registered foreground/background color pairs so far.
   std::unique_ptr<ColorPalette> color_palette_;                 // The live color palette of stdscr if the terminal isn't direct-color.
   CursorState cursor_state_;                                    // The current cursor state, corresponding to the last call to apply_cursor_settings.
-  KeyboardInputMode keyboard_disambiguation_;                   // RAI object to bring terminal into state to disambiguate escape codes.
   MouseInputMode mouse_input_;                                  // RAI object enabling mouse reporting and bracketed paste while Context is active.
+  KeyboardInputMode keyboard_protocols_;                        // RAI object to bring terminal into a state to disambiguate escape codes.
 
  public:
   Context(utils::Badge<core::Application>);

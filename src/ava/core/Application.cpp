@@ -5,14 +5,9 @@
 #include "debug.h"
 
 namespace ava::core {
-namespace {
 
-// These process-lifecycle values are non-atomic by design. main publishes the
-// initialized Application before app::run starts workers, and revokes it only
-// after app::run returns with all app::run-owned workers joined.
-Application* registered_application = nullptr;
-
-} // namespace
+//static
+Application* Application::s_instance;
 
 Application::Application(CWDEBUG_ONLY(bool debug_init_arg))
     :
@@ -24,25 +19,17 @@ Application::Application(CWDEBUG_ONLY(bool debug_init_arg))
       terminal_context_({})
 {
   // Instantiate only one `Application` object derived from ava::core::Application.
-  ASSERT(registered_application == nullptr);
-  registered_application = this;
+  ASSERT(s_instance == nullptr);
+  s_instance = this;
 }
 
 Application::~Application() noexcept
 {
-  registered_application = nullptr;
+  s_instance = nullptr;
   // Prints to dc::memory that memory::NodeMemoryResource::deinit() is called, which in turn silences the destructor.
   // The latter is necessary because by the time that the NodeMemoryResource objects are destructed we have destructed
   // the mutex used by the debug output ostream.
   Vec8Alloc::deinit();
-}
-
-//FIXME: Add mutex for access.
-Application& Application::instance()
-{
-  // Create an `Application` object, derived from ava::core::Application at the top of main, after any debug initialization.
-  ASSERT(registered_application != nullptr);
-  return *registered_application;
 }
 
 }  // namespace ava::core

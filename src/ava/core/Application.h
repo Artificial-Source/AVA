@@ -22,6 +22,7 @@ class Application
   using Vec8Alloc = memory::VectorAllocator<char>;
 
  private:
+  static Application* s_instance;               // There can only be one instance of Application. Allow global access.
   memory::MemoryPagePool mpp_;                  // Pool using the default block size (32 KiB); its first growth allocates at least two blocks (64 KiB).
   Vec8Alloc vec8alloc_;                         // A geometric allocator for sizes 8, 16, 32, 64, ...
   tui::terminal::Context terminal_context_;     // The terminal context instance.
@@ -34,9 +35,16 @@ class Application
   Application& operator=(Application&&) = delete;
   virtual ~Application() noexcept;
 
+  //FIXME: Add mutex for access.
+  static Application& instance()
+  {
+    // Create an `Application` object, derived from ava::core::Application at the top of main, after any debug initialization.
+    ASSERT(s_instance != nullptr);
+    return *s_instance;
+  }
+
   Vec8Alloc vec8alloc() const { return vec8alloc_; }
 
-  [[nodiscard]] static Application& instance();
   [[nodiscard]] virtual std::string_view application_name() const noexcept = 0;
 
   // Accessor for terminal_context_.
