@@ -123,6 +123,10 @@ int main(int argc, char** argv)
   std::string request;
   if (!std::getline(std::cin, request))
   {
+    // The outbound-limit test closes stdin before requesting its stop reason.
+    // Stay alive so natural EOF exit cannot win that settlement race.
+    if (scenario == "request-marker")
+      loop_forever();
     if (scenario == "shutdown-term-refusal" || scenario == "live-destructor")
     {
       std::signal(SIGTERM, SIG_IGN);
