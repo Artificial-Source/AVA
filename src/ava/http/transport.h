@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-#include "ava/observability/run_observer.h"
+#include "ava/observability/trace_context.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -13,6 +13,10 @@
 #include <string_view>
 #include <vector>
 #include "debug.h"
+
+namespace ava::observability {
+class RunObservation;
+}
 
 namespace ava::http {
 

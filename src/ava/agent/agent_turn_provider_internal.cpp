@@ -26,7 +26,7 @@ ava::core::VoidResult ProviderEventAccumulator::append(std::vector<ava::provider
   {
     if (options_.max_provider_events > 0 && events_.size() >= options_.max_provider_events)
     {
-      return std::unexpected(output_limit_error("provider output event limit exceeded", "max_provider_events", options_.max_provider_events));
+      return std::unexpected(provider_event_limit_error(options_.max_provider_events));
     }
     if (event.type == ava::provider::StreamEventType::TextDelta)
     {

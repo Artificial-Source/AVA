@@ -33,12 +33,7 @@ struct McpResourceBinding
 
 bool is_canceled_error(ava::core::Error const& error)
 {
-  for (auto const& context : error.context())
-  {
-    if (context.key == "canceled" && context.value == "true")
-      return true;
-  }
-  return error.message() == "tool canceled";
+  return error.code() == ava::core::ErrorCode::Canceled;
 }
 
 bool is_canceled(ava::tools::ToolContext const& context)
@@ -73,9 +68,10 @@ ava::tools::ToolDispatchResult remote_tool_error_result(ava::tools::ProviderTool
   return safe_tool_failure_result(call, ava::diagnostics::external_failure(ava::diagnostics::ComponentClass::Mcp), false);
 }
 
-ava::core::Error mcp_tool_error(ava::core::ErrorCategory category, std::string message, McpToolBinding const& binding)
+ava::core::Error mcp_tool_error(ava::core::ErrorCategory category, std::string message, McpToolBinding const& binding,
+                                ava::core::ErrorCode code = ava::core::ErrorCode::Unspecified)
 {
-  auto error = ava::core::Error(category, std::move(message));
+  auto error = ava::core::Error(category, std::move(message), code);
   error.with_context("mcp_server", binding.server.id);
   error.with_context("mcp_tool", binding.tool.name);
   error.with_context("tool", binding.model_tool_name);
@@ -84,9 +80,10 @@ ava::core::Error mcp_tool_error(ava::core::ErrorCategory category, std::string m
   return error;
 }
 
-ava::core::Error mcp_resource_error(ava::core::ErrorCategory category, std::string message, McpResourceBinding const& binding)
+ava::core::Error mcp_resource_error(ava::core::ErrorCategory category, std::string message, McpResourceBinding const& binding,
+                                    ava::core::ErrorCode code = ava::core::ErrorCode::Unspecified)
 {
-  auto error = ava::core::Error(category, std::move(message));
+  auto error = ava::core::Error(category, std::move(message), code);
   error.with_context("mcp_server", binding.server.id);
   error.with_context("mcp_resource", binding.resource.uri);
   error.with_context("tool", binding.model_tool_name);
@@ -95,9 +92,10 @@ ava::core::Error mcp_resource_error(ava::core::ErrorCategory category, std::stri
   return error;
 }
 
-ava::core::Error mcp_server_error(ava::core::ErrorCategory category, std::string message, McpServerConfig const& server)
+ava::core::Error mcp_server_error(ava::core::ErrorCategory category, std::string message, McpServerConfig const& server,
+                                  ava::core::ErrorCode code = ava::core::ErrorCode::Unspecified)
 {
-  auto error = ava::core::Error(category, std::move(message));
+  auto error = ava::core::Error(category, std::move(message), code);
   error.with_context("mcp_server", server.id);
   if (!server.source_path.empty())
     error.with_context("config", server.source_path.string());
@@ -106,14 +104,14 @@ ava::core::Error mcp_server_error(ava::core::ErrorCategory category, std::string
 
 ava::core::Error mcp_tool_canceled_error(McpToolBinding const& binding)
 {
-  auto error = mcp_tool_error(ava::core::ErrorCategory::Unknown, "MCP tool call canceled", binding);
+  auto error = mcp_tool_error(ava::core::ErrorCategory::Unknown, "MCP tool call canceled", binding, ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   return error;
 }
 
 ava::core::Error mcp_resource_canceled_error(McpResourceBinding const& binding)
 {
-  auto error = mcp_resource_error(ava::core::ErrorCategory::Unknown, "MCP resource read canceled", binding);
+  auto error = mcp_resource_error(ava::core::ErrorCategory::Unknown, "MCP resource read canceled", binding, ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   return error;
 }
@@ -410,7 +408,7 @@ ava::core::Result<std::vector<McpToolDescription>> discover_server_tools(ava::to
 {
   if (is_canceled(context))
   {
-    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP tool discovery canceled", server));
+    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP tool discovery canceled", server, ava::core::ErrorCode::Canceled));
   }
   auto tool_context = context;
   tool_context.permission_tool_name = "mcp_discovery";
@@ -421,7 +419,7 @@ ava::core::Result<std::vector<McpToolDescription>> discover_server_tools(ava::to
   }
   if (is_canceled(tool_context))
   {
-    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP tool discovery canceled", server));
+    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP tool discovery canceled", server, ava::core::ErrorCode::Canceled));
   }
   auto client = McpStdioClient::start(server, client_options_for_context(context), context.cancel_requested);
   if (!client)
@@ -439,7 +437,7 @@ ava::core::Result<std::vector<McpResourceDescription>> discover_server_resources
 {
   if (is_canceled(context))
   {
-    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP resource discovery canceled", server));
+    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP resource discovery canceled", server, ava::core::ErrorCode::Canceled));
   }
   auto tool_context = context;
   tool_context.permission_tool_name = "mcp_resource_discovery";
@@ -450,7 +448,7 @@ ava::core::Result<std::vector<McpResourceDescription>> discover_server_resources
   }
   if (is_canceled(tool_context))
   {
-    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP resource discovery canceled", server));
+    return std::unexpected(mcp_server_error(ava::core::ErrorCategory::Unknown, "MCP resource discovery canceled", server, ava::core::ErrorCode::Canceled));
   }
   auto client = McpStdioClient::start(server, client_options_for_context(context), context.cancel_requested);
   if (!client)

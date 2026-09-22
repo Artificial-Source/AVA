@@ -597,9 +597,20 @@ void test_app_rpc_contract_validation_regressions()
              ava::app::serialize_rpc_error_jsonl("f", skipped).find("\"code\":\"follow_up_skipped\"") != std::string::npos,
          "RPC stable error codes cover active, canceled, and skipped follow-up branches");
 
-  auto runtime_canceled = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
+  auto runtime_canceled = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
   runtime_canceled.with_context("boundary", "after_tool_dispatch");
   auto const runtime_canceled_json = ava::app::serialize_rpc_error_jsonl("runtime-canceled", runtime_canceled);
+  expect(runtime_canceled_json ==
+             "{\"id\":\"runtime-canceled\",\"type\":\"response\",\"success\":false,\"error\":{\"category\":\"unknown\",\"code\":\"canceled\","
+             "\"message\":\"agent loop canceled\",\"details\":\"unknown: agent loop canceled\\n  boundary: after_tool_dispatch\"}}\n",
+         "typed cancellation preserves the existing RPC response byte for byte");
+  auto new_wording = ava::core::Error(ava::core::ErrorCategory::Unknown, "operation stopped", ava::core::ErrorCode::Canceled);
+  expect(ava::app::serialize_rpc_error_jsonl("new", new_wording).find("\"code\":\"canceled\"") != std::string::npos &&
+             ava::app::serialize_rpc_error_jsonl("negative", ava::core::Error(ava::core::ErrorCategory::Unknown, "not canceled"))
+                     .find("\"code\":\"internal_error\"") != std::string::npos &&
+             ava::app::serialize_rpc_error_jsonl("untyped", ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled"))
+                     .find("\"code\":\"internal_error\"") != std::string::npos,
+         "RPC cancellation uses identity rather than English wording");
   auto const independent_unknown =
       ava::app::serialize_rpc_error_jsonl("provider-unknown", ava::core::Error(ava::core::ErrorCategory::Unknown, "provider returned an unknown failure"));
   expect(runtime_canceled_json.find("\"category\":\"unknown\",\"code\":\"canceled\",\"message\":\"agent loop canceled\"") != std::string::npos &&

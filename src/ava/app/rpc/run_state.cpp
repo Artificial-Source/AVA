@@ -76,7 +76,7 @@ void transition_input_terminal_locked(RpcRunState& state, RpcInputTerminalOutcom
 
 ava::core::Error canceled_error()
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
   error.with_context("rpc_error_code", "canceled");
   return error;
 }

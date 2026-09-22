@@ -96,7 +96,7 @@ ava::core::VoidResult AgentTurnSession::check_canceled(std::string_view boundary
   if (!is_canceled())
     return {};
   static_cast<void>(append_cancel(options_.append_entry, boundary));
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
   error.with_context("boundary", std::string(boundary));
   return std::unexpected(std::move(error));
 }
@@ -288,6 +288,8 @@ ava::core::Result<bool> AgentTurnExecutor::prepare_context_overflow_retry(ava::c
   auto compacted = compact_context("context_overflow");
   if (!compacted)
   {
+    if (compacted.error().code() == ava::core::ErrorCode::Canceled)
+      return std::unexpected(std::move(compacted.error()));
     // Both errors can originate in provider callbacks. Do not carry their
     // diagnostics into the session or public runtime error path.
     auto compact_error = ava::core::Error(ava::core::ErrorCategory::Provider, "context overflow compaction failed");

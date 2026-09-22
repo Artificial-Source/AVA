@@ -147,7 +147,7 @@ bool is_canceled(ToolContext const& context)
 
 ava::core::Error search_canceled_error(std::string_view tool_name)
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   error.with_context("tool", std::string(tool_name));
   return error;

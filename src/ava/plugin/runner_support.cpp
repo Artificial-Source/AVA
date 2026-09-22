@@ -34,7 +34,8 @@ bool is_canceled(CancelCallback const& cancel_requested) noexcept
 
 ava::core::Error canceled_error(std::string message, PluginManifest const& manifest)
 {
-  auto error = plugin_error(ava::core::ErrorCategory::Unknown, std::move(message), manifest);
+  static_cast<void>(manifest);
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, std::move(message), ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   return error;
 }

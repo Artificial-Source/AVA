@@ -148,19 +148,22 @@ void test_agent_loop_task_subagent_runs_child_session()
   int resolver_prompts = 0;
   auto trace_collector = std::make_shared<TraceCollector>();
   auto observation = std::make_shared<ava::observability::RunObservation>(trace_collector);
-  ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{.workspace_dir = workspace,
-                                                          .mode = ava::agent::Mode::Build,
-                                                          .model = agent_loop_test::model_invocation_options(),
-                                                          .access_token = "token",
-                                                          .permission_resolver = [&resolver_prompts](ava::permissions::PermissionPrompt const&)
-                                                              -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
-                                                            ++resolver_prompts;
-                                                            return ava::permissions::PermissionResolution::Allow;
-                                                          },
-                                                          .append_entry = append_route_for_test(store),
-                                                          .append_batch = append_batch_route_for_test(store),
-                                                          .session_read_authority = read_authority_for_test(store),
-                                                          .observation = observation});
+  ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .mode = ava::agent::Mode::Build,
+      .model = agent_loop_test::model_invocation_options(),
+      .access_token = "token",
+      .permission_resolver =
+          [&resolver_prompts](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        ++resolver_prompts;
+        return ava::permissions::PermissionResolution::Allow;
+      },
+      .append_entry = append_route_for_test(store),
+      .append_batch = append_batch_route_for_test(store),
+      .session_read_authority = read_authority_for_test(store),
+      .synthetic_user_message_provenance =
+          ava::session::SyntheticDeliveryProvenance{.delivery_id = "delivery-parent", .prompt_fingerprint = "fingerprint-parent"},
+      .observation = observation});
 
   auto result = loop.run_turn("delegate", store, provider, transport);
   expect(result && result->final_text == "parent saw task" && result->tool_calls == 1 && result->provider_iterations == 2 && resolver_prompts == 0,
@@ -194,6 +197,12 @@ void test_agent_loop_task_subagent_runs_child_session()
     }
     for (auto const& entry : *entries)
     {
+      if (entry.type == ava::session::EntryType::UserMessage)
+      {
+        auto provenance = ava::session::parse_synthetic_delivery_provenance(entry);
+        expect(provenance && *provenance && (*provenance)->delivery_id == "delivery-parent" && (*provenance)->prompt_fingerprint == "fingerprint-parent",
+               "parent synthetic delivery retains its original provenance after launching a child");
+      }
       saw_task_result =
           saw_task_result ||
           (entry.type == ava::session::EntryType::ToolResult && entry.data_json.find("\\\"tool\\\":\\\"task\\\"") != std::string::npos &&
@@ -227,6 +236,11 @@ void test_agent_loop_task_subagent_runs_child_session()
         continue;
       for (auto const& entry : *child_entries)
       {
+        if (entry.type == ava::session::EntryType::UserMessage)
+        {
+          auto provenance = ava::session::parse_synthetic_delivery_provenance(entry);
+          expect(provenance && !*provenance, "child launched during synthetic delivery gets an ordinary prompt without parent provenance");
+        }
         saw_child_metadata = saw_child_metadata || (entry.type == ava::session::EntryType::SessionMetadata &&
                                                     entry.data_json.find("\"parent_session_id\":\"parent\"") != std::string::npos &&
                                                     entry.data_json.find("@general subagent") != std::string::npos);

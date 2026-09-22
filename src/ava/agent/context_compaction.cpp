@@ -17,7 +17,7 @@ constexpr std::size_t kMaxCompactionPromptEntryBytes = 8192;
 
 ava::core::Error agent_loop_canceled_error()
 {
-  return ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
+  return ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
 }
 
 std::string capped_entry_data(std::string_view data)
@@ -456,6 +456,103 @@ ava::core::Result<std::string> generate_context_compaction_summary(std::vector<a
   return *summary;
 }
 
+ava::core::Result<bool> compact_context_transaction(ava::session::SessionReadAuthority const& read_authority, ava::session::CompactionConfig const& config,
+                                                    std::optional<long long> context_window_tokens, std::string_view trigger,
+                                                    std::vector<std::string> const& replayed_user_messages, std::function<bool()> const& cancel_requested,
+                                                    CompactionTransactionAdapters const& adapters)
+{
+  if (!adapters.summarize || !adapters.append)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "compaction transaction adapters are unavailable"));
+  constexpr std::size_t max_compaction_attempts = 2;
+  std::size_t last_snapshot_entries = 0;
+  std::size_t last_current_entries = 0;
+  for (std::size_t attempt = 0; attempt < max_compaction_attempts; ++attempt)
+  {
+    if (cancel_requested && cancel_requested())
+      return std::unexpected(agent_loop_canceled_error());
+    auto entries = read_authority.load();
+    if (!entries)
+      return std::unexpected(std::move(entries.error()));
+    auto prepared = prepare_compaction_context(*entries, config, replayed_user_messages);
+    if (!prepared)
+      return std::unexpected(std::move(prepared.error()));
+    auto const threshold = ava::session::effective_auto_threshold_tokens(config, context_window_tokens);
+    auto estimated_tokens = prepared->estimated_tokens;
+    auto threshold_tokens = threshold;
+    if (trigger == "auto")
+    {
+      auto decision = ava::session::should_auto_compact(*entries, config, context_window_tokens);
+      if (!decision)
+        return std::unexpected(std::move(decision.error()));
+      if (!decision->should_compact)
+        return false;
+      estimated_tokens = decision->estimated_tokens;
+      threshold_tokens = decision->threshold_tokens;
+    }
+    CompactionTransactionStats stats{.attempt = attempt + 1,
+                                     .max_attempts = max_compaction_attempts,
+                                     .estimated_tokens = estimated_tokens,
+                                     .threshold_tokens = threshold_tokens,
+                                     .retained_tokens = prepared->retained_tokens};
+    if (adapters.event)
+    {
+      auto emitted = adapters.event(CompactionTransactionPhase::Started, stats);
+      if (!emitted)
+        return std::unexpected(std::move(emitted.error()));
+    }
+    auto summary = adapters.summarize(prepared->active_entries, estimated_tokens);
+    if (!summary)
+      return std::unexpected(std::move(summary.error()));
+    if (cancel_requested && cancel_requested())
+      return std::unexpected(agent_loop_canceled_error());
+    auto entry = ava::session::make_manual_compaction_entry(ava::session::ManualCompactionRequest{.summary = *summary,
+                                                                                                  .instructions = "",
+                                                                                                  .config = config,
+                                                                                                  .estimated_tokens = estimated_tokens,
+                                                                                                  .threshold_tokens = threshold_tokens,
+                                                                                                  .retained_tokens = prepared->retained_tokens,
+                                                                                                  .trigger = std::string(trigger),
+                                                                                                  .recent_context = prepared->recent_context,
+                                                                                                  .recent_context_omitted = prepared->recent_context_omitted});
+    if (!entry)
+      return std::unexpected(std::move(entry.error()));
+    auto const snapshot_entries = entries->size();
+    auto appended = adapters.append(std::move(*entry), std::move(*entries));
+    if (!appended)
+      return std::unexpected(std::move(appended.error()));
+    if (*appended == ava::session::SessionCompactionAppendResult::Appended)
+    {
+      stats.summary_bytes = summary->size();
+      stats.post_compaction_tokens = ava::session::estimate_tokens(*summary) + prepared->retained_tokens;
+      if (adapters.event)
+      {
+        auto emitted = adapters.event(CompactionTransactionPhase::Committed, stats);
+        if (!emitted)
+          return std::unexpected(std::move(emitted.error()));
+      }
+      return true;
+    }
+    last_snapshot_entries = snapshot_entries;
+    auto current = read_authority.load();
+    if (!current)
+      return std::unexpected(std::move(current.error()));
+    last_current_entries = current->size();
+    if (attempt + 1 < max_compaction_attempts && adapters.event)
+    {
+      stats.snapshot_entries = last_snapshot_entries;
+      stats.current_entries = last_current_entries;
+      auto emitted = adapters.event(CompactionTransactionPhase::SnapshotRetry, stats);
+      if (!emitted)
+        return std::unexpected(std::move(emitted.error()));
+    }
+  }
+  auto error = ava::core::Error(ava::core::ErrorCategory::Session, "session changed during context compaction after retry");
+  error.with_context("trigger", std::string(trigger));
+  error.with_context("snapshot_entries", std::to_string(last_snapshot_entries));
+  error.with_context("current_entries", std::to_string(last_current_entries));
+  return std::unexpected(std::move(error));
+}
+
 ava::core::Result<bool> compact_child_context(ChildContextCompactionBinding const& binding, std::string_view trigger,
                                               std::vector<std::string> const& replayed_user_messages, ava::provider::Provider const& provider,
                                               ava::http::Transport& transport, ContextCompactionInvocation const& invocation)
@@ -466,66 +563,17 @@ ava::core::Result<bool> compact_child_context(ChildContextCompactionBinding cons
   if (!read_authority)
     return std::unexpected(std::move(read_authority.error()));
 
-  constexpr std::size_t max_compaction_attempts = 2;
-  std::size_t last_snapshot_entries = 0;
-  std::size_t last_current_entries = 0;
-  for (std::size_t attempt = 0; attempt < max_compaction_attempts; ++attempt)
-  {
-    if (invocation.cancel_requested && invocation.cancel_requested())
-      return std::unexpected(agent_loop_canceled_error());
-    auto entries = read_authority->load();
-    if (!entries)
-      return std::unexpected(std::move(entries.error()));
-    auto prepared = prepare_compaction_context(*entries, binding.blueprint.config, replayed_user_messages);
-    if (!prepared)
-      return std::unexpected(std::move(prepared.error()));
-    auto const threshold = ava::session::effective_auto_threshold_tokens(binding.blueprint.config, binding.blueprint.context_window_tokens);
-    auto estimated_tokens = prepared->estimated_tokens;
-    auto threshold_tokens = threshold;
-    if (trigger == "auto")
-    {
-      auto decision = ava::session::should_auto_compact(*entries, binding.blueprint.config, binding.blueprint.context_window_tokens);
-      if (!decision)
-        return std::unexpected(std::move(decision.error()));
-      if (!decision->should_compact)
-        return false;
-      estimated_tokens = decision->estimated_tokens;
-      threshold_tokens = decision->threshold_tokens;
-    }
-    auto summary =
-        generate_context_compaction_summary(prepared->active_entries, binding.blueprint.config, "", estimated_tokens, provider, transport, invocation);
-    if (!summary)
-      return std::unexpected(std::move(summary.error()));
-    if (invocation.cancel_requested && invocation.cancel_requested())
-      return std::unexpected(agent_loop_canceled_error());
-    auto entry = ava::session::make_manual_compaction_entry(ava::session::ManualCompactionRequest{.summary = *summary,
-                                                                                                  .instructions = "",
-                                                                                                  .config = binding.blueprint.config,
-                                                                                                  .estimated_tokens = estimated_tokens,
-                                                                                                  .threshold_tokens = threshold_tokens,
-                                                                                                  .retained_tokens = prepared->retained_tokens,
-                                                                                                  .trigger = std::string(trigger),
-                                                                                                  .recent_context = prepared->recent_context,
-                                                                                                  .recent_context_omitted = prepared->recent_context_omitted});
-    if (!entry)
-      return std::unexpected(std::move(entry.error()));
-    auto const snapshot_entries = entries->size();
-    auto appended = binding.append_target->append_compaction_if_snapshot_matches(*entry, *entries, invocation.cancel_requested);
-    if (!appended)
-      return std::unexpected(std::move(appended.error()));
-    if (*appended == ava::session::SessionCompactionAppendResult::Appended)
-      return true;
-    last_snapshot_entries = snapshot_entries;
-    auto current = read_authority->load();
-    if (!current)
-      return std::unexpected(std::move(current.error()));
-    last_current_entries = current->size();
-  }
-  auto error = ava::core::Error(ava::core::ErrorCategory::Session, "session changed during context compaction after retry");
-  error.with_context("trigger", std::string(trigger));
-  error.with_context("snapshot_entries", std::to_string(last_snapshot_entries));
-  error.with_context("current_entries", std::to_string(last_current_entries));
-  return std::unexpected(std::move(error));
+  return compact_context_transaction(
+      *read_authority, binding.blueprint.config, binding.blueprint.context_window_tokens, trigger, replayed_user_messages, invocation.cancel_requested,
+      CompactionTransactionAdapters{.summarize =
+                                        [&](auto const& entries, std::size_t estimated_tokens) {
+                                          return generate_context_compaction_summary(entries, binding.blueprint.config, "", estimated_tokens, provider,
+                                                                                     transport, invocation);
+                                        },
+                                    .append =
+                                        [&](ava::session::SessionEntry entry, std::vector<ava::session::SessionEntry> entries) {
+                                          return binding.append_target->append_compaction_if_snapshot_matches(entry, entries, invocation.cancel_requested);
+                                        }});
 }
 
 }  // namespace ava::agent

@@ -42,8 +42,7 @@ struct AgentTraceScope
 
 bool is_terminal_canceled_error(ava::core::Error const& error)
 {
-  return error.message() == "agent loop canceled" || error.message() == "transport retry canceled" || error.message() == "transport request canceled" ||
-         detail::is_scheduler_canceled_error(error);
+  return error.code() == ava::core::ErrorCode::Canceled;
 }
 
 ava::observability::TraceOutcome terminal_outcome(ava::core::Error const& error)

@@ -96,7 +96,8 @@ bool is_canceled(CancelCallback const& cancel_requested)
 
 ava::core::Error canceled_error(std::string message, McpServerConfig const& server)
 {
-  auto error = mcp_error(ava::core::ErrorCategory::Unknown, std::move(message), server);
+  static_cast<void>(server);
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, std::move(message), ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   return error;
 }

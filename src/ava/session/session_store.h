@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-#include "ava/observability/run_observer.h"
+#include "ava/observability/trace_context.h"
 #include "ava/session/assistant_output.h"
 #include "ava/core/result.h"
 
@@ -17,6 +17,10 @@
 #include <string_view>
 #include <vector>
 #include <sys/types.h>
+
+namespace ava::observability {
+class RunObservation;
+}
 
 namespace ava::app {
 class SessionRunController;

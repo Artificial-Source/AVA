@@ -455,6 +455,7 @@ void test_streaming_incremental_gate_limits_and_cancellation()
     auto response = fixture.transport.send_streaming(request_for(path, 60000), [](std::string_view) -> ava::core::VoidResult { return {}; });
     fixture.capture_snapshot();
     expect(!response && response.error().message().find("exceeded byte limit") != std::string::npos &&
+               (response.error().code() == ava::core::ErrorCode::BodyOutputLimit) == (path == std::string_view("/stream-output-limit")) &&
                settled_record(fixture.only_record(), path == std::string_view("/stream-output-limit") ? ava::process::TerminationReasonV1::OutputLimit
                                                                                                       : ava::process::TerminationReasonV1::ProtocolFailure),
            "streaming curl independently enforces bounded cumulative headers and the existing body cap");
@@ -549,8 +550,9 @@ void test_stop_reasons_and_limits()
     auto const elapsed = std::chrono::steady_clock::now() - started;
     fixture.capture_snapshot();
     auto const* record = fixture.only_record();
-    expect(!response && response.error().message() == "curl response exceeded byte limit" && elapsed < 5s &&
-               settled_record(record, ava::process::TerminationReasonV1::OutputLimit) && record->stdout_truncated && record->stdout_bytes > 8U * 1024U * 1024U,
+    expect(!response && response.error().message() == "curl response exceeded byte limit" && response.error().code() == ava::core::ErrorCode::BodyOutputLimit &&
+               elapsed < 5s && settled_record(record, ava::process::TerminationReasonV1::OutputLimit) && record->stdout_truncated &&
+               record->stdout_bytes > 8U * 1024U * 1024U,
            "curl stdout hard cap starts cleanup at failure, remains below its elapsed ceiling, and accounts raw output");
   }
   {

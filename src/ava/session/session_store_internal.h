@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/observability/run_observer.h"
 #include "ava/session/session_store.h"
 #include "ava/core/strict_json.h"
 

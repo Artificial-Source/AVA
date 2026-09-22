@@ -464,7 +464,8 @@ void test_agent_loop_error_paths_and_bounds()
         .session_read_authority = read_authority_for_test(store),
     });
     auto result = loop.run_turn("hi", store, provider, transport);
-    expect(!result && result.error().message().find("event limit") != std::string::npos, "agent loop enforces provider event bounds");
+    expect(!result && result.error().message().find("event limit") != std::string::npos && result.error().code() == ava::core::ErrorCode::ProviderEventLimit,
+           "agent loop enforces provider event bounds");
   }
 
   {

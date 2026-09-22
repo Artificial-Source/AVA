@@ -32,7 +32,7 @@ ava::core::Result<std::shared_ptr<ava::lsp::DiagnosticsProvider>> lsp_provider(T
 ava::core::VoidResult check_not_canceled(ToolContext const& context)
 {
   if (context.cancel_requested && context.cancel_requested()) {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled));
   }
   return {};
 }

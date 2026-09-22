@@ -22,7 +22,7 @@ namespace {
 // boundary-tagged result out of provider retry and error persistence.
 bool is_checked_agent_loop_cancellation(ava::core::Error const& error)
 {
-  if (error.category() != ava::core::ErrorCategory::Unknown || error.message() != "agent loop canceled")
+  if (error.code() != ava::core::ErrorCode::Canceled)
     return false;
   for (auto const& context : error.context())
   {
@@ -49,7 +49,7 @@ ava::core::VoidResult AgentTurnExecutor::receive_provider_events(ava::http::Http
         [&](std::string_view chunk) -> ava::core::VoidResult {
           processed_stream_chunks = true;
           if (session_.is_canceled())
-            return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled"));
+            return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled));
           auto parsed = stream_parser->append(chunk);
           if (!parsed)
             return std::unexpected(std::move(parsed.error()));

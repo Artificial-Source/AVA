@@ -464,8 +464,8 @@ void test_prelaunch_authority_cancel_and_discovery_are_process_free()
   auto canceled =
       ava::plugin::PluginProcess::start(fake_manifest(root / "canceled", "argv0", marker), options_for(workspace, authority->run), [] { return true; });
   auto after_cancel = authority->supervisor->snapshot();
-  expect(!canceled && canceled.error().message().find("canceled") != std::string::npos && !after_cancel.monitor_started && after_cancel.live_records == 0 &&
-             after_cancel.records.empty() && !std::filesystem::exists(marker),
+  expect(!canceled && canceled.error().code() == ava::core::ErrorCode::Canceled && canceled.error().message().find("canceled") != std::string::npos &&
+             !after_cancel.monitor_started && after_cancel.live_records == 0 && after_cancel.records.empty() && !std::filesystem::exists(marker),
          "pre-canceled plugin startup creates no child or process record");
 
   std::atomic_size_t cancellation_observations = 0;

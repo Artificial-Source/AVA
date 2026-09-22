@@ -14,6 +14,7 @@
 #include "ava/agent/agent_loop_session.h"
 #include "ava/agent/message_builder.h"
 #include "ava/agent/mode.h"
+#include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_services.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/agent/tool_registry.h"
@@ -1747,6 +1748,27 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
              notifications.size() == 1 && runs == 1,
          "malformed, unknown, similarly named, job, and excluded calls never emit private task launch metadata");
 
+  std::size_t preflights = 0;
+  auto checked_context = allow_context;
+  checked_context.auto_allow_deny_preflight = [&](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    ++preflights;
+    return ava::permissions::PermissionResolution::Allow;
+  };
+  ava::agent::ToolDispatcher checked_dispatcher(checked_context, services);
+  for (auto const* field : {"task_id", "command"})
+  {
+    for (auto const* value : {"null", "true", "42", "[]", "{}"})
+    {
+      auto arguments = std::string(R"({"description":"work","prompt":"do it","subagent_type":"general",")") + field + "\":" + value + "}";
+      auto rejected = checked_dispatcher.dispatch({.id = "bad-optional", .name = "task", .arguments_json = arguments});
+      expect(rejected && !rejected->success && runs == 1 && notifications.size() == 1 && preflights == 0,
+             "non-string optional task arguments fail before runner, permission, or launch notification");
+    }
+  }
+  auto typo = checked_dispatcher.dispatch(
+      {.id = "typo", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general","taskid":"child"})"});
+  expect(typo && !typo->success && runs == 1 && notifications.size() == 1 && preflights == 0, "task field typos fail before permission or publication");
+
   std::size_t denied_notifications = 0;
   ava::tools::ToolContext deny_context{.workspace_dir = workspace,
                                        .auto_allow_deny_preflight = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -1939,6 +1961,12 @@ void test_permission_denial_guidance_provider_only_channel()
 
 void run_agent_tool_dispatcher_tests()
 {
+  ava::agent::ProviderToolCall const call{.id = "typed", .name = "read_file", .arguments_json = "{}"};
+  auto negative = ava::agent::tool_dispatch::tool_error_result(call, ava::core::Error(ava::core::ErrorCategory::Tool, "not canceled"));
+  auto typed =
+      ava::agent::tool_dispatch::tool_error_result(call, ava::core::Error(ava::core::ErrorCategory::Tool, "operation stopped", ava::core::ErrorCode::Canceled));
+  expect(negative.payload.status != ava::agent::ToolResultStatus::Canceled && typed.payload.status == ava::agent::ToolResultStatus::Canceled,
+         "tool cancellation uses typed identity and never a substring of arbitrary error wording");
   test_tool_dispatcher_plugin_tool_inclusion_control();
   test_tool_dispatcher();
   test_task_persistent_deny_preflight_blocks_runner();

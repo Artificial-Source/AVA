@@ -531,7 +531,7 @@ ava::core::Result<WebFetchResult> webfetch(ToolContext const& context, std::stri
 {
   if (context.cancel_requested && context.cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled));
   }
   auto safe_url = validated_url(url);
   if (!safe_url)
@@ -545,7 +545,7 @@ ava::core::Result<WebFetchResult> webfetch(ToolContext const& context, std::stri
   }
   if (context.cancel_requested && context.cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled));
   }
 
   auto const max_bytes = std::min(options.max_bytes == 0 ? std::size_t{1024 * 1024} : options.max_bytes, kMaxWebFetchBytes);
@@ -589,7 +589,7 @@ ava::core::Result<WebFetchResult> webfetch(ToolContext const& context, std::stri
     return std::unexpected(std::move(response.error()));
   if (context.cancel_requested && context.cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled));
   }
   if (response->status_code < 200 || response->status_code >= 300)
   {

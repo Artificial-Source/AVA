@@ -391,7 +391,7 @@ ava::core::Error generic_transport_error(ava::process::ExitStatusV1 const* statu
 
 ava::core::Error canceled_error()
 {
-  return ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled");
+  return ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled);
 }
 
 ava::core::Error deadline_error()
@@ -401,7 +401,7 @@ ava::core::Error deadline_error()
 
 ava::core::Error output_limit_error()
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Provider, "curl response exceeded byte limit");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Provider, "curl response exceeded byte limit", ava::core::ErrorCode::BodyOutputLimit);
   error.with_context("max_bytes", std::to_string(kMaxCurlResponseBytes));
   return error;
 }
@@ -937,7 +937,7 @@ class CurlRequest final
           auto consumed = consume_streaming_stdout(std::string_view(buffer.data(), bytes));
           if (!consumed)
           {
-            truncated = consumed.error().message() == output_limit_error().message();
+            truncated = consumed.error().code() == ava::core::ErrorCode::BodyOutputLimit;
             set_failure(failure, truncated ? ava::process::TerminationReasonV1::OutputLimit : ava::process::TerminationReasonV1::ProtocolFailure,
                         std::move(consumed.error()));
           }
@@ -1007,7 +1007,7 @@ class CurlRequest final
     auto retained = retain_streaming_body(std::string_view(pending_stdout_).substr(0, trailer_start));
     if (!retained)
     {
-      auto const output_limited = retained.error().message() == output_limit_error().message();
+      auto const output_limited = retained.error().code() == ava::core::ErrorCode::BodyOutputLimit;
       set_failure(failure, output_limited ? ava::process::TerminationReasonV1::OutputLimit : ava::process::TerminationReasonV1::ProtocolFailure,
                   std::move(retained.error()));
       return;

@@ -69,6 +69,54 @@ ToolVisibilityOptions subagent_tool_visibility(ToolVisibilityOptions parent, Sub
   return parent;
 }
 
+// Start empty: session identity, delivery provenance, and parent callbacks are
+// never inherited. Exact child authority and worker routes are installed later.
+AgentLoopOptions inherited_child_options(AgentLoopOptions const& parent)
+{
+  AgentLoopOptions child;
+  child.workspace_dir = parent.workspace_dir;
+  child.current_dir = parent.current_dir;
+  child.additional_writable_dirs = parent.additional_writable_dirs;
+  child.anchor_set = parent.anchor_set;
+  child.mode = parent.mode;
+  child.model = parent.model;
+  child.access_token = parent.access_token;
+  child.credential_type = parent.credential_type;
+  child.openai_oauth = parent.openai_oauth;
+  child.openai_account_id = parent.openai_account_id;
+  child.max_tool_iterations = parent.max_tool_iterations;
+  child.max_provider_events = parent.max_provider_events;
+  child.max_assistant_text_bytes = parent.max_assistant_text_bytes;
+  child.max_tool_argument_bytes = parent.max_tool_argument_bytes;
+  child.max_tool_result_context_bytes = parent.max_tool_result_context_bytes;
+  child.tool_resources = parent.tool_resources;
+  child.tool_execution.require_descriptor_secure_workspace = parent.tool_execution.require_descriptor_secure_workspace;
+  child.tool_execution.announce_execution_after_permission = parent.tool_execution.announce_execution_after_permission;
+  child.tool_execution.redact_permission_audit_arguments = parent.tool_execution.redact_permission_audit_arguments;
+  child.tool_execution.require_explicit_file_permissions = parent.tool_execution.require_explicit_file_permissions;
+  child.tool_execution.ava_authority_roots = parent.tool_execution.ava_authority_roots;
+  child.tool_execution.exact_file_access = parent.tool_execution.exact_file_access;
+  child.tool_execution.command_executor = parent.tool_execution.command_executor;
+  child.tool_execution.cancel_requested = parent.tool_execution.cancel_requested;
+  child.subagents = parent.subagents;
+  child.tool_visibility = parent.tool_visibility;
+  child.permission_resolver = parent.permission_resolver;
+  child.auto_allow_deny_preflight = parent.auto_allow_deny_preflight;
+  child.question_resolver = parent.question_resolver;
+  child.cancel_requested = parent.cancel_requested;
+  child.child_compaction_blueprint = parent.child_compaction_blueprint;
+  child.transport_factory = parent.transport_factory;
+  child.session_read_limits = parent.session_read_limits;
+  child.parallel_read_search_tools = parent.parallel_read_search_tools;
+  child.parallel_read_search_max_workers = parent.parallel_read_search_max_workers;
+  child.observation = parent.observation;
+  child.subagent_launch.display = parent.subagent_launch.display;
+  // Anchors, resource capabilities and observation deliberately share ownership
+  // with the parent; process authority is replaced before child publication.
+  child.child_execution = true;
+  return child;
+}
+
 std::string subagent_system_prompt(std::string base, std::string_view role_prompt)
 {
   auto const role = role_prompt.empty()
@@ -85,7 +133,7 @@ void append_subagent_error_best_effort(SessionAppendSink const& append_sink, ava
 {
   if (!append_sink)
     return;
-  auto safe = ava::core::Error(error.category(), safe_subagent_error_message(error));
+  auto safe = ava::core::Error(error.category(), safe_subagent_error_message(error), error.code());
   static_cast<void>(append_error(append_sink, safe));
 }
 
@@ -219,7 +267,7 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
   if (!child_read_authority)
     return std::unexpected(std::move(child_read_authority.error()));
 
-  auto child_options = options_;
+  auto child_options = inherited_child_options(options_);
   child_options.tool_execution.process_scope = std::move(child_run_process_scope);
   // A child owns a distinct exact session namespace. Preserve the parent
   // roots and add the child directory before its AgentLoop constructs any
@@ -229,27 +277,6 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
   child_options.model.system_prompt = subagent_system_prompt(options_.model.system_prompt, request.subagent_system_prompt);
   child_options.tool_visibility = subagent_tool_visibility(options_.tool_visibility, request.tool_preset);
   child_options.max_tool_iterations = request.max_tool_iterations.value_or(options_.max_tool_iterations);
-  child_options.child_execution = true;
-  // Child history is independent. Never inherit a parent append callback:
-  // it may capture parent run/session ownership and would both mix histories
-  // and outlive the parent.
-  child_options.append_entry = nullptr;
-  child_options.append_batch = nullptr;
-  child_options.on_phase = nullptr;
-  child_options.on_tool_event = nullptr;
-  child_options.on_tool_progress = nullptr;
-  child_options.on_stream_event = nullptr;
-  // Preserve the child invocation's configured display for any future nested
-  // task ownership, but never route child launches into the parent's private
-  // observer. Recursive task/job tools are currently hidden below as well.
-  child_options.subagent_launch.sink = nullptr;
-  child_options.subagent_launch.request_id.clear();
-  child_options.subagent_launch.correlation_id.clear();
-  child_options.take_steering_messages = nullptr;
-  child_options.compact_context = nullptr;
-  child_options.background_provider_factory = nullptr;
-  child_options.background_transport_factory = nullptr;
-  child_options.subagent_coordinator = nullptr;
   // A child owns a fresh lifecycle/session identity. Parent IDs are typed
   // correlation metadata only and never become child lifecycle IDs.
   child_options.trace_context = {.run_id = {},
@@ -448,7 +475,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
         {
           auto error =
               ava::core::Error(ava::core::ErrorCategory::Tool,
-                               waited->job.execution == SubagentExecutionState::Canceled ? "foreground subagent was canceled" : "foreground subagent failed");
+                               waited->job.execution == SubagentExecutionState::Canceled ? "foreground subagent was canceled" : "foreground subagent failed",
+                               waited->job.execution == SubagentExecutionState::Canceled ? ava::core::ErrorCode::Canceled : ava::core::ErrorCode::Unspecified);
           error.with_context("job_id", job_id);
           if (waited->job.error)
             error.with_context("cause", *waited->job.error);

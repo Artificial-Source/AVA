@@ -66,20 +66,18 @@ ava::core::VoidResult reject_oversized_task_arg(std::string_view value, std::str
   return std::unexpected(std::move(error));
 }
 
-ava::core::Result<std::optional<std::string>> optional_task_string_arg(std::string_view arguments, std::string_view field, std::size_t max_bytes,
-                                                                       std::string_view tool_name)
+struct ParsedTaskRequest
 {
-  auto value = ava::core::json::string_field(arguments, field);
-  if (!value || value->empty())
-    return std::optional<std::string>{};
-  if (auto safe = reject_control_arg(*value, field, tool_name); !safe)
-    return std::unexpected(std::move(safe.error()));
-  if (auto bounded = reject_oversized_task_arg(*value, field, max_bytes, tool_name); !bounded)
-  {
-    return std::unexpected(std::move(bounded.error()));
-  }
-  return std::optional<std::string>{std::move(*value)};
-}
+  std::string description;
+  std::string prompt;
+  std::string subagent_type;
+  std::optional<std::string> task_id;
+  std::string command;
+  bool background = false;
+  std::optional<std::size_t> max_tool_iterations;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
 
 bool is_allowed_task_field(std::string_view key)
 {
@@ -87,7 +85,7 @@ bool is_allowed_task_field(std::string_view key)
          key == "max_tool_iterations";
 }
 
-ava::core::Result<std::optional<std::size_t>> task_max_tool_iterations(std::string_view arguments, std::string_view tool_name)
+ava::core::Result<ParsedTaskRequest> parse_task_request(std::string_view arguments, std::string_view tool_name)
 {
   auto const strict = ava::core::validate_strict_json(arguments, ava::core::json::kMaxNestingDepth);
   if (strict == ava::core::StrictJsonStatus::DuplicateObjectKey)
@@ -106,58 +104,78 @@ ava::core::Result<std::optional<std::size_t>> task_max_tool_iterations(std::stri
       return std::unexpected(std::move(error));
     }
   }
-  if (!root.contains("max_tool_iterations"))
-    return std::optional<std::size_t>{};
-  if (!root["max_tool_iterations"].is_number_integer())
+  std::optional<std::size_t> max_tool_iterations;
+  if (auto const it = root.find("max_tool_iterations"); it != root.end())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "max_tool_iterations must be an integer from 1 through 1000"));
+    if (!it->is_number_integer() || *it < 1 || *it > kMaxTaskToolIterations)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "max_tool_iterations must be an integer from 1 through 1000"));
+    max_tool_iterations = it->get<std::size_t>();
   }
-  long long value = 0;
-  try
+  auto validate_string = [&](std::string_view field, std::size_t max_bytes, bool required, bool text = false) -> ava::core::VoidResult {
+    auto const it = root.find(field);
+    if (!required && it == root.end())
+      return {};
+    if (it == root.end() || !it->is_string())
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, required ? "tool argument is required" : "tool argument must be a string");
+      error.with_context("tool", std::string(tool_name)).with_context("argument", std::string(field));
+      return std::unexpected(std::move(error));
+    }
+    auto const& value = it->get_ref<std::string const&>();
+    auto safe = text ? reject_nul_arg(value, field, tool_name) : reject_control_arg(value, field, tool_name);
+    if (!safe)
+      return safe;
+    return reject_oversized_task_arg(value, field, max_bytes, tool_name);
+  };
+  if (auto valid = validate_string("description", kMaxTaskDescriptionBytes, true); !valid)
+    return std::unexpected(std::move(valid.error()));
+  if (auto valid = validate_string("prompt", kMaxTaskPromptBytes, true, true); !valid)
+    return std::unexpected(std::move(valid.error()));
+  if (auto valid = validate_string("subagent_type", kMaxTaskSubagentTypeBytes, true); !valid)
+    return std::unexpected(std::move(valid.error()));
+  if (auto valid = validate_string("task_id", kMaxTaskIdBytes, false); !valid)
+    return std::unexpected(std::move(valid.error()));
+  if (auto valid = validate_string("command", kMaxTaskCommandBytes, false); !valid)
+    return std::unexpected(std::move(valid.error()));
+  bool background = false;
+  bool const has_background = root.contains("background");
+  if (has_background)
   {
-    value = root["max_tool_iterations"].get<long long>();
+    if (!root["background"].is_boolean())
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "tool argument must be a boolean");
+      error.with_context("tool", std::string(tool_name)).with_context("argument", "background");
+      return std::unexpected(std::move(error));
+    }
+    background = root["background"].get<bool>();
   }
-  catch (...)
+  if (auto const mode = root.find("mode"); mode != root.end())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "max_tool_iterations must be an integer from 1 through 1000"));
+    if (!mode->is_string() || (*mode != "foreground" && *mode != "background"))
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task mode must be foreground or background");
+      error.with_context("tool", std::string(tool_name)).with_context("argument", "mode");
+      return std::unexpected(std::move(error));
+    }
+    bool const mode_background = *mode == "background";
+    if (has_background && background != mode_background)
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task mode conflicts with legacy background flag");
+      error.with_context("tool", std::string(tool_name));
+      return std::unexpected(std::move(error));
+    }
+    background = mode_background;
   }
-  if (value < 1 || value > static_cast<long long>(kMaxTaskToolIterations))
-  {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "max_tool_iterations must be an integer from 1 through 1000"));
-  }
-  return std::optional<std::size_t>{static_cast<std::size_t>(value)};
-}
-
-ava::core::Result<bool> task_background_mode(std::string_view arguments, std::string_view tool_name)
-{
-  auto background = optional_bool_arg(arguments, "background", false, tool_name);
-  if (!background)
-    return std::unexpected(std::move(background.error()));
-  bool const has_background = ava::core::json::field_value_start(arguments, "background").has_value();
-  auto const mode_start = ava::core::json::field_value_start(arguments, "mode");
-  if (!mode_start)
-    return *background;
-  auto mode = ava::core::json::string_field(arguments, "mode");
-  if (!mode)
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task mode must be foreground or background");
-    error.with_context("tool", std::string(tool_name)).with_context("argument", "mode");
-    return std::unexpected(std::move(error));
-  }
-  if (*mode != "foreground" && *mode != "background")
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task mode must be foreground or background");
-    error.with_context("tool", std::string(tool_name)).with_context("argument", "mode");
-    return std::unexpected(std::move(error));
-  }
-  bool const mode_background = *mode == "background";
-  if (has_background && *background != mode_background)
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "task mode conflicts with legacy background flag");
-    error.with_context("tool", std::string(tool_name));
-    return std::unexpected(std::move(error));
-  }
-  return mode_background;
+  // Copy values only after the complete object has validated. Empty optional
+  // strings retain their historical absent/default semantics.
+  auto task_id = root.value("task_id", std::string{});
+  return ParsedTaskRequest{.description = root["description"].get<std::string>(),
+                           .prompt = root["prompt"].get<std::string>(),
+                           .subagent_type = root["subagent_type"].get<std::string>(),
+                           .task_id = task_id.empty() ? std::nullopt : std::optional<std::string>(std::move(task_id)),
+                           .command = root.value("command", std::string{}),
+                           .background = background,
+                           .max_tool_iterations = max_tool_iterations};
 }
 
 ava::core::Result<SubagentDefinition> selected_subagent_definition(ToolDispatchServices const& services, std::string_view subagent_type,
@@ -195,42 +213,12 @@ void publish_subagent_launch_best_effort(ToolDispatchServices const& services, s
 
 ToolDispatchResult task_result(ava::tools::ToolContext const& context, ToolDispatchServices const& services, ProviderToolCall const& call)
 {
-  auto max_tool_iterations = task_max_tool_iterations(call.arguments_json, call.name);
-  if (!max_tool_iterations)
-    return tool_error_result(call, max_tool_iterations.error());
-  auto description = required_safe_string_arg(call.arguments_json, "description", call.name);
-  if (!description)
-    return tool_error_result(call, description.error());
-  if (auto bounded = reject_oversized_task_arg(*description, "description", kMaxTaskDescriptionBytes, call.name); !bounded)
-  {
-    return tool_error_result(call, bounded.error());
-  }
-  auto prompt = required_text_arg(call.arguments_json, "prompt", call.name);
-  if (!prompt)
-    return tool_error_result(call, prompt.error());
-  if (auto bounded = reject_oversized_task_arg(*prompt, "prompt", kMaxTaskPromptBytes, call.name); !bounded)
-  {
-    return tool_error_result(call, bounded.error());
-  }
-  auto subagent_type = required_safe_string_arg(call.arguments_json, "subagent_type", call.name);
-  if (!subagent_type)
-    return tool_error_result(call, subagent_type.error());
-  if (auto bounded = reject_oversized_task_arg(*subagent_type, "subagent_type", kMaxTaskSubagentTypeBytes, call.name); !bounded)
-  {
-    return tool_error_result(call, bounded.error());
-  }
-  auto subagent = selected_subagent_definition(services, *subagent_type, call.name);
+  auto request = parse_task_request(call.arguments_json, call.name);
+  if (!request)
+    return tool_error_result(call, request.error());
+  auto subagent = selected_subagent_definition(services, request->subagent_type, call.name);
   if (!subagent)
     return tool_error_result(call, subagent.error());
-  auto task_id = optional_task_string_arg(call.arguments_json, "task_id", kMaxTaskIdBytes, call.name);
-  if (!task_id)
-    return tool_error_result(call, task_id.error());
-  auto command = optional_task_string_arg(call.arguments_json, "command", kMaxTaskCommandBytes, call.name);
-  if (!command)
-    return tool_error_result(call, command.error());
-  auto background = task_background_mode(call.arguments_json, call.name);
-  if (!background)
-    return tool_error_result(call, background.error());
   // AgentTurnExecutor has already published the ordinary public Running event
   // on this thread. Emit private launch association only after all built-in task
   // arguments and catalog identity have validated, but before permission/start
@@ -243,7 +231,7 @@ ToolDispatchResult task_result(ava::tools::ToolContext const& context, ToolDispa
   }
 
   auto tool_context = context_for_provider_tool(context, call);
-  if (auto permission = ava::tools::ensure_permission(tool_context, ava::permissions::Operation::TaskRun, context.workspace_dir, *subagent_type, "task",
+  if (auto permission = ava::tools::ensure_permission(tool_context, ava::permissions::Operation::TaskRun, context.workspace_dir, request->subagent_type, "task",
                                                       "task launch permission check failed");
       !permission)
   {
@@ -251,15 +239,15 @@ ToolDispatchResult task_result(ava::tools::ToolContext const& context, ToolDispa
   }
 
   auto run = services.task_subagent_runner(
-      TaskSubagentRequest{.description = *description,
-                          .prompt = *prompt,
-                          .subagent_type = *subagent_type,
+      TaskSubagentRequest{.description = request->description,
+                          .prompt = request->prompt,
+                          .subagent_type = request->subagent_type,
                           .subagent_system_prompt = subagent->system_prompt,
                           .tool_preset = subagent->tool_preset,
-                          .max_tool_iterations = max_tool_iterations->has_value() ? *max_tool_iterations : subagent->max_tool_iterations,
-                          .task_id = *task_id,
-                          .command = command->value_or(""),
-                          .background = *background});
+                          .max_tool_iterations = request->max_tool_iterations ? request->max_tool_iterations : subagent->max_tool_iterations,
+                          .task_id = request->task_id,
+                          .command = request->command,
+                          .background = request->background});
   if (!run)
     return tool_error_result(call, run.error());
 
@@ -267,10 +255,11 @@ ToolDispatchResult task_result(ava::tools::ToolContext const& context, ToolDispa
   auto const summary = state == "running" ? std::string("Background subagent task started: ") : std::string("Subagent task completed: ");
   auto const job_attr = run->job_id.empty() ? std::string{} : std::string(" job_id=\"") + xml_escape(run->job_id) + "\"";
   auto const content = std::string("<task id=\"") + xml_escape(run->task_id) + "\"" + job_attr + " state=\"" + xml_escape(state) + "\">" + "<summary>" +
-                       summary + xml_escape(*description) + "</summary>" + "<task_result>" + xml_escape(run->final_text) + "</task_result></task>";
+                       summary + xml_escape(request->description) + "</summary>" + "<task_result>" + xml_escape(run->final_text) + "</task_result></task>";
   std::string text = "{\"tool\":\"task\",\"ok\":true,\"task_id\":\"" + ava::core::json::escape(run->task_id) + "\",\"subagent_type\":\"" +
-                     ava::core::json::escape(run->subagent_type) + "\",\"description\":\"" + ava::core::json::escape(*description) + "\",\"session_path\":\"" +
-                     ava::core::json::escape(run->session_path.generic_string()) + "\",\"state\":\"" + ava::core::json::escape(state) + "\"" +
+                     ava::core::json::escape(run->subagent_type) + "\",\"description\":\"" + ava::core::json::escape(request->description) +
+                     "\",\"session_path\":\"" + ava::core::json::escape(run->session_path.generic_string()) + "\",\"state\":\"" +
+                     ava::core::json::escape(state) + "\"" +
                      (run->job_id.empty() ? std::string{} : ",\"job_id\":\"" + ava::core::json::escape(run->job_id) + "\"") + ",\"stop_reason\":\"" +
                      ava::core::json::escape(run->stop_reason) + "\",\"provider_iterations\":" + std::to_string(run->provider_iterations) +
                      ",\"tool_calls\":" + std::to_string(run->tool_calls) + ",\"tool_iterations\":" + std::to_string(run->tool_iterations) +

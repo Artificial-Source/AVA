@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <iterator>
 #include <limits>
@@ -116,7 +117,8 @@ void test_acp_peer_prompt_terminal_commit_arbitration()
     feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"prompt"}})");
     feed(state, R"({"jsonrpc":"2.0","method":"test/reader_probe","params":{}})");
     auto const probe_deadline = ava::tests::now_plus_seconds(2);
-    while (!reader_probe.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < probe_deadline) std::this_thread::sleep_for(1ms);
+    while (!reader_probe.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < probe_deadline)
+      std::this_thread::sleep_for(1ms);
     barrier->release();
 
     std::optional<std::string> prompt_terminal;
@@ -160,6 +162,44 @@ void test_acp_peer_prompt_terminal_commit_arbitration()
 
   run_case(ava::app::RunPhase::AwaitingProvider, true);
   run_case(ava::app::RunPhase::Completing, false);
+
+  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-terminal-refusal-outcome");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  configure_acp_test_model(root);
+  auto provider_state = std::make_shared<CapturingSequenceState>();
+  auto updates = std::make_shared<SessionUpdateGateway>();
+  updates->bind([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
+  auto requests = std::make_shared<ClientRequestGateway>();
+  AcpSessionOptions options;
+  options.launch_root = ava::core::normalized_absolute_path(workspace);
+  options.paths = ava::tests::app_test_paths(root);
+  options.provider_bundle_factory = sequence_bundle_factory(provider_state, {acp_text_response("terminal refusal")});
+  options.client_capabilities = std::make_shared<ClientCapabilities const>();
+  options.updates = updates;
+  options.client_requests = requests;
+  AcpSessionRegistry registry(std::move(options));
+  auto host = registry.create(ava::core::normalized_absolute_path(workspace), std::make_shared<ava::mcp::McpConfig const>());
+  auto reservation = host ? (*host)->reserve_prompt() : ava::core::Result<std::uint64_t>(std::unexpected(host.error()));
+  std::shared_ptr<ava::app::SessionRunController> controller;
+  std::string run_id;
+  if (reservation)
+  {
+    auto session_r = (*host)->session_r();
+    controller = session_r->run_controller();
+    run_id = controller ? controller->snapshot().run_id : std::string{};
+  }
+  auto refused = reservation ? (*host)->prompt(AcpPromptContent{.text = "refuse terminal commit", .images = {}}, {}, *reservation, [] { return false; })
+                             : RequestResult(std::unexpected(JsonRpcError{}));
+  auto outcome = controller && !run_id.empty()
+                     ? controller->wait_outcome(run_id)
+                     : ava::core::Result<ava::app::RunOutcome>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing ACP run outcome")));
+  expect(host && reservation && !refused && outcome && outcome->reason == ava::app::StopReason::UserCanceled && outcome->error &&
+             outcome->error->code() == ava::core::ErrorCode::Canceled && outcome->error->format().find("boundary: before_terminal_commit") != std::string::npos,
+         "ACP terminal-commit refusal completes the admitted run as UserCanceled, not ProviderError");
+  registry.shutdown();
+  std::error_code cleanup;
+  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_client_tool_dtos_lifecycle_and_cancellation()
@@ -209,6 +249,41 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
           ava::core::json::integer_field(params[2], "limit") == 21 &&
           policies == std::vector<OutboundCallPolicy>({OutboundCallPolicy::Normal, OutboundCallPolicy::AbortConnectionIfDelivered, OutboundCallPolicy::Normal}),
       "ACP exact-file adapter emits exact full/windowed DTOs, ignores malformed optional response _meta, and uses fail-stop delivery only for writes");
+
+  auto const delegated_cancel_root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-delegated-read-cancel");
+  auto const delegated_cancel_workspace = delegated_cancel_root / "workspace";
+  std::filesystem::create_directories(delegated_cancel_workspace);
+  {
+    std::ofstream file(delegated_cancel_workspace / "note.txt");
+    file << "local placeholder";
+  }
+  auto delegated_cancel_secure = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(delegated_cancel_workspace));
+  auto delegated_cancel_gateway = std::make_shared<ClientRequestGateway>();
+  auto delegated_cancel_promise = std::make_shared<std::promise<CallResult>>();
+  bool cancellation_observable = false;
+  std::string canceled_method;
+  delegated_cancel_gateway->bind(
+      [&](std::string method, std::optional<std::string>, std::chrono::milliseconds, OutboundCallPolicy) -> ava::core::Result<PendingCall> {
+        canceled_method = method;
+        cancellation_observable = true;
+        return PendingCall{.id = std::string("delegated-read"), .completion = delegated_cancel_promise->get_future()};
+      },
+      [](JsonRpcId const&, std::string) { return true; });
+  ava::tools::ToolContext delegated_cancel_context{.workspace_dir = ava::core::normalized_absolute_path(delegated_cancel_workspace),
+                                                   .mode = ava::agent::Mode::Build,
+                                                   .cancel_requested = [&] { return cancellation_observable; },
+                                                   .secure_workspace = delegated_cancel_secure ? *delegated_cancel_secure : nullptr,
+                                                   .exact_file_access = make_client_exact_file_access("session-delegated-cancel", delegated_cancel_gateway)};
+  ava::agent::ToolDispatcher delegated_cancel_dispatcher(delegated_cancel_context);
+  auto delegated_cancel = delegated_cancel_dispatcher.dispatch(
+      ava::agent::ProviderToolCall{.id = "call_delegated_cancel", .name = "read_file", .arguments_json = R"({"path":"note.txt"})"});
+  expect(delegated_cancel_secure && delegated_cancel && !delegated_cancel->success &&
+             delegated_cancel->payload.status == ava::agent::ToolResultStatus::Canceled && canceled_method == "fs/read_text_file" &&
+             delegated_cancel->result_text.find("ACP client tool request canceled") != std::string::npos &&
+             delegated_cancel->result_text.find("method: fs/read_text_file") != std::string::npos,
+         "delegated ACP fs/read_text_file cancellation reaches tool dispatch as Canceled with unchanged wire diagnostics");
+  std::error_code delegated_cancel_cleanup;
+  std::filesystem::remove_all(delegated_cancel_root, delegated_cancel_cleanup);
 
   auto ambiguous_write_gateway = std::make_shared<ClientRequestGateway>();
   auto ambiguous_write_promise = std::make_shared<std::promise<CallResult>>();

@@ -21,6 +21,15 @@ enum class ErrorCategory
   Unknown,
 };
 
+// Internal control-flow identity; deliberately absent from format() and wire formats.
+enum class ErrorCode
+{
+  Unspecified,
+  Canceled,
+  ProviderEventLimit,
+  BodyOutputLimit,
+};
+
 struct ErrorContext
 {
   std::string key;
@@ -32,8 +41,9 @@ struct ErrorContext
 class Error
 {
  public:
-  Error(ErrorCategory category, std::string message);
+  Error(ErrorCategory category, std::string message, ErrorCode code = ErrorCode::Unspecified);
 
+  [[nodiscard]] ErrorCode code() const noexcept;
   [[nodiscard]] ErrorCategory category() const noexcept;
   [[nodiscard]] std::string const& message() const noexcept;
   [[nodiscard]] std::vector<ErrorContext> const& context() const noexcept;
@@ -45,6 +55,7 @@ class Error
 
  private:
   ErrorCategory category_;
+  ErrorCode code_;
   std::string message_;
   std::vector<ErrorContext> context_;
 };

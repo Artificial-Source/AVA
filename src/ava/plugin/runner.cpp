@@ -50,14 +50,7 @@ PluginProxyResponse proxy_error_response(ava::core::ErrorCategory category, std:
 
 bool error_is_canceled(ava::core::Error const& error)
 {
-  for (auto const& context : error.context())
-  {
-    if (context.key == "canceled" && context.value == "true")
-      return true;
-  }
-  return error.message() == "plugin startup canceled" || error.message() == "plugin tool call canceled" || error.message() == "plugin command call canceled" ||
-         error.message() == "plugin event observation canceled" || error.message() == "plugin resource list canceled" ||
-         error.message() == "plugin resource read canceled" || error.message() == "plugin request canceled" || error.message() == "tool canceled";
+  return error.code() == ava::core::ErrorCode::Canceled;
 }
 
 std::string_view proxy_capability_for_operation(std::string_view operation)

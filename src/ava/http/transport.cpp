@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/http/transport.h"
+#include "ava/observability/run_observer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -64,7 +65,7 @@ bool retry_cancel_requested(RetryOptions const& options, Transport::CancelCallba
 
 ava::core::Error retry_canceled_error()
 {
-  return ava::core::Error(ava::core::ErrorCategory::Unknown, "transport retry canceled");
+  return ava::core::Error(ava::core::ErrorCategory::Unknown, "transport retry canceled", ava::core::ErrorCode::Canceled);
 }
 
 std::optional<std::string_view> response_retry_reason(RetryOptions const& options, HttpResponse const& response)
@@ -148,14 +149,14 @@ ava::core::Result<HttpResponse> Transport::send(HttpRequest const& request, Canc
 {
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   auto response = send(request);
   if (!response)
     return std::unexpected(std::move(response.error()));
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   return response;
 }
@@ -164,14 +165,14 @@ ava::core::Result<HttpResponse> Transport::send_streaming(HttpRequest const& req
 {
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   auto response = send(request, cancel_requested);
   if (!response)
     return std::unexpected(std::move(response.error()));
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   if (response->status_code >= 200 && response->status_code < 300 && on_body_chunk && !response->body.empty())
   {
@@ -180,7 +181,7 @@ ava::core::Result<HttpResponse> Transport::send_streaming(HttpRequest const& req
   }
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   return response;
 }
