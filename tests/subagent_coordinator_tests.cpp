@@ -5,6 +5,7 @@
 #include "ava/agent/subagent_inspector.h"
 #include "ava/agent/subagent_inspector_source.h"
 #include "ava/session/session_store.h"
+#include "ava/session/subagent_job_history.h"
 
 #include <array>
 #include <atomic>
@@ -1555,6 +1556,134 @@ void test_owner_checked_bounded_steering_fifo()
          "steering is owner-checked FIFO, drains exactly once, rejects overflow, and closes on cancellation or terminal state");
 }
 
+struct CapturingHistorySink
+{
+  std::mutex mutex;
+  std::vector<ava::session::SessionEntry> entries;
+  bool fail_start = false;
+  bool fail_terminal = false;
+  std::size_t calls = 0;
+
+  ava::core::VoidResult operator()(ava::session::SessionEntry entry)
+  {
+    std::lock_guard lock(mutex);
+    ++calls;
+    auto parsed = ava::session::parse_subagent_job_history_entry(entry);
+    bool const start = parsed && *parsed && (*parsed)->phase == ava::session::SubagentJobHistoryPhase::Start;
+    if (start && fail_start)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "forced start history failure"));
+    if (!start && fail_terminal)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "forced terminal history failure"));
+    entries.push_back(std::move(entry));
+    return {};
+  }
+};
+
+void test_job_history_start_before_worker_and_immediate_completion_order()
+{
+  ava::agent::SubagentCoordinatorOptions options;
+  options.registry_options.wait_for_terminal_before_start_returns = true;
+  auto coordinator = coordinator_with(std::move(options));
+  if (!coordinator)
+    return;
+  auto sink = std::make_shared<CapturingHistorySink>();
+  std::atomic<int> worker_runs{0};
+  auto started = coordinator->start(
+      ava::agent::SubagentCoordinatorStartRequest{
+          .parent_session_id = "parent_history",
+          .mode = ava::agent::SubagentJobMode::Background,
+          .job = {.child_session_id = "child_history"},
+          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      [&](auto const&) {
+        ++worker_runs;
+        return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
+      });
+  expect(started && worker_runs == 1 && sink->entries.size() == 2, "immediate completion still persists start then terminal");
+  if (sink->entries.size() != 2)
+    return;
+  auto first = ava::session::parse_subagent_job_history_entry(sink->entries[0]);
+  auto second = ava::session::parse_subagent_job_history_entry(sink->entries[1]);
+  expect(first && *first && (*first)->phase == ava::session::SubagentJobHistoryPhase::Start && second && *second &&
+             (*second)->phase == ava::session::SubagentJobHistoryPhase::Terminal && (*second)->summary == "done",
+         "start and terminal history cannot reorder for immediate completion");
+}
+
+void test_job_history_start_failure_does_not_launch_worker()
+{
+  auto coordinator = coordinator_with();
+  if (!coordinator)
+    return;
+  auto sink = std::make_shared<CapturingHistorySink>();
+  sink->fail_start = true;
+  std::atomic<int> worker_runs{0};
+  auto started = coordinator->start(
+      ava::agent::SubagentCoordinatorStartRequest{
+          .parent_session_id = "parent_fail_start",
+          .mode = ava::agent::SubagentJobMode::Background,
+          .job = {.child_session_id = "child_fail_start"},
+          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      [&](auto const&) {
+        ++worker_runs;
+        return ava::agent::BackgroundJobCompletion{};
+      });
+  expect(!started && worker_runs == 0 && sink->entries.empty() &&
+             ava::agent::subagent_publication_commit_state(started.error()) == ava::agent::SubagentPublicationCommitState::ProvenUnpublished,
+         "start history failure does not launch a worker and stays unpublished");
+}
+
+void test_job_history_terminal_failure_keeps_worker_outcome()
+{
+  ava::agent::SubagentCoordinatorOptions options;
+  options.registry_options.wait_for_terminal_before_start_returns = true;
+  auto coordinator = coordinator_with(std::move(options));
+  if (!coordinator)
+    return;
+  auto sink = std::make_shared<CapturingHistorySink>();
+  sink->fail_terminal = true;
+  auto started = coordinator->start(
+      ava::agent::SubagentCoordinatorStartRequest{
+          .parent_session_id = "parent_fail_terminal",
+          .mode = ava::agent::SubagentJobMode::Background,
+          .job = {.child_session_id = "child_fail_terminal"},
+          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      [](auto const&) {
+        return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "kept", .stop_reason = "completed"};
+      });
+  expect(started && started->job.execution == ava::agent::SubagentExecutionState::Completed && started->job.summary == "kept" && sink->entries.size() == 1,
+         "terminal history failure does not mislabel the worker outcome and leaves unmatched start history");
+  auto projected = ava::session::project_subagent_job_history("parent_fail_terminal", sink->entries);
+  expect(projected.size() == 1 && projected[0].unmatched_start && projected[0].record.execution == ava::session::SubagentJobHistoryExecution::Interrupted,
+         "post-start terminal persistence failure yields conservative unknown history rather than false success");
+}
+
+void test_job_history_registry_start_failure_leaves_unmatched_start()
+{
+  ava::agent::SubagentCoordinatorOptions options;
+  options.registry_options.thread_start_preflight = [] {
+    return ava::core::VoidResult(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "forced thread start failure")));
+  };
+  auto coordinator = coordinator_with(std::move(options));
+  if (!coordinator)
+    return;
+  auto sink = std::make_shared<CapturingHistorySink>();
+  std::atomic<int> worker_runs{0};
+  auto started = coordinator->start(
+      ava::agent::SubagentCoordinatorStartRequest{
+          .parent_session_id = "parent_thread_fail",
+          .mode = ava::agent::SubagentJobMode::Background,
+          .job = {.child_session_id = "child_thread_fail"},
+          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      [&](auto const&) {
+        ++worker_runs;
+        return ava::agent::BackgroundJobCompletion{};
+      });
+  expect(!started && worker_runs == 0 && sink->entries.size() == 1 &&
+             ava::agent::subagent_publication_commit_state(started.error()) == ava::agent::SubagentPublicationCommitState::ProvenUnpublished,
+         "registry start failure after start history leaves unmatched start and does not launch the worker");
+  auto projected = ava::session::project_subagent_job_history("parent_thread_fail", sink->entries);
+  expect(projected.size() == 1 && projected[0].unmatched_start, "unmatched start history is interrupted/unknown after a failed launch");
+}
+
 void test_safe_bounds_attempt_validation_and_shutdown()
 {
   auto coordinator = coordinator_with();
@@ -1618,4 +1747,8 @@ void run_subagent_coordinator_tests()
   test_parent_maintenance_serializes_start_and_live_jobs();
   test_owner_checked_bounded_steering_fifo();
   test_safe_bounds_attempt_validation_and_shutdown();
+  test_job_history_start_before_worker_and_immediate_completion_order();
+  test_job_history_start_failure_does_not_launch_worker();
+  test_job_history_terminal_failure_keeps_worker_outcome();
+  test_job_history_registry_start_failure_leaves_unmatched_start();
 }

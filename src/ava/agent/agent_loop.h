@@ -156,6 +156,9 @@ struct AgentLoopOptions
   // commit are appended through one guarded authority.
   SessionAppendSink append_entry = nullptr;
   SessionAppendBatchSink append_batch = nullptr;
+  // Cross-turn owner append used only for durable job history. Must not be the
+  // run-scoped append_entry sink; that expires with the parent turn.
+  SessionAppendSink job_history_append = nullptr;
   // Copyable exact-lease (or in-memory) authority used for every history read.
   std::optional<ava::session::SessionReadAuthority> session_read_authority = std::nullopt;
   // Must match the policy established when the runtime session was opened.

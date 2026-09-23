@@ -258,6 +258,7 @@ set(AVA_TESTS_SOURCES
   "session_stats_tests.cpp"
   "session_store_tests.cpp"
   "session_tree_tests.cpp"
+  "session_subagent_job_history_tests.cpp"
   "session_run_controller_tests.cpp"
   "session_title_coordinator_tests.cpp"
   "subagent_coordinator_tests.cpp"

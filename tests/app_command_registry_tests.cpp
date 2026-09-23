@@ -10,6 +10,7 @@
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/session/session_store.h"
+#include "ava/session/subagent_job_history.h"
 #include "ava/permissions/permission.h"
 
 #include <algorithm>
@@ -598,6 +599,107 @@ void test_project_trust_gates_project_resource_commands()
          "/reload trust removes project prompt and skill commands after denial");
 }
 
+void test_jobs_command_reads_owned_session_history_after_reopen_path()
+{
+  auto const root = create_empty_root("command-registry-jobs-history");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  auto unlocked_session = open_test_session(root, workspace);
+  std::string session_id;
+  ava::agent::SessionAppendSink owner;
+  {
+    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    session_id = session_r->store.session_id();
+    owner = session_r->owner_append_route_1();
+  }
+  ava::session::SubagentJobHistoryRecord record;
+  record.phase = ava::session::SubagentJobHistoryPhase::Terminal;
+  record.job_id = "job_session_hist";
+  record.task_id = "session_child";
+  record.parent_session_id = session_id;
+  record.child_session_id = "session_child";
+  record.delivery_id = "delivery_session_hist";
+  record.mode = ava::session::SubagentJobHistoryMode::Background;
+  record.execution = ava::session::SubagentJobHistoryExecution::Completed;
+  record.started_at = "2026-05-01T00:00:00Z";
+  record.updated_at = "2026-05-01T00:00:01Z";
+  record.terminal_at = "2026-05-01T00:00:01Z";
+  record.summary = "session recorded summary";
+  auto entry = ava::session::make_subagent_job_history_entry(record);
+  expect(entry && owner, "owned session history fixture writes through owner_append_route");
+  if (!entry || !owner)
+    return;
+  auto appended = owner(std::move(*entry));
+  expect(appended.has_value(), appended ? "owner_append_route accepts job history" : appended.error().format());
+  auto listed = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/jobs list"});
+  auto shown = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/jobs show job_session_hist"});
+  auto result = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/jobs result job_session_hist"});
+  auto canceled = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/jobs cancel job_session_hist"});
+  expect(listed && !listed->output.empty() && listed->output[0].find("job_session_hist") != std::string::npos &&
+             listed->output[0].find("historical") != std::string::npos && shown && !shown->output.empty() && shown->output[0].find("Completed") != std::string::npos &&
+             result && !result->output.empty() && result->output[0].find("session recorded summary") != std::string::npos && canceled && !canceled->output.empty() &&
+             canceled->output[0].find("display-only") != std::string::npos,
+         "/jobs after reopen-style owned session load shows recorded history without granting live controls");
+}
+
+void test_jobs_command_merges_recorded_history_without_live_controls()
+{
+  ava::session::SubagentJobHistoryView completed;
+  completed.record.phase = ava::session::SubagentJobHistoryPhase::Terminal;
+  completed.record.job_id = "job_hist_done";
+  completed.record.task_id = "session_child";
+  completed.record.parent_session_id = "session_parent";
+  completed.record.child_session_id = "session_child";
+  completed.record.delivery_id = "delivery_hist";
+  completed.record.mode = ava::session::SubagentJobHistoryMode::Background;
+  completed.record.execution = ava::session::SubagentJobHistoryExecution::Completed;
+  completed.record.started_at = "2026-05-01T00:00:00Z";
+  completed.record.updated_at = "2026-05-01T00:00:01Z";
+  completed.record.terminal_at = "2026-05-01T00:00:01Z";
+  completed.record.summary = "recorded summary";
+
+  ava::session::SubagentJobHistoryView unmatched;
+  unmatched.record = completed.record;
+  unmatched.record.job_id = "job_hist_open";
+  unmatched.record.phase = ava::session::SubagentJobHistoryPhase::Start;
+  unmatched.record.execution = ava::session::SubagentJobHistoryExecution::Interrupted;
+  unmatched.record.terminal_at = std::nullopt;
+  unmatched.record.summary = std::nullopt;
+  unmatched.unmatched_start = true;
+
+  auto listed = ava::app::run_jobs_command(nullptr, "session_parent", "list", false, {completed, unmatched});
+  auto history = ava::app::run_jobs_command(nullptr, "session_parent", "history", false, {completed, unmatched});
+  auto show = ava::app::run_jobs_command(nullptr, "session_parent", "show job_hist_done", false, {completed, unmatched});
+  auto result = ava::app::run_jobs_command(nullptr, "session_parent", "result job_hist_done", false, {completed, unmatched});
+  auto unknown = ava::app::run_jobs_command(nullptr, "session_parent", "result job_hist_open", false, {completed, unmatched});
+  auto cancel = ava::app::run_jobs_command(nullptr, "session_parent", "cancel job_hist_done", false, {completed, unmatched});
+  expect(listed && !listed->output.empty() && listed->output[0].find("job_hist_done") != std::string::npos && listed->output[0].find("historical") != std::string::npos &&
+             history && !history->output.empty() && history->output[0].rfind("Job history", 0) == 0 && show && !show->output.empty() &&
+             show->output[0].find("Completed") != std::string::npos && result && !result->output.empty() &&
+             result->output[0].find("recorded summary") != std::string::npos && unknown && !unknown->output.empty() &&
+             unknown->output[0].find("outcome unknown") != std::string::npos && cancel && !cancel->output.empty() &&
+             cancel->output[0].find("display-only") != std::string::npos,
+         "/jobs list/history/show/result expose recorded history while controls reject historical-only jobs");
+
+  auto coordinator = ava::agent::SubagentCoordinator::create();
+  expect(coordinator.has_value(), "history merge live-wins fixture creates a coordinator");
+  if (!coordinator)
+    return;
+  auto started = (*coordinator)->start_background("session_parent", {.child_session_id = "session_live_child"}, [](auto const&) {
+    return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "live", .stop_reason = "completed"};
+  });
+  expect(started.has_value(), "history merge live-wins fixture starts");
+  if (!started)
+    return;
+  ava::session::SubagentJobHistoryView stale = completed;
+  stale.record.job_id = started->job.identity.job_id;
+  stale.record.summary = "stale recorded summary";
+  auto merged = ava::app::run_jobs_command(*coordinator, "session_parent", "list", false, {stale});
+  expect(merged && !merged->output.empty() && merged->output[0].find(started->job.identity.job_id) != std::string::npos &&
+             merged->output[0].find("stale recorded summary") == std::string::npos && merged->output[0].find("historical") == std::string::npos,
+         "live jobs win over recorded history for the same id");
+}
+
 }  // namespace
 
 void run_app_command_registry_tests()
@@ -608,5 +710,7 @@ void run_app_command_registry_tests()
   test_mcp_prompts_are_registry_entries_and_permissioned_prompts();
   test_builtin_session_alias_registers_as_current_stats_command();
   test_interactive_jobs_human_output_keeps_public_json_contract();
+  test_jobs_command_reads_owned_session_history_after_reopen_path();
+  test_jobs_command_merges_recorded_history_without_live_controls();
   test_project_trust_gates_project_resource_commands();
 }

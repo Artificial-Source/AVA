@@ -819,13 +819,15 @@ void add_backend_argument_completions(std::vector<tui::SlashCommandItem>& items,
   if (auto index = find_item_index(items, "/jobs"))
   {
     auto& item = items[*index];
-    for (auto const& action : {"show", "wait", "result", "cancel", "promote"}) add_completion(item, 0, action, "Subagent job control", "Sessions");
+    for (auto const& action : {"list", "history", "show", "wait", "result", "cancel", "promote"})
+      add_completion(item, 0, action, "Subagent job control", "Sessions");
     if (subagent_coordinator)
     {
       auto const jobs = subagent_coordinator->list(session_id);
       std::vector<std::string> job_ids;
       job_ids.reserve(jobs.size());
-      for (auto const& snapshot : jobs) job_ids.push_back(snapshot.job.identity.job_id);
+      for (auto const& snapshot : jobs)
+        job_ids.push_back(snapshot.job.identity.job_id);
       auto const job_refs = unique_short_id_refs(job_ids);
       for (std::size_t job_index = 0; job_index < jobs.size(); ++job_index)
       {
@@ -875,7 +877,8 @@ void add_backend_argument_completions(std::vector<tui::SlashCommandItem>& items,
     {
       std::vector<std::string> rule_ids;
       rule_ids.reserve(rules->size());
-      for (auto const& rule : *rules) rule_ids.push_back(rule.rule_id);
+      for (auto const& rule : *rules)
+        rule_ids.push_back(rule.rule_id);
       auto const rule_refs = unique_short_id_refs(rule_ids);
       for (std::size_t rule_index = 0; rule_index < rules->size(); ++rule_index)
       {

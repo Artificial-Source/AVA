@@ -558,6 +558,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
         .subagent_coordinator = session_r->subagent_coordinator(),
         .append_entry = append_route,
         .append_batch = std::move(append_batch_route),
+        .job_history_append = session_r->owner_append_route_1(),
         .session_read_authority = std::move(*session_read_authority),
         .session_read_limits = session_r->session_read_limits(),
         .synthetic_user_message_provenance = runtime_options.synthetic_subagent_delivery ? runtime_options.synthetic_user_message_provenance : std::nullopt,

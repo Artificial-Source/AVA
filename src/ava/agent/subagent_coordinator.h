@@ -4,6 +4,7 @@
 #include "ava/agent/background_job_registry.h"
 #include "ava/agent/question.h"
 #include "ava/agent/subagent_job.h"
+#include "ava/session/session_store.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/result.h"
 
@@ -80,6 +81,10 @@ class SubagentSteeringQueue final
   friend class SubagentCoordinator;
 };
 
+// Per-job owner-append callback for bounded start/terminal history. Bind the
+// parent session's owner_append_route, never a run-scoped append sink.
+using SubagentJobHistoryAppend = std::function<ava::core::VoidResult(ava::session::SessionEntry)>;
+
 // Coordinator-owned launch request. Private launch presentation crosses the
 // ownership boundary here and never enters BackgroundJobStartOptions/registry.
 struct SubagentCoordinatorStartRequest
@@ -89,6 +94,7 @@ struct SubagentCoordinatorStartRequest
   BackgroundJobStartOptions job;
   SubagentLaunchDisplay launch_display = {};
   std::shared_ptr<SubagentSteeringQueue> steering_queue = nullptr;
+  SubagentJobHistoryAppend history_append = nullptr;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };

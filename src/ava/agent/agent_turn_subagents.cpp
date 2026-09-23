@@ -421,7 +421,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
                                         .mode = request.background ? SubagentJobMode::Background : SubagentJobMode::Foreground,
                                         .job = std::move(start_options),
                                         .launch_display = run_state->child_options.subagent_launch.display,
-                                        .steering_queue = std::move(steering_queue)},
+                                        .steering_queue = std::move(steering_queue),
+                                        .history_append = options_.job_history_append},
         std::move(worker), interaction_gate, std::move(*inspection_source));
     if (!coordinated)
     {

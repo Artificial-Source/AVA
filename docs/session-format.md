@@ -50,7 +50,7 @@ Current AVA entry type strings are:
 | Type | Purpose |
 | --- | --- |
 | `session_start` | Runtime/model metadata captured when a session starts. |
-| `session_metadata` | Append-only display/tree metadata such as name, labels, archive state, and branch provenance. |
+| `session_metadata` | Append-only display/tree metadata such as name, labels, archive state, branch provenance, and optional nested display-only `subagent_job` history. |
 | `user_message` | User text and optional image attachment metadata. |
 | `assistant_message` | Final assistant text plus usage/cost metadata when known. |
 | `tool_call` | Provider-requested tool call and arguments. |
@@ -160,6 +160,19 @@ Validation requires a non-empty `summary`, boolean `summary_unavailable` when pr
 - `branch_from_entry_id`: entry id in the source session.
 - `branch_origin`: empty or one of `root`, `fork`, `clone`, `manual`, `import`.
 - `actor`: optional string, at most 64 bytes.
+- `subagent_job`: optional nested object, `schema_version:1`. Display-only background/subagent job history. It is not tree metadata and does not affect titles, labels, or model context. Older sessions without the field remain valid.
+
+When present, `subagent_job` is strictly typed:
+
+- `phase`: `start` or `terminal`.
+- `job_id`, `task_id`, `parent_session_id`, `child_session_id`, `delivery_id`: non-empty identifiers, at most 96 bytes, `[A-Za-z0-9_.:-]`.
+- `mode`: `foreground` or `background`.
+- `execution`: `starting` for start records; terminal records use `completed`, `failed`, `canceled`, or `interrupted`.
+- `started_at`, `updated_at`: required timestamps; `terminal_at` is required on terminal records.
+- Optional bounded `summary` (16 KiB), `error` (4 KiB), `stop_reason` (1 KiB), truncation booleans, `error_category`, and non-negative accounting counters.
+- Records never store credentials, prompts, raw tool args, paths, or launch authority.
+
+Readers project at most the latest 64 unique jobs whose `parent_session_id` matches the current session. Forks must not inherit control. Unmatched start records display as interrupted with outcome unknown. Append-only disk size grows with ordinary session history; this is not a fixed disk bound.
 
 The effective display title is the latest manual `name` whenever any `name` field has appeared; otherwise it is the latest `generated_title`. Consequently `name:""` is an explicit durable suppression of generated display titles, even if a later record contains `generated_title`. Sessions written before `generated_title` remain valid and keep their existing manual/untitled behavior; readers that do not know the additive field may ignore it.
 
