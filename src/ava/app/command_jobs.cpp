@@ -10,6 +10,7 @@
 #include <cctype>
 #include <charconv>
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -341,6 +342,53 @@ std::string format_human_job_snapshot(ava::agent::SubagentCoordinatorJobSnapshot
   return output;
 }
 
+enum class JobsCommandKind
+{
+  DisplayList,
+  DisplayHistory,
+  Show,
+  Result,
+  LiveControl,
+  Usage,
+};
+
+JobsCommandKind classify_jobs_command(std::string_view arguments)
+{
+  auto const parts = split(arguments);
+  if (parts.empty() || (parts.size() == 1 && parts.front() == "list"))
+    return JobsCommandKind::DisplayList;
+  if (parts.size() == 1 && parts.front() == "history")
+    return JobsCommandKind::DisplayHistory;
+  auto const action = parts.front();
+  std::size_t const expected_min = 2;
+  std::size_t const expected_max = action == "wait" ? 3 : 2;
+  if ((action != "show" && action != "wait" && action != "result" && action != "cancel" && action != "promote") || parts.size() < expected_min ||
+      parts.size() > expected_max || !safe_job_id(parts[1]))
+  {
+    return JobsCommandKind::Usage;
+  }
+  if (action == "show")
+    return JobsCommandKind::Show;
+  if (action == "result")
+    return JobsCommandKind::Result;
+  return JobsCommandKind::LiveControl;
+}
+
+bool live_job_visible(std::shared_ptr<ava::agent::SubagentCoordinator> const& coordinator, std::string_view parent_session_id, std::string_view arguments,
+                      JobsCommandKind kind)
+{
+  if (!coordinator || (kind != JobsCommandKind::Show && kind != JobsCommandKind::Result))
+    return false;
+  auto const parts = split(arguments);
+  if (parts.size() < 2)
+    return false;
+  auto snapshot = kind == JobsCommandKind::Show ? coordinator->snapshot(std::string(parent_session_id), parts[1])
+                                                : coordinator->result(std::string(parent_session_id), parts[1]);
+  if (snapshot)
+    return true;
+  return snapshot.error().category() != ava::core::ErrorCategory::NotFound;
+}
+
 }  // namespace
 
 std::optional<std::string_view> active_jobs_command_arguments(std::string_view submitted) noexcept
@@ -360,6 +408,31 @@ std::optional<std::string_view> active_jobs_command_arguments(std::string_view s
   return arguments;
 }
 
+JobsHistorySnapshot load_jobs_history_snapshot(runtime::session_ts const& unlocked_session, std::string_view parent_session_id)
+{
+  JobsHistorySnapshot snapshot;
+  auto entries = session_command_support::load_runtime_entries(unlocked_session);
+  if (!entries)
+  {
+    snapshot.load_error = entries.error();
+    return snapshot;
+  }
+  snapshot.records = ava::session::project_subagent_job_history(parent_session_id, *entries);
+  return snapshot;
+}
+
+JobsCommandBinding capture_jobs_command_binding(runtime::session_ts& unlocked_session)
+{
+  JobsCommandBinding binding;
+  {
+    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    binding.coordinator = session_r->subagent_coordinator();
+    binding.parent_session_id = session_r->store.session_id();
+  }
+  binding.history = load_jobs_history_snapshot(unlocked_session, binding.parent_session_id);
+  return binding;
+}
+
 ava::core::Result<CommandResult> run_jobs_command_1(runtime::session_ts& unlocked_session, std::string_view arguments)
 {
   std::shared_ptr<ava::agent::SubagentCoordinator> coordinator;
@@ -369,19 +442,24 @@ ava::core::Result<CommandResult> run_jobs_command_1(runtime::session_ts& unlocke
     coordinator = session_r->subagent_coordinator();
     session_id = session_r->store.session_id();
   }
-  auto entries = session_command_support::load_runtime_entries(unlocked_session);
-  if (!entries)
-  {
-    CommandResult result;
-    result.handled = true;
-    add_error(result, entries.error());
-    return result;
-  }
-  return run_jobs_command(coordinator, session_id, arguments, false, ava::session::project_subagent_job_history(session_id, *entries));
+  auto const kind = classify_jobs_command(arguments);
+  JobsHistorySnapshot history;
+  bool const needs_history =
+      kind == JobsCommandKind::DisplayList || kind == JobsCommandKind::DisplayHistory ||
+      ((kind == JobsCommandKind::Show || kind == JobsCommandKind::Result) && !live_job_visible(coordinator, session_id, arguments, kind));
+  if (needs_history)
+    history = load_jobs_history_snapshot(unlocked_session, session_id);
+  return run_jobs_command(coordinator, session_id, arguments, false, std::move(history.records), std::move(history.load_error));
+}
+
+ava::core::Result<CommandResult> run_jobs_command(JobsCommandBinding const& binding, std::string_view arguments, bool active_run)
+{
+  return run_jobs_command(binding.coordinator, binding.parent_session_id, arguments, active_run, binding.history.records, binding.history.load_error);
 }
 
 ava::core::Result<CommandResult> run_jobs_command(std::shared_ptr<ava::agent::SubagentCoordinator> const& coordinator, std::string_view parent_session_id,
-                                                  std::string_view arguments, bool active_run, std::vector<ava::session::SubagentJobHistoryView> historical)
+                                                  std::string_view arguments, bool active_run, std::vector<ava::session::SubagentJobHistoryView> historical,
+                                                  std::optional<ava::core::Error> history_error)
 {
   CommandResult result;
   result.handled = true;
@@ -394,11 +472,18 @@ ava::core::Result<CommandResult> run_jobs_command(std::shared_ptr<ava::agent::Su
 
   if (parts.empty() || (parts.size() == 1 && parts.front() == "list"))
   {
+    if (history_error)
+      add_error(result, *history_error);
     result.output.push_back(format_human_job_list(merge_job_snapshots(live, historical), live_ids, false, true));
     return result;
   }
   if (parts.size() == 1 && parts.front() == "history")
   {
+    if (history_error)
+    {
+      add_error(result, *history_error);
+      return result;
+    }
     std::unordered_map<std::string, ava::agent::SubagentCoordinatorJobSnapshot> live_by_id;
     for (auto const& snapshot : live)
       live_by_id.emplace(snapshot.job.identity.job_id, snapshot);
@@ -457,6 +542,11 @@ ava::core::Result<CommandResult> run_jobs_command(std::shared_ptr<ava::agent::Su
       result.output.push_back(format_human_job_snapshot(snapshot_from_history(*historical_view), content, true, historical_view->unmatched_start));
       return result;
     }
+    if (!snapshot && history_error)
+    {
+      add_error(result, *history_error);
+      return result;
+    }
   }
   else if (action == "wait")
   {
@@ -477,6 +567,11 @@ ava::core::Result<CommandResult> run_jobs_command(std::shared_ptr<ava::agent::Su
     if (!snapshot && historical_view)
     {
       result.output.push_back(format_human_job_snapshot(snapshot_from_history(*historical_view), content, true, historical_view->unmatched_start));
+      return result;
+    }
+    if (!snapshot && history_error)
+    {
+      add_error(result, *history_error);
       return result;
     }
   }

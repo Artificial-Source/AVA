@@ -418,14 +418,8 @@ int run_tui(ShellState state)
       .reasoning_status_provider = [&unlocked_session]() { return ava::app::reasoning_status_for_session(unlocked_session); },
       .create_active_run_queues =
           [&unlocked_session](ava::event::EventEnvelopeSink event_sink) {
-            std::shared_ptr<ava::agent::SubagentCoordinator> active_job_coordinator;
-            std::string active_job_owner;
-            {
-              SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-              active_job_coordinator = session_r->subagent_coordinator();
-              active_job_owner = session_r->store.session_id();
-            }
-            auto queue = std::make_shared<ava::app::InteractiveRunQueue>(active_job_owner, ava::core::make_id("request"), std::move(event_sink));
+            auto jobs_binding = ava::app::capture_jobs_command_binding(unlocked_session);
+            auto queue = std::make_shared<ava::app::InteractiveRunQueue>(jobs_binding.parent_session_id, ava::core::make_id("request"), std::move(event_sink));
             return ava::tui::TuiActiveRunQueues{
                 .active_request_id = queue->active_request_id(),
                 .queue_steering = [queue](std::string message) { return queue->queue_steering(std::move(message)); },
@@ -449,11 +443,11 @@ int run_tui(ShellState state)
                     return std::unexpected(std::move(restored.error()));
                   return ava::tui::TuiRestoredQueuedMessage{.message = restored->message, .steering = restored->steering};
                 },
-                .run_nonblocking_command = [active_job_coordinator, active_job_owner](std::string const& submitted) -> std::optional<std::vector<std::string>> {
+                .run_nonblocking_command = [jobs_binding](std::string const& submitted) -> std::optional<std::vector<std::string>> {
                   auto arguments = ava::app::active_jobs_command_arguments(submitted);
                   if (!arguments)
                     return std::nullopt;
-                  auto command = ava::app::run_jobs_command(active_job_coordinator, active_job_owner, *arguments, true);
+                  auto command = ava::app::run_jobs_command(jobs_binding, *arguments, true);
                   if (!command)
                     return std::vector<std::string>{command.error().format()};
                   return std::move(command->output);

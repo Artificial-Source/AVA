@@ -662,8 +662,8 @@ void test_jobs_command_reads_owned_session_history_after_reopen_path()
              listed->output[0].find("historical") != std::string::npos && result && !result->output.empty() &&
              result->output[0].find("session recorded summary") != std::string::npos && unknown && !unknown->output.empty() &&
              unknown->output[0].find("Interrupted") != std::string::npos && unknown->output[0].find("outcome unknown") != std::string::npos && canceled &&
-             !canceled->output.empty() && canceled->output[0].find("display-only") != std::string::npos,
-         "/jobs after actual reopen shows recorded history, unmatched starts as interrupted/unknown, and rejects live controls");
+             !canceled->output.empty() && canceled->output[0].find("not found") != std::string::npos,
+         "/jobs after actual reopen shows recorded history, unmatched starts as interrupted/unknown, and live cancel does not require a history read");
 }
 
 void test_jobs_command_merges_recorded_history_without_live_controls()
@@ -791,6 +791,180 @@ void test_jobs_history_overlays_live_running_unmatched_start()
   expect(terminal && !terminal->timed_out, "history live-overlay fixture joins the blocked worker");
 }
 
+void test_jobs_live_cancel_survives_historical_read_failure()
+{
+  struct BlockingWorker
+  {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool started = false;
+    bool release = false;
+
+    ava::agent::BackgroundJobCompletion run(ava::agent::BackgroundJobContext const& context)
+    {
+      std::stop_callback wake_on_stop(context.stop_token, [&] { changed.notify_all(); });
+      std::unique_lock lock(mutex);
+      started = true;
+      changed.notify_all();
+      changed.wait(lock, [&] { return release || context.stop_token.stop_requested(); });
+      if (context.stop_token.stop_requested())
+        return {.state = ava::agent::BackgroundJobState::Canceled, .final_text = {}, .stop_reason = "canceled"};
+      return {.state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
+    }
+
+    bool wait_started()
+    {
+      std::unique_lock lock(mutex);
+      return changed.wait_for(lock, std::chrono::seconds(2), [&] { return started; });
+    }
+  };
+
+  auto const root = create_empty_root("command-registry-jobs-read-failure");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  ava::app::runtime::OpenContext options;
+  options.workspace_dir = workspace;
+  options.current_dir = workspace;
+  options.paths = app_test_paths(root);
+  options.session_read_limits = ava::session::SessionReadLimits{.max_file_bytes = 8U * 1024U * 1024U, .max_line_bytes = 1024U * 1024U, .max_entries = 4};
+  auto unlocked_session_result = ava::app::runtime::Session::open(options);
+  expect(unlocked_session_result.has_value(),
+         unlocked_session_result ? "read-failure fixture opens a bounded session" : unlocked_session_result.error().format());
+  if (!unlocked_session_result)
+    return;
+  auto& unlocked_session = *unlocked_session_result;
+  std::shared_ptr<ava::agent::SubagentCoordinator> coordinator;
+  std::string session_id;
+  ava::agent::SessionAppendSink owner;
+  {
+    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    coordinator = session_r->subagent_coordinator();
+    session_id = session_r->store.session_id();
+    owner = session_r->owner_append_route_1();
+  }
+  expect(coordinator && owner, "read-failure fixture has coordinator and owner append");
+  if (!coordinator || !owner)
+    return;
+  auto worker = std::make_shared<BlockingWorker>();
+  auto started =
+      coordinator->start_background(session_id, {.child_session_id = "child_read_fail"}, [worker](auto const& context) { return worker->run(context); });
+  expect(started && worker->wait_started(), "read-failure fixture starts a live job");
+  if (!started)
+    return;
+  for (int index = 0; index < 8; ++index)
+  {
+    auto appended = owner(ava::session::SessionEntry{.id = "entry_overflow_" + std::to_string(index),
+                                                     .parent_id = "",
+                                                     .type = ava::session::EntryType::UserMessage,
+                                                     .timestamp = "2026-05-01T00:00:00Z",
+                                                     .data_json = "{\"text\":\"overflow\"}"});
+    expect(appended.has_value(), appended ? "read-failure fixture appends extra history" : appended.error().format());
+  }
+  auto history = ava::app::load_jobs_history_snapshot(unlocked_session, session_id);
+  expect(history.load_error.has_value(), "bounded session history read fails after extra entries");
+  auto usage = ava::app::run_jobs_command_1(unlocked_session, "not-a-command");
+  auto listed = ava::app::run_jobs_command_1(unlocked_session, "list");
+  auto canceled = ava::app::run_jobs_command_1(unlocked_session, "cancel " + started->job.identity.job_id);
+  expect(usage && !usage->output.empty() && usage->output[0].rfind("usage:", 0) == 0 && listed && !listed->output.empty() &&
+             listed->output[0].find("jobs:") == 0 && listed->output.size() >= 2 &&
+             listed->output.back().find(started->job.identity.job_id) != std::string::npos && canceled && !canceled->output.empty() &&
+             (canceled->output[0].find("Canceled") != std::string::npos || canceled->output[0].find("cancel requested") != std::string::npos),
+         "live cancel and usage succeed when historical session reads fail, while list reports the read error and still shows live jobs");
+}
+
+void test_jobs_active_run_binding_overlays_captured_history()
+{
+  auto const root = create_empty_root("command-registry-jobs-active-binding");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  auto unlocked_session = open_test_session(root, workspace);
+  std::string session_id;
+  ava::agent::SessionAppendSink owner;
+  {
+    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    session_id = session_r->store.session_id();
+    owner = session_r->owner_append_route_1();
+  }
+  ava::session::SubagentJobHistoryRecord completed;
+  completed.phase = ava::session::SubagentJobHistoryPhase::Terminal;
+  completed.job_id = "job_bound_done";
+  completed.task_id = "session_child";
+  completed.parent_session_id = session_id;
+  completed.child_session_id = "session_child";
+  completed.delivery_id = "delivery_bound";
+  completed.mode = ava::session::SubagentJobHistoryMode::Background;
+  completed.execution = ava::session::SubagentJobHistoryExecution::Completed;
+  completed.started_at = "2026-05-01T00:00:00Z";
+  completed.updated_at = "2026-05-01T00:00:01Z";
+  completed.terminal_at = "2026-05-01T00:00:01Z";
+  completed.summary = "captured summary";
+  auto entry = ava::session::make_subagent_job_history_entry(completed);
+  expect(entry && owner, "active-run binding fixture writes captured history");
+  if (!entry || !owner)
+    return;
+  expect(owner(std::move(*entry)).has_value(), "active-run binding fixture appends history");
+  std::shared_ptr<ava::agent::SubagentCoordinator> coordinator;
+  {
+    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    coordinator = session_r->subagent_coordinator();
+  }
+  struct BindingWorker
+  {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool started = false;
+    bool release = false;
+    ava::agent::BackgroundJobCompletion run(ava::agent::BackgroundJobContext const& context)
+    {
+      std::stop_callback wake_on_stop(context.stop_token, [&] { changed.notify_all(); });
+      std::unique_lock lock(mutex);
+      started = true;
+      changed.notify_all();
+      changed.wait(lock, [&] { return release || context.stop_token.stop_requested(); });
+      return {.state = ava::agent::BackgroundJobState::Completed, .final_text = "live", .stop_reason = "completed"};
+    }
+    bool wait_started()
+    {
+      std::unique_lock lock(mutex);
+      return changed.wait_for(lock, std::chrono::seconds(2), [&] { return started; });
+    }
+    void finish()
+    {
+      std::lock_guard lock(mutex);
+      release = true;
+      changed.notify_all();
+    }
+  };
+  auto worker = std::make_shared<BindingWorker>();
+  auto live = coordinator ? coordinator->start_background(session_id, {.child_session_id = "child_bound_live"},
+                                                          [worker](auto const& context) { return worker->run(context); })
+                          : ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot>(
+                                std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "missing coordinator")));
+  expect(live && worker->wait_started(), "active-run binding fixture starts a live job");
+  if (!live)
+    return;
+  auto binding = ava::app::capture_jobs_command_binding(unlocked_session);
+  expect(!binding.history.load_error && !binding.history.records.empty() && binding.parent_session_id == session_id,
+         "capture_jobs_command_binding reads history once without a live session reference");
+  auto listed = ava::app::run_jobs_command(binding, "list", true);
+  auto history = ava::app::run_jobs_command(binding, "history", true);
+  auto shown_hist = ava::app::run_jobs_command(binding, "show job_bound_done", true);
+  auto shown_live = ava::app::run_jobs_command(binding, "show " + live->job.identity.job_id, true);
+  auto waited = ava::app::run_jobs_command(binding, "wait job_bound_done", true);
+  auto resulted = ava::app::run_jobs_command(binding, "result job_bound_done", true);
+  expect(listed && !listed->output.empty() && listed->output[0].find("job_bound_done") != std::string::npos &&
+             listed->output[0].find(live->job.identity.job_id) != std::string::npos && history && !history->output.empty() &&
+             history->output[0].rfind("Job history", 0) == 0 && history->output[0].find("job_bound_done") != std::string::npos && shown_hist &&
+             !shown_hist->output.empty() && shown_hist->output[0].find("Completed") != std::string::npos && shown_live && !shown_live->output.empty() &&
+             shown_live->output[0].find("Running") != std::string::npos && waited && !waited->output.empty() &&
+             waited->output[0].find("may block") != std::string::npos && resulted && !resulted->output.empty() &&
+             resulted->output[0].find("may block") != std::string::npos,
+         "active-run binding lists captured history with live overlay and still rejects wait/result");
+  worker->finish();
+  if (coordinator)
+    static_cast<void>(coordinator->wait(session_id, live->job.identity.job_id, std::chrono::seconds(2)));
+}
+
 }  // namespace
 
 void run_app_command_registry_tests()
@@ -804,5 +978,7 @@ void run_app_command_registry_tests()
   test_jobs_command_reads_owned_session_history_after_reopen_path();
   test_jobs_command_merges_recorded_history_without_live_controls();
   test_jobs_history_overlays_live_running_unmatched_start();
+  test_jobs_live_cancel_survives_historical_read_failure();
+  test_jobs_active_run_binding_overlays_captured_history();
   test_project_trust_gates_project_resource_commands();
 }
