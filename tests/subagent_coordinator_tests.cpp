@@ -1741,12 +1741,13 @@ void test_job_history_terminal_append_gates_automatic_delivery()
   expect(history->wait_entered_terminal(), "terminal history append is entered before automatic delivery");
   auto pending_blocked = coordinator->pending_deliveries("parent_gate_delivery");
   auto snap_blocked = coordinator->snapshot("parent_gate_delivery", started->job.identity.job_id);
+  auto raced_attempt = coordinator->record_delivery_attempt("parent_gate_delivery", started->job.identity.job_id, "attempt_early", "fingerprint_early");
   {
     std::lock_guard lock(notify_mutex);
     expect(notifications == 0 && pending_blocked && pending_blocked->empty() && snap_blocked &&
                snap_blocked->job.execution == ava::agent::SubagentExecutionState::Completed &&
-               snap_blocked->job.delivery == ava::agent::SubagentDeliveryState::Direct,
-           "blocked terminal history append does not arm Pending or automatic delivery");
+               snap_blocked->job.delivery == ava::agent::SubagentDeliveryState::Pending && !raced_attempt,
+           "blocked terminal history append shows Pending but does not expose automatic delivery");
   }
   coordinator->set_terminal_sink([&](ava::agent::SubagentCoordinatorJobSnapshot const&) {
     std::lock_guard lock(notify_mutex);

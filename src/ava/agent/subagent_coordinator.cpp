@@ -530,8 +530,8 @@ struct SubagentCoordinator::JobState
   bool terminal_notification_pending = false;
   bool terminal_notification_emitted = false;
   bool delivery_exhausted = false;
-  // False while a background terminal history append is in flight so prune
-  // and automatic delivery cannot treat the job as Direct-complete or Pending.
+  // False while a background terminal history append is in flight. Public
+  // terminal+Pending is already visible; automatic delivery and prune wait.
   bool delivery_arm_ready = true;
   std::size_t sequence = 0;
 };
@@ -1018,7 +1018,12 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
       state->snapshot.error_truncated = normalize_text(*state->snapshot.error, kMaxErrorBytes, "subagent job failed");
     }
     if (state->snapshot.mode == SubagentJobMode::Background)
+    {
+      state->snapshot.delivery = SubagentDeliveryState::Pending;
+      state->snapshot.delivery_pending_at = now;
+      state->terminal_notification_pending = true;
       state->delivery_arm_ready = false;
+    }
     if (state->steering_queue)
       state->steering_queue->close();
     // Terminal inspection handoff: move the source local, bump source epoch so
@@ -1077,20 +1082,15 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
 
   {
     std::lock_guard state_lock(state->mutex);
-    if (state->snapshot.mode == SubagentJobMode::Background && terminal(state->snapshot.execution) && !state->delivery_arm_ready)
+    if (!state->delivery_arm_ready)
     {
-      auto const armed_at = ava::session::now_timestamp();
-      state->snapshot.delivery = SubagentDeliveryState::Pending;
-      state->snapshot.delivery_pending_at = armed_at;
-      state->snapshot.updated_at = armed_at;
-      state->terminal_notification_pending = true;
       state->delivery_arm_ready = true;
       state->changed.notify_all();
     }
   }
 
-  // Delay terminal sink until freeze is stable and history append has been attempted
-  // so observers never race an empty gap or pre-history automatic delivery.
+  // Public terminal+Pending is already visible. Automatic delivery waits until the
+  // history append attempt has finished so sinks cannot fire early.
   publish_terminal_notification(state);
 
   {
@@ -1109,7 +1109,8 @@ void SubagentCoordinator::publish_terminal_notification(std::shared_ptr<JobState
     {
       std::lock_guard lock(mutex_);
       std::lock_guard state_lock(state->mutex);
-      if (!state->published || !state->terminal_notification_pending || state->terminal_notification_emitted || state->delivery_exhausted || !terminal_sink_)
+      if (!state->published || !state->delivery_arm_ready || !state->terminal_notification_pending || state->terminal_notification_emitted ||
+          state->delivery_exhausted || !terminal_sink_)
         return;
       sink = terminal_sink_;
       notification = public_snapshot_locked(*state);
@@ -1150,8 +1151,8 @@ ava::core::Result<std::vector<SubagentCoordinatorJobSnapshot>> SubagentCoordinat
     for (auto const& [_, state] : jobs_)
     {
       std::lock_guard state_lock(state->mutex);
-      if (state->published && state->snapshot.identity.parent_session_id == parent_session_id && delivery_pending(state->snapshot.delivery) &&
-          !state->delivery_exhausted)
+      if (state->published && state->delivery_arm_ready && state->snapshot.identity.parent_session_id == parent_session_id &&
+          delivery_pending(state->snapshot.delivery) && !state->delivery_exhausted)
         ordered.emplace_back(state->sequence, public_snapshot_locked(*state));
     }
   }
@@ -1531,7 +1532,8 @@ void SubagentCoordinator::set_terminal_sink(SubagentTerminalSink sink)
       for (auto const& [_, state] : jobs_)
       {
         std::lock_guard state_lock(state->mutex);
-        if (state->published && state->terminal_notification_pending && !state->terminal_notification_emitted && !state->delivery_exhausted)
+        if (state->published && state->delivery_arm_ready && state->terminal_notification_pending && !state->terminal_notification_emitted &&
+            !state->delivery_exhausted)
           pending.push_back(state);
       }
     }
@@ -1556,7 +1558,7 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::record_de
     return std::unexpected(not_found(job_id));
 
   std::lock_guard state_lock(state->mutex);
-  if (!terminal(state->snapshot.execution) || !delivery_pending(state->snapshot.delivery) || state->delivery_exhausted)
+  if (!terminal(state->snapshot.execution) || !delivery_pending(state->snapshot.delivery) || !state->delivery_arm_ready || state->delivery_exhausted)
     return std::unexpected(invalid_transition("subagent delivery is not pending", job_id));
   if (!state->snapshot.delivery_attempt_history.empty() && state->snapshot.delivery_attempt_history.back().attempt_id == attempt_id)
   {
