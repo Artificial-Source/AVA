@@ -13,6 +13,7 @@ target_sources(ava_core
     "open_beneath.cpp"
     "path.cpp"
     "process_args.cpp"
+    "Signals.cpp"
     "strict_json.cpp"
     "string_utils.cpp"
     "trusted_home.cpp"

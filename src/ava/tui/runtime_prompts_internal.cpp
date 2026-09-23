@@ -17,6 +17,7 @@
 #include <curses.h>
 
 namespace ava::tui {
+using Signals = core::Signals;
 using runtime_input::read_curses_input;
 using runtime_input::read_curses_input_with_timeout;
 using runtime_input::RuntimeInput;
@@ -303,7 +304,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     {
       return resolve_choice(PermissionPromptChoice::Deny);
     }
-    if (terminal_signal_received())
+    if (Signals::signal_received(terminal_signals))
     {
       emit_prompt_audit("tui:permission_deny", "permission denied: interrupted", prompt.permission_request_id, prompt.tool_name, prompt.reason, "interrupted");
       {
@@ -483,7 +484,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
       return std::move(*answer);
     if (stop_requested && stop_requested())
       return cancel_question();
-    if (terminal_signal_received())
+    if (Signals::signal_received(terminal_signals))
     {
       emit_prompt_audit("tui:question_cancel", "question canceled: interrupted");
       {

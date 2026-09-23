@@ -27,7 +27,6 @@
 #include "ava/provider/openai_provider.h"
 #include "ava/provider/provider_utils.h"
 #include "ava/context/context_loader.h"
-#include "ava/core/Application.h"
 #include "ava/core/atomic_file.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
@@ -36,11 +35,13 @@
 #include "ava/core/process_args.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <climits>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
@@ -54,13 +55,12 @@
 #include <utility>
 #include <vector>
 #include <fcntl.h>
-#include <sys/resource.h>
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
+#include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+extern char** environ;
 
 namespace {
 
@@ -93,14 +93,6 @@ void test_mode_parsing()
          "agent/core toggle_mode remain identical");
 }
 
-#ifdef CWDEBUG
-class TestApplication final : public ava::core::Application
-{
- public:
-  TestApplication() : ava::core::Application(CWDEBUG_ONLY(false)) { }
-  [[nodiscard]] std::string_view application_name() const noexcept override { return "test application"; }
-};
-
 constexpr int lifecycle_child_setup_failed = 125;
 constexpr int lifecycle_child_still_dumpable = 126;
 
@@ -111,6 +103,7 @@ struct ChildWaitResult
   int status = 0;
 };
 
+// Poll one helper until it exits or the lifecycle-test deadline expires.
 ChildWaitResult wait_for_child_until(pid_t child, std::chrono::steady_clock::duration timeout)
 {
   auto const deadline = ava::tests::now_plus_seconds(timeout);
@@ -127,107 +120,107 @@ ChildWaitResult wait_for_child_until(pid_t child, std::chrono::steady_clock::dur
   return {.timed_out = true};
 }
 
-void expect_lifecycle_death(void (*child_action)(), std::string_view description)
+// Force a stuck isolated child to terminate and synchronously reap it without relying on a catchable termination signal.
+bool kill_and_reap_child(pid_t child)
 {
-  auto const child = ::fork();
-  if (child < 0)
+  static_cast<void>(::kill(child, SIGKILL));
+  int status = 0;
+  pid_t waited;
+  do
   {
-    expect(false, "Application lifecycle death test could not fork: " + std::string(description));
+    waited = ::waitpid(child, &status, 0);
+  }
+  while (waited < 0 && errno == EINTR);
+  return waited == child;
+}
+
+enum class LifecycleScenarioResult
+{
+  success,
+  abort,
+};
+
+// Execute one lifecycle scenario in a freshly initialized helper process and enforce bounded cleanup without forking the test runner.
+void expect_lifecycle_scenario(std::string_view scenario, LifecycleScenarioResult expected_result, std::string_view description)
+{
+  posix_spawn_file_actions_t actions;
+  int const actions_result = ::posix_spawn_file_actions_init(&actions);
+  if (actions_result != 0)
+  {
+    expect(false, "Application lifecycle test could not initialize spawn actions: " + std::string(description));
     return;
   }
-  if (child == 0)
-  {
-    rlimit const core_limit{.rlim_cur = 0, .rlim_max = 0};
-    if (::setrlimit(RLIMIT_CORE, &core_limit) != 0)
-      _exit(lifecycle_child_setup_failed);
-#ifdef __linux__
-    // Linux ignores RLIMIT_CORE for piped core handlers. Disable dumpability
-    // so these intentional aborts cannot invoke external dump collection and
-    // delay reaping; retain the file-size limit as defense-in-depth.
-    if (::prctl(PR_SET_DUMPABLE, 0L, 0L, 0L, 0L) != 0)
-      _exit(lifecycle_child_setup_failed);
-#endif
 
-    // The child is expected to abort; nothing it writes is part of any test
-    // assertion (the parent only checks WTERMSIG == SIGABRT). In particular
-    // the intentional LIBCWD_ASSERT in the lifecycle invariants emits
-    // libcwd's dc::core "COREDUMP" diagnostic to std::cerr, which would
-    // otherwise leak into the test process's stderr. Point fd 2 at
-    // /dev/null so the child may write whatever it wants before aborting
-    // without polluting the parent's stderr.
-    int devnull = ::open("/dev/null", O_WRONLY);
-    if (devnull >= 0)
+  if (expected_result == LifecycleScenarioResult::abort)
+  {
+    int const redirect_result = ::posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    if (redirect_result != 0)
     {
-      ::dup2(devnull, STDERR_FILENO);
-      ::close(devnull);
+      ::posix_spawn_file_actions_destroy(&actions);
+      expect(false, "Application lifecycle death test could not silence helper stderr: " + std::string(description));
+      return;
     }
-    child_action();
-    _exit(EXIT_SUCCESS);
   }
 
-  auto result = wait_for_child_until(child, std::chrono::seconds(2));
+  std::string scenario_argument{scenario};
+  std::array<char*, 3> arguments{const_cast<char*>(AVA_CORE_APPLICATION_LIFECYCLE_HELPER_PATH), scenario_argument.data(), nullptr};
+  pid_t child = -1;
+  int const spawn_result = ::posix_spawn(&child, AVA_CORE_APPLICATION_LIFECYCLE_HELPER_PATH, &actions, nullptr, arguments.data(), environ);
+  ::posix_spawn_file_actions_destroy(&actions);
+  if (spawn_result != 0)
+  {
+    expect(false, "Application lifecycle test could not spawn helper (" + std::string(std::strerror(spawn_result)) + "): " + std::string(description));
+    return;
+  }
+
+  auto const result = wait_for_child_until(child, std::chrono::seconds(4));
   if (result.timed_out)
   {
-    static_cast<void>(::kill(child, SIGKILL));
-    auto const cleanup = wait_for_child_until(child, std::chrono::seconds(2));
-    expect(false, "Application lifecycle death test timed out and required SIGKILL cleanup: " + std::string(description));
-    expect(cleanup.reaped, "Application lifecycle death test reaped its SIGKILL cleanup child: " + std::string(description));
+    bool const reaped = kill_and_reap_child(child);
+    expect(false, "Application lifecycle helper timed out and required SIGKILL cleanup: " + std::string(description));
+    expect(reaped, "Application lifecycle test reaped its SIGKILL cleanup helper: " + std::string(description));
     return;
   }
   if (!result.reaped)
   {
-    expect(false, "Application lifecycle death test could not observe its child: " + std::string(description));
+    bool const reaped = kill_and_reap_child(child);
+    expect(false, "Application lifecycle test could not observe its helper: " + std::string(description));
+    expect(reaped, "Application lifecycle test reaped its unobserved helper: " + std::string(description));
     return;
   }
   if (WIFEXITED(result.status) && WEXITSTATUS(result.status) == lifecycle_child_setup_failed)
   {
-    expect(false, "Application lifecycle death test child could not disable core dumps: " + std::string(description));
+    expect(false, "Application lifecycle death helper could not disable core dumps: " + std::string(description));
     return;
   }
   if (WIFEXITED(result.status) && WEXITSTATUS(result.status) == lifecycle_child_still_dumpable)
   {
-    expect(false, "Application lifecycle death test allowed external core handling (child remained dumpable): " + std::string(description));
+    expect(false, "Application lifecycle death helper allowed external core handling: " + std::string(description));
     return;
   }
 
-  expect(WIFSIGNALED(result.status) && WTERMSIG(result.status) == SIGABRT, "Application lifecycle invariant aborts: " + std::string(description));
+  bool const succeeded = WIFEXITED(result.status) && WEXITSTATUS(result.status) == EXIT_SUCCESS;
+  bool const aborted = WIFSIGNALED(result.status) && WTERMSIG(result.status) == SIGABRT;
+  expect(expected_result == LifecycleScenarioResult::success ? succeeded : aborted,
+         "Application lifecycle helper produced the expected result: " + std::string(description));
 }
 
-void child_instance_before_initialize()
+// Cover each supported Application lifecycle contract in its own executable lifetime.
+void test_application_lifecycle_contracts()
 {
-  static_cast<void>(ava::core::Application::instance());
+#ifdef CWDEBUG
+  expect_lifecycle_scenario("initialized-instance", LifecycleScenarioResult::success, "initialized instance publication");
+  expect_lifecycle_scenario("instance-before-initialize", LifecycleScenarioResult::abort, "instance access before initialize");
+  expect_lifecycle_scenario("instance-after-destruction", LifecycleScenarioResult::abort, "instance access after destruction");
+  expect_lifecycle_scenario("duplicate-live-instance", LifecycleScenarioResult::abort, "duplicate live Application construction");
+#endif
+  expect_lifecycle_scenario("signal-construction", LifecycleScenarioResult::success, "signal construction, pending delivery, and atomic claim");
+  expect_lifecycle_scenario("signal-teardown", LifecycleScenarioResult::success, "ordinary signal teardown postcondition");
+  expect_lifecycle_scenario("joined-worker", LifecycleScenarioResult::success, "joined worker before Application destruction");
+#if CW_DEBUG && defined(__linux__)
+  expect_lifecycle_scenario("live-worker-destruction", LifecycleScenarioResult::abort, "Application destruction with a live worker");
+#endif
 }
-
-void child_instance_after_destruction()
-{
-  {
-    TestApplication application;
-  }
-  static_cast<void>(ava::core::Application::instance());
-}
-
-void child_duplicate_live_application()
-{
-  TestApplication first;
-  TestApplication second;
-  static_cast<void>(first);
-  static_cast<void>(second);
-}
-
-void test_application_lifecycle()
-{
-  {
-    TestApplication application;
-    auto const& instance = ava::core::Application::instance();
-    expect(&instance == &application && instance.application_name() == "test application",
-           "Application publishes its initialized concrete instance and virtual application name");
-  }
-
-  expect_lifecycle_death(child_instance_before_initialize, "instance access before initialize");
-  expect_lifecycle_death(child_instance_after_destruction, "instance access after destruction");
-  expect_lifecycle_death(child_duplicate_live_application, "duplicate live Application construction");
-}
-#endif // CWDEBUG
 
 void test_json_escape_control_characters()
 {
@@ -509,8 +502,7 @@ void run_core_mode_tests()
 {
   test_mode_parsing();
 
-  // Fix the code before doing a Release?
-  Debug(test_application_lifecycle());
+  test_application_lifecycle_contracts();
 }
 
 void run_core_json_permission_tests()

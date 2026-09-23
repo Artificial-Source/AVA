@@ -121,9 +121,19 @@ void test1()
   ASSERT(!failure);
 }
 
+void test2()
+{
+  DoutEntering(dc::notice, "test1()");
+  utils::Signals signals({SIGINT, SIGTERM});
+
+  utils::Signal::block_and_unregister(SIGINT);
+  utils::Signal::block_and_unregister(SIGTERM);
+}
+
 int main()
 {
   Debug(NAMESPACE_DEBUG::init());
   test1();
+  test2();
   Dout(dc::notice, "Leaving main()...");
 }

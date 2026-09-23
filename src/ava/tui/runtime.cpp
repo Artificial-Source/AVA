@@ -209,9 +209,12 @@ int run_interactive_composer(TuiRuntimeOptions options)
     return 1;
   }
 
-  clear_terminal_signal();
-  terminal::Context& terminal_context = core::Application::instance().terminal_context();
+  core::Application& application = core::Application::instance();
+  terminal::Context& terminal_context = application.terminal_context();
+  core::Signals& signals_manager = application.signals_manager();
+
   terminal_context.initialize();
+  signals_manager.activate_handlers();
 
   ComposerTerminalGraphicsGuard graphics_cleanup;
   apply_terminal_cursor_settings(options.cursor);
@@ -244,6 +247,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   refresh_reasoning_status();
 
   bool terminal_write_failed = false;
+  bool terminal_signal_received = false;
   RuntimeDraftState draft_state;
   auto& input_history = draft_state.input_history;
   auto& history_index = draft_state.history_index;
@@ -635,10 +639,14 @@ int run_interactive_composer(TuiRuntimeOptions options)
   auto handle_submit = [&](std::optional<std::string> forced_submission = std::nullopt) {
     auto const outcome = submit_controller.submit(std::move(forced_submission));
     terminal_write_failed = outcome.terminal_write_failed;
+    terminal_signal_received = outcome.terminal_signal_received;
+    // outcome.terminal_signal_received an only be true if outcome.disposition is set to BreakLoop.
+    ASSERT(!terminal_signal_received || outcome.disposition == RuntimeSubmitDisposition::BreakLoop);
     return outcome.disposition;
   };
 
-  if (terminal_signal_received())
+  using Signals = core::Signals;
+  if (Signals::signal_received(terminal_signals))
     return 130;
   if (!service_mermaid_presentation() || !render())
     return 1;
@@ -691,22 +699,53 @@ int run_interactive_composer(TuiRuntimeOptions options)
       continue;
     }
     auto const input = *maybe_input;
-    if (terminal_signal_received())
+    if (Signals::signal_received(terminal_signals))
     {
+      bool const exit_requested = Signals::clear_signal(Signals::bit_SIGTERM);
+      if (exit_requested)
+        terminal_signal_received = true;
+
+      // ┌─────────────────────┬─────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────┐
+      // │Successfully claimed │UI state                                 │Intended action                                                      │
+      // ├─────────────────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+      // │SIGTERM or SIGINT    │Active branch summary                    │Request cancellation; additionally request eventual exit for SIGTERM │
+      // ├─────────────────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+      // │SIGTERM              │No active branch summary                 │Leave the loop (break), regardless of draft contents                 │
+      // ├─────────────────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+      // │SIGINT               │No active branch summary, empty draft    │Leave the loop too (break)                                           │
+      // ├─────────────────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+      // │SIGINT               │No active branch summary, nonempty draft │Clear draft and continue                                             │
+      // └─────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────┘
       if (branch_summary_ui.active)
       {
-        auto const exit_requested = terminal_signal_number() != SIGINT;
-        clear_terminal_signal();
-        if (!cancel_branch_summary(exit_requested))
+        if (AI_LIKELY(exit_requested || Signals::clear_signal(Signals::bit_SIGINT)))
         {
-          terminal_write_failed = true;
+          // We have an active branch summary and successfully claimed either terminal signal.
+          // Request cancellation; additionally request eventual exit for SIGTERM.
+          if (!cancel_branch_summary(exit_requested))
+          {
+            terminal_write_failed = true;
+            break;
+          }
+          continue;
+        }
+        // We failed to claim either terminal signal; fall-through.
+      }
+      else if (exit_requested)
+      {
+        // Claimed SIGTERM and no active branch summary. Leave the loop, regardless of draft contents.
+        break;
+      }
+      else if (Signals::clear_signal(Signals::bit_SIGINT))
+      {
+        // Claimed SIGINT, no active branch summary
+        if (draft.text.empty())
+        {
+          // and an empty draft. Leave the loop too.
+          terminal_signal_received = true;
           break;
         }
-        continue;
-      }
-      if (terminal_signal_number() == SIGINT && !draft.text.empty())
-      {
-        clear_terminal_signal();
+        // and nonempty draft. Clear draft and continue if successful.
         static_cast<void>(clear_draft_for_interrupt());
         snapshot.selected_slash_command_index = selected_slash_command_index;
         if (!render())
@@ -716,7 +755,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         }
         continue;
       }
-      break;
+      // Failed to claim either terminal signal; fall-through.
     }
     if (input.resize)
     {
@@ -2551,7 +2590,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   plugin_ui.shutdown(snapshot);
   if (!before_shutdown.invoke())
     terminal_write_failed = true;
-  return terminal_signal_received() ? 130 : (terminal_write_failed ? 1 : 0);
+  return terminal_signal_received ? 130 : (terminal_write_failed ? 1 : 0);
 }
 
 ava::core::Result<TuiRuntimeStateSnapshot> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, std::string pending_status,

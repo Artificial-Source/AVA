@@ -15,6 +15,8 @@
 #include <curses.h>
 
 namespace ava::tui::runtime_input {
+using Signals = core::Signals;
+
 namespace {
 
 constexpr std::size_t kMaxBracketedPasteBytes = 1024 * 1024;
@@ -124,7 +126,7 @@ RuntimeInput read_bracketed_paste()
 {
   std::string pasted;
   static_cast<void>(wtimeout(stdscr, 1000));
-  while (!terminal_signal_received() && pasted.size() < kMaxBracketedPasteBytes)
+  while (!Signals::signal_received(terminal_signals) && pasted.size() < kMaxBracketedPasteBytes)
   {
     auto const character = read_plain_wide_character();
     if (!character)
@@ -254,7 +256,7 @@ RuntimeInput read_curses_input_from_terminal()
 {
   wint_t value = 0;
   auto const result = wget_wch(stdscr, &value);
-  if (terminal_signal_received())
+  if (Signals::signal_received(terminal_signals))
     return key_input(Key::CtrlC);
   if (result == ERR)
     return unknown_input();

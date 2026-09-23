@@ -214,6 +214,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         static_cast<void>(beep());
         success = renderer_.request_render();
       }
+      //FIXME: how is `success` related to terminal_write_failed ?!
       return {.disposition = success ? RuntimeSubmitDisposition::ContinueLoop : RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = !success};
     }
     if (exact_command(submitted, "/jobs"))
@@ -596,9 +597,9 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    auto const outcome = active_run_controller_.run(std::move(submitted));
+    RuntimeActiveRunOutcome const outcome = active_run_controller_.run(std::move(submitted));
     return {.disposition = outcome.break_loop ? RuntimeSubmitDisposition::BreakLoop : RuntimeSubmitDisposition::ContinueLoop,
-            .terminal_write_failed = outcome.terminal_write_failed};
+            .terminal_write_failed = outcome.terminal_write_failed, .terminal_signal_received = outcome.terminal_signal_received};
   }
   return {};
 }

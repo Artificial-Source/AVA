@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <unistd.h>
@@ -169,8 +168,7 @@ constexpr std::array kTestSuites{
 // libcwd sink before core::Application initializes debugging and allocators.
 //
 // The suite token determines the private log filename in CWDEBUG builds. The
-// sink remains process-owned while the Application may be temporarily absent
-// so the core_mode suite can exercise Application lifecycle invariants.
+// sink and Application remain process-owned for the complete test run.
 class TestRunnerApplication final : public ava::core::Application
 {
  public:
@@ -200,9 +198,8 @@ class TestRunnerApplication final : public ava::core::Application
 
  private:
 #ifdef CWDEBUG
-  // Install or reuse the process-owned per-suite sink and return whether it
-  // requires libcwd initialization. Reuse avoids truncating the log when the
-  // core_mode suite temporarily releases and restores the Application.
+  // Install the process-owned per-suite sink and return whether it requires
+  // libcwd initialization. The defensive reuse path avoids replacing a sink.
   static bool prepare_debug(std::string_view debug_suite_token)
   {
     if (s_output_sink_)
@@ -283,8 +280,7 @@ int main(int argc, char** argv)
 
   // Construct the process Application before other startup work. Its base
   // initializes debugging before constructing the allocator-owned members.
-  std::optional<TestRunnerApplication> application;
-  application.emplace(CWDEBUG_ONLY(debug_suite_token));
+  TestRunnerApplication application(CWDEBUG_ONLY(debug_suite_token));
 
 #ifdef CWDEBUG
   if (!TestRunnerApplication::debug_setup_succeeded())
@@ -337,8 +333,6 @@ int main(int argc, char** argv)
     {
       if (suite.name == requested_suite)
       {
-        if (suite.name == "core_mode")
-          application.reset();
         run_suite(suite);
         if (ava::tests::failures() == 0 && ava::tests::skip_requested())
           return 77;
@@ -357,20 +351,7 @@ int main(int argc, char** argv)
   }
 
   for (auto const& suite : kTestSuites)
-  {
-    if (suite.name == "core_mode")
-    {
-      application.reset();
-      suite.run();
-    }
-  }
-  application.emplace(CWDEBUG_ONLY(debug_suite_token));
-  for (auto const& suite : kTestSuites)
-  {
-    if (suite.name == "core_mode")
-      continue;
     suite.run();
-  }
 
   int const failure_status = print_failures();
   if (failure_status == 0)

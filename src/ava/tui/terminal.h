@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/core/result.h"
+#include "ava/core/Signals.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -180,36 +181,6 @@ struct TerminalBackgroundColor
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-class CursesSession
-{
- public:
-  CursesSession(CursesSession const&) = delete;
-  CursesSession& operator=(CursesSession const&) = delete;
-  CursesSession(CursesSession&& other) noexcept;
-  CursesSession& operator=(CursesSession&& other) noexcept;
-  ~CursesSession();
-
-  [[nodiscard]] static ava::core::Result<CursesSession> enter();
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-
- private:
-  struct ScreenDeleter
-  {
-    void operator()(void* screen) const noexcept;
-  };
-
-  explicit CursesSession(void* screen);
-
-  void restore() noexcept;
-
-  std::unique_ptr<void, ScreenDeleter> screen_;
-  std::string previous_locale_;
-  termios previous_terminal_attrs_{};
-  bool restore_terminal_attrs_ = false;
-  bool active_ = false;
-};
-
 void erase_last_utf8_codepoint(std::string& text);
 [[nodiscard]] int terminal_escape_delay_ms();
 [[nodiscard]] std::string_view terminal_kitty_keyboard_push_sequence();
@@ -306,9 +277,8 @@ void terminal_reset_mouse_tracking() noexcept;
 [[nodiscard]] bool terminal_escape_sequence_complete(std::string_view sequence);
 [[nodiscard]] bool terminal_escape_sequence_should_discard(std::string_view sequence);
 [[nodiscard]] bool terminal_is_tty();
-[[nodiscard]] bool terminal_signal_received();
-[[nodiscard]] int terminal_signal_number();
-void clear_terminal_signal();
+
+constexpr auto terminal_signals = core::Signals::bit_SIGINT | core::Signals::bit_SIGTERM;
 
 namespace detail {
 [[nodiscard]] bool force_terminal_cursor_visible() noexcept;

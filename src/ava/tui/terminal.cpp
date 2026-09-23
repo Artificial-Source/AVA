@@ -49,7 +49,6 @@ constexpr std::string_view kModifyOtherKeysEnableSequence = "\x1b[>4;2m";
 constexpr std::string_view kModifyOtherKeysDisableSequence = "\x1b[>4;0m";
 constexpr std::string_view kTerminalBackgroundQuerySequence = "\x1b]11;?\x1b\\";
 
-sig_atomic_t volatile g_terminal_signal = 0;
 bool g_keyboard_protocol_kitty_response_seen = false;
 bool g_keyboard_protocol_kitty_supported = false;
 int g_kitty_keyboard_active_flags = 0;
@@ -66,43 +65,10 @@ bool g_terminal_cursor_style_forced = false;
 detail::TerminalSequenceWriter g_terminal_sequence_writer = nullptr;
 detail::TerminalFlushinpHook g_terminal_flushinp_hook = nullptr;
 detail::TerminalTcflushHook g_terminal_tcflush_hook = nullptr;
-struct sigaction g_curses_previous_sigint{};
-struct sigaction g_curses_previous_sigterm{};
 
 InputEvent key_event(Key key)
 {
   return InputEvent{.key = key, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
-}
-
-void mark_terminal_signal(int signal_number)
-{
-  g_terminal_signal = signal_number;
-}
-
-void install_curses_signal_flags()
-{
-  struct sigaction action{};
-  action.sa_handler = mark_terminal_signal;
-  sigemptyset(&action.sa_mask);
-  sigaddset(&action.sa_mask, SIGINT);
-  sigaddset(&action.sa_mask, SIGTERM);
-  action.sa_flags = 0;
-  static_cast<void>(sigaction(SIGINT, &action, &g_curses_previous_sigint));
-  static_cast<void>(sigaction(SIGTERM, &action, &g_curses_previous_sigterm));
-}
-
-void uninstall_curses_signal_flags()
-{
-  static_cast<void>(sigaction(SIGINT, &g_curses_previous_sigint, nullptr));
-  static_cast<void>(sigaction(SIGTERM, &g_curses_previous_sigterm, nullptr));
-}
-
-void configure_curses_colors()
-{
-  if (!has_colors())
-    return;
-  static_cast<void>(start_color());
-  static_cast<void>(use_default_colors());
 }
 
 constexpr std::string_view kBracketedPasteEnableSequence = "\x1b[?2004h";
@@ -1500,99 +1466,6 @@ int rgb_luminance(TerminalBackgroundColor const& color)
 
 }  // namespace
 
-CursesSession::CursesSession(void* screen) : screen_(screen), active_(screen != nullptr)
-{
-}
-
-CursesSession::CursesSession(CursesSession&& other) noexcept
-    : screen_(std::move(other.screen_)),
-      previous_locale_(std::move(other.previous_locale_)),
-      previous_terminal_attrs_(other.previous_terminal_attrs_),
-      restore_terminal_attrs_(std::exchange(other.restore_terminal_attrs_, false)),
-      active_(std::exchange(other.active_, false))
-{
-}
-
-CursesSession& CursesSession::operator=(CursesSession&& other) noexcept
-{
-  if (this == &other)
-    return *this;
-  restore();
-  screen_ = std::move(other.screen_);
-  previous_locale_ = std::move(other.previous_locale_);
-  previous_terminal_attrs_ = other.previous_terminal_attrs_;
-  restore_terminal_attrs_ = std::exchange(other.restore_terminal_attrs_, false);
-  active_ = std::exchange(other.active_, false);
-  return *this;
-}
-
-CursesSession::~CursesSession()
-{
-  restore();
-}
-
-ava::core::Result<CursesSession> CursesSession::enter()
-{
-  char const* current_locale = std::setlocale(LC_ALL, nullptr);
-  std::string const previous_locale = current_locale == nullptr ? "C" : current_locale;
-  if (std::setlocale(LC_ALL, "") == nullptr)
-  {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to configure terminal locale"));
-  }
-
-  sigset_t blocked_signals{};
-  sigset_t previous_mask{};
-  sigemptyset(&blocked_signals);
-  sigaddset(&blocked_signals, SIGINT);
-  sigaddset(&blocked_signals, SIGTERM);
-  bool const blocked = sigprocmask(SIG_BLOCK, &blocked_signals, &previous_mask) == 0;
-  auto restore_signal_mask = [&]() {
-    if (blocked)
-      static_cast<void>(sigprocmask(SIG_SETMASK, &previous_mask, nullptr));
-  };
-
-  SCREEN* screen = newterm(nullptr, stdout, stdin);
-  if (screen == nullptr)
-  {
-    restore_signal_mask();
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to initialize ncurses screen"));
-  }
-
-  CursesSession session(screen);
-  session.previous_locale_ = previous_locale;
-  static_cast<void>(set_term(screen));
-  install_curses_signal_flags();
-
-  if (raw() == ERR || noecho() == ERR || keypad(stdscr, TRUE) == ERR)
-  {
-    session.restore();
-    restore_signal_mask();
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to configure ncurses raw terminal mode"));
-  }
-
-  termios terminal_attrs{};
-  if (tcgetattr(STDIN_FILENO, &terminal_attrs) == 0)
-  {
-    session.previous_terminal_attrs_ = terminal_attrs;
-    terminal_attrs.c_iflag &= static_cast<tcflag_t>(~(IXON | IXOFF | IXANY));
-    if (tcsetattr(STDIN_FILENO, TCSANOW, &terminal_attrs) == 0)
-      session.restore_terminal_attrs_ = true;
-  }
-
-  noqiflush();
-  static_cast<void>(nonl());
-  static_cast<void>(scrollok(stdscr, FALSE));
-  static_cast<void>(idlok(stdscr, FALSE));
-#ifdef NCURSES_VERSION
-  static_cast<void>(set_escdelay(terminal_escape_delay_ms()));
-#endif
-  configure_curses_colors();
-  arm_owned_terminal_protocols_on_enter();
-  restore_signal_mask();
-  return session;
-}
-
 bool detail::force_terminal_cursor_visible() noexcept
 {
   static_cast<void>(curs_set(0));
@@ -1635,37 +1508,6 @@ void detail::reset_terminal_protocol_ownership_for_test() noexcept
   g_left_mouse_down = false;
   g_terminal_cursor_settings = {};
   g_terminal_cursor_style_forced = false;
-}
-
-void CursesSession::restore() noexcept
-{
-  if (!active_)
-    return;
-  static_cast<void>(set_term(static_cast<SCREEN*>(screen_.get())));
-  // Balance AVA-owned protocols before returning the terminal. Idempotent when
-  // enter failed before arming or when handoff already released them.
-  restore_owned_terminal_protocols();
-  // Discard pending curses then kernel input nonblockingly. No sleep/read loop.
-  discard_pending_terminal_input();
-  if (restore_terminal_attrs_)
-  {
-    static_cast<void>(tcsetattr(STDIN_FILENO, TCSANOW, &previous_terminal_attrs_));
-    restore_terminal_attrs_ = false;
-  }
-  static_cast<void>(detail::force_terminal_cursor_visible());
-  static_cast<void>(endwin());
-  uninstall_curses_signal_flags();
-  active_ = false;
-  screen_.reset();
-  if (!previous_locale_.empty())
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale_.c_str()));
-}
-
-void CursesSession::ScreenDeleter::operator()(void* screen) const noexcept
-{
-  if (screen == nullptr)
-    return;
-  delscreen(static_cast<SCREEN*>(screen));
 }
 
 void erase_last_utf8_codepoint(std::string& text)
@@ -2281,21 +2123,6 @@ bool terminal_escape_sequence_should_discard(std::string_view sequence)
 bool terminal_is_tty()
 {
   return isatty(STDIN_FILENO) != 0 && isatty(STDOUT_FILENO) != 0;
-}
-
-bool terminal_signal_received()
-{
-  return g_terminal_signal != 0;
-}
-
-int terminal_signal_number()
-{
-  return g_terminal_signal;
-}
-
-void clear_terminal_signal()
-{
-  g_terminal_signal = 0;
 }
 
 }  // namespace ava::tui

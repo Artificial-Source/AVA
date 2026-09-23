@@ -2405,8 +2405,6 @@ void run_tui_composer_rendering_tests_part_3()
                                  .height = 10});
   expect(std::ranges::all_of(wide_frame, [](std::string const& line) { return visible_columns(line) <= 24; }),
          "tui treats CJK and emoji as wide cells when fitting rendered lines");
-  ava::tui::clear_terminal_signal();
-  expect(!ava::tui::terminal_signal_received(), "tui terminal signal state can be cleared before curses entry");
 }
 void run_tui_composer_rendering_tests_part_4()
 {

@@ -29,6 +29,7 @@ struct RuntimeSubmitOutcome
 {
   RuntimeSubmitDisposition disposition = RuntimeSubmitDisposition::NoAction;
   bool terminal_write_failed = false;
+  bool terminal_signal_received = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

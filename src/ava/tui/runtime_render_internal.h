@@ -15,21 +15,6 @@
 
 namespace ava::tui {
 
-class SignalBlockGuard
-{
- public:
-  SignalBlockGuard();
-  SignalBlockGuard(SignalBlockGuard const&) = delete;
-  SignalBlockGuard& operator=(SignalBlockGuard const&) = delete;
-  ~SignalBlockGuard();
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  sigset_t previous_{};
-  bool active_ = false;
-};
-
 [[nodiscard]] std::pair<std::size_t, std::size_t> terminal_size();
 
 enum class WheelDirection

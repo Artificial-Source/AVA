@@ -231,7 +231,7 @@ bool RuntimeActionController::suspend_to_background()
   terminal_reset_mouse_tracking();
 
   {
-    SignalBlockGuard block_signals;
+    utils::Signal::BlockGuard block_signals({SIGINT|SIGTERM});
     def_prog_mode();
     endwin();
     // Disable AVA-owned protocols after leaving curses so the stopped process's

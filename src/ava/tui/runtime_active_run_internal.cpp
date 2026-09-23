@@ -163,6 +163,7 @@ std::vector<ToolTimelineItem> merge_unauthorized_command_event_tools(RuntimeActi
 
 }  // namespace detail
 
+using Signals = core::Signals;
 using runtime_commands::is_compact_command;
 using runtime_commands::shell_helper_submission;
 using runtime_input::poll_curses_input;
@@ -500,6 +501,7 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
 
 RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_value)
 {
+  RuntimeActiveRunOutcome active_run_outcome{.break_loop = true};
   auto& options = options_;
   auto& renderer = renderer_;
   auto& prompt_coordinator = prompt_coordinator_;
@@ -615,7 +617,6 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   auto settle_turn_activity = [&]() { this->settle_turn_activity(state); };
   auto request_stop = [&]() -> bool { return this->request_stop(state); };
   auto request_close_after_submit = [&]() { this->request_close_after_submit(state); };
-  bool terminal_write_failed = false;
   ava::permissions::PermissionResolver permission_resolver;
   ava::agent::QuestionResolver question_resolver;
   push_history(input_history, submitted);
@@ -624,8 +625,8 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   if (!render())
   {
     plugin_ui_.finish_submission(snapshot);
-    terminal_write_failed = true;
-    return RuntimeActiveRunOutcome{.break_loop = true, .terminal_write_failed = terminal_write_failed};
+    active_run_outcome.terminal_write_failed = true;
+    return active_run_outcome;
   }
   auto result = TuiSubmitResult{};
   bool session_changed = false;
@@ -653,7 +654,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     });
     bool render_failed = false;
     auto fail_active_run = [&]() {
-      terminal_write_failed = true;
+      active_run_outcome.terminal_write_failed = true;
       render_failed = true;
       run_cancel_requested.store(true);
       plugin_ui_.cancel_active();
@@ -734,11 +735,33 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     detail::ActiveRunCadence cadence(std::chrono::steady_clock::now());
     while (submit_future.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready)
     {
-      if (terminal_signal_received())
+      if (Signals::signal_received(terminal_signals))
       {
-        if (terminal_signal_number() == SIGINT && !draft.text.empty())
+        bool const exit_requested = Signals::clear_signal(Signals::bit_SIGTERM);
+        bool const claimed_sigint = !exit_requested && Signals::clear_signal(Signals::bit_SIGINT);
+
+        // ┌─────────────────────┬────────────────┬────────────────────────────────────────────────────────────────────┐
+        // │Successfully claimed │UI state        │Intended action                                                     │
+        // ├─────────────────────┼────────────────┼────────────────────────────────────────────────────────────────────┤
+        // │SIGTERM              │Any draft state │Request run cancellation and close after submit; leave loop (break) │
+        // ├─────────────────────┼────────────────┼────────────────────────────────────────────────────────────────────┤
+        // │SIGINT only          │Empty draft     │Request run cancellation and close after submit; leave loop (break) │
+        // ├─────────────────────┼────────────────┼────────────────────────────────────────────────────────────────────┤
+        // │SIGINT only          │Nonempty draft  │Clear draft, render, and continue; keep the active run running      │
+        // └─────────────────────┴────────────────┴────────────────────────────────────────────────────────────────────┘
+
+        if (exit_requested || (claimed_sigint && draft.text.empty()))
         {
-          clear_terminal_signal();
+          // Claimed SIGTERM, any draft state, or claimed SIGINT (only) and have empty draft;
+          // request run cancellation and close after submit; leave loop.
+          request_close_after_submit();
+          active_run_outcome.terminal_signal_received = true;
+          break;
+        }
+
+        if (claimed_sigint)     // If this is true than draft.text.empty() must be false.
+        {
+          // Claimed SIGINT only and have nonempty draft; clear draft, render, and continue.
           static_cast<void>(clear_draft_for_interrupt());
           snapshot.selected_slash_command_index = selected_slash_command_index;
           if (!render())
@@ -748,8 +771,6 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
           }
           continue;
         }
-        request_close_after_submit();
-        break;
       }
       auto const prompt_result = service_pending_prompt();
       if (prompt_result == detail::PendingPromptServiceResult::Failed)
@@ -881,7 +902,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     {
       if (drain_events(state) == RuntimeEventDrainResult::RenderFailed)
       {
-        terminal_write_failed = true;
+        active_run_outcome.terminal_write_failed = true;
         render_failed = true;
       }
       if (is_command_submission)
@@ -903,12 +924,12 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     }
     prompt_coordinator.set_audit_sink(nullptr);
     if (render_failed)
-      return RuntimeActiveRunOutcome{.break_loop = true, .terminal_write_failed = terminal_write_failed};
+      return active_run_outcome;
   }
   plugin_ui_.finish_submission(snapshot);
   prompt_coordinator.set_audit_sink(nullptr);
-  if (terminal_signal_received())
-    return RuntimeActiveRunOutcome{.break_loop = true, .terminal_write_failed = terminal_write_failed};
+  if (active_run_outcome.terminal_signal_received)
+    return active_run_outcome;
   auto const events_received = is_command_submission ? authorized_command_events_received(state) : event_queue.received_any();
   auto settlement_event_state = event_state;
   auto const conversation_committed = !is_command_submission || !state.ordinary_turn_request_ids.empty();
@@ -1022,14 +1043,18 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   refresh_active_context_status();
   if (!service_mermaid_presentation_() || !render())
   {
-    terminal_write_failed = true;
-    return RuntimeActiveRunOutcome{.break_loop = true, .terminal_write_failed = terminal_write_failed};
+    active_run_outcome.terminal_write_failed = true;
+    return active_run_outcome;
   }
   if (close_after_submit)
-    return RuntimeActiveRunOutcome{.break_loop = true, .terminal_write_failed = terminal_write_failed};
+    return active_run_outcome;
   if (result.quit)
-    return RuntimeActiveRunOutcome{.break_loop = true, .terminal_write_failed = terminal_write_failed};
-  return RuntimeActiveRunOutcome{.break_loop = false, .terminal_write_failed = terminal_write_failed};
+    return active_run_outcome;
+
+  // If terminal_signal_received is returned than break_loop must be set.
+  ASSERT(!active_run_outcome.terminal_signal_received);
+  active_run_outcome.break_loop = false;
+  return active_run_outcome;
 }
 
 std::optional<std::vector<std::string>> dispatch_tui_active_nonblocking_command(TuiActiveRunQueues const& queues, std::string const& submitted)

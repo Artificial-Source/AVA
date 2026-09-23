@@ -11,21 +11,7 @@
 #include <curses.h>
 
 namespace ava::tui {
-
-SignalBlockGuard::SignalBlockGuard()
-{
-  sigset_t blocked{};
-  sigemptyset(&blocked);
-  sigaddset(&blocked, SIGINT);
-  sigaddset(&blocked, SIGTERM);
-  active_ = sigprocmask(SIG_BLOCK, &blocked, &previous_) == 0;
-}
-
-SignalBlockGuard::~SignalBlockGuard()
-{
-  if (active_)
-    static_cast<void>(sigprocmask(SIG_SETMASK, &previous_, nullptr));
-}
+using Signals = core::Signals;
 
 std::pair<std::size_t, std::size_t> terminal_size()
 {
@@ -400,12 +386,9 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
   auto& path_completion_force_active = draft_state.path_completion_force_active;
   auto& draft_scroll_offset = draft_state.draft_scroll_offset;
 
-  if (terminal_signal_received())
-    return false;
   bool wrote = false;
   {
     std::lock_guard<std::recursive_mutex> lock(ui_mutex);
-    SignalBlockGuard block_signals;
     draft.cursor = clamp_composer_draft_cursor(draft.text, draft.cursor);
     snapshot.input = draft.text;
     snapshot.input_cursor = draft.cursor;
@@ -510,7 +493,7 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
     wrote = detail::draw_screen_cached(snapshot, completion_cache, snapshot.file_references_generation, transcript_layout_cache, snapshot.transcript_generation,
                                        screen_row_cache, freeze_detached_viewport, freeze_modal_transcript_layout);
   }
-  return wrote && !terminal_signal_received();
+  return wrote;
 }
 
 bool RuntimeRenderer::render_processing_frame()
@@ -581,19 +564,16 @@ bool RuntimeRenderer::paint(FrameRenderKind kind, bool freeze_transcript_layout)
     return render_full(freeze_transcript_layout);
 
   auto& snapshot = snapshot_;
-  if (terminal_signal_received())
-    return false;
   bool wrote = false;
   {
     std::lock_guard<std::recursive_mutex> lock(ui_mutex);
-    SignalBlockGuard block_signals;
     if (snapshot.permission_prompt || snapshot.question_prompt || snapshot.command_output || snapshot.select_list || snapshot.subagent_workspace ||
         snapshot.sidebar_drawer_visible || !snapshot.processing)
       return true;
     wrote = detail::draw_processing_footer_cached(snapshot, completion_cache, snapshot.file_references_generation, transcript_layout_cache,
                                                   snapshot.transcript_generation, screen_row_cache);
   }
-  return wrote && !terminal_signal_received();
+  return wrote;
 }
 
 }  // namespace ava::tui

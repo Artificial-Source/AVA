@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/Signals.h"
 #include "ava/tui/terminal/Context.h"
 #include "memory/MemoryPagePool.h"
 #include "memory/VectorAllocator.h"
@@ -23,8 +24,11 @@ class Application
 
  private:
   static Application* s_instance;               // There can only be one instance of Application. Allow global access.
+
+  // The order of these members is important; do not change.
   memory::MemoryPagePool mpp_;                  // Pool using the default block size (32 KiB); its first growth allocates at least two blocks (64 KiB).
   Vec8Alloc vec8alloc_;                         // A geometric allocator for sizes 8, 16, 32, 64, ...
+  Signals signals_manager_;                     // The POSIX signals manager.
   tui::terminal::Context terminal_context_;     // The terminal context instance.
 
  public:
@@ -47,7 +51,11 @@ class Application
 
   [[nodiscard]] virtual std::string_view application_name() const noexcept = 0;
 
-  // Accessor for terminal_context_.
+  // Accessors
+
+  Signals& signals_manager() { return signals_manager_; }
+  Signals const& signals_manager() const { return signals_manager_; }
+
   tui::terminal::Context& terminal_context() { return terminal_context_; }
   tui::terminal::Context const& terminal_context() const { return terminal_context_; }
 
