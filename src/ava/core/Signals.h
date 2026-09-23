@@ -35,7 +35,6 @@ class Signals final
 
  public:
   Signals(utils::Badge<Application>);
-  ~Signals();
 
   // Must be called, after ncurses initialization, to unblock the signals.
   void activate_handlers();

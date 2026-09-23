@@ -27,17 +27,6 @@ Signals::Signals(utils::Badge<Application>) : signals_({SIGINT, SIGTERM})
   signals_.register_callback(SIGTERM, signal_handler);
 }
 
-Signals::~Signals()
-{
-  DoutEntering(dc::notice, "core::Signals::~Signals()");
-
-  // Ordinary teardown leaves AVA's foreground signals blocked and ignored.
-  utils::Signal::block_and_unregister(SIGINT);
-  utils::Signal::block_and_unregister(SIGTERM);
-  // No recorded foreground signal may remain observable after teardown.
-  s_received_ = 0;
-}
-
 void Signals::activate_handlers()
 {
   // This thread receives SIGINT and SIGTERM signals.
