@@ -243,7 +243,7 @@ std::vector<ava::agent::SubagentCoordinatorJobSnapshot> merge_job_snapshots(std:
 }
 
 std::string secondary_job_details(ava::agent::SubagentCoordinatorJobSnapshot const& snapshot, bool include_job_id, bool include_result_content,
-                                  bool historical = false, bool unmatched_start = false)
+                                  bool historical = false, bool unmatched_start = false, bool live_overlay = false)
 {
   auto const& job = snapshot.job;
   std::string details;
@@ -286,6 +286,8 @@ std::string secondary_job_details(ava::agent::SubagentCoordinatorJobSnapshot con
   }
   if (historical)
     append_detail_fragment(details, "historical");
+  if (live_overlay)
+    append_detail_fragment(details, "live");
   if (unmatched_start)
     append_detail_fragment(details, "outcome unknown");
   return details;
@@ -306,7 +308,9 @@ std::string format_human_job_list(std::vector<ava::agent::SubagentCoordinatorJob
   {
     auto const ordinal = index - first + 1;
     auto const& snapshot = snapshots[index];
-    bool const historical = history_only || (annotate_historical && !live_ids.contains(snapshot.job.identity.job_id));
+    bool const live_row = live_ids.contains(snapshot.job.identity.job_id);
+    bool const historical = !live_row && (history_only || annotate_historical);
+    bool const live_overlay = history_only && live_row;
     bool const unmatched = historical && snapshot.job.execution == ava::agent::SubagentExecutionState::Interrupted && !snapshot.job.terminal_at;
     output += "\n";
     output += std::to_string(ordinal);
@@ -314,7 +318,7 @@ std::string format_human_job_list(std::vector<ava::agent::SubagentCoordinatorJob
     output += primary_job_line(snapshot.job);
     // List rows keep the exact job id secondary so controls remain copyable;
     // ordinals are display-only and never accepted as control authority.
-    auto const details = secondary_job_details(snapshot, true, false, historical, unmatched);
+    auto const details = secondary_job_details(snapshot, true, false, historical, unmatched, live_overlay);
     if (!details.empty())
     {
       output += "\n   ";
@@ -395,11 +399,17 @@ ava::core::Result<CommandResult> run_jobs_command(std::shared_ptr<ava::agent::Su
   }
   if (parts.size() == 1 && parts.front() == "history")
   {
+    std::unordered_map<std::string, ava::agent::SubagentCoordinatorJobSnapshot> live_by_id;
+    for (auto const& snapshot : live)
+      live_by_id.emplace(snapshot.job.identity.job_id, snapshot);
     std::vector<ava::agent::SubagentCoordinatorJobSnapshot> recorded;
     recorded.reserve(historical.size());
     for (auto const& view : historical)
-      recorded.push_back(snapshot_from_history(view));
-    result.output.push_back(format_human_job_list(recorded, {}, true));
+    {
+      auto found = live_by_id.find(view.record.job_id);
+      recorded.push_back(found != live_by_id.end() ? found->second : snapshot_from_history(view));
+    }
+    result.output.push_back(format_human_job_list(recorded, live_ids, true, true));
     return result;
   }
 

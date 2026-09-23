@@ -20,8 +20,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <sys/stat.h>
 #include <thread>
+#include <sys/stat.h>
 
 namespace {
 
@@ -182,8 +182,7 @@ void test_launch_display_survives_coordinator_lifecycle_and_owner_checks()
   auto coordinator = coordinator_with();
   if (!coordinator)
     return;
-  auto const display =
-      ava::agent::SubagentLaunchDisplay::normalized("COORDINATOR_MODEL_SENTINEL", std::string_view("COORD_REASONING_SENTINEL"));
+  auto const display = ava::agent::SubagentLaunchDisplay::normalized("COORDINATOR_MODEL_SENTINEL", std::string_view("COORD_REASONING_SENTINEL"));
   auto worker = std::make_shared<BlockingWorker>();
   auto started = coordinator->start(ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "launch_owner",
                                                                                 .mode = ava::agent::SubagentJobMode::Foreground,
@@ -200,8 +199,8 @@ void test_launch_display_survives_coordinator_lifecycle_and_owner_checks()
   auto hidden = coordinator->snapshot("wrong_owner", job_id);
   auto promoted = coordinator->promote("launch_owner", job_id);
   expect(listed.size() == 1 && listed.front().job.launch_display == display && status && status->job.launch_display == display && timed && timed->timed_out &&
-             timed->job.launch_display == display && !hidden &&
-             hidden.error().category() == ava::core::ErrorCategory::NotFound && promoted && promoted->job.launch_display == display,
+             timed->job.launch_display == display && !hidden && hidden.error().category() == ava::core::ErrorCategory::NotFound && promoted &&
+             promoted->job.launch_display == display,
          "list/status/wait/promotion preserve immutable launch display while wrong-owner authority remains non-enumerating");
   worker->finish();
   auto terminal = coordinator->wait("launch_owner", job_id, std::chrono::seconds(2));
@@ -211,8 +210,7 @@ void test_launch_display_survives_coordinator_lifecycle_and_owner_checks()
   auto const public_list = ava::agent::public_job_list_json(coordinator->list("launch_owner"));
   expect(terminal && retained && terminal->job.was_promoted && terminal->job.launch_display == display && retained->job.launch_display == display &&
              public_status.find("COORDINATOR_MODEL_SENTINEL") == std::string::npos && public_result.find("COORDINATOR_MODEL_SENTINEL") == std::string::npos &&
-             public_list.find("COORDINATOR_MODEL_SENTINEL") == std::string::npos &&
-             public_result.find("COORD_REASONING_SENTINEL") == std::string::npos,
+             public_list.find("COORDINATOR_MODEL_SENTINEL") == std::string::npos && public_result.find("COORD_REASONING_SENTINEL") == std::string::npos,
          "promotion, terminal completion, retained result, and public status/list/result keep private launch display in coordinator custody only");
 
   auto canceled_worker = std::make_shared<BlockingWorker>();
@@ -241,38 +239,38 @@ void test_launch_display_survives_coordinator_lifecycle_and_owner_checks()
 
 void test_exact_v1_job_snapshot_and_enum_strings()
 {
-  ava::agent::SubagentCoordinatorJobSnapshot snapshot{.job = {.schema_version = 1,
-                                                              .identity = {.job_id = "job_fixed",
-                                                                           .task_id = "task_fixed",
-                                                                           .parent_session_id = "parent_fixed",
-                                                                           .child_session_id = "child_fixed",
-                                                                           .delivery_id = "delivery_fixed"},
-                                                              .mode = ava::agent::SubagentJobMode::Background,
-                                                              .execution = ava::agent::SubagentExecutionState::Completed,
-                                                              .delivery = ava::agent::SubagentDeliveryState::Acknowledged,
-                                                              .was_promoted = true,
-                                                              .cancel_requested = true,
-                                                              .delivery_attempts = 7,
-                                                              .started_at = "started",
-                                                              .updated_at = "updated",
-                                                              .promoted_at = std::nullopt,
-                                                              .cancel_requested_at = "cancel-requested",
-                                                              .terminal_at = std::nullopt,
-                                                              .delivery_pending_at = "delivery-pending",
-                                                              .last_delivery_attempt_at = std::nullopt,
-                                                              .delivery_acknowledged_at = "delivery-acknowledged",
-                                                              .summary = "fixed summary",
-                                                              .summary_truncated = true,
-                                                              .error_truncated = false,
-                                                              .stop_reason_truncated = true,
-                                                              .provider_iterations = 11,
-                                                              .tool_calls = 12,
-                                                              .tool_iterations = 13,
-                                                              .display_title = "internal display only",
-                                                              .display_subagent_type = "explore",
-                                                              .launch_display = ava::agent::SubagentLaunchDisplay::normalized(
-                                                                  "MODEL_DISPLAY_SENTINEL", std::string_view("REASONING_SENTINEL"))},
-                                                      .timed_out = true};
+  ava::agent::SubagentCoordinatorJobSnapshot snapshot{
+      .job = {.schema_version = 1,
+              .identity = {.job_id = "job_fixed",
+                           .task_id = "task_fixed",
+                           .parent_session_id = "parent_fixed",
+                           .child_session_id = "child_fixed",
+                           .delivery_id = "delivery_fixed"},
+              .mode = ava::agent::SubagentJobMode::Background,
+              .execution = ava::agent::SubagentExecutionState::Completed,
+              .delivery = ava::agent::SubagentDeliveryState::Acknowledged,
+              .was_promoted = true,
+              .cancel_requested = true,
+              .delivery_attempts = 7,
+              .started_at = "started",
+              .updated_at = "updated",
+              .promoted_at = std::nullopt,
+              .cancel_requested_at = "cancel-requested",
+              .terminal_at = std::nullopt,
+              .delivery_pending_at = "delivery-pending",
+              .last_delivery_attempt_at = std::nullopt,
+              .delivery_acknowledged_at = "delivery-acknowledged",
+              .summary = "fixed summary",
+              .summary_truncated = true,
+              .error_truncated = false,
+              .stop_reason_truncated = true,
+              .provider_iterations = 11,
+              .tool_calls = 12,
+              .tool_iterations = 13,
+              .display_title = "internal display only",
+              .display_subagent_type = "explore",
+              .launch_display = ava::agent::SubagentLaunchDisplay::normalized("MODEL_DISPLAY_SENTINEL", std::string_view("REASONING_SENTINEL"))},
+      .timed_out = true};
   auto const expected =
       R"({"schema_version":1,"job_id":"job_fixed","task_id":"task_fixed","parent_session_id":"parent_fixed","child_session_id":"child_fixed","delivery_id":"delivery_fixed","mode":"background","state":"completed","delivery_state":"acknowledged","was_promoted":true,"cancel_requested":true,"timed_out":true,"started_at":"started","updated_at":"updated","promoted_at":null,"cancel_requested_at":"cancel-requested","terminal_at":null,"delivery_pending_at":"delivery-pending","last_delivery_attempt_at":null,"delivery_acknowledged_at":"delivery-acknowledged","delivery_attempts":7,"summary_truncated":true,"error_truncated":false,"stop_reason_truncated":true,"provider_iterations":11,"tool_calls":12,"tool_iterations":13,"result":{"status":"completed","summary":"fixed summary"}})";
   auto const encoded = ava::agent::public_job_snapshot_json(snapshot, ava::agent::PublicJobContent::IncludeTerminalResult);
@@ -281,7 +279,8 @@ void test_exact_v1_job_snapshot_and_enum_strings()
              encoded.find("\"title\"") == std::string::npos && encoded.find("explore") == std::string::npos &&
              encoded.find("MODEL_DISPLAY_SENTINEL") == std::string::npos && encoded.find("REASONING_SENTINEL") == std::string::npos &&
              listed.find("MODEL_DISPLAY_SENTINEL") == std::string::npos && listed.find("REASONING_SENTINEL") == std::string::npos,
-         "exact schema-version-1 public snapshot JSON retains every field, nullable value, counter, truncation flag, and terminal result shape while omitting internal display fields");
+         "exact schema-version-1 public snapshot JSON retains every field, nullable value, counter, truncation flag, and terminal result shape while omitting "
+         "internal display fields");
 
   std::array const modes{ava::agent::SubagentJobMode::Foreground, ava::agent::SubagentJobMode::Background};
   std::array const mode_strings{std::string_view("foreground"), std::string_view("background")};
@@ -294,9 +293,12 @@ void test_exact_v1_job_snapshot_and_enum_strings()
                               ava::agent::SubagentDeliveryState::Attempting, ava::agent::SubagentDeliveryState::Acknowledged};
   std::array const delivery_strings{std::string_view("direct"), std::string_view("pending"), std::string_view("attempting"), std::string_view("acknowledged")};
   bool exact = true;
-  for (std::size_t index = 0; index < modes.size(); ++index) exact = exact && ava::agent::to_string(modes[index]) == mode_strings[index];
-  for (std::size_t index = 0; index < executions.size(); ++index) exact = exact && ava::agent::to_string(executions[index]) == execution_strings[index];
-  for (std::size_t index = 0; index < deliveries.size(); ++index) exact = exact && ava::agent::to_string(deliveries[index]) == delivery_strings[index];
+  for (std::size_t index = 0; index < modes.size(); ++index)
+    exact = exact && ava::agent::to_string(modes[index]) == mode_strings[index];
+  for (std::size_t index = 0; index < executions.size(); ++index)
+    exact = exact && ava::agent::to_string(executions[index]) == execution_strings[index];
+  for (std::size_t index = 0; index < deliveries.size(); ++index)
+    exact = exact && ava::agent::to_string(deliveries[index]) == delivery_strings[index];
   expect(exact, "exact public mode, retained execution, and delivery enum strings remain schema-version-1 compatible");
 }
 
@@ -792,10 +794,10 @@ std::optional<PersistentChildFixture> make_child_fixture(std::string session_id,
   if (!append_target)
     return std::nullopt;
   auto entry = ava::session::SessionEntry{.id = "u1",
-                                         .parent_id = "",
-                                         .type = ava::session::EntryType::UserMessage,
-                                         .timestamp = ava::session::now_timestamp(),
-                                         .data_json = "{\"text\":\"" + seed_text + "\"}"};
+                                          .parent_id = "",
+                                          .type = ava::session::EntryType::UserMessage,
+                                          .timestamp = ava::session::now_timestamp(),
+                                          .data_json = "{\"text\":\"" + seed_text + "\"}"};
   if (!(*append_target)->append(entry))
     return std::nullopt;
   auto authority = ava::session::SessionReadAuthority::create_persistent(store, *lease);
@@ -820,30 +822,25 @@ void test_live_inspection_missing_mismatch_owner_and_prepublication()
   if (!coordinator)
     return;
 
-  auto missing = coordinator->start_background("parent_inspect", {.child_session_id = "child_missing_source"},
-                                               [](auto const&) {
-                                                 return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
-                                                                                            .final_text = "done",
-                                                                                            .stop_reason = "completed"};
-                                               });
+  auto missing = coordinator->start_background("parent_inspect", {.child_session_id = "child_missing_source"}, [](auto const&) {
+    return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
+  });
   expect(missing.has_value(), "legacy start without source still publishes");
   if (!missing)
     return;
   auto unavailable = coordinator->inspect("parent_inspect", missing->job.identity.job_id);
-  expect(unavailable && (*unavailable)->unavailable && !(*unavailable)->not_modified,
-         "missing inspection source returns a stable unavailable frame");
+  expect(unavailable && (*unavailable)->unavailable && !(*unavailable)->not_modified, "missing inspection source returns a stable unavailable frame");
 
   auto child = make_child_fixture("child_match");
   expect(static_cast<bool>(child), "inspection mismatch fixture builds child session");
   if (!child)
     return;
-  auto mismatched = coordinator->start_background("parent_inspect", {.child_session_id = "child_other_id"},
-                                                  [](auto const&) {
-                                                    return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
-                                                                                               .final_text = "x",
-                                                                                               .stop_reason = "completed"};
-                                                  },
-                                                  child->source);
+  auto mismatched = coordinator->start_background(
+      "parent_inspect", {.child_session_id = "child_other_id"},
+      [](auto const&) {
+        return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "x", .stop_reason = "completed"};
+      },
+      child->source);
   expect(!mismatched && ava::agent::subagent_publication_commit_state(mismatched.error()) == ava::agent::SubagentPublicationCommitState::ProvenUnpublished,
          "source/session_id mismatch is proven unpublished before worker launch");
 
@@ -859,13 +856,12 @@ void test_live_inspection_missing_mismatch_owner_and_prepublication()
       expect(ephemeral_source.has_value(), "ephemeral rejection fixture creates source");
       if (ephemeral_source)
       {
-        auto rejected = coordinator->start_background("parent_inspect", {.child_session_id = ephemeral_authority->session_id()},
-                                                      [](auto const&) {
-                                                        return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
-                                                                                                   .final_text = "x",
-                                                                                                   .stop_reason = "completed"};
-                                                      },
-                                                      *ephemeral_source);
+        auto rejected = coordinator->start_background(
+            "parent_inspect", {.child_session_id = ephemeral_authority->session_id()},
+            [](auto const&) {
+              return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "x", .stop_reason = "completed"};
+            },
+            *ephemeral_source);
         expect(!rejected && ava::agent::subagent_publication_commit_state(rejected.error()) == ava::agent::SubagentPublicationCommitState::ProvenUnpublished,
                "ephemeral inspection sources are rejected as proven unpublished");
       }
@@ -877,8 +873,9 @@ void test_live_inspection_missing_mismatch_owner_and_prepublication()
   expect(static_cast<bool>(matched_child), "owner isolation fixture builds child");
   if (!matched_child)
     return;
-  auto started = coordinator->start_background("parent_a", {.child_session_id = matched_child->store.session_id()},
-                                               [worker](auto const& context) { return worker->run(context, "owner"); }, matched_child->source);
+  auto started = coordinator->start_background(
+      "parent_a", {.child_session_id = matched_child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "owner"); },
+      matched_child->source);
   expect(started && worker->wait_started(), "owner isolation fixture starts");
   if (!started)
     return;
@@ -905,15 +902,14 @@ void test_live_inspection_generation_freeze_and_lifecycle()
 
   auto worker = std::make_shared<BlockingWorker>();
   auto started = coordinator->start_background(
-      "parent_freeze", {.child_session_id = child->store.session_id()},
-      [worker](auto const& context) { return worker->run(context, "final summary"); }, child->source);
+      "parent_freeze", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "final summary"); },
+      child->source);
   expect(started && worker->wait_started(), "freeze fixture starts running job");
   if (!started)
     return;
 
   auto first = coordinator->inspect("parent_freeze", started->job.identity.job_id);
-  expect(first && (*first)->generation == 1 && !(*first)->refresh_unavailable && (*first)->messages.size() == 1 &&
-             (*first)->messages.front().text == "prefix",
+  expect(first && (*first)->generation == 1 && !(*first)->refresh_unavailable && (*first)->messages.size() == 1 && (*first)->messages.front().text == "prefix",
          "live inspect projects committed prefix under content generation 1");
   if (!first)
     return;
@@ -979,9 +975,9 @@ void test_live_inspection_generation_freeze_and_lifecycle()
     return;
   auto promote_worker = std::make_shared<BlockingWorker>();
   auto gate = ava::agent::SubagentInteractionGate::create(ava::agent::SubagentJobMode::Foreground, nullptr, nullptr);
-  auto promoted_start =
-      coordinator->start("parent_promote", ava::agent::SubagentJobMode::Foreground, {.child_session_id = promote_child->store.session_id()},
-                         [promote_worker](auto const& context) { return promote_worker->run(context); }, gate, promote_child->source);
+  auto promoted_start = coordinator->start(
+      "parent_promote", ava::agent::SubagentJobMode::Foreground, {.child_session_id = promote_child->store.session_id()},
+      [promote_worker](auto const& context) { return promote_worker->run(context); }, gate, promote_child->source);
   expect(promoted_start && promote_worker->wait_started(), "promote inspect fixture starts");
   if (!promoted_start)
     return;
@@ -1000,9 +996,9 @@ void test_live_inspection_generation_freeze_and_lifecycle()
   if (!shutdown_child)
     return;
   auto shutdown_worker = std::make_shared<BlockingWorker>();
-  auto shutdown_start = coordinator->start_background("parent_shutdown_src", {.child_session_id = shutdown_child->store.session_id()},
-                                                      [shutdown_worker](auto const& context) { return shutdown_worker->run(context); },
-                                                      shutdown_child->source);
+  auto shutdown_start = coordinator->start_background(
+      "parent_shutdown_src", {.child_session_id = shutdown_child->store.session_id()},
+      [shutdown_worker](auto const& context) { return shutdown_worker->run(context); }, shutdown_child->source);
   expect(shutdown_start && shutdown_worker->wait_started(), "shutdown source fixture starts");
   if (!shutdown_start)
     return;
@@ -1026,8 +1022,7 @@ void test_live_inspection_deterministic_stale_inflight_race()
       return;
     hook_entered = true;
     hook_cv.notify_all();
-    expect(hook_cv.wait_for(lock, std::chrono::seconds(2), [&] { return release_hook; }),
-           "inspect_after_source_capture_for_test waits with a finite deadline");
+    expect(hook_cv.wait_for(lock, std::chrono::seconds(2), [&] { return release_hook; }), "inspect_after_source_capture_for_test waits with a finite deadline");
   };
   auto coordinator = coordinator_with(std::move(options));
   if (!coordinator)
@@ -1038,8 +1033,9 @@ void test_live_inspection_deterministic_stale_inflight_race()
   if (!child)
     return;
   auto worker = std::make_shared<BlockingWorker>();
-  auto started = coordinator->start_background("parent_race", {.child_session_id = child->store.session_id()},
-                                               [worker](auto const& context) { return worker->run(context, "race-done"); }, child->source);
+  auto started = coordinator->start_background(
+      "parent_race", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "race-done"); },
+      child->source);
   expect(started && worker->wait_started(), "deterministic race fixture starts");
   if (!started)
     return;
@@ -1106,8 +1102,7 @@ void test_live_inspection_monotonic_concurrent_publish_race()
     --remaining_blocks;
     hook_entered = true;
     hook_cv.notify_all();
-    expect(hook_cv.wait_for(lock, std::chrono::seconds(2), [&] { return release_hook; }),
-           "inspect_before_publish_for_test waits with a finite deadline");
+    expect(hook_cv.wait_for(lock, std::chrono::seconds(2), [&] { return release_hook; }), "inspect_before_publish_for_test waits with a finite deadline");
   };
   auto coordinator = coordinator_with(std::move(options));
   if (!coordinator)
@@ -1118,8 +1113,9 @@ void test_live_inspection_monotonic_concurrent_publish_race()
   if (!child)
     return;
   auto worker = std::make_shared<BlockingWorker>();
-  auto started = coordinator->start_background("parent_mono_race", {.child_session_id = child->store.session_id()},
-                                               [worker](auto const& context) { return worker->run(context, "mono-done"); }, child->source);
+  auto started = coordinator->start_background(
+      "parent_mono_race", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "mono-done"); },
+      child->source);
   expect(started && worker->wait_started(), "monotonic race fixture starts");
   if (!started)
     return;
@@ -1147,8 +1143,7 @@ void test_live_inspection_monotonic_concurrent_publish_race()
       std::async(std::launch::async, [&] { return coordinator->inspect("parent_mono_race", started->job.identity.job_id, (*initial)->generation); });
   {
     std::unique_lock lock(hook_mutex);
-    expect(hook_cv.wait_for(lock, std::chrono::seconds(2), [&] { return hook_entered; }),
-           "inspector A reaches before-publish seam with C1 projected");
+    expect(hook_cv.wait_for(lock, std::chrono::seconds(2), [&] { return hook_entered; }), "inspector A reaches before-publish seam with C1 projected");
   }
 
   auto c2 = ava::session::SessionEntry{.id = "a_c2",
@@ -1178,9 +1173,9 @@ void test_live_inspection_monotonic_concurrent_publish_race()
     hook_cv.notify_all();
   }
   auto a_result = inspector_a.get();
-  expect(a_result && !(*a_result)->not_modified && (*a_result)->generation == 2 && (*a_result)->messages.size() == 3 &&
-             (*a_result)->messages.back().text == "C2",
-         "inspector A returns current C2 generation/content without regressing to C1 or minting a new generation");
+  expect(
+      a_result && !(*a_result)->not_modified && (*a_result)->generation == 2 && (*a_result)->messages.size() == 3 && (*a_result)->messages.back().text == "C2",
+      "inspector A returns current C2 generation/content without regressing to C1 or minting a new generation");
 
   auto current = coordinator->inspect("parent_mono_race", started->job.identity.job_id, (*inspector_b)->generation);
   expect(current && (*current)->not_modified && (*current)->generation == 2, "current known generation returns not_modified at C2");
@@ -1219,8 +1214,9 @@ void test_live_inspection_two_client_lost_response_and_sink()
   if (!child)
     return;
   auto worker = std::make_shared<BlockingWorker>();
-  auto started = coordinator->start_background("parent_two_client", {.child_session_id = child->store.session_id()},
-                                               [worker](auto const& context) { return worker->run(context, "done"); }, child->source);
+  auto started = coordinator->start_background(
+      "parent_two_client", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "done"); },
+      child->source);
   expect(started && worker->wait_started(), "two-client fixture starts");
   if (!started)
     return;
@@ -1248,8 +1244,7 @@ void test_live_inspection_two_client_lost_response_and_sink()
   expect(lost && !(*lost)->not_modified && (*lost)->generation == 2 && (*lost)->messages.size() == 2,
          "lost-response retry with stale generation returns the newer cached frame");
   auto lost_again = coordinator->inspect("parent_two_client", started->job.identity.job_id, (*client_a)->generation);
-  expect(lost_again && !(*lost_again)->not_modified && (*lost_again)->generation == 2,
-         "second lost-response retry still returns the newer cached frame");
+  expect(lost_again && !(*lost_again)->not_modified && (*lost_again)->generation == 2, "second lost-response retry still returns the newer cached frame");
   auto current = coordinator->inspect("parent_two_client", started->job.identity.job_id, (*client_b)->generation);
   expect(current && (*current)->not_modified && (*current)->generation == 2, "current generation still short-circuits");
 
@@ -1274,8 +1269,8 @@ void test_live_inspection_path_free_refresh_failures()
   if (!child)
     return;
   auto worker = std::make_shared<BlockingWorker>();
-  auto started = coordinator->start_background("parent_path_free", {.child_session_id = child->store.session_id()},
-                                               [worker](auto const& context) { return worker->run(context, "x"); }, child->source);
+  auto started = coordinator->start_background(
+      "parent_path_free", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "x"); }, child->source);
   expect(started && worker->wait_started(), "path-free fixture starts");
   if (!started)
     return;
@@ -1293,9 +1288,9 @@ void test_live_inspection_path_free_refresh_failures()
   expect(corrupted.has_value(), "corrupt live inspect returns a path-free frame, not a raw error");
   if (corrupted)
   {
-    expect((*corrupted)->refresh_unavailable && !(*corrupted)->not_modified && (*corrupted)->messages.size() == 1 &&
-               (*corrupted)->messages.front().text == "seed",
-           "corrupt live inspect retains prior messages and sets refresh_unavailable");
+    expect(
+        (*corrupted)->refresh_unavailable && !(*corrupted)->not_modified && (*corrupted)->messages.size() == 1 && (*corrupted)->messages.front().text == "seed",
+        "corrupt live inspect retains prior messages and sets refresh_unavailable");
     auto const rendered = (*corrupted)->messages.front().text;
     expect(rendered.find(child->store.session_path().string()) == std::string::npos, "path-free frame omits session path text");
     expect(!(*corrupted)->unavailable || !(*corrupted)->messages.empty() || (*corrupted)->refresh_unavailable,
@@ -1308,8 +1303,9 @@ void test_live_inspection_path_free_refresh_failures()
   if (!over_child)
     return;
   auto over_worker = std::make_shared<BlockingWorker>();
-  auto over_started = coordinator->start_background("parent_over_cap", {.child_session_id = over_child->store.session_id()},
-                                                    [over_worker](auto const& context) { return over_worker->run(context, "x"); }, over_child->source);
+  auto over_started = coordinator->start_background(
+      "parent_over_cap", {.child_session_id = over_child->store.session_id()}, [over_worker](auto const& context) { return over_worker->run(context, "x"); },
+      over_child->source);
   expect(over_started && over_worker->wait_started(), "over-cap fixture starts");
   if (!over_started)
     return;
@@ -1325,8 +1321,7 @@ void test_live_inspection_path_free_refresh_failures()
     expect(over_child->append_target->append(entry).has_value(), "over-cap fixture appends");
   }
   auto over = coordinator->inspect("parent_over_cap", over_started->job.identity.job_id, (*over_first)->generation);
-  expect(over && (*over)->refresh_unavailable && (*over)->messages.size() == 1,
-         "over-cap live inspect is path-free refresh_unavailable with prior messages");
+  expect(over && (*over)->refresh_unavailable && (*over)->messages.size() == 1, "over-cap live inspect is path-free refresh_unavailable with prior messages");
   if (over)
   {
     expect(!(*over)->not_modified, "over-cap does not claim not_modified");
@@ -1363,12 +1358,12 @@ void test_live_inspection_eviction_and_freeze_failure()
   auto finish = [&](std::string parent, PersistentChildFixture& child, std::string suffix) {
     // Foreground/direct terminal jobs are retention-eligible immediately, so the
     // hard cap can drop older sources without delivery-ack choreography.
-    auto started = coordinator->start(parent, ava::agent::SubagentJobMode::Foreground, {.child_session_id = child.store.session_id()},
-                                      [](auto const&) {
-                                        return ava::agent::BackgroundJobCompletion{
-                                            .state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
-                                      },
-                                      nullptr, child.source);
+    auto started = coordinator->start(
+        parent, ava::agent::SubagentJobMode::Foreground, {.child_session_id = child.store.session_id()},
+        [](auto const&) {
+          return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
+        },
+        nullptr, child.source);
     expect(started.has_value(), "eviction fixture starts: " + suffix);
     if (!started)
       return std::string{};
@@ -1400,8 +1395,8 @@ void test_live_inspection_eviction_and_freeze_failure()
     return;
   auto fail_worker = std::make_shared<BlockingWorker>();
   auto fail_started = failure_coordinator->start_background(
-      "parent_fail", {.child_session_id = fail_child->store.session_id()},
-      [fail_worker](auto const& context) { return fail_worker->run(context, "x"); }, fail_child->source);
+      "parent_fail", {.child_session_id = fail_child->store.session_id()}, [fail_worker](auto const& context) { return fail_worker->run(context, "x"); },
+      fail_child->source);
   expect(fail_started && fail_worker->wait_started(), "freeze-failure fixture starts");
   if (!fail_started)
     return;
@@ -1415,9 +1410,8 @@ void test_live_inspection_eviction_and_freeze_failure()
   auto fail_terminal = failure_coordinator->wait("parent_fail", fail_started->job.identity.job_id, std::chrono::seconds(2));
   expect(fail_terminal && !fail_terminal->timed_out, "freeze-failure fixture reaches terminal");
   auto fail_frame = failure_coordinator->inspect("parent_fail", fail_started->job.identity.job_id);
-  expect(fail_frame && (*fail_frame)->terminal && !(*fail_frame)->freeze_pending && (*fail_frame)->refresh_unavailable &&
-             !(*fail_frame)->unavailable && (*fail_frame)->generation > (*prior)->generation && (*fail_frame)->messages.size() == 1 &&
-             (*fail_frame)->messages.front().text == "keep-me",
+  expect(fail_frame && (*fail_frame)->terminal && !(*fail_frame)->freeze_pending && (*fail_frame)->refresh_unavailable && !(*fail_frame)->unavailable &&
+             (*fail_frame)->generation > (*prior)->generation && (*fail_frame)->messages.size() == 1 && (*fail_frame)->messages.front().text == "keep-me",
          "failed terminal freeze retains the last live frame and marks refresh_unavailable");
 
   // Freeze failure with no prior frame: stable unavailable.
@@ -1527,12 +1521,11 @@ void test_owner_checked_bounded_steering_fifo()
     return;
   auto worker = std::make_shared<BlockingWorker>();
   auto queue = ava::agent::SubagentSteeringQueue::create();
-  auto started = coordinator->start(
-      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "steer_owner",
-                                                   .mode = ava::agent::SubagentJobMode::Background,
-                                                   .job = {.child_session_id = "steer_child"},
-                                                   .steering_queue = queue},
-      [worker](auto const& context) { return worker->run(context); });
+  auto started = coordinator->start(ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "steer_owner",
+                                                                                .mode = ava::agent::SubagentJobMode::Background,
+                                                                                .job = {.child_session_id = "steer_child"},
+                                                                                .steering_queue = queue},
+                                    [worker](auto const& context) { return worker->run(context); });
   expect(started && worker->wait_started(), "steering fixture starts with a child-owned queue");
   if (!started)
     return;
@@ -1589,11 +1582,10 @@ void test_job_history_start_before_worker_and_immediate_completion_order()
   auto sink = std::make_shared<CapturingHistorySink>();
   std::atomic<int> worker_runs{0};
   auto started = coordinator->start(
-      ava::agent::SubagentCoordinatorStartRequest{
-          .parent_session_id = "parent_history",
-          .mode = ava::agent::SubagentJobMode::Background,
-          .job = {.child_session_id = "child_history"},
-          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "parent_history",
+                                                  .mode = ava::agent::SubagentJobMode::Background,
+                                                  .job = {.child_session_id = "child_history"},
+                                                  .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
       [&](auto const&) {
         ++worker_runs;
         return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
@@ -1617,11 +1609,10 @@ void test_job_history_start_failure_does_not_launch_worker()
   sink->fail_start = true;
   std::atomic<int> worker_runs{0};
   auto started = coordinator->start(
-      ava::agent::SubagentCoordinatorStartRequest{
-          .parent_session_id = "parent_fail_start",
-          .mode = ava::agent::SubagentJobMode::Background,
-          .job = {.child_session_id = "child_fail_start"},
-          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "parent_fail_start",
+                                                  .mode = ava::agent::SubagentJobMode::Background,
+                                                  .job = {.child_session_id = "child_fail_start"},
+                                                  .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
       [&](auto const&) {
         ++worker_runs;
         return ava::agent::BackgroundJobCompletion{};
@@ -1641,11 +1632,10 @@ void test_job_history_terminal_failure_keeps_worker_outcome()
   auto sink = std::make_shared<CapturingHistorySink>();
   sink->fail_terminal = true;
   auto started = coordinator->start(
-      ava::agent::SubagentCoordinatorStartRequest{
-          .parent_session_id = "parent_fail_terminal",
-          .mode = ava::agent::SubagentJobMode::Background,
-          .job = {.child_session_id = "child_fail_terminal"},
-          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "parent_fail_terminal",
+                                                  .mode = ava::agent::SubagentJobMode::Background,
+                                                  .job = {.child_session_id = "child_fail_terminal"},
+                                                  .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
       [](auto const&) {
         return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "kept", .stop_reason = "completed"};
       });
@@ -1668,11 +1658,10 @@ void test_job_history_registry_start_failure_leaves_unmatched_start()
   auto sink = std::make_shared<CapturingHistorySink>();
   std::atomic<int> worker_runs{0};
   auto started = coordinator->start(
-      ava::agent::SubagentCoordinatorStartRequest{
-          .parent_session_id = "parent_thread_fail",
-          .mode = ava::agent::SubagentJobMode::Background,
-          .job = {.child_session_id = "child_thread_fail"},
-          .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
+      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "parent_thread_fail",
+                                                  .mode = ava::agent::SubagentJobMode::Background,
+                                                  .job = {.child_session_id = "child_thread_fail"},
+                                                  .history_append = [sink](ava::session::SessionEntry entry) { return (*sink)(std::move(entry)); }},
       [&](auto const&) {
         ++worker_runs;
         return ava::agent::BackgroundJobCompletion{};
@@ -1682,6 +1671,103 @@ void test_job_history_registry_start_failure_leaves_unmatched_start()
          "registry start failure after start history leaves unmatched start and does not launch the worker");
   auto projected = ava::session::project_subagent_job_history("parent_thread_fail", sink->entries);
   expect(projected.size() == 1 && projected[0].unmatched_start, "unmatched start history is interrupted/unknown after a failed launch");
+}
+
+struct BlockingTerminalHistorySink
+{
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool entered_terminal = false;
+  bool release_terminal = false;
+  std::vector<ava::session::SessionEntry> entries;
+
+  ava::core::VoidResult operator()(ava::session::SessionEntry entry)
+  {
+    auto parsed = ava::session::parse_subagent_job_history_entry(entry);
+    bool const start = parsed && *parsed && (*parsed)->phase == ava::session::SubagentJobHistoryPhase::Start;
+    if (start)
+    {
+      std::lock_guard lock(mutex);
+      entries.push_back(std::move(entry));
+      return {};
+    }
+    std::unique_lock lock(mutex);
+    entered_terminal = true;
+    changed.notify_all();
+    changed.wait(lock, [&] { return release_terminal; });
+    entries.push_back(std::move(entry));
+    return {};
+  }
+
+  bool wait_entered_terminal()
+  {
+    std::unique_lock lock(mutex);
+    return changed.wait_for(lock, std::chrono::seconds(2), [&] { return entered_terminal; });
+  }
+
+  void release()
+  {
+    std::lock_guard lock(mutex);
+    release_terminal = true;
+    changed.notify_all();
+  }
+};
+
+void test_job_history_terminal_append_gates_automatic_delivery()
+{
+  auto coordinator = coordinator_with();
+  if (!coordinator)
+    return;
+  auto history = std::make_shared<BlockingTerminalHistorySink>();
+  auto worker = std::make_shared<BlockingWorker>();
+  std::mutex notify_mutex;
+  std::condition_variable notify_changed;
+  std::size_t notifications = 0;
+  coordinator->set_terminal_sink([&](ava::agent::SubagentCoordinatorJobSnapshot const&) {
+    std::lock_guard lock(notify_mutex);
+    ++notifications;
+    notify_changed.notify_all();
+  });
+  auto started = coordinator->start(
+      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "parent_gate_delivery",
+                                                  .mode = ava::agent::SubagentJobMode::Background,
+                                                  .job = {.child_session_id = "child_gate_delivery"},
+                                                  .history_append = [history](ava::session::SessionEntry entry) { return (*history)(std::move(entry)); }},
+      [worker](auto const& context) { return worker->run(context, "gated"); });
+  expect(started && worker->wait_started(), "delivery-gate fixture starts a live worker");
+  if (!started)
+    return;
+  worker->finish();
+  expect(history->wait_entered_terminal(), "terminal history append is entered before automatic delivery");
+  auto pending_blocked = coordinator->pending_deliveries("parent_gate_delivery");
+  auto snap_blocked = coordinator->snapshot("parent_gate_delivery", started->job.identity.job_id);
+  {
+    std::lock_guard lock(notify_mutex);
+    expect(notifications == 0 && pending_blocked && pending_blocked->empty() && snap_blocked &&
+               snap_blocked->job.execution == ava::agent::SubagentExecutionState::Completed &&
+               snap_blocked->job.delivery == ava::agent::SubagentDeliveryState::Direct,
+           "blocked terminal history append does not arm Pending or automatic delivery");
+  }
+  coordinator->set_terminal_sink([&](ava::agent::SubagentCoordinatorJobSnapshot const&) {
+    std::lock_guard lock(notify_mutex);
+    ++notifications;
+    notify_changed.notify_all();
+  });
+  {
+    std::lock_guard lock(notify_mutex);
+    expect(notifications == 0, "installing a terminal sink during blocked history append does not emit early delivery");
+  }
+  history->release();
+  {
+    std::unique_lock lock(notify_mutex);
+    expect(notify_changed.wait_for(lock, std::chrono::seconds(2), [&] { return notifications == 1; }),
+           "releasing terminal history append arms normal automatic delivery once");
+  }
+  auto pending_armed = coordinator->pending_deliveries("parent_gate_delivery");
+  auto snap_armed = coordinator->snapshot("parent_gate_delivery", started->job.identity.job_id);
+  expect(pending_armed && pending_armed->size() == 1 && snap_armed && snap_armed->job.delivery == ava::agent::SubagentDeliveryState::Pending &&
+             snap_armed->job.execution == ava::agent::SubagentExecutionState::Completed && snap_armed->job.summary == "gated",
+         "after history append, background delivery is Pending with the actual worker outcome");
 }
 
 void test_safe_bounds_attempt_validation_and_shutdown()
@@ -1751,4 +1837,5 @@ void run_subagent_coordinator_tests()
   test_job_history_start_failure_does_not_launch_worker();
   test_job_history_terminal_failure_keeps_worker_outcome();
   test_job_history_registry_start_failure_leaves_unmatched_start();
+  test_job_history_terminal_append_gates_automatic_delivery();
 }

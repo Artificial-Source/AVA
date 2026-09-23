@@ -170,7 +170,7 @@ When present, `subagent_job` is strictly typed:
 - `execution`: `starting` for start records; terminal records use `completed`, `failed`, `canceled`, or `interrupted`.
 - `started_at`, `updated_at`: required timestamps; `terminal_at` is required on terminal records.
 - Optional bounded `summary` (16 KiB), `error` (4 KiB), `stop_reason` (1 KiB), truncation booleans, `error_category`, and non-negative accounting counters.
-- Records never store credentials, prompts, raw tool args, paths, or launch authority.
+- Writers omit credentials, raw launch prompts, raw tool args, path metadata, and launch authority. Bounded `summary`/`error` text may still contain ordinary user content or path prose; this is not a redaction engine.
 
 Readers project at most the latest 64 unique jobs whose `parent_session_id` matches the current session. Forks must not inherit control. Unmatched start records display as interrupted with outcome unknown. Append-only disk size grows with ordinary session history; this is not a fixed disk bound.
 

@@ -44,7 +44,9 @@ enum class SubagentJobHistoryExecution
 };
 
 // Bounded display-only job lifecycle record nested in session_metadata.
-// Prompts, credentials, raw tool args, paths, and launch authority are never stored.
+// Writers omit credentials, raw launch prompts, raw tool args, path metadata, and
+// launch authority. Bounded summary/error text may still contain ordinary user
+// content or path prose; this is not a redaction engine.
 struct SubagentJobHistoryRecord
 {
   SubagentJobHistoryPhase phase = SubagentJobHistoryPhase::Start;
@@ -69,7 +71,7 @@ struct SubagentJobHistoryRecord
   std::size_t tool_calls = 0;
   std::size_t tool_iterations = 0;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct SubagentJobHistoryView
@@ -77,7 +79,7 @@ struct SubagentJobHistoryView
   SubagentJobHistoryRecord record = {};
   bool unmatched_start = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 [[nodiscard]] std::string_view to_string(SubagentJobHistoryPhase value) noexcept;

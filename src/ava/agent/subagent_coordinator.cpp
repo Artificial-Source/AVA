@@ -530,6 +530,9 @@ struct SubagentCoordinator::JobState
   bool terminal_notification_pending = false;
   bool terminal_notification_emitted = false;
   bool delivery_exhausted = false;
+  // False while a background terminal history append is in flight so prune
+  // and automatic delivery cannot treat the job as Direct-complete or Pending.
+  bool delivery_arm_ready = true;
   std::size_t sequence = 0;
 };
 
@@ -652,7 +655,7 @@ bool SubagentCoordinator::erase_oldest_eligible_locked()
   {
     std::lock_guard state_lock(candidate->second->mutex);
     auto const& state = *candidate->second;
-    bool const eligible = state.published && terminal(state.snapshot.execution) &&
+    bool const eligible = state.published && state.delivery_arm_ready && terminal(state.snapshot.execution) &&
                           (state.snapshot.delivery == SubagentDeliveryState::Direct || state.snapshot.delivery == SubagentDeliveryState::Acknowledged ||
                            state.delivery_exhausted);
     if (!eligible)
@@ -685,7 +688,7 @@ void SubagentCoordinator::prune_eligible_locked()
   for (auto const& [_, state] : jobs_)
   {
     std::lock_guard state_lock(state->mutex);
-    if (state->published && terminal(state->snapshot.execution) &&
+    if (state->published && state->delivery_arm_ready && terminal(state->snapshot.execution) &&
         (state->snapshot.delivery == SubagentDeliveryState::Direct || state->snapshot.delivery == SubagentDeliveryState::Acknowledged ||
          state->delivery_exhausted))
       ++eligible;
@@ -1015,11 +1018,7 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
       state->snapshot.error_truncated = normalize_text(*state->snapshot.error, kMaxErrorBytes, "subagent job failed");
     }
     if (state->snapshot.mode == SubagentJobMode::Background)
-    {
-      state->snapshot.delivery = SubagentDeliveryState::Pending;
-      state->snapshot.delivery_pending_at = now;
-      state->terminal_notification_pending = true;
-    }
+      state->delivery_arm_ready = false;
     if (state->steering_queue)
       state->steering_queue->close();
     // Terminal inspection handoff: move the source local, bump source epoch so
@@ -1073,11 +1072,25 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
   }
 
   // History is display-only and must not reorder ahead of the start record.
-  // Persist the normalized terminal snapshot outside locks, then notify.
+  // Persist the normalized terminal snapshot outside locks, then arm delivery.
   static_cast<void>(persist_job_history(history_append, history_snapshot, ava::session::SubagentJobHistoryPhase::Terminal));
 
-  // Delay terminal sink until the freeze attempt is stable so observers never
-  // race an empty gap between terminal job state and published inspection.
+  {
+    std::lock_guard state_lock(state->mutex);
+    if (state->snapshot.mode == SubagentJobMode::Background && terminal(state->snapshot.execution) && !state->delivery_arm_ready)
+    {
+      auto const armed_at = ava::session::now_timestamp();
+      state->snapshot.delivery = SubagentDeliveryState::Pending;
+      state->snapshot.delivery_pending_at = armed_at;
+      state->snapshot.updated_at = armed_at;
+      state->terminal_notification_pending = true;
+      state->delivery_arm_ready = true;
+      state->changed.notify_all();
+    }
+  }
+
+  // Delay terminal sink until freeze is stable and history append has been attempted
+  // so observers never race an empty gap or pre-history automatic delivery.
   publish_terminal_notification(state);
 
   {
