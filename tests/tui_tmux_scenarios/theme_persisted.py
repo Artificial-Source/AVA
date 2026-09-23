@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from tui_smoke_helpers import (
     SmokeContext,
     send_keys,
@@ -149,4 +151,19 @@ def scenario_theme_persisted(ctx: SmokeContext) -> None:
         raise RuntimeError(
             f"settings modal did not report auto-reloaded display.json light theme\nscreen:\n{auto_reloaded_theme_modal}"
         )
+    close_settings(tmux_exe, persisted_theme_session, "closed settings before backend reload")
+    for command, expected in (
+        ("/reload models", r"models: loaded"),
+        ("/reload permissions", r"permissions: restart-required"),
+        ("/reload no-such", r"unsupported reload target: no-such"),
+    ):
+        send_keys(tmux_exe, persisted_theme_session, "C-u")
+        send_literal(tmux_exe, persisted_theme_session, command)
+        wait_for(tmux_exe, persisted_theme_session, rf"(?m)^\s*│\s+{re.escape(command)}\s*$", f"{command} draft")
+        # Reload suggestions include local aliases: dismiss completion rather
+        # than letting Enter replace a backend target with the selected alias.
+        send_keys(tmux_exe, persisted_theme_session, "Escape")
+        wait_for_absent(tmux_exe, persisted_theme_session, r"(?m)^\s*│\s+›\s+theme\s+Reload", "reload palette dismissed")
+        send_keys(tmux_exe, persisted_theme_session, "Enter")
+        wait_for(tmux_exe, persisted_theme_session, expected, f"{command} backend report")
     tmux(tmux_exe, "kill-session", "-t", persisted_theme_session, check=False)
