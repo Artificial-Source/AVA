@@ -34,4 +34,19 @@ void Signals::activate_handlers()
   utils::Signal::unblock(SIGTERM);
 }
 
+//static
+bool Signals::reset_child_signal_state() noexcept
+{
+  struct sigaction action{};
+  action.sa_handler = SIG_DFL;
+  ::sigemptyset(&action.sa_mask);
+  for (int const signal_number : {SIGPIPE, SIGINT, SIGTERM, SIGHUP, SIGQUIT})
+    if (::sigaction(signal_number, &action, nullptr) != 0)
+      return false;
+
+  sigset_t empty;
+  ::sigemptyset(&empty);
+  return ::sigprocmask(SIG_SETMASK, &empty, nullptr) == 0;
+}
+
 } // namespace ava::core

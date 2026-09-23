@@ -53,6 +53,11 @@ class Signals final
     return (prev & signal) != 0;
   }
 
+  // Reset of SIGPIPE, SIGINT, SIGTERM, SIGHUP and SIGQUIT to their default dispositions, then unblock all signals.
+  // Call only in the forked child before exec; do not resume application execution afterward.
+  // If exec fails, terminate the child with _exit().
+  static bool reset_child_signal_state() noexcept;
+
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

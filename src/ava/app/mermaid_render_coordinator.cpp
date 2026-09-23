@@ -165,17 +165,6 @@ void close_nonstandard_fds(int first_preserved, int second_preserved) noexcept
   }
 }
 
-void reset_child_signals() noexcept
-{
-  struct sigaction action{};
-  action.sa_handler = SIG_DFL;
-  ::sigemptyset(&action.sa_mask);
-  for (int const signal_number : {SIGPIPE, SIGINT, SIGTERM, SIGHUP, SIGQUIT}) static_cast<void>(::sigaction(signal_number, &action, nullptr));
-  sigset_t empty;
-  ::sigemptyset(&empty);
-  static_cast<void>(::sigprocmask(SIG_SETMASK, &empty, nullptr));
-}
-
 [[noreturn]] void child_launch_failed(int error_fd) noexcept
 {
   int const saved_errno = errno == 0 ? EIO : errno;
@@ -433,8 +422,9 @@ RenderResult render_one(std::vector<std::string> argv_values, std::string const&
     if (::setpgid(0, 0) != 0)
       _exit(127);
     static_cast<void>(::raise(SIGSTOP));
-    reset_child_signals();
-    if (::dup2(stdin_pipe->read_end.get(), STDIN_FILENO) < 0 || ::dup2(stdout_pipe->write_end.get(), STDOUT_FILENO) < 0)
+    if (!core::Signals::reset_child_signal_state() ||
+        ::dup2(stdin_pipe->read_end.get(), STDIN_FILENO) < 0 ||
+        ::dup2(stdout_pipe->write_end.get(), STDOUT_FILENO) < 0)
       child_launch_failed(exec_pipe->write_end.get());
     int const dev_null = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
     if (dev_null < 0 || ::dup2(dev_null, STDERR_FILENO) < 0 || ::chdir("/") != 0)

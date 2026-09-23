@@ -7,6 +7,7 @@
 #include "ava/tools/spill_files.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/Signals.h"
 
 #include <algorithm>
 #include <array>
@@ -257,23 +258,6 @@ void close_nonstandard_fds_except(std::vector<int> const& keep_fds) noexcept
       continue;
     static_cast<void>(::close(fd));
   }
-}
-
-bool reset_child_signal_state()
-{
-  sigset_t empty_mask{};
-  if (::sigemptyset(&empty_mask) != 0 || ::sigprocmask(SIG_SETMASK, &empty_mask, nullptr) != 0)
-    return false;
-  struct sigaction action{};
-  action.sa_handler = SIG_DFL;
-  if (::sigemptyset(&action.sa_mask) != 0)
-    return false;
-  for (int const signal_number : {SIGTERM, SIGINT, SIGHUP, SIGQUIT})
-  {
-    if (::sigaction(signal_number, &action, nullptr) != 0)
-      return false;
-  }
-  return true;
 }
 
 bool is_canceled(ToolContext const& context)
@@ -1069,7 +1053,7 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
     sentinel_read.reset();
     sentinel_write.reset();
     int gate_status = 0;
-    if (!reset_child_signal_state())
+    if (!core::Signals::reset_child_signal_state())
     {
       gate_status = errno == 0 ? EIO : errno;
       static_cast<void>(write_retry(status_write.get(), &gate_status, sizeof(gate_status)));
@@ -1204,7 +1188,7 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
     // The TUI installs process-level handlers. The sentinel is an internal
     // supervisor child and must retain default termination behavior so the
     // verified group can leave during the finite TERM grace period.
-    if (!reset_child_signal_state())
+    if (!core::Signals::reset_child_signal_state())
       _exit(127);
     // Join the verified command process group. The leader established it
     // behind the gate; the parent verified it before forking here.
