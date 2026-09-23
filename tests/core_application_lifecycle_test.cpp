@@ -162,7 +162,7 @@ void scenario_signal_construction()
   sigset_t pending{};
   check(::sigpending(&pending) == 0 && ::sigismember(&pending, SIGINT) == 1 && ::sigismember(&pending, SIGTERM) == 1,
         "both foreground signals remain kernel-pending before activation");
-  check(!ava::core::Signals::signal_received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
+  check(!ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
         "blocked pending signals have not reached the installed handler before activation");
 
   application.signals_manager().activate_handlers();
@@ -170,10 +170,10 @@ void scenario_signal_construction()
   check(!signal_is_blocked(active_mask, SIGINT) && !signal_is_blocked(active_mask, SIGTERM) && signal_is_blocked(active_mask, SIGUSR1) &&
             !signal_is_blocked(active_mask, SIGUSR2),
         "activation unblocks only SIGINT and SIGTERM in its calling thread");
-  check(ava::core::Signals::signal_received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
+  check(ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
         "activation delivers both pending signals to the installed handler");
-  check(ava::core::Signals::clear_signal(ava::core::Signals::bit_SIGINT) && ava::core::Signals::signal_received(ava::core::Signals::bit_SIGTERM) &&
-            !ava::core::Signals::clear_signal(ava::core::Signals::bit_SIGINT) && ava::core::Signals::clear_signal(ava::core::Signals::bit_SIGTERM),
+  check(ava::core::Signals::try_obtain(ava::core::Signals::bit_SIGINT) && ava::core::Signals::received(ava::core::Signals::bit_SIGTERM) &&
+            !ava::core::Signals::try_obtain(ava::core::Signals::bit_SIGINT) && ava::core::Signals::try_obtain(ava::core::Signals::bit_SIGTERM),
         "atomic signal claim clears only its selected bit and a second claim is false");
 }
 
@@ -189,11 +189,11 @@ void scenario_signal_teardown()
     auto const terminate_action = read_signal_action(SIGTERM);
     check(interrupt_action.sa_handler == terminate_action.sa_handler && interrupt_action.sa_handler != unrelated_signal_handler,
           "Application construction replaces prior foreground dispositions with its shared handler");
-    check(!ava::core::Signals::signal_received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
+    check(!ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
           "Application construction starts without recorded signal bits");
     application.signals_manager().activate_handlers();
     check(::raise(SIGINT) == 0 && ::raise(SIGTERM) == 0, "the Application handler receives both foreground signals");
-    check(ava::core::Signals::signal_received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
+    check(ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
           "the Application handler records both foreground signals");
     // Leave both bits set so ordinary destruction must establish the clear-bit postcondition.
   }

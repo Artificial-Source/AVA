@@ -40,14 +40,14 @@ class Signals final
   void activate_handlers();
 
   // Returns WasTrue if any of the signals in `signals` are pending.
-  static bool signal_received(mask_type signals)
+  static bool received(mask_type signals)
   {
     return (s_received_.load(std::memory_order::relaxed) & signals) != 0;
   }
 
   // May also be used to clear more than one signal, but then the return value should be ignored.
   // Otherwise, return true if the signal was successfully claimed for this thread to be handled.
-  static bool clear_signal(mask_type signal)
+  static bool try_obtain(mask_type signal)
   {
     mask_type prev = s_received_.fetch_and(~signal, std::memory_order_relaxed);
     return (prev & signal) != 0;

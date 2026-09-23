@@ -646,7 +646,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   };
 
   using Signals = core::Signals;
-  if (Signals::signal_received(terminal_signals))
+  if (Signals::received(terminal_signals))
     return 130;
   if (!service_mermaid_presentation() || !render())
     return 1;
@@ -699,9 +699,9 @@ int run_interactive_composer(TuiRuntimeOptions options)
       continue;
     }
     auto const input = *maybe_input;
-    if (Signals::signal_received(terminal_signals))
+    if (Signals::received(terminal_signals))
     {
-      bool const exit_requested = Signals::clear_signal(Signals::bit_SIGTERM);
+      bool const exit_requested = Signals::try_obtain(Signals::bit_SIGTERM);
       if (exit_requested)
         terminal_signal_received = true;
 
@@ -718,7 +718,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
       // └─────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────┘
       if (branch_summary_ui.active)
       {
-        if (AI_LIKELY(exit_requested || Signals::clear_signal(Signals::bit_SIGINT)))
+        if (AI_LIKELY(exit_requested || Signals::try_obtain(Signals::bit_SIGINT)))
         {
           // We have an active branch summary and successfully claimed either terminal signal.
           // Request cancellation; additionally request eventual exit for SIGTERM.
@@ -736,7 +736,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         // Claimed SIGTERM and no active branch summary. Leave the loop, regardless of draft contents.
         break;
       }
-      else if (Signals::clear_signal(Signals::bit_SIGINT))
+      else if (Signals::try_obtain(Signals::bit_SIGINT))
       {
         // Claimed SIGINT, no active branch summary
         if (draft.text.empty())

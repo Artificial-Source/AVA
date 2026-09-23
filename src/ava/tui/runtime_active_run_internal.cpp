@@ -735,10 +735,10 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     detail::ActiveRunCadence cadence(std::chrono::steady_clock::now());
     while (submit_future.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready)
     {
-      if (Signals::signal_received(terminal_signals))
+      if (Signals::received(terminal_signals))
       {
-        bool const exit_requested = Signals::clear_signal(Signals::bit_SIGTERM);
-        bool const claimed_sigint = !exit_requested && Signals::clear_signal(Signals::bit_SIGINT);
+        bool const exit_requested = Signals::try_obtain(Signals::bit_SIGTERM);
+        bool const claimed_sigint = !exit_requested && Signals::try_obtain(Signals::bit_SIGINT);
 
         // ┌─────────────────────┬────────────────┬────────────────────────────────────────────────────────────────────┐
         // │Successfully claimed │UI state        │Intended action                                                     │
