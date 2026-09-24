@@ -73,6 +73,7 @@ bool valid_log_stem(std::string_view log_stem)
 
 struct LibcwdOutputSink::Impl
 {
+  std::mutex file_stream_mutex;
   std::unique_ptr<__gnu_cxx::stdio_filebuf<char>> file_buffer;
   std::unique_ptr<std::ostream> file_stream;
   bool enabled = false;
@@ -230,7 +231,7 @@ LibcwdOutputSink::LibcwdOutputSink(std::string const log_stem) : impl_(std::make
   }
   impl_->file_stream = std::make_unique<std::ostream>(impl_->file_buffer.get());
   *impl_->file_stream << std::unitbuf;
-  Debug(libcw_do.set_ostream(impl_->file_stream.get()));
+  Debug(libcw_do.set_ostream(impl_->file_stream.get(), &impl_->file_stream_mutex));
   impl_->enabled = true;
 }
 
