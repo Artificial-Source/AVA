@@ -9,6 +9,7 @@
 #include "ava/app/print_mode.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/signal_policy.h"
 #include "ava/config/auth.h"
 #include "ava/config/openai_oauth.h"
 #include "ava/permissions/permission.h"
@@ -72,6 +73,48 @@ void test_app_print_prompt_merging()
 
   auto missing = ava::app::merge_print_prompt(ava::app::PrintPromptInputs{.explicit_prompt = std::nullopt, .stdin_prompt = std::nullopt});
   expect(!missing && missing.error().message().find("requires a prompt") != std::string::npos, "print prompt rejects missing prompt input");
+}
+
+void test_invocation_signal_policy_mapping()
+{
+  using ava::app::InvocationMode;
+  using ava::app::InvocationSignalPolicy;
+  using ava::app::signal_policy_for;
+
+  for (auto const mode :
+       {InvocationMode::Acp, InvocationMode::Rpc, InvocationMode::Print, InvocationMode::Connect, InvocationMode::Doctor, InvocationMode::SupportExport})
+    expect(signal_policy_for(mode) == InvocationSignalPolicy::SharedBits, "blocking noninteractive modes use shared signal bits");
+  expect(signal_policy_for(InvocationMode::ImmediateOutput) == InvocationSignalPolicy::Default,
+         "immediate output and parser errors use conventional default signal dispositions");
+  expect(signal_policy_for(InvocationMode::Interactive) == InvocationSignalPolicy::Deferred &&
+             signal_policy_for(InvocationMode::LineShell) == InvocationSignalPolicy::Deferred,
+         "interactive frontends retain deferred signal activation");
+
+  char const* print_argv[] = {"ava", "--session-dir", "/path/that/need/not/exist", "--print", "hello"};
+  auto print = ava::app::parse_command_line(5, print_argv);
+  auto const* print_command = std::get_if<ava::app::RuntimeInvocation>(&print);
+  expect(print_command && print_command->frontend == ava::app::RuntimeFrontend::Print && print_command->print_prompt == "hello" &&
+             ava::app::invocation_mode(print) == InvocationMode::Print,
+         "pure command-line resolution selects print mode without touching the requested filesystem path");
+
+  char const* conflict_argv[] = {"ava", "--print", "hello", "--rpc"};
+  auto conflict = ava::app::parse_command_line(4, conflict_argv);
+  auto const* conflict_output = std::get_if<ava::app::ImmediateInvocation>(&conflict);
+  expect(conflict_output && conflict_output->status == 2 && conflict_output->stderr_output &&
+             conflict_output->text == "ava: use either --print or --rpc, not both\n" && ava::app::invocation_mode(conflict) == InvocationMode::ImmediateOutput,
+         "parser resolves validation failures as exact immediate-error invocations");
+
+  char const* acp_precedence_argv[] = {"ava", "--help", "--acp"};
+  auto acp_precedence = ava::app::parse_command_line(3, acp_precedence_argv);
+  expect(std::holds_alternative<ava::app::ImmediateInvocation>(acp_precedence) && ava::app::invocation_mode(acp_precedence) == InvocationMode::ImmediateOutput,
+         "ACP standalone validation retains precedence over help output");
+
+  char const* login_argv[] = {"ava", "auth", "login", "openai", "--headless-oauth"};
+  auto login = ava::app::parse_command_line(5, login_argv);
+  auto const* connect = std::get_if<ava::app::ConnectInvocation>(&login);
+  expect(connect && connect->provider == "openai" && connect->source == ava::app::ConnectCredentialSource::HeadlessOAuth &&
+             ava::app::invocation_mode(login) == InvocationMode::Connect,
+         "auth login alias resolves completely to connect mode before dispatch");
 }
 
 void test_headless_permission_policy()
@@ -1159,6 +1202,7 @@ void test_app_print_json_mode_streams_provider_deltas_before_final_message()
 void run_app_print_tests()
 {
   test_app_print_prompt_merging();
+  test_invocation_signal_policy_mapping();
   test_headless_permission_policy();
   test_app_print_text_mode_outputs_final_text_only();
   test_app_print_text_mode_sanitizes_terminal_output_and_diagnostics_when_requested();

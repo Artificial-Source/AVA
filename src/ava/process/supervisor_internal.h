@@ -419,11 +419,14 @@ struct GateReleaseDecision
 [[nodiscard]] ava::core::Result<Pipe> make_cloexec_pipe();
 [[nodiscard]] ava::core::VoidResult set_nonblocking(int descriptor);
 [[nodiscard]] ava::core::Result<bool> wait_descriptor(int descriptor, short events, ProcessDeadline deadline);
-[[nodiscard]] bool write_without_sigpipe(int descriptor, void const* data, std::size_t size) noexcept;
+// Write all `size` bytes from `data` to `descriptor`, retrying interrupted writes.
+//
+// Returns false when a write fails or makes no progress. AVA's process-wide signal policy keeps SIGPIPE ignored and blocked,
+// so a closed reader is reported as EPIPE instead of terminating the process.
+[[nodiscard]] bool write_all_to_descriptor(int descriptor, void const* data, std::size_t size) noexcept;
 [[nodiscard]] pid_t waitpid_retry(pid_t process, int* status, int options) noexcept;
 [[nodiscard]] int waitid_retry(pid_t process, siginfo_t* information, int options) noexcept;
 [[nodiscard]] bool exact_provisional_cleanup(pid_t leader, pid_t sentinel, ProcessDeadline deadline) noexcept;
-[[nodiscard]] bool reset_child_signal_state() noexcept;
 [[nodiscard]] ssize_t child_read_retry(int descriptor, void* data, std::size_t size) noexcept;
 [[nodiscard]] bool child_write_all(int descriptor, void const* data, std::size_t size) noexcept;
 void close_nonstandard_descriptors(int preserved, int maximum) noexcept;

@@ -25,8 +25,6 @@
 #include <vector>
 #include <fcntl.h>
 #include <poll.h>
-#include <pthread.h>
-#include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #ifdef __linux__
@@ -756,11 +754,6 @@ struct MermaidRenderCoordinator::Impl
 
   void worker_loop(std::stop_token stop_token)
   {
-    sigset_t blocked;
-    ::sigemptyset(&blocked);
-    ::sigaddset(&blocked, SIGPIPE);
-    static_cast<void>(::pthread_sigmask(SIG_BLOCK, &blocked, nullptr));
-
     for (;;)
     {
       std::vector<std::string> argv;

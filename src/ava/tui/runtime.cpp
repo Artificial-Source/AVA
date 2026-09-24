@@ -214,7 +214,10 @@ int run_interactive_composer(TuiRuntimeOptions options)
   core::Signals& signals_manager = application.signals_manager();
 
   terminal_context.initialize();
-  signals_manager.activate_handlers();
+
+  // Activate signal handlers for the TUI.
+  signals_manager.activate_handlers({SIGTERM, SIGINT});
+  signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup;
   apply_terminal_cursor_settings(options.cursor);
@@ -701,7 +704,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
     auto const input = *maybe_input;
     if (Signals::received(terminal_signals))
     {
-      bool const exit_requested = Signals::try_obtain(Signals::bit_SIGTERM);
+      bool const exit_requested = Signals::try_obtain(SIGTERM);
       if (exit_requested)
         terminal_signal_received = true;
 
@@ -718,7 +721,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
       // └─────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────┘
       if (branch_summary_ui.active)
       {
-        if (AI_LIKELY(exit_requested || Signals::try_obtain(Signals::bit_SIGINT)))
+        if (AI_LIKELY(exit_requested || Signals::try_obtain(SIGINT)))
         {
           // We have an active branch summary and successfully claimed either terminal signal.
           // Request cancellation; additionally request eventual exit for SIGTERM.
@@ -736,7 +739,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
         // Claimed SIGTERM and no active branch summary. Leave the loop, regardless of draft contents.
         break;
       }
-      else if (Signals::try_obtain(Signals::bit_SIGINT))
+      else if (Signals::try_obtain(SIGINT))
       {
         // Claimed SIGINT, no active branch summary
         if (draft.text.empty())

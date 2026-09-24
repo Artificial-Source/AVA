@@ -13,22 +13,6 @@
 
 namespace ava::lsp::lsp_client_internal {
 
-class ScopedSignalIgnore
-{
- public:
-  explicit ScopedSignalIgnore(int signal_number);
-  ScopedSignalIgnore(ScopedSignalIgnore const&) = delete;
-  ScopedSignalIgnore& operator=(ScopedSignalIgnore const&) = delete;
-  ~ScopedSignalIgnore();
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-
- private:
-  int signal_number_ = 0;
-  bool active_ = false;
-  struct sigaction previous_{};
-};
-
 ava::core::Error lsp_error(ava::core::ErrorCategory category, std::string message, ServerConfig const& config);
 ava::core::Error errno_error(std::string message, ServerConfig const& config);
 bool is_canceled(CancelCallback const& cancel_requested);

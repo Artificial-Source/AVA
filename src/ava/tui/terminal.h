@@ -278,7 +278,7 @@ void terminal_reset_mouse_tracking() noexcept;
 [[nodiscard]] bool terminal_escape_sequence_should_discard(std::string_view sequence);
 [[nodiscard]] bool terminal_is_tty();
 
-constexpr auto terminal_signals = core::Signals::bit_SIGINT | core::Signals::bit_SIGTERM;
+constexpr auto terminal_signals = core::Signals::to_mask(SIGINT) | core::Signals::to_mask(SIGTERM);
 
 namespace detail {
 [[nodiscard]] bool force_terminal_cursor_visible() noexcept;

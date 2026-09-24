@@ -18,8 +18,6 @@
 
 #if !defined(_WIN32)
 #include <poll.h>
-#include <pthread.h>
-#include <signal.h>
 #include <unistd.h>
 #endif
 
@@ -109,22 +107,8 @@ ava::core::Result<PipeIoResultV1> PipeEndpoint::write(std::span<std::byte const>
   if (source.empty())
     return PipeIoResultV1{.bytes = 0, .state = PipeIoStateV1::Progress};
 
-  sigset_t blocked{};
-  sigset_t previous{};
-  if (::sigemptyset(&blocked) != 0 || ::sigaddset(&blocked, SIGPIPE) != 0 || ::pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0)
-    return std::unexpected(detail::io_error("failed to block SIGPIPE for process pipe write", errno));
   auto const result = ::write(state->descriptor.get(), source.data(), source.size());
   int const saved_errno = errno;
-  bool const was_blocked = ::sigismember(&previous, SIGPIPE) == 1;
-  if (result < 0 && saved_errno == EPIPE && !was_blocked)
-  {
-    timespec const no_wait{};
-    while (::sigtimedwait(&blocked, nullptr, &no_wait) < 0 && errno == EINTR)
-    {
-    }
-  }
-  if (::pthread_sigmask(SIG_SETMASK, &previous, nullptr) != 0)
-    return std::unexpected(detail::io_error("failed to restore the signal mask after process pipe write", errno));
   if (result >= 0)
     return PipeIoResultV1{.bytes = static_cast<std::size_t>(result), .state = PipeIoStateV1::Progress};
   if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK)

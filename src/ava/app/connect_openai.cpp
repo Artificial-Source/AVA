@@ -3,6 +3,7 @@
 #include "ava/app/browser_open.h"
 #include "ava/app/connect_oauth_callback.h"
 #include "ava/app/connect_openai.h"
+#include "ava/app/signal_policy.h"
 #include "ava/tui/composer.h"
 #include "ava/config/auth.h"
 #include "ava/config/openai_oauth.h"
@@ -14,7 +15,6 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
-#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
@@ -24,7 +24,6 @@
 #include <utility>
 #include <vector>
 #include <poll.h>
-#include <signal.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -33,54 +32,63 @@ namespace {
 
 constexpr std::size_t max_connect_secret_bytes = 64 * 1024;
 
-sig_atomic_t volatile terminal_mode_signal_number = 0;
-bool terminal_mode_signal_handlers_installed = false;
-struct sigaction previous_sigint_action{};
-struct sigaction previous_sigterm_action{};
-struct sigaction previous_sighup_action{};
+thread_local ModeSignalLatch connect_signal_latch;
+thread_local unsigned int connect_invocation_depth = 0;
 
-void terminal_mode_signal_handler(int signal_number)
+class ScopedConnectSignalInvocation final
 {
-  terminal_mode_signal_number = signal_number;
-}
-
-bool install_terminal_mode_signal_handlers()
-{
-  terminal_mode_signal_number = 0;
-  struct sigaction action{};
-  action.sa_handler = terminal_mode_signal_handler;
-  sigemptyset(&action.sa_mask);
-  action.sa_flags = 0;
-  if (::sigaction(SIGINT, &action, &previous_sigint_action) != 0)
-    return false;
-  if (::sigaction(SIGTERM, &action, &previous_sigterm_action) != 0)
+ public:
+  ScopedConnectSignalInvocation()
   {
-    static_cast<void>(::sigaction(SIGINT, &previous_sigint_action, nullptr));
-    return false;
+    if (connect_invocation_depth++ == 0)
+      connect_signal_latch.reset();
   }
-  if (::sigaction(SIGHUP, &action, &previous_sighup_action) != 0)
-  {
-    static_cast<void>(::sigaction(SIGTERM, &previous_sigterm_action, nullptr));
-    static_cast<void>(::sigaction(SIGINT, &previous_sigint_action, nullptr));
-    return false;
-  }
-  terminal_mode_signal_handlers_installed = true;
-  return true;
-}
+  ~ScopedConnectSignalInvocation() { --connect_invocation_depth; }
 
-void restore_terminal_mode_signal_handlers()
-{
-  if (!terminal_mode_signal_handlers_installed)
-    return;
-  terminal_mode_signal_handlers_installed = false;
-  static_cast<void>(::sigaction(SIGINT, &previous_sigint_action, nullptr));
-  static_cast<void>(::sigaction(SIGTERM, &previous_sigterm_action, nullptr));
-  static_cast<void>(::sigaction(SIGHUP, &previous_sighup_action, nullptr));
-}
+  ScopedConnectSignalInvocation(ScopedConnectSignalInvocation const&) = delete;
+  ScopedConnectSignalInvocation& operator=(ScopedConnectSignalInvocation const&) = delete;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
 
 bool terminal_mode_cancelled_by_signal()
 {
-  return terminal_mode_signal_number != 0;
+  return connect_signal_latch.poll();
+}
+
+enum class ConnectInputReadiness
+{
+  Ready,
+  Cancelled,
+  Failed,
+};
+
+// Wait until production stdin can be read without blocking, while polling the
+// shared process signal bits. Injected streams are already finite test inputs
+// and can be read directly.
+ConnectInputReadiness wait_for_connect_input(std::istream& in)
+{
+  if (&in != &std::cin)
+    return ConnectInputReadiness::Ready;
+  while (true)
+  {
+    if (terminal_mode_cancelled_by_signal())
+      return ConnectInputReadiness::Cancelled;
+    if (in.rdbuf() != nullptr && in.rdbuf()->in_avail() > 0)
+      return ConnectInputReadiness::Ready;
+    pollfd descriptor{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    int const ready = ::poll(&descriptor, 1, 50);
+    if (ready > 0)
+    {
+      if ((descriptor.revents & (POLLIN | POLLHUP)) != 0)
+        return ConnectInputReadiness::Ready;
+      if ((descriptor.revents & (POLLERR | POLLNVAL)) != 0)
+        return ConnectInputReadiness::Failed;
+      continue;
+    }
+    if (ready < 0 && errno != EINTR)
+      return ConnectInputReadiness::Failed;
+  }
 }
 
 long long unix_time_seconds()
@@ -122,19 +130,15 @@ class ScopedTerminalRawMode
   {
     if (!active_)
       return;
-    bool const signal_handlers_installed = install_terminal_mode_signal_handlers();
     auto current = original_;
     current.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
     current.c_cc[VMIN] = 1;
     current.c_cc[VTIME] = 0;
     if (::tcsetattr(STDIN_FILENO, TCSAFLUSH, &current) != 0)
     {
-      if (signal_handlers_installed)
-        restore_terminal_mode_signal_handlers();
       active_ = false;
       return;
     }
-    signal_handlers_installed_ = signal_handlers_installed;
   }
 
   ScopedTerminalRawMode(ScopedTerminalRawMode const&) = delete;
@@ -145,13 +149,10 @@ class ScopedTerminalRawMode
     if (!active_)
       return;
     static_cast<void>(::tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_));
-    if (signal_handlers_installed_)
-      restore_terminal_mode_signal_handlers();
   }
 
  private:
   bool active_ = false;
-  bool signal_handlers_installed_ = false;
   termios original_{};
 };
 
@@ -316,7 +317,8 @@ bool menu_input_pending(std::istream& in, bool stdin_is_tty)
   do
   {
     ready = ::poll(&descriptor, 1, 25);
-  } while (ready < 0 && errno == EINTR);
+  }
+  while (ready < 0 && errno == EINTR);
   return ready > 0 && (descriptor.revents & POLLIN) != 0;
 }
 
@@ -334,8 +336,11 @@ void consume_escape_sequence_tail(std::istream& in, bool stdin_is_tty)
 
 ava::core::Result<MenuInput> read_menu_input(std::istream& in, bool stdin_is_tty)
 {
-  if (terminal_mode_cancelled_by_signal())
+  auto const readiness = wait_for_connect_input(in);
+  if (readiness == ConnectInputReadiness::Cancelled)
     return MenuInput{.kind = MenuInputKind::Escape, .text = {}};
+  if (readiness == ConnectInputReadiness::Failed)
+    return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to wait for provider menu input"));
   char ch = 0;
   if (!in.get(ch))
   {
@@ -495,13 +500,38 @@ bool is_valid_connect_provider_id(std::string_view provider_id)
 
 ava::core::Result<std::string> read_prompt_line(std::istream& in, std::ostream& out, std::string_view prompt, bool secret, bool stdin_is_tty)
 {
+  if (terminal_mode_cancelled_by_signal())
+    return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "connect prompt cancelled"));
   out << prompt << std::flush;
   std::string line;
   {
     ScopedTerminalEcho const echo_guard(secret && stdin_is_tty);
-    if (!std::getline(in, line))
+    if (&in != &std::cin)
     {
-      return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to read connect prompt input"));
+      if (!std::getline(in, line))
+        return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to read connect prompt input"));
+    }
+    else
+    {
+      while (true)
+      {
+        auto const readiness = wait_for_connect_input(in);
+        if (readiness == ConnectInputReadiness::Cancelled)
+          return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "connect prompt cancelled"));
+        if (readiness == ConnectInputReadiness::Failed)
+          return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to wait for connect prompt input"));
+        char character = 0;
+        if (!in.get(character))
+        {
+          if (in.eof() && !line.empty())
+            break;
+          return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to read connect prompt input"));
+        }
+        if (character == '\n')
+          break;
+        if (character != '\r')
+          line.push_back(character);
+      }
     }
   }
   if (secret && stdin_is_tty)
@@ -557,9 +587,16 @@ ava::core::Result<std::string> read_connect_secret(ConnectProviderCredentialOpti
   }
 
   std::string secret;
-  char ch = 0;
-  while (in.get(ch))
+  while (true)
   {
+    auto const readiness = wait_for_connect_input(in);
+    if (readiness == ConnectInputReadiness::Cancelled)
+      return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "credential input cancelled"));
+    if (readiness == ConnectInputReadiness::Failed)
+      return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to wait for credential input"));
+    char ch = 0;
+    if (!in.get(ch))
+      break;
     if (secret.size() >= max_connect_secret_bytes)
     {
       auto error = connect_error(ava::core::ErrorCategory::InvalidArgument, "credential stdin is too large");
@@ -568,6 +605,8 @@ ava::core::Result<std::string> read_connect_secret(ConnectProviderCredentialOpti
     }
     secret.push_back(ch);
   }
+  if (terminal_mode_cancelled_by_signal())
+    return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "credential input cancelled"));
   if (in.bad())
   {
     return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "failed to read credential from stdin"));
@@ -624,6 +663,7 @@ ava::core::Result<ava::config::OpenAICredential> wait_for_openai_device_oauth(av
 int run_connect_openai_browser(ava::config::XdgPaths const& paths, std::ostream& out, std::ostream& err,
                                std::optional<ava::process::ProcessScopeV1> process_scope)
 {
+  ScopedConnectSignalInvocation const signal_invocation;
   if (!process_scope)
   {
     err << "OpenAI OAuth process authority is unavailable\n";
@@ -647,12 +687,16 @@ int run_connect_openai_browser(ava::config::XdgPaths const& paths, std::ostream&
   out << "Waiting for browser callback on http://localhost:1455/auth/callback ...\n";
 
   ava::http::CurlCliTransport transport(*process_scope);
-  auto credential = complete_openai_browser_oauth(*session, transport, unix_time_seconds());
+  auto credential = complete_openai_browser_oauth(*session, transport, unix_time_seconds(), [] { return terminal_mode_cancelled_by_signal(); });
   if (!credential)
   {
+    if (terminal_mode_cancelled_by_signal())
+      return 130;
     err << ava::tui::sanitize_terminal_text(credential.error().format()) << '\n';
     return 1;
   }
+  if (terminal_mode_cancelled_by_signal())
+    return 130;
   auto stored = ava::config::store_openai_credential(paths, *credential);
   if (!stored)
   {
@@ -666,6 +710,7 @@ int run_connect_openai_browser(ava::config::XdgPaths const& paths, std::ostream&
 int run_connect_openai_headless(ava::config::XdgPaths const& paths, std::ostream& out, std::ostream& err,
                                 std::optional<ava::process::ProcessScopeV1> process_scope)
 {
+  ScopedConnectSignalInvocation const signal_invocation;
   if (!process_scope)
   {
     err << "OpenAI OAuth process authority is unavailable\n";
@@ -682,12 +727,16 @@ int run_connect_openai_headless(ava::config::XdgPaths const& paths, std::ostream
   out << "Enter this code: " << ava::tui::sanitize_terminal_text(authorization->user_code) << "\n\n";
   out << "Waiting for OpenAI authorization ...\n";
 
-  auto credential = wait_for_openai_device_oauth(*authorization, transport, unix_time_seconds());
+  auto credential = wait_for_openai_device_oauth(*authorization, transport, unix_time_seconds(), [] { return terminal_mode_cancelled_by_signal(); });
   if (!credential)
   {
+    if (terminal_mode_cancelled_by_signal())
+      return 130;
     err << ava::tui::sanitize_terminal_text(credential.error().format()) << '\n';
     return 1;
   }
+  if (terminal_mode_cancelled_by_signal())
+    return 130;
   auto stored = ava::config::store_openai_credential(paths, *credential);
   if (!stored)
   {
@@ -700,12 +749,14 @@ int run_connect_openai_headless(ava::config::XdgPaths const& paths, std::ostream
 
 int run_connect_openai(ava::config::XdgPaths const& paths, std::optional<ava::process::ProcessScopeV1> process_scope)
 {
+  ScopedConnectSignalInvocation const signal_invocation;
   return run_connect_openai_browser(paths, std::cout, std::cerr, std::move(process_scope));
 }
 
 int run_connect_openai_wizard(ava::config::XdgPaths const& paths, ConnectProviderWizardOptions const& options, std::istream& in, std::ostream& out,
                               std::ostream& err, std::optional<ava::process::ProcessScopeV1> process_scope)
 {
+  ScopedConnectSignalInvocation const signal_invocation;
   if (options.credential_type)
   {
     return run_connect_provider_wizard(
@@ -728,6 +779,8 @@ int run_connect_openai_wizard(ava::config::XdgPaths const& paths, ConnectProvide
   auto method_text = read_prompt_line(in, out, "Select method [1-3]: ", false, options.stdin_is_tty);
   if (!method_text)
   {
+    if (terminal_mode_cancelled_by_signal())
+      return 130;
     err << ava::tui::sanitize_terminal_text(method_text.error().format()) << '\n';
     return 1;
   }
@@ -756,6 +809,7 @@ int run_connect_openai_wizard(ava::config::XdgPaths const& paths, ConnectProvide
 int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProviderWizardOptions const& options, std::istream& in, std::ostream& out,
                                 std::ostream& err, std::optional<ava::process::ProcessScopeV1> process_scope)
 {
+  ScopedConnectSignalInvocation const signal_invocation;
   if (!options.stdin_is_tty)
   {
     err << "interactive provider login requires a terminal; use --api-key-stdin or --api-key-env\n";
@@ -772,6 +826,8 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
     auto provider = select_provider_from_menu(in, out, options.stdin_is_tty);
     if (!provider)
     {
+      if (terminal_mode_cancelled_by_signal())
+        return 130;
       err << ava::tui::sanitize_terminal_text(provider.error().format()) << '\n';
       return 1;
     }
@@ -816,9 +872,13 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
   auto secret = read_prompt_line(in, out, credential_type_label(credential_type) + " for " + provider_id + ": ", true, options.stdin_is_tty);
   if (!secret)
   {
+    if (terminal_mode_cancelled_by_signal())
+      return 130;
     err << ava::tui::sanitize_terminal_text(secret.error().format()) << '\n';
     return 1;
   }
+  if (terminal_mode_cancelled_by_signal())
+    return 130;
   auto stored = store_connect_secret(paths, provider_id, credential_type, *secret);
   if (!stored)
   {
@@ -837,6 +897,7 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
 int run_connect_provider_credential(ava::config::XdgPaths const& paths, ConnectProviderCredentialOptions const& options, std::istream& in, std::ostream& out,
                                     std::ostream& err)
 {
+  ScopedConnectSignalInvocation const signal_invocation;
   {
     auto catalog = ava::provider::ProviderCatalog::build(paths);
     if (!catalog)
@@ -859,9 +920,13 @@ int run_connect_provider_credential(ava::config::XdgPaths const& paths, ConnectP
   auto secret = read_connect_secret(options, in);
   if (!secret)
   {
+    if (terminal_mode_cancelled_by_signal())
+      return 130;
     err << ava::tui::sanitize_terminal_text(secret.error().format()) << '\n';
     return 1;
   }
+  if (terminal_mode_cancelled_by_signal())
+    return 130;
 
   auto stored = store_connect_secret(paths, options.provider_id, options.credential_type, *secret);
   if (!stored)

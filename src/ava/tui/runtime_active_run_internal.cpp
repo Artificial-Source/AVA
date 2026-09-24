@@ -737,8 +737,8 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     {
       if (Signals::received(terminal_signals))
       {
-        bool const exit_requested = Signals::try_obtain(Signals::bit_SIGTERM);
-        bool const claimed_sigint = !exit_requested && Signals::try_obtain(Signals::bit_SIGINT);
+        bool const exit_requested = Signals::try_obtain(SIGTERM);
+        bool const claimed_sigint = !exit_requested && Signals::try_obtain(SIGINT);
 
         // ┌─────────────────────┬────────────────┬────────────────────────────────────────────────────────────────────┐
         // │Successfully claimed │UI state        │Intended action                                                     │

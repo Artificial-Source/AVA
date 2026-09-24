@@ -27,20 +27,6 @@
 
 namespace ava::lsp::lsp_client_internal {
 
-ScopedSignalIgnore::ScopedSignalIgnore(int signal_number) : signal_number_(signal_number)
-{
-  struct sigaction ignored{};
-  ignored.sa_handler = SIG_IGN;
-  sigemptyset(&ignored.sa_mask);
-  active_ = sigaction(signal_number_, &ignored, &previous_) == 0;
-}
-
-ScopedSignalIgnore::~ScopedSignalIgnore()
-{
-  if (active_)
-    sigaction(signal_number_, &previous_, nullptr);
-}
-
 ssize_t read_retry(int fd, char* data, std::size_t size)
 {
   while (true)
@@ -421,7 +407,6 @@ ava::core::VoidResult SubprocessLspClient::launch()
 
   pid_ = pid;
   owned_pgid_ = child_pgid;
-  ScopedSignalIgnore const ignore_sigpipe(SIGPIPE);
   char const release = '1';
   if (write_retry((*gate_pipe)[1], &release, 1) != 1)
   {

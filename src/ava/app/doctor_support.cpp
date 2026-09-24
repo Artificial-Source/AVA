@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/diagnostics/artifact_store.h"
 #include "ava/app/doctor_support.h"
+#include "ava/app/signal_policy.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
@@ -161,9 +162,10 @@ std::int64_t now_seconds() noexcept
 
 }  // namespace
 
-DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir)
+DoctorReport collect_passive_doctor_report_impl(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir, ModeSignalLatch* signal_latch)
 {
   DoctorReport report;
+  auto canceled = [&] { return signal_latch && signal_latch->poll(); };
   try
   {
     auto anchors = ava::core::AnchorSet::open({workspace_dir, paths.ava_config_dir, paths.ava_state_dir});
@@ -179,6 +181,8 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
     auto const state_root = inspect_metadata(paths.ava_state_dir, ExpectedType::Directory, true);
     report.checks.push_back(root_check(DoctorCheckKind::ConfigRoot, config_root));
     report.checks.push_back(root_check(DoctorCheckKind::StateRoot, state_root));
+    if (canceled())
+      return report;
 
     ava::config::ModelRegistry registry;
     bool registry_ready = false;
@@ -229,6 +233,8 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
                              .code = default_ready ? DoctorCode::Ready : DoctorCode::DefaultUnavailable,
                              .items = default_ready ? 1U : 0U,
                              .errors = default_ready ? 0U : 1U});
+    if (canceled())
+      return report;
 
     auto const auth = inspect_metadata(paths.auth_file, ExpectedType::RegularFile, true);
     if (auth.state == MetadataState::Ready)
@@ -259,7 +265,12 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
           enablement.state == MetadataState::Ready ? paths.ava_state_dir / "plugin-enablement.json" : std::filesystem::path{}, workspace_dir);
       plugin_items = diagnostics.plugins.size();
       plugin_errors += diagnostics.failures.size();
-      for (auto const& plugin : diagnostics.plugins) plugin_enabled += plugin.enabled ? 1U : 0U;
+      for (auto const& plugin : diagnostics.plugins)
+      {
+        if (canceled())
+          return report;
+        plugin_enabled += plugin.enabled ? 1U : 0U;
+      }
     }
     report.checks.push_back(
         {.kind = DoctorCheckKind::PluginConfiguration,
@@ -288,7 +299,12 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
       if (loaded)
       {
         mcp_items = loaded->servers.size();
-        for (auto const& server : loaded->servers) mcp_enabled += server.enabled ? 1U : 0U;
+        for (auto const& server : loaded->servers)
+        {
+          if (canceled())
+            return report;
+          mcp_enabled += server.enabled ? 1U : 0U;
+        }
       }
       else
       {
@@ -320,7 +336,12 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
            .project_config_file = project_lsp.state == MetadataState::Ready ? workspace_dir / ".ava" / "lsp.json" : std::filesystem::path{},
            .workspace_root = workspace_dir,
            .anchor_set = *anchors});
-      for (auto const& config : inspection.configs) lsp_items += config.server_count;
+      for (auto const& config : inspection.configs)
+      {
+        if (canceled())
+          return report;
+        lsp_items += config.server_count;
+      }
       lsp_builtins = inspection.builtin_servers;
       lsp_errors += inspection.error_count;
     }
@@ -336,6 +357,8 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
       lsp_builtins = ava::lsp::inspect_builtin_servers({}, workspace_dir, *anchors);
     for (auto const& builtin : lsp_builtins)
     {
+      if (canceled())
+        return report;
       DoctorStatus status = DoctorStatus::Pass;
       DoctorCode code = DoctorCode::BuiltinDefaults;
       std::uint64_t enabled = 0;
@@ -412,12 +435,22 @@ DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, s
   return report;
 }
 
+DoctorReport collect_passive_doctor_report(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir)
+{
+  return collect_passive_doctor_report_impl(paths, workspace_dir, nullptr);
+}
+
 int run_doctor(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir, bool json, std::ostream& out, std::ostream& err)
 {
+  ModeSignalLatch signal_latch;
   try
   {
+    if (signal_latch.poll())
+      return 130;
     Dout(dc::app, "operation=doctor state=start format=" << (json ? "json" : "human"));
-    auto const report = collect_passive_doctor_report(paths, workspace_dir);
+    auto const report = collect_passive_doctor_report_impl(paths, workspace_dir, &signal_latch);
+    if (signal_latch.poll())
+      return 130;
 #ifdef CWDEBUG
     std::uint64_t warning_count = 0;
     std::uint64_t failure_count = 0;
@@ -428,6 +461,8 @@ int run_doctor(ava::config::XdgPaths const& paths, std::filesystem::path const& 
     }
     Dout(dc::config, "operation=doctor state=result checks=" << report.checks.size() << " warnings=" << warning_count << " failures=" << failure_count);
 #endif
+    if (signal_latch.poll())
+      return 130;
     out << (json ? ava::diagnostics::serialize_doctor_report_json(report) + '\n' : ava::diagnostics::serialize_doctor_report_human(report));
     return report.has_failures() ? 1 : 0;
   }
@@ -449,8 +484,11 @@ int run_doctor(ava::config::XdgPaths const& paths, std::filesystem::path const& 
 
 int run_support_export(ava::config::XdgPaths const& paths, std::filesystem::path const& workspace_dir, std::ostream& out, std::ostream& err)
 {
+  ModeSignalLatch signal_latch;
   try
   {
+    if (signal_latch.poll())
+      return 130;
     Dout(dc::app, "operation=support_export state=start");
     std::error_code state_error;
     std::filesystem::create_directories(paths.ava_state_dir, state_error);
@@ -472,9 +510,13 @@ int run_support_export(ava::config::XdgPaths const& paths, std::filesystem::path
       err << "Support artifact generation failed [unsafe_storage].\n";
       return 1;
     }
-    auto report = collect_passive_doctor_report(paths, workspace_dir);
+    auto report = collect_passive_doctor_report_impl(paths, workspace_dir, &signal_latch);
+    if (signal_latch.poll())
+      return 130;
     auto trace = ava::diagnostics::read_trace_counter_snapshot(paths, **anchor_set);
     auto last_failure = ava::diagnostics::read_last_failure_record(paths, **anchor_set);
+    if (signal_latch.poll())
+      return 130;
     ava::diagnostics::SupportArtifact artifact{
         .generated_at = now_seconds(), .doctor = std::move(report), .trace = std::move(trace), .last_failure = std::move(last_failure)};
     auto const publication = ava::diagnostics::publish_support_artifact(paths, **anchor_set, artifact);

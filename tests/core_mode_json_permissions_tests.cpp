@@ -215,6 +215,7 @@ void test_application_lifecycle_contracts()
   expect_lifecycle_scenario("duplicate-live-instance", LifecycleScenarioResult::abort, "duplicate live Application construction");
 #endif
   expect_lifecycle_scenario("signal-construction", LifecycleScenarioResult::success, "signal construction, pending delivery, and atomic claim");
+  expect_lifecycle_scenario("signal-immediate-output", LifecycleScenarioResult::success, "immediate output preserves permanent SIGPIPE suppression");
   expect_lifecycle_scenario("signal-teardown", LifecycleScenarioResult::success, "ordinary signal teardown postcondition");
   expect_lifecycle_scenario("joined-worker", LifecycleScenarioResult::success, "joined worker before Application destruction");
 #if CW_DEBUG && defined(__linux__)

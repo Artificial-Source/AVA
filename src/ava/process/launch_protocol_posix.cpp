@@ -376,7 +376,7 @@ LaunchProtocolOutcomeV1 await_launch_exec_confirmation(int descriptor, ProcessDe
       if (Clock::now() >= deadline)
         return protocol_outcome(LaunchProtocolDispositionV1::LaunchFailed, LaunchProtocolProblemV1::TimedOut);
       char const continuation = 'C';
-      if (!write_without_sigpipe(containment_continuation_descriptor, &continuation, 1))
+      if (!write_all_to_descriptor(containment_continuation_descriptor, &continuation, 1))
       {
         return protocol_outcome(LaunchProtocolDispositionV1::LaunchFailed, LaunchProtocolProblemV1::ContinuationFailed, LaunchFailureStageV1::None, EIO);
       }

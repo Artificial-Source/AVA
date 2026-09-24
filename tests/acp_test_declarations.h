@@ -29,6 +29,7 @@ void test_acp_close_timeout_is_internal_error_with_eventual_cleanup();
 void test_acp_peer_prompt_terminal_commit_arbitration();
 void test_acp_client_tool_dtos_lifecycle_and_cancellation();
 void test_acp_peer_lifecycle_notifications_and_duplicate_ids();
+void test_acp_peer_shutdown_cancels_blocked_transport();
 void test_acp_peer_bidirectional_out_of_order_deadline_and_late_response();
 void test_acp_peer_cancel_duplicate_inflight_and_saturation();
 void test_acp_peer_lifecycle_request_commit_linearization();

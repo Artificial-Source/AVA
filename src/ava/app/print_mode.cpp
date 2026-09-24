@@ -6,16 +6,19 @@
 #include "ava/http/curl_transport.h"
 #include "ava/app/print_mode.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime_credentials.h"
+#include "ava/app/signal_policy.h"
 #include "ava/tui/composer.h"
 #include "ava/config/auth.h"
 #include "ava/config/openai_oauth.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/provider/catalog.h"
-#include "ava/app/runtime_credentials.h"
 #include "ava/provider/registry.h"
 #include "ava/core/error.h"
 
+#include <cerrno>
 #include <concepts>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <ostream>
@@ -23,6 +26,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <poll.h>
 #include <unistd.h>
 
 #ifdef CWDEBUG
@@ -40,6 +44,37 @@ bool has_value(std::optional<std::string> const& value)
 std::string read_all(std::istream& in)
 {
   return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+ava::core::Result<std::string> read_signal_aware_stdin(ModeSignalLatch& signal_latch)
+{
+  std::string input;
+  char buffer[8192];
+  while (true)
+  {
+    if (signal_latch.poll())
+      return input;
+    pollfd descriptor{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+    int const ready = ::poll(&descriptor, 1, 50);
+    if (ready < 0)
+    {
+      if (errno == EINTR)
+        continue;
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to poll print stdin"));
+    }
+    if (ready == 0)
+      continue;
+    ssize_t const bytes = ::read(STDIN_FILENO, buffer, sizeof(buffer));
+    if (bytes > 0)
+    {
+      input.append(buffer, static_cast<std::size_t>(bytes));
+      continue;
+    }
+    if (bytes == 0)
+      return input;
+    if (errno != EINTR)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to read print stdin"));
+  }
 }
 
 ava::permissions::PermissionResolver deny_permission_resolver()
@@ -160,9 +195,9 @@ ava::core::Result<std::string> merge_print_prompt(PrintPromptInputs const& input
   return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "print mode requires a prompt argument or stdin"));
 }
 
-ava::core::Result<ava::agent::AgentLoopResult> run_print_prompt(runtime::session_ts& unlocked_session, std::string const& prompt, ava::provider::Provider const& provider,
-                                                                ava::http::Transport& transport, PrintModeRunOptions const& options, std::ostream& out,
-                                                                std::ostream& err)
+ava::core::Result<ava::agent::AgentLoopResult> run_print_prompt(runtime::session_ts& unlocked_session, std::string const& prompt,
+                                                                ava::provider::Provider const& provider, ava::http::Transport& transport,
+                                                                PrintModeRunOptions const& options, std::ostream& out, std::ostream& err)
 {
   DoutEntering(dc::runtime, "run_print_prompt(prompt_bytes=" << prompt.size() << ")");
 #ifdef CWDEBUG
@@ -234,11 +269,27 @@ ava::core::Result<ava::agent::AgentLoopResult> run_print_prompt(runtime::session
 
 int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err)
 {
+  ModeSignalLatch signal_latch;
   bool const sanitize_stdout = ::isatty(STDOUT_FILENO) == 1;
   bool const sanitize_stderr = ::isatty(STDERR_FILENO) == 1;
   std::optional<std::string> stdin_prompt;
   if (options.read_stdin)
-    stdin_prompt = read_all(in);
+  {
+    if (&in == &std::cin)
+    {
+      auto read = read_signal_aware_stdin(signal_latch);
+      if (!read)
+      {
+        err << terminal_output_text(read.error().format(), sanitize_stderr) << '\n';
+        return 1;
+      }
+      stdin_prompt = std::move(*read);
+    }
+    else
+      stdin_prompt = read_all(in);
+    if (signal_latch.poll())
+      return 130;
+  }
 
   auto prompt = merge_print_prompt(PrintPromptInputs{.explicit_prompt = options.explicit_prompt, .stdin_prompt = std::move(stdin_prompt)});
   if (!prompt)
@@ -269,7 +320,7 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
   }
   ava::http::Transport& transport = options.transport_override ? options.transport_override->get() : *default_transport;
   ava::http::Transport& auth_transport = options.transport_override ? options.transport_override->get() : *default_transport;
-  auto catalog = session_w->provider_catalog() ? session_w->provider_catalog()
+  auto catalog = session_w->provider_catalog()           ? session_w->provider_catalog()
                  : options.open_context.provider_catalog ? options.open_context.provider_catalog
                                                          : ava::provider::ProviderCatalog::build_builtins_only();
   auto default_provider = catalog->create(session_w->model().provider_id);
@@ -306,13 +357,14 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
 
   runtime_options.enable_transport_retries = !options.transport_override.has_value();
   runtime_options.permission_resolver = build_headless_permission_resolver(options.permission_policy);
+  runtime_options.cancel_requested = [&signal_latch] { return signal_latch.poll(); };
 
   PrintModeRunOptions const run_options{.output_format = options.output_format,
                                         .runtime_options = std::move(runtime_options),
                                         .sanitize_terminal_output = sanitize_stdout,
                                         .sanitize_terminal_diagnostics = sanitize_stderr};
   auto result = run_print_prompt(unlocked_session, *prompt, provider, transport, run_options, out, err);
-  return result ? 0 : 1;
+  return signal_latch.signaled() ? 130 : (result ? 0 : 1);
 }
 
 }  // namespace ava::app

@@ -33,6 +33,7 @@ void run_acp_tests()
   test_acp_peer_prompt_terminal_commit_arbitration();
   test_acp_client_tool_dtos_lifecycle_and_cancellation();
   test_acp_peer_lifecycle_notifications_and_duplicate_ids();
+  test_acp_peer_shutdown_cancels_blocked_transport();
   test_acp_peer_bidirectional_out_of_order_deadline_and_late_response();
   test_acp_peer_cancel_duplicate_inflight_and_saturation();
   test_acp_peer_lifecycle_request_commit_linearization();

@@ -37,24 +37,6 @@ class UniqueFd
   int fd_ = -1;
 };
 
-class ScopedSignalIgnore
-{
- public:
-  explicit ScopedSignalIgnore(int signal);
-  ScopedSignalIgnore(ScopedSignalIgnore const&) = delete;
-  ScopedSignalIgnore& operator=(ScopedSignalIgnore const&) = delete;
-  ScopedSignalIgnore(ScopedSignalIgnore&&) = delete;
-  ScopedSignalIgnore& operator=(ScopedSignalIgnore&&) = delete;
-  ~ScopedSignalIgnore();
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-
- private:
-  int signal_ = 0;
-  struct sigaction previous_{};
-  bool installed_ = false;
-};
-
 [[nodiscard]] ava::core::Error mcp_error(ava::core::ErrorCategory category, std::string message, McpServerConfig const& server);
 [[nodiscard]] ava::core::Error errno_error(std::string message, McpServerConfig const& server);
 [[nodiscard]] ava::core::Error protocol_error(std::string message, McpServerConfig const& server);

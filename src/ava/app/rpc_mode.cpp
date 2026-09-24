@@ -15,6 +15,7 @@
 #include "ava/app/rpc/session_operators.h"
 #include "ava/app/rpc_mode.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/signal_policy.h"
 #include "ava/session/attachments.h"
 #include "ava/provider/catalog.h"
 #include "ava/provider/provider_utils.h"
@@ -45,41 +46,6 @@
 
 namespace ava::app {
 namespace {
-
-class ScopedRpcSignalIgnore
-{
- public:
-  explicit ScopedRpcSignalIgnore(int signal_number) : signal_number_(signal_number)
-  {
-    struct sigaction ignored{};
-    ignored.sa_handler = SIG_IGN;
-    sigemptyset(&ignored.sa_mask);
-    if (sigaction(signal_number_, &ignored, &previous_) == 0)
-      installed_ = true;
-    else
-      error_number_ = errno;
-  }
-
-  ScopedRpcSignalIgnore(ScopedRpcSignalIgnore const&) = delete;
-  ScopedRpcSignalIgnore& operator=(ScopedRpcSignalIgnore const&) = delete;
-  ScopedRpcSignalIgnore(ScopedRpcSignalIgnore&&) = delete;
-  ScopedRpcSignalIgnore& operator=(ScopedRpcSignalIgnore&&) = delete;
-
-  ~ScopedRpcSignalIgnore()
-  {
-    if (installed_)
-      static_cast<void>(sigaction(signal_number_, &previous_, nullptr));
-  }
-
-  [[nodiscard]] bool installed() const noexcept { return installed_; }
-  [[nodiscard]] int error_number() const noexcept { return error_number_; }
-
- private:
-  int signal_number_ = 0;
-  int error_number_ = 0;
-  bool installed_ = false;
-  struct sigaction previous_{};
-};
 
 std::filesystem::path resolve_rpc_attachment_path(std::filesystem::path const& current_dir, std::string const& attachment_path)
 {
@@ -325,21 +291,21 @@ ava::core::JoinThread make_rpc_compaction_worker(RpcCompactionWorkerOptions opti
     auto summary_generator =
         CompactionSummaryGenerator([&](std::vector<ava::session::SessionEntry> const& entries, ava::session::CompactionConfig const& config,
                                        std::string_view instructions, std::size_t estimated_tokens) {
-          return generate_compaction_summary(options.unlocked_session, entries, config, instructions, estimated_tokens, selected_provider->get(), options.transport,
-                                             *compact_runtime_options);
+          return generate_compaction_summary(options.unlocked_session, entries, config, instructions, estimated_tokens, selected_provider->get(),
+                                             options.transport, *compact_runtime_options);
         });
     std::string slash_command = "/compact";
     if (options.instructions)
       slash_command += " " + *options.instructions;
-    auto command_result =
-        run_command(options.unlocked_session, CommandRequest{
-                                         .command = std::move(slash_command),
-                                         .event_sink = ava::event::make_runtime_event_bus_adapter(event_bus, rpc::rpc_event_context(options.request_id)),
-                                         .permission_resolver = compact_runtime_options->permission_resolver,
-                                         .compaction_summary_generator = std::move(summary_generator),
-                                         .cancel_requested = std::move(compact_cancel_requested),
-                                         .propagate_compaction_errors = true,
-                                     });
+    auto command_result = run_command(options.unlocked_session,
+                                      CommandRequest{
+                                          .command = std::move(slash_command),
+                                          .event_sink = ava::event::make_runtime_event_bus_adapter(event_bus, rpc::rpc_event_context(options.request_id)),
+                                          .permission_resolver = compact_runtime_options->permission_resolver,
+                                          .compaction_summary_generator = std::move(summary_generator),
+                                          .cancel_requested = std::move(compact_cancel_requested),
+                                          .propagate_compaction_errors = true,
+                                      });
     if (!command_result)
     {
       finish(std::unexpected(std::move(command_result.error())));
@@ -351,9 +317,9 @@ ava::core::JoinThread make_rpc_compaction_worker(RpcCompactionWorkerOptions opti
 
 }  // namespace
 
-ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtime::OpenContext const& open_context, ava::provider::Provider const& provider,
-                                   ava::http::Transport& transport, ava::http::Transport& auth_transport, runtime::RunOptions runtime_options,
-                                   rpc::RpcLineReader& input, std::ostream& out)
+ava::core::VoidResult run_rpc_loop_impl(runtime::session_ts& unlocked_session, runtime::OpenContext const& open_context,
+                                        ava::provider::Provider const& provider, ava::http::Transport& transport, ava::http::Transport& auth_transport,
+                                        runtime::RunOptions runtime_options, rpc::RpcLineReader& input, std::ostream& out, ModeSignalLatch* signal_latch)
 {
 #ifdef CWDEBUG
   {
@@ -374,6 +340,22 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
     static_cast<void>(rpc::cancel_pending_resolvers(output, pending_state));
   });
   std::optional<ava::core::JoinThread> prompt_worker;
+  std::optional<std::jthread> signal_watcher;
+  if (signal_latch)
+  {
+    signal_watcher.emplace([&](std::stop_token stop_token) {
+      while (!stop_token.stop_requested())
+      {
+        if (signal_latch->poll())
+        {
+          static_cast<void>(rpc::close_input_and_cancel(run_state));
+          input.cancel();
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    });
+  }
 
   // At this point we are still single-threaded.
   CRITICAL_AREA_BEGIN_R(session);
@@ -495,9 +477,7 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
           return written;
         continue;
       }
-      auto envelope =
-          rpc::resolver_event_envelope("permission_grant_revoked", command->id, command->id,
-                                       rpc::session_id_snapshot(unlocked_session), *revoked);
+      auto envelope = rpc::resolver_event_envelope("permission_grant_revoked", command->id, command->id, rpc::session_id_snapshot(unlocked_session), *revoked);
       if (auto written = rpc::Output::write_record(output, ava::event::serialize_event_envelope_jsonl(envelope)); !written)
         return written;
       if (auto written = rpc::write_success(output, command->id, *revoked); !written)
@@ -508,9 +488,7 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
     if (command->type == "permission_grants_clear")
     {
       auto const cleared = rpc::permission_session_grants_clear_result_json(pending_state);
-      auto envelope =
-          rpc::resolver_event_envelope("permission_grants_cleared", command->id, command->id,
-                                       rpc::session_id_snapshot(unlocked_session), cleared);
+      auto envelope = rpc::resolver_event_envelope("permission_grants_cleared", command->id, command->id, rpc::session_id_snapshot(unlocked_session), cleared);
       if (auto written = rpc::Output::write_record(output, ava::event::serialize_event_envelope_jsonl(envelope)); !written)
         return written;
       if (auto written = rpc::write_success(output, command->id, cleared); !written)
@@ -528,14 +506,14 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
         }
         continue;
       }
-      auto registry = load_command_registry(unlocked_session,
-          CommandRegistryOptions{.include_builtins = true,
-                                 .include_prompt_commands = true,
-                                 .include_skills = true,
-                                 .include_plugin_commands = true,
-                                 .include_mcp_prompts = true,
-                                 .permission_resolver = runtime_options.permission_resolver,
-                                 .cancel_requested = [&] { return run_state.cancel_requested.load(std::memory_order_relaxed); }});
+      auto registry = load_command_registry(
+          unlocked_session, CommandRegistryOptions{.include_builtins = true,
+                                                   .include_prompt_commands = true,
+                                                   .include_skills = true,
+                                                   .include_plugin_commands = true,
+                                                   .include_mcp_prompts = true,
+                                                   .permission_resolver = runtime_options.permission_resolver,
+                                                   .cancel_requested = [&] { return run_state.cancel_requested.load(std::memory_order_relaxed); }});
       if (auto written = rpc::write_success(output, command->id, rpc::command_registry_result_json(registry)); !written)
       {
         return written;
@@ -574,10 +552,10 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
       ava::config::XdgPaths paths;
       {
         paths = runtime::session_ts::rat(unlocked_session)->paths();
-        auto result =
-            run_command(unlocked_session, CommandRequest{.command = std::move(slash_command),
-                                                .event_sink = ava::event::make_runtime_event_bus_adapter(event_bus, rpc::rpc_event_context(command->id)),
-                                                .permission_resolver = runtime_options.permission_resolver});
+        auto result = run_command(unlocked_session,
+                                  CommandRequest{.command = std::move(slash_command),
+                                                 .event_sink = ava::event::make_runtime_event_bus_adapter(event_bus, rpc::rpc_event_context(command->id)),
+                                                 .permission_resolver = runtime_options.permission_resolver});
         if (!result)
         {
           if (auto written = rpc::write_error(output, command->id, result.error()); !written)
@@ -689,9 +667,9 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
           return written;
         continue;
       }
-      auto envelope = rpc::resolver_event_envelope("permission_replied", *command->correlation_id, *command->correlation_id,
-                                                   rpc::session_id_snapshot(unlocked_session),
-                                                   rpc::permission_reply_payload_json(*command->request_id, *command->decision, command->reason));
+      auto envelope =
+          rpc::resolver_event_envelope("permission_replied", *command->correlation_id, *command->correlation_id, rpc::session_id_snapshot(unlocked_session),
+                                       rpc::permission_reply_payload_json(*command->request_id, *command->decision, command->reason));
       if (auto written = rpc::Output::write_record(output, ava::event::serialize_event_envelope_jsonl(envelope)); !written)
         return written;
       if (auto written = rpc::write_success(output, command->id, "{}"); !written)
@@ -725,9 +703,9 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
           return written;
         continue;
       }
-      auto envelope = rpc::resolver_event_envelope(
-          "question_replied", *command->correlation_id, *command->correlation_id, rpc::session_id_snapshot(unlocked_session),
-          rpc::question_reply_payload_json(*command->request_id, command->answer, command->selected, command->selected_options));
+      auto envelope =
+          rpc::resolver_event_envelope("question_replied", *command->correlation_id, *command->correlation_id, rpc::session_id_snapshot(unlocked_session),
+                                       rpc::question_reply_payload_json(*command->request_id, command->answer, command->selected, command->selected_options));
       if (auto written = rpc::Output::write_record(output, ava::event::serialize_event_envelope_jsonl(envelope)); !written)
         return written;
       if (auto written = rpc::write_success(output, command->id, "{}"); !written)
@@ -922,8 +900,8 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
       rpc::subscribe_event_envelope_writer(event_bus, output);
       auto result =
           run_command(unlocked_session, CommandRequest{.command = std::move(slash_command),
-                                                 .event_sink = ava::event::make_runtime_event_bus_adapter(event_bus, rpc::rpc_event_context(command->id)),
-                                                 .permission_resolver = runtime_options.permission_resolver});
+                                                       .event_sink = ava::event::make_runtime_event_bus_adapter(event_bus, rpc::rpc_event_context(command->id)),
+                                                       .permission_resolver = runtime_options.permission_resolver});
       if (!result)
       {
         if (auto written = rpc::write_error(output, command->id, result.error()); !written)
@@ -1065,6 +1043,13 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
 }
 
 ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtime::OpenContext const& open_context, ava::provider::Provider const& provider,
+                                   ava::http::Transport& transport, ava::http::Transport& auth_transport, runtime::RunOptions runtime_options,
+                                   rpc::RpcLineReader& input, std::ostream& out)
+{
+  return run_rpc_loop_impl(unlocked_session, open_context, provider, transport, auth_transport, std::move(runtime_options), input, out, nullptr);
+}
+
+ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtime::OpenContext const& open_context, ava::provider::Provider const& provider,
                                    ava::http::Transport& transport, ava::http::Transport& auth_transport, runtime::RunOptions runtime_options, std::istream& in,
                                    std::ostream& out, rpc::RpcInputWake wake)
 {
@@ -1094,15 +1079,7 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
 
 int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err, rpc::RpcInputWake wake)
 {
-  ScopedRpcSignalIgnore const ignore_sigpipe(SIGPIPE);
-  if (!ignore_sigpipe.installed())
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed to suppress SIGPIPE for RPC mode");
-    error.with_context("cause", std::strerror(ignore_sigpipe.error_number()));
-    err << error.format() << '\n';
-    return 1;
-  }
-
+  ModeSignalLatch signal_latch;
   auto unlocked_session_result = runtime::Session::open(options.open_context, options.lifecycle_request);
   if (!unlocked_session_result)
   {
@@ -1112,6 +1089,7 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
   runtime::session_ts& unlocked_session = *unlocked_session_result;
 
   runtime::RunOptions runtime_options;
+  runtime_options.cancel_requested = [&signal_latch] { return signal_latch.poll(); };
   // The Provider is kept alive till the end of this function.
   std::unique_ptr<ava::provider::Provider> provider;
   {
@@ -1151,12 +1129,15 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
       err << input.error().format() << '\n';
       return 1;
     }
-    result = run_rpc_loop(unlocked_session, options.open_context, *provider, transport, transport, std::move(runtime_options), **input, out);
+    result =
+        run_rpc_loop_impl(unlocked_session, options.open_context, *provider, transport, transport, std::move(runtime_options), **input, out, &signal_latch);
   }
   else
   {
     result = run_rpc_loop(unlocked_session, options.open_context, *provider, transport, transport, std::move(runtime_options), in, out, std::move(wake));
   }
+  if (signal_latch.signaled())
+    return 130;
   if (!result)
   {
     err << result.error().format() << '\n';

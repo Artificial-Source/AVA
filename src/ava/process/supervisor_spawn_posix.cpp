@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/process/launch_protocol_posix.h"
 #include "ava/process/supervisor_internal.h"
+#include "ava/core/Signals.h"
 
 #include <algorithm>
 #include <array>
@@ -24,7 +25,6 @@
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <poll.h>
-#include <pthread.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -136,18 +136,10 @@ ava::core::Result<bool> wait_descriptor(int descriptor, short events, ProcessDea
   }
 }
 
-bool write_without_sigpipe(int descriptor, void const* data, std::size_t size) noexcept
+bool write_all_to_descriptor(int descriptor, void const* data, std::size_t size) noexcept
 {
-  sigset_t blocked{};
-  sigset_t previous{};
-  if (::sigemptyset(&blocked) != 0 || ::sigaddset(&blocked, SIGPIPE) != 0 || ::pthread_sigmask(SIG_BLOCK, &blocked, &previous) != 0)
-    return false;
-
-  bool const was_blocked = ::sigismember(&previous, SIGPIPE) == 1;
   auto const* next = static_cast<unsigned char const*>(data);
   std::size_t offset = 0;
-  bool success = true;
-  bool broken = false;
   while (offset < size)
   {
     auto const written = ::write(descriptor, next + offset, size - offset);
@@ -158,20 +150,10 @@ bool write_without_sigpipe(int descriptor, void const* data, std::size_t size) n
     }
     if (written < 0 && errno == EINTR)
       continue;
-    broken = written < 0 && errno == EPIPE;
-    success = false;
-    break;
+    if (written <= 0)
+      return false;
   }
-  if (broken && !was_blocked)
-  {
-    timespec const no_wait{};
-    while (::sigtimedwait(&blocked, nullptr, &no_wait) < 0 && errno == EINTR)
-    {
-    }
-  }
-  if (::pthread_sigmask(SIG_SETMASK, &previous, nullptr) != 0)
-    success = false;
-  return success;
+  return true;
 }
 
 pid_t waitpid_retry(pid_t process, int* status, int options) noexcept
@@ -229,25 +211,6 @@ bool exact_provisional_cleanup(pid_t leader, pid_t sentinel, ProcessDeadline dea
     complete = complete && reaped;
   }
   return complete;
-}
-
-bool reset_child_signal_state() noexcept
-{
-  sigset_t empty{};
-  if (::sigemptyset(&empty) != 0 || ::sigprocmask(SIG_SETMASK, &empty, nullptr) != 0)
-    return false;
-  struct sigaction action{};
-  action.sa_handler = SIG_DFL;
-  if (::sigemptyset(&action.sa_mask) != 0)
-    return false;
-  for (int signal_number = 1; signal_number < NSIG; ++signal_number)
-  {
-    if (signal_number == SIGKILL || signal_number == SIGSTOP)
-      continue;
-    if (::sigaction(signal_number, &action, nullptr) != 0 && errno != EINVAL)
-      return false;
-  }
-  return true;
 }
 
 ssize_t child_read_retry(int descriptor, void* data, std::size_t size) noexcept
@@ -653,7 +616,7 @@ void child_duplicate_stream(PreparedStream const& stream, int target, int launch
   if (prepared.standard_error.parent_end.get() >= 0)
     static_cast<void>(::close(prepared.standard_error.parent_end.get()));
 
-  if (!detail::reset_child_signal_state())
+  if (!core::Signals::reset_child_signal_state())
     child_fail(status_descriptor, detail::LaunchFailureStageV1::SignalReset, errno == 0 ? EIO : errno);
   if (::setpgid(0, 0) != 0)
     child_fail(status_descriptor, detail::LaunchFailureStageV1::ProcessGroup, errno);
@@ -963,7 +926,7 @@ ava::core::Result<SpawnResultV1> Supervisor::spawn(Reservation&& reservation, Sp
   }
 
   char const release = 'G';
-  if (!detail::write_without_sigpipe(prepared->gate.write_end.get(), &release, 1))
+  if (!detail::write_all_to_descriptor(prepared->gate.write_end.get(), &release, 1))
   {
     prepared->gate.write_end.reset();
     auto const failure = detail::fail_registered_launch(state, identity, TerminationReasonV1::LaunchFailed);

@@ -689,7 +689,6 @@ ava::core::VoidResult McpStdioClient::write_message(std::string_view message, st
     return std::unexpected(std::move(error));
   }
   std::size_t offset = 0;
-  ScopedSignalIgnore const ignore_sigpipe(SIGPIPE);
   while (offset < frame.size())
   {
     if (is_canceled(cancel_requested))

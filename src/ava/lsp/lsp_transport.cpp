@@ -209,7 +209,6 @@ ava::core::VoidResult SubprocessLspClient::write_message(std::string_view body, 
   }
   std::string const frame = "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string(body);
   std::size_t offset = 0;
-  ScopedSignalIgnore const ignore_sigpipe(SIGPIPE);
   while (offset < frame.size())
   {
     if (is_canceled(cancel_requested))

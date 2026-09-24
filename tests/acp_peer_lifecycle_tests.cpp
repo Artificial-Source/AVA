@@ -38,6 +38,22 @@ using ava::app::acp::JsonRpcId;
 using namespace acp_test;
 namespace runtime = ava::app::runtime;
 
+void test_acp_peer_shutdown_cancels_blocked_transport()
+{
+  using namespace ava::app::acp;
+  auto state = std::make_shared<MemoryTransportState>();
+  JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [](Request const&, std::stop_token) -> RequestResult { return std::string("{}"); });
+  ava::core::VoidResult run_result;
+  ava::core::JoinThread thread = ava::core::JoinThread::create("shutdown_reader", [&] { run_result = peer.run(); });
+  wait_reader(state);
+
+  peer.shutdown();
+  thread.join();
+
+  std::lock_guard lock(state->mutex);
+  expect(state->canceled && state->cancel_calls > 0 && run_result.has_value(), "ACP shutdown cancels transport and wakes a peer blocked in read_record");
+}
+
 void test_acp_peer_lifecycle_notifications_and_duplicate_ids()
 {
   using namespace ava::app::acp;
@@ -184,7 +200,8 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   std::atomic_int started = 0;
   JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [&started](Request const&, std::stop_token token) -> RequestResult {
     started.fetch_add(1, std::memory_order_release);
-    while (!token.stop_requested()) std::this_thread::sleep_for(1ms);
+    while (!token.stop_requested())
+      std::this_thread::sleep_for(1ms);
     return std::unexpected(JsonRpcError{.code = -32800, .message = "cancelled", .data_json = std::nullopt, .id = std::nullopt, .suppress_response = false});
   });
   ava::core::VoidResult run_result;
@@ -192,7 +209,8 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   wait_reader(state);
 
   feed(state, R"({"jsonrpc":"2.0","id":null,"method":"slow","params":{}})");
-  while (started.load(std::memory_order_acquire) == 0) std::this_thread::sleep_for(1ms);
+  while (started.load(std::memory_order_acquire) == 0)
+    std::this_thread::sleep_for(1ms);
   feed(state, R"({"jsonrpc":"2.0","id":null,"method":"slow","params":{}})");
   expect(output_has_code(take_output(state), -32600), "ACP peer reserves explicit null ids and rejects a colliding in-flight request");
   feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":null}})");
@@ -212,7 +230,8 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   for (int index = 0; index < static_cast<int>(kMaxInflightRequests); ++index)
     feed(state, "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancel_request\",\"params\":{\"requestId\":" + std::to_string(index) + "}}");
   bool inflight_released = true;
-  for (std::size_t index = 0; index < kMaxInflightRequests; ++index) inflight_released = inflight_released && output_has_code(take_output(state), -32800);
+  for (std::size_t index = 0; index < kMaxInflightRequests; ++index)
+    inflight_released = inflight_released && output_has_code(take_output(state), -32800);
   expect(inflight_released, "ACP cancellation releases every saturated in-flight slot");
 
   std::deque<PendingCall> pending;
@@ -342,7 +361,8 @@ void test_acp_peer_outbound_queue_saturation()
     state->cv.notify_all();
   }
   bool drained = true;
-  for (std::size_t index = 0; index < queued + 1; ++index) drained = drained && take_output(state).has_value();
+  for (std::size_t index = 0; index < queued + 1; ++index)
+    drained = drained && take_output(state).has_value();
 
   auto recovered = peer.send_request("client/recovered", std::string("{}"), 2s);
   auto recovered_record = take_output(state);
@@ -520,7 +540,8 @@ void test_acp_peer_writer_acknowledged_lifecycle()
   bool const handler_commit_succeeded = handler_commit_ready && handler_committed.get();
   feed(state, R"({"jsonrpc":"2.0","id":"held","method":"work","params":{}})");
   feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"held"}})");
-  while (peer.stats().duplicate_inbound_ids == 0) std::this_thread::sleep_for(1ms);
+  while (peer.stats().duplicate_inbound_ids == 0)
+    std::this_thread::sleep_for(1ms);
 
   {
     std::lock_guard lock(state->mutex);

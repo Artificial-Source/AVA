@@ -5,61 +5,25 @@
 #include "ava/app/acp/service.h"
 #include "ava/app/acp/transport.h"
 #include "ava/app/acp_mode.h"
+#include "ava/app/signal_policy.h"
 #include "ava/provider/catalog.h"
 #include "ava/core/json.h"
 #include "ava/core/version.h"
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <ostream>
 #include <string_view>
+#include <thread>
 #include <utility>
-#include <signal.h>
 #include <unistd.h>
 
 namespace ava::app {
-namespace {
-
-class ScopedSignalIgnore
-{
- public:
-  explicit ScopedSignalIgnore(int signal_number) : signal_number_(signal_number)
-  {
-    struct sigaction ignored{};
-    ignored.sa_handler = SIG_IGN;
-    sigemptyset(&ignored.sa_mask);
-    installed_ = sigaction(signal_number_, &ignored, &previous_) == 0;
-  }
-
-  ScopedSignalIgnore(ScopedSignalIgnore const&) = delete;
-  ScopedSignalIgnore& operator=(ScopedSignalIgnore const&) = delete;
-
-  ~ScopedSignalIgnore()
-  {
-    if (installed_)
-      static_cast<void>(sigaction(signal_number_, &previous_, nullptr));
-  }
-
-  [[nodiscard]] bool installed() const noexcept { return installed_; }
-
- private:
-  int signal_number_ = 0;
-  bool installed_ = false;
-  struct sigaction previous_{};
-};
-
-}  // namespace
 
 int run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const& application_process_scope,
                  std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics)
 {
-  ScopedSignalIgnore ignore_sigpipe(SIGPIPE);
-  if (!ignore_sigpipe.installed())
-  {
-    error_output << "ACP startup failed: could not install output safety\n";
-    return 1;
-  }
-
   auto transport = acp::make_fd_record_transport(STDIN_FILENO, STDOUT_FILENO);
   if (!transport)
   {
@@ -116,11 +80,27 @@ int run_acp_mode(std::ostream& error_output, ava::process::ProcessScopeV1 const&
         return peer.cancel_pending_call(id, std::move(reason));
       },
       [&peer](std::string) { peer.shutdown(); });
+  ModeSignalLatch signal_latch;
+  std::jthread signal_watcher([&](std::stop_token stop_token) {
+    while (!stop_token.stop_requested())
+    {
+      if (signal_latch.poll())
+      {
+        peer.shutdown();
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  });
   auto result = peer.run();
+  signal_watcher.request_stop();
+  signal_watcher.join();
   service.unbind_request_terminal_committer();
   service.unbind_client_request_sender();
   service.unbind_update_sender();
   service.shutdown();
+  if (signal_latch.signaled())
+    return 130;
   if (!result)
   {
     error_output << "ACP connection closed after a transport or service failure\n";

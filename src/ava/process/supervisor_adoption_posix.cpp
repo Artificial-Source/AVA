@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/process/launch_protocol_posix.h"
 #include "ava/process/supervisor_internal.h"
+#include "ava/core/Signals.h"
 
 #include <algorithm>
 #include <array>
@@ -340,7 +341,7 @@ ava::core::Result<AdoptionForkBranchV1> AdoptionGate::fork_leader()
       gate.sentinel_control->write_end.reset();
     }
     int const status_descriptor = gate.launch_status.write_end.get();
-    if (!detail::reset_child_signal_state())
+    if (!core::Signals::reset_child_signal_state())
       child_fail(status_descriptor, detail::LaunchFailureStageV1::SignalReset, errno == 0 ? EIO : errno);
     if (::setpgid(0, 0) != 0)
       child_fail(status_descriptor, detail::LaunchFailureStageV1::ProcessGroup, errno);
@@ -432,7 +433,7 @@ ava::core::VoidResult AdoptionGate::fork_sentinel()
     static_cast<void>(::close(STDOUT_FILENO));
     static_cast<void>(::close(STDERR_FILENO));
 
-    if (!detail::reset_child_signal_state())
+    if (!core::Signals::reset_child_signal_state())
       child_fail(status_descriptor, detail::LaunchFailureStageV1::SignalReset, errno == 0 ? EIO : errno);
     if (::setpgid(0, gate.leader) != 0)
       child_fail(status_descriptor, detail::LaunchFailureStageV1::ProcessGroup, errno);
@@ -850,8 +851,8 @@ ava::core::Result<ProcessHandle> Supervisor::adopt(AdoptionGate&& gate)
   char const release = 'G';
   bool released = true;
   if (ticket.sentinel_control)
-    released = detail::write_without_sigpipe(ticket.sentinel_control->write_end.get(), &release, 1);
-  released = detail::write_without_sigpipe(ticket.leader_control.write_end.get(), &release, 1) && released;
+    released = detail::write_all_to_descriptor(ticket.sentinel_control->write_end.get(), &release, 1);
+  released = detail::write_all_to_descriptor(ticket.leader_control.write_end.get(), &release, 1) && released;
   ticket.leader_control.write_end.reset();
   if (ticket.sentinel_control)
     ticket.sentinel_control->write_end.reset();

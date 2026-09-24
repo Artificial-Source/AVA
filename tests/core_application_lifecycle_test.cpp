@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/app/signal_policy.h"
 #include "ava/core/Application.h"
 #include "ava/core/thread.h"
 
@@ -135,46 +136,66 @@ void scenario_duplicate_live_instance()
   static_cast<void>(second);
 }
 
-// Verify signal construction, pending delivery, activation, and atomic claims in one Application lifetime.
+// Verify ignored startup policy, activation, SIGHUP delivery, permanent SIGPIPE suppression, and atomic claims in one Application lifetime.
 void scenario_signal_construction()
 {
   establish_unrelated_signal_state();
   struct sigaction default_action{};
   default_action.sa_handler = SIG_DFL;
   ::sigemptyset(&default_action.sa_mask);
-  check(::sigaction(SIGINT, &default_action, nullptr) == 0 && ::sigaction(SIGTERM, &default_action, nullptr) == 0,
-        "signal construction starts with default foreground dispositions");
+  check(::sigaction(SIGINT, &default_action, nullptr) == 0 && ::sigaction(SIGTERM, &default_action, nullptr) == 0 &&
+            ::sigaction(SIGHUP, &default_action, nullptr) == 0 && ::sigaction(SIGPIPE, &default_action, nullptr) == 0,
+        "signal construction starts with default process-signal dispositions");
 
   TestApplication application;
   auto const interrupt_action = read_signal_action(SIGINT);
   auto const terminate_action = read_signal_action(SIGTERM);
+  auto const hangup_action = read_signal_action(SIGHUP);
+  auto const pipe_action = read_signal_action(SIGPIPE);
   auto const unrelated_action = read_signal_action(SIGUSR1);
   auto const startup_mask = current_thread_signal_mask();
-  check(interrupt_action.sa_handler == terminate_action.sa_handler && interrupt_action.sa_handler != SIG_DFL && interrupt_action.sa_handler != SIG_IGN,
-        "Application construction installs the same custom handler for SIGINT and SIGTERM");
+  check(interrupt_action.sa_handler == SIG_IGN && terminate_action.sa_handler == SIG_IGN && hangup_action.sa_handler == SIG_IGN &&
+            pipe_action.sa_handler == SIG_IGN,
+        "Application construction deliberately ignores reserved process signals until policy selection");
   check(unrelated_action.sa_handler == unrelated_signal_handler && (unrelated_action.sa_flags & SA_RESTART) != 0,
         "Application construction preserves an unrelated signal disposition");
-  check(signal_is_blocked(startup_mask, SIGINT) && signal_is_blocked(startup_mask, SIGTERM) && signal_is_blocked(startup_mask, SIGUSR1) &&
-            !signal_is_blocked(startup_mask, SIGUSR2),
-        "Application construction blocks foreground signals without changing unrelated mask bits");
+  check(signal_is_blocked(startup_mask, SIGINT) && signal_is_blocked(startup_mask, SIGTERM) && signal_is_blocked(startup_mask, SIGHUP) &&
+            signal_is_blocked(startup_mask, SIGPIPE) && signal_is_blocked(startup_mask, SIGUSR1) && !signal_is_blocked(startup_mask, SIGUSR2),
+        "Application construction blocks process signals without changing unrelated mask bits");
 
-  check(::raise(SIGINT) == 0 && ::raise(SIGTERM) == 0, "foreground signals can be raised while startup keeps them blocked");
-  sigset_t pending{};
-  check(::sigpending(&pending) == 0 && ::sigismember(&pending, SIGINT) == 1 && ::sigismember(&pending, SIGTERM) == 1,
-        "both foreground signals remain kernel-pending before activation");
-  check(!ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
-        "blocked pending signals have not reached the installed handler before activation");
+  check(::raise(SIGINT) == 0 && ::raise(SIGTERM) == 0 && ::raise(SIGHUP) == 0, "foreground signals can be raised while startup keeps them blocked");
+  check(!ava::core::Signals::received(ava::core::Signals::to_mask(SIGINT) | ava::core::Signals::to_mask(SIGTERM) | ava::core::Signals::to_mask(SIGHUP)),
+        "signals raised under the ignored startup disposition do not set shared bits");
 
-  application.signals_manager().activate_handlers();
+  application.signals_manager().activate_handlers({SIGTERM, SIGINT, SIGHUP});
   auto const active_mask = current_thread_signal_mask();
-  check(!signal_is_blocked(active_mask, SIGINT) && !signal_is_blocked(active_mask, SIGTERM) && signal_is_blocked(active_mask, SIGUSR1) &&
-            !signal_is_blocked(active_mask, SIGUSR2),
-        "activation unblocks only SIGINT and SIGTERM in its calling thread");
-  check(ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
-        "activation delivers both pending signals to the installed handler");
-  check(ava::core::Signals::try_obtain(ava::core::Signals::bit_SIGINT) && ava::core::Signals::received(ava::core::Signals::bit_SIGTERM) &&
-            !ava::core::Signals::try_obtain(ava::core::Signals::bit_SIGINT) && ava::core::Signals::try_obtain(ava::core::Signals::bit_SIGTERM),
+  check(!signal_is_blocked(active_mask, SIGINT) && !signal_is_blocked(active_mask, SIGTERM) && !signal_is_blocked(active_mask, SIGHUP) &&
+            signal_is_blocked(active_mask, SIGUSR1) && !signal_is_blocked(active_mask, SIGUSR2),
+        "activation unblocks only the selected foreground signals in its calling thread");
+  check(::raise(SIGINT) == 0 && ::raise(SIGTERM) == 0 && ::raise(SIGHUP) == 0, "active foreground signals reach the shared callback");
+  check(ava::core::Signals::received(ava::core::Signals::to_mask(SIGINT) | ava::core::Signals::to_mask(SIGTERM) | ava::core::Signals::to_mask(SIGHUP)),
+        "activation records SIGINT, SIGTERM, and SIGHUP bits");
+  check(ava::core::Signals::try_obtain(SIGINT) && ava::core::Signals::received(ava::core::Signals::to_mask(SIGTERM)) &&
+            !ava::core::Signals::try_obtain(SIGINT) && ava::core::Signals::try_obtain(SIGTERM) && ava::core::Signals::try_obtain(SIGHUP) &&
+            !ava::core::Signals::try_obtain(SIGHUP),
         "atomic signal claim clears only its selected bit and a second claim is false");
+
+  auto const active_pipe_action = read_signal_action(SIGPIPE);
+  check(active_pipe_action.sa_handler == SIG_IGN && signal_is_blocked(active_mask, SIGPIPE),
+        "foreground-signal activation leaves SIGPIPE permanently ignored and blocked");
+}
+
+// Verify that selecting conventional signal delivery for immediate output does not restore or unblock SIGPIPE.
+void scenario_signal_immediate_output()
+{
+  TestApplication application;
+  ava::app::apply_invocation_signal_policy(ava::app::InvocationMode::ImmediateOutput);
+
+  auto const terminate_action = read_signal_action(SIGTERM);
+  auto const pipe_action = read_signal_action(SIGPIPE);
+  auto const mask = current_thread_signal_mask();
+  check(terminate_action.sa_handler == SIG_DFL && !signal_is_blocked(mask, SIGTERM), "immediate-output policy restores conventional SIGTERM delivery");
+  check(pipe_action.sa_handler == SIG_IGN && signal_is_blocked(mask, SIGPIPE), "immediate-output policy leaves SIGPIPE permanently ignored and blocked");
 }
 
 // Verify ordinary teardown blocks and ignores foreground signals, preserves unrelated state, and clears recorded bits.
@@ -187,21 +208,20 @@ void scenario_signal_teardown()
     TestApplication application;
     auto const interrupt_action = read_signal_action(SIGINT);
     auto const terminate_action = read_signal_action(SIGTERM);
-    check(interrupt_action.sa_handler == terminate_action.sa_handler && interrupt_action.sa_handler != unrelated_signal_handler,
-          "Application construction replaces prior foreground dispositions with its shared handler");
-    check(!ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
+    check(interrupt_action.sa_handler == SIG_IGN && terminate_action.sa_handler == SIG_IGN,
+          "Application construction replaces prior foreground dispositions with its ignored startup policy");
+    check(!ava::core::Signals::received(ava::core::Signals::to_mask(SIGINT) | ava::core::Signals::to_mask(SIGTERM)),
           "Application construction starts without recorded signal bits");
-    application.signals_manager().activate_handlers();
+    application.signals_manager().activate_handlers({SIGTERM, SIGINT});
     check(::raise(SIGINT) == 0 && ::raise(SIGTERM) == 0, "the Application handler receives both foreground signals");
-    check(ava::core::Signals::received(ava::core::Signals::bit_SIGINT | ava::core::Signals::bit_SIGTERM),
+    check(ava::core::Signals::received(ava::core::Signals::to_mask(SIGINT) | ava::core::Signals::to_mask(SIGTERM)),
           "the Application handler records both foreground signals");
     // Leave both bits set so ordinary destruction must establish the clear-bit postcondition.
   }
 
   auto const unrelated_action = read_signal_action(SIGUSR1);
   auto const teardown_mask = current_thread_signal_mask();
-  check(!signal_is_blocked(teardown_mask, SIGUSR2),
-        "ordinary Application destruction does not block unrelated signals");
+  check(!signal_is_blocked(teardown_mask, SIGUSR2), "ordinary Application destruction does not block unrelated signals");
   check(unrelated_action.sa_handler == unrelated_signal_handler && (unrelated_action.sa_flags & SA_RESTART) != 0,
         "ordinary Application destruction preserves an unrelated signal disposition");
 }
@@ -226,7 +246,7 @@ void scenario_joined_worker()
     release.wait();
   });
   auto const worker_startup_mask = startup_mask_future.get();
-  application.signals_manager().activate_handlers();
+  application.signals_manager().activate_handlers({SIGTERM, SIGINT});
   main_activated_promise.set_value();
   auto const worker_active_mask = active_mask_future.get();
   auto const main_active_mask = current_thread_signal_mask();
@@ -282,6 +302,8 @@ bool run_scenario(std::string_view scenario)
     scenario_duplicate_live_instance();
   else if (scenario == "signal-construction")
     scenario_signal_construction();
+  else if (scenario == "signal-immediate-output")
+    scenario_signal_immediate_output();
   else if (scenario == "signal-teardown")
     scenario_signal_teardown();
   else if (scenario == "joined-worker")

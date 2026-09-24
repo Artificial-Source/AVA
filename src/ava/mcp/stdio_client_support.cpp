@@ -56,21 +56,6 @@ void UniqueFd::reset(int fd) noexcept
   fd_ = fd;
 }
 
-ScopedSignalIgnore::ScopedSignalIgnore(int signal) : signal_(signal)
-{
-  struct sigaction action{};
-  action.sa_handler = SIG_IGN;
-  sigemptyset(&action.sa_mask);
-  if (sigaction(signal_, &action, &previous_) == 0)
-    installed_ = true;
-}
-
-ScopedSignalIgnore::~ScopedSignalIgnore()
-{
-  if (installed_)
-    sigaction(signal_, &previous_, nullptr);
-}
-
 ava::core::Error mcp_error(ava::core::ErrorCategory category, std::string message, McpServerConfig const& server)
 {
   static_cast<void>(server);

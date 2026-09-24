@@ -141,6 +141,8 @@ class JsonRpcPeer::State
   {
     aborting_.store(true, std::memory_order_release);
     accepting_.store(false, std::memory_order_release);
+    if (transport_)
+      transport_->cancel();
     std::deque<WorkerTask> abandoned_tasks;
     {
       std::lock_guard lock(task_mutex_);
@@ -446,7 +448,8 @@ class JsonRpcPeer::State
   void request_worker_stop() noexcept
   {
     std::lock_guard lock(workers_mutex_);
-    for (auto& worker : workers_) worker.request_stop();
+    for (auto& worker : workers_)
+      worker.request_stop();
   }
 
   void diagnose(std::string_view message) noexcept
@@ -821,12 +824,14 @@ class JsonRpcPeer::State
 
   static void fulfill_failures(std::vector<PendingFailure> failures)
   {
-    for (auto& [pending, error] : failures) pending->promise.set_value(std::unexpected(std::move(error)));
+    for (auto& [pending, error] : failures)
+      pending->promise.set_value(std::unexpected(std::move(error)));
   }
 
   static void fulfill_completions(std::vector<PendingCompletion> completions)
   {
-    for (auto& [pending, result] : completions) pending->promise.set_value(std::move(result));
+    for (auto& [pending, result] : completions)
+      pending->promise.set_value(std::move(result));
   }
 
   void finalize_canceled_locked(std::shared_ptr<OutboundCallTicket> const& ticket, std::vector<PendingFailure>& failures)
@@ -997,7 +1002,8 @@ class JsonRpcPeer::State
           tickets.push_back(pending->ticket);
         }
       }
-      for (auto const& ticket : tickets) finalize_canceled_locked(ticket, failures);
+      for (auto const& ticket : tickets)
+        finalize_canceled_locked(ticket, failures);
     }
     fulfill_failures(std::move(failures));
   }
