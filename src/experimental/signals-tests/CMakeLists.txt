@@ -8,3 +8,5 @@ project(ava-signal-tests
 
 add_executable(signals00 signals00-basic.cpp)
 target_link_libraries(signals00 PRIVATE ${AICXX_OBJECTS_LIST})
+
+add_executable(signals01 signals01-proc-task-accounting.cpp)

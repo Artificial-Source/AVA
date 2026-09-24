@@ -5,6 +5,8 @@
 #include "debug.h"
 
 #if CW_DEBUG && defined(__linux__)
+#include <chrono>
+#include <thread>
 #include <sys/stat.h>
 #endif
 
@@ -17,10 +19,19 @@ bool only_one_thread_remains()
 {
 #ifdef __linux__
   struct stat st;
-  return ::stat("/proc/self/task", &st) == 0 && st.st_nlink == 3;       // 3: `./`, `../` and one directory for the current thread.
+  auto delay_ms = std::chrono::milliseconds(1);
+  int attempt = 0;
+  while (++attempt <= 4)
+  {
+    if (::stat("/proc/self/task", &st) == 0 && st.st_nlink == 3)        // 3: `./`, `../` and one directory for the current thread.
+      return true;
+    std::this_thread::sleep_for(delay_ms);
+    delay_ms *= 2;
+  }
 #else
   return true;
 #endif
+  return false;
 }
 
 } // namespace
