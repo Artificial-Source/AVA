@@ -28,6 +28,14 @@ The 2026-08-23 tested source-build matrix is Ubuntu 24.04.4 x64 with GCC 13.3: B
 
 Plugin/MCP contract changes should also follow [`docs/plugin-compatibility-policy.md`](../plugin-compatibility-policy.md). Keep checked-in golden fixtures small and deterministic under `tests/golden/ava-080/`, and prefer existing `ava_tests` plugin/MCP suites for contract assertions.
 
+## Temporary Fixture Ownership
+
+C++ test directories are uniquely acquired and removed by their owning fixture or by the test runner before its final status. Cleanup failures fail the test; forked children do not remove their parent's fixtures, and directory symlinks are removed without deleting their targets. Stop and join fixture workers before releasing their directories. This covers normal exits and caught test failures, not crashes or `SIGKILL`; there is no automatic sweep of old `/tmp` files.
+
+The full-model and RPC Bash-cleanup smokes use their build-owned test roots, remove them after success, and retain failed-run artifacts there for diagnosis. Other build-local integration artifacts and explicitly requested debug/timing logs retain their documented lifetimes.
+
+Use the normal temporary namespace for the full suite: some permission and containment fixtures deliberately test root-owned sticky `/tmp` ancestry. A private `TMPDIR` is useful for checking compatible suites such as `ava_tests.plugin_runner_process`, but changes those security fixtures' prerequisites.
+
 ## Per-Suite libcwd Debug Logs
 
 In libcwd-enabled builds, set `AVA_DEBUG_OUTPUT_DIR` to an absolute path to capture `ava_tests` libcwd output without contaminating normal stdout or stderr. The final directory is created when absent and otherwise validated as a current-user, non-symlink directory with exact mode 0700. Logs are private mode-0600 files named `ava_tests.<suite>.libcwd.log` (`all` for no argument and `invalid` for invalid arguments); each invocation truncates its deterministic file, while distinct CTest suites can write in parallel without colliding. The setting is ignored by libcwd-disabled builds.
