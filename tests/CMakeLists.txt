@@ -181,7 +181,7 @@ set(AVA_TESTS_SOURCES
   "agent_tool_dispatcher_tests.cpp"
   "agent_todo_tests.cpp"
   "app_compaction_tests.cpp"
-  "app_line_shell_tests.cpp"
+  "app_interactive_tests.cpp"
   "branch_summary_coordinator_tests.cpp"
   "app_command_registry_tests.cpp"
   "app_print_tests.cpp"
@@ -351,7 +351,7 @@ set(AVA_TEST_SUITES
   provider_builtin_generic
   command
   app_compaction
-  app_line_shell
+  app_interactive
   app_print
   app_event_serialization
   app_event_bus
@@ -1125,24 +1125,23 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_cli.rpc_parser_subprocess PROPERTIES TIMEOUT 20 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
-    NAME ava_cli.line_shell_parser
+    NAME ava_cli.interactive_startup
     COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/line_shell_cli_test.py
+            ${CMAKE_CURRENT_SOURCE_DIR}/interactive_cli_test.py
             --ava $<TARGET_FILE:ava>
-            --root ${CMAKE_BINARY_DIR}/line-shell-cli)
-  set_tests_properties(ava_cli.line_shell_parser PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" LABELS "line-shell;offline")
+            --root ${CMAKE_BINARY_DIR}/interactive-cli)
+  set_tests_properties(ava_cli.interactive_startup PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" LABELS "interactive;offline")
 
   if(UNIX)
     add_test(
-      NAME ava_cli.line_shell_pty
+      NAME ava_cli.interactive_pty
       COMMAND ${Python3_EXECUTABLE}
-              ${CMAKE_CURRENT_SOURCE_DIR}/line_shell_pty_test.py
+              ${CMAKE_CURRENT_SOURCE_DIR}/interactive_pty_test.py
               --ava $<TARGET_FILE:ava>
-              --fake-provider $<TARGET_FILE:ava_fake_provider_server>
-              --root ${CMAKE_BINARY_DIR}/line-shell-pty)
+              --root ${CMAKE_BINARY_DIR}/interactive-pty)
     set_tests_properties(
-      ava_cli.line_shell_pty
-      PROPERTIES TIMEOUT 90 TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" LABELS "line-shell;pty;offline")
+      ava_cli.interactive_pty
+      PROPERTIES TIMEOUT 30 TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" LABELS "interactive;pty;offline")
   endif()
 
   add_test(

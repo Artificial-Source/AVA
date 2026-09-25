@@ -6,8 +6,8 @@
 #include "ava/app/command_sessions.h"
 #include "ava/app/commands.h"
 #include "ava/app/display_settings.h"
+#include "ava/app/interactive_internal.h"
 #include "ava/app/interactive_run_queue.h"
-#include "ava/app/line_shell_internal.h"
 #include "ava/app/mermaid_tui_bridge.h"
 #include "ava/app/onboarding.h"
 #include "ava/app/plugin_ui_capability.h"
@@ -42,7 +42,7 @@
 #include <variant>
 #include <vector>
 
-namespace ava::app::line_shell_internal {
+namespace ava::app::interactive_internal {
 namespace {
 
 ava::tui::TuiPluginUiBinding tui_plugin_ui_binding(ava::app::PluginUiInvocationBinding const& binding)
@@ -116,7 +116,7 @@ ava::plugin::PluginUiAction plugin_ui_action(ava::tui::TuiPluginUiReply reply)
 
 namespace version = ava::core::version;
 
-int run_tui(ShellState state)
+int run_tui(InteractiveState state)
 {
   ava::app::runtime::session_ts& unlocked_session = state.unlocked_session;
   auto const invocation_paths = ava::app::runtime::session_ts::rat(unlocked_session)->paths();
@@ -485,17 +485,17 @@ int run_tui(ShellState state)
             auto line_result = [&] {
               if (plugin_ui_capability_unavailable)
               {
-                LineResult failed;
+                InteractiveResult failed;
                 add_output(failed, "plugin UI capability is unavailable");
                 return failed;
               }
-              return handle_line(state, submitted, permission_resolver, context.question_resolver, hotkeys, context.event_sink, context.cancel_requested,
-                                 context.take_steering_messages, std::move(context.image_attachments), context.request_id, context.on_subagent_launch,
-                                 std::move(plugin_ui_capability));
+              return handle_interactive_submission(state, submitted, permission_resolver, context.question_resolver, hotkeys, context.event_sink,
+                                                   context.cancel_requested, context.take_steering_messages, std::move(context.image_attachments),
+                                                   context.request_id, context.on_subagent_launch, std::move(plugin_ui_capability));
             }();
             TuiRequestPresentation request_presentation;
             bool const initial_is_local_command = submitted.starts_with('/') || submitted.starts_with('!');
-            auto capture_request_presentation = [&](std::string_view line, std::string const& request_id, LineResult const& request_result) {
+            auto capture_request_presentation = [&](std::string_view line, std::string const& request_id, InteractiveResult const& request_result) {
               capture_tui_request_presentation(request_presentation, initial_is_local_command, line, request_id, request_result);
             };
             if (is_display_settings_command(submitted))
@@ -515,9 +515,9 @@ int run_tui(ShellState state)
                 line_result, workspace_catalog_reload, session_id_before, context,
                 [&unlocked_session]() { return ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(); },
                 [&](ava::tui::TuiQueuedFollowUp const& follow_up) {
-                  auto follow_up_result =
-                      handle_line(state, follow_up.message, permission_resolver, context.question_resolver, hotkeys, context.event_sink,
-                                  context.cancel_requested, context.take_steering_messages, {}, follow_up.request_id, context.on_subagent_launch, nullptr);
+                  auto follow_up_result = handle_interactive_submission(state, follow_up.message, permission_resolver, context.question_resolver, hotkeys,
+                                                                        context.event_sink, context.cancel_requested, context.take_steering_messages, {},
+                                                                        follow_up.request_id, context.on_subagent_launch, nullptr);
                   capture_request_presentation(follow_up.message, follow_up.request_id, follow_up_result);
                   return follow_up_result;
                 });
@@ -1032,4 +1032,4 @@ int run_tui(ShellState state)
   return result;
 }
 
-}  // namespace ava::app::line_shell_internal
+}  // namespace ava::app::interactive_internal

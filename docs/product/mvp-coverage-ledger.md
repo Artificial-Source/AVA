@@ -40,7 +40,7 @@ Internal parallel read/search opt-in evidence (2026-07-09 M1/M2 local): `ava_tes
 | Checklist item | Coverage evidence |
 | --- | --- |
 | Native local terminal coding agent in C++23 | `cmake --build --preset dev`, `ava_tests.core_mode`, `ava_tests.app_runtime`, `README.md` build/run docs. |
-| Interactive TUI entry point and non-TTY line shell | `ava_tests.tui_composer`, `ava_tests.app_runtime`, `ava_cli.headless_print_*`, opt-in `ava_tui.tmux_smoke`. |
+| Interactive TUI entry point and non-TTY startup rejection | `ava_tests.tui_composer`, `ava_tests.app_runtime`, `ava_cli.interactive_startup`, `ava_cli.interactive_pty`, `ava_cli.headless_print_*`, opt-in `ava_tui.tmux_smoke`. |
 | Print mode, text/JSONL output, piped stdin, and TTY-bound terminal-control sanitization | `ava_tests.app_print`, `ava_cli.headless_print_positional_prompt`, `ava_cli.headless_print_prompt_overrides`, `ava_cli.headless_mode_json_alias`. |
 | Stdio JSONL RPC mode | `ava_tests.app_rpc`, `ava_tests.app_rpc_queue`, `ava_tests.app_rpc_resolver`, `ava_cli.headless_rpc_contract`, `docs/rpc-protocol.md` / `docs/headless-protocol.md`; dedicated RPC JSONL import/share remains deferred and documented. |
 | Session resume by latest workspace session and id/prefix | `ava_tests.session`, `ava_tests.app_runtime`, `ava_cli.headless_print_session_startup_options`. |

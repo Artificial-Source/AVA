@@ -161,7 +161,7 @@ compaction can work. See [configuration § models](configuration.md#models).
 | `/providers` | Lists built-ins and user-defined providers; credential source/status without secret values; endpoint and quirks. |
 | `/models`, `/model`, Ctrl+L | Lists models including custom ones; diagnostics for missing metadata and api_family/protocol mismatches. |
 | `/connect`, `/login`, `ava connect <id>` | API-key providers accept/store a provider-scoped key and show the configured env name. `auth:none` reports no credential required and does not write `auth.json`. |
-| TUI, print, line shell, RPC, ACP, compaction, titles, subagents | Use the same pinned process catalog and credential policy. |
+| TUI, print, RPC, ACP, compaction, titles, subagents | Use the same pinned process catalog and credential policy. |
 
 ## Copy-paste examples
 

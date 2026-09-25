@@ -35,7 +35,7 @@ adapters:
 
 | Adapter | Main implementation | Boundary |
 | --- | --- | --- |
-| Interactive terminal | `app/interactive_tui.cpp`, `app/line_shell.cpp`, `tui/` | ncurses input/rendering around the shared runtime |
+| Interactive terminal | `app/interactive.cpp`, `app/interactive_tui.cpp`, `tui/` | ncurses input/rendering around the shared runtime |
 | Print | `app/print_mode.cpp` | one prompt; text or versioned event output; noninteractive permission policy |
 | RPC | `app/rpc_mode.cpp`, `app/rpc/` | proprietary JSONL protocol, worker/resolver and session commands |
 | ACP | `app/acp_mode.cpp`, `app/acp/` | ACP v1 JSON-RPC 2.0 peer, sessions, permissions, and client capabilities |

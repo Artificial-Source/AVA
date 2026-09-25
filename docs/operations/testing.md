@@ -388,7 +388,7 @@ The tmux family dispatches the 23 independent scenarios listed in the [MVP capab
 
 The `mermaid` scenario verifies disabled/pending/failure/stale original-fence fallback and the bounded successful projection path without a live provider. Mermaid execution is application-owned; no renderer subprocess or semantic transcript mutation is claimed.
 
-`--line-shell` has offline CLI coverage for bounded sanitized line output and numbered permission/question flows. It bypasses full-screen terminal protocols and is not a screen-reader certification test.
+Interactive startup has offline CLI/PTY coverage that the TUI requires a terminal on both stdin and stdout, unknown `--line-shell` is rejected, and `--print`/`--rpc` remain available for non-TTY runs. This is not a screen-reader certification test.
 
 The MVP strategy is renderer/editor reducers first, then PTY/tmux assertions for terminal protocols and cleanup. AVA intentionally does not require a separate virtual-terminal parser for MVP; add one only if focused renderer tests plus the existing PTY smokes stop providing stable evidence.
 

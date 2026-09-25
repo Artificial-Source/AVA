@@ -13,10 +13,8 @@
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/result.h"
 
-#include <cstddef>
 #include <filesystem>
 #include <functional>
-#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,9 +26,9 @@ namespace ava::app {
 class PluginUiInvocationCapability;
 }
 
-namespace ava::app::line_shell_internal {
+namespace ava::app::interactive_internal {
 
-struct ShellState
+struct InteractiveState
 {
  public:
   // Lifetime contract: the borrowed session must outlive each run loop invocation.
@@ -40,7 +38,7 @@ struct ShellState
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-struct LineResult
+struct InteractiveResult
 {
  public:
   bool quit = false;
@@ -56,41 +54,13 @@ struct TuiRequestPresentation
 {
  public:
   bool has_local_command = false;
-  LineResult local_command;
-  LineResult conversation;
+  InteractiveResult local_command;
+  InteractiveResult conversation;
   std::vector<std::string> ordinary_turn_request_ids;
 
   // TUI presentation can contain provider output and must not be debug-printed.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
-
-inline constexpr std::size_t kLineShellMaxSubmittedBytes = 64 * 1024;
-inline constexpr std::size_t kLineShellMaxPromptAnswerBytes = 8 * 1024;
-
-enum class BoundedLineStatus
-{
-  Line,
-  EndOfInput,
-  TooLong,
-  InputError,
-};
-
-enum class LinePermissionChoice
-{
-  Deny,
-  Allow,
-  AllowSession,
-  AllowRemember,
-  DenyRemember,
-  Cancel,
-};
-
-[[nodiscard]] BoundedLineStatus read_bounded_line(std::istream& input, std::string& line, std::size_t maximum_bytes);
-[[nodiscard]] LinePermissionChoice resolve_line_permission_prompt(ava::permissions::PermissionPrompt const& prompt, bool allow_session_available,
-                                                                  bool allow_remember_available, bool deny_remember_available, std::istream& input,
-                                                                  std::ostream& output, std::string& user_guidance);
-[[nodiscard]] ava::core::Result<ava::agent::QuestionAnswer> resolve_line_question_prompt(ava::agent::QuestionPrompt const& prompt, std::istream& input,
-                                                                                         std::ostream& output);
 
 void append_status_line(std::string& target, std::string line);
 [[nodiscard]] std::string git_branch_for_sidebar(std::filesystem::path const& workspace);
@@ -115,7 +85,8 @@ void append_status_line(std::string& target, std::string line);
                                                                                std::vector<std::string> targets);
 [[nodiscard]] ava::core::Result<ava::tui::SelectListView> clear_scoped_models(runtime::session_ts& unlocked_session, ava::tui::SelectListView const& previous,
                                                                               std::vector<std::string> targets);
-[[nodiscard]] ava::core::Result<ava::tui::SelectListView> toggle_scoped_model_provider(runtime::session_ts& unlocked_session, ava::tui::SelectListView const& previous,
+[[nodiscard]] ava::core::Result<ava::tui::SelectListView> toggle_scoped_model_provider(runtime::session_ts& unlocked_session,
+                                                                                       ava::tui::SelectListView const& previous,
                                                                                        std::string_view selected_value);
 [[nodiscard]] ava::core::Result<ava::tui::SelectListView> reorder_scoped_model(runtime::session_ts& unlocked_session, ava::tui::SelectListView const& previous,
                                                                                std::string_view selected_value, bool up);
@@ -125,30 +96,28 @@ void append_status_line(std::string& target, std::string line);
                                                                                                            ava::permissions::PermissionAction action,
                                                                                                            std::string actor = "tui_prompt");
 
-[[nodiscard]] bool workspace_catalog_changed(LineResult const& result);
+[[nodiscard]] bool workspace_catalog_changed(InteractiveResult const& result);
 [[nodiscard]] bool workspace_catalog_reload_requested(std::string_view submitted);
 [[nodiscard]] bool is_display_settings_command(std::string_view line) noexcept;
-void add_output(LineResult& result, std::string text);
+void add_output(InteractiveResult& result, std::string text);
 // Request-segmented presentation is a TUI-only projection. An initial local
 // command owns uncommitted queued results without granting conversation authority.
 void capture_tui_request_presentation(TuiRequestPresentation& presentation, bool initial_is_local_command, std::string_view request_line,
-                                      std::string const& request_id, LineResult const& request_result);
+                                      std::string const& request_id, InteractiveResult const& request_result);
 // Runs queued follow-ups only while the submit worker still owns the same
 // authoritative session. A transition keeps only that line's presentation
 // output/tool data while preserving aggregate control flags.
-[[nodiscard]] bool run_queued_follow_ups_until_session_transition(LineResult& result, bool& workspace_catalog_reload, std::string_view initial_session_id,
-                                                                  ava::tui::TuiSubmitContext const& context,
+[[nodiscard]] bool run_queued_follow_ups_until_session_transition(InteractiveResult& result, bool& workspace_catalog_reload,
+                                                                  std::string_view initial_session_id, ava::tui::TuiSubmitContext const& context,
                                                                   std::function<std::string()> const& current_session_id,
-                                                                  std::function<LineResult(ava::tui::TuiQueuedFollowUp const&)> const& run_follow_up);
-[[nodiscard]] LineResult handle_line(ShellState& state, std::string const& line, ava::permissions::PermissionResolver permission_resolver = nullptr,
-                                     ava::agent::QuestionResolver question_resolver = nullptr, std::vector<CommandHotkey> const& hotkeys = {},
-                                     ava::event::RuntimeEventSink event_sink = nullptr, std::function<bool()> cancel_requested = nullptr,
-                                     std::function<ava::core::Result<std::vector<std::string>>()> take_steering_messages = nullptr,
-                                     std::vector<ava::session::ImageAttachmentRef> image_attachments = {}, std::string request_id = {},
-                                     ava::agent::SubagentLaunchSink on_subagent_launch = nullptr,
-                                     std::shared_ptr<PluginUiInvocationCapability> plugin_ui_capability = nullptr);
+                                                                  std::function<InteractiveResult(ava::tui::TuiQueuedFollowUp const&)> const& run_follow_up);
+[[nodiscard]] InteractiveResult handle_interactive_submission(
+    InteractiveState& state, std::string const& line, ava::permissions::PermissionResolver permission_resolver = nullptr,
+    ava::agent::QuestionResolver question_resolver = nullptr, std::vector<CommandHotkey> const& hotkeys = {}, ava::event::RuntimeEventSink event_sink = nullptr,
+    std::function<bool()> cancel_requested = nullptr, std::function<ava::core::Result<std::vector<std::string>>()> take_steering_messages = nullptr,
+    std::vector<ava::session::ImageAttachmentRef> image_attachments = {}, std::string request_id = {},
+    ava::agent::SubagentLaunchSink on_subagent_launch = nullptr, std::shared_ptr<PluginUiInvocationCapability> plugin_ui_capability = nullptr);
 
-[[nodiscard]] int run_line_shell(ShellState state, std::istream& input, std::ostream& output);
-[[nodiscard]] int run_tui(ShellState state);
+[[nodiscard]] int run_tui(InteractiveState state);
 
-}  // namespace ava::app::line_shell_internal
+}  // namespace ava::app::interactive_internal

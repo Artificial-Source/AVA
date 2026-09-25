@@ -19,7 +19,7 @@ The same roots may contain `mode: primary` definitions selected at process start
 
 A selected definition's body is appended as explicit system instructions, preserving AVA's base, safety, context, and ambient-extension-free prompt composition. `tools: read-only` intersects the current CLI visibility with AVA's read/search built-ins and does not grant permission. An inherit primary keeps `task`, `job`, and `todowrite` unless CLI visibility removed them.
 
-Selection is invocation-local and available to the TUI, line shell, print mode, and CLI RPC; ACP rejects extra startup flags. The resolved definition remains fixed across model switches, prompt/trust reloads, and ordinary turns and is not persisted as a conversation turn. A navigated replacement may resolve the carried name again. Start or replace a session after config/trust changes when selected identity or policy must change; AVA has no live primary-agent picker.
+Selection is invocation-local and available to the TUI, print mode, and CLI RPC; ACP rejects extra startup flags. The resolved definition remains fixed across model switches, prompt/trust reloads, and ordinary turns and is not persisted as a conversation turn. A navigated replacement may resolve the carried name again. Start or replace a session after config/trust changes when selected identity or policy must change; AVA has no live primary-agent picker.
 
 ## Foreground and background execution
 

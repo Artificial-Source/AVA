@@ -57,7 +57,7 @@ Application (src/ava/app/app.cpp, src/ava/core/Application.cpp)
 │           ├─ ProviderEventAccumulator   per provider turn
 │           └─ PendingCommittedToolResults  per committed assistant turn
 │
-└─ per frontend (TUI: src/ava/tui/runtime.h, event_state.h; line shell; RPC/ACP workers)
+└─ per frontend (TUI: src/ava/tui/runtime.h, event_state.h; RPC/ACP workers)
     ├─ TuiEventState                      transcript/pending/queue vectors (unbounded-by-design UI state)
     ├─ ApplicationCatalogCoordinator      cached session tree + summaries
     ├─ MermaidRenderCoordinator           owns "mermaid_render" JoinThread worker
@@ -131,8 +131,8 @@ Entry points into `ava::app::run_prompt`
 ([src/ava/app/runtime_prompt.cpp](../../src/ava/app/runtime_prompt.cpp),
 declared in [src/ava/app/runtime.h](../../src/ava/app/runtime.h)):
 
-- interactive line shell / TUI submit path: `run_line` in
-  [src/ava/app/line_shell.cpp](../../src/ava/app/line_shell.cpp) (two call sites:
+- interactive TUI submit path: `handle_interactive_submission` in
+  [src/ava/app/interactive.cpp](../../src/ava/app/interactive.cpp) (two call sites:
   direct prompt and command-expanded prompt)
 - headless print mode: [src/ava/app/print_mode.cpp](../../src/ava/app/print_mode.cpp)
 - RPC prompt worker: [src/ava/app/rpc/prompt_worker.cpp](../../src/ava/app/rpc/prompt_worker.cpp)
@@ -343,7 +343,7 @@ is current behavior, not a proposal.
 | 6 | [src/ava/app/mermaid_render_coordinator.cpp](../../src/ava/app/mermaid_render_coordinator.cpp) · render worker | `MermaidRenderCoordinator` (TUI-scoped; `"mermaid_render"` JoinThread) | One diagram render | Deadline `kMermaidRenderDeadline` or coordinator cancel → group kill | SIGSTOP handshake before exec; exec-failure pipe; child reaped by worker on all outcomes | Helper resolved to an `O_NOFOLLOW` descriptor and `fexecve`d; missing helper is a first-class outcome (`MissingHelper`). |
 | 7 | [src/ava/app/browser_open.cpp](../../src/ava/app/browser_open.cpp) · `open_url_in_browser` / `spawn_detached` | **None (deliberately detached)** — used by OAuth connect flows ([src/ava/app/command_connect.cpp](../../src/ava/app/command_connect.cpp), [src/ava/app/connect_openai.cpp](../../src/ava/app/connect_openai.cpp)) | Until opener exits | None | Double-fork + `setsid` + stdio→`/dev/null`; intermediate child reaped; grandchild orphaned to init | Grandchild is unreapable and unkillable by AVA by design; `AVA_DISABLE_BROWSER_OPEN` disables the site. URL scheme allowlist (`http(s)`), `$BROWSER` without spaces, then `xdg-open`/`gio`/`open`/`wslview`. |
 | 8 | [src/ava/app/clipboard_image.cpp](../../src/ava/app/clipboard_image.cpp) · `capture_command_stdout` | The clipboard-image read (composer paste path) | One helper invocation | None (bounded by `timeout` only) | Non-blocking read with deadline → SIGKILL + `waitpid`; byte cap | No cancellation callback; relies on the caller-supplied timeout. Helper taken from environment-configured commands. |
-| 9 | [src/ava/app/external_editor.cpp](../../src/ava/app/external_editor.cpp) · `edit_text_with_external_editor` | The line-shell external-editor action | One editor session | None (blocks the prompt thread) | `std::system("exec $EDITOR …")` reaped by the call; temp file RAII (`mkstemp`, 0600, unlink) | Goes through the shell by construction; editor string comes from `VISUAL`/`EDITOR` verbatim (user-controlled environment). Draft size cap `kExternalEditorMaxBytes`. |
+| 9 | [src/ava/app/external_editor.cpp](../../src/ava/app/external_editor.cpp) · `edit_text_with_external_editor` | The TUI external-editor action | One editor session | None (blocks the prompt thread) | `std::system("exec $EDITOR …")` reaped by the call; temp file RAII (`mkstemp`, 0600, unlink) | Goes through the shell by construction; editor string comes from `VISUAL`/`EDITOR` verbatim (user-controlled environment). Draft size cap `kExternalEditorMaxBytes`. |
 
 Not process spawns but adjacent: `detail::ToolScheduler`
 ([src/ava/agent/tool_scheduler.cpp](../../src/ava/agent/tool_scheduler.cpp)) runs

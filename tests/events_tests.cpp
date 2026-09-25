@@ -1,8 +1,8 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
 #include "ava/event/events.h"
+#include "ava/app/interactive_internal.h"
 #include "ava/app/interactive_run_queue.h"
-#include "ava/app/line_shell_internal.h"
 #include "ava/core/json.h"
 
 #include <string>
@@ -616,7 +616,7 @@ void test_interactive_tui_stops_follow_ups_at_session_transition()
   };
 
   auto session_id = std::string("session_old");
-  auto result = ava::app::line_shell_internal::LineResult{
+  auto result = ava::app::interactive_internal::InteractiveResult{
       .ordinary_turn_committed = true,
       .output = {"OLD-OUTPUT-MUST-NOT-SURVIVE"},
       .tool_timeline = {{.name = "old_tool"}},
@@ -624,7 +624,7 @@ void test_interactive_tui_stops_follow_ups_at_session_transition()
   bool workspace_catalog_reload = false;
   std::vector<std::string> executed;
   std::vector<std::string> executed_request_ids;
-  auto const transitioned = ava::app::line_shell_internal::run_queued_follow_ups_until_session_transition(
+  auto const transitioned = ava::app::interactive_internal::run_queued_follow_ups_until_session_transition(
       result, workspace_catalog_reload, "session_old", context, [&session_id]() { return session_id; },
       [&](ava::tui::TuiQueuedFollowUp const& follow_up) {
         executed.push_back(follow_up.message);
@@ -632,13 +632,13 @@ void test_interactive_tui_stops_follow_ups_at_session_transition()
         if (follow_up.message == "/new")
         {
           session_id = "session_new";
-          return ava::app::line_shell_internal::LineResult{
+          return ava::app::interactive_internal::InteractiveResult{
               .session_tree_changed = true,
               .output = {"NEW-SESSION-RECEIPT"},
               .tool_timeline = {{.name = "transition_tool"}},
           };
         }
-        return ava::app::line_shell_internal::LineResult{.output = {"OLD-LATE-OUTPUT"}, .tool_timeline = {{.name = "old_late_tool"}}};
+        return ava::app::interactive_internal::InteractiveResult{.output = {"OLD-LATE-OUTPUT"}, .tool_timeline = {{.name = "old_late_tool"}}};
       });
   auto const finished = queue.finish(false);
 

@@ -27,8 +27,8 @@ FIELD_ALLOWLIST = MODULE_FILES | {
     Path("app/commands.h"),
     Path("app/command_plugins.cpp"),
     Path("app/interactive_tui.cpp"),
-    Path("app/line_shell.cpp"),
-    Path("app/line_shell_internal.h"),
+    Path("app/interactive.cpp"),
+    Path("app/interactive_internal.h"),
 }
 
 
@@ -82,9 +82,9 @@ def main() -> int:
 
     interactive = (root / "app" / "interactive_tui.cpp").read_text(encoding="utf-8")
     if interactive.count("std::move(plugin_ui_capability)") != 1:
-        raise AssertionError("the TUI capability must attach to exactly the first canonical handle_line call")
+        raise AssertionError("the TUI capability must attach to exactly the first canonical handle_interactive_submission call")
     if not re.search(r"follow_up\.message[\s\S]{0,700}?context\.on_subagent_launch,\s*nullptr\)", interactive):
-        raise AssertionError("every queued TUI follow-up must call handle_line with explicit null UI authority")
+        raise AssertionError("every queued TUI follow-up must call handle_interactive_submission with explicit null UI authority")
 
     tui_files = source_files(root / "tui")
     tui_app_includes = matches(tui_files, root, re.compile(r'^\s*#\s*include\s*[<\"]ava/app/'))

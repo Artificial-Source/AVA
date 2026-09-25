@@ -131,7 +131,7 @@ git --no-pager diff --check
 | `--thinking <level>` | Implemented alias | Maps to existing runtime reasoning selection: `off` clears explicit reasoning, and other levels use active-model `reasoning_levels`/provider validation. Covered by CLI/RPC startup alias tests. |
 | `--fork`, `--name`, `--session-dir`, `@file` | Implemented | Existing behavior retained; `--fork` conflict wording now mentions aliases. |
 | `--models`, `--extension`, `--skill`, `--prompt-template`, `--theme`, `--no-context-files`, `--export`, `--offline`, trust flags | Deferred / excluded for this area | These affect provider/model selection, context/resource loading, settings, process exit export, or trust policy. They are intentionally left for settings/packages/resources or future product design to avoid ambiguous aliases and weakened safety boundaries. |
-| Dedicated RPC import/share | Deferred | RPC already covers Markdown/HTML export; local JSONL import is slash/line-shell only until the RPC contract for archive replacement/switching is designed. |
+| Dedicated RPC import/share | Deferred | RPC already covers Markdown/HTML export; local JSONL import is slash/TUI only until the RPC contract for archive replacement/switching is designed. |
 | Session content search | Deferred | Current `/sessions [query]` searches session metadata/tree rows; full transcript search across sessions needs indexing/UX design and is not required for safe local import/export closure. |
 
 ## Validation Evidence

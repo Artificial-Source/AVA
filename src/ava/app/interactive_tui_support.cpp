@@ -1,7 +1,7 @@
 #include "sys.h"
 #include "ava/app/command_palette.h"
-#include "ava/app/line_shell.h"
-#include "ava/app/line_shell_internal.h"
+#include "ava/app/interactive.h"
+#include "ava/app/interactive_internal.h"
 #include "ava/app/project_trust.h"
 #include "ava/agent/todo.h"
 #include "ava/tui/composer.h"
@@ -28,7 +28,7 @@
 #include <utility>
 #include <vector>
 
-namespace ava::app::line_shell_internal {
+namespace ava::app::interactive_internal {
 
 void append_status_line(std::string& target, std::string line)
 {
@@ -102,11 +102,13 @@ std::string permission_summary_field(std::string_view summary, std::string_view 
   for (auto line : ava::tui::split_lines(std::string(summary)))
   {
     std::string_view view(line);
-    while (!view.empty() && (view.front() == ' ' || view.front() == '\t')) view.remove_prefix(1);
+    while (!view.empty() && (view.front() == ' ' || view.front() == '\t'))
+      view.remove_prefix(1);
     if (!view.starts_with(label))
       continue;
     view.remove_prefix(label.size());
-    while (!view.empty() && (view.front() == ' ' || view.front() == '\t')) view.remove_prefix(1);
+    while (!view.empty() && (view.front() == ' ' || view.front() == '\t'))
+      view.remove_prefix(1);
     return std::string(view);
   }
   return {};
@@ -644,7 +646,8 @@ ava::core::Result<ava::tui::SelectListView> toggle_scoped_model_provider(ava::ap
       !provider_values.empty() && std::ranges::all_of(provider_values, [&](auto const& value) { return contains_value(next, value); });
   if (provider_enabled)
   {
-    for (auto const& value : provider_values) std::erase(next, value);
+    for (auto const& value : provider_values)
+      std::erase(next, value);
   }
   else
   {
@@ -714,9 +717,7 @@ ava::core::Result<ava::tui::TuiRememberedPermissionRule> remember_permission_rul
                                                                                              ava::permissions::PermissionPrompt const& prompt,
                                                                                              ava::permissions::PermissionAction action, std::string actor)
 {
-  auto reason = prompt.reason.empty() ? (actor == "tui_prompt" ? std::string("remembered from TUI permission prompt")
-                                                               : std::string("remembered from line-shell permission prompt"))
-                                      : prompt.reason;
+  auto reason = prompt.reason.empty() ? std::string("remembered from TUI permission prompt") : prompt.reason;
   std::string recipe_key;
   std::string recipe_display;
   if (prompt.operation == ava::permissions::Operation::RunCommand)
@@ -752,7 +753,7 @@ ava::core::Result<ava::tui::TuiRememberedPermissionRule> remember_permission_rul
   return ava::tui::TuiRememberedPermissionRule{.rule_id = added->rule_id};
 }
 
-bool workspace_catalog_changed(LineResult const& result)
+bool workspace_catalog_changed(InteractiveResult const& result)
 {
   return std::ranges::any_of(result.tool_timeline, [](ava::agent::ToolTimelineEntry const& entry) {
     return entry.status == ava::agent::ToolTimelineStatus::Success && !entry.changed_paths.empty();
@@ -760,7 +761,7 @@ bool workspace_catalog_changed(LineResult const& result)
 }
 
 void capture_tui_request_presentation(TuiRequestPresentation& presentation, bool initial_is_local_command, std::string_view request_line,
-                                      std::string const& request_id, LineResult const& request_result)
+                                      std::string const& request_id, InteractiveResult const& request_result)
 {
   if (request_result.ordinary_turn_committed)
   {
@@ -794,9 +795,9 @@ bool workspace_catalog_reload_requested(std::string_view submitted)
   return arguments.substr(first, end - first) == "all";
 }
 
-bool run_queued_follow_ups_until_session_transition(LineResult& result, bool& workspace_catalog_reload, std::string_view initial_session_id,
+bool run_queued_follow_ups_until_session_transition(InteractiveResult& result, bool& workspace_catalog_reload, std::string_view initial_session_id,
                                                     ava::tui::TuiSubmitContext const& context, std::function<std::string()> const& current_session_id,
-                                                    std::function<LineResult(ava::tui::TuiQueuedFollowUp const&)> const& run_follow_up)
+                                                    std::function<InteractiveResult(ava::tui::TuiQueuedFollowUp const&)> const& run_follow_up)
 {
   if (current_session_id() != initial_session_id)
     return true;
@@ -847,13 +848,13 @@ bool run_queued_follow_ups_until_session_transition(LineResult& result, bool& wo
   return false;
 }
 
-}  // namespace ava::app::line_shell_internal
+}  // namespace ava::app::interactive_internal
 
 namespace ava::app {
 
 std::vector<ava::tui::ToolTimelineItem> tool_timeline_for_tui(std::vector<ava::agent::ToolTimelineEntry> const& entries)
 {
-  return line_shell_internal::tui_tool_timeline(entries);
+  return interactive_internal::tui_tool_timeline(entries);
 }
 
 }  // namespace ava::app

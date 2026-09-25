@@ -64,7 +64,7 @@ print mode, and protocol adapters.
 **Key entry points:** `app.cpp`, `runtime.h`, `runtime/Session.h`,
 `runtime/OpenOptions.h`, `runtime/RunOptions.h`, `session_run_controller.h`,
 `commands.h`, `command_registry.h`, `print_mode.h`, `rpc_mode.h`, `acp_mode.h`,
-`interactive_tui.cpp`, and `line_shell.h`. Protocol implementations live under
+`interactive_tui.cpp`, and `interactive.h`. Protocol implementations live under
 `app/rpc/` and `app/acp/`. `Application.h` currently constructs the
 application-scoped memory page pool and node resource, but no production
 allocation path uses that pool yet.

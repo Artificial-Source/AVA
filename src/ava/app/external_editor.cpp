@@ -1,5 +1,5 @@
 #include "sys.h"
-#include "ava/app/line_shell_internal.h"
+#include "ava/app/interactive_internal.h"
 #include "ava/core/error.h"
 
 #include <cerrno>
@@ -18,11 +18,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-namespace ava::app::line_shell_internal {
+namespace ava::app::interactive_internal {
 
 constexpr std::uintmax_t kExternalEditorMaxBytes = 1024 * 1024;
 
-ava::core::Error errno_line_shell_error(ava::core::ErrorCategory category, std::string message)
+ava::core::Error errno_io_error(ava::core::ErrorCategory category, std::string message)
 {
   auto error = ava::core::Error(category, std::move(message));
   error.with_context("cause", std::strerror(errno));
@@ -147,24 +147,24 @@ ava::core::Result<std::optional<std::string>> edit_text_with_external_editor(std
   mutable_path.push_back('\0');
   int const fd = ::mkstemp(mutable_path.data());
   if (fd < 0)
-    return std::unexpected(errno_line_shell_error(ava::core::ErrorCategory::Io, "failed to create external editor temp file"));
+    return std::unexpected(errno_io_error(ava::core::ErrorCategory::Io, "failed to create external editor temp file"));
 
   ScopedTempFile temp_file(std::filesystem::path(mutable_path.data()), fd);
   if (::fchmod(temp_file.fd(), S_IRUSR | S_IWUSR) != 0)
-    return std::unexpected(errno_line_shell_error(ava::core::ErrorCategory::Io, "failed to secure external editor temp file"));
+    return std::unexpected(errno_io_error(ava::core::ErrorCategory::Io, "failed to secure external editor temp file"));
   if (!write_all_fd(temp_file.fd(), initial_text))
-    return std::unexpected(errno_line_shell_error(ava::core::ErrorCategory::Io, "failed to write external editor temp file"));
+    return std::unexpected(errno_io_error(ava::core::ErrorCategory::Io, "failed to write external editor temp file"));
   if (!temp_file.close())
-    return std::unexpected(errno_line_shell_error(ava::core::ErrorCategory::Io, "failed to close external editor temp file"));
+    return std::unexpected(errno_io_error(ava::core::ErrorCategory::Io, "failed to close external editor temp file"));
 
   ScopedEnvVar file_env("AVA_EXTERNAL_EDITOR_FILE", temp_file.path().string());
   if (!file_env.ok())
-    return std::unexpected(errno_line_shell_error(ava::core::ErrorCategory::Io, "failed to prepare external editor file environment"));
+    return std::unexpected(errno_io_error(ava::core::ErrorCategory::Io, "failed to prepare external editor file environment"));
 
   auto const command = std::string("exec ") + *editor + " \"$AVA_EXTERNAL_EDITOR_FILE\"";
   int const status = std::system(command.c_str());
   if (status == -1)
-    return std::unexpected(errno_line_shell_error(ava::core::ErrorCategory::Io, "failed to launch external editor"));
+    return std::unexpected(errno_io_error(ava::core::ErrorCategory::Io, "failed to launch external editor"));
   if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
     return std::optional<std::string>{};
 
@@ -190,4 +190,4 @@ ava::core::Result<std::optional<std::string>> edit_text_with_external_editor(std
   return std::optional<std::string>{std::move(edited)};
 }
 
-}  // namespace ava::app::line_shell_internal
+}  // namespace ava::app::interactive_internal

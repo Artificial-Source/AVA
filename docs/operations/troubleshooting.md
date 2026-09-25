@@ -38,7 +38,7 @@ Use this symptom-first runbook for common local failures. Start with `ava doctor
 - If keys arrive incorrectly, test without tmux and without custom `keybinds.json`, then restore settings one at a time. Plain Up/Down scroll transcript history by default; they do not replace the draft.
 - For cursor/Alacritty issues, retry outside mux paths. Direct Alacritty DA2 gating is asynchronous and best effort; startup never waits for it. `/cursor default steady` returns cursor ownership to the terminal.
 - If Mermaid projection fails, the original completed fence should remain visible. Check that `mermaid.enabled` is true and `argv[0]` is the intended absolute bounded helper; an invalid reload keeps the last good config. AVA does not provide full Mermaid or extension-owned renderers.
-- Use `ava --line-shell` when full-screen terminal protocols are unsuitable. Its numbered text flows improve scrollback/accessibility but are not broad screen-reader certification.
+- Interactive AVA requires a terminal on both stdin and stdout. If the TUI cannot start, use `ava --print` or `ava --rpc` instead of piping into an interactive invocation. Keyboard TUI coverage is not screen-reader certification.
 - Clipboard images require a supported image type and an available Wayland/X11 helper; unsupported terminals retain text metadata rather than an inline preview.
 - See [terminal-setup.md](https://github.com/Artificial-Source/AVA/blob/develop/docs/operations/terminal-setup.md), [themes-keybindings.md](https://github.com/Artificial-Source/AVA/blob/develop/docs/interfaces/themes-keybindings.md), and the TUI section of [USAGE.md](../core/usage.md#tui-layout).
 

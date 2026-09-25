@@ -5,7 +5,7 @@
 #include "ava/app/command_catalog.h"
 #include "ava/app/command_palette.h"
 #include "ava/app/command_sessions.h"
-#include "ava/app/line_shell_internal.h"
+#include "ava/app/interactive_internal.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
@@ -159,7 +159,7 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
              (**source_summary).path == "/private/raw-parent.jsonl" && missing_summary && !*missing_summary,
          "application catalog marks only the current direct parent with bound/unbound summary hints while retaining source authority behind the app seam");
 
-  auto const mapped_branch_snapshot = ava::app::line_shell_internal::tui_branch_summary_snapshot(
+  auto const mapped_branch_snapshot = ava::app::interactive_internal::tui_branch_summary_snapshot(
       ava::app::BranchSummarySnapshot{.generation = 42,
                                       .phase = ava::app::BranchSummaryPhase::Failed,
                                       .source_label = "Résumé parent",
