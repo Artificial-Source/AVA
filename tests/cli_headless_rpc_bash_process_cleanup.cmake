@@ -228,3 +228,8 @@ foreach(NEEDLE
     message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
   endif()
 endforeach()
+
+file(REMOVE_RECURSE "${TEST_ROOT}")
+if(EXISTS "${TEST_ROOT}" OR IS_SYMLINK "${TEST_ROOT}")
+  message(FATAL_ERROR "failed to remove completed test fixture: ${TEST_ROOT}")
+endif()

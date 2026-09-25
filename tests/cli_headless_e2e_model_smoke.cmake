@@ -353,3 +353,8 @@ assert_after(REPLAY_OUTPUT "\"id\":\"replay-messages\"" "\"type\":\"assistant_me
 assert_after(REPLAY_OUTPUT "\"id\":\"replay-messages\"" "E2E task complete: TODO fixed and verification command passed.")
 assert_after(REPLAY_OUTPUT "\"id\":\"replay-messages\"" "\"type\":\"tool_call\"")
 assert_after(REPLAY_OUTPUT "\"id\":\"replay-messages\"" "\"call_id\":\"call_bash_e2e\"")
+
+file(REMOVE_RECURSE "${TEST_ROOT}")
+if(EXISTS "${TEST_ROOT}" OR IS_SYMLINK "${TEST_ROOT}")
+  message(FATAL_ERROR "failed to remove completed test fixture: ${TEST_ROOT}")
+endif()

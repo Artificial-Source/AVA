@@ -109,7 +109,10 @@ def cleanup_owned_processes():
         if directory.is_symlink() or directory.is_file():
             directory.unlink(missing_ok=True)
             continue
-        shutil.rmtree(directory, ignore_errors=True)
+        try:
+            shutil.rmtree(directory)
+        except FileNotFoundError:
+            pass
     OWNED_DIRECTORIES.clear()
 
 
