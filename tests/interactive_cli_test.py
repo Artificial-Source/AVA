@@ -88,15 +88,15 @@ def run(
     )
 
 
-def session_files(state_root: pathlib.Path) -> list[pathlib.Path]:
-    sessions = state_root / "ava" / "sessions"
-    if not sessions.exists():
-        return []
-    return sorted(path for path in sessions.rglob("*") if path.is_file())
+def assert_no_runtime_state(state_root: pathlib.Path, label: str) -> None:
+    ava_state = state_root / "ava"
+    for name in ("sessions", "diagnostics"):
+        require(not (ava_state / name).exists(), f"{label} created {name} runtime state")
 
 
 def assert_no_sessions(state_root: pathlib.Path, label: str) -> None:
-    found = session_files(state_root)
+    sessions = state_root / "ava" / "sessions"
+    found = sorted(path for path in sessions.rglob("*") if path.is_file()) if sessions.exists() else []
     require(not found, f"{label} created session state: {found}")
 
 
@@ -112,7 +112,7 @@ def run_cases(ava: pathlib.Path, workspace: pathlib.Path, environment: dict[str,
         unknown.returncode == 2 and unknown.stdout == b"" and b"unknown argument: --line-shell" in unknown.stderr,
         f"--line-shell was not rejected as an unknown flag: rc={unknown.returncode} stdout={unknown.stdout!r} stderr={unknown.stderr!r}",
     )
-    assert_no_sessions(state_root, "unknown --line-shell")
+    assert_no_runtime_state(state_root, "unknown --line-shell")
 
     acp_unknown = run(ava, ["--acp", "--line-shell"], environment, workspace)
     require(
@@ -122,9 +122,9 @@ def run_cases(ava: pathlib.Path, workspace: pathlib.Path, environment: dict[str,
         and b"--acp is a standalone mode" in acp_unknown.stderr,
         f"--acp --line-shell did not use ordinary ACP extra-flag rejection: rc={acp_unknown.returncode} stdout={acp_unknown.stdout!r} stderr={acp_unknown.stderr!r}",
     )
-    assert_no_sessions(state_root, "ACP extra --line-shell")
+    assert_no_runtime_state(state_root, "ACP extra --line-shell")
 
-    both_non_tty = run(ava, ["--offline", "--no-session"], environment, workspace, b"/exit\n")
+    both_non_tty = run(ava, ["--offline"], environment, workspace, b"/exit\n")
     require(
         both_non_tty.returncode == 2
         and both_non_tty.stdout == b""
@@ -132,19 +132,25 @@ def run_cases(ava: pathlib.Path, workspace: pathlib.Path, environment: dict[str,
         and PRINT_OR_RPC in both_non_tty.stderr,
         f"piped stdin and stdout did not reject interactive startup: rc={both_non_tty.returncode} stdout={both_non_tty.stdout!r} stderr={both_non_tty.stderr!r}",
     )
-    assert_no_sessions(state_root, "both-non-TTY interactive startup")
+    assert_no_runtime_state(state_root, "both-non-TTY interactive startup")
 
     print_smoke = run(ava, ["--print", "--no-session", "--offline", "hi"], environment, workspace)
     require(
-        print_smoke.returncode != 2 and TTY_REQUIRED not in print_smoke.stderr,
-        f"explicit --print --no-session was treated as a TTY gate failure: rc={print_smoke.returncode} stdout={print_smoke.stdout!r} stderr={print_smoke.stderr!r}",
+        print_smoke.returncode == 1
+        and print_smoke.stdout == b""
+        and b"offline mode is enabled; provider model calls are disabled" in print_smoke.stderr
+        and TTY_REQUIRED not in print_smoke.stderr,
+        f"explicit --print --no-session did not reach the offline provider gate: rc={print_smoke.returncode} stdout={print_smoke.stdout!r} stderr={print_smoke.stderr!r}",
     )
     assert_no_sessions(state_root, "explicit --print --no-session")
 
     positional = run(ava, ["--offline", "--no-session", "hello"], environment, workspace)
     require(
-        positional.returncode != 2 and TTY_REQUIRED not in positional.stderr,
-        f"positional prompt lost implicit print selection: rc={positional.returncode} stdout={positional.stdout!r} stderr={positional.stderr!r}",
+        positional.returncode == 1
+        and positional.stdout == b""
+        and b"offline mode is enabled; provider model calls are disabled" in positional.stderr
+        and TTY_REQUIRED not in positional.stderr,
+        f"positional prompt did not reach the offline provider gate: rc={positional.returncode} stdout={positional.stdout!r} stderr={positional.stderr!r}",
     )
     assert_no_sessions(state_root, "positional print prompt")
     return 0

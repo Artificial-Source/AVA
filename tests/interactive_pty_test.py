@@ -114,16 +114,10 @@ def isolated_environment(root: pathlib.Path, tmpdir: pathlib.Path) -> dict[str, 
     return environment
 
 
-def session_files(state_root: pathlib.Path) -> list[pathlib.Path]:
-    sessions = state_root / "ava" / "sessions"
-    if not sessions.exists():
-        return []
-    return sorted(path for path in sessions.rglob("*") if path.is_file())
-
-
-def assert_no_sessions(state_root: pathlib.Path, label: str) -> None:
-    found = session_files(state_root)
-    require(not found, f"{label} created session state: {found}")
+def assert_no_runtime_state(state_root: pathlib.Path, label: str) -> None:
+    ava_state = state_root / "ava"
+    for name in ("sessions", "diagnostics"):
+        require(not (ava_state / name).exists(), f"{label} created {name} runtime state")
 
 
 def wait_exit(process: subprocess.Popen[bytes], timeout: float = DEADLINE_SECONDS) -> int:
@@ -134,16 +128,16 @@ def wait_exit(process: subprocess.Popen[bytes], timeout: float = DEADLINE_SECOND
         raise RuntimeError(f"AVA did not exit within {timeout:.1f}s") from error
 
 
-def drain(fd: int, capture: bytearray) -> None:
+def drain(fd: int, capture: bytearray) -> bool:
     try:
         chunk = os.read(fd, 16384)
     except OSError as error:
         if error.errno != errno.EIO:
             raise
-        return
-    if chunk:
-        capture.extend(chunk)
-        require(len(capture) <= MAX_CAPTURE_BYTES, "PTY capture exceeded its byte limit")
+        return False
+    capture.extend(chunk)
+    require(len(capture) <= MAX_CAPTURE_BYTES, f"PTY capture exceeded its byte limit: {bytes(capture)!r}")
+    return bool(chunk)
 
 
 def prove_tty_starts_tui(ava: pathlib.Path, workspace: pathlib.Path, environment: dict[str, str]) -> None:
@@ -163,8 +157,8 @@ def prove_tty_starts_tui(ava: pathlib.Path, workspace: pathlib.Path, environment
     try:
         deadline = time.monotonic() + DEADLINE_SECONDS
         while time.monotonic() < deadline:
-            # CSI is TUI/ncurses initialization readiness, not a screen snapshot.
-            if b"\x1b[" in capture:
+            # The rendered empty composer is visible only after ncurses initialization.
+            if b"Type a message..." in capture:
                 break
             if process.poll() is not None:
                 raise RuntimeError(f"AVA exited before TUI readiness: rc={process.returncode} capture={bytes(capture)!r}")
@@ -172,14 +166,20 @@ def prove_tty_starts_tui(ava: pathlib.Path, workspace: pathlib.Path, environment
             if ready:
                 drain(master_fd, capture)
         else:
-            raise RuntimeError(f"timed out waiting for TUI terminal initialization; capture={bytes(capture)!r}")
+            raise RuntimeError(f"timed out waiting for TUI composer; capture={bytes(capture)!r}")
         os.write(master_fd, b"\x04")
         deadline = time.monotonic() + DEADLINE_SECONDS
         while process.poll() is None and time.monotonic() < deadline:
             ready, _, _ = select.select([master_fd], [], [], min(0.1, max(0.0, deadline - time.monotonic())))
             if ready:
                 drain(master_fd, capture)
-        returncode = wait_exit(process)
+        if process.poll() is None:
+            raise RuntimeError(f"AVA did not exit within {DEADLINE_SECONDS:.1f}s; capture={bytes(capture)!r}")
+        returncode = process.wait()
+        # The child can exit before its final terminal bytes are read from the master.
+        while select.select([master_fd], [], [], 0)[0]:
+            if not drain(master_fd, capture):
+                break
         require(returncode == 0, f"TTY TUI exit failed: rc={returncode} capture={bytes(capture)!r}")
         require(b"Ready when you are" in capture, f"TTY TUI did not restore and print the farewell card: {bytes(capture)!r}")
         require(TTY_REQUIRED not in capture, f"TTY TUI was rejected as non-interactive: {bytes(capture)!r}")
@@ -192,7 +192,7 @@ def prove_piped_stdin_rejects(ava: pathlib.Path, workspace: pathlib.Path, enviro
     master_fd, slave_fd = pty.openpty()
     set_winsize(slave_fd)
     process = subprocess.Popen(
-        [str(ava), "--offline", "--no-session"],
+        [str(ava), "--offline"],
         cwd=workspace,
         env=environment,
         stdin=subprocess.PIPE,
@@ -210,7 +210,7 @@ def prove_piped_stdin_rejects(ava: pathlib.Path, workspace: pathlib.Path, enviro
             returncode == 2 and TTY_REQUIRED in stderr and PRINT_OR_RPC in stderr,
             f"piped stdin with TTY stdout did not reject early: rc={returncode} stderr={stderr!r}",
         )
-        assert_no_sessions(state_root, "piped-stdin interactive startup")
+        assert_no_runtime_state(state_root, "piped-stdin interactive startup")
     finally:
         terminate_group(process)
         os.close(master_fd)
@@ -220,7 +220,7 @@ def prove_redirected_stdout_rejects(ava: pathlib.Path, workspace: pathlib.Path, 
     master_fd, slave_fd = pty.openpty()
     set_winsize(slave_fd)
     process = subprocess.Popen(
-        [str(ava), "--offline", "--no-session"],
+        [str(ava), "--offline"],
         cwd=workspace,
         env=environment,
         stdin=slave_fd,
@@ -237,7 +237,7 @@ def prove_redirected_stdout_rejects(ava: pathlib.Path, workspace: pathlib.Path, 
             returncode == 2 and stdout == b"" and TTY_REQUIRED in stderr and PRINT_OR_RPC in stderr,
             f"redirected stdout with TTY stdin did not reject early: rc={returncode} stdout={stdout!r} stderr={stderr!r}",
         )
-        assert_no_sessions(state_root, "redirected-stdout interactive startup")
+        assert_no_runtime_state(state_root, "redirected-stdout interactive startup")
     finally:
         terminate_group(process)
         os.close(master_fd)
