@@ -870,6 +870,9 @@ void test_jobs_live_cancel_survives_historical_read_failure()
              listed->output.back().find(started->job.identity.job_id) != std::string::npos && canceled && !canceled->output.empty() &&
              (canceled->output[0].find("Canceled") != std::string::npos || canceled->output[0].find("cancel requested") != std::string::npos),
          "live cancel and usage succeed when historical session reads fail, while list reports the read error and still shows live jobs");
+  // A cancellation receipt does not join the worker. Keep the session and its
+  // delivery manager alive until terminal callbacks have finished on that thread.
+  coordinator->shutdown();
 }
 
 void test_jobs_active_run_binding_overlays_captured_history()
