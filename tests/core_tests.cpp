@@ -363,6 +363,9 @@ int main(int argc, char** argv)
         if (suite.name == "core_mode")
           application.reset();
         run_suite(suite);
+        // Drop Application before namespace cleanup so Application-owned fixture
+        // threads cannot still be using those directories.
+        application.reset();
         return finalize_test_run(false, true);
       }
     }
@@ -382,7 +385,7 @@ int main(int argc, char** argv)
     if (suite.name == "core_mode")
     {
       application.reset();
-      suite.run();
+      run_suite(suite);
     }
   }
   application.emplace(CWDEBUG_ONLY(debug_suite_token));
@@ -390,8 +393,12 @@ int main(int argc, char** argv)
   {
     if (suite.name == "core_mode")
       continue;
-    suite.run();
+    run_suite(suite);
   }
 
+  // Drop Application before namespace cleanup so Application-owned fixture
+  // threads cannot still be using those directories. Test-function locals have
+  // already ended.
+  application.reset();
   return finalize_test_run(true, false);
 }

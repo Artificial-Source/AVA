@@ -1,7 +1,7 @@
 #include "tests/support/test_harness.h"
-#include "ava/core/ids.h"
 #include "ava/session/record.h"
 #include "ava/session/validation.h"
+#include "ava/core/ids.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -169,7 +169,8 @@ bool write_all_to_descriptor_for_test(int descriptor, void const* buffer, std::s
     do
     {
       waited = ::sigtimedwait(&sigpipe_mask, nullptr, &no_wait);
-    } while (waited < 0 && errno == EINTR);
+    }
+    while (waited < 0 && errno == EINTR);
   }
 
   if (::pthread_sigmask(SIG_SETMASK, &previous_mask, nullptr) != 0)
@@ -198,8 +199,23 @@ struct OwnedDirectory
   std::filesystem::path path;
   long owner_pid = 0;
 };
+struct CachedTempRoot
+{
+  std::filesystem::path tmpdir;
+  long owner_pid = 0;
+  std::filesystem::path root;
+};
 std::vector<OwnedDirectory> owned_directories;
-std::vector<std::pair<std::filesystem::path, std::filesystem::path>> temp_roots_by_tmpdir;
+std::vector<CachedTempRoot> temp_roots_by_tmpdir;
+
+std::filesystem::path absolute_lexical_path(std::filesystem::path const& path)
+{
+  std::error_code error;
+  auto absolute = std::filesystem::absolute(path, error);
+  if (error)
+    throw std::system_error(error, "resolve absolute test directory path " + path.string());
+  return absolute.lexically_normal();
+}
 
 void register_owned_directory(std::filesystem::path path)
 {
@@ -214,64 +230,32 @@ void unregister_owned_directory(std::filesystem::path const& path)
   std::erase_if(owned_directories, [&](OwnedDirectory const& entry) { return entry.owner_pid == pid && entry.path == path; });
 }
 
-bool remove_path_without_following_symlinks(std::filesystem::path const& path, std::string& error_message) noexcept
+bool remove_owned_path(std::filesystem::path const& path, std::string& error_message) noexcept
 {
-  std::error_code status_error;
-  auto const status = std::filesystem::symlink_status(path, status_error);
-  if (status_error)
-  {
-    if (status_error == std::errc::no_such_file_or_directory)
-      return true;
-    error_message = "stat owned test fixture " + path.string() + ": " + status_error.message();
-    return false;
-  }
-  if (std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status))
-  {
-    std::error_code remove_error;
-    std::filesystem::remove(path, remove_error);
-    if (remove_error && remove_error != std::errc::no_such_file_or_directory)
-    {
-      error_message = "remove owned test fixture " + path.string() + ": " + remove_error.message();
-      return false;
-    }
+  std::error_code error;
+  // error_code overload does not throw. remove_all deletes a symlink itself and
+  // does not walk through it into a foreign target.
+  static_cast<void>(std::filesystem::remove_all(path, error));
+  if (!error || error == std::errc::no_such_file_or_directory)
     return true;
-  }
-
-  std::error_code iterator_error;
-  for (auto const& entry : std::filesystem::directory_iterator(path, std::filesystem::directory_options::skip_permission_denied, iterator_error))
-  {
-    if (!remove_path_without_following_symlinks(entry.path(), error_message))
-      return false;
-  }
-  if (iterator_error && iterator_error != std::errc::no_such_file_or_directory)
-  {
-    error_message = "scan owned test fixture " + path.string() + ": " + iterator_error.message();
-    return false;
-  }
-
-  std::error_code remove_error;
-  std::filesystem::remove(path, remove_error);
-  if (remove_error && remove_error != std::errc::no_such_file_or_directory)
-  {
-    error_message = "remove owned test fixture " + path.string() + ": " + remove_error.message();
-    return false;
-  }
-  return true;
+  error_message = "remove owned test fixture " + path.string() + ": " + error.message();
+  return false;
 }
 
 std::filesystem::path create_unique_owned_directory(std::filesystem::path const& parent, std::string_view prefix)
 {
+  auto const absolute_parent = absolute_lexical_path(parent);
   std::error_code parent_error;
-  if (!std::filesystem::is_directory(parent, parent_error))
+  if (!std::filesystem::is_directory(absolute_parent, parent_error))
   {
-    throw std::runtime_error("owned test directory parent does not exist: " + parent.string() +
+    throw std::runtime_error("owned test directory parent does not exist: " + absolute_parent.string() +
                              (parent_error ? (": " + parent_error.message()) : std::string()));
   }
 
-  std::string tmpl = (parent / (std::string(prefix) + "XXXXXX")).string();
+  std::string tmpl = (absolute_parent / (std::string(prefix) + "XXXXXX")).string();
   if (::mkdtemp(tmpl.data()) == nullptr)
-    throw std::system_error(errno, std::generic_category(), "create unique test directory under " + parent.string());
-  std::filesystem::path created{std::move(tmpl)};
+    throw std::system_error(errno, std::generic_category(), "create unique test directory under " + absolute_parent.string());
+  auto created = absolute_lexical_path(std::filesystem::path{std::move(tmpl)});
   if (::chmod(created.c_str(), S_IRWXU) != 0)
   {
     int const error = errno;
@@ -328,7 +312,7 @@ void ScopedTestDirectory::teardown() noexcept
   if (owner_pid_ != static_cast<long>(::getpid()))
     return;
   std::string error_message;
-  if (remove_path_without_following_symlinks(path_, error_message))
+  if (remove_owned_path(path_, error_message))
     unregister_owned_directory(path_);
   else
     expect(false, "failed to remove owned test fixture " + path_.string() + ": " + error_message);
@@ -348,7 +332,7 @@ bool cleanup_owned_test_directories() noexcept
     if (entry.owner_pid != pid)
       continue;
     std::string error_message;
-    if (!remove_path_without_following_symlinks(entry.path, error_message))
+    if (!remove_owned_path(entry.path, error_message))
     {
       expect(false, "failed to remove owned test fixture " + entry.path.string() + ": " + error_message);
       ok = false;
@@ -358,8 +342,8 @@ bool cleanup_owned_test_directories() noexcept
   }
   {
     std::lock_guard lock(owned_directory_mutex);
-    std::erase_if(temp_roots_by_tmpdir, [&](auto const& cached) {
-      return std::none_of(owned_directories.begin(), owned_directories.end(), [&](OwnedDirectory const& entry) { return entry.path == cached.second; });
+    std::erase_if(temp_roots_by_tmpdir, [&](CachedTempRoot const& cached) {
+      return std::none_of(owned_directories.begin(), owned_directories.end(), [&](OwnedDirectory const& entry) { return entry.path == cached.root; });
     });
   }
   return ok;
@@ -367,13 +351,14 @@ bool cleanup_owned_test_directories() noexcept
 
 std::filesystem::path temp_root()
 {
-  auto const tmpdir = std::filesystem::temp_directory_path();
+  auto const tmpdir = absolute_lexical_path(std::filesystem::temp_directory_path());
+  auto const pid = static_cast<long>(::getpid());
   {
     std::lock_guard lock(owned_directory_mutex);
     for (auto const& cached : temp_roots_by_tmpdir)
     {
-      if (cached.first == tmpdir)
-        return cached.second;
+      if (cached.tmpdir == tmpdir && cached.owner_pid == pid)
+        return cached.root;
     }
   }
   auto root = create_unique_owned_directory(tmpdir, "ava_core_tests_");
@@ -383,15 +368,15 @@ std::filesystem::path temp_root()
     std::lock_guard lock(owned_directory_mutex);
     for (auto const& cached : temp_roots_by_tmpdir)
     {
-      if (cached.first == tmpdir)
+      if (cached.tmpdir == tmpdir && cached.owner_pid == pid)
       {
-        winner = cached.second;
+        winner = cached.root;
         break;
       }
     }
     if (winner.empty())
     {
-      temp_roots_by_tmpdir.emplace_back(tmpdir, root);
+      temp_roots_by_tmpdir.push_back(CachedTempRoot{.tmpdir = tmpdir, .owner_pid = pid, .root = root});
       created_this_thread = true;
       winner = root;
     }
@@ -400,7 +385,7 @@ std::filesystem::path temp_root()
   {
     // Another thread won the create race; drop the extra unique directory.
     std::string error_message;
-    if (remove_path_without_following_symlinks(root, error_message))
+    if (remove_owned_path(root, error_message))
       unregister_owned_directory(root);
   }
   return winner;

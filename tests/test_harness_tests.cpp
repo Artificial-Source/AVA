@@ -2,6 +2,7 @@
 #include "tests/support/test_timeout.h"
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -169,6 +170,101 @@ void test_cleanup_does_not_remove_untracked_directories()
   std::filesystem::remove_all(untracked, remove_error);
 }
 
+struct RestoreCwd
+{
+  std::filesystem::path previous = std::filesystem::current_path();
+  ~RestoreCwd()
+  {
+    std::error_code error;
+    std::filesystem::current_path(previous, error);
+  }
+};
+
+void test_owned_directory_cleanup_survives_relative_parent_and_cwd_change()
+{
+  RestoreCwd restore;
+  auto staging = ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-harness-relcwd-");
+  auto const relative_parent = std::filesystem::path("rel-parent");
+  std::filesystem::create_directories(staging.path() / relative_parent);
+  std::filesystem::current_path(staging.path());
+  std::filesystem::path captured;
+  {
+    auto dir = ScopedTestDirectory::create_unique(relative_parent, "ava-harness-rel-");
+    captured = dir.path();
+    expect(captured.is_absolute(), "owned directory stores an absolute lexical path at creation");
+    std::ofstream(captured / "marker") << "x";
+    std::filesystem::current_path(restore.previous);
+  }
+  expect(!captured.empty() && captured.is_absolute() && !std::filesystem::exists(captured),
+         "owned directory teardown uses the creation-time absolute path after cwd changes");
+}
+
+void test_temp_root_relative_tmpdir_survives_cwd_change()
+{
+  RestoreCwd restore;
+  auto staging = ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-harness-reltmp-");
+  auto const work = staging.path() / "work";
+  auto const tmp = staging.path() / "tmp";
+  std::filesystem::create_directories(work);
+  std::filesystem::create_directories(tmp);
+  std::filesystem::current_path(work);
+  std::filesystem::path root;
+  {
+    ScopedEnvVar const tmpdir("TMPDIR", (std::filesystem::path("..") / "tmp").string());
+    root = temp_root();
+    std::ofstream(root / "marker") << "x";
+  }
+  std::filesystem::current_path(restore.previous);
+  expect(root.is_absolute() && std::filesystem::exists(root / "marker"), "temp_root keeps an absolute namespace after cwd changes with a relative TMPDIR");
+}
+
+void test_forked_child_temp_root_is_distinct_and_does_not_remove_parent()
+{
+  auto const parent_root = temp_root();
+  std::array<int, 2> descriptors{-1, -1};
+  if (::pipe(descriptors.data()) != 0)
+  {
+    expect(false, "temp_root fork pipe is created");
+    return;
+  }
+  pid_t const child = ::fork();
+  if (child == 0)
+  {
+    static_cast<void>(::close(descriptors[0]));
+    auto const child_root = temp_root();
+    auto const text = child_root.string();
+    bool const distinct = child_root != parent_root && std::filesystem::exists(parent_root);
+    bool const written = write_all_to_descriptor_for_test(descriptors[1], text.data(), text.size());
+    static_cast<void>(::close(descriptors[1]));
+    static_cast<void>(cleanup_owned_test_directories());
+    ::_exit(distinct && written && std::filesystem::exists(parent_root) ? 0 : 1);
+  }
+  static_cast<void>(::close(descriptors[1]));
+  if (child < 0)
+  {
+    static_cast<void>(::close(descriptors[0]));
+    expect(false, "temp_root fork starts");
+    return;
+  }
+  std::string child_root;
+  char buffer[4096];
+  for (;;)
+  {
+    auto const transferred = ::read(descriptors[0], buffer, sizeof(buffer));
+    if (transferred < 0 && errno == EINTR)
+      continue;
+    if (transferred <= 0)
+      break;
+    child_root.append(buffer, static_cast<std::size_t>(transferred));
+  }
+  static_cast<void>(::close(descriptors[0]));
+  int status = 0;
+  bool const waited = ::waitpid(child, &status, 0) == child;
+  expect(waited && WIFEXITED(status) && WEXITSTATUS(status) == 0 && !child_root.empty() && std::filesystem::path(child_root) != parent_root &&
+             std::filesystem::exists(parent_root) && !std::filesystem::exists(child_root),
+         "forked child temp_root is a distinct namespace and child cleanup leaves the parent namespace in place");
+}
+
 }  // namespace
 
 void run_test_harness_tests()
@@ -182,4 +278,7 @@ void run_test_harness_tests()
   test_forked_child_does_not_remove_parent_fixtures();
   test_temp_root_does_not_adopt_existing_directory();
   test_cleanup_does_not_remove_untracked_directories();
+  test_owned_directory_cleanup_survives_relative_parent_and_cwd_change();
+  test_temp_root_relative_tmpdir_survives_cwd_change();
+  test_forked_child_temp_root_is_distinct_and_does_not_remove_parent();
 }
