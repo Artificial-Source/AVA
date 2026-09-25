@@ -141,33 +141,27 @@ void test_forked_child_does_not_remove_parent_fixtures()
 
 void test_temp_root_does_not_adopt_existing_directory()
 {
-  auto const tmpdir = std::filesystem::temp_directory_path();
-  auto const impostor = tmpdir / ("ava_core_tests_" + std::to_string(static_cast<unsigned long long>(::getpid())));
-  std::error_code create_error;
-  std::filesystem::create_directories(impostor, create_error);
+  auto staging = ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-harness-no-adopt-");
+  ScopedEnvVar const tmpdir("TMPDIR", staging.path().string());
+  // Simulate a legacy PID-named directory only inside this test's private namespace.
+  auto const impostor = staging.path() / ("ava_core_tests_" + std::to_string(static_cast<unsigned long long>(::getpid())));
+  std::filesystem::create_directory(impostor);
   auto const marker = impostor / "not-owned";
-  if (!create_error)
-    std::ofstream(marker) << "leave me";
+  std::ofstream(marker) << "leave me";
   auto const root = temp_root();
-  expect(!create_error && root != impostor && std::filesystem::exists(marker),
-         "temp_root uniquely creates a namespace and does not adopt an existing pid-named directory");
-  std::error_code remove_error;
-  std::filesystem::remove_all(impostor, remove_error);
+  expect(root != impostor && std::filesystem::exists(marker), "temp_root uniquely creates a namespace and does not adopt an existing pid-named directory");
 }
 
 void test_cleanup_does_not_remove_untracked_directories()
 {
-  auto const tmpdir = std::filesystem::temp_directory_path();
-  auto const untracked = tmpdir / ("ava-harness-untracked-" + std::to_string(static_cast<unsigned long long>(::getpid())));
-  std::error_code create_error;
-  std::filesystem::create_directories(untracked, create_error);
+  auto staging = ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-harness-siblings-");
+  auto const untracked = staging.path() / "untracked";
+  std::filesystem::create_directory(untracked);
   {
-    auto owned = ScopedTestDirectory::create_unique(tmpdir, "ava-harness-tracked-");
+    auto owned = ScopedTestDirectory::create_unique(staging.path(), "tracked-");
     std::ofstream(owned.path() / "owned.txt") << "owned";
   }
-  expect(!create_error && std::filesystem::is_directory(untracked), "teardown removes only directories acquired by this process and leaves untracked paths");
-  std::error_code remove_error;
-  std::filesystem::remove_all(untracked, remove_error);
+  expect(std::filesystem::is_directory(untracked), "scoped teardown leaves a sibling outside its acquired directory intact");
 }
 
 struct RestoreCwd
