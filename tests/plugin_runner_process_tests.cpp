@@ -66,14 +66,9 @@ std::optional<TestAuthority> make_authority()
   return TestAuthority{.supervisor = std::move(supervisor), .application = std::move(*application), .session = std::move(*session), .run = std::move(*run)};
 }
 
-std::filesystem::path test_root(std::string_view label)
+ScopedTestDirectory test_root(std::string_view label)
 {
-  auto root =
-      std::filesystem::temp_directory_path() / ("ava-plugin-process-" + std::string(label) + "-" + std::to_string(Clock::now().time_since_epoch().count()));
-  std::error_code error;
-  std::filesystem::remove_all(root, error);
-  std::filesystem::create_directories(root);
-  return root;
+  return ScopedTestDirectory::create_unique(temp_root(), "plugin-process-" + std::string(label) + "-");
 }
 
 void write_text(std::filesystem::path const& path, std::string_view text)

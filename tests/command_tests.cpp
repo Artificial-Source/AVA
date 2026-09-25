@@ -868,16 +868,13 @@ void test_synthetic_environment_roots_are_sealed_and_fresh()
   auto authority_root = fixture.root / "ava-authority";
   std::filesystem::create_directories(authority_root);
   ::chmod(authority_root.c_str(), S_IRWXU);
-  auto const unique_suffix = std::to_string(static_cast<unsigned long long>(::getpid()));
-  auto sealed_tmpdir = std::filesystem::temp_directory_path() / ("ava-command-sealed-synthetic-" + unique_suffix);
-  auto outside = std::filesystem::temp_directory_path() / ("ava-command-sealed-outside-" + unique_suffix);
-  std::error_code cleanup_error;
-  std::filesystem::remove_all(sealed_tmpdir, cleanup_error);
-  std::filesystem::remove_all(outside, cleanup_error);
-  std::filesystem::create_directories(sealed_tmpdir);
-  std::filesystem::create_directories(outside);
-  ::chmod(sealed_tmpdir.c_str(), S_IRWXU);
-  ::chmod(outside.c_str(), S_IRWXU);
+  // Declare the foreign target first so its destructor runs after sealed_tmpdir.
+  // The test later replaces sealed_tmpdir with a symlink to outside; teardown
+  // must unlink that symlink and never follow it into the separately owned dir.
+  auto outside = ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-command-sealed-outside-");
+  auto sealed_tmpdir = ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-command-sealed-synthetic-");
+  ::chmod(sealed_tmpdir.path().c_str(), S_IRWXU);
+  ::chmod(outside.path().c_str(), S_IRWXU);
 
   auto loose_mode_options = fixture.options();
   ::chmod(loose_mode_options.environment.xdg_cache_home.c_str(), S_IRWXU | S_IRGRP);
@@ -885,8 +882,8 @@ void test_synthetic_environment_roots_are_sealed_and_fresh()
   ::chmod(loose_mode_options.environment.xdg_cache_home.c_str(), S_IRWXU);
 
   auto sealed_options = fixture.options();
-  sealed_options.environment.tmpdir = sealed_tmpdir;
-  sealed_options.anchor_set = fixture.open_anchors({}, {sealed_tmpdir});
+  sealed_options.environment.tmpdir = sealed_tmpdir.path();
+  sealed_options.anchor_set = fixture.open_anchors({}, {sealed_tmpdir.path()});
   auto plan = command::seal_command_plan(*intent, sealed_options);
   auto before = plan ? command::plan_is_fresh(*plan) : ava::core::Result<bool>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "no plan"))};
 
@@ -940,8 +937,8 @@ void test_synthetic_environment_roots_are_sealed_and_fresh()
                                      ? command::plan_is_fresh(*missing_disjoint_authority)
                                      : ava::core::Result<bool>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "no plan"))};
 
-  std::filesystem::remove(sealed_tmpdir);
-  std::filesystem::create_directory_symlink(outside, sealed_tmpdir);
+  std::filesystem::remove(sealed_tmpdir.path());
+  std::filesystem::create_directory_symlink(outside.path(), sealed_tmpdir.path());
   auto replaced =
       plan ? command::plan_is_fresh(*plan) : ava::core::Result<bool>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "no plan"))};
 

@@ -3,6 +3,7 @@
 #include "ava/session/record.h"
 #include "ava/session/validation.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
@@ -14,8 +15,10 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 #include <pthread.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -187,16 +190,220 @@ std::streamsize FailingStreambuf::xsputn(char const* s, std::streamsize count)
   return 0;
 }
 
+namespace {
+
+std::mutex owned_directory_mutex;
+struct OwnedDirectory
+{
+  std::filesystem::path path;
+  long owner_pid = 0;
+};
+std::vector<OwnedDirectory> owned_directories;
+std::vector<std::pair<std::filesystem::path, std::filesystem::path>> temp_roots_by_tmpdir;
+
+void register_owned_directory(std::filesystem::path path)
+{
+  std::lock_guard lock(owned_directory_mutex);
+  owned_directories.push_back(OwnedDirectory{.path = std::move(path), .owner_pid = static_cast<long>(::getpid())});
+}
+
+void unregister_owned_directory(std::filesystem::path const& path)
+{
+  std::lock_guard lock(owned_directory_mutex);
+  auto const pid = static_cast<long>(::getpid());
+  std::erase_if(owned_directories, [&](OwnedDirectory const& entry) { return entry.owner_pid == pid && entry.path == path; });
+}
+
+bool remove_path_without_following_symlinks(std::filesystem::path const& path, std::string& error_message) noexcept
+{
+  std::error_code status_error;
+  auto const status = std::filesystem::symlink_status(path, status_error);
+  if (status_error)
+  {
+    if (status_error == std::errc::no_such_file_or_directory)
+      return true;
+    error_message = "stat owned test fixture " + path.string() + ": " + status_error.message();
+    return false;
+  }
+  if (std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status))
+  {
+    std::error_code remove_error;
+    std::filesystem::remove(path, remove_error);
+    if (remove_error && remove_error != std::errc::no_such_file_or_directory)
+    {
+      error_message = "remove owned test fixture " + path.string() + ": " + remove_error.message();
+      return false;
+    }
+    return true;
+  }
+
+  std::error_code iterator_error;
+  for (auto const& entry : std::filesystem::directory_iterator(path, std::filesystem::directory_options::skip_permission_denied, iterator_error))
+  {
+    if (!remove_path_without_following_symlinks(entry.path(), error_message))
+      return false;
+  }
+  if (iterator_error && iterator_error != std::errc::no_such_file_or_directory)
+  {
+    error_message = "scan owned test fixture " + path.string() + ": " + iterator_error.message();
+    return false;
+  }
+
+  std::error_code remove_error;
+  std::filesystem::remove(path, remove_error);
+  if (remove_error && remove_error != std::errc::no_such_file_or_directory)
+  {
+    error_message = "remove owned test fixture " + path.string() + ": " + remove_error.message();
+    return false;
+  }
+  return true;
+}
+
+std::filesystem::path create_unique_owned_directory(std::filesystem::path const& parent, std::string_view prefix)
+{
+  std::error_code parent_error;
+  if (!std::filesystem::is_directory(parent, parent_error))
+  {
+    throw std::runtime_error("owned test directory parent does not exist: " + parent.string() +
+                             (parent_error ? (": " + parent_error.message()) : std::string()));
+  }
+
+  std::string tmpl = (parent / (std::string(prefix) + "XXXXXX")).string();
+  if (::mkdtemp(tmpl.data()) == nullptr)
+    throw std::system_error(errno, std::generic_category(), "create unique test directory under " + parent.string());
+  std::filesystem::path created{std::move(tmpl)};
+  if (::chmod(created.c_str(), S_IRWXU) != 0)
+  {
+    int const error = errno;
+    std::error_code ignored;
+    std::filesystem::remove(created, ignored);
+    throw std::system_error(error, std::generic_category(), "set owner-only permissions on " + created.string());
+  }
+  register_owned_directory(created);
+  return created;
+}
+
+}  // namespace
+
+ScopedTestDirectory::ScopedTestDirectory(std::filesystem::path path) : path_(std::move(path)), owner_pid_(static_cast<long>(::getpid())), armed_(true)
+{
+}
+
+ScopedTestDirectory ScopedTestDirectory::create_unique(std::filesystem::path const& parent, std::string_view prefix)
+{
+  return ScopedTestDirectory(create_unique_owned_directory(parent, prefix));
+}
+
+ScopedTestDirectory::ScopedTestDirectory(ScopedTestDirectory&& other) noexcept
+    : path_(std::move(other.path_)), owner_pid_(other.owner_pid_), armed_(other.armed_)
+{
+  other.armed_ = false;
+  other.owner_pid_ = 0;
+}
+
+ScopedTestDirectory& ScopedTestDirectory::operator=(ScopedTestDirectory&& other) noexcept
+{
+  if (this != &other)
+  {
+    teardown();
+    path_ = std::move(other.path_);
+    owner_pid_ = other.owner_pid_;
+    armed_ = other.armed_;
+    other.armed_ = false;
+    other.owner_pid_ = 0;
+  }
+  return *this;
+}
+
+ScopedTestDirectory::~ScopedTestDirectory() noexcept
+{
+  teardown();
+}
+
+void ScopedTestDirectory::teardown() noexcept
+{
+  if (!armed_)
+    return;
+  armed_ = false;
+  if (owner_pid_ != static_cast<long>(::getpid()))
+    return;
+  std::string error_message;
+  if (remove_path_without_following_symlinks(path_, error_message))
+    unregister_owned_directory(path_);
+  else
+    expect(false, "failed to remove owned test fixture " + path_.string() + ": " + error_message);
+}
+
+bool cleanup_owned_test_directories() noexcept
+{
+  std::vector<OwnedDirectory> snapshot;
+  {
+    std::lock_guard lock(owned_directory_mutex);
+    snapshot = owned_directories;
+  }
+  auto const pid = static_cast<long>(::getpid());
+  bool ok = true;
+  for (auto const& entry : snapshot)
+  {
+    if (entry.owner_pid != pid)
+      continue;
+    std::string error_message;
+    if (!remove_path_without_following_symlinks(entry.path, error_message))
+    {
+      expect(false, "failed to remove owned test fixture " + entry.path.string() + ": " + error_message);
+      ok = false;
+      continue;
+    }
+    unregister_owned_directory(entry.path);
+  }
+  {
+    std::lock_guard lock(owned_directory_mutex);
+    std::erase_if(temp_roots_by_tmpdir, [&](auto const& cached) {
+      return std::none_of(owned_directories.begin(), owned_directories.end(), [&](OwnedDirectory const& entry) { return entry.path == cached.second; });
+    });
+  }
+  return ok;
+}
+
 std::filesystem::path temp_root()
 {
-  auto const build_name = std::filesystem::current_path().filename();
-  auto const process_id = static_cast<unsigned long long>(::getpid());
-  auto const root = std::filesystem::temp_directory_path() / ("ava_core_tests_" + build_name.string() + "_" + std::to_string(process_id));
-  std::error_code create_error;
-  std::filesystem::create_directories(root, create_error);
-  if (!create_error)
-    static_cast<void>(::chmod(root.c_str(), S_IRWXU));
-  return root;
+  auto const tmpdir = std::filesystem::temp_directory_path();
+  {
+    std::lock_guard lock(owned_directory_mutex);
+    for (auto const& cached : temp_roots_by_tmpdir)
+    {
+      if (cached.first == tmpdir)
+        return cached.second;
+    }
+  }
+  auto root = create_unique_owned_directory(tmpdir, "ava_core_tests_");
+  std::filesystem::path winner;
+  bool created_this_thread = false;
+  {
+    std::lock_guard lock(owned_directory_mutex);
+    for (auto const& cached : temp_roots_by_tmpdir)
+    {
+      if (cached.first == tmpdir)
+      {
+        winner = cached.second;
+        break;
+      }
+    }
+    if (winner.empty())
+    {
+      temp_roots_by_tmpdir.emplace_back(tmpdir, root);
+      created_this_thread = true;
+      winner = root;
+    }
+  }
+  if (!created_this_thread)
+  {
+    // Another thread won the create race; drop the extra unique directory.
+    std::string error_message;
+    if (remove_path_without_following_symlinks(root, error_message))
+      unregister_owned_directory(root);
+  }
+  return winner;
 }
 
 std::filesystem::path create_empty_root(std::filesystem::path root_name)
@@ -227,8 +434,7 @@ std::filesystem::path create_empty_root(std::filesystem::path root_name)
   return link / root_name;
 }
 
-std::shared_ptr<ava::core::AnchorSet> command_anchors_for_test(std::filesystem::path const& workspace,
-                                                               std::filesystem::path const& spill_dir)
+std::shared_ptr<ava::core::AnchorSet> command_anchors_for_test(std::filesystem::path const& workspace, std::filesystem::path const& spill_dir)
 {
   std::error_code error;
   std::filesystem::create_directories(spill_dir, error);
@@ -354,11 +560,11 @@ std::function<ava::core::VoidResult(ava::session::SessionEntry const&)> append_r
   ava::core::Result<std::shared_ptr<ava::session::SessionAppendTarget>> target =
       store.is_ephemeral() ? ava::session::SessionAppendTarget::create_ephemeral(store)
                            : [&]() -> ava::core::Result<std::shared_ptr<ava::session::SessionAppendTarget>> {
-                               auto lease = acquire_test_session_lease(store);
-                               if (!lease)
-                                 return std::unexpected(std::move(lease.error()));
-                               return ava::session::SessionAppendTarget::create_persistent(store, *lease, ava::session::legacy_unbounded_session_read_limits());
-                             }();
+    auto lease = acquire_test_session_lease(store);
+    if (!lease)
+      return std::unexpected(std::move(lease.error()));
+    return ava::session::SessionAppendTarget::create_persistent(store, *lease, ava::session::legacy_unbounded_session_read_limits());
+  }();
   if (target)
   {
     auto retained_target = std::move(*target);
@@ -409,7 +615,7 @@ ava::session::SessionReadAuthority read_authority_for_test(ava::session::Session
 }
 
 ava::core::Result<ava::session::SessionMetadataView> append_session_metadata_for_test(ava::session::SessionStore& store,
-                                                                                       ava::session::SessionMetadataUpdate update)
+                                                                                      ava::session::SessionMetadataUpdate update)
 {
   if (store.is_ephemeral())
     return ava::session::append_session_metadata_ephemeral(store, std::move(update));
@@ -432,10 +638,10 @@ ava::core::VoidResult append_manual_compaction_for_test(ava::session::SessionSto
 ava::core::VoidResult append_permission_audit_for_test(ava::session::SessionStore& store, ava::tools::PermissionAuditEvent const& event)
 {
   return append_session_entry_for_test(store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
-                                                                          .parent_id = "",
-                                                                          .type = ava::session::EntryType::PermissionDecision,
-                                                                          .timestamp = ava::session::now_timestamp(),
-                                                                          .data_json = ava::tools::permission_audit_data_json(event)});
+                                                                         .parent_id = "",
+                                                                         .type = ava::session::EntryType::PermissionDecision,
+                                                                         .timestamp = ava::session::now_timestamp(),
+                                                                         .data_json = ava::tools::permission_audit_data_json(event)});
 }
 
 std::vector<ava::session::SessionEntry> permission_entries(std::vector<ava::session::SessionEntry> const& entries)

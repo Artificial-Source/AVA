@@ -42,11 +42,17 @@ class FailingStreambuf final : public std::streambuf
   std::streamsize xsputn(char const* s, std::streamsize count) override;
 };
 
-// Physical per-build test namespace used by security fixtures that need to
-// control ancestor permissions explicitly.
+// Physical per-process test namespace used by security fixtures that need to
+// control ancestor permissions explicitly. Each calling process uniquely creates
+// the directories it actually acquires; they are not adopted from leftover PID
+// names. cleanup_owned_test_directories() removes this process's namespace.
 std::filesystem::path temp_root();
 // Create an empty logical root. If the directory already exists it will be cleaned out.
 std::filesystem::path create_empty_root(std::filesystem::path root_name);
+// Remove directories acquired by this process without following symlinks. Forked
+// children skip parent-owned entries. Failures are reported through expect() and
+// counted as test failures. ENOENT is success. Does not glob or purge leftovers.
+bool cleanup_owned_test_directories() noexcept;
 std::shared_ptr<ava::core::AnchorSet> command_anchors_for_test(std::filesystem::path const& workspace, std::filesystem::path const& spill_dir);
 
 class ScopedEnvVar
@@ -96,6 +102,34 @@ class ScopedTmpFile
 
  private:
   FILE* file_ptr_ = nullptr;
+};
+
+// Owns one uniquely created directory. Destruction removes that directory without
+// following symlinks, so a fixture replaced by a symlink to a foreign target does
+// not delete the target. Forked children do not remove a parent's directory.
+// Teardown never throws; removal failures are reported through expect().
+class ScopedTestDirectory
+{
+ public:
+  [[nodiscard]] static ScopedTestDirectory create_unique(std::filesystem::path const& parent, std::string_view prefix);
+
+  ScopedTestDirectory(ScopedTestDirectory const&) = delete;
+  ScopedTestDirectory& operator=(ScopedTestDirectory const&) = delete;
+  ScopedTestDirectory(ScopedTestDirectory&& other) noexcept;
+  ScopedTestDirectory& operator=(ScopedTestDirectory&& other) noexcept;
+  ~ScopedTestDirectory() noexcept;
+
+  [[nodiscard]] std::filesystem::path const& path() const noexcept { return path_; }
+  [[nodiscard]] operator std::filesystem::path const&() const noexcept { return path_; }
+  [[nodiscard]] std::filesystem::path operator/(std::filesystem::path const& rhs) const { return path_ / rhs; }
+
+ private:
+  explicit ScopedTestDirectory(std::filesystem::path path);
+  void teardown() noexcept;
+
+  std::filesystem::path path_;
+  long owner_pid_ = 0;
+  bool armed_ = false;
 };
 
 std::string strip_sgr(std::string_view text);

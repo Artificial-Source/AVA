@@ -760,15 +760,14 @@ void test_all_start_error_families_are_proven_unpublished()
   }
 }
 
-std::filesystem::path coordinator_temp_root()
+ScopedTestDirectory coordinator_temp_root()
 {
-  auto root = std::filesystem::temp_directory_path() / "ava-subagent-inspect" / std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-  std::filesystem::create_directories(root);
-  return root;
+  return ScopedTestDirectory::create_unique(temp_root(), "ava-subagent-inspect-");
 }
 
 struct PersistentChildFixture
 {
+  ScopedTestDirectory owned_root;
   std::filesystem::path root;
   ava::session::SessionStore store;
   ava::session::SessionLease lease;
@@ -782,7 +781,8 @@ struct PersistentChildFixture
 // Returns no fixture when lease, append-target, seed append, read-authority, or inspection-source construction fails.
 std::optional<PersistentChildFixture> make_child_fixture(std::string session_id, std::string seed_text = "hello child")
 {
-  auto root = coordinator_temp_root();
+  auto owned_root = coordinator_temp_root();
+  auto root = owned_root.path();
   auto workspace = root / "workspace";
   auto sessions = root / "sessions";
   std::filesystem::create_directories(workspace);
@@ -807,6 +807,7 @@ std::optional<PersistentChildFixture> make_child_fixture(std::string session_id,
   if (!source)
     return std::nullopt;
   return PersistentChildFixture{
+      .owned_root = std::move(owned_root),
       .root = std::move(root),
       .store = std::move(store),
       .lease = std::move(*lease),
