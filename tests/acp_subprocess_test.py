@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -17,6 +18,7 @@ from timeout_support import test_timeout
 
 OWNED_PROCESSES = set()
 OWNED_PROVIDERS: list[FakeProvider] = []
+OWNED_DIRECTORIES: list[Path] = []
 
 
 def environment(root):
@@ -103,6 +105,15 @@ def cleanup_owned_processes():
     for provider in reversed(OWNED_PROVIDERS):
         provider.stop()
     OWNED_PROVIDERS.clear()
+    for directory in reversed(OWNED_DIRECTORIES):
+        if directory.is_symlink() or directory.is_file():
+            directory.unlink(missing_ok=True)
+            continue
+        try:
+            shutil.rmtree(directory)
+        except FileNotFoundError:
+            pass
+    OWNED_DIRECTORIES.clear()
 
 
 def signal_cleanup(signum, _frame):
@@ -215,9 +226,11 @@ def main():
     parser.add_argument("--fake-mcp", required=True)
     parser.add_argument("--root", required=True)
     args = parser.parse_args()
-    # Command plans validate workspace ancestry. Use a private /tmp root rather
-    # than the build tree, whose checkout ancestor can deliberately be shared.
+    # Command plans validate workspace ancestry. Use a private mkdtemp root
+    # (honors TMPDIR) rather than the build tree, whose checkout ancestor can
+    # deliberately be shared. The directory is removed during process cleanup.
     root = Path(tempfile.mkdtemp(prefix="ava-acp-subprocess-"))
+    OWNED_DIRECTORIES.append(root)
 
     conflict = subprocess.run([args.ava, "--acp", "--rpc"], input=b"", capture_output=True, env=environment(root), timeout=test_timeout(10))
     assert conflict.returncode != 0 and conflict.stdout == b"" and b"standalone" in conflict.stderr

@@ -5,7 +5,7 @@
 #include "ava/app/command_line.h"
 #include "ava/app/connect_openai.h"
 #include "ava/app/doctor_support.h"
-#include "ava/app/line_shell.h"
+#include "ava/app/interactive.h"
 #include "ava/app/print_mode.h"
 #include "ava/app/rpc_mode.h"
 #include "ava/app/runtime.h"
@@ -35,7 +35,6 @@ void print_help()
   std::cout << "Usage:\n";
   std::cout << "  ava [--help]\n";
   std::cout << "  ava [prompt]\n";
-  std::cout << "  ava --line-shell  # line-oriented interactive frontend\n";
   std::cout << "  ava @file [prompt]\n";
   std::cout << "  ava login [provider] [--api-key|--browser-oauth|--headless-oauth]\n";
   std::cout << "  ava auth login [provider] [--api-key|--browser-oauth|--headless-oauth]\n";
@@ -64,16 +63,6 @@ void print_help()
   std::cout << "  ava --output rpc [--allow read-only] [--allow-tool list]\n";
   std::cout << "  ava [--trace] --acp  # ACP v1 transport with the implemented AVA session/tool profile\n\n";
   std::cout << version::kDisplayVersion << " status: backend MVP runtime with terminal, print, RPC, and ACP v1 workflows.\n";
-}
-
-bool stdin_is_tty()
-{
-  return isatty(STDIN_FILENO) == 1;
-}
-
-bool stdout_is_tty()
-{
-  return isatty(STDOUT_FILENO) == 1;
 }
 
 bool logical_path_is_within(std::filesystem::path const& path, std::filesystem::path const& root)
@@ -254,9 +243,8 @@ int dispatch_runtime(RuntimeInvocation command, ava::config::XdgPaths paths, cha
     std::cerr << program << ": " << session.error().format() << '\n';
     return 1;
   }
-  bool const line_shell = command.frontend == RuntimeFrontend::LineShell;
-  bool const farewell = !line_shell && stdin_is_tty() && stdout_is_tty();
-  int const status = run_interactive(*session, line_shell);
+  bool const farewell = stdin_is_tty() && stdout_is_tty();
+  int const status = run_interactive(*session);
   if (farewell)
     print_exit_card(*session, status);
   return status;

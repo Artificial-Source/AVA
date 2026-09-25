@@ -31,7 +31,7 @@ bool command_canceled(CommandRequest const& request)
 
 ava::core::Error command_canceled_error()
 {
-  return ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
+  return ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
 }
 
 }  // namespace

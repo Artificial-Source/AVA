@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/http/transport.h"
+#include "ava/observability/run_observer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -64,7 +65,7 @@ bool retry_cancel_requested(RetryOptions const& options, Transport::CancelCallba
 
 ava::core::Error retry_canceled_error()
 {
-  return ava::core::Error(ava::core::ErrorCategory::Unknown, "transport retry canceled");
+  return ava::core::Error(ava::core::ErrorCategory::Unknown, "transport retry canceled", ava::core::ErrorCode::Canceled);
 }
 
 std::optional<std::string_view> response_retry_reason(RetryOptions const& options, HttpResponse const& response)
@@ -148,14 +149,14 @@ ava::core::Result<HttpResponse> Transport::send(HttpRequest const& request, Canc
 {
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   auto response = send(request);
   if (!response)
     return std::unexpected(std::move(response.error()));
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   return response;
 }
@@ -164,23 +165,23 @@ ava::core::Result<HttpResponse> Transport::send_streaming(HttpRequest const& req
 {
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   auto response = send(request, cancel_requested);
   if (!response)
     return std::unexpected(std::move(response.error()));
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
-  if (on_body_chunk && !response->body.empty())
+  if (response->status_code >= 200 && response->status_code < 300 && on_body_chunk && !response->body.empty())
   {
     if (auto delivered = on_body_chunk(response->body); !delivered)
       return std::unexpected(std::move(delivered.error()));
   }
   if (cancel_requested && cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled", ava::core::ErrorCode::Canceled));
   }
   return response;
 }
@@ -269,20 +270,19 @@ ava::core::Result<HttpResponse> RetryTransport::send_streaming(HttpRequest const
   if (combined_cancel_requested())
     return std::unexpected(retry_canceled_error());
   ava::core::Result<HttpResponse> response = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "streaming request was not attempted"));
-  std::string final_body;
   for (int attempt = 1; attempt <= max_attempts; ++attempt)
   {
     if (combined_cancel_requested())
       return std::unexpected(retry_canceled_error());
-    std::string attempt_body;
-    bool delivered_chunks = false;
+    bool accepted_body = false;
     response = inner_.send_streaming(
         request,
         [&](std::string_view chunk) -> ava::core::VoidResult {
-          attempt_body.append(chunk);
+          if (chunk.empty())
+            return {};
+          accepted_body = true;
           if (!on_body_chunk)
-            return ava::core::VoidResult{};
-          delivered_chunks = true;
+            return {};
           return on_body_chunk(chunk);
         },
         combined_cancel_requested);
@@ -294,7 +294,7 @@ ava::core::Result<HttpResponse> RetryTransport::send_streaming(HttpRequest const
     bool const last_attempt = attempt == max_attempts;
     if (response)
     {
-      if (!last_attempt && !delivered_chunks)
+      if (!last_attempt && !accepted_body)
       {
         if (auto const reason = response_retry_reason(options_, *response))
         {
@@ -314,12 +314,10 @@ ava::core::Result<HttpResponse> RetryTransport::send_streaming(HttpRequest const
           continue;
         }
       }
-      if (!delivered_chunks)
-        final_body = std::move(attempt_body);
       break;
     }
 
-    if (last_attempt || delivered_chunks || !is_retryable_transport_error(response.error()))
+    if (last_attempt || accepted_body || !is_retryable_transport_error(response.error()))
       break;
     int const delay_ms = exponential_delay_ms(options_, attempt);
     if (auto published = publish_retry_event(options_, static_cast<std::size_t>(attempt + 1), static_cast<std::size_t>(max_attempts), delay_ms,
@@ -339,11 +337,6 @@ ava::core::Result<HttpResponse> RetryTransport::send_streaming(HttpRequest const
     return std::unexpected(std::move(response.error()));
   if (combined_cancel_requested())
     return std::unexpected(retry_canceled_error());
-  if (on_body_chunk && !final_body.empty())
-  {
-    if (auto delivered = on_body_chunk(final_body); !delivered)
-      return std::unexpected(std::move(delivered.error()));
-  }
   return response;
 }
 

@@ -275,54 +275,53 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     if (auto reload_target = reload_command_argument(submitted))
     {
-      push_history(input_history, submitted);
-      auto const parsed_reload_target = reload_target_from_argument(*reload_target);
-      if (!parsed_reload_target)
+      // Only theme/display and keybinding aliases stay on the TUI hot-reload path.
+      // Bare /reload remains local keybindings; /reload all and every other or invalid
+      // target fall through so command_reload's canonical validation and reports win.
+      if (auto const parsed_reload_target = reload_target_from_argument(*reload_target))
       {
-        open_command_error(snapshot, submitted,
-                           "invalid_argument: unsupported reload target\n  target: " + *reload_target + "\n  supported: keybindings, theme");
-        static_cast<void>(beep());
-      }
-      else if (*parsed_reload_target == ReloadTarget::DisplaySettings)
-      {
-        if (!options_.on_reload_display_settings)
+        push_history(input_history, submitted);
+        if (*parsed_reload_target == ReloadTarget::DisplaySettings)
         {
-          open_command_error(snapshot, submitted, "display reload unavailable");
+          if (!options_.on_reload_display_settings)
+          {
+            open_command_error(snapshot, submitted, "display reload unavailable");
+            static_cast<void>(beep());
+          }
+          else if (auto reloaded = options_.on_reload_display_settings())
+          {
+            auto status = reloaded->status.empty() ? std::string("display theme reloaded") : reloaded->status;
+            presentation_state_.apply_runtime_state_snapshot(options_, std::move(*reloaded));
+            settle_local_command_status(snapshot, std::move(status));
+          }
+          else
+          {
+            open_command_error(snapshot, submitted, reloaded.error().format());
+            static_cast<void>(beep());
+          }
+        }
+        else if (!options_.on_reload_key_bindings)
+        {
+          open_command_error(snapshot, submitted, "reload unavailable");
           static_cast<void>(beep());
         }
-        else if (auto reloaded = options_.on_reload_display_settings())
+        else if (auto reloaded = options_.on_reload_key_bindings())
         {
-          auto status = reloaded->status.empty() ? std::string("display theme reloaded") : reloaded->status;
-          presentation_state_.apply_runtime_state_snapshot(options_, std::move(*reloaded));
-          settle_local_command_status(snapshot, std::move(status));
+          options_.key_bindings = std::move(reloaded->key_bindings);
+          presentation_state_.apply_runtime_state_snapshot(options_, std::move(reloaded->state));
+          settle_local_command_status(snapshot, "keybindings reloaded");
         }
         else
         {
           open_command_error(snapshot, submitted, reloaded.error().format());
           static_cast<void>(beep());
         }
+        if (!renderer_.render())
+        {
+          return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
+        }
+        return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
-      else if (!options_.on_reload_key_bindings)
-      {
-        open_command_error(snapshot, submitted, "reload unavailable");
-        static_cast<void>(beep());
-      }
-      else if (auto reloaded = options_.on_reload_key_bindings())
-      {
-        options_.key_bindings = std::move(reloaded->key_bindings);
-        presentation_state_.apply_runtime_state_snapshot(options_, std::move(reloaded->state));
-        settle_local_command_status(snapshot, "keybindings reloaded");
-      }
-      else
-      {
-        open_command_error(snapshot, submitted, reloaded.error().format());
-        static_cast<void>(beep());
-      }
-      if (!renderer_.render())
-      {
-        return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
-      }
-      return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
     if (submitted == "/hotkeys" || submitted == "/keybindings")
     {

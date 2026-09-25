@@ -79,7 +79,7 @@ bool is_lsp_metadata(ToolMetadata const& metadata) noexcept
 
 ava::core::Error scheduler_canceled_error(std::string_view phase)
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool schedule canceled");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool schedule canceled", ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   error.with_context("phase", std::string(phase));
   return error;

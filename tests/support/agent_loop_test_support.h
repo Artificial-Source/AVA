@@ -42,6 +42,34 @@ class SharedFakeTransport final : public ava::http::Transport
   std::shared_ptr<std::mutex> mutex_;
 };
 
+class BlockingSequenceTransport final : public ava::http::Transport
+{
+ public:
+  struct State
+  {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t blocked_request_index = 0;
+    bool release = false;
+    bool cancel_observed = false;
+    std::vector<ava::http::HttpRequest> requests;
+
+    void release_success();
+    [[nodiscard]] bool wait_for_requests(std::size_t count, std::chrono::milliseconds timeout);
+    [[nodiscard]] bool wait_for_cancel(std::chrono::milliseconds timeout);
+    [[nodiscard]] std::vector<ava::http::HttpRequest> requests_snapshot();
+  };
+
+  BlockingSequenceTransport(std::shared_ptr<State> state, std::vector<ava::http::HttpResponse> responses);
+
+  [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override;
+  [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request, CancelCallback cancel_requested) override;
+
+ private:
+  std::shared_ptr<State> state_;
+  std::vector<ava::http::HttpResponse> responses_;
+};
+
 class BlockingBackgroundTransport final : public ava::http::Transport
 {
  public:

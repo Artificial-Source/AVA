@@ -51,6 +51,13 @@ ava::core::Error output_limit_error(std::string message, std::string_view limit_
   return error;
 }
 
+ava::core::Error provider_event_limit_error(std::size_t limit)
+{
+  auto error = ava::core::Error(ava::core::ErrorCategory::Provider, "provider output event limit exceeded", ava::core::ErrorCode::ProviderEventLimit);
+  error.with_context("max_provider_events", std::to_string(limit));
+  return error;
+}
+
 bool would_exceed(std::size_t current, std::size_t added, std::size_t limit)
 {
   return limit > 0 && (current > limit || added > limit - current);

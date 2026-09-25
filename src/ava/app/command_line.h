@@ -109,6 +109,9 @@ struct RuntimeInvocation
 
 using CommandLineInvocation = std::variant<ImmediateInvocation, AcpInvocation, DoctorInvocation, SupportExportInvocation, ConnectInvocation, RuntimeInvocation>;
 
+bool stdin_is_tty();
+bool stdout_is_tty();
+
 // Parse argc entries from argv into one fully resolved invocation.
 //
 // Parsing performs no output, filesystem access, TTY queries, or mode dispatch.

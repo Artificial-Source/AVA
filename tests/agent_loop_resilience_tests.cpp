@@ -85,11 +85,14 @@ class SequencedProviderTransport final : public ava::http::Transport
     auto response = take_response();
     if (!response)
       return std::unexpected(std::move(response.error()));
-    auto const midpoint = response->body.size() / 2;
-    if (auto first = on_body_chunk(std::string_view(response->body).substr(0, midpoint)); !first)
-      return std::unexpected(std::move(first.error()));
-    if (auto second = on_body_chunk(std::string_view(response->body).substr(midpoint)); !second)
-      return std::unexpected(std::move(second.error()));
+    if (response->status_code >= 200 && response->status_code < 300 && on_body_chunk)
+    {
+      auto const midpoint = response->body.size() / 2;
+      if (auto first = on_body_chunk(std::string_view(response->body).substr(0, midpoint)); !first)
+        return std::unexpected(std::move(first.error()));
+      if (auto second = on_body_chunk(std::string_view(response->body).substr(midpoint)); !second)
+        return std::unexpected(std::move(second.error()));
+    }
     return response;
   }
 
@@ -461,7 +464,8 @@ void test_agent_loop_error_paths_and_bounds()
         .session_read_authority = read_authority_for_test(store),
     });
     auto result = loop.run_turn("hi", store, provider, transport);
-    expect(!result && result.error().message().find("event limit") != std::string::npos, "agent loop enforces provider event bounds");
+    expect(!result && result.error().message().find("event limit") != std::string::npos && result.error().code() == ava::core::ErrorCode::ProviderEventLimit,
+           "agent loop enforces provider event bounds");
   }
 
   {
@@ -927,6 +931,72 @@ void test_agent_loop_unknown_incomplete_reason_remains_fail_closed()
          "an unknown incomplete reason with an actionable call remains fail closed before persistence, permission, or dispatch");
 }
 
+void test_child_auto_compacts_after_large_tool_result()
+{
+  auto const root = create_empty_root("agent-child-auto-compaction");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  {
+    std::ofstream large(workspace / "large.txt", std::ios::binary | std::ios::trunc);
+    large << std::string(4096, 'x');
+  }
+  auto store_result = ava::session::SessionStore::create_ephemeral(workspace);
+  expect(store_result.has_value(), "child compaction fixture creates an ephemeral child session");
+  if (!store_result)
+    return;
+  auto store = std::move(*store_result);
+  auto target_result = ava::session::SessionAppendTarget::create_ephemeral(store);
+  expect(target_result.has_value(), "child compaction fixture creates an owned append target");
+  if (!target_result)
+    return;
+  auto target = *target_result;
+  auto read_authority = target->read_authority();
+  if (!read_authority)
+  {
+    expect(false, "child compaction fixture derives read authority");
+    return;
+  }
+  ava::session::CompactionConfig config;
+  config.auto_threshold_tokens = 50;
+  config.auto_threshold_tokens_explicit = true;
+  config.keep_recent_tokens = 200;
+  config.provider_id = "openai";
+  config.model_id = "gpt-test";
+  auto const read_call =
+      std::string("data: {\"type\":\"response.function_call.added\",\"call_id\":\"large_read\",\"name\":\"read_file\"}\n\n") +
+      "data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"large_read\",\"delta\":\"{\\\"path\\\":\\\"large.txt\\\"}\"}\n\n" +
+      "data: {\"type\":\"response.function_call.done\",\"call_id\":\"large_read\"}\n\n"
+      "data: [DONE]\n\n";
+  ava::tests::FakeTransport transport(
+      {sse_response(read_call),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"# Goal\\nPreserve findings\\n# Constraints / Preferences\\nNone noted.\\n# "
+                    "Decisions\\nNone noted.\\n# Files Read or Modified\\nlarge.txt read\\n# Unresolved Tasks\\nReport findings\\n# Next "
+                    "Steps\\nFinish\"}\n\ndata: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child finished from compacted findings\"}\n\ndata: [DONE]\n\n")});
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .mode = ava::agent::Mode::Build,
+      .model = agent_loop_test::model_invocation_options(),
+      .access_token = "token",
+      .child_execution = true,
+      .child_compaction_blueprint = ava::agent::ChildContextCompactionBlueprint{.config = config, .context_window_tokens = 4096},
+      .child_compaction_binding =
+          ava::agent::ChildContextCompactionBinding{.blueprint = {.config = config, .context_window_tokens = 4096}, .append_target = target},
+      .append_entry = [target](ava::session::SessionEntry entry) { return target->append(entry); },
+      .append_batch = [target](std::vector<ava::session::SessionEntry> entries) { return target->append_batch(std::move(entries)); },
+      .session_read_authority = std::move(*read_authority),
+  });
+  auto result = loop.run_turn("read the large file and report", store, provider, transport);
+  auto entries = store.load();
+  auto const compactions =
+      entries ? std::ranges::count_if(*entries, [](ava::session::SessionEntry const& entry) { return entry.type == ava::session::EntryType::Compaction; }) : 0;
+  expect(result && result->final_text == "child finished from compacted findings" && result->tool_iterations == 1 && compactions == 1 &&
+             transport.requests().size() == 3 && transport.requests()[1].body.find("large.txt") != std::string::npos &&
+             transport.requests()[2].body.find("Preserve findings") != std::string::npos,
+         "a large child tool result crosses the snapshotted threshold, writes one child checkpoint, retains findings, and preserves its tool budget");
+}
+
 void test_agent_loop_max_iteration_guard()
 {
   auto const root = create_empty_root("agent-max");
@@ -964,6 +1034,104 @@ void test_agent_loop_max_iteration_guard()
   auto entries = store.load();
   expect(entries && std::ranges::none_of(*entries, [](ava::session::SessionEntry const& entry) { return entry.type == ava::session::EntryType::Error; }),
          "max-turn-requests is a terminal outcome rather than a persisted internal error");
+
+  ava::session::SessionStore child_store(
+      ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "max-child"});
+  auto const two_tools =
+      std::string("data: {\"type\":\"response.function_call.added\",\"call_id\":\"child_glob_1\",\"name\":\"glob\"}\n\n") +
+      "data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"child_glob_1\",\"delta\":\"{\\\"pattern\\\":\\\"**/*\\\"}\"}\n\n" +
+      "data: {\"type\":\"response.function_call.done\",\"call_id\":\"child_glob_1\"}\n\n" +
+      "data: {\"type\":\"response.function_call.added\",\"call_id\":\"child_glob_2\",\"name\":\"glob\"}\n\n" +
+      "data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"child_glob_2\",\"delta\":\"{\\\"pattern\\\":\\\"**/*.cpp\\\"}\"}\n\n" +
+      "data: {\"type\":\"response.function_call.done\",\"call_id\":\"child_glob_2\"}\n\n"
+      "data: [DONE]\n\n";
+  auto const noncompliant_wrap_up = std::string("data: {\"type\":\"response.output_text.delta\",\"delta\":\"findings and unfinished work\"}\n\n") +
+                                    "data: {\"type\":\"response.function_call.added\",\"call_id\":\"forbidden_write\",\"name\":\"write_file\"}\n\n" +
+                                    "data: "
+                                    "{\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"forbidden_write\",\"delta\":\"{\\\"path\\\":"
+                                    "\\\"forbidden.txt\\\",\\\"content\\\":\\\"no\\\"}\"}\n\n" +
+                                    "data: {\"type\":\"response.function_call.done\",\"call_id\":\"forbidden_write\"}\n\n"
+                                    "data: [DONE]\n\n";
+  ava::tests::FakeTransport child_transport({sse_response(two_tools), sse_response(noncompliant_wrap_up)});
+  int permission_requests = 0;
+  ava::agent::AgentLoop child_loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .mode = ava::agent::Mode::Build,
+      .model = agent_loop_test::model_invocation_options(),
+      .access_token = "token",
+      .max_tool_iterations = 1,
+      .child_execution = true,
+      .permission_resolver = [&permission_requests](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        ++permission_requests;
+        return ava::permissions::PermissionResolution::Allow;
+      },
+      .append_entry = append_route_for_test(child_store),
+      .append_batch = append_batch_route_for_test(child_store),
+      .session_read_authority = read_authority_for_test(child_store),
+  });
+  auto child_result = child_loop.run_turn("use one tool round", child_store, provider, child_transport);
+  auto child_entries = child_store.load();
+  bool const settled_without_execution =
+      child_entries && std::ranges::any_of(*child_entries, [](ava::session::SessionEntry const& entry) {
+        return entry.type == ava::session::EntryType::ToolResult && entry.data_json.find("child_tool_limit_reached") != std::string::npos;
+      });
+  expect(child_result && child_result->outcome == ava::core::RuntimeTerminalOutcome::MaxTurnRequests && child_result->provider_iterations == 2 &&
+             child_result->tool_iterations == 1 && child_result->tool_calls == 2 && child_result->final_text == "findings and unfinished work" &&
+             permission_requests == 0 && !std::filesystem::exists(workspace / "forbidden.txt") && settled_without_execution &&
+             child_transport.requests().size() == 2 && child_transport.requests()[1].body.find("\"tools\":[]") != std::string::npos &&
+             child_transport.requests()[1].body.find("Do not call tools") != std::string::npos,
+         "a child limit counts a multi-tool round once, then makes one bounded tool-free summary request and settles noncompliant calls without execution");
+}
+
+void test_child_wrap_up_omits_anthropic_thinking_when_output_clamped()
+{
+  auto const root = create_empty_root("agent-child-wrap-up-anthropic-thinking");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  ava::session::SessionStore store(
+      ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "child-wrap-thinking"});
+  ava::provider::AnthropicProvider const provider("https://anthropic.example.test");
+  auto const wrap_up =
+      std::string("event: content_block_start\n") +
+      "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" + "event: content_block_delta\n" +
+      "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"findings\"}}\n\n" + "event: content_block_stop\n" +
+      "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" + "event: message_delta\n" +
+      "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n" + "event: message_stop\n" + "data: {\"type\":\"message_stop\"}\n\n";
+  ava::tests::FakeTransport transport(
+      {sse_response(anthropic_stream_tool_call("toolu_wrap_1", "glob", R"({"pattern":"**/*"})", "tool_use")), sse_response(wrap_up)});
+  ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .mode = ava::agent::Mode::Build,
+      .model = ava::agent::ModelInvocationOptions{.provider_id = "anthropic",
+                                                  .model_id = "claude-sonnet-4-5",
+                                                  .system_prompt = "system prompt",
+                                                  .max_output_tokens = 8192,
+                                                  .reasoning = ava::provider::ProviderReasoningOptions{.type = "enabled", .budget_tokens = 4096},
+                                                  .api_family = "anthropic_messages",
+                                                  .reasoning_format = "anthropic_thinking"},
+      .access_token = "token",
+      .max_tool_iterations = 1,
+      .child_execution = true,
+      .append_entry = append_route_for_test(store),
+      .append_batch = append_batch_route_for_test(store),
+      .session_read_authority = read_authority_for_test(store),
+  });
+  auto result = loop.run_turn("use one tool round", store, provider, transport);
+  auto entries = store.load();
+  auto const validation = entries ? ava::session::validate_session_replay(*entries) : ava::session::SessionReplayValidation{};
+  bool const bound_tool = transport.requests().size() == 2 &&
+                          transport.requests()[1].body.find(R"("type":"tool_use","id":"toolu_wrap_1","name":"glob")") != std::string::npos &&
+                          transport.requests()[1].body.find(R"("type":"tool_result","tool_use_id":"toolu_wrap_1")") != std::string::npos;
+  expect(result && result->outcome == ava::core::RuntimeTerminalOutcome::MaxTurnRequests && result->final_text == "findings" &&
+             result->provider_iterations == 2 && result->tool_iterations == 1 && result->tool_calls == 1 && validation.ok() && bound_tool &&
+             transport.requests()[0].body.find(R"("max_tokens":8192)") != std::string::npos &&
+             transport.requests()[0].body.find(R"("thinking":{"type":"enabled","budget_tokens":4096})") != std::string::npos &&
+             transport.requests()[0].body.find(R"("tools":[)") != std::string::npos &&
+             transport.requests()[1].body.find(R"("max_tokens":2048)") != std::string::npos &&
+             transport.requests()[1].body.find(R"("thinking":{"type":"enabled")") == std::string::npos &&
+             transport.requests()[1].body.find(R"("tools":)") == std::string::npos &&
+             transport.requests()[1].body.find("Do not call tools") != std::string::npos,
+         "child wrap-up clamps Anthropic output to 2048 without thinking or tools after one enabled-thinking tool round");
 }
 
 }  // namespace
@@ -974,5 +1142,7 @@ void run_agent_loop_resilience_tests()
   test_agent_loop_error_paths_and_bounds();
   test_agent_loop_truncated_provider_output_never_dispatches_tools();
   test_agent_loop_unknown_incomplete_reason_remains_fail_closed();
+  test_child_auto_compacts_after_large_tool_result();
   test_agent_loop_max_iteration_guard();
+  test_child_wrap_up_omits_anthropic_thinking_when_output_clamped();
 }

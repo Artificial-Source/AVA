@@ -2,6 +2,7 @@
 #include "ava/session/assistant_output.h"
 #include "ava/session/record.h"
 #include "ava/session/session_metadata.h"
+#include "ava/session/subagent_job_history.h"
 #include "ava/session/validation.h"
 #include "ava/session/validation_fields.h"
 #include "ava/core/json.h"
@@ -463,7 +464,8 @@ void validate_compaction_entry(SessionReplayValidation& validation, std::size_t 
 
 void skip_json_ws(std::string_view text, std::size_t& index)
 {
-  while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) != 0) ++index;
+  while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index])) != 0)
+    ++index;
 }
 
 bool string_has_control_byte(std::string_view value)
@@ -558,8 +560,10 @@ std::optional<std::size_t> json_value_end(std::string_view text, std::size_t sta
   if (text[start] == '[')
     return json_balanced_end(text, start, '[', ']');
   auto end = start;
-  while (end < text.size() && text[end] != ',' && text[end] != '}' && text[end] != ']') ++end;
-  while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) --end;
+  while (end < text.size() && text[end] != ',' && text[end] != '}' && text[end] != ']')
+    ++end;
+  while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0)
+    --end;
   return end == start ? std::nullopt : std::optional<std::size_t>(end - 1);
 }
 
@@ -1017,20 +1021,27 @@ void validate_session_metadata_entry(SessionReplayValidation& validation, std::s
 
   auto const branch_origin = ava::core::json::string_field(entry.data_json, "branch_origin");
   bool const has_branch_origin = branch_origin && !branch_origin->empty();
+  auto const subagent_job_start = ava::core::json::field_value_start(entry.data_json, "subagent_job");
+  bool const has_subagent_job = subagent_job_start.has_value();
+  auto const subagent_job = has_subagent_job ? ava::core::json::object_field(entry.data_json, "subagent_job") : std::nullopt;
+  bool const valid_subagent_job = !has_subagent_job || (subagent_job && valid_subagent_job_history_object(*subagent_job));
   bool const has_meaningful_field =
       ava::core::json::field_value_start(entry.data_json, "name") || ava::core::json::field_value_start(entry.data_json, "generated_title") ||
       ava::core::json::field_value_start(entry.data_json, "labels") || ava::core::json::field_value_start(entry.data_json, "archived") ||
       ava::core::json::field_value_start(entry.data_json, "parent_session_id") || ava::core::json::field_value_start(entry.data_json, "source_session_id") ||
-      ava::core::json::field_value_start(entry.data_json, "branch_from_entry_id") || has_branch_origin;
+      ava::core::json::field_value_start(entry.data_json, "branch_from_entry_id") || has_branch_origin || has_subagent_job;
   if (!schema_version_is_current(entry.data_json) || !has_meaningful_field ||
       !valid_optional_short_string(entry.data_json, "name", kMaxSessionNameBytes, true) ||
       !valid_optional_short_string(entry.data_json, "generated_title", kMaxGeneratedSessionTitleBytes, false) ||
       !valid_optional_string_array(entry.data_json, "labels", kMaxSessionLabels, kMaxSessionLabelBytes) || !valid_optional_bool(entry.data_json, "archived") ||
       !valid_optional_session_id(entry.data_json, "parent_session_id") || !valid_optional_session_id(entry.data_json, "source_session_id") ||
       !valid_optional_entry_id(entry.data_json, "branch_from_entry_id", entry.id) ||
-      !valid_optional_short_string(entry.data_json, "actor", kMaxSessionLabelBytes, false) || !valid_optional_metadata_origin(entry.data_json, "branch_origin"))
+      !valid_optional_short_string(entry.data_json, "actor", kMaxSessionLabelBytes, false) ||
+      !valid_optional_metadata_origin(entry.data_json, "branch_origin") || !valid_subagent_job)
   {
-    add_error(validation, SessionReplayIssueKind::InvalidSessionMetadataEntry, index, entry, "", "session_metadata entry has malformed tree metadata");
+    add_error(validation, SessionReplayIssueKind::InvalidSessionMetadataEntry, index, entry, "",
+              has_subagent_job && !valid_subagent_job ? "session_metadata entry has malformed subagent_job history"
+                                                      : "session_metadata entry has malformed tree metadata");
   }
 }
 

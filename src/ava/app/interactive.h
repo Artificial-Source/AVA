@@ -10,6 +10,6 @@
 namespace ava::app {
 
 [[nodiscard]] std::vector<ava::tui::ToolTimelineItem> tool_timeline_for_tui(std::vector<ava::agent::ToolTimelineEntry> const& entries);
-[[nodiscard]] int run_interactive(runtime::session_ts& unlocked_session, bool force_line_shell = false);
+[[nodiscard]] int run_interactive(runtime::session_ts& unlocked_session);
 
 }  // namespace ava::app

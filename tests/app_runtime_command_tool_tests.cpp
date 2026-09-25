@@ -4,7 +4,7 @@
 #include "tests/support/runtime_event_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/app/commands.h"
-#include "ava/app/line_shell.h"
+#include "ava/app/interactive.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/tui/composer.h"

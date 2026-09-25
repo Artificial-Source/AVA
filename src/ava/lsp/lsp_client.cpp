@@ -40,9 +40,9 @@ std::string command_label(std::vector<std::string> const& argv)
 
 namespace lsp_client_internal {
 
-ava::core::Error lsp_error(ava::core::ErrorCategory category, std::string message, ServerConfig const& config)
+ava::core::Error lsp_error(ava::core::ErrorCategory category, std::string message, ServerConfig const& config, ava::core::ErrorCode code)
 {
-  auto error = ava::core::Error(category, std::move(message));
+  auto error = ava::core::Error(category, std::move(message), code);
   error.with_context("command", command_label(config.argv));
   error.with_context("workspace", config.workspace_root.string());
   return error;
@@ -62,7 +62,7 @@ bool is_canceled(CancelCallback const& cancel_requested)
 
 ava::core::Error canceled_error(std::string message, ServerConfig const& config)
 {
-  auto error = lsp_error(ava::core::ErrorCategory::Unknown, std::move(message), config);
+  auto error = lsp_error(ava::core::ErrorCategory::Unknown, std::move(message), config, ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   return error;
 }

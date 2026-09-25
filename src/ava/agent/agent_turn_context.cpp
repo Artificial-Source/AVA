@@ -96,7 +96,7 @@ ava::core::VoidResult AgentTurnSession::check_canceled(std::string_view boundary
   if (!is_canceled())
     return {};
   static_cast<void>(append_cancel(options_.append_entry, boundary));
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
   error.with_context("boundary", std::string(boundary));
   return std::unexpected(std::move(error));
 }
@@ -118,8 +118,8 @@ ava::core::Result<PersistedAssistantTurn> AgentTurnSession::append_assistant_tur
       options_.model.api_family.empty() ? std::optional<std::string_view>{} : std::optional<std::string_view>{options_.model.api_family};
   auto const source_reasoning_format =
       options_.model.reasoning_format.empty() ? std::optional<std::string_view>{} : std::optional<std::string_view>{options_.model.reasoning_format};
-  return ava::agent::append_assistant_turn(options_.append_batch, turn, options_.model.provider_id, options_.model.model_id, usage, cost_usd,
-                                           source_api_family, source_reasoning_format);
+  return ava::agent::append_assistant_turn(options_.append_batch, turn, options_.model.provider_id, options_.model.model_id, usage, cost_usd, source_api_family,
+                                           source_reasoning_format);
 }
 
 ava::core::VoidResult AgentTurnSession::append_tool_result(ToolDispatchResult const& dispatch_result, std::optional<std::string_view> assistant_output_entry_id)
@@ -204,7 +204,8 @@ MessageBuildOptions AgentTurnExecutor::message_build_options() const
   }
   std::vector<std::string> active_entry_ids;
   active_entry_ids.reserve(active_turn_user_messages_.size());
-  for (auto const& message : active_turn_user_messages_) active_entry_ids.push_back(message.id);
+  for (auto const& message : active_turn_user_messages_)
+    active_entry_ids.push_back(message.id);
   bool const supports_images =
       std::find(options_.model.input_modalities.begin(), options_.model.input_modalities.end(), "image") != options_.model.input_modalities.end();
   return MessageBuildOptions{.max_tool_result_context_bytes = options_.max_tool_result_context_bytes,
@@ -226,7 +227,8 @@ std::vector<std::string> AgentTurnExecutor::replayable_active_turn_texts() const
 {
   std::vector<std::string> messages;
   messages.reserve(active_turn_user_messages_.size());
-  for (auto const& message : active_turn_user_messages_) messages.push_back(message.text);
+  for (auto const& message : active_turn_user_messages_)
+    messages.push_back(message.text);
   return messages;
 }
 
@@ -234,14 +236,22 @@ ava::core::Result<bool> AgentTurnExecutor::compact_context(std::string_view trig
 {
   if (auto phase = publish_phase(RunPhase::Compacting); !phase)
     return std::unexpected(std::move(phase.error()));
-  if (!options_.compact_context)
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::Provider, "context compaction is unavailable");
-    error.with_context("trigger", std::string(trigger));
-    return std::unexpected(std::move(error));
-  }
   auto const replayed_messages = replayable_active_turn_texts();
-  return options_.compact_context(*options_.session_read_authority, trigger, replayed_messages);
+  if (options_.child_compaction_binding)
+  {
+    return compact_child_context(*options_.child_compaction_binding, trigger, replayed_messages, provider_, *effective_transport_,
+                                 ContextCompactionInvocation{.model = options_.model,
+                                                             .access_token = options_.access_token,
+                                                             .credential_type = options_.credential_type,
+                                                             .openai_oauth = options_.openai_oauth,
+                                                             .openai_account_id = options_.openai_account_id,
+                                                             .cancel_requested = options_.cancel_requested});
+  }
+  if (options_.compact_context)
+    return options_.compact_context(*options_.session_read_authority, trigger, replayed_messages);
+  auto error = ava::core::Error(ava::core::ErrorCategory::Provider, "context compaction is unavailable");
+  error.with_context("trigger", std::string(trigger));
+  return std::unexpected(std::move(error));
 }
 
 ava::core::VoidResult AgentTurnExecutor::append_active_turn_user_message(std::string const& text,
@@ -266,7 +276,7 @@ ava::core::VoidResult AgentTurnExecutor::replay_active_turn_user_messages()
 
 ava::core::Result<bool> AgentTurnExecutor::prepare_context_overflow_retry(ava::core::Error const& error)
 {
-  if (!ava::provider::is_context_overflow_error(error) || context_overflow_retry_used_ || !options_.compact_context)
+  if (!ava::provider::is_context_overflow_error(error) || context_overflow_retry_used_ || (!options_.compact_context && !options_.child_compaction_binding))
   {
     return false;
   }
@@ -278,6 +288,8 @@ ava::core::Result<bool> AgentTurnExecutor::prepare_context_overflow_retry(ava::c
   auto compacted = compact_context("context_overflow");
   if (!compacted)
   {
+    if (compacted.error().code() == ava::core::ErrorCode::Canceled)
+      return std::unexpected(std::move(compacted.error()));
     // Both errors can originate in provider callbacks. Do not carry their
     // diagnostics into the session or public runtime error path.
     auto compact_error = ava::core::Error(ava::core::ErrorCategory::Provider, "context overflow compaction failed");

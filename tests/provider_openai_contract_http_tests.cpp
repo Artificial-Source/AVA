@@ -47,7 +47,7 @@ class StreamingFakeTransport final : public ava::http::Transport
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "transport request canceled"));
     }
-    if (on_body_chunk && !response.body.empty())
+    if (response.status_code >= 200 && response.status_code < 300 && on_body_chunk && !response.body.empty())
     {
       if (auto delivered = on_body_chunk(response.body); !delivered)
         return std::unexpected(std::move(delivered.error()));
@@ -60,6 +60,33 @@ class StreamingFakeTransport final : public ava::http::Transport
  private:
   std::deque<ava::http::HttpResponse> responses_;
   std::vector<ava::http::HttpRequest> requests_;
+};
+
+class PartialStreamingFailureTransport final : public ava::http::Transport
+{
+ public:
+  [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const&) override
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "streaming only"));
+  }
+
+  [[nodiscard]] bool supports_streaming() const noexcept override { return true; }
+
+  [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send_streaming(ava::http::HttpRequest const&, BodyChunkSink on_body_chunk, CancelCallback) override
+  {
+    ++attempts_;
+    if (on_body_chunk)
+    {
+      if (auto delivered = on_body_chunk("accepted partial body"); !delivered)
+        return std::unexpected(std::move(delivered.error()));
+    }
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "temporary failure after body"));
+  }
+
+  [[nodiscard]] std::size_t attempts() const noexcept { return attempts_; }
+
+ private:
+  std::size_t attempts_ = 0;
 };
 
 class FailingOnceTransport final : public ava::http::Transport
@@ -283,7 +310,7 @@ void exercise_contract_http_retry(ava::provider::OpenAIProvider const&)
   expect(retried_transport_error && retried_transport_error->status_code == 200 && failing_once.requests().size() == 2,
          "retry transport retries retryable transport errors");
 
-  StreamingFakeTransport streaming_inner({ava::http::HttpResponse{.status_code = 429, .headers = {{"Retry-After", "0"}}, .body = ""},
+  StreamingFakeTransport streaming_inner({ava::http::HttpResponse{.status_code = 429, .headers = {{"Retry-After", "0"}}, .body = "rate limited body"},
                                           ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "data: [DONE]\n\n"}});
   ava::http::RetryTransport streaming_retry_transport(
       streaming_inner, ava::http::RetryOptions{
@@ -295,6 +322,36 @@ void exercise_contract_http_retry(ava::provider::OpenAIProvider const&)
   });
   expect(streaming_retry && streaming_retry->status_code == 200 && streaming_inner.requests().size() == 2 && streamed_body == "data: [DONE]\n\n",
          "retry transport retries rate-limited streaming responses and only delivers final chunks");
+
+  PartialStreamingFailureTransport partial_failure_inner;
+  ava::http::RetryTransport partial_failure_retry(partial_failure_inner, ava::http::RetryOptions{.max_attempts = 2, .base_delay_ms = 0});
+  std::string partial_body;
+  auto partial_failure = partial_failure_retry.send_streaming(retry_request, [&partial_body](std::string_view chunk) -> ava::core::VoidResult {
+    partial_body.append(chunk);
+    return {};
+  });
+  expect(!partial_failure && partial_failure.error().category() == ava::core::ErrorCategory::Io && partial_failure_inner.attempts() == 1 &&
+             partial_body == "accepted partial body",
+         "retry transport never retries an IO failure after any accepted streaming body delivery");
+
+  StreamingFakeTransport sink_failure_inner({ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "accepted"},
+                                             ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "unexpected retry"}});
+  ava::http::RetryTransport sink_failure_retry(sink_failure_inner, ava::http::RetryOptions{.max_attempts = 2, .base_delay_ms = 0});
+  auto sink_failure = sink_failure_retry.send_streaming(retry_request, [](std::string_view) -> ava::core::VoidResult {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "sink rejected accepted bytes"));
+  });
+  expect(!sink_failure && sink_failure.error().message() == "sink rejected accepted bytes" && sink_failure_inner.requests().size() == 1,
+         "retry transport marks body delivery before invoking a failing sink and never retries its IO error");
+
+  ava::tests::FakeTransport default_error_inner({ava::http::HttpResponse{.status_code = 503, .headers = {}, .body = "withheld default error"}});
+  std::string default_error_sink;
+  auto default_error = static_cast<ava::http::Transport&>(default_error_inner)
+                           .send_streaming(retry_request, [&default_error_sink](std::string_view chunk) -> ava::core::VoidResult {
+                             default_error_sink.append(chunk);
+                             return {};
+                           });
+  expect(default_error && default_error->body == "withheld default error" && default_error_sink.empty(),
+         "default streaming transport retains non-2xx bodies without publishing them");
 
   StreamingFakeTransport streaming_cancel_inner({ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "data: [DONE]\n\n"}});
   ava::http::RetryTransport streaming_cancel_transport(streaming_cancel_inner, ava::http::RetryOptions{.max_attempts = 2, .base_delay_ms = 0});

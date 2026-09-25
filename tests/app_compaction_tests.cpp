@@ -10,6 +10,7 @@
 #include "ava/app/commands.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/agent/context_compaction.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/compaction.h"
 #include "ava/session/export.h"
@@ -61,6 +62,82 @@ class CancelAfterRequestTransport final : public ava::http::Transport
   bool canceled_ = false;
   std::vector<ava::http::HttpRequest> requests_;
 };
+
+void test_shared_compaction_transaction()
+{
+  auto store = ava::session::SessionStore::create_ephemeral(create_empty_root("shared-compaction"));
+  expect(store.has_value(), "shared compaction creates isolated history");
+  if (!store)
+    return;
+  auto target = ava::session::SessionAppendTarget::create_ephemeral(*store);
+  if (!target)
+  {
+    expect(false, "shared compaction creates append authority");
+    return;
+  }
+  auto authority = (*target)->read_authority();
+  if (!authority)
+  {
+    expect(false, "shared compaction creates read authority");
+    return;
+  }
+  ava::session::CompactionConfig config;
+  config.auto_threshold_tokens = 0;
+  config.auto_threshold_tokens_explicit = true;
+  std::size_t summaries = 0;
+  std::size_t appends = 0;
+  bool cancel = false;
+  bool always_stale = false;
+  std::vector<ava::agent::CompactionTransactionPhase> phases;
+  using Phase = ava::agent::CompactionTransactionPhase;
+  ava::agent::CompactionTransactionAdapters adapters{
+      .summarize = [&](auto const&, std::size_t) -> ava::core::Result<std::string> {
+        ++summaries;
+        return "shared summary";
+      },
+      .append = [&](ava::session::SessionEntry entry,
+                    std::vector<ava::session::SessionEntry> snapshot) -> ava::core::Result<ava::session::SessionCompactionAppendResult> {
+        ++appends;
+        if (always_stale || appends == 1)
+          return ava::session::SessionCompactionAppendResult::SnapshotMismatch;
+        return (*target)->append_compaction_if_snapshot_matches(entry, snapshot);
+      },
+      .event = [&](Phase phase, ava::agent::CompactionTransactionStats const& stats) -> ava::core::VoidResult {
+        phases.push_back(phase);
+        expect(stats.max_attempts == 2 && stats.attempt >= 1 && stats.attempt <= 2, "shared compaction reports bounded attempt metadata");
+        if (phase == Phase::Committed)
+          expect(stats.summary_bytes == 14, "commit metadata describes the committed summary");
+        return {};
+      }};
+  auto run = [&](std::string_view trigger) {
+    return ava::agent::compact_context_transaction(*authority, config, 100, trigger, {}, [&] { return cancel; }, adapters);
+  };
+  auto disabled = run("auto");
+  expect(disabled && !*disabled && summaries == 0 && phases.empty(), "explicit zero auto threshold suppresses summary and events in shared transaction");
+  auto committed = run("context_overflow");
+  expect(committed && *committed && summaries == 2 && appends == 2 &&
+             phases == std::vector<Phase>{Phase::Started, Phase::SnapshotRetry, Phase::Started, Phase::Committed},
+         "one shared transaction owns the two-attempt CAS flow and publishes end only after commit");
+  always_stale = true;
+  phases.clear();
+  auto stale = run("context_overflow");
+  expect(!stale && stale.error().message() == "session changed during context compaction after retry" && stale.error().context().size() == 3 &&
+             summaries == 4 && appends == 4 && phases == std::vector<Phase>{Phase::Started, Phase::SnapshotRetry, Phase::Started},
+         "shared transaction bounds repeated staleness without a false completion event");
+  cancel = true;
+  phases.clear();
+  auto canceled = run("context_overflow");
+  expect(!canceled && canceled.error().code() == ava::core::ErrorCode::Canceled && phases.empty() && summaries == 4,
+         "shared transaction checks cancellation before loading or summarizing");
+  cancel = false;
+  adapters.summarize = [&](auto const&, std::size_t) -> ava::core::Result<std::string> {
+    cancel = true;
+    return "canceled summary";
+  };
+  auto canceled_summary = run("context_overflow");
+  expect(!canceled_summary && canceled_summary.error().code() == ava::core::ErrorCode::Canceled && appends == 4,
+         "shared transaction checks cancellation after summary and before checkpoint append");
+}
 
 void test_app_compact_provider_summary_success()
 {
@@ -1553,6 +1630,7 @@ void test_app_context_overflow_retry_is_bounded()
 
 void run_app_compaction_tests()
 {
+  test_shared_compaction_transaction();
   test_app_compact_provider_summary_success();
   test_app_compact_rejects_replaced_current_session_history();
   test_app_compact_openai_oauth_streaming_summary_success();

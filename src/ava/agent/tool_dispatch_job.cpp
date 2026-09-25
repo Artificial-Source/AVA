@@ -18,10 +18,13 @@ using namespace ava::agent::tool_dispatch;
 
 using Json = nlohmann::json;
 
+constexpr std::size_t kMaxJobSteeringMessageBytes = 16U * 1024U;
+
 struct JobToolRequest
 {
   std::string action;
   std::string job_id;
+  std::string message;
   std::chrono::milliseconds timeout{std::chrono::milliseconds(kDefaultPublicJobWaitTimeoutMs)};
 };
 
@@ -37,7 +40,7 @@ ava::core::Result<JobToolRequest> parse_job_tool_request(std::string_view argume
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job arguments must be one valid JSON object"));
   for (auto const& [key, _] : root.items())
   {
-    if (key != "action" && key != "job_id" && key != "timeout_ms")
+    if (key != "action" && key != "job_id" && key != "timeout_ms" && key != "message")
     {
       auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job arguments contain an unknown field");
       error.with_context("tool", std::string(tool_name)).with_context("argument", key);
@@ -48,7 +51,8 @@ ava::core::Result<JobToolRequest> parse_job_tool_request(std::string_view argume
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job action is required"));
   JobToolRequest request;
   request.action = root["action"].get<std::string>();
-  if (request.action != "list" && request.action != "status" && request.action != "wait" && request.action != "result" && request.action != "cancel")
+  if (request.action != "list" && request.action != "status" && request.action != "wait" && request.action != "result" && request.action != "cancel" &&
+      request.action != "steer")
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job action is unsupported"));
   if (root.contains("job_id"))
   {
@@ -56,9 +60,15 @@ ava::core::Result<JobToolRequest> parse_job_tool_request(std::string_view argume
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job_id must be a string"));
     request.job_id = root["job_id"].get<std::string>();
   }
+  if (root.contains("message"))
+  {
+    if (!root["message"].is_string())
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job message must be a string"));
+    request.message = root["message"].get<std::string>();
+  }
   if (request.action == "list")
   {
-    if (!request.job_id.empty() || root.contains("timeout_ms"))
+    if (!request.job_id.empty() || root.contains("timeout_ms") || root.contains("message"))
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job list accepts only action"));
     return request;
   }
@@ -68,6 +78,19 @@ ava::core::Result<JobToolRequest> parse_job_tool_request(std::string_view argume
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job_id is too long"));
   if (auto safe = reject_control_arg(request.job_id, "job_id", tool_name); !safe)
     return std::unexpected(std::move(safe.error()));
+  if (request.action == "steer")
+  {
+    if (request.message.empty())
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "message is required for job steer"));
+    if (request.message.size() > kMaxJobSteeringMessageBytes)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "job steering message is too long"));
+    if (auto safe = reject_nul_arg(request.message, "message", tool_name); !safe)
+      return std::unexpected(std::move(safe.error()));
+  }
+  else if (root.contains("message"))
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "message is accepted only for job steer"));
+  }
   if (root.contains("timeout_ms"))
   {
     if (request.action != "wait")
@@ -130,6 +153,8 @@ ToolDispatchResult job_result(ava::tools::ToolContext const& context, ToolDispat
   }
   else if (request->action == "cancel")
     snapshot = services.subagent_coordinator->cancel(context.session_id, request->job_id);
+  else if (request->action == "steer")
+    snapshot = services.subagent_coordinator->steer(context.session_id, request->job_id, std::move(request->message));
   if (!snapshot)
     return job_control_error(call, snapshot.error());
   return ToolDispatchResult{.call_id = call.id, .name = call.name, .success = true, .result_text = public_job_snapshot_json(*snapshot, content)};

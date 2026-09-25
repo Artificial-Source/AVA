@@ -8,6 +8,9 @@ void run_session_tests()
   session_tests::test_ephemeral_session_store_stays_in_memory();
   session_tests::test_session_record_round_trip();
   session_tests::test_session_tree_metadata_entries_validate_and_export();
+  session_tests::test_subagent_job_history_round_trip_malformed_bounds_and_legacy();
+  session_tests::test_subagent_job_history_projection_fork_filter_and_unmatched_start();
+  session_tests::test_subagent_job_history_is_excluded_from_provider_replay();
   session_tests::test_session_tree_index_derives_branches();
   session_tests::test_session_tree_index_handles_parent_cycles();
   session_tests::test_session_branch_fork_and_clone_copy_source_safely();

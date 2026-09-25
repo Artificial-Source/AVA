@@ -141,6 +141,7 @@ class AgentTurnExecutor final
   [[nodiscard]] ava::core::VoidResult initialize_tools();
   [[nodiscard]] ava::core::VoidResult persist_assistant_turn(ProviderTurn const& provider_turn, PendingCommittedToolResults& pending_results);
   [[nodiscard]] ava::core::VoidResult commit_truncated_provider_tool_results(ParsedAssistantTurn const& turn, PendingCommittedToolResults& pending_results);
+  [[nodiscard]] ava::core::VoidResult settle_wrap_up_tool_calls(ParsedAssistantTurn const& turn, PendingCommittedToolResults& pending_results);
   [[nodiscard]] ava::core::Result<ToolDispatchResult> dispatch_and_commit_tool(ProviderToolCall const& call, PendingCommittedToolResults& pending_results);
   [[nodiscard]] ava::core::VoidResult commit_buffered_tool(ProviderToolCall const& call, ToolDispatchResult dispatch_result,
                                                            BufferedToolCallbacks const& callbacks, PendingCommittedToolResults& pending_results);
@@ -169,6 +170,7 @@ class AgentTurnExecutor final
   std::optional<ava::tools::ToolContext> tool_context_storage_;
   std::optional<ToolDispatcher> dispatcher_storage_;
   std::size_t tool_iterations_ = 0;
+  bool finalizing_after_tool_limit_ = false;
   bool accumulated_cost_known_ = true;
 };
 

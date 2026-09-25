@@ -13,7 +13,8 @@
 
 namespace ava::lsp::lsp_client_internal {
 
-ava::core::Error lsp_error(ava::core::ErrorCategory category, std::string message, ServerConfig const& config);
+ava::core::Error lsp_error(ava::core::ErrorCategory category, std::string message, ServerConfig const& config,
+                           ava::core::ErrorCode code = ava::core::ErrorCode::Unspecified);
 ava::core::Error errno_error(std::string message, ServerConfig const& config);
 bool is_canceled(CancelCallback const& cancel_requested);
 ava::core::Error canceled_error(std::string message, ServerConfig const& config);

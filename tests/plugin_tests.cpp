@@ -1022,8 +1022,9 @@ void test_plugin_runner_tool_calls()
                request.find("\"text\":\"write tests\"") != std::string::npos && request.find(workspace.string()) != std::string::npos,
            "plugin runner sends bounded tool call request context");
     auto pre_canceled = (*process)->call_tool("todo_add", "{}", "pre_canceled", [] { return true; });
-    expect(!pre_canceled && pre_canceled.error().message().find("canceled") != std::string::npos,
-           "plugin runner maps cancellation before a tool call to a deterministic canceled error");
+    expect(
+        !pre_canceled && pre_canceled.error().code() == ava::core::ErrorCode::Canceled && pre_canceled.error().message().find("canceled") != std::string::npos,
+        "plugin runner maps cancellation before a tool call to a deterministic typed canceled error");
     auto shutdown = (*process)->shutdown(std::chrono::milliseconds(500));
     expect(shutdown.has_value(), "plugin runner shuts down after tool call");
   }
@@ -1844,6 +1845,28 @@ void test_plugin_tool_dispatcher()
                          denied->payload.permission_request_ids.end(),
            "plugin denial payload links the permission request id");
   }
+
+  auto typed_cancel_context = context;
+  typed_cancel_context.permission_audit_sink = [](ava::tools::PermissionAuditEvent const&) -> ava::core::VoidResult {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "renamed plugin interruption", ava::core::ErrorCode::Canceled));
+  };
+  ava::agent::ToolDispatcher typed_cancel_dispatcher(typed_cancel_context);
+  auto typed_cancel =
+      typed_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_typed_cancel", .name = model_tool_name, .arguments_json = "{}"});
+  expect(typed_cancel && !typed_cancel->success && typed_cancel->payload.status == ava::agent::ToolResultStatus::Canceled,
+         "plugin broker classifies a renamed typed cancellation by ErrorCode");
+
+  auto legacy_cancel_context = context;
+  legacy_cancel_context.permission_audit_sink = [](ava::tools::PermissionAuditEvent const&) -> ava::core::VoidResult {
+    auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled");
+    error.with_context("canceled", "true");
+    return std::unexpected(std::move(error));
+  };
+  ava::agent::ToolDispatcher legacy_cancel_dispatcher(legacy_cancel_context);
+  auto legacy_cancel =
+      legacy_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_legacy_cancel", .name = model_tool_name, .arguments_json = "{}"});
+  expect(legacy_cancel && !legacy_cancel->success && legacy_cancel->payload.status == ava::agent::ToolResultStatus::Error,
+         "plugin broker does not classify untyped legacy cancellation text or context as cancellation");
 
   auto const prompts_before_cancel = prompts.size();
   cancel_requested = true;

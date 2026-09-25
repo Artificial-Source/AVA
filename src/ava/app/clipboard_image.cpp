@@ -5,6 +5,7 @@
 #include "ava/app/clipboard_image_test_support.h"
 #include "ava/session/session_store.h"
 #include "ava/core/error.h"
+#include "ava/core/thread.h"
 
 #include <algorithm>
 #include <array>

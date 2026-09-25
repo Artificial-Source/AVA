@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <map>
 #include <optional>
@@ -22,6 +23,7 @@ constexpr std::size_t kMaxSubagentDescriptionBytes = 1024;
 constexpr std::size_t kMaxSubagentPromptBytes = 64 * 1024;
 constexpr std::size_t kMaxSubagents = 128;
 constexpr std::size_t kMaxDiagnostics = 128;
+constexpr std::size_t kMaxSubagentToolIterations = 1000;
 
 void add_diagnostic(std::vector<SubagentDiagnostic>& diagnostics, std::filesystem::path path, std::string message,
                     std::optional<std::string> agent_name = std::nullopt, bool blocks_primary_selection = false)
@@ -110,6 +112,45 @@ bool hidden_field(std::map<std::string, std::string> const& frontmatter)
   auto text = core::trim(*value);
   std::ranges::transform(text, text.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return text == "true" || text == "yes" || text == "1";
+}
+
+std::size_t frontmatter_field_count(std::string_view content, std::string_view field_name)
+{
+  if (!(content.starts_with("---\n") || content.starts_with("---\r\n")))
+    return 0;
+  auto const body_start = content.starts_with("---\r\n") ? 5U : 4U;
+  auto const delimiter = content.find("\n---", body_start);
+  if (delimiter == std::string_view::npos)
+    return 0;
+  auto const frontmatter = content.substr(body_start, delimiter - body_start);
+  std::size_t count = 0;
+  for (std::size_t line_start = 0; line_start <= frontmatter.size();)
+  {
+    auto const line_end = frontmatter.find('\n', line_start);
+    auto line = frontmatter.substr(line_start, line_end == std::string_view::npos ? std::string_view::npos : line_end - line_start);
+    if (!line.empty() && line.back() == '\r')
+      line.remove_suffix(1);
+    auto const colon = line.find(':');
+    if (colon != std::string_view::npos && core::trim_view(line.substr(0, colon)) == field_name)
+      ++count;
+    if (line_end == std::string_view::npos)
+      break;
+    line_start = line_end + 1;
+  }
+  return count;
+}
+
+std::optional<std::optional<std::size_t>> parse_max_tool_iterations(std::map<std::string, std::string> const& frontmatter)
+{
+  auto value = field(frontmatter, "max_tool_iterations");
+  if (!value)
+    return std::optional<std::size_t>{};
+  auto const text = core::trim_view(*value);
+  std::size_t parsed = 0;
+  auto const [end, error] = std::from_chars(text.data(), text.data() + text.size(), parsed);
+  if (error != std::errc{} || end != text.data() + text.size() || parsed == 0 || parsed > kMaxSubagentToolIterations)
+    return std::nullopt;
+  return std::optional<std::size_t>{parsed};
 }
 
 void add_or_replace_definition(std::vector<SubagentDefinition>& definitions, std::vector<SubagentDiagnostic>& diagnostics, SubagentDefinition definition,
@@ -203,10 +244,20 @@ void load_subagent_file(std::vector<SubagentDefinition>& subagents, std::vector<
       invalidate_primary(primary_agents, invalid_primary_agents, candidate_name);
     tools = SubagentToolPreset::Inherit;
   }
+  auto max_tool_iterations = parse_max_tool_iterations(parsed.frontmatter);
+  if (!max_tool_iterations || frontmatter_field_count(*content, "max_tool_iterations") > 1)
+  {
+    bool const primary_mode = mode == "primary" || mode == "all";
+    add_diagnostic(diagnostics, path, "agent max_tool_iterations must be one integer from 1 through 1000", candidate_name, primary_mode);
+    if (primary_mode)
+      invalidate_primary(primary_agents, invalid_primary_agents, candidate_name);
+    return;
+  }
   SubagentDefinition definition{.name = std::move(name),
                                 .description = std::move(description),
                                 .system_prompt = std::move(parsed.body),
                                 .tool_preset = *tools,
+                                .max_tool_iterations = *max_tool_iterations,
                                 .hidden = hidden_field(parsed.frontmatter),
                                 .provenance = provenance,
                                 .path = path};

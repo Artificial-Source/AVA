@@ -22,6 +22,8 @@ void run_agent_loop_tests()
   test_agent_loop_tool_turn_and_continuation();
   test_agent_loop_private_task_launch_follows_public_running_and_stays_private();
   test_agent_loop_task_subagent_runs_child_session();
+  test_agent_loop_task_subagent_limit_precedence_exceeds_parent_budget();
+  test_agent_loop_task_spawned_child_compaction_isolated_and_resumable();
   test_agent_loop_foreground_task_child_uses_parent_permission_resolver();
   test_agent_loop_child_rejects_unadvertised_task_and_job_calls();
   test_agent_loop_coordinated_foreground_uses_fresh_worker_and_preserves_result_accounting();
@@ -32,6 +34,9 @@ void run_agent_loop_tests()
   test_subagent_config_loads_project_definitions();
   test_agent_loop_custom_subagent_definition_controls_prompt_and_tools();
   test_agent_loop_background_task_starts_child_session();
+  test_agent_loop_background_resume_preserves_history_and_owner_authority();
+  test_agent_loop_dispatcher_steering_reaches_blocked_child_fifo_once();
+  test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint();
   test_agent_loop_background_task_failure_records_parent_and_child_errors();
   test_agent_loop_background_task_cancel_requests_child_cancellation();
   test_agent_loop_background_task_requires_coordinator();

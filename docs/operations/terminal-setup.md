@@ -4,7 +4,7 @@ AVA's interactive TUI is a native wide-character ncurses (`ncursesw`) applicatio
 
 Use this guide when the TUI fails to start, keys or mouse events behave differently across terminals, image previews fall back to text, a clipboard copy request is sent but the OS clipboard is unchanged, or remote/tmux/screen sessions lose terminal features.
 
-`ava --line-shell` bypasses ncurses/full-screen protocols for a bounded sanitized line-oriented accessibility and scrollback interface with numbered permission/question flows. It is not screen-reader certification and cannot be combined with print, RPC, or ACP.
+Interactive AVA requires a terminal on both stdin and stdout. Piped stdin or redirected stdout without `--print`, `--rpc`, or `--acp` exits before the TUI starts. Keyboard TUI coverage is not screen-reader certification.
 
 For general command usage see [USAGE.md](../core/usage.md); for persisted display/theme files see [CONFIG.md](../core/configuration.md); for terminal smoke coverage see [TESTING.md](testing.md).
 

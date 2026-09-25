@@ -569,7 +569,7 @@ bool command_type_is(std::string_view type, std::initializer_list<std::string_vi
 
 bool is_runtime_cancellation_error(ava::core::Error const& error)
 {
-  return error.message() == "agent loop canceled" || error.message() == "transport retry canceled" || error.message() == "transport request canceled";
+  return error.code() == ava::core::ErrorCode::Canceled;
 }
 
 std::string rpc_error_code(ava::core::Error const& error)

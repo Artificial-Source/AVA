@@ -55,14 +55,14 @@ void append_safe_lsp_error_context(ava::core::Error& redacted, ava::core::Error 
 
 ToolDispatchResult lsp_error_result(ProviderToolCall const& call, ava::core::Error const& error)
 {
-  if (error.message().find("canceled") != std::string::npos || error.message().find("cancelled") != std::string::npos)
+  if (error.code() == ava::core::ErrorCode::Canceled)
   {
-    auto redacted = ava::core::Error(error.category(), "LSP query canceled");
+    auto redacted = ava::core::Error(error.category(), "LSP query canceled", error.code());
     append_safe_lsp_error_context(redacted, error);
     redacted.with_context("tool", call.name);
     return tool_dispatch::tool_error_result(call, redacted);
   }
-  auto redacted = ava::core::Error(error.category(), "LSP query failed");
+  auto redacted = ava::core::Error(error.category(), "LSP query failed", error.code());
   append_safe_lsp_error_context(redacted, error);
   redacted.with_context("tool", call.name);
   return tool_dispatch::tool_error_result(call, redacted);

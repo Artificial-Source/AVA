@@ -501,6 +501,14 @@ void test_permission_defaults()
 
 void run_core_mode_tests()
 {
+  auto plain = ava::core::Error(ava::core::ErrorCategory::Unknown, "wording");
+  auto typed = ava::core::Error(ava::core::ErrorCategory::Unknown, "wording", ava::core::ErrorCode::Canceled);
+  plain.with_context("first", "1").with_context("second", "2");
+  typed.with_context("first", "1").with_context("second", "2");
+  auto copy = typed;
+  expect(plain.code() == ava::core::ErrorCode::Unspecified && copy.code() == ava::core::ErrorCode::Canceled &&
+             plain.format() == "unknown: wording\n  first: 1\n  second: 2" && typed.format() == plain.format(),
+         "internal error codes survive value copies without changing human formatting or context ordering");
   test_mode_parsing();
 
   test_application_lifecycle_contracts();

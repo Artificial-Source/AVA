@@ -4,7 +4,7 @@ This document defines the current backend contract for AVA headless modes. AVA s
 
 ## Modes
 
-- `interactive`: current TUI or non-TTY line shell behavior. Human prompts are allowed. Piped stdin without `--print` remains the line shell for slash-command scripts.
+- `interactive`: current TUI behavior. Human prompts are allowed. Both stdin and stdout must be terminals; piped or redirected interactive startup is rejected. Use print or RPC for non-interactive runs.
 - `print`: one prompt in, text or JSONL events out, process exits after the turn. Enable with `ava --print "prompt"`, `ava -p "prompt"`, `ava --mode text "prompt"`, `ava --mode json "prompt"`, or `printf 'prompt' | ava --print`.
 - `rpc`: JSONL request/response envelopes over stdio for long-lived automation. Enable with `ava --rpc`, `ava --output rpc`, or `ava --mode rpc`.
 - `server` (deferred): no contract yet. Server mode is explicitly out of scope until the stdio RPC contract is proven.

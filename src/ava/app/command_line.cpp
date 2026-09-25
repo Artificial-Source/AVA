@@ -25,7 +25,7 @@ bool is_cli_option(std::string_view arg)
   return arg == "--help" || arg == "-h" || arg == "--version" || arg == "--mode" || arg == "--session" || arg == "--session-id" || arg == "--continue" ||
          arg == "--resume" || arg == "-c" || arg == "-r" || arg == "--fork" || arg == "--name" || arg == "-n" || arg == "--session-dir" || arg == "--cwd" ||
          arg == "--no-session" || arg == "--offline" || arg == "--trace" || arg == "--thinking" || arg == "--agent" || arg == "--system-prompt" ||
-         arg == "--append-system-prompt" || arg == "--line-shell" || arg == "--print" || arg == "-p" || arg == "--rpc" || arg == "--acp" || arg == "--json" ||
+         arg == "--append-system-prompt" || arg == "--print" || arg == "-p" || arg == "--rpc" || arg == "--acp" || arg == "--json" ||
          arg == "--output" || arg == "--allow" || arg == "--allow-tool" || arg == "--tools" || arg == "-t" || arg == "--exclude-tools" || arg == "-xt" ||
          arg == "--no-builtin-tools" || arg == "-nbt" || arg == "--no-tools" || arg == "-nt";
 }
@@ -150,6 +150,16 @@ CommandLineInvocation parse_connect(int argc, char const* const* argv, int index
 
 }  // namespace
 
+bool stdin_is_tty()
+{
+  return isatty(STDIN_FILENO) == 1;
+}
+
+bool stdout_is_tty()
+{
+  return isatty(STDOUT_FILENO) == 1;
+}
+
 CommandLineInvocation parse_command_line(int argc, char const* const* argv)
 {
   if (argc >= 2 && std::string_view(argv[1]) == "doctor")
@@ -169,17 +179,13 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
 
   int acp_flags = 0;
   int trace_flags = 0;
-  int line_shell_flags = 0;
   for (int index = 1; index < argc; ++index)
   {
     acp_flags += std::string_view(argv[index]) == "--acp" ? 1 : 0;
     trace_flags += std::string_view(argv[index]) == "--trace" ? 1 : 0;
-    line_shell_flags += std::string_view(argv[index]) == "--line-shell" ? 1 : 0;
   }
   if (acp_flags > 0)
   {
-    if (line_shell_flags > 0)
-      return program_error(argv[0], 2, "use either --line-shell or --acp, not both");
     if (acp_flags != 1 || trace_flags > 1 || argc != 2 + trace_flags)
       return program_error(argv[0], 2, "--acp is a standalone mode and accepts only one optional --trace flag");
     return AcpInvocation{.trace = trace_flags == 1};
@@ -190,7 +196,6 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
   RuntimeInvocation command;
   bool print_mode = false;
   bool rpc_mode = false;
-  bool line_shell = false;
   bool print_output_flag_seen = false;
   bool print_permission_flag_seen = false;
   std::vector<std::string> file_arguments;
@@ -237,11 +242,6 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
         command.mode = *parsed;
       else
         return program_error(argv[0], 2, "--mode requires build, plan, text, json, or rpc");
-      continue;
-    }
-    if (arg == "--line-shell")
-    {
-      line_shell = true;
       continue;
     }
     if (arg == "--agent")
@@ -388,10 +388,6 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       return program_error(argv[0], 2, "unknown argument: " + std::string(arg));
   }
 
-  if (line_shell && print_mode)
-    return program_error(argv[0], 2, "use either --line-shell or --print, not both");
-  if (line_shell && rpc_mode)
-    return program_error(argv[0], 2, "use either --line-shell or --rpc, not both");
   if (print_mode && rpc_mode)
     return program_error(argv[0], 2, "use either --print or --rpc, not both");
   if (!print_mode && !rpc_mode && print_output_flag_seen)
@@ -403,11 +399,12 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     return program_error(argv[0], 2, "use only one of --session/--session-id, --continue/--resume, or --fork");
   if (command.sessionless && persisted_modes > 0)
     return program_error(argv[0], 2, "use either --no-session or session resume options, not both");
+  if (!print_mode && !rpc_mode && (!stdin_is_tty() || !stdout_is_tty()))
+    return program_error(argv[0], 2, "interactive TUI requires a terminal on both stdin and stdout; use --print or --rpc for non-interactive runs");
 
   prepend_file_arguments_to_prompt(command.print_prompt, file_arguments);
   command.frontend = print_mode   ? RuntimeFrontend::Print
                      : rpc_mode   ? RuntimeFrontend::Rpc
-                     : line_shell ? RuntimeFrontend::LineShell
                                   : RuntimeFrontend::Interactive;
   return command;
 }

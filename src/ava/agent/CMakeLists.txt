@@ -10,6 +10,7 @@ add_library(ava_agent
   "assistant_turn.cpp"
   "history_projection.cpp"
   "background_job_registry.cpp"
+  "context_compaction.cpp"
   "job_control.cpp"
   "message_builder.cpp"
   "provider_output_validation.cpp"

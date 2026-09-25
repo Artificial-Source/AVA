@@ -12,16 +12,14 @@ namespace ava::app {
 
 bool is_agent_loop_canceled_error(ava::core::Error const& error)
 {
-  return error.message() == "agent loop canceled" || error.message() == "transport retry canceled" || error.message() == "transport request canceled";
+  return error.code() == ava::core::ErrorCode::Canceled;
 }
 
 StopReason outcome_reason_for_error(ava::core::Error const& error)
 {
   if (is_agent_loop_canceled_error(error))
     return StopReason::UserCanceled;
-  if (error.message().find("maximum tool iterations") != std::string::npos)
-    return StopReason::MaxToolCalls;
-  if (error.message().find("provider output event limit") != std::string::npos)
+  if (error.code() == ava::core::ErrorCode::ProviderEventLimit)
     return StopReason::MaxTurns;
   if (error.category() == ava::core::ErrorCategory::Tool)
     return StopReason::ToolError;

@@ -50,7 +50,7 @@ Current AVA entry type strings are:
 | Type | Purpose |
 | --- | --- |
 | `session_start` | Runtime/model metadata captured when a session starts. |
-| `session_metadata` | Append-only display/tree metadata such as name, labels, archive state, and branch provenance. |
+| `session_metadata` | Append-only display/tree metadata such as name, labels, archive state, branch provenance, and optional nested display-only `subagent_job` history. |
 | `user_message` | User text and optional image attachment metadata. |
 | `assistant_message` | Final assistant text plus usage/cost metadata when known. |
 | `tool_call` | Provider-requested tool call and arguments. |
@@ -160,6 +160,19 @@ Validation requires a non-empty `summary`, boolean `summary_unavailable` when pr
 - `branch_from_entry_id`: entry id in the source session.
 - `branch_origin`: empty or one of `root`, `fork`, `clone`, `manual`, `import`.
 - `actor`: optional string, at most 64 bytes.
+- `subagent_job`: optional nested object, `schema_version:1`. Display-only background/subagent job history. It is not tree metadata and does not affect titles, labels, or model context. Older sessions without the field remain valid.
+
+When present, `subagent_job` is strictly typed:
+
+- `phase`: `start` or `terminal`.
+- `job_id`, `task_id`, `parent_session_id`, `child_session_id`, `delivery_id`: non-empty identifiers, at most 96 bytes, `[A-Za-z0-9_.:-]`.
+- `mode`: `foreground` or `background`.
+- `execution`: `starting` for start records; terminal records use `completed`, `failed`, `canceled`, or `interrupted`.
+- `started_at`, `updated_at`: required timestamps; `terminal_at` is required on terminal records.
+- Optional bounded `summary` (16 KiB), `error` (4 KiB), `stop_reason` (1 KiB), truncation booleans, `error_category`, and non-negative accounting counters.
+- Writers omit credentials, raw launch prompts, raw tool args, path metadata, and launch authority. Bounded `summary`/`error` text may still contain ordinary user content or path prose; this is not a redaction engine.
+
+Readers project at most the latest 64 unique jobs whose `parent_session_id` matches the current session. Forks must not inherit control. Unmatched start records display as interrupted with outcome unknown. Append-only disk size grows with ordinary session history; this is not a fixed disk bound.
 
 The effective display title is the latest manual `name` whenever any `name` field has appeared; otherwise it is the latest `generated_title`. Consequently `name:""` is an explicit durable suppression of generated display titles, even if a later record contains `generated_title`. Sessions written before `generated_title` remain valid and keep their existing manual/untitled behavior; readers that do not know the additive field may ignore it.
 
@@ -199,8 +212,8 @@ Provider replay also has request-level caps, including at most 16 images and agg
 - `/export` writes a Markdown transcript by default.
 - `/export html [path]` writes or returns an HTML rendering.
 - `/export jsonl [path]` or `/export raw [path]` emits a portable sanitized AVA JSONL archive for v0–v4 histories. It preserves every committed v4 `assistant_output_item` and `assistant_turn_commit` in exact order plus exact `assistant_output_entry_id` tool-result bindings, while stripping provider item IDs/output indexes and all native reasoning/signature/redacted payload values. Portable v4 reasoning sets `private_replay_metadata_omitted:true`; request-time replay drops that reasoning item entirely. Text phase/order, functions, commit provider/model/finish/usage, replay-valid parent chains, and redacted attachment metadata remain. The result is validated before return and is importable, but intentionally cannot losslessly replay provider-native data.
-- RPC `export` and `export_html` return Markdown/HTML command output. Dedicated RPC portable JSONL export/import/share commands are deferred; use slash/line-shell `/export jsonl` for a portable archive.
-- `/import <path.jsonl> --confirm` is slash/line-shell only for the current MVP. It opens one local regular non-symlink descriptor with nonblocking final-component checks, then reads only that descriptor. Imports are capped at 8 MiB per file, less than 1 MiB per JSONL record, and 16,384 entries before replay validation; confirmed valid imports create and switch to a new session.
+- RPC `export` and `export_html` return Markdown/HTML command output. Dedicated RPC portable JSONL export/import/share commands are deferred; use slash/TUI `/export jsonl` for a portable archive.
+- `/import <path.jsonl> --confirm` is slash/TUI only for the current MVP. It opens one local regular non-symlink descriptor with nonblocking final-component checks, then reads only that descriptor. Imports are capped at 8 MiB per file, less than 1 MiB per JSONL record, and 16,384 entries before replay validation; confirmed valid imports create and switch to a new session.
 - Import treats missing-version legacy entries as version `0` while reading and preserves their canonical wire form (the top-level `version` member remains absent) when appending to the new session.
 - Markdown and HTML export, transcript, compaction prompts, and token estimation use the ordered public projection. RPC `get_messages` uses the compatibility projection with additive `ordered_output`; its legacy-compatible message selection and caps run before ordered detail, and an omitted-detail response reports additive `ordered_output_truncated` and `ordered_output_omitted_count`. Portable JSONL uses its physical-order archive projection. Normal AVA startup, resume, list, tree, fork, clone, compact, and export do not rewrite existing session files. Prefer copy-forward import/migration into a new session over editing JSONL in place.
 - Automation should prefer RPC `get_messages`, `get_session_stats`, `validate_session`, `session_metadata`, and `session_tree` for stable views. Direct JSONL readers should tolerate additive fields and ignore non-message bookkeeping entries they do not need, but AVA itself rejects unknown entry type strings when opening/importing a session.

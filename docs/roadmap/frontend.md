@@ -62,7 +62,7 @@ well-bounded polish.
 | Tools and diffs | `tool_cards.*`, `composer_diff.cpp` | compact summaries, detail disclosure, result and denial clarity |
 | Terminal/platform | `terminal.*`, `terminal_image.*`, `event_state.*` | resize, mouse, images, links, cleanup, capability fallbacks |
 | Interaction system | `keybindings.*`, `theme.*` | preserved controls, discoverability, visual tokens, theme limits |
-| Application integration | `src/ava/app/line_shell.cpp`, `command_palette.*`, `display_settings.*`, `interactive_run_queue.*`, `events.*`, `onboarding.*`, `clipboard_image.*`, `reasoning_controls.*`, `runtime_sessions.*` | semantic boundaries, application state, settings, session integration |
+| Application integration | `src/ava/app/interactive.cpp`, `command_palette.*`, `display_settings.*`, `interactive_run_queue.*`, `events.*`, `onboarding.*`, `clipboard_image.*`, `reasoning_controls.*`, `runtime_sessions.*` | semantic boundaries, application state, settings, session integration |
 | Tests | `tests/tui_composer_tests.cpp`, `tests/tui_tmux_smoke.py`, `tests/tui_smoke_helpers.py`, `tests/tui_kitty_image_smoke.py` (shared parameterized Kitty/iTerm2 driver), `tests/tui_terminal_lifecycle_smoke.py`, `tests/tui_osc8_smoke.py`, `tests/CMakeLists.txt` | deterministic behavior and terminal evidence |
 
 Current CTest inventory has 23 tmux scenarios:

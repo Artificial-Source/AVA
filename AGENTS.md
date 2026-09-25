@@ -19,7 +19,7 @@ AVA is a native C++23 terminal coding agent. Treat the codebase as a small syste
 - `src/ava/agent/`: agent loop, thin tool dispatch/registration/family adapters, user-question plumbing, configurable task subagents, and process-local background job registry.
 - `src/ava/command/`: canonical command planning, classification, policy, environment, and execution metadata.
 - `src/ava/containment/`: Linux Landlock/seccomp command-containment planning and enforcement helpers.
-- `src/ava/app/`: application entry after `main`, runtime orchestration, CLI/TUI/print/RPC/ACP glue (including `app/acp/`), OpenAI connect flow, non-TTY line shell, command dispatch, project trust, headless policy, and event adapters.
+- `src/ava/app/`: application entry after `main`, runtime orchestration, CLI/TUI/print/RPC/ACP glue (including `app/acp/`), OpenAI connect flow, command dispatch, project trust, headless policy, and event adapters.
 - `src/ava/permissions/`: backend permission policy, persistent rules, prompts, and decisions.
 - `src/ava/tools/`: built-in file, search, shell, web, and LSP tools. Keep filesystem and process safety checks here or in clearly permissioned call paths. User-interaction tools such as `question` are registered and dispatched under `src/ava/agent/`.
 - `src/ava/session/`: append-only JSONL session storage, leases/authority, compaction, validation, and session lifecycle helpers.

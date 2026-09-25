@@ -14,6 +14,7 @@
 #include "ava/agent/agent_loop_session.h"
 #include "ava/agent/message_builder.h"
 #include "ava/agent/mode.h"
+#include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_services.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/agent/tool_registry.h"
@@ -1216,9 +1217,9 @@ void test_tool_dispatcher()
   auto const& schemas = configured_schemas;
   auto const metadata = ava::agent::ToolDispatcher::tool_metadata();
   auto const job_schema = std::ranges::find_if(default_schemas, [](std::string const& schema) { return schema.find(R"("name":"job")") != std::string::npos; });
-  expect(job_schema != default_schemas.end() && job_schema->find(R"("enum":["list","status","wait","result","cancel"])") != std::string::npos &&
+  expect(job_schema != default_schemas.end() && job_schema->find(R"("enum":["list","status","wait","result","cancel","steer"])") != std::string::npos &&
              job_schema->find("promote") == std::string::npos,
-         "model-visible job schema omits backend-only promotion");
+         "model-visible job schema exposes steering while omitting backend-only promotion");
   auto const& registry = ava::agent::builtin_tool_registry();
   auto const* registered_read_tool = registry.find("read_file");
   expect(registry.entries().size() == metadata.size(), "built-in tool registry covers all static tool metadata");
@@ -1264,6 +1265,7 @@ void test_tool_dispatcher()
   bool grep_has_literal = false;
   bool grep_has_case_insensitive = false;
   bool question_has_allow_multiple = false;
+  bool task_rejects_unknown_properties = false;
   auto const default_has_lsp_schema =
       std::ranges::any_of(default_schemas, [](std::string const& schema) { return schema.find("\"name\":\"lsp_") != std::string::npos; });
   auto const configured_lsp_schema_count =
@@ -1298,6 +1300,8 @@ void test_tool_dispatcher()
     bool const is_question_schema = schema.find("\"name\":\"question\"") != std::string::npos;
     has_question = has_question || is_question_schema;
     question_has_allow_multiple = question_has_allow_multiple || (is_question_schema && schema.find("allow_multiple") != std::string::npos);
+    task_rejects_unknown_properties =
+        task_rejects_unknown_properties || (tool.name == "task" && schema.find("\"additionalProperties\":false") != std::string::npos);
   }
   expect(!schemas.empty() && schemas[0].find("read_file") != std::string::npos && has_apply_patch && has_question && has_webfetch && has_websearch &&
              has_skill && has_list_directory && has_lsp_diagnostics && read_has_offset && grep_has_literal && grep_has_case_insensitive,
@@ -1305,6 +1309,7 @@ void test_tool_dispatcher()
   expect(!lsp_schema_exposes_command, "lsp_diagnostics schema keeps server command out of provider control");
   expect(!glob_has_no_ignore && !grep_has_no_ignore, "search tool schemas keep no_ignore out of provider control");
   expect(question_has_allow_multiple, "question tool schema exposes the allow_multiple alias");
+  expect(task_rejects_unknown_properties, "task schema sets additionalProperties false");
 }
 
 void test_task_persistent_deny_preflight_blocks_runner()
@@ -1382,25 +1387,30 @@ void test_task_mode_and_job_tool_controls()
   std::filesystem::create_directories(workspace);
 
   bool captured_background = false;
+  std::optional<std::size_t> captured_max_tool_iterations;
   std::size_t task_runs = 0;
   ava::tools::ToolContext task_context{.workspace_dir = workspace,
                                        .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
                                          return ava::permissions::PermissionResolution::Allow;
                                        }};
-  ava::agent::ToolDispatchServices task_services{.task_subagent_runner = [&](ava::agent::TaskSubagentRequest const& request) {
-    ++task_runs;
-    captured_background = request.background;
-    return ava::agent::TaskSubagentResult{.task_id = "task_mode",
-                                          .job_id = {},
-                                          .session_path = {},
-                                          .subagent_type = request.subagent_type,
-                                          .state = "completed",
-                                          .final_text = {},
-                                          .stop_reason = {},
-                                          .provider_iterations = 0,
-                                          .tool_calls = 0,
-                                          .tool_iterations = 0};
-  }};
+  ava::agent::ToolDispatchServices task_services{
+      .task_subagent_runner =
+          [&](ava::agent::TaskSubagentRequest const& request) {
+            ++task_runs;
+            captured_background = request.background;
+            captured_max_tool_iterations = request.max_tool_iterations;
+            return ava::agent::TaskSubagentResult{.task_id = "task_mode",
+                                                  .job_id = {},
+                                                  .session_path = {},
+                                                  .subagent_type = request.subagent_type,
+                                                  .state = "completed",
+                                                  .final_text = {},
+                                                  .stop_reason = {},
+                                                  .provider_iterations = 0,
+                                                  .tool_calls = 0,
+                                                  .tool_iterations = 0};
+          },
+      .subagents = {ava::agent::SubagentDefinition{.name = "general", .description = "general", .system_prompt = "general", .max_tool_iterations = 7}}};
   ava::agent::ToolDispatcher task_dispatcher(task_context, task_services);
   auto preferred = task_dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "task_mode", .name = "task", .arguments_json = R"({"description":"mode","prompt":"run","subagent_type":"general","mode":"background"})"});
@@ -1414,6 +1424,59 @@ void test_task_mode_and_job_tool_controls()
       .arguments_json = R"({"description":"conflict","prompt":"run","subagent_type":"general","mode":"foreground","background":true})"});
   expect(conflict && !conflict->success && conflict->result_text.find("conflicts") != std::string::npos && task_runs == 2,
          "task rejects conflicting preferred and legacy mode fields before dispatch");
+  auto inherited_limit = task_dispatcher.dispatch(ava::agent::ProviderToolCall{
+      .id = "task_limit_default", .name = "task", .arguments_json = R"({"description":"limit","prompt":"run","subagent_type":"general"})"});
+  bool const inherited_definition_limit = inherited_limit && inherited_limit->success && captured_max_tool_iterations == 7;
+  auto overridden_limit = task_dispatcher.dispatch(
+      ava::agent::ProviderToolCall{.id = "task_limit_override",
+                                   .name = "task",
+                                   .arguments_json = R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":12})"});
+  bool const explicit_override = overridden_limit && overridden_limit->success && captured_max_tool_iterations == 12;
+  std::array<std::string, 7> const invalid_limits{
+      R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":true})",
+      R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":1.5})",
+      R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":0})",
+      R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":-1})",
+      R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":1001})",
+      R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":18446744073709551616})",
+      R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":2,"max_tool_iterations":3})"};
+  bool invalid_rejected = true;
+  for (std::size_t index = 0; index < invalid_limits.size(); ++index)
+  {
+    auto invalid = task_dispatcher.dispatch(
+        ava::agent::ProviderToolCall{.id = "task_limit_invalid_" + std::to_string(index), .name = "task", .arguments_json = invalid_limits[index]});
+    invalid_rejected = invalid_rejected && invalid && !invalid->success;
+  }
+  expect(inherited_definition_limit && explicit_override && invalid_rejected && task_runs == 4,
+         "task max_tool_iterations inherits the agent definition, accepts an invocation override, and strictly rejects invalid integers");
+
+  std::size_t unknown_runs = 0;
+  std::size_t unknown_permissions = 0;
+  std::size_t unknown_launches = 0;
+  ava::tools::ToolContext unknown_context{
+      .workspace_dir = workspace,
+      .permission_resolver = [&unknown_permissions](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        ++unknown_permissions;
+        return ava::permissions::PermissionResolution::Allow;
+      }};
+  ava::agent::ToolDispatchServices unknown_services{
+      .task_subagent_runner = [&unknown_runs](ava::agent::TaskSubagentRequest const&) -> ava::core::Result<ava::agent::TaskSubagentResult> {
+        ++unknown_runs;
+        return ava::agent::TaskSubagentResult{};
+      },
+      .subagent_launch = {.sink = [&unknown_launches](ava::agent::SubagentLaunchNotification const&) { ++unknown_launches; }},
+      .subagents = {ava::agent::SubagentDefinition{.name = "general", .description = "general", .system_prompt = "general"}}};
+  ava::agent::ToolDispatcher unknown_dispatcher(unknown_context, unknown_services);
+  auto typo_iterations = unknown_dispatcher.dispatch(
+      ava::agent::ProviderToolCall{.id = "task_typo_iterations",
+                                   .name = "task",
+                                   .arguments_json = R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iteration":12})"});
+  auto typo_task_id = unknown_dispatcher.dispatch(ava::agent::ProviderToolCall{
+      .id = "task_typo_id", .name = "task", .arguments_json = R"({"description":"limit","prompt":"run","subagent_type":"general","task_idd":"child"})"});
+  expect(typo_iterations && !typo_iterations->success && typo_iterations->result_text.find("unknown field") != std::string::npos && typo_task_id &&
+             !typo_task_id->success && typo_task_id->result_text.find("unknown field") != std::string::npos && unknown_runs == 0 && unknown_permissions == 0 &&
+             unknown_launches == 0,
+         "task rejects unknown argument names such as max_tool_iteration and task_idd before permission, launch, or runner invocation");
 
   std::filesystem::permissions(root, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
   auto coordinator_result = ava::agent::SubagentCoordinator::create();
@@ -1452,13 +1515,14 @@ void test_task_mode_and_job_tool_controls()
     }
   };
   auto state = std::make_shared<WorkerState>();
-  auto started = coordinator->start(
-      ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "owner",
-                                                   .mode = ava::agent::SubagentJobMode::Background,
-                                                   .job = {.child_session_id = "child_job_tool"},
-                                                   .launch_display = ava::agent::SubagentLaunchDisplay::normalized(
-                                                       "MODEL_JOB_SENTINEL", std::string_view("REASONING_JOB_SENTINEL"))},
-      [state](auto const& context) { return state->run(context); });
+  auto steering_queue = ava::agent::SubagentSteeringQueue::create();
+  auto started = coordinator->start(ava::agent::SubagentCoordinatorStartRequest{.parent_session_id = "owner",
+                                                                                .mode = ava::agent::SubagentJobMode::Background,
+                                                                                .job = {.child_session_id = "child_job_tool"},
+                                                                                .launch_display = ava::agent::SubagentLaunchDisplay::normalized(
+                                                                                    "MODEL_JOB_SENTINEL", std::string_view("REASONING_JOB_SENTINEL")),
+                                                                                .steering_queue = steering_queue},
+                                    [state](auto const& context) { return state->run(context); });
   expect(started.has_value(), "job dispatcher fixture starts owned job");
   if (!started)
     return;
@@ -1476,12 +1540,16 @@ void test_task_mode_and_job_tool_controls()
       ava::agent::ProviderToolCall{.id = "job_wait", .name = "job", .arguments_json = "{\"action\":\"wait\",\"job_id\":\"" + job_id + "\",\"timeout_ms\":1}"});
   auto not_ready = job_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "job_result", .name = "job", .arguments_json = "{\"action\":\"result\",\"job_id\":\"" + job_id + "\"}"});
+  auto steered = job_dispatcher.dispatch(ava::agent::ProviderToolCall{
+      .id = "job_steer", .name = "job", .arguments_json = "{\"action\":\"steer\",\"job_id\":\"" + job_id + "\",\"message\":\"inspect next\"}"});
+  auto steering_messages = steering_queue->take();
   auto duplicate =
       job_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "job_duplicate", .name = "job", .arguments_json = R"({"action":"list","action":"status"})"});
   expect(list && list->success && list->result_text.find(job_id) != std::string::npos && list->result_text.find("safe terminal summary") == std::string::npos &&
              status && status->success && status->result_text.find("\"state\":\"running\"") != std::string::npos && timed && timed->success &&
              timed->result_text.find("\"timed_out\":true") != std::string::npos && not_ready && !not_ready->success &&
-             not_ready->result_text.find("\"code\":\"job_not_ready\"") != std::string::npos && duplicate && !duplicate->success &&
+             not_ready->result_text.find("\"code\":\"job_not_ready\"") != std::string::npos && steered && steered->success && steering_messages &&
+             *steering_messages == std::vector<std::string>{"inspect next"} && duplicate && !duplicate->success &&
              list->result_text.find("MODEL_JOB_SENTINEL") == std::string::npos && status->result_text.find("REASONING_JOB_SENTINEL") == std::string::npos &&
              timed->result_text.find("MODEL_JOB_SENTINEL") == std::string::npos && not_ready->result_text.find("REASONING_JOB_SENTINEL") == std::string::npos,
          "job tool shares bounded snapshots, strict parsing, timeout snapshots, and stable not-ready status");
@@ -1623,8 +1691,7 @@ void test_tool_dispatcher_plan_mode_denies_mutation()
 void test_subagent_launch_display_normalization_and_validated_task_callback()
 {
   auto const normalized = ava::agent::SubagentLaunchDisplay::normalized("  Configured\tModel  ", std::string_view("  high\n"));
-  auto const idempotent =
-      ava::agent::SubagentLaunchDisplay::normalized(normalized.model_display_name(), std::string_view(normalized.reasoning_label()));
+  auto const idempotent = ava::agent::SubagentLaunchDisplay::normalized(normalized.model_display_name(), std::string_view(normalized.reasoning_label()));
   auto const defaulted = ava::agent::SubagentLaunchDisplay::normalized("");
   auto const controlled = ava::agent::SubagentLaunchDisplay::normalized("unsafe\x1b[31m", std::string_view("low\x7f"));
   auto const malformed = ava::agent::SubagentLaunchDisplay::normalized(std::string("\xC3\x28", 2), std::string_view(std::string("\xC2\x9B", 2)));
@@ -1641,11 +1708,10 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
   auto const root = create_empty_root("dispatcher-private-task-launch");
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
-  ava::tools::ToolContext allow_context{
-      .workspace_dir = workspace,
-      .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
-        return ava::permissions::PermissionResolution::Allow;
-      }};
+  ava::tools::ToolContext allow_context{.workspace_dir = workspace,
+                                        .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+                                          return ava::permissions::PermissionResolution::Allow;
+                                        }};
   std::vector<ava::agent::SubagentLaunchNotification> notifications;
   std::size_t runs = 0;
   ava::agent::ToolDispatchServices services{
@@ -1671,28 +1737,48 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
              notifications.front().display == normalized,
          "validated built-in task callback carries exact backend/request/correlation identity and immutable display");
 
-  auto malformed_task = dispatcher.dispatch(
-      ava::agent::ProviderToolCall{.id = "malformed", .name = "task", .arguments_json = R"({"description":"missing fields"})"});
+  auto malformed_task =
+      dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "malformed", .name = "task", .arguments_json = R"({"description":"missing fields"})"});
   auto similar = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "similar", .name = "task_similar", .arguments_json = "{}"});
   auto job = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "job", .name = "job", .arguments_json = R"({"action":"list"})"});
   ava::agent::ToolDispatcher excluded(allow_context, services, ava::agent::ToolVisibilityOptions{.excluded_tools = {"task"}});
-  auto excluded_task = excluded.dispatch(ava::agent::ProviderToolCall{
-      .id = "excluded", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
+  auto excluded_task = excluded.dispatch(
+      ava::agent::ProviderToolCall{.id = "excluded", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
   expect(malformed_task && !malformed_task->success && similar && !similar->success && job && !job->success && excluded_task && !excluded_task->success &&
              notifications.size() == 1 && runs == 1,
          "malformed, unknown, similarly named, job, and excluded calls never emit private task launch metadata");
 
+  std::size_t preflights = 0;
+  auto checked_context = allow_context;
+  checked_context.auto_allow_deny_preflight = [&](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    ++preflights;
+    return ava::permissions::PermissionResolution::Allow;
+  };
+  ava::agent::ToolDispatcher checked_dispatcher(checked_context, services);
+  for (auto const* field : {"task_id", "command"})
+  {
+    for (auto const* value : {"null", "true", "42", "[]", "{}"})
+    {
+      auto arguments = std::string(R"({"description":"work","prompt":"do it","subagent_type":"general",")") + field + "\":" + value + "}";
+      auto rejected = checked_dispatcher.dispatch({.id = "bad-optional", .name = "task", .arguments_json = arguments});
+      expect(rejected && !rejected->success && runs == 1 && notifications.size() == 1 && preflights == 0,
+             "non-string optional task arguments fail before runner, permission, or launch notification");
+    }
+  }
+  auto typo = checked_dispatcher.dispatch(
+      {.id = "typo", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general","taskid":"child"})"});
+  expect(typo && !typo->success && runs == 1 && notifications.size() == 1 && preflights == 0, "task field typos fail before permission or publication");
+
   std::size_t denied_notifications = 0;
-  ava::tools::ToolContext deny_context{
-      .workspace_dir = workspace,
-      .auto_allow_deny_preflight = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
-        return ava::permissions::PermissionResolution::Deny;
-      }};
+  ava::tools::ToolContext deny_context{.workspace_dir = workspace,
+                                       .auto_allow_deny_preflight = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+                                         return ava::permissions::PermissionResolution::Deny;
+                                       }};
   auto denied_services = services;
   denied_services.subagent_launch.sink = [&](auto const&) { ++denied_notifications; };
   ava::agent::ToolDispatcher denied_dispatcher(deny_context, denied_services);
-  auto denied = denied_dispatcher.dispatch(ava::agent::ProviderToolCall{
-      .id = "denied", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
+  auto denied = denied_dispatcher.dispatch(
+      ava::agent::ProviderToolCall{.id = "denied", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
 
   std::size_t failed_notifications = 0;
   auto failed_services = services;
@@ -1704,8 +1790,8 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
     throw std::runtime_error("private sink failure");
   };
   ava::agent::ToolDispatcher failed_dispatcher(allow_context, failed_services);
-  auto failed = failed_dispatcher.dispatch(ava::agent::ProviderToolCall{
-      .id = "failed", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
+  auto failed = failed_dispatcher.dispatch(
+      ava::agent::ProviderToolCall{.id = "failed", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
   expect(denied && !denied->success && denied_notifications == 1 && failed && !failed->success && failed_notifications == 1 && runs == 1,
          "valid task permission denial and start failure retain launch metadata while a throwing private sink cannot affect execution");
 }
@@ -1792,9 +1878,8 @@ void test_permission_denial_guidance_provider_only_channel()
                                                                                 .reasoning_format = "openai_responses",
                                                                                 .supports_tools = true,
                                                                                 .supports_images = false}});
-  expect(static_cast<bool>(messages),
-         messages ? "provider message reconstruction succeeds for paired guided tool result"
-                  : "provider message reconstruction succeeds for paired guided tool result: " + messages.error().format());
+  expect(static_cast<bool>(messages), messages ? "provider message reconstruction succeeds for paired guided tool result"
+                                               : "provider message reconstruction succeeds for paired guided tool result: " + messages.error().format());
   bool provider_message_content_has_guidance = false;
   bool provider_content_part_has_guidance = false;
   if (messages)
@@ -1876,6 +1961,12 @@ void test_permission_denial_guidance_provider_only_channel()
 
 void run_agent_tool_dispatcher_tests()
 {
+  ava::agent::ProviderToolCall const call{.id = "typed", .name = "read_file", .arguments_json = "{}"};
+  auto negative = ava::agent::tool_dispatch::tool_error_result(call, ava::core::Error(ava::core::ErrorCategory::Tool, "not canceled"));
+  auto typed =
+      ava::agent::tool_dispatch::tool_error_result(call, ava::core::Error(ava::core::ErrorCategory::Tool, "operation stopped", ava::core::ErrorCode::Canceled));
+  expect(negative.payload.status != ava::agent::ToolResultStatus::Canceled && typed.payload.status == ava::agent::ToolResultStatus::Canceled,
+         "tool cancellation uses typed identity and never a substring of arbitrary error wording");
   test_tool_dispatcher_plugin_tool_inclusion_control();
   test_tool_dispatcher();
   test_task_persistent_deny_preflight_blocks_runner();

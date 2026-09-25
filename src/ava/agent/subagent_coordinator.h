@@ -4,12 +4,15 @@
 #include "ava/agent/background_job_registry.h"
 #include "ava/agent/question.h"
 #include "ava/agent/subagent_job.h"
+#include "ava/session/session_store.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/result.h"
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -55,6 +58,33 @@ enum class SubagentWaitMode
   TerminalOrPromotion,
 };
 
+// Shared only by one coordinator job and its child loop so steering can cross
+// the worker boundary without retaining the coordinator or parent callbacks.
+class SubagentSteeringQueue final
+{
+ public:
+  SubagentSteeringQueue() = default;
+  [[nodiscard]] static std::shared_ptr<SubagentSteeringQueue> create();
+  [[nodiscard]] ava::core::Result<std::vector<std::string>> take();
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  [[nodiscard]] ava::core::VoidResult enqueue(std::string message);
+  void close();
+
+  std::mutex mutex_;
+  std::deque<std::string> messages_;
+  std::size_t queued_bytes_ = 0;
+  bool closed_ = false;
+
+  friend class SubagentCoordinator;
+};
+
+// Per-job owner-append callback for bounded start/terminal history. Bind the
+// parent session's owner_append_route, never a run-scoped append sink.
+using SubagentJobHistoryAppend = std::function<ava::core::VoidResult(ava::session::SessionEntry)>;
+
 // Coordinator-owned launch request. Private launch presentation crosses the
 // ownership boundary here and never enters BackgroundJobStartOptions/registry.
 struct SubagentCoordinatorStartRequest
@@ -63,6 +93,8 @@ struct SubagentCoordinatorStartRequest
   SubagentJobMode mode = SubagentJobMode::Foreground;
   BackgroundJobStartOptions job;
   SubagentLaunchDisplay launch_display = {};
+  std::shared_ptr<SubagentSteeringQueue> steering_queue = nullptr;
+  SubagentJobHistoryAppend history_append = nullptr;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -182,6 +214,7 @@ class SubagentCoordinator final : public std::enable_shared_from_this<SubagentCo
                                                                        std::chrono::milliseconds timeout, SubagentWaitMode mode = SubagentWaitMode::Terminal);
   [[nodiscard]] ava::core::Result<SubagentCoordinatorJobSnapshot> result(std::string_view parent_session_id, std::string_view job_id);
   [[nodiscard]] ava::core::Result<SubagentCoordinatorJobSnapshot> cancel(std::string_view parent_session_id, std::string_view job_id);
+  [[nodiscard]] ava::core::Result<SubagentCoordinatorJobSnapshot> steer(std::string_view parent_session_id, std::string_view job_id, std::string message);
   [[nodiscard]] ava::core::Result<SubagentCoordinatorJobSnapshot> promote(std::string_view parent_session_id, std::string_view job_id);
   // Owner-bound path-free live inspection. known_generation yields not_modified
   // only when it equals the current published content generation after a fresh

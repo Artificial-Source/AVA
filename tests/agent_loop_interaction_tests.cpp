@@ -770,7 +770,7 @@ void test_agent_loop_context_overflow_retry_skips_duplicate_auto_compaction()
       },
       .append_entry = append_route,
       .append_batch = append_batch,
-      .session_read_authority = std::move(*read_authority),
+      .session_read_authority = *read_authority,
   });
 
   auto result = loop.run_turn("overflow prompt", store, provider, transport);
@@ -788,4 +788,22 @@ void test_agent_loop_context_overflow_retry_skips_duplicate_auto_compaction()
   expect(transport.requests().size() == 1 && transport.requests()[0].body.find("overflow summary") != std::string::npos &&
              transport.requests()[0].body.find("overflow prompt") != std::string::npos,
          "context overflow retry rebuilds context from the overflow compaction boundary");
+  OverflowOnceProvider const canceled_provider("https://api.example.test");
+  ava::tests::FakeTransport unused_transport({});
+  ava::agent::AgentLoop canceled_loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .model = agent_loop_test::model_invocation_options(),
+      .access_token = "token",
+      .compact_context = [](auto, std::string_view trigger, auto const&) -> ava::core::Result<bool> {
+        if (trigger == "context_overflow")
+          return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "summary interrupted", ava::core::ErrorCode::Canceled));
+        return false;
+      },
+      .append_entry = append_route,
+      .append_batch = append_batch,
+      .session_read_authority = *read_authority});
+  auto canceled = canceled_loop.run_turn("cancel summary", store, canceled_provider, unused_transport);
+  expect(!canceled && canceled.error().code() == ava::core::ErrorCode::Canceled && canceled.error().message() == "summary interrupted" &&
+             unused_transport.requests().empty(),
+         "overflow compaction passes typed cancellation through without sanitizing it into a provider failure");
 }

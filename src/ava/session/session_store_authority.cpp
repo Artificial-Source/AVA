@@ -643,7 +643,7 @@ SessionAppendTarget::ConditionalAppendOutcome SessionAppendTarget::append_branch
     // preflight and append_impl have not started. Cancellation after this check
     // may race with a committed append and is reported by the append result.
     if (cancel_requested && cancel_requested())
-      return rejected(ava::core::Error(ava::core::ErrorCategory::Unknown, "conditional branch summary append canceled"));
+      return rejected(ava::core::Error(ava::core::ErrorCategory::Unknown, "conditional branch summary append canceled", ava::core::ErrorCode::Canceled));
 
     AssistantOutputAppendState next_state = assistant_output_state_;
     if (auto preflight = next_state.apply_candidate(entry); !preflight)
@@ -752,7 +752,7 @@ SessionAppendTarget::CompactionAppendOutcome SessionAppendTarget::append_compact
     // rebuild/preflight. A later cancellation may race with a committed write
     // and is represented by append_impl's stable commit state.
     if (cancel_requested && cancel_requested())
-      return rejected(ava::core::Error(ava::core::ErrorCategory::Unknown, "conditional compaction append canceled"));
+      return rejected(ava::core::Error(ava::core::ErrorCategory::Unknown, "conditional compaction append canceled", ava::core::ErrorCode::Canceled));
 
     auto rebuilt_state = AssistantOutputAppendState::from_validated_history(*history);
     if (!rebuilt_state)

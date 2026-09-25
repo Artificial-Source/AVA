@@ -17,6 +17,7 @@
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
+#include "ava/tui/runtime_submit_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/runtime_views_internal.h"
 #include "ava/tui/terminal.h"
@@ -1138,8 +1139,100 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   return rebuilt && rendered;
 }
 
+bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
+{
+  ScopedEnvVar term_guard("TERM", "xterm-256color");
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+
+  SCREEN* screen = newterm(nullptr, output.get(), input.get());
+  if (!screen)
+    return false;
+  static_cast<void>(set_term(screen));
+  if (has_colors())
+  {
+    static_cast<void>(start_color());
+    static_cast<void>(use_default_colors());
+  }
+  static_cast<void>(resizeterm(18, 96));
+
+  std::vector<std::string> backend_submissions;
+  int display_reload_calls = 0;
+  int keybinding_reload_calls = 0;
+  ava::tui::TuiRuntimeOptions options;
+  options.session_id = "session_reload_routing";
+  options.on_submit = [&backend_submissions](std::string const& submitted, ava::tui::TuiSubmitContext) {
+    backend_submissions.push_back(submitted);
+    ava::tui::TuiSubmitResult result;
+    result.output = {"backend handled " + submitted};
+    return result;
+  };
+  options.on_reload_display_settings = [&display_reload_calls]() -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+    ++display_reload_calls;
+    ava::tui::TuiRuntimeStateSnapshot state;
+    state.session_id = "session_reload_routing";
+    state.status = "display theme reloaded";
+    return state;
+  };
+  options.on_reload_key_bindings = [&keybinding_reload_calls]() -> ava::core::Result<ava::tui::TuiKeyBindingReloadResult> {
+    ++keybinding_reload_calls;
+    ava::tui::TuiKeyBindingReloadResult reloaded;
+    reloaded.state.session_id = "session_reload_routing";
+    reloaded.state.status = "keybindings reloaded";
+    return reloaded;
+  };
+
+  ava::tui::RuntimePresentationState presentation(options);
+  ava::tui::RuntimeDraftState draft_state;
+  ava::tui::RuntimeRenderer renderer(presentation.snapshot, presentation.sidebar, draft_state);
+  ava::tui::RuntimeNavigationController navigation(options, presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  auto active_select_list = ava::tui::ActiveSelectList::None;
+  ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
+  std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(options, presentation.snapshot, presentation.command_session_grants, renderer);
+  ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, options.key_bindings);
+  ava::tui::RuntimePluginUiCoordinator plugin_ui;
+  ava::tui::RuntimeActionController action_controller(options, presentation, draft_state, renderer, active_select_list, session_archive_confirmation);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(options, presentation.snapshot);
+  ava::tui::RuntimeActiveRunController active_run(options, presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui, navigation,
+                                                  action_controller, transcript_search, subagent_workspace);
+  ava::tui::RuntimeSubmitController submit_controller(options, presentation, draft_state, renderer, navigation, action_controller, active_run, prompt_stash,
+                                                      transcript_search, subagent_workspace, active_select_list);
+
+  auto continued = [](ava::tui::RuntimeSubmitOutcome const& outcome) {
+    return outcome.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && !outcome.terminal_write_failed;
+  };
+
+  auto const models = submit_controller.submit(std::string("/reload models"));
+  bool const models_ok =
+      continued(models) && backend_submissions == std::vector<std::string>{"/reload models"} && display_reload_calls == 0 && keybinding_reload_calls == 0;
+
+  auto const malformed = submit_controller.submit(std::string("/reload no-such"));
+  bool const malformed_ok = continued(malformed) && backend_submissions == std::vector<std::string>{"/reload models", "/reload no-such"} &&
+                            display_reload_calls == 0 && keybinding_reload_calls == 0;
+
+  auto const theme = submit_controller.submit(std::string("/reload theme"));
+  bool const theme_ok = continued(theme) && backend_submissions.size() == 2 && display_reload_calls == 1 && keybinding_reload_calls == 0 &&
+                        presentation.snapshot.status == "display theme reloaded";
+
+  auto const keybindings = submit_controller.submit(std::string("/reload keybindings"));
+  bool const keybindings_ok = continued(keybindings) && backend_submissions.size() == 2 && display_reload_calls == 1 && keybinding_reload_calls == 1 &&
+                              presentation.snapshot.status == "keybindings reloaded";
+
+  auto const bare = submit_controller.submit(std::string("/reload"));
+  bool const bare_ok = continued(bare) && backend_submissions.size() == 2 && display_reload_calls == 1 && keybinding_reload_calls == 2 &&
+                       presentation.snapshot.status == "keybindings reloaded";
+
+  static_cast<void>(endwin());
+  delscreen(screen);
+  return models_ok && malformed_ok && theme_ok && keybindings_ok && bare_ok;
+}
+
 void run_tui_composer_rendering_tests_part_1()
 {
+  expect(test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload(),
+         "TUI /reload keeps theme and keybinding (including bare /reload) on the local hot-reload path while supported backend targets and malformed "
+         "targets reach ordinary backend submission");
   expect(test_display_settings_reload_poll_outcome_and_preview_staging(),
          "display reload poll uses optional snapshot as applied/unchanged signal, hydrates without final render, restages overlay before paint, and Esc "
          "restores new authority even when overlay values equal the hydrated baseline");

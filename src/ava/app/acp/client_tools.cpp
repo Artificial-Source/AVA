@@ -26,9 +26,9 @@ constexpr auto kTerminalPollInterval = 10ms;
 constexpr auto kMaxCommandTimeout = 120s;
 constexpr std::size_t kTerminalOutputByteLimit = kMaxStringBytes;
 
-ava::core::Error client_tool_error(std::string message, std::string_view method = {})
+ava::core::Error client_tool_error(std::string message, std::string_view method = {}, ava::core::ErrorCode code = ava::core::ErrorCode::Unspecified)
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Io, std::move(message));
+  auto error = ava::core::Error(ava::core::ErrorCategory::Io, std::move(message), code);
   if (!method.empty())
     error.with_context("method", std::string(method));
   return error;
@@ -44,7 +44,7 @@ ava::core::Error rpc_error(std::string_view method, JsonRpcError const& rpc)
 
 ava::core::Error canceled_error(std::string_view method)
 {
-  auto error = client_tool_error("ACP client tool request canceled", method);
+  auto error = client_tool_error("ACP client tool request canceled", method, ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   return error;
 }

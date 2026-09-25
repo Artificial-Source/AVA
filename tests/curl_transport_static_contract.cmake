@@ -21,6 +21,8 @@ foreach(forbidden IN ITEMS
 endforeach()
 
 foreach(required IN ITEMS
+    [=[dump-header = \"/dev/stderr\"]=]
+    "suppress-connect-headers"
     "parent_scope_.operation()"
     "make_curl_environment_v1"
     "supervisor.reserve"

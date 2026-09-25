@@ -44,7 +44,7 @@ ToolDispatchResult tool_error_result(ProviderToolCall const& call, ava::core::Er
 {
   return ToolDispatchResult{.call_id = call.id, .name = call.name, .success = false, .result_text = error_json(call.name, error), .payload = [&] {
                               ava::agent::ToolResultPayload payload;
-                              if (error.message().find("canceled") != std::string::npos || error.message().find("cancelled") != std::string::npos)
+                              if (error.code() == ava::core::ErrorCode::Canceled)
                               {
                                 payload.status = ava::agent::ToolResultStatus::Canceled;
                               }
@@ -65,7 +65,7 @@ bool is_canceled(ava::tools::ToolContext const& context)
 
 ava::core::Error canceled_error(ProviderToolCall const& call)
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled);
   error.with_context("tool", call.name);
   error.with_context("call_id", call.id);
   return error;

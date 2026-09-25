@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/observability/run_observer.h"
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
 #include "ava/session/session_store_internal.h"

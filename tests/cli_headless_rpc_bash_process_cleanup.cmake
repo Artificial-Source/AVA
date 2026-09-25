@@ -43,8 +43,11 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   math(EXPR AVA_POLL_200 "${AVA_DEBUG_SECONDS} * 20")
 endif()
 
-get_filename_component(TEST_ROOT_NAME "${AVA_CLI_TEST_ROOT}" NAME)
-set(TEST_ROOT "/tmp/${TEST_ROOT_NAME}")
+# Use the CMake-supplied unique build-owned root. Do not copy into a predictable
+# /tmp/<name> path: that races across runs, ignores isolated TMPDIR, and leaks
+# after success. Failure artifacts stay in this bounded build directory; the
+# next invocation starts with REMOVE_RECURSE on the same root.
+get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(HOME_DIR "${TEST_ROOT}/home")
 set(CONFIG_DIR "${TEST_ROOT}/config")
@@ -225,3 +228,8 @@ foreach(NEEDLE
     message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
   endif()
 endforeach()
+
+file(REMOVE_RECURSE "${TEST_ROOT}")
+if(EXISTS "${TEST_ROOT}" OR IS_SYMLINK "${TEST_ROOT}")
+  message(FATAL_ERROR "failed to remove completed test fixture: ${TEST_ROOT}")
+endif()

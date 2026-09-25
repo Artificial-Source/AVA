@@ -134,7 +134,7 @@ ava::core::Result<WebSearchResult> websearch(ToolContext const& context, std::st
 {
   if (context.cancel_requested && context.cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled));
   }
 
   auto safe_query = validate_query(query);
@@ -149,7 +149,7 @@ ava::core::Result<WebSearchResult> websearch(ToolContext const& context, std::st
   }
   if (context.cancel_requested && context.cancel_requested())
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled));
   }
 
   auto const max_results = std::min(options.max_results == 0 ? std::size_t{8} : options.max_results, kMaxWebSearchResults);

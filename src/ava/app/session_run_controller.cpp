@@ -30,7 +30,8 @@ ava::core::Error inactive_error()
 
 ava::core::Error stop_requested_error(StopReason reason)
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, reason == StopReason::UserCanceled ? "agent loop canceled" : "run stop requested");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, reason == StopReason::UserCanceled ? "agent loop canceled" : "run stop requested",
+                                reason == StopReason::UserCanceled ? ava::core::ErrorCode::Canceled : ava::core::ErrorCode::Unspecified);
   error.with_context("stop_reason", std::string(to_string(reason)));
   return error;
 }

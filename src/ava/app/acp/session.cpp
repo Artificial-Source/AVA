@@ -589,15 +589,15 @@ RequestResult AcpSessionHost::prompt(AcpPromptContent content, std::stop_token s
   run_options.require_explicit_file_permissions = true;
   run_options.question_resolver = nullptr;
   run_options.permission_resolver = permission_resolver(prompt_reservation, stop_token);
-  run_options.on_terminal_commit = request_terminal_commit
-                                       ? std::function<ava::core::VoidResult()>([commit = std::move(request_terminal_commit)]() -> ava::core::VoidResult {
-                                           if (commit())
-                                             return {};
-                                           auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
-                                           error.with_context("boundary", "before_terminal_commit");
-                                           return std::unexpected(std::move(error));
-                                         })
-                                       : std::function<ava::core::VoidResult()>{};
+  run_options.on_terminal_commit =
+      request_terminal_commit ? std::function<ava::core::VoidResult()>([commit = std::move(request_terminal_commit)]() -> ava::core::VoidResult {
+        if (commit())
+          return {};
+        auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
+        error.with_context("boundary", "before_terminal_commit");
+        return std::unexpected(std::move(error));
+      })
+                              : std::function<ava::core::VoidResult()>{};
   run_options.image_attachments = std::move(image_attachments);
   run_options.expand_prompt_file_references = false;
   RuntimeSessionUpdateMapper mapper(RuntimeSessionUpdateMapperOptions{.workspace_root = options_.launch_root, .message_id = request_id});

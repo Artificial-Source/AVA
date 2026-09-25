@@ -30,7 +30,7 @@ The first official release is intentionally narrow:
 
 - native C++23 `ava` terminal executable;
 - Linux x86-64 only, unless another architecture gains native exact-candidate evidence before the freeze closes;
-- TUI, line shell, print, proprietary JSONL RPC v1, and the documented ACP profile;
+- TUI, print, proprietary JSONL RPC v1, and the documented ACP profile;
 - supported provider adapters, safe built-in tools, append-only sessions, bounded local plugins, local stdio MCP, and installed/configured LSP integration already described in current docs;
 - one exact retained archive/checksum pair whose bytes passed the complete candidate gate.
 

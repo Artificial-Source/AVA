@@ -208,7 +208,7 @@ bool is_parallel_ready_slot(ToolScheduleSlot const& slot) noexcept
 
 bool is_scheduler_canceled_error(ava::core::Error const& error)
 {
-  return error_has_context(error, "canceled", "true");
+  return error.code() == ava::core::ErrorCode::Canceled;
 }
 
 PendingCommittedToolResults::PendingCommittedToolResults(AgentTurnSession& session, ParsedAssistantTurn const& turn) noexcept : session_(session), turn_(turn)

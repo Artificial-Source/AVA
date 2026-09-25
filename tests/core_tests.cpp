@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -38,7 +39,7 @@ void run_provider_user_catalog_tests();
 void run_provider_builtin_generic_tests();
 void run_command_tests();
 void run_app_compaction_tests();
-void run_app_line_shell_tests();
+void run_app_interactive_tests();
 void run_app_print_tests();
 void run_app_event_serialization_tests();
 void run_app_rpc_queue_tests();
@@ -116,7 +117,7 @@ constexpr std::array kTestSuites{
     TestSuite{"provider_builtin_generic", run_provider_builtin_generic_tests},
     TestSuite{"command", run_command_tests},
     TestSuite{"app_compaction", run_app_compaction_tests},
-    TestSuite{"app_line_shell", run_app_line_shell_tests},
+    TestSuite{"app_interactive", run_app_interactive_tests},
     TestSuite{"app_print", run_app_print_tests},
     TestSuite{"app_event_serialization", run_app_event_serialization_tests},
     TestSuite{"app_event_bus", run_app_event_bus_tests},
@@ -246,7 +247,18 @@ std::string_view libcwd_suite_token(int argc, char** argv)
 void run_suite(TestSuite const& suite)
 {
   ava::tests::clear_skip();
-  suite.run();
+  try
+  {
+    suite.run();
+  }
+  catch (std::exception const& ex)
+  {
+    expect(false, std::string(suite.name) + " tests threw: " + ex.what());
+  }
+  catch (...)
+  {
+    expect(false, std::string(suite.name) + " tests threw an unknown exception");
+  }
 
   int const failures = ava::tests::failures();
   if (failures == 0 && ava::tests::skip_requested())
@@ -259,14 +271,24 @@ void run_suite(TestSuite const& suite)
   }
 }
 
-int print_failures()
+struct OwnedTestFixtureGuard
 {
+  ~OwnedTestFixtureGuard() noexcept { static_cast<void>(cleanup_owned_test_directories()); }
+};
+
+int finalize_test_run(bool report_all_passed, bool allow_skip)
+{
+  static_cast<void>(cleanup_owned_test_directories());
   int const failures = ava::tests::failures();
   if (failures != 0)
   {
     std::cerr << failures << " test failure(s)\n";
     return 1;
   }
+  if (allow_skip && ava::tests::skip_requested())
+    return 77;
+  if (report_all_passed)
+    std::cout << "ava tests passed\n";
   return 0;
 }
 
@@ -274,6 +296,7 @@ int print_failures()
 
 int main(int argc, char** argv)
 {
+  OwnedTestFixtureGuard owned_fixtures;
 #ifdef CWDEBUG
   std::string_view const debug_suite_token = libcwd_suite_token(argc, argv);
 #endif
@@ -334,9 +357,7 @@ int main(int argc, char** argv)
       if (suite.name == requested_suite)
       {
         run_suite(suite);
-        if (ava::tests::failures() == 0 && ava::tests::skip_requested())
-          return 77;
-        return print_failures();
+        return finalize_test_run(false, true);
       }
     }
 
@@ -351,12 +372,7 @@ int main(int argc, char** argv)
   }
 
   for (auto const& suite : kTestSuites)
-    suite.run();
+    run_suite(suite);
 
-  int const failure_status = print_failures();
-  if (failure_status == 0)
-  {
-    std::cout << "ava tests passed\n";
-  }
-  return failure_status;
+  return finalize_test_run(true, false);
 }

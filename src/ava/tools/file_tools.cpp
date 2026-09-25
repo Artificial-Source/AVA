@@ -504,7 +504,7 @@ ava::core::VoidResult ensure_permission_impl(ToolContext const& context, ava::pe
   }
   if (resolution && *resolution == ava::permissions::PermissionResolution::Cancel)
   {
-    auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled");
+    auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
     error.with_context("permission_request_id", permission_request_id);
     if (operation != ava::permissions::Operation::RunCommand)
       error.with_context("resolution_reason", resolution->reason);

@@ -142,7 +142,7 @@ ava::core::Result<ParsedAssistantTurn> parse_assistant_turn(std::vector<ava::pro
 {
   if (limits.max_events > 0 && events.size() > limits.max_events)
   {
-    return std::unexpected(output_limit_error("provider output event limit exceeded", "max_provider_events", limits.max_events));
+    return std::unexpected(provider_event_limit_error(limits.max_events));
   }
 
   ParsedAssistantTurn turn;

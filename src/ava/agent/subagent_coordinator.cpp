@@ -4,6 +4,7 @@
 #include "ava/agent/subagent_inspector.h"
 #include "ava/agent/subagent_inspector_source.h"
 #include "ava/session/session_store.h"
+#include "ava/session/subagent_job_history.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
@@ -26,6 +27,9 @@ constexpr std::size_t kMaxDisplayTitleBytes = 256;
 constexpr std::size_t kMaxDisplaySubagentTypeBytes = 128;
 constexpr std::size_t kMaxAccountingValue = 1024U * 1024U;
 constexpr std::size_t kMaxIdentityGenerationAttempts = 8;
+constexpr std::size_t kMaxSteeringMessages = 16;
+constexpr std::size_t kMaxSteeringMessageBytes = 16U * 1024U;
+constexpr std::size_t kMaxSteeringQueueBytes = 64U * 1024U;
 constexpr std::string_view kPublicationCommitStateContext = "subagent_publication_commit_state";
 
 ava::core::Error coordinator_maintenance_error(std::string_view conflict)
@@ -132,7 +136,8 @@ bool truncate_utf8(std::string& value, std::size_t max_bytes)
   if (value.size() <= max_bytes)
     return false;
   std::size_t end = max_bytes;
-  while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0U) == 0x80U) --end;
+  while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0U) == 0x80U)
+    --end;
   value.resize(end);
   return true;
 }
@@ -176,7 +181,8 @@ std::string make_display_field(std::string_view raw, std::size_t max_bytes)
   if (!ava::core::json::is_valid_utf8(value))
     return {};
   truncate_utf8(value, max_bytes);
-  while (!value.empty() && value.back() == ' ') value.pop_back();
+  while (!value.empty() && value.back() == ' ')
+    value.pop_back();
   return value;
 }
 
@@ -256,7 +262,122 @@ BackgroundJobCompletion normalize_completion(std::string const& job_id, Backgrou
   return completion;
 }
 
+ava::session::SubagentJobHistoryMode history_mode(SubagentJobMode mode) noexcept
+{
+  return mode == SubagentJobMode::Background ? ava::session::SubagentJobHistoryMode::Background : ava::session::SubagentJobHistoryMode::Foreground;
+}
+
+ava::session::SubagentJobHistoryExecution history_execution(SubagentExecutionState execution) noexcept
+{
+  switch (execution)
+  {
+    case SubagentExecutionState::Starting:
+      return ava::session::SubagentJobHistoryExecution::Starting;
+    case SubagentExecutionState::Running:
+      return ava::session::SubagentJobHistoryExecution::Running;
+    case SubagentExecutionState::Completed:
+      return ava::session::SubagentJobHistoryExecution::Completed;
+    case SubagentExecutionState::Failed:
+      return ava::session::SubagentJobHistoryExecution::Failed;
+    case SubagentExecutionState::Canceled:
+      return ava::session::SubagentJobHistoryExecution::Canceled;
+    case SubagentExecutionState::Interrupted:
+      return ava::session::SubagentJobHistoryExecution::Interrupted;
+  }
+  return ava::session::SubagentJobHistoryExecution::Interrupted;
+}
+
+ava::session::SubagentJobHistoryRecord history_record_from_snapshot(SubagentJobSnapshot const& snapshot, ava::session::SubagentJobHistoryPhase phase)
+{
+  ava::session::SubagentJobHistoryRecord record;
+  record.phase = phase;
+  record.job_id = snapshot.identity.job_id;
+  record.task_id = snapshot.identity.task_id;
+  record.parent_session_id = snapshot.identity.parent_session_id;
+  record.child_session_id = snapshot.identity.child_session_id;
+  record.delivery_id = snapshot.identity.delivery_id;
+  record.mode = history_mode(snapshot.mode);
+  record.execution = history_execution(snapshot.execution);
+  record.started_at = snapshot.started_at;
+  record.updated_at = snapshot.updated_at;
+  if (phase == ava::session::SubagentJobHistoryPhase::Terminal)
+  {
+    record.terminal_at = snapshot.terminal_at;
+    record.summary = snapshot.summary;
+    record.summary_truncated = snapshot.summary_truncated;
+    record.error = snapshot.error;
+    record.error_truncated = snapshot.error_truncated;
+    record.error_category = snapshot.error_category;
+    record.stop_reason = snapshot.stop_reason;
+    record.stop_reason_truncated = snapshot.stop_reason_truncated;
+    record.provider_iterations = snapshot.provider_iterations;
+    record.tool_calls = snapshot.tool_calls;
+    record.tool_iterations = snapshot.tool_iterations;
+  }
+  return record;
+}
+
+ava::core::VoidResult persist_job_history(SubagentJobHistoryAppend const& sink, SubagentJobSnapshot const& snapshot,
+                                          ava::session::SubagentJobHistoryPhase phase)
+{
+  if (!sink)
+    return {};
+  auto entry = ava::session::make_subagent_job_history_entry(history_record_from_snapshot(snapshot, phase));
+  if (!entry)
+    return std::unexpected(std::move(entry.error()));
+  return sink(std::move(*entry));
+}
+
 }  // namespace
+
+std::shared_ptr<SubagentSteeringQueue> SubagentSteeringQueue::create()
+{
+  return std::make_shared<SubagentSteeringQueue>();
+}
+
+ava::core::VoidResult SubagentSteeringQueue::enqueue(std::string message)
+{
+  if (message.empty() || message.size() > kMaxSteeringMessageBytes || !ava::core::json::is_valid_utf8(message) || has_forbidden_text_control(message))
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "steering message is empty, too long, or invalid");
+    error.with_context("max_bytes", std::to_string(kMaxSteeringMessageBytes));
+    return std::unexpected(std::move(error));
+  }
+  std::lock_guard lock(mutex_);
+  if (closed_)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "subagent job no longer accepts steering"));
+  if (messages_.size() >= kMaxSteeringMessages || message.size() > kMaxSteeringQueueBytes - std::min(queued_bytes_, kMaxSteeringQueueBytes))
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::Tool, "subagent steering queue is full");
+    error.with_context("job_error_code", "steering_queue_full");
+    return std::unexpected(std::move(error));
+  }
+  queued_bytes_ += message.size();
+  messages_.push_back(std::move(message));
+  return {};
+}
+
+ava::core::Result<std::vector<std::string>> SubagentSteeringQueue::take()
+{
+  std::lock_guard lock(mutex_);
+  std::vector<std::string> result;
+  result.reserve(messages_.size());
+  while (!messages_.empty())
+  {
+    result.push_back(std::move(messages_.front()));
+    messages_.pop_front();
+  }
+  queued_bytes_ = 0;
+  return result;
+}
+
+void SubagentSteeringQueue::close()
+{
+  std::lock_guard lock(mutex_);
+  closed_ = true;
+  messages_.clear();
+  queued_bytes_ = 0;
+}
 
 SubagentInteractionGate::SubagentInteractionGate(SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver,
                                                  QuestionResolver question_resolver)
@@ -392,6 +513,7 @@ struct SubagentCoordinator::JobState
   std::condition_variable changed;
   std::shared_ptr<SubagentInteractionGate> interaction_gate = nullptr;
   std::shared_ptr<SubagentLiveInspectionSource> inspection_source = nullptr;
+  std::shared_ptr<SubagentSteeringQueue> steering_queue = nullptr;
   // Latest successfully published path-free frame + the fingerprint it was
   // projected from. Survives freeze_pending so racing inspect never sees a gap.
   std::shared_ptr<SubagentInspectorFrame const> published_inspection = nullptr;
@@ -403,10 +525,14 @@ struct SubagentCoordinator::JobState
   // any frame has been successfully published for this job.
   std::uint64_t content_generation = 0;
   bool freeze_pending = false;
+  SubagentJobHistoryAppend history_append = nullptr;
   bool published = false;
   bool terminal_notification_pending = false;
   bool terminal_notification_emitted = false;
   bool delivery_exhausted = false;
+  // False while a background terminal history append is in flight. Public
+  // terminal+Pending is already visible; automatic delivery and prune wait.
+  bool delivery_arm_ready = true;
   std::size_t sequence = 0;
 };
 
@@ -529,7 +655,7 @@ bool SubagentCoordinator::erase_oldest_eligible_locked()
   {
     std::lock_guard state_lock(candidate->second->mutex);
     auto const& state = *candidate->second;
-    bool const eligible = state.published && terminal(state.snapshot.execution) &&
+    bool const eligible = state.published && state.delivery_arm_ready && terminal(state.snapshot.execution) &&
                           (state.snapshot.delivery == SubagentDeliveryState::Direct || state.snapshot.delivery == SubagentDeliveryState::Acknowledged ||
                            state.delivery_exhausted);
     if (!eligible)
@@ -562,12 +688,13 @@ void SubagentCoordinator::prune_eligible_locked()
   for (auto const& [_, state] : jobs_)
   {
     std::lock_guard state_lock(state->mutex);
-    if (state->published && terminal(state->snapshot.execution) &&
+    if (state->published && state->delivery_arm_ready && terminal(state->snapshot.execution) &&
         (state->snapshot.delivery == SubagentDeliveryState::Direct || state->snapshot.delivery == SubagentDeliveryState::Acknowledged ||
          state->delivery_exhausted))
       ++eligible;
   }
-  while (eligible > options_.registry_options.max_retained_finished_jobs && erase_oldest_eligible_locked()) --eligible;
+  while (eligible > options_.registry_options.max_retained_finished_jobs && erase_oldest_eligible_locked())
+    --eligible;
 }
 
 ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::start(SubagentCoordinatorStartRequest request, BackgroundJobWorker worker,
@@ -578,6 +705,8 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::start(Sub
   auto const mode = request.mode;
   auto options = std::move(request.job);
   auto launch_display = std::move(request.launch_display);
+  auto steering_queue = std::move(request.steering_queue);
+  auto history_append = std::move(request.history_append);
   if (!worker)
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "background job worker is unavailable");
@@ -690,6 +819,8 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::start(Sub
                            .display_subagent_type = make_display_field(options.subagent_type, kMaxDisplaySubagentTypeBytes),
                            .launch_display = launch_display};
     candidate->interaction_gate = interaction_gate;
+    candidate->steering_queue = steering_queue;
+    candidate->history_append = history_append;
     // Store the source before registry start/publication so inspect can observe
     // the child as soon as the job becomes visible.
     candidate->inspection_source = inspection_source;
@@ -732,6 +863,18 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::start(Sub
   }
 
   options.job_id = identity.job_id;
+  if (auto persisted = persist_job_history(history_append, state->snapshot, ava::session::SubagentJobHistoryPhase::Start); !persisted)
+  {
+    {
+      std::lock_guard lock(mutex_);
+      auto found = jobs_.find(identity.job_id);
+      if (found != jobs_.end() && found->second == state)
+        jobs_.erase(found);
+    }
+    auto error = std::move(persisted.error());
+    mark_unpublished(error);
+    return std::unexpected(std::move(error));
+  }
   auto started = registry_.start(std::move(options), [this, state, worker = std::move(worker)](BackgroundJobContext const& context) mutable {
     BackgroundJobCompletion completion;
     try
@@ -842,6 +985,8 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
   auto const now = ava::session::now_timestamp();
   std::shared_ptr<SubagentLiveInspectionSource> freeze_source;
   std::uint64_t freeze_epoch = 0;
+  SubagentJobHistoryAppend history_append;
+  SubagentJobSnapshot history_snapshot;
   {
     std::lock_guard state_lock(state->mutex);
     if (terminal(state->snapshot.execution))
@@ -877,7 +1022,10 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
       state->snapshot.delivery = SubagentDeliveryState::Pending;
       state->snapshot.delivery_pending_at = now;
       state->terminal_notification_pending = true;
+      state->delivery_arm_ready = false;
     }
+    if (state->steering_queue)
+      state->steering_queue->close();
     // Terminal inspection handoff: move the source local, bump source epoch so
     // late live publishes cannot store, preserve the latest successful live
     // frame through freeze_pending, and never reacquire by path.
@@ -888,6 +1036,8 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
       state->source_epoch = 1;
     freeze_epoch = state->source_epoch;
     state->freeze_pending = static_cast<bool>(freeze_source);
+    history_append = state->history_append;
+    history_snapshot = state->snapshot;
     state->changed.notify_all();
   }
 
@@ -904,8 +1054,7 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
         if (projected)
         {
           state->content_generation = advance_content_generation(state->content_generation);
-          state->published_inspection =
-              stamp_inspection_frame(state->content_generation, true, false, false, false, std::move(*projected));
+          state->published_inspection = stamp_inspection_frame(state->content_generation, true, false, false, false, std::move(*projected));
           if (fingerprint)
             state->published_fingerprint = std::move(*fingerprint);
         }
@@ -913,8 +1062,7 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
         {
           // Retain prior messages and mark a truthful path-free final-unavailable flag.
           state->content_generation = advance_content_generation(state->content_generation);
-          state->published_inspection = stamp_inspection_frame(state->content_generation, true, false, false, true,
-                                                              state->published_inspection->messages);
+          state->published_inspection = stamp_inspection_frame(state->content_generation, true, false, false, true, state->published_inspection->messages);
         }
         else
         {
@@ -928,8 +1076,21 @@ BackgroundJobCompletion SubagentCoordinator::complete(std::shared_ptr<JobState> 
     }
   }
 
-  // Delay terminal sink until the freeze attempt is stable so observers never
-  // race an empty gap between terminal job state and published inspection.
+  // History is display-only and must not reorder ahead of the start record.
+  // Persist the normalized terminal snapshot outside locks, then arm delivery.
+  static_cast<void>(persist_job_history(history_append, history_snapshot, ava::session::SubagentJobHistoryPhase::Terminal));
+
+  {
+    std::lock_guard state_lock(state->mutex);
+    if (!state->delivery_arm_ready)
+    {
+      state->delivery_arm_ready = true;
+      state->changed.notify_all();
+    }
+  }
+
+  // Public terminal+Pending is already visible. Automatic delivery waits until the
+  // history append attempt has finished so sinks cannot fire early.
   publish_terminal_notification(state);
 
   {
@@ -948,7 +1109,8 @@ void SubagentCoordinator::publish_terminal_notification(std::shared_ptr<JobState
     {
       std::lock_guard lock(mutex_);
       std::lock_guard state_lock(state->mutex);
-      if (!state->published || !state->terminal_notification_pending || state->terminal_notification_emitted || state->delivery_exhausted || !terminal_sink_)
+      if (!state->published || !state->delivery_arm_ready || !state->terminal_notification_pending || state->terminal_notification_emitted ||
+          state->delivery_exhausted || !terminal_sink_)
         return;
       sink = terminal_sink_;
       notification = public_snapshot_locked(*state);
@@ -976,7 +1138,8 @@ std::vector<SubagentCoordinatorJobSnapshot> SubagentCoordinator::list(std::strin
   std::ranges::sort(ordered, [](auto const& left, auto const& right) { return left.first < right.first; });
   std::vector<SubagentCoordinatorJobSnapshot> result;
   result.reserve(ordered.size());
-  for (auto& [_, snapshot] : ordered) result.push_back(std::move(snapshot));
+  for (auto& [_, snapshot] : ordered)
+    result.push_back(std::move(snapshot));
   return result;
 }
 
@@ -988,15 +1151,16 @@ ava::core::Result<std::vector<SubagentCoordinatorJobSnapshot>> SubagentCoordinat
     for (auto const& [_, state] : jobs_)
     {
       std::lock_guard state_lock(state->mutex);
-      if (state->published && state->snapshot.identity.parent_session_id == parent_session_id && delivery_pending(state->snapshot.delivery) &&
-          !state->delivery_exhausted)
+      if (state->published && state->delivery_arm_ready && state->snapshot.identity.parent_session_id == parent_session_id &&
+          delivery_pending(state->snapshot.delivery) && !state->delivery_exhausted)
         ordered.emplace_back(state->sequence, public_snapshot_locked(*state));
     }
   }
   std::ranges::sort(ordered, [](auto const& left, auto const& right) { return left.first < right.first; });
   std::vector<SubagentCoordinatorJobSnapshot> result;
   result.reserve(ordered.size());
-  for (auto& [_, snapshot] : ordered) result.push_back(std::move(snapshot));
+  for (auto& [_, snapshot] : ordered)
+    result.push_back(std::move(snapshot));
   return result;
 }
 
@@ -1097,6 +1261,28 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::cancel(st
     }
   }
   std::lock_guard state_lock(state->mutex);
+  return public_snapshot_locked(*state);
+}
+
+ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::steer(std::string_view parent_session_id, std::string_view job_id, std::string message)
+{
+  std::shared_ptr<JobState> state;
+  {
+    std::lock_guard lock(mutex_);
+    state = find_owned_locked(parent_session_id, job_id);
+  }
+  if (!state)
+    return std::unexpected(not_found(job_id));
+
+  std::lock_guard state_lock(state->mutex);
+  if (terminal(state->snapshot.execution))
+    return std::unexpected(invalid_transition("cannot steer a terminal subagent job", job_id));
+  if (state->snapshot.cancel_requested)
+    return std::unexpected(invalid_transition("cannot steer a subagent after cancellation was requested", job_id));
+  if (state->snapshot.execution != SubagentExecutionState::Running || !state->steering_queue)
+    return std::unexpected(invalid_transition("subagent job does not accept steering", job_id));
+  if (auto queued = state->steering_queue->enqueue(std::move(message)); !queued)
+    return std::unexpected(std::move(queued.error()));
   return public_snapshot_locked(*state);
 }
 
@@ -1203,8 +1389,8 @@ ava::core::Result<std::shared_ptr<SubagentInspectorFrame const>> SubagentCoordin
     if (state->source_epoch != source_epoch || state->inspection_source.get() != captured_source)
       return current_frame_locked();
     if (state->published_inspection)
-      return make_refresh_unavailable_inspection_frame(state->published_inspection->generation, terminal(state->snapshot.execution),
-                                                       state->freeze_pending, state->published_inspection->messages);
+      return make_refresh_unavailable_inspection_frame(state->published_inspection->generation, terminal(state->snapshot.execution), state->freeze_pending,
+                                                       state->published_inspection->messages);
     return make_refresh_unavailable_inspection_frame(state->content_generation, terminal(state->snapshot.execution), state->freeze_pending);
   }
 
@@ -1213,8 +1399,8 @@ ava::core::Result<std::shared_ptr<SubagentInspectorFrame const>> SubagentCoordin
     std::lock_guard state_lock(state->mutex);
     if (state->source_epoch != source_epoch || state->inspection_source.get() != captured_source)
       return current_frame_locked();
-    if (state->published_inspection && state->published_fingerprint && *state->published_fingerprint == *fingerprint &&
-        known_generation && *known_generation == state->published_inspection->generation)
+    if (state->published_inspection && state->published_fingerprint && *state->published_fingerprint == *fingerprint && known_generation &&
+        *known_generation == state->published_inspection->generation)
       return make_not_modified_inspection_frame(state->published_inspection->generation, terminal(state->snapshot.execution), state->freeze_pending);
     if (state->published_inspection)
       return view_published_frame(state->published_inspection, terminal(state->snapshot.execution), state->freeze_pending);
@@ -1229,8 +1415,8 @@ ava::core::Result<std::shared_ptr<SubagentInspectorFrame const>> SubagentCoordin
     if (state->source_epoch != source_epoch || state->inspection_source.get() != captured_source)
       return current_frame_locked();
     if (state->published_inspection)
-      return make_refresh_unavailable_inspection_frame(state->published_inspection->generation, terminal(state->snapshot.execution),
-                                                       state->freeze_pending, state->published_inspection->messages);
+      return make_refresh_unavailable_inspection_frame(state->published_inspection->generation, terminal(state->snapshot.execution), state->freeze_pending,
+                                                       state->published_inspection->messages);
     return make_refresh_unavailable_inspection_frame(state->content_generation, terminal(state->snapshot.execution), state->freeze_pending);
   }
 
@@ -1263,8 +1449,8 @@ ava::core::Result<std::shared_ptr<SubagentInspectorFrame const>> SubagentCoordin
       return current_frame_locked();
 
     state->content_generation = advance_content_generation(state->content_generation);
-    auto frame = stamp_inspection_frame(state->content_generation, terminal(state->snapshot.execution), state->freeze_pending, false, false,
-                                        std::move(*projected));
+    auto frame =
+        stamp_inspection_frame(state->content_generation, terminal(state->snapshot.execution), state->freeze_pending, false, false, std::move(*projected));
     state->published_inspection = frame;
     state->published_fingerprint = std::move(*fingerprint);
     return frame;
@@ -1346,12 +1532,14 @@ void SubagentCoordinator::set_terminal_sink(SubagentTerminalSink sink)
       for (auto const& [_, state] : jobs_)
       {
         std::lock_guard state_lock(state->mutex);
-        if (state->published && state->terminal_notification_pending && !state->terminal_notification_emitted && !state->delivery_exhausted)
+        if (state->published && state->delivery_arm_ready && state->terminal_notification_pending && !state->terminal_notification_emitted &&
+            !state->delivery_exhausted)
           pending.push_back(state);
       }
     }
   }
-  for (auto const& state : pending) publish_terminal_notification(state);
+  for (auto const& state : pending)
+    publish_terminal_notification(state);
 }
 
 ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::record_delivery_attempt(std::string_view parent_session_id, std::string_view job_id,
@@ -1370,7 +1558,7 @@ ava::core::Result<SubagentCoordinatorJobSnapshot> SubagentCoordinator::record_de
     return std::unexpected(not_found(job_id));
 
   std::lock_guard state_lock(state->mutex);
-  if (!terminal(state->snapshot.execution) || !delivery_pending(state->snapshot.delivery) || state->delivery_exhausted)
+  if (!terminal(state->snapshot.execution) || !delivery_pending(state->snapshot.delivery) || !state->delivery_arm_ready || state->delivery_exhausted)
     return std::unexpected(invalid_transition("subagent delivery is not pending", job_id));
   if (!state->snapshot.delivery_attempt_history.empty() && state->snapshot.delivery_attempt_history.back().attempt_id == attempt_id)
   {
@@ -1497,6 +1685,8 @@ void SubagentCoordinator::shutdown()
         state->source_epoch = 1;
       state->inspection_source = nullptr;
       state->freeze_pending = false;
+      if (state->steering_queue)
+        state->steering_queue->close();
       if (!terminal(state->snapshot.execution))
       {
         state->snapshot.cancel_requested = true;
@@ -1508,7 +1698,8 @@ void SubagentCoordinator::shutdown()
       state->changed.notify_all();
     }
   }
-  for (auto const& job_id : jobs) static_cast<void>(registry_.cancel(job_id));
+  for (auto const& job_id : jobs)
+    static_cast<void>(registry_.cancel(job_id));
   registry_.shutdown();
   std::unordered_map<std::string, std::shared_ptr<JobState>> released;
   {

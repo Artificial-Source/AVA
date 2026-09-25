@@ -33,12 +33,7 @@ struct PluginToolBinding
 
 bool is_canceled_error(ava::core::Error const& error)
 {
-  for (auto const& context : error.context())
-  {
-    if (context.key == "canceled" && context.value == "true")
-      return true;
-  }
-  return error.message() == "tool canceled";
+  return error.code() == ava::core::ErrorCode::Canceled;
 }
 
 bool is_canceled(ava::tools::ToolContext const& context)
@@ -381,9 +376,10 @@ ava::tools::ToolResultPayload result_payload(std::string const& text)
   return payload;
 }
 
-ava::core::Error plugin_tool_error(ava::core::ErrorCategory category, std::string message, PluginToolBinding const& binding)
+ava::core::Error plugin_tool_error(ava::core::ErrorCategory category, std::string message, PluginToolBinding const& binding,
+                                   ava::core::ErrorCode code = ava::core::ErrorCode::Unspecified)
 {
-  auto error = ava::core::Error(category, std::move(message));
+  auto error = ava::core::Error(category, std::move(message), code);
   error.with_context("plugin", binding.manifest.id);
   error.with_context("plugin_tool", binding.contribution.name);
   error.with_context("tool", binding.model_tool_name);
@@ -557,7 +553,7 @@ ava::tools::ToolDispatchResult dispatch_plugin_tool(ava::tools::ToolContext cons
 {
   if (is_canceled(context))
   {
-    return tool_error_result(call, plugin_tool_error(ava::core::ErrorCategory::Unknown, "plugin tool call canceled", binding));
+    return tool_error_result(call, plugin_tool_error(ava::core::ErrorCategory::Unknown, "plugin tool call canceled", binding, ava::core::ErrorCode::Canceled));
   }
   if (!ava::core::json::is_valid_object(call.arguments_json))
   {
@@ -578,7 +574,7 @@ ava::tools::ToolDispatchResult dispatch_plugin_tool(ava::tools::ToolContext cons
   }
   if (is_canceled(tool_context))
   {
-    return tool_error_result(call, plugin_tool_error(ava::core::ErrorCategory::Unknown, "plugin tool call canceled", binding));
+    return tool_error_result(call, plugin_tool_error(ava::core::ErrorCategory::Unknown, "plugin tool call canceled", binding, ava::core::ErrorCode::Canceled));
   }
   if (auto permission = ava::tools::ensure_permission(tool_context, ava::permissions::Operation::PluginToolCall, binding.manifest.path, command, call.name,
                                                       "plugin tool call requires permission");
@@ -588,7 +584,7 @@ ava::tools::ToolDispatchResult dispatch_plugin_tool(ava::tools::ToolContext cons
   }
   if (is_canceled(tool_context))
   {
-    return tool_error_result(call, plugin_tool_error(ava::core::ErrorCategory::Unknown, "plugin tool call canceled", binding));
+    return tool_error_result(call, plugin_tool_error(ava::core::ErrorCategory::Unknown, "plugin tool call canceled", binding, ava::core::ErrorCode::Canceled));
   }
 
   PluginRunnerOptions options;

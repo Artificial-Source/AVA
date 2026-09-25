@@ -1386,13 +1386,14 @@ void test_permission_rule_storage_allows_root_sticky_temp_ancestor()
 {
   auto const temporary_root = std::filesystem::temp_directory_path();
   struct stat temporary_status{};
-  auto const root = temporary_root / ("ava-permission-rules-sticky-" + std::to_string(static_cast<long long>(::getpid())));
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
-  std::filesystem::create_directories(root);
+  // Direct child of the process temporary directory so the sticky, root-owned
+  // ancestor property is the real TMPDIR/temp_directory_path(), not a nested
+  // harness namespace.
+  auto const root = ScopedTestDirectory::create_unique(temporary_root, "ava-permission-rules-sticky-");
   auto const temporary_is_root_sticky =
       ::stat(temporary_root.c_str(), &temporary_status) == 0 && temporary_status.st_uid == 0 && (temporary_status.st_mode & S_ISVTX) != 0;
-  expect(::chmod(root.c_str(), S_IRWXU) == 0, "root-sticky ancestor fixture creates an owned 0700 child");
+  expect(root.path().parent_path() == temporary_root && ::chmod(root.path().c_str(), S_IRWXU) == 0,
+         "root-sticky ancestor fixture creates an owned 0700 child that directly descends from the process temporary directory");
 
   auto const store = test_store(root);
   auto const target = root / "outside.txt";

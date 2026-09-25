@@ -6,6 +6,7 @@
 #include "ava/agent/subagent_launch.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -24,6 +25,7 @@ struct TaskSubagentRequest
   std::string subagent_type;
   std::string subagent_system_prompt;
   SubagentToolPreset tool_preset = SubagentToolPreset::Inherit;
+  std::optional<std::size_t> max_tool_iterations = std::nullopt;
   std::optional<std::string> task_id = std::nullopt;
   std::string command;
   bool background = false;

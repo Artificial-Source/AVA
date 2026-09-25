@@ -39,7 +39,8 @@ std::optional<ava::core::Error> abort_error(BoundedFileReadOptions const& option
 {
   if (is_canceled(options))
   {
-    auto error = read_error(ava::core::ErrorCategory::Unknown, "LSP file read canceled", options.path);
+    auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "LSP file read canceled", ava::core::ErrorCode::Canceled);
+    error.with_context("path", options.path.string());
     error.with_context("canceled", "true");
     return error;
   }

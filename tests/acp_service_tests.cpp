@@ -772,9 +772,7 @@ void test_acp_list_pagination_cancel_race_stop_reasons_and_file_safety()
 void test_acp_session_cwd_allows_symlinked_workspace_path()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-symlinked-cwd");
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
+  auto const root = ScopedTestDirectory::create_unique(temp_root(), "acp-symlinked-cwd-");
   // Mirror a workspace configured through an absolute symlink, e.g.
   // /home/user/projects/github -> /usr/src/projects_github.
   auto const real_target = root / "real-target";

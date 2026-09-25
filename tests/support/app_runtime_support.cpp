@@ -206,8 +206,11 @@ ava::core::Result<ava::http::HttpResponse> ChunkedStreamingTransport::send_strea
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "stream canceled"));
     }
-    if (auto delivered = on_body_chunk(chunk); !delivered)
-      return std::unexpected(std::move(delivered.error()));
+    if (status_code_ >= 200 && status_code_ < 300 && on_body_chunk)
+    {
+      if (auto delivered = on_body_chunk(chunk); !delivered)
+        return std::unexpected(std::move(delivered.error()));
+    }
   }
   return ava::http::HttpResponse{.status_code = status_code_, .headers = {}, .body = response_body_};
 }

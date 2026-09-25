@@ -8,6 +8,7 @@
 #include "ava/app/runtime/ReasoningSelection.h"
 #include "ava/app/session_run_controller.h"
 #include "ava/agent/agent_loop.h"
+#include "ava/agent/context_compaction.h"
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/session/compaction.h"
@@ -38,16 +39,7 @@ using CompactionSummaryGenerator =
     std::function<ava::core::Result<std::string>(std::vector<ava::session::SessionEntry> const& entries, ava::session::CompactionConfig const& config,
                                                  std::string_view instructions, std::size_t estimated_tokens)>;
 
-struct PreparedCompactionContext
-{
-  std::vector<ava::session::SessionEntry> active_entries;
-  std::string recent_context;
-  std::size_t estimated_tokens = 0;
-  std::size_t retained_tokens = 0;
-  bool recent_context_omitted = false;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
+using PreparedCompactionContext = ava::agent::PreparedCompactionContext;
 
 [[nodiscard]] ava::core::Result<runtime::PromptState> select_runtime_prompt_state(runtime::session_ts const& unlocked_session, ava::agent::Mode mode);
 

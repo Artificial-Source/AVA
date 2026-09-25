@@ -314,7 +314,8 @@ void test_mcp_stdio_client_lists_and_calls_tools()
   auto startup_canceled = ava::mcp::McpStdioClient::start(startup_cancel_server, fake_client_options(workspace),
                                                           [&] { return read_pid_file_for_test(startup_cancel_pgid_file).has_value(); });
   auto const startup_cancel_pgid = read_pid_file_for_test(startup_cancel_pgid_file);
-  expect(!startup_canceled && startup_canceled.error().message().find("canceled") != std::string::npos && startup_cancel_pgid &&
+  expect(!startup_canceled && startup_canceled.error().code() == ava::core::ErrorCode::Canceled &&
+             startup_canceled.error().message().find("canceled") != std::string::npos && startup_cancel_pgid &&
              wait_for_process_group_exit(*startup_cancel_pgid),
          "MCP stdio client cancels hung startup and terminates the server process group before timeout");
 
@@ -381,8 +382,8 @@ void test_mcp_stdio_client_lists_and_calls_tools()
   expect(tools && tools->size() == 1 && tools->front().name == "echo" && tools->front().input_schema_json.find("required") != std::string::npos,
          tools ? "MCP stdio client lists tools" : "MCP stdio client lists tools: " + tools.error().format());
   auto pre_canceled = (*client)->call_tool("echo", "{\"text\":\"hello\"}", [] { return true; });
-  expect(!pre_canceled && pre_canceled.error().message().find("canceled") != std::string::npos,
-         "MCP stdio client maps cancellation before tools/call to a deterministic canceled error");
+  expect(!pre_canceled && pre_canceled.error().code() == ava::core::ErrorCode::Canceled && pre_canceled.error().message().find("canceled") != std::string::npos,
+         "MCP stdio client maps cancellation before tools/call to a deterministic typed canceled error");
   auto result = (*client)->call_tool("echo", "{\n  \"text\": \"hello\"\n}");
   expect(result && !result->is_error && result->content == "MCP call ok",
          result ? "MCP stdio client sends newline-delimited compact JSON to standard stdio servers"
@@ -752,6 +753,32 @@ void test_mcp_tool_dispatcher()
   expect(invalid_args && invalid_args->payload.status == ava::agent::ToolResultStatus::Error && invalid_args->payload.error_category == "configuration" &&
              invalid_args->payload.error_code == "invalid_request",
          "MCP tool dispatcher attaches support-safe structured semantic errors");
+
+  auto typed_cancel_context = context;
+  typed_cancel_context.permission_audit_sink = [](ava::tools::PermissionAuditEvent const& event) -> ava::core::VoidResult {
+    if (event.operation == ava::permissions::Operation::McpToolCall)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "renamed MCP interruption", ava::core::ErrorCode::Canceled));
+    return {};
+  };
+  ava::agent::ToolDispatcher typed_cancel_dispatcher(typed_cancel_context);
+  auto typed_cancel =
+      typed_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_mcp_typed_cancel", .name = model_tool_name, .arguments_json = "{}"});
+  expect(typed_cancel && !typed_cancel->success && typed_cancel->payload.status == ava::agent::ToolResultStatus::Canceled,
+         "MCP broker classifies a renamed typed cancellation by ErrorCode");
+
+  auto legacy_cancel_context = context;
+  legacy_cancel_context.permission_audit_sink = [](ava::tools::PermissionAuditEvent const& event) -> ava::core::VoidResult {
+    if (event.operation != ava::permissions::Operation::McpToolCall)
+      return {};
+    auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled");
+    error.with_context("canceled", "true");
+    return std::unexpected(std::move(error));
+  };
+  ava::agent::ToolDispatcher legacy_cancel_dispatcher(legacy_cancel_context);
+  auto legacy_cancel =
+      legacy_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_mcp_legacy_cancel", .name = model_tool_name, .arguments_json = "{}"});
+  expect(legacy_cancel && !legacy_cancel->success && legacy_cancel->payload.status == ava::agent::ToolResultStatus::Error,
+         "MCP broker does not classify untyped legacy cancellation text or context as cancellation");
 
   auto const prompts_before_cancel = prompts.size();
   cancel_requested = true;

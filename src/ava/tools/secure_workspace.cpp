@@ -204,7 +204,7 @@ ava::core::Result<bool> visit_directory(int directory_fd, std::filesystem::path 
 
 ava::core::Error canceled_write_error(std::filesystem::path const& path)
 {
-  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled");
+  auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "tool canceled", ava::core::ErrorCode::Canceled);
   error.with_context("canceled", "true");
   error.with_context("operation", "write_file");
   error.with_context("path", path.string());

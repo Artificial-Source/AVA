@@ -35,6 +35,7 @@ struct SubagentDefinition
   std::string description;
   std::string system_prompt;
   SubagentToolPreset tool_preset = SubagentToolPreset::Inherit;
+  std::optional<std::size_t> max_tool_iterations = std::nullopt;
   bool hidden = false;
   SubagentDefinitionProvenance provenance = SubagentDefinitionProvenance::Unknown;
   std::filesystem::path path = {};

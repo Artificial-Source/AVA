@@ -321,7 +321,7 @@ ava::core::VoidResult visit_session_snapshot_fd(int fd, off_t snapshot_size, std
   while (offset < snapshot_size)
   {
     if (cancel_requested && cancel_requested())
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "session read canceled"));
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "session read canceled", ava::core::ErrorCode::Canceled));
     auto const remaining = snapshot_size - offset;
     auto const wanted = remaining < static_cast<off_t>(buffer.size()) ? static_cast<std::size_t>(remaining) : buffer.size();
     ssize_t count = 0;
@@ -529,7 +529,7 @@ ava::core::VoidResult SessionStore::visit_entries(SessionReadLimits limits, Sess
     for (auto const& entry : snapshot)
     {
       if (cancel_requested && cancel_requested())
-        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "session read canceled"));
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "session read canceled", ava::core::ErrorCode::Canceled));
       auto keep_going = visitor(entry);
       if (!keep_going)
         return std::unexpected(std::move(keep_going.error()));

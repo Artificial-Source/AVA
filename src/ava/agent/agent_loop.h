@@ -2,6 +2,7 @@
 #include "ava/http/transport.h"
 #include "ava/observability/run_observer.h"
 #include "ava/agent/agent_loop_session.h"
+#include "ava/agent/context_compaction.h"
 #include "ava/agent/message_builder.h"
 #include "ava/agent/mode.h"
 #include "ava/agent/model_invocation_options.h"
@@ -109,6 +110,9 @@ struct AgentLoopOptions
   bool openai_oauth = false;
   std::string openai_account_id = "";
   std::size_t max_tool_iterations = 10;
+  // Child loops opt into one bounded, tool-free wrap-up request after this
+  // tool-round ceiling. Parent loops preserve their existing hard stop.
+  bool child_execution = false;
   std::size_t max_provider_events = 4096;
   std::size_t max_assistant_text_bytes = 256 * 1024;
   std::size_t max_tool_argument_bytes = 256 * 1024;
@@ -135,6 +139,10 @@ struct AgentLoopOptions
   std::function<ava::core::Result<std::vector<std::string>>()> take_steering_messages = nullptr;
   std::function<ava::core::Result<bool>(ava::session::SessionReadAuthority, std::string_view, std::vector<std::string> const& replayed_user_messages)>
       compact_context = nullptr;
+  // Value-only launch snapshot inherited by children. A child binds this to
+  // its own exact leased append target; parent callbacks are never retained.
+  std::optional<ChildContextCompactionBlueprint> child_compaction_blueprint = std::nullopt;
+  std::optional<ChildContextCompactionBinding> child_compaction_binding = std::nullopt;
   std::function<ava::core::Result<std::unique_ptr<ava::provider::Provider>>()> background_provider_factory = nullptr;
   // Retained by child loops so web tools continue to use the originating
   // runtime session authority even after the scheduling run has ended.
@@ -148,6 +156,9 @@ struct AgentLoopOptions
   // commit are appended through one guarded authority.
   SessionAppendSink append_entry = nullptr;
   SessionAppendBatchSink append_batch = nullptr;
+  // Cross-turn owner append used only for durable job history. Must not be the
+  // run-scoped append_entry sink; that expires with the parent turn.
+  SessionAppendSink job_history_append = nullptr;
   // Copyable exact-lease (or in-memory) authority used for every history read.
   std::optional<ava::session::SessionReadAuthority> session_read_authority = std::nullopt;
   // Must match the policy established when the runtime session was opened.

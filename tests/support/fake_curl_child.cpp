@@ -109,6 +109,13 @@ std::string environment_dump()
   return result;
 }
 
+void write_response_head(int descriptor, int code, std::string_view reason = "Test", std::string_view headers = {})
+{
+  static_cast<void>(write_all(descriptor, "HTTP/1.1 " + std::to_string(code) + " " + std::string(reason) + "\r\n"));
+  static_cast<void>(write_all(descriptor, headers));
+  static_cast<void>(write_all(descriptor, "\r\n"));
+}
+
 void write_status(int code)
 {
   static_cast<void>(write_all(STDOUT_FILENO, "\nAVA_HTTP_STATUS:" + std::to_string(code)));
@@ -158,6 +165,13 @@ int main(int argc, char** argv)
   auto const url = quoted_value(config, "url = \"");
   auto const body_path = quoted_value(config, "data-binary = \"@");
   auto const body = read_file(body_path);
+  bool const dumps_streaming_headers = config.find("dump-header = \"/dev/stderr\"\n") != std::string::npos;
+  if (streaming &&
+      (!dumps_streaming_headers || config.find("include\n") != std::string::npos || config.find("suppress-connect-headers\n") == std::string::npos))
+  {
+    static_cast<void>(write_all(STDERR_FILENO, "invalid streaming curl config"));
+    return 66;
+  }
 
   if (url.find("/environment") != std::string::npos)
   {
@@ -179,10 +193,178 @@ int main(int argc, char** argv)
     static_cast<void>(write_all(STDOUT_FILENO, output));
     return 0;
   }
+  if (url.find("/retry-429") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 429, "Too Many Requests", "Retry-After: 0\r\n");
+    static_cast<void>(write_all(STDOUT_FILENO, "rate limited response"));
+    write_status(429);
+    return 0;
+  }
+  if (url.find("/retry-quota") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 429, "Too Many Requests");
+    static_cast<void>(write_all(STDOUT_FILENO, "insufficient_quota: billing hard limit"));
+    write_status(429);
+    return 0;
+  }
+  if (url.find("/retry-auth") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 401, "Unauthorized");
+    static_cast<void>(write_all(STDOUT_FILENO, "authentication failed"));
+    write_status(401);
+    return 0;
+  }
+  if (url.find("/retry-503") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 503, "Unavailable");
+    static_cast<void>(write_all(STDOUT_FILENO, "transient response"));
+    write_status(503);
+    return 0;
+  }
+  if (url.find("/retry-success") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 200, "OK");
+    static_cast<void>(write_all(STDOUT_FILENO, "accepted response"));
+    write_status(200);
+    return 0;
+  }
+  if (url.find("/stream-output-limit") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 200, "OK");
+    std::string output(32U * 1024U, 'x');
+    while (write_all(STDOUT_FILENO, output))
+    {
+    }
+    return 0;
+  }
+  if (url.find("/stream-error-cancel") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 503, "Unavailable");
+    std::string output(4096, 'e');
+    while (write_all(STDOUT_FILENO, output))
+      std::this_thread::sleep_for(5ms);
+    return 0;
+  }
+  if (url.find("/stream-gate-") != std::string::npos)
+  {
+    auto const token = url.substr(url.find("/stream-gate-") + std::string_view("/stream-gate-").size());
+    auto const gate = "/tmp/ava-curl-stream-gate-" + token;
+    write_response_head(STDERR_FILENO, 200, "OK");
+    static_cast<void>(write_all(STDOUT_FILENO, "incremental accepted body before gate|"));
+    for (int index = 0; index < 400 && ::access(gate.c_str(), F_OK) != 0; ++index)
+      std::this_thread::sleep_for(5ms);
+    if (::access(gate.c_str(), F_OK) != 0)
+      return 69;
+    static_cast<void>(write_all(STDOUT_FILENO, "after gate"));
+    write_status(200);
+    return 0;
+  }
+  if (url.find("/stream-http-trailers") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 200, "OK", "Trailer: X-Trace, data\r\n");
+    static_cast<void>(write_all(STDOUT_FILENO, "expected body"));
+    static_cast<void>(write_all(STDERR_FILENO, "X-Trace: trailer metadata\r\ndata: malicious trailer event\r\n"));
+    write_status(200);
+    return 0;
+  }
+  if (url.find("/stream-head-chain") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 100, "Continue");
+    write_response_head(STDERR_FILENO, 103, "Early Hints", "Link: </hint>\r\n");
+    write_response_head(STDERR_FILENO, 399, "Redirect", "Location: https://curl.test/final\r\n");
+    write_response_head(STDERR_FILENO, 200, "OK", "X-Final: yes\r\n");
+    static_cast<void>(write_all(STDOUT_FILENO, "chain body"));
+    write_status(200);
+    return 0;
+  }
+  if (url.find("/stream-upgrade") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 101, "Switching Protocols", "Upgrade: fake\r\n");
+    static_cast<void>(write_all(STDOUT_FILENO, "upgrade body HTTP/1.1 200 Fake\r\n\r\nnot a second head"));
+    write_status(101);
+    return 0;
+  }
+  if (url.find("/stream-final-redirect") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 399, "Final Redirect");
+    static_cast<void>(write_all(STDOUT_FILENO, "body HTTP/1.1 200 Fake\r\nX-Fake: yes\r\n\r\nstill redirect"));
+    write_status(399);
+    return 0;
+  }
+  if (url.find("/stream-disabled-redirect") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 399, "Disabled Redirect", "Location: https://curl.test/not-followed\r\n");
+    static_cast<void>(write_all(STDOUT_FILENO, "disabled body HTTP/1.1 200 Fake\r\n\r\nnot a head"));
+    write_status(399);
+    return 0;
+  }
+  if (url.find("/stream-missing-trailer") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 200, "OK");
+    static_cast<void>(write_all(STDOUT_FILENO, "body without trailer"));
+    return 0;
+  }
+  if (url.find("/stream-malformed-trailer") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 200, "OK");
+    static_cast<void>(write_all(STDOUT_FILENO, "body\nAVA_HTTP_STATUS:20x"));
+    return 0;
+  }
+  if (url.find("/stream-mismatched-trailer") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 200, "OK");
+    static_cast<void>(write_all(STDOUT_FILENO, "body"));
+    write_status(201);
+    return 0;
+  }
+  if (url.find("/stream-stderr-eof-first") != std::string::npos)
+  {
+    write_response_head(STDERR_FILENO, 200, "OK", "X-Order: headers-first\r\n");
+    static_cast<void>(::close(STDERR_FILENO));
+    static_cast<void>(write_all(STDOUT_FILENO, "headers-first body"));
+    write_status(200);
+    return 0;
+  }
+  if (url.find("/stream-stdout-eof-first") != std::string::npos)
+  {
+    static_cast<void>(write_all(STDOUT_FILENO, "body-pipe-first body"));
+    write_status(200);
+    static_cast<void>(::close(STDOUT_FILENO));
+    std::this_thread::sleep_for(10ms);
+    write_response_head(STDERR_FILENO, 200, "OK", "X-Order: body-pipe-first\r\n");
+    return 0;
+  }
+  if (url.find("/stream-missing-metadata") != std::string::npos)
+  {
+    static_cast<void>(write_all(STDERR_FILENO, "curl: metadata unavailable\n"));
+    static_cast<void>(write_all(STDOUT_FILENO, "must remain withheld"));
+    write_status(200);
+    return 0;
+  }
+  if (url.find("/stream-prefix-diagnostic-failure") != std::string::npos)
+  {
+    static_cast<void>(write_all(STDERR_FILENO, "curl: connection failed before response metadata\nHTTP/1.1 200 Fake\r\n\r\n"));
+    static_cast<void>(write_all(STDOUT_FILENO, "\nAVA_HTTP_STATUS:000"));
+    return 7;
+  }
+  if (url.find("/stream-header-limit") != std::string::npos)
+  {
+    static_cast<void>(write_all(STDERR_FILENO, "HTTP/1.1 200 OK\r\nX-Large: "));
+    static_cast<void>(write_all(STDERR_FILENO, std::string(65U * 1024U, 'h')));
+    static_cast<void>(write_all(STDERR_FILENO, "\r\n\r\n"));
+    // Keep the child alive until the transport rejects the oversized header;
+    // a natural exit can otherwise win settlement when the pipe holds it all.
+    idle_forever();
+  }
   if (url.find("/stream") != std::string::npos)
   {
     if (!streaming)
       return 66;
+    static_cast<void>(write_all(STDERR_FILENO, "HTTP/1.1 206 Partial"));
+    std::this_thread::sleep_for(5ms);
+    static_cast<void>(write_all(STDERR_FILENO, " Content\r\nX-Split: yes\r\n"));
+    std::this_thread::sleep_for(5ms);
+    static_cast<void>(write_all(STDERR_FILENO, "\r\n"));
     static_cast<void>(write_all(STDOUT_FILENO, "chunk-one|"));
     std::this_thread::sleep_for(15ms);
     static_cast<void>(write_all(STDERR_FILENO, "stream-stderr"));
