@@ -3,13 +3,13 @@
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_selection_internal.h"
 #include "ava/tui/theme.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <limits>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 namespace {
@@ -1421,32 +1421,32 @@ bool RuntimeTranscriptSelectionState::copy_selection(ComposerSnapshot& snapshot,
   if (!range_)
   {
     snapshot.status = "no selection to copy";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   if (!has_compatible_authority(layout_cache))
   {
     snapshot.status = "selection unavailable in current view";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   auto extracted = extract_transcript_selection_text(layout_cache.layout, *range_, kSelectionCopySoftCeiling);
   if (extracted.oversize)
   {
     snapshot.status = "selection too large to copy";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   if (extracted.text.empty())
   {
     snapshot.status = "no selection to copy";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   auto const copied = runtime_transcript::copy_text_to_terminal_clipboard(extracted.text);
   snapshot.status = copied ? "selection copy request sent" : "clipboard copy failed";
   if (!copied)
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
   // Keep selection after success.
   return copied;
 }

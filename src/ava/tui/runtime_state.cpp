@@ -162,7 +162,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
   snapshot.show_images = state.show_images;
   snapshot.image_width_cells = state.image_width_cells;
   snapshot.cursor = state.cursor;
-  apply_terminal_cursor_settings(snapshot.cursor);
   if (snapshot.mermaid_config_epoch != state.mermaid_config_epoch || snapshot.mermaid_enabled != state.mermaid_enabled)
   {
     snapshot.mermaid_config_epoch = state.mermaid_config_epoch;
@@ -173,7 +172,8 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
   snapshot.startup_overview = std::move(state.startup_overview);
   if (!snapshot.show_images)
   {
-    for (auto& attachment : snapshot.pending_attachments) attachment.preview.reset();
+    for (auto& attachment : snapshot.pending_attachments)
+      attachment.preview.reset();
   }
 
   sidebar.mode = snapshot.mode;

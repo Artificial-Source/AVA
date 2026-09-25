@@ -60,6 +60,26 @@ void test_context_balances_mouse_input_modes()
          "Context must activate and restore each mouse input mode exactly once");
 }
 
+// Verify that Context alone releases and rearms mouse, paste, keyboard, and retained cursor modes across a temporary terminal handoff.
+void test_context_balances_handoff_modes()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  {
+    terminal::Context context(output.get(), input.get());
+    context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
+    context.release_input_modes_for_handoff();
+    context.rearm_input_modes_after_handoff();
+  }
+
+  std::string const emitted = read_output(output.get());
+  expect(count_occurrences(emitted, kMouseEnableSequence) == 2 && count_occurrences(emitted, kMouseDisableSequence) == 2 &&
+             count_occurrences(emitted, kBracketedPasteEnableSequence) == 2 && count_occurrences(emitted, kBracketedPasteDisableSequence) == 2,
+         "Context balances mouse and bracketed-paste modes across handoff, rearm, and final destruction");
+  expect(count_occurrences(emitted, "\x1b[6 q") == 2 && count_occurrences(emitted, "\x1b[0 q") == 2,
+         "Context releases a forced cursor for handoff, reapplies it on resume, and resets it during destruction");
+}
+
 } // namespace
 
 // Run deterministic terminal mouse-mode lifecycle tests with a direct-color TERM to avoid palette probing.
@@ -67,4 +87,5 @@ void run_terminal_mouse_input_mode_tests()
 {
   ScopedEnvVar term_guard("TERM", "xterm-direct");
   test_context_balances_mouse_input_modes();
+  test_context_balances_handoff_modes();
 }

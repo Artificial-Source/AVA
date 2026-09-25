@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime.h"
+#include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/theme.h"
 #include "ava/core/result.h"
 
@@ -79,7 +80,7 @@ struct DisplayPresentationBaseline
 {
   bool show_images = true;
   std::size_t image_width_cells = 60;
-  TerminalCursorSettings cursor = {};
+  terminal::CursorSettings cursor{terminal::CursorStyle::Default};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -91,7 +92,7 @@ struct DisplayPreviewOverlay
   std::optional<TuiThemeInfo> theme;
   std::optional<bool> show_images;
   std::optional<std::size_t> image_width_cells;
-  std::optional<TerminalCursorStyle> cursor_style;
+  std::optional<terminal::CursorStyle> cursor_style;
   std::optional<bool> cursor_blink;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

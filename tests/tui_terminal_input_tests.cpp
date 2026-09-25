@@ -8,6 +8,7 @@
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/tui/terminal/Context.h"
 #include "ava/tui/terminal_image.h"
 #include "ava/tui/text_wrap.h"
 #include "ava/tui/theme.h"
@@ -2359,7 +2360,7 @@ void test_alacritty_da2_version_gate_and_lifecycle()
   }
   expect(ava::tui::terminal_escape_sequence_complete(fragmented_reply), "the complete fragmented DA2 reply becomes one bounded CSI sequence");
 
-  // Unknown/non-Alacritty and multiplexer environments never arm DA2 and use flags 7.
+  // Every environment uses disambiguation-only flags without an Alacritty event-type probe.
   for (auto const& environment : {std::pair{std::string(""), std::string("xterm-256color")}, std::pair{std::string("ghostty"), std::string("xterm-256color")},
                                   std::pair{std::string("Alacritty"), std::string("tmux-256color")}})
   {
@@ -2372,17 +2373,16 @@ void test_alacritty_da2_version_gate_and_lifecycle()
     ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
     ava::tui::arm_owned_terminal_protocols_on_enter();
     auto const ownership = ava::tui::terminal_protocol_ownership();
-    expect(ownership.kitty_keyboard_active_flags == 7 && ownership.kitty_keyboard_desired_flags == 7 && !ownership.alacritty_da2_probe_armed &&
-               count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_query_sequence()) == 1 &&
+    expect(ownership.kitty_keyboard_active_flags == 1 && ownership.kitty_keyboard_desired_flags == 1 && !ownership.alacritty_da2_probe_armed &&
+               count_sequence(capture.sequences, "\x1b[>1u\x1b[?u\x1b[c") == 1 &&
                !sequences_contain(capture.sequences, ava::tui::terminal_alacritty_da2_query_sequence()) &&
                !ava::tui::terminal_keyboard_protocol_handle_response("[>0;2402;1c"),
-           "non-Alacritty and mux sessions keep flags 7 and do not trust unsolicited DA2 replies");
+           "Kitty sessions use disambiguation-only flags and do not need or trust unsolicited DA2 replies");
     ava::tui::restore_owned_terminal_protocols();
     reset_lifecycle_test_seams();
   }
 
-  // A direct Alacritty starts at 5. Malformed input leaves the asynchronous probe
-  // armed; an exact 2401 response consumes it without changing the active flags.
+  // Direct Alacritty also keeps disambiguation-only flags because AVA no longer requests event types.
   {
     ScopedEnvVar term_program_guard("TERM_PROGRAM", "Alacritty");
     ScopedEnvVar term_guard("TERM", "xterm-256color");
@@ -2393,226 +2393,19 @@ void test_alacritty_da2_version_gate_and_lifecycle()
     ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
     ava::tui::arm_owned_terminal_protocols_on_enter();
     auto ownership = ava::tui::terminal_protocol_ownership();
-    expect(ownership.kitty_keyboard_active_flags == 5 && ownership.kitty_keyboard_desired_flags == 5 && ownership.alacritty_da2_probe_armed &&
-               sequences_contain(capture.sequences, "\x1b[>5u\x1b[?u\x1b[c") &&
-               count_sequence(capture.sequences, ava::tui::terminal_alacritty_da2_query_sequence()) == 1,
-           "direct Alacritty starts conservatively at flags 5 and issues one nonblocking DA2 query");
+    expect(ownership.kitty_keyboard_active_flags == 1 && ownership.kitty_keyboard_desired_flags == 1 && !ownership.alacritty_da2_probe_armed &&
+               sequences_contain(capture.sequences, "\x1b[>1u\x1b[?u\x1b[c") &&
+               !sequences_contain(capture.sequences, ava::tui::terminal_alacritty_da2_query_sequence()),
+           "direct Alacritty uses flags 1 without issuing an irrelevant event-type compatibility query");
     ava::tui::release_owned_terminal_protocols();
     ava::tui::rearm_owned_terminal_protocols();
-    expect(ava::tui::terminal_protocol_ownership().kitty_keyboard_active_flags == 5 && ava::tui::terminal_protocol_ownership().alacritty_da2_probe_armed &&
-               count_sequence(capture.sequences, ava::tui::terminal_alacritty_da2_query_sequence()) == 1,
-           "an absent DA2 reply leaves flags 5 active across handoff without reissuing the asynchronous query");
-    expect(!ava::tui::terminal_keyboard_protocol_handle_response("[>0;2402;2c") && ava::tui::terminal_protocol_ownership().alacritty_da2_probe_armed,
-           "malformed DA2 does not consume or upgrade the armed probe");
-    expect(ava::tui::terminal_keyboard_protocol_handle_response("[>0;2401;1c"), "exact Alacritty 2401 DA2 is consumed");
     ownership = ava::tui::terminal_protocol_ownership();
-    expect(ownership.kitty_keyboard_active_flags == 5 && ownership.kitty_keyboard_desired_flags == 5 && !ownership.alacritty_da2_probe_armed &&
-               count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()) == 1,
-           "Alacritty 2401 remains on flags 5 without replacing the active stack layer");
-    ava::tui::release_owned_terminal_protocols();
-    ava::tui::rearm_owned_terminal_protocols();
-    expect(ava::tui::terminal_protocol_ownership().kitty_keyboard_active_flags == 5 && count_sequence(capture.sequences, "\x1b[>5u") == 2,
-           "the selected flags 5 survive repeated handoff and rearm");
+    expect(ownership.kitty_keyboard_active_flags == 1 && ownership.kitty_keyboard_desired_flags == 1 && !ownership.alacritty_da2_probe_armed &&
+               count_sequence(capture.sequences, "\x1b[>1u") == 1 && !ava::tui::terminal_keyboard_protocol_handle_response("[>0;2402;1c"),
+           "flags 1 survive handoff and rearm without accepting an unsolicited DA2 upgrade");
     ava::tui::restore_owned_terminal_protocols();
     reset_lifecycle_test_seams();
   }
-
-  // Exact 2402 upgrades by replacing, never stacking, AVA's one active layer.
-  {
-    ScopedEnvVar term_program_guard("TERM_PROGRAM", "alacritty");
-    ScopedEnvVar term_guard("TERM", "xterm-256color");
-    ScopedEnvVar tmux_guard("TMUX", "");
-    reset_lifecycle_test_seams();
-    SequenceCapture capture;
-    g_sequence_capture = &capture;
-    ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
-    ava::tui::arm_owned_terminal_protocols_on_enter();
-    expect(ava::tui::terminal_keyboard_protocol_handle_response("[>0;2402;1c"), "exact Alacritty 2402 DA2 is consumed");
-    auto ownership = ava::tui::terminal_protocol_ownership();
-    expect(ownership.kitty_keyboard_active_flags == 7 && ownership.kitty_keyboard_desired_flags == 7 && !ownership.alacritty_da2_probe_armed &&
-               count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()) == 1 &&
-               count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_push_sequence()) == 1,
-           "Alacritty 2402 performs one balanced pop/push replacement to flags 7");
-    auto const after_upgrade = capture.sequences.size();
-    expect(!ava::tui::terminal_keyboard_protocol_handle_response("[>0;2402;1c") && capture.sequences.size() == after_upgrade,
-           "a duplicate or unsolicited DA2 reply cannot grow the Kitty stack");
-    ava::tui::release_owned_terminal_protocols();
-    ava::tui::rearm_owned_terminal_protocols();
-    expect(ava::tui::terminal_protocol_ownership().kitty_keyboard_active_flags == 7 &&
-               count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_push_sequence()) == 2,
-           "the upgraded flags 7 survive handoff and rearm without another DA2 query");
-    ava::tui::restore_owned_terminal_protocols();
-    expect(count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()) == 3 &&
-               count_sequence(capture.sequences, ava::tui::terminal_alacritty_da2_query_sequence()) == 1,
-           "Alacritty upgrade plus handoff and final restore leave every Kitty stack layer balanced");
-    reset_lifecycle_test_seams();
-  }
-}
-
-void test_terminal_cursor_mapping_and_lifecycle()
-{
-  using CursorSettings = ava::tui::TerminalCursorSettings;
-  using CursorStyle = ava::tui::TerminalCursorStyle;
-  expect(ava::tui::terminal_cursor_style_sequence(CursorSettings{.style = CursorStyle::Default, .blink = true}).empty() &&
-             ava::tui::terminal_cursor_style_sequence(CursorSettings{.style = CursorStyle::Block, .blink = true}) == "\x1b[1 q" &&
-             ava::tui::terminal_cursor_style_sequence(CursorSettings{.style = CursorStyle::Block, .blink = false}) == "\x1b[2 q" &&
-             ava::tui::terminal_cursor_style_sequence(CursorSettings{.style = CursorStyle::Underline, .blink = true}) == "\x1b[3 q" &&
-             ava::tui::terminal_cursor_style_sequence(CursorSettings{.style = CursorStyle::Underline, .blink = false}) == "\x1b[4 q" &&
-             ava::tui::terminal_cursor_style_sequence(CursorSettings{.style = CursorStyle::Bar, .blink = true}) == "\x1b[5 q" &&
-             ava::tui::terminal_cursor_style_sequence(CursorSettings{.style = CursorStyle::Bar, .blink = false}) == "\x1b[6 q" &&
-             ava::tui::terminal_cursor_style_reset_sequence() == "\x1b[0 q",
-         "cursor style and blink settings map exactly to DECSCUSR 1-6 and reset 0");
-
-  ScopedEnvVar term_program_guard("TERM_PROGRAM", "ghostty");
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedEnvVar tmux_guard("TMUX", "");
-  reset_lifecycle_test_seams();
-  SequenceCapture capture;
-  g_sequence_capture = &capture;
-  ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
-
-  ava::tui::apply_terminal_cursor_settings(CursorSettings{});
-  ava::tui::release_owned_terminal_protocols();
-  ava::tui::restore_owned_terminal_protocols();
-  expect(capture.sequences.empty() && !ava::tui::terminal_cursor_style_forced(),
-         "default cursor settings never emit DECSCUSR or perturb the inherited shell cursor");
-
-  auto const forced = CursorSettings{.style = CursorStyle::Bar, .blink = false};
-  ava::tui::arm_owned_terminal_protocols_on_enter();
-  ava::tui::apply_terminal_cursor_settings(forced);
-  ava::tui::apply_terminal_cursor_settings(forced);
-  expect(count_sequence(capture.sequences, "\x1b[6 q") == 1 && ava::tui::terminal_cursor_style_forced() && ava::tui::terminal_cursor_settings() == forced,
-         "a non-default cursor is applied once and retained as TUI-owned state");
-  ava::tui::release_owned_terminal_protocols();
-  expect(count_sequence(capture.sequences, ava::tui::terminal_cursor_style_reset_sequence()) == 1 && !ava::tui::terminal_cursor_style_forced() &&
-             ava::tui::terminal_cursor_settings() == forced,
-         "handoff resets a forced cursor before suspend or external-editor ownership transfer while retaining the desired style");
-  ava::tui::rearm_owned_terminal_protocols();
-  expect(count_sequence(capture.sequences, "\x1b[6 q") == 2 && ava::tui::terminal_cursor_style_forced(),
-         "resume reapplies the retained cursor style on the TUI thread");
-  ava::tui::restore_owned_terminal_protocols();
-  expect(count_sequence(capture.sequences, ava::tui::terminal_cursor_style_reset_sequence()) == 2 && !ava::tui::terminal_cursor_style_forced() &&
-             ava::tui::terminal_cursor_settings() == CursorSettings{},
-         "final teardown resets only the cursor AVA forced and clears retained cursor settings");
-
-  auto const reset_count = count_sequence(capture.sequences, ava::tui::terminal_cursor_style_reset_sequence());
-  ava::tui::restore_owned_terminal_protocols();
-  expect(count_sequence(capture.sequences, ava::tui::terminal_cursor_style_reset_sequence()) == reset_count,
-         "idempotent final teardown does not emit a cursor reset after ownership is gone");
-
-  ava::tui::apply_terminal_cursor_settings(CursorSettings{.style = CursorStyle::Underline, .blink = true});
-  ava::tui::apply_terminal_cursor_settings(CursorSettings{});
-  ava::tui::apply_terminal_cursor_settings(CursorSettings{});
-  expect(count_sequence(capture.sequences, "\x1b[3 q") == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_cursor_style_reset_sequence()) == reset_count + 1,
-         "selecting default resets exactly one style AVA forced and repeated default remains non-interfering");
-  reset_lifecycle_test_seams();
-}
-
-void test_terminal_protocol_lifecycle_enter_handoff_resume_restore()
-{
-  ScopedEnvVar term_program_guard("TERM_PROGRAM", "ghostty");
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedEnvVar tmux_guard("TMUX", "");
-  reset_lifecycle_test_seams();
-  SequenceCapture capture;
-  g_sequence_capture = &capture;
-  ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
-
-  expect(ava::tui::terminal_bracketed_paste_enable_sequence() == std::string_view("\x1b[?2004h") &&
-             ava::tui::terminal_bracketed_paste_disable_sequence() == std::string_view("\x1b[?2004l") &&
-             ava::tui::terminal_mouse_enable_sequence() == std::string_view("\x1b[?1003l\x1b[?1000h\x1b[?1002h\x1b[?1006h") &&
-             ava::tui::terminal_mouse_disable_sequence() == std::string_view("\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l"),
-         "terminal lifecycle exposes bracketed paste and button-motion SGR mouse enable/disable sequences");
-
-  // enter -> arm
-  ava::tui::arm_owned_terminal_protocols_on_enter();
-  auto ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.kitty_keyboard_pushed && ownership.bracketed_paste_enabled && ownership.mouse_enabled && !ownership.modify_other_keys_enabled &&
-             !ownership.modify_other_keys_desired && !ownership.kitty_keyboard_supported && !ownership.keyboard_protocol_kitty_response_seen,
-         "enter arms paste/mouse/Kitty push+query without enabling modifyOtherKeys yet");
-  expect(count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_query_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_bracketed_paste_enable_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_mouse_enable_sequence()) == 1 &&
-             !sequences_contain(capture.sequences, ava::tui::terminal_background_query_sequence()),
-         "enter emits one Kitty query push and paste enable and never OSC 11");
-
-  // Negotiate modifyOtherKeys fallback (Kitty flags 0).
-  expect(ava::tui::terminal_keyboard_protocol_handle_response("[?0u"), "lifecycle test injects a Kitty flags=0 negotiation reply");
-  ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.keyboard_protocol_kitty_response_seen && !ownership.kitty_keyboard_supported && ownership.modify_other_keys_enabled &&
-             ownership.modify_other_keys_desired && count_sequence(capture.sequences, ava::tui::terminal_modify_other_keys_enable_sequence()) == 1,
-         "flags=0 negotiation enables modifyOtherKeys and remembers it as desired");
-
-  auto const after_enter = capture.sequences.size();
-
-  // handoff release (shared by suspend and external editor)
-  ava::tui::release_owned_terminal_protocols();
-  ownership = ava::tui::terminal_protocol_ownership();
-  expect(!ownership.kitty_keyboard_pushed && !ownership.bracketed_paste_enabled && !ownership.mouse_enabled && !ownership.modify_other_keys_enabled &&
-             ownership.modify_other_keys_desired && ownership.keyboard_protocol_kitty_response_seen,
-         "handoff disables live protocols while retaining negotiated modifyOtherKeys desire");
-  expect(count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_modify_other_keys_disable_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_bracketed_paste_disable_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_mouse_disable_sequence()) == 1 &&
-             !sequences_contain(std::vector<std::string>(capture.sequences.begin() + static_cast<std::ptrdiff_t>(after_enter), capture.sequences.end()),
-                                ava::tui::terminal_background_query_sequence()),
-         "handoff emits balanced pop/disable sequences without OSC 11");
-
-  // idempotent second release
-  auto const after_release = capture.sequences.size();
-  ava::tui::release_owned_terminal_protocols();
-  expect(capture.sequences.size() == after_release, "second handoff release is a no-op");
-
-  // resume re-arm
-  ava::tui::rearm_owned_terminal_protocols();
-  ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.kitty_keyboard_pushed && ownership.bracketed_paste_enabled && ownership.mouse_enabled && ownership.modify_other_keys_enabled &&
-             ownership.modify_other_keys_desired,
-         "resume re-arms paste/mouse/Kitty push and negotiated modifyOtherKeys");
-  expect(count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_push_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_query_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_modify_other_keys_enable_sequence()) == 2 &&
-             count_sequence(capture.sequences, ava::tui::terminal_bracketed_paste_enable_sequence()) == 2 &&
-             count_sequence(capture.sequences, ava::tui::terminal_mouse_enable_sequence()) == 2 &&
-             !sequences_contain(capture.sequences, ava::tui::terminal_background_query_sequence()),
-         "resume uses push-only Kitty re-arm, re-enables paste/modifyOtherKeys, and never re-queries or probes OSC 11");
-
-  // repeated re-arm must not grow Kitty stack or re-emit
-  auto const after_rearm = capture.sequences.size();
-  ava::tui::rearm_owned_terminal_protocols();
-  expect(capture.sequences.size() == after_rearm && ava::tui::terminal_protocol_ownership().kitty_keyboard_pushed,
-         "idempotent resume does not push Kitty again");
-
-  // second handoff + resume cycle
-  ava::tui::release_owned_terminal_protocols();
-  ava::tui::rearm_owned_terminal_protocols();
-  expect(count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()) == 2 &&
-             count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_push_sequence()) == 2 &&
-             count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_query_sequence()) == 1,
-         "repeated handoff/resume keeps Kitty push/pop balanced without extra query pushes");
-
-  // final restore clears negotiation memory
-  ava::tui::restore_owned_terminal_protocols();
-  ownership = ava::tui::terminal_protocol_ownership();
-  expect(!ownership.kitty_keyboard_pushed && !ownership.bracketed_paste_enabled && !ownership.mouse_enabled && !ownership.modify_other_keys_enabled &&
-             !ownership.modify_other_keys_desired && !ownership.keyboard_protocol_kitty_response_seen && !ownership.kitty_keyboard_supported,
-         "final restore releases protocols and clears negotiation memory");
-  expect(count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()) == 3 &&
-             count_sequence(capture.sequences, ava::tui::terminal_mouse_enable_sequence()) ==
-                 count_sequence(capture.sequences, ava::tui::terminal_mouse_disable_sequence()) &&
-             count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_push_sequence()) +
-                     count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_query_sequence()) ==
-                 count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()),
-         "final restore keeps total Kitty pushes equal to pops (no stack growth)");
-
-  // partial/idempotent restore when already released
-  auto const after_restore = capture.sequences.size();
-  ava::tui::restore_owned_terminal_protocols();
-  expect(capture.sequences.size() == after_restore, "restore is idempotent after protocols are already down");
-
-  reset_lifecycle_test_seams();
 }
 
 void test_terminal_protocol_lifecycle_kitty_supported_path()
@@ -2642,7 +2435,7 @@ void test_terminal_protocol_lifecycle_kitty_supported_path()
   ava::tui::release_owned_terminal_protocols();
   ava::tui::rearm_owned_terminal_protocols();
   ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.kitty_keyboard_pushed && ownership.bracketed_paste_enabled && !ownership.modify_other_keys_enabled &&
+  expect(ownership.kitty_keyboard_pushed && !ownership.modify_other_keys_enabled &&
              count_sequence(capture.sequences, ava::tui::terminal_modify_other_keys_enable_sequence()) == 1,
          "Kitty-supported resume re-pushes keyboard protocol without re-enabling modifyOtherKeys");
   expect(!sequences_contain(capture.sequences, ava::tui::terminal_background_query_sequence()), "Kitty-supported handoff/resume never emits OSC 11");
@@ -2665,46 +2458,6 @@ void test_terminal_input_flush_ordering_seam()
   expect(g_flushinp_calls == 2 && g_tcflush_calls == 2 && g_flush_order == std::vector<char>({'i', 't', 'i', 't'}),
          "input flush remains ordered and fail-soft across repeated restore-safe calls");
 
-  reset_lifecycle_test_seams();
-}
-
-void test_external_editor_and_suspend_share_handoff_sequence()
-{
-  ScopedEnvVar term_program_guard("TERM_PROGRAM", "ghostty");
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedEnvVar tmux_guard("TMUX", "");
-  // Deterministic stand-in for both RuntimeActionController handoff paths: the
-  // production suspend/editor code leaves curses, releases protocols before the
-  // handoff, and rearms after reset_prog_mode + geometry refresh.
-  reset_lifecycle_test_seams();
-  SequenceCapture capture;
-  g_sequence_capture = &capture;
-  ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
-
-  ava::tui::arm_owned_terminal_protocols_on_enter();
-  static_cast<void>(ava::tui::terminal_keyboard_protocol_handle_response("[?0u"));
-
-  // external-editor style handoff
-  ava::tui::release_owned_terminal_protocols();
-  // editor runs here
-  ava::tui::rearm_owned_terminal_protocols();
-  auto ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.bracketed_paste_enabled && ownership.modify_other_keys_enabled && ownership.kitty_keyboard_pushed,
-         "external-editor handoff resume restores paste and negotiated keyboard modes");
-
-  // suspend style handoff with resize-while-stopped represented by geometry refresh no-op seam
-  ava::tui::release_owned_terminal_protocols();
-  ava::tui::refresh_terminal_geometry_from_kernel();  // fail-soft without a TTY
-  ava::tui::rearm_owned_terminal_protocols();
-  ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.bracketed_paste_enabled && ownership.modify_other_keys_enabled &&
-             count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_query_sequence()) == 1 &&
-             count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_push_sequence()) == 2 &&
-             count_sequence(capture.sequences, ava::tui::terminal_kitty_keyboard_pop_sequence()) == 2,
-         "suspend-style second handoff stays balanced and does not re-issue Kitty query");
-  expect(!sequences_contain(capture.sequences, ava::tui::terminal_background_query_sequence()), "shared handoff helper never re-probes OSC 11");
-
-  ava::tui::restore_owned_terminal_protocols();
   reset_lifecycle_test_seams();
 }
 
@@ -2883,7 +2636,7 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   expect(LINES == static_cast<int>(size.ws_row) && COLS == static_cast<int>(size.ws_col), "same-size geometry baseline matches the controlled PTY winsize");
 
   for (int i = 0; i < 8; ++i)
-    ava::tui::refresh_terminal_geometry_from_kernel();
+    ava::tui::terminal::BasicScreen::refresh_geometry_from_kernel();
 
   auto const same_size_resizes = drain_resize_events();
   expect(same_size_resizes == 0, "same-size repeated geometry refresh must not inject KEY_RESIZE (got " + std::to_string(same_size_resizes) + ")");
@@ -2894,7 +2647,7 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   grown.ws_row = 30;
   grown.ws_col = 100;
   static_cast<void>(::ioctl(STDOUT_FILENO, TIOCSWINSZ, &grown));
-  ava::tui::refresh_terminal_geometry_from_kernel();
+  ava::tui::terminal::BasicScreen::refresh_geometry_from_kernel();
   expect(LINES == static_cast<int>(grown.ws_row) && COLS == static_cast<int>(grown.ws_col), "real kernel resize still updates ncurses geometry via resizeterm");
   // Consuming any KEY_RESIZE from the real path is fine; just drain so teardown is clean.
   static_cast<void>(drain_resize_events());
@@ -2928,10 +2681,6 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
   ScopedEnvVar tmux_guard("TMUX", "");
   ScopedEnvVar term_program_guard("TERM_PROGRAM", "");
 
-  reset_lifecycle_test_seams();
-  SequenceCapture capture;
-  g_sequence_capture = &capture;
-  ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
   ava::tui::terminal_reset_mouse_tracking();
   ava::tui::runtime_input::clear_startup_input_queue();
 
@@ -2939,7 +2688,6 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
   expect(master_fd >= 0, "direct-terminal mouse PTY can open a master");
   if (master_fd < 0)
   {
-    reset_lifecycle_test_seams();
     static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
     return;
   }
@@ -2947,7 +2695,6 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
   {
     expect(false, "direct-terminal mouse PTY can grant/unlock the slave");
     static_cast<void>(::close(master_fd));
-    reset_lifecycle_test_seams();
     static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
     return;
   }
@@ -2956,7 +2703,6 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
   if (slave_name == nullptr)
   {
     static_cast<void>(::close(master_fd));
-    reset_lifecycle_test_seams();
     static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
     return;
   }
@@ -2965,7 +2711,6 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
   if (slave_fd < 0)
   {
     static_cast<void>(::close(master_fd));
-    reset_lifecycle_test_seams();
     static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
     return;
   }
@@ -2990,112 +2735,83 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
     else if (output_fd >= 0)
       static_cast<void>(::close(output_fd));
     static_cast<void>(::close(master_fd));
-    reset_lifecycle_test_seams();
     static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
     return;
   }
 
-  SCREEN* screen = newterm(nullptr, output, input);
-  expect(screen != nullptr, std::string("direct-terminal mouse PTY creates an ncurses screen under TERM=") + term_name);
-  if (!screen)
   {
-    static_cast<void>(std::fclose(input));
-    static_cast<void>(std::fclose(output));
-    static_cast<void>(::close(master_fd));
-    reset_lifecycle_test_seams();
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
-    return;
+    ava::tui::terminal::Context terminal_context(output, input);
+    static_cast<void>(keypad(stdscr, TRUE));
+    static_cast<void>(wtimeout(stdscr, 100));
+
+    char const* kmous = tigetstr("kmous");
+    bool const kmous_is_sgr_prefix = kmous != nullptr && kmous != reinterpret_cast<char*>(-1) && std::string_view(kmous) == "\x1b[<";
+    expect(kmous_is_sgr_prefix, std::string("direct-terminal mouse regression requires kmous=ESC[< under TERM=") + term_name);
+
+    expect(has_mouse(), "terminal Context mouse mode initializes the ncurses mouse driver");
+
+    auto feed = [&](std::string_view label, std::string_view sequence) {
+      expect(write_all_fd(master_fd, sequence), std::string("direct-terminal mouse PTY can write ") + std::string(label));
+    };
+
+    auto expect_mouse = [&](std::string_view label, ava::tui::Key key, std::size_t column, std::size_t row) {
+      auto input_event = read_direct_mouse_event(label);
+      if (!input_event)
+        return;
+      expect(input_event->event.key == key && input_event->event.mouse_column == column && input_event->event.mouse_row == row && input_event->text.empty() &&
+                 input_event->event.text.empty() && !input_event->bracketed_paste,
+             std::string("direct-terminal mouse delivers ") + std::string(label) + " without residual text");
+      expect_no_residual_mouse_payload(label);
+    };
+
+    // Feed serially: ncurses mouse FIFO is shallow; batching drops intermediate reports.
+    feed("press", "\x1b[<0;10;5M");
+    expect_mouse("left press", ava::tui::Key::MouseLeftPress, 10, 5);
+
+    feed("drag", "\x1b[<32;12;6M");
+    expect_mouse("left drag", ava::tui::Key::MouseLeftDrag, 12, 6);
+
+    feed("release", "\x1b[<0;12;6m");
+    expect_mouse("left release", ava::tui::Key::MouseLeftRelease, 12, 6);
+
+    feed("wheel up", "\x1b[<64;20;8M");
+    expect_mouse("wheel up", ava::tui::Key::MouseWheelUp, 20, 8);
+
+    feed("wheel down", "\x1b[<65;20;8M");
+    expect_mouse("wheel down", ava::tui::Key::MouseWheelDown, 20, 8);
+
+    feed("shift press", "\x1b[<4;15;9M");
+    expect_mouse("shift press cancel", ava::tui::Key::MousePointerCancel, 15, 9);
+
+    // Ordinary text must still reach the composer path after mouse traffic.
+    feed("plain z", "z");
+    auto plain = read_direct_mouse_event("plain z");
+    if (plain)
+    {
+      expect(plain->event.key == ava::tui::Key::Character && plain->text == "z",
+             "direct-terminal mouse mode preserves ordinary character input after SGR traffic");
+    }
+    expect_no_residual_mouse_payload("plain z");
+
+    // Raw SGR parser (tmux/multiplexer path) remains authoritative for full sequences.
+    ava::tui::terminal_reset_mouse_tracking();
+    auto const raw_press = ava::tui::terminal_escape_sequence_event("[<0;11;7M");
+    auto const raw_drag = ava::tui::terminal_escape_sequence_event("[<32;13;8M");
+    auto const raw_release = ava::tui::terminal_escape_sequence_event("[<0;13;8m");
+    auto const raw_wheel_up = ava::tui::terminal_escape_sequence_event("[<64;21;9M");
+    auto const raw_wheel_down = ava::tui::terminal_escape_sequence_event("[<65;21;9M");
+    auto const raw_shift = ava::tui::terminal_escape_sequence_event("[<4;11;7M");
+    expect(raw_press.key == ava::tui::Key::MouseLeftPress && raw_drag.key == ava::tui::Key::MouseLeftDrag &&
+               raw_release.key == ava::tui::Key::MouseLeftRelease && raw_wheel_up.key == ava::tui::Key::MouseWheelUp &&
+               raw_wheel_down.key == ava::tui::Key::MouseWheelDown && raw_shift.key == ava::tui::Key::MousePointerCancel,
+           "raw SGR mouse parser (tmux/multiplexer path) still classifies press/drag/release/wheel/shift");
   }
 
-  static_cast<void>(set_term(screen));
-  static_cast<void>(raw());
-  static_cast<void>(noecho());
-  static_cast<void>(keypad(stdscr, TRUE));
-  static_cast<void>(meta(stdscr, TRUE));
-  static_cast<void>(wtimeout(stdscr, 100));
-
-  char const* kmous = tigetstr("kmous");
-  bool const kmous_is_sgr_prefix = kmous != nullptr && kmous != reinterpret_cast<char*>(-1) && std::string_view(kmous) == "\x1b[<";
-  expect(kmous_is_sgr_prefix, std::string("direct-terminal mouse regression requires kmous=ESC[< under TERM=") + term_name);
-
-  // Production enter path must initialize ncurses mouse ownership via mousemask
-  // even though has_mouse() is still false before the first nonzero mask.
-  expect(!has_mouse(), "direct terminfo starts with has_mouse() false before production mouse arm");
-  ava::tui::arm_owned_terminal_protocols_on_enter();
-  expect(ava::tui::terminal_protocol_ownership().mouse_enabled, "production enter arms mouse ownership");
-  expect(count_sequence(capture.sequences, ava::tui::terminal_mouse_enable_sequence()) == 1,
-         "production enter still emits portable SGR mouse enable sequences");
-  expect(has_mouse(), "production mouse arm initializes the ncurses mouse driver (has_mouse becomes true)");
-
-  auto feed = [&](std::string_view label, std::string_view sequence) {
-    expect(write_all_fd(master_fd, sequence), std::string("direct-terminal mouse PTY can write ") + std::string(label));
-  };
-
-  auto expect_mouse = [&](std::string_view label, ava::tui::Key key, std::size_t column, std::size_t row) {
-    auto input_event = read_direct_mouse_event(label);
-    if (!input_event)
-      return;
-    expect(input_event->event.key == key && input_event->event.mouse_column == column && input_event->event.mouse_row == row && input_event->text.empty() &&
-               input_event->event.text.empty() && !input_event->bracketed_paste,
-           std::string("direct-terminal mouse delivers ") + std::string(label) + " without residual text");
-    expect_no_residual_mouse_payload(label);
-  };
-
-  // Feed serially: ncurses mouse FIFO is shallow; batching drops intermediate reports.
-  feed("press", "\x1b[<0;10;5M");
-  expect_mouse("left press", ava::tui::Key::MouseLeftPress, 10, 5);
-
-  feed("drag", "\x1b[<32;12;6M");
-  expect_mouse("left drag", ava::tui::Key::MouseLeftDrag, 12, 6);
-
-  feed("release", "\x1b[<0;12;6m");
-  expect_mouse("left release", ava::tui::Key::MouseLeftRelease, 12, 6);
-
-  feed("wheel up", "\x1b[<64;20;8M");
-  expect_mouse("wheel up", ava::tui::Key::MouseWheelUp, 20, 8);
-
-  feed("wheel down", "\x1b[<65;20;8M");
-  expect_mouse("wheel down", ava::tui::Key::MouseWheelDown, 20, 8);
-
-  feed("shift press", "\x1b[<4;15;9M");
-  expect_mouse("shift press cancel", ava::tui::Key::MousePointerCancel, 15, 9);
-
-  // Ordinary text must still reach the composer path after mouse traffic.
-  feed("plain z", "z");
-  auto plain = read_direct_mouse_event("plain z");
-  if (plain)
-  {
-    expect(plain->event.key == ava::tui::Key::Character && plain->text == "z",
-           "direct-terminal mouse arm preserves ordinary character input after SGR traffic");
-  }
-  expect_no_residual_mouse_payload("plain z");
-
-  // Raw SGR parser (tmux/multiplexer path) remains authoritative for full sequences.
-  ava::tui::terminal_reset_mouse_tracking();
-  auto const raw_press = ava::tui::terminal_escape_sequence_event("[<0;11;7M");
-  auto const raw_drag = ava::tui::terminal_escape_sequence_event("[<32;13;8M");
-  auto const raw_release = ava::tui::terminal_escape_sequence_event("[<0;13;8m");
-  auto const raw_wheel_up = ava::tui::terminal_escape_sequence_event("[<64;21;9M");
-  auto const raw_wheel_down = ava::tui::terminal_escape_sequence_event("[<65;21;9M");
-  auto const raw_shift = ava::tui::terminal_escape_sequence_event("[<4;11;7M");
-  expect(raw_press.key == ava::tui::Key::MouseLeftPress && raw_drag.key == ava::tui::Key::MouseLeftDrag && raw_release.key == ava::tui::Key::MouseLeftRelease &&
-             raw_wheel_up.key == ava::tui::Key::MouseWheelUp && raw_wheel_down.key == ava::tui::Key::MouseWheelDown &&
-             raw_shift.key == ava::tui::Key::MousePointerCancel,
-         "raw SGR mouse parser (tmux/multiplexer path) still classifies press/drag/release/wheel/shift");
-
-  ava::tui::restore_owned_terminal_protocols();
-  expect(count_sequence(capture.sequences, ava::tui::terminal_mouse_enable_sequence()) ==
-             count_sequence(capture.sequences, ava::tui::terminal_mouse_disable_sequence()),
-         "direct-terminal mouse regression keeps enable/disable protocol balance");
-
-  static_cast<void>(endwin());
-  delscreen(screen);
   static_cast<void>(std::fclose(input));
   static_cast<void>(std::fclose(output));
   static_cast<void>(::close(master_fd));
   ava::tui::runtime_input::clear_startup_input_queue();
   ava::tui::terminal_reset_mouse_tracking();
-  reset_lifecycle_test_seams();
   static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
 #else
   expect(true, "ncurses mouse support unavailable; direct-terminal mouse PTY regression skipped");
@@ -3121,11 +2837,8 @@ void run_tui_terminal_osc11_theme_tests()
 void run_tui_terminal_lifecycle_protocol_tests()
 {
   test_alacritty_da2_version_gate_and_lifecycle();
-  test_terminal_cursor_mapping_and_lifecycle();
-  test_terminal_protocol_lifecycle_enter_handoff_resume_restore();
   test_terminal_protocol_lifecycle_kitty_supported_path();
   test_terminal_input_flush_ordering_seam();
-  test_external_editor_and_suspend_share_handoff_sequence();
   test_same_size_geometry_refresh_does_not_inject_key_resize();
   test_direct_terminal_ncurses_mouse_sgr_no_composer_leak();
 }

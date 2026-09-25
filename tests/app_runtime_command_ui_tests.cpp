@@ -10,6 +10,7 @@
 #include "ava/agent/agent_loop.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
+#include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/theme.h"
 #include "ava/config/auth.h"
 #include "ava/permissions/permission.h"
@@ -671,7 +672,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     auto legacy_defaults = ava::app::load_tui_display_settings(paths);
     expect(legacy_defaults && legacy_defaults->theme && *legacy_defaults->theme == "light" && legacy_defaults->show_images &&
                legacy_defaults->image_width_cells == 60 && !legacy_defaults->show_images_configured && !legacy_defaults->image_width_configured &&
-               legacy_defaults->cursor.style == ava::tui::TerminalCursorStyle::Default && legacy_defaults->cursor.blink &&
+               legacy_defaults->cursor.style() == ava::tui::terminal::CursorStyle::Default && legacy_defaults->cursor.blink() &&
                !legacy_defaults->cursor_style_configured && !legacy_defaults->cursor_blink_configured,
            "theme-only legacy display.json uses image and non-interfering cursor defaults");
 
@@ -680,7 +681,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     std::filesystem::remove(paths.ava_config_dir / "display.json", remove_display_error);
     missing_defaults = ava::app::load_tui_display_settings(paths);
     expect(missing_defaults && !missing_defaults->theme && missing_defaults->show_images && missing_defaults->image_width_cells == 60 &&
-               missing_defaults->cursor == ava::tui::TerminalCursorSettings{},
+               missing_defaults->cursor == ava::tui::terminal::CursorSettings{ava::tui::terminal::CursorStyle::Default},
            "missing display.json uses all effective image and cursor defaults");
 
     auto images_status = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/images"});
@@ -697,10 +698,11 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     expect(images_off && images_off->handled && theme_after_images && theme_after_images->handled && width_set && width_set->handled && cursor_set &&
                cursor_set->handled && !cursor_set->output.empty() && cursor_set->output[0].find("Stored TUI cursor underline steady") != std::string::npos &&
                cursor_style_only && cursor_style_only->handled && preserved && preserved->theme && *preserved->theme == "dark" && !preserved->show_images &&
-               preserved->image_width_cells == 80 && preserved->cursor.style == ava::tui::TerminalCursorStyle::Bar && !preserved->cursor.blink &&
+               preserved->image_width_cells == 80 && preserved->cursor.style() == ava::tui::terminal::CursorStyle::Bar && !preserved->cursor.blink() &&
                preserved_document && preserved_document->theme && *preserved_document->theme == "dark" && preserved_document->show_images &&
                !*preserved_document->show_images && preserved_document->image_width_cells && *preserved_document->image_width_cells == 80 &&
-               preserved_document->cursor_style == ava::tui::TerminalCursorStyle::Bar && preserved_document->cursor_blink && !*preserved_document->cursor_blink,
+               preserved_document->cursor_style == ava::tui::terminal::CursorStyle::Bar && preserved_document->cursor_blink &&
+               !*preserved_document->cursor_blink,
            "alternating theme/image/cursor setters preserve every recognized field and omitted blink retains its prior value");
 
     write_app_test_file(paths.ava_config_dir / "display.json",
@@ -708,14 +710,14 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
                         "\"cursor_blink\": false,\n  \"future_flag\": {\"nested\": true}\n}\n");
     auto with_unknown = ava::app::load_display_settings_document(paths);
     auto store_width = ava::app::store_tui_image_width_setting(paths, 96);
-    auto store_cursor = ava::app::store_tui_cursor_setting(paths, ava::tui::TerminalCursorStyle::Underline, std::nullopt);
+    auto store_cursor = ava::app::store_tui_cursor_setting(paths, ava::tui::terminal::CursorStyle::Underline, std::nullopt);
     auto after_unknown = ava::app::load_display_settings_document(paths);
     std::ifstream after_unknown_input(paths.ava_config_dir / "display.json", std::ios::binary);
     std::string after_unknown_text((std::istreambuf_iterator<char>(after_unknown_input)), std::istreambuf_iterator<char>());
     expect(with_unknown && with_unknown->unknown_fields.size() == 1 && with_unknown->unknown_fields.front().first == "future_flag" && store_width &&
                store_cursor && after_unknown && after_unknown->theme && *after_unknown->theme == "light" && after_unknown->show_images &&
                !*after_unknown->show_images && after_unknown->image_width_cells && *after_unknown->image_width_cells == 96 &&
-               after_unknown->cursor_style == ava::tui::TerminalCursorStyle::Underline && after_unknown->cursor_blink && !*after_unknown->cursor_blink &&
+               after_unknown->cursor_style == ava::tui::terminal::CursorStyle::Underline && after_unknown->cursor_blink && !*after_unknown->cursor_blink &&
                after_unknown->unknown_fields.size() == 1 && after_unknown->unknown_fields.front().first == "future_flag" &&
                after_unknown_text.find("\"future_flag\": {\"nested\": true}") != std::string::npos,
            "recognized cursor fields and raw unknown display.json fields survive field-specific updates");
@@ -725,7 +727,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     auto after_resets = ava::app::load_display_settings_document(paths);
     expect(reset_images && reset_images->handled && reset_width && reset_width->handled && after_resets && after_resets->theme &&
                *after_resets->theme == "light" && !after_resets->show_images && !after_resets->image_width_cells &&
-               after_resets->cursor_style == ava::tui::TerminalCursorStyle::Underline && after_resets->cursor_blink && !*after_resets->cursor_blink &&
+               after_resets->cursor_style == ava::tui::terminal::CursorStyle::Underline && after_resets->cursor_blink && !*after_resets->cursor_blink &&
                after_resets->unknown_fields.size() == 1,
            "each image reset removes only its key and preserves theme, cursor, and unknown fields");
 
@@ -740,7 +742,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
 
     write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"cursor_style\": \"Block\"\n}\n");
     auto invalid_cursor_style = ava::app::load_tui_display_settings(paths);
-    auto rejected_cursor_store = ava::app::store_tui_cursor_setting(paths, ava::tui::TerminalCursorStyle::Bar, true);
+    auto rejected_cursor_store = ava::app::store_tui_cursor_setting(paths, ava::tui::terminal::CursorStyle::Bar, true);
     write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"cursor_blink\": \"yes\"\n}\n");
     auto invalid_cursor_blink = ava::app::load_tui_display_settings(paths);
     expect(!invalid_cursor_style && invalid_cursor_style.error().format().find("cursor_style") != std::string::npos && !rejected_cursor_store &&
@@ -752,7 +754,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"cursor_style\": \"bar\",\n  \"cursor_blink\": false\n}\n");
     auto cursor_watch_after = ava::app::load_tui_display_settings_watch_state(paths);
     expect(cursor_watch_before && cursor_watch_after && ava::app::tui_display_settings_watch_state_changed(*cursor_watch_before, *cursor_watch_after) &&
-               cursor_watch_after->cursor.style == ava::tui::TerminalCursorStyle::Bar && !cursor_watch_after->cursor.blink,
+               cursor_watch_after->cursor.style() == ava::tui::terminal::CursorStyle::Bar && !cursor_watch_after->cursor.blink(),
            "display reload watch detects persistent cursor style and blink changes");
 
     write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"image_width_cells\": 7\n}\n");
@@ -782,7 +784,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
                bad_cursor_style->output[0].find("usage: /cursor default|block|underline|bar [blink|steady]") != std::string::npos && bad_cursor_blink &&
                bad_cursor_blink->handled && !bad_cursor_blink->output.empty() &&
                bad_cursor_blink->output[0].find("unsupported cursor blink mode") != std::string::npos && default_cursor && default_cursor->handled &&
-               default_cursor_settings && default_cursor_settings->cursor == ava::tui::TerminalCursorSettings{},
+               default_cursor_settings && default_cursor_settings->cursor == ava::tui::terminal::CursorSettings{ava::tui::terminal::CursorStyle::Default},
            "command dispatcher validates cursor arguments and persists the non-interfering default");
   }
   auto details = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/details"});

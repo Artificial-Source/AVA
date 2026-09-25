@@ -10,11 +10,11 @@
 #include "ava/tui/runtime_views_internal.h"
 #include "ava/tui/session_grants.h"
 #include "ava/tui/terminal.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <chrono>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 using Signals = core::Signals;
@@ -148,7 +148,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
                           ? permission_prompt_status(allow_session_available, allow_remember_available, deny_remember_available)
                           : "permission required: A=allow D=reject G=guide rejection Tab/Left/Right choose Enter/Space confirm Esc reject";
   }
-  static_cast<void>(beep());
+  ava::core::Application::instance().terminal_context().beep();
   if (!render())
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render permission prompt"));
@@ -425,7 +425,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
     snapshot.status =
         prompt.multiple ? "question required: Space toggles, Enter sends, Esc cancels" : "question required: Enter sends, numbers choose, Esc cancels";
   }
-  static_cast<void>(beep());
+  ava::core::Application::instance().terminal_context().beep();
   if (!render())
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to render question prompt"));

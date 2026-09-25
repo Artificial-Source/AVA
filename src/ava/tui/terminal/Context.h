@@ -122,11 +122,56 @@ class Context final
   // Cursor control.
 
   void apply_cursor_settings(CursorSettings const& settings) { cursor_state_.apply(this, settings); }
-  // Emit the retained cursor settings even when they have not changed.
+  // Emit the retained cursor settings even when they have not changed, unless AVA has only observed the untouched default.
   //
   // Use this after terminal operations such as curs_set that can alter cursor shape or blinking behind CursorState's back.
   void reapply_cursor_settings() { cursor_state_.reapply(this); }
   CursorSettings const& cursor_settings() const { return cursor_state_.cursor_settings_; }
+
+  // Set physical cursor visibility and restore any explicitly applied cursor shape when making it visible.
+  //
+  // ncurses may alter shape or blinking as a side effect of changing visibility, so callers must use this instead of BasicWindow::curs_set.
+  void set_cursor_visible(bool visible)
+  {
+    BasicWindow::curs_set(visible ? 1 : 0);
+    if (visible)
+      cursor_state_.reapply(this);
+  }
+
+  // Release keyboard, mouse, paste, and cursor modes before terminal control is handed to another process.
+  // Retained cursor settings survive and can be restored by rearm_input_modes_after_handoff().
+  void release_input_modes_for_handoff()
+  {
+    keyboard_protocols_.stop();
+    mouse_input_.stop();
+    cursor_state_.release(this);
+  }
+
+  // Re-enable terminal input modes and restore retained cursor settings after a handoff.
+  void rearm_input_modes_after_handoff()
+  {
+    mouse_input_.start(*this);
+    keyboard_protocols_.start(*this);
+    cursor_state_.reapply(this);
+  }
+
+  // Save and leave ncurses' program mode, then release owned input and cursor modes before another process takes control of the terminal.
+  void leave_terminal_for_handoff()
+  {
+    first_screen_.save_program_mode();
+    first_screen_.leave_program_mode();
+    release_input_modes_for_handoff();
+  }
+
+  // Restore ncurses and owned terminal modes after a handoff, refresh geometry, and force a complete repaint.
+  void restore_terminal_after_handoff()
+  {
+    first_screen_.restore_program_mode();
+    first_screen_.refresh_geometry_from_kernel();
+    rearm_input_modes_after_handoff();
+    stdscr_.clearok(true);
+    stdscr_.refresh();
+  }
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 

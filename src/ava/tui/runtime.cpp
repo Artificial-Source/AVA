@@ -220,7 +220,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup;
-  apply_terminal_cursor_settings(options.cursor);
+  terminal_context.apply_cursor_settings(options.cursor);
   // Probe the direct terminal background once after enter and before first paint.
   // No re-probe on suspend/resume and no late theme flip after presentation starts.
   TerminalBackgroundDetectionGuard terminal_background_detection;
@@ -264,7 +264,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   auto& draft_selection_anchor = draft_state.draft_selection_anchor;
   auto& draft_selection_cursor = draft_state.draft_selection_cursor;
   auto& pending_escape_clear = draft_state.pending_escape_clear;
-  RuntimeRenderer renderer(snapshot, sidebar, draft_state);
+  RuntimeRenderer renderer(snapshot, sidebar, draft_state, &terminal_context);
   RuntimeNavigationController navigation(options, snapshot, sidebar, draft_state, renderer);
   auto& transcript_scroll_offset = renderer.transcript_scroll_offset;
   auto& completion_cache = renderer.completion_cache;

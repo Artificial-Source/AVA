@@ -10,6 +10,7 @@
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/terminal.h"
 #include "ava/tui/terminal_image.h"
+#include "ava/core/Application.h"
 
 #include <cerrno>
 #include <chrono>
@@ -23,7 +24,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 namespace {
@@ -120,7 +120,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     if (last_display_reload_error_ && *last_display_reload_error_ == status)
       return DisplaySettingsReloadPollOutcome::Unchanged;
     last_display_reload_error_ = status;
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     {
       std::lock_guard<std::recursive_mutex> lock(renderer_.ui_mutex);
       settle_local_command_status(presentation_state_.snapshot, std::move(status));
@@ -162,11 +162,12 @@ bool RuntimeActionController::clear_draft_for_interrupt()
 
 bool RuntimeActionController::open_external_editor()
 {
+  auto& terminal_context = core::Application::instance().terminal_context();
   auto& snapshot = presentation_state_.snapshot;
   if (!options_.on_external_editor)
   {
     snapshot.status = "external editor unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(terminal_context.beep());
     return renderer_.render();
   }
   draft_state_.pending_escape_clear = false;
@@ -186,22 +187,16 @@ bool RuntimeActionController::open_external_editor()
   if (!renderer_.render())
     return false;
 
-  def_prog_mode();
-  endwin();
   // Balance AVA-owned protocols after leaving curses/alt-screen so the shell
   // and $VISUAL/$EDITOR inherit a clean Kitty stack, paste, and mouse state.
-  release_owned_terminal_protocols();
+  terminal_context.leave_terminal_for_handoff();
   auto edited = options_.on_external_editor(draft_state_.draft.text);
-  reset_prog_mode();
-  refresh_terminal_geometry_from_kernel();
-  rearm_owned_terminal_protocols();
-  clearok(stdscr, TRUE);
-  refresh();
+  terminal_context.restore_terminal_after_handoff();
 
   if (!edited)
   {
     snapshot.status = edited.error().format();
-    static_cast<void>(beep());
+    static_cast<void>(terminal_context.beep());
     return renderer_.render();
   }
   if (!*edited)
@@ -216,6 +211,7 @@ bool RuntimeActionController::open_external_editor()
 
 bool RuntimeActionController::suspend_to_background()
 {
+  auto& terminal_context = core::Application::instance().terminal_context();
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
   draft_state_.jump_mode = ComposerJumpMode::None;
@@ -231,31 +227,21 @@ bool RuntimeActionController::suspend_to_background()
   terminal_reset_mouse_tracking();
 
   {
-    utils::Signal::BlockGuard block_signals({SIGINT|SIGTERM});
-    def_prog_mode();
-    endwin();
+    utils::Signal::BlockGuard block_signals({SIGINT | SIGTERM});
     // Disable AVA-owned protocols after leaving curses so the stopped process's
     // shell inherits balanced keyboard/paste/mouse state. Negotiation preferences
     // are retained so resume can re-arm without re-probing OSC 11.
-    release_owned_terminal_protocols();
+    terminal_context.leave_terminal_for_handoff();
     if (kill(0, SIGTSTP) != 0)
     {
       auto const saved_errno = errno;
-      reset_prog_mode();
-      refresh_terminal_geometry_from_kernel();
-      rearm_owned_terminal_protocols();
-      clearok(stdscr, TRUE);
-      refresh();
+      terminal_context.restore_terminal_after_handoff();
       snapshot.status = std::string("failed to suspend: ") + std::strerror(saved_errno);
-      static_cast<void>(beep());
+      static_cast<void>(terminal_context.beep());
       return renderer_.render();
     }
     // Continues after fg/SIGCONT. Geometry may have changed while stopped.
-    reset_prog_mode();
-    refresh_terminal_geometry_from_kernel();
-    rearm_owned_terminal_protocols();
-    clearok(stdscr, TRUE);
-    refresh();
+    terminal_context.restore_terminal_after_handoff();
   }
 
   snapshot.status = "resumed from background";
@@ -293,7 +279,7 @@ bool RuntimeActionController::paste_clipboard_image()
   if (!options_.on_paste_clipboard_image)
   {
     snapshot.status = "clipboard image paste unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.render();
   }
   snapshot.status = "reading clipboard image";
@@ -304,13 +290,13 @@ bool RuntimeActionController::paste_clipboard_image()
   if (!imported)
   {
     snapshot.status = imported.error().format();
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.render();
   }
   if (!*imported)
   {
     snapshot.status = "no clipboard image available";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.render();
   }
   return queue_pending_image_attachment(**imported, "clipboard image", "pasted clipboard image for next prompt");
@@ -322,7 +308,7 @@ bool RuntimeActionController::copy_latest_assistant_message()
   auto const result = runtime_transcript::copy_latest_assistant_message(snapshot.transcript);
   snapshot.status = runtime_transcript::latest_assistant_copy_status(result);
   if (result != runtime_transcript::LatestAssistantCopyResult::RequestSent)
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
   return renderer_.request_render();
 }
 
@@ -359,7 +345,7 @@ bool RuntimeActionController::open_model_selector()
   if (!options_.model_selector_view)
   {
     snapshot.status = "model selector unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return true;
   }
   draft_state_.pending_escape_clear = false;
@@ -381,7 +367,7 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
     if (!chained_from_model_selection)
     {
       snapshot.status = "thinking mode unavailable for current model";
-      static_cast<void>(beep());
+      static_cast<void>(core::Application::instance().terminal_context().beep());
     }
     return true;
   }
@@ -400,7 +386,7 @@ bool RuntimeActionController::open_scoped_model_selector()
   if (!options_.scoped_model_selector_view)
   {
     snapshot.status = "scoped model selector unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return true;
   }
   draft_state_.pending_escape_clear = false;
@@ -418,7 +404,7 @@ bool RuntimeActionController::open_session_selector()
   if (!options_.session_selector_view)
   {
     snapshot.status = "session selector unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return true;
   }
   draft_state_.pending_escape_clear = false;
@@ -445,7 +431,7 @@ bool RuntimeActionController::toggle_startup_overview()
   if (!snapshot.startup_overview)
   {
     snapshot.status = "startup overview unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
   // Replace any other modal with the read-only overview; Enter/Esc close without mutation.
@@ -464,14 +450,14 @@ bool RuntimeActionController::open_fork_user_turn_selector(std::string_view init
   if (!options_.on_open_fork_user_turn_selector)
   {
     snapshot.status = "fork-from selector unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return true;
   }
   auto opened = options_.on_open_fork_user_turn_selector(initial_query);
   if (!opened)
   {
     snapshot.status = opened.error().format();
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
   draft_state_.pending_escape_clear = false;
@@ -489,14 +475,14 @@ bool RuntimeActionController::open_copy_user_turn_selector(std::string_view init
   if (!options_.on_open_copy_user_turn_selector)
   {
     snapshot.status = "copy user-turn selector unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return true;
   }
   auto opened = options_.on_open_copy_user_turn_selector(initial_query);
   if (!opened)
   {
     snapshot.status = opened.error().format();
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
   draft_state_.pending_escape_clear = false;
@@ -514,14 +500,14 @@ void RuntimeActionController::cycle_model(bool forward)
   if (!options_.on_cycle_model)
   {
     snapshot.status = "model cycling unavailable";
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return;
   }
   auto result = options_.on_cycle_model(forward);
   if (!result)
   {
     snapshot.status = result.error().format();
-    static_cast<void>(beep());
+    static_cast<void>(core::Application::instance().terminal_context().beep());
     return;
   }
   presentation_state_.apply_runtime_state_snapshot(options_, std::move(*result));

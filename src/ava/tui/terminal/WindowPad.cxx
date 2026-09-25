@@ -4,7 +4,7 @@
 namespace ava::tui::terminal {
 
 WindowPad::WindowPad(columns_t window_width, Position window_bottom_left, Rendition rendition, Border border)
-  : WindowBorder(window_width, window_bottom_left, rendition, border)
+    : WindowBorder(window_width, window_bottom_left, rendition, border)
 {
 }
 
@@ -24,8 +24,7 @@ void WindowPad::do_pnoutrefresh(uint32_t pad_row)
     {
       // This pad is the compose area. Keep the cursor inside and make it visible.
       pad_.leaveok(false);
-      pad_.curs_set(config::cursor_visibility);
-      core::Application::instance().terminal_context().reapply_cursor_settings();
+      core::Application::instance().terminal_context().set_cursor_visible(config::cursor_visibility != 0);
     }
   }
 

@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <string>
-#include <curses.h>
 
 namespace ava::tui {
 

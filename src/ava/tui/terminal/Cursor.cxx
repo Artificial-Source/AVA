@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "Context.h"
+
 #include <utility>
 
 namespace ava::tui::terminal {
@@ -26,11 +27,19 @@ void CursorState::apply(Context* context, CursorSettings const& cursor_settings)
     return;
   context->write_raw_sequence(cursor_style_sequence(cursor_settings));
   cursor_settings_ = cursor_settings;
+  cursor_settings_applied_ = true;
+}
+
+void CursorState::release(Context* context) const
+{
+  if (cursor_settings_applied_ && cursor_settings_.style() != CursorStyle::Default)
+    context->write_raw_sequence(cursor_style_sequence({CursorStyle::Default}));
 }
 
 void CursorState::reapply(Context* context) const
 {
-  context->write_raw_sequence(cursor_style_sequence(cursor_settings_));
+  if (cursor_settings_applied_)
+    context->write_raw_sequence(cursor_style_sequence(cursor_settings_));
 }
 
 } // namespace ava::tui::terminal

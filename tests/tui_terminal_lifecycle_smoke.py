@@ -55,12 +55,9 @@ ENVIRONMENT_ALLOWLIST = (
 )
 BRACKETED_PASTE_ENABLE = b"\x1b[?2004h"
 BRACKETED_PASTE_DISABLE = b"\x1b[?2004l"
-KITTY_KEYBOARD_PUSH_FLAGS_5 = b"\x1b[>5u"
-KITTY_KEYBOARD_PUSH_FLAGS_7 = b"\x1b[>7u"
+KITTY_KEYBOARD_PUSH_FLAGS_1 = b"\x1b[>1u"
 KITTY_KEYBOARD_QUERY = b"\x1b[?u"
 DEVICE_ATTRIBUTES_QUERY = b"\x1b[c"
-ALACRITTY_DA2_QUERY = b"\x1b[>c"
-ALACRITTY_DA2_2402_RESPONSE = b"\x1b[>0;2402;1c"
 MODIFY_OTHER_KEYS_ENABLE = b"\x1b[>4;2m"
 MODIFY_OTHER_KEYS_DISABLE = b"\x1b[>4;0m"
 KITTY_KEYBOARD_POP = b"\x1b[<u"
@@ -345,7 +342,7 @@ def run_case(
     )
     pgid = process.pid
     try:
-        initial_kitty_push = KITTY_KEYBOARD_PUSH_FLAGS_5 if direct_alacritty else KITTY_KEYBOARD_PUSH_FLAGS_7
+        initial_kitty_push = KITTY_KEYBOARD_PUSH_FLAGS_1
         startup = read_until(
             master_fd,
             process,
@@ -355,7 +352,6 @@ def run_case(
                 and initial_kitty_push in output
                 and KITTY_KEYBOARD_QUERY in output
                 and DEVICE_ATTRIBUTES_QUERY in output
-                and (not direct_alacritty or ALACRITTY_DA2_QUERY in output)
                 and (not forced_cursor or CURSOR_STEADY_BAR in output)
             ),
             f"{case} synchronized startup",
@@ -365,52 +361,28 @@ def run_case(
             ("Kitty keyboard query", KITTY_KEYBOARD_QUERY),
             ("device-attributes query", DEVICE_ATTRIBUTES_QUERY),
         ]
-        if direct_alacritty:
-            startup_protocols.append(("Alacritty DA2 query", ALACRITTY_DA2_QUERY))
         try:
             require_order(startup, startup_protocols)
         except RuntimeError as error:
             raise RuntimeError(f"{case} startup protocol order was invalid: {error}") from error
-        if direct_alacritty and KITTY_KEYBOARD_PUSH_FLAGS_7 in startup:
-            raise RuntimeError(f"{case} pushed healthy Kitty flags before the DA2 response; startup={startup!r}")
         if forced_cursor:
-            if startup.count(CURSOR_STEADY_BAR) != 1 or CURSOR_STYLE_RESET in startup:
-                raise RuntimeError(f"{case} did not force one steady bar cursor without resetting it during entry; startup={startup!r}")
+            # Context applies the requested shape, then repairs it after ncurses makes the initially hidden cursor visible.
+            if startup.count(CURSOR_STEADY_BAR) != 2 or CURSOR_STYLE_RESET in startup:
+                raise RuntimeError(f"{case} did not apply and restore one steady bar cursor without resetting it during entry; startup={startup!r}")
         else:
             for sequence in CURSOR_STYLE_SEQUENCES:
                 if sequence in startup:
                     raise RuntimeError(f"{case} default cursor perturbed DECSCUSR during entry with {sequence!r}; startup={startup!r}")
 
-        if direct_alacritty:
-            # This capture begins only after the strict response is written. The
-            # replacement assertion therefore cannot match the initial flags-5 push.
-            os.write(master_fd, ALACRITTY_DA2_2402_RESPONSE)
-            negotiation = read_until(
-                master_fd,
-                process,
-                lambda output: (
-                    KITTY_KEYBOARD_POP in output
-                    and KITTY_KEYBOARD_PUSH_FLAGS_7 in output
-                    and output.find(KITTY_KEYBOARD_POP) < output.find(KITTY_KEYBOARD_PUSH_FLAGS_7)
-                ),
-                f"{case} Alacritty DA2 upgrade",
-            )
-            if (
-                negotiation.count(KITTY_KEYBOARD_POP) != 1
-                or negotiation.count(KITTY_KEYBOARD_PUSH_FLAGS_7) != 1
-                or KITTY_KEYBOARD_PUSH_FLAGS_5 in negotiation
-            ):
-                raise RuntimeError(f"{case} DA2 upgrade was not one balanced pop/re-push to flags 7; negotiation={negotiation!r}")
-        else:
-            os.write(master_fd, b"\x1b[?1;2c")
-            negotiation = read_until(
-                master_fd,
-                process,
-                lambda output: MODIFY_OTHER_KEYS_ENABLE in output,
-                f"{case} modifyOtherKeys fallback enable",
-            )
-            if MODIFY_OTHER_KEYS_ENABLE not in negotiation:
-                raise RuntimeError("device-attributes response did not enable modifyOtherKeys fallback")
+        os.write(master_fd, b"\x1b[?1;2c")
+        negotiation = read_until(
+            master_fd,
+            process,
+            lambda output: MODIFY_OTHER_KEYS_ENABLE in output,
+            f"{case} modifyOtherKeys fallback enable",
+        )
+        if MODIFY_OTHER_KEYS_ENABLE not in negotiation:
+            raise RuntimeError("device-attributes response did not enable modifyOtherKeys fallback")
 
         cursor_setup = b""
         if teardown_method == "ctrl_d":
@@ -430,8 +402,7 @@ def run_case(
             raise RuntimeError(f"{case} exited with {returncode}, expected {expected_returncode}; teardown={teardown!r}")
 
         teardown_protocols = []
-        if not direct_alacritty:
-            teardown_protocols.append(("modifyOtherKeys disable", MODIFY_OTHER_KEYS_DISABLE))
+        teardown_protocols.append(("modifyOtherKeys disable", MODIFY_OTHER_KEYS_DISABLE))
         teardown_protocols.extend(
             [
                 ("Kitty keyboard pop", KITTY_KEYBOARD_POP),
@@ -442,15 +413,6 @@ def run_case(
             teardown_protocols.append(("forced cursor reset", CURSOR_STYLE_RESET))
         require_order(teardown, teardown_protocols)
 
-        if direct_alacritty:
-            lifecycle = startup + negotiation + cursor_setup + teardown
-            if (
-                lifecycle.count(KITTY_KEYBOARD_PUSH_FLAGS_5) != 1
-                or lifecycle.count(KITTY_KEYBOARD_PUSH_FLAGS_7) != 1
-                or lifecycle.count(KITTY_KEYBOARD_POP) != 2
-                or lifecycle.count(ALACRITTY_DA2_QUERY) != 1
-            ):
-                raise RuntimeError(f"{case} direct-Alacritty Kitty lifecycle was not balanced; lifecycle={lifecycle!r}")
         if ALT_SCREEN_ENTER in startup and ALT_SCREEN_EXIT not in teardown:
             raise RuntimeError(f"xterm alternate-screen entry was not paired with exit; teardown={teardown!r}")
         cursor_show_at = teardown.find(CURSOR_SHOW)

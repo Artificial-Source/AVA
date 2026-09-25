@@ -6,6 +6,8 @@
 
 namespace ava::tui::terminal {
 
+class Context;
+
 enum class CursorStyle
 {
   Default = 0,
@@ -35,10 +37,16 @@ class CursorSettings
 struct CursorState
 {
   CursorSettings cursor_settings_{CursorStyle::Default};                // The last CursorSettings that were applied.
+  bool cursor_settings_applied_ = false;                                // Whether AVA has emitted a DECSCUSR setting for this Context.
 
   void apply(Context* context, CursorSettings const& cursor_settings);
 
-  // Repeat the last sequence of a call to `apply`. Called by terminal::Context::reapply_cursor_settings.
+  // Emit the default cursor style without replacing the retained settings.
+  // Use this while terminal control is handed to another process; reapply restores the retained style afterward.
+  void release(Context* context) const;
+
+  // Repeat the last sequence emitted by `apply`, or do nothing when AVA has retained only the untouched default.
+  // Called by terminal::Context::reapply_cursor_settings.
   void reapply(Context* context) const;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

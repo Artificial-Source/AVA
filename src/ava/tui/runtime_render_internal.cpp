@@ -3,23 +3,24 @@
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/tui/terminal/Context.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <string>
-#include <curses.h>
 
 namespace ava::tui {
 using Signals = core::Signals;
 
 std::pair<std::size_t, std::size_t> terminal_size()
 {
-  int height = 0;
-  int width = 0;
-  getmaxyx(stdscr, height, width);
+  auto const& terminal_context = ava::core::Application::instance().terminal_context();
+  auto const height = terminal_context.rows();
+  auto const width = terminal_context.cols();
   if (width > 0 && height > 0)
-    return {static_cast<std::size_t>(width), static_cast<std::size_t>(height)};
+    return {width, height};
   return {80, 24};
 }
 
@@ -142,8 +143,8 @@ bool FrameScheduler::failed() const
   return failed_;
 }
 
-RuntimeRenderer::RuntimeRenderer(ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state)
-    : snapshot_(snapshot), sidebar_(sidebar), draft_state_(draft_state)
+RuntimeRenderer::RuntimeRenderer(ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context)
+    : snapshot_(snapshot), sidebar_(sidebar), draft_state_(draft_state), terminal_context_(terminal_context)
 {
 }
 
@@ -560,6 +561,8 @@ bool RuntimeRenderer::render_failed() const
 
 bool RuntimeRenderer::paint(FrameRenderKind kind, bool freeze_transcript_layout)
 {
+  if (terminal_context_)
+    terminal_context_->apply_cursor_settings(snapshot_.cursor);
   if (kind == FrameRenderKind::Full)
     return render_full(freeze_transcript_layout);
 

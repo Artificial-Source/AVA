@@ -12,10 +12,24 @@ namespace ava::tui::terminal {
 namespace {
 
 constexpr std::chrono::milliseconds kKeyboardNegotiationTimeout{50};
-constexpr std::string_view kKittyPushQueryAndDeviceAttributes = "\x1b[>7u\x1b[?u\x1b[c";
+constexpr int kKittyKeyboardHealthyFlags = 7;
+constexpr int kKittyKeyboardDisambiguationOnlyFlags = 1;
+constexpr int kKittyKeyboardDesiredFlags = kKittyKeyboardDisambiguationOnlyFlags;
+constexpr std::string_view kKittyHealthyPushQueryAndDeviceAttributes = "\x1b[>7u\x1b[?u\x1b[c";
+constexpr std::string_view kKittyDisambiguationOnlyPushQueryAndDeviceAttributes = "\x1b[>1u\x1b[?u\x1b[c";
 constexpr std::string_view kModifyOtherKeysSetQueryAndDeviceAttributes = "\x1b[>4;2m\x1b[?4m\x1b[c";
 constexpr std::string_view kDisableModifyOtherKeys = "\x1b[>4;0m";
 constexpr std::string_view kPopKittyKeyboard = "\x1b[<u";
+
+// Return the Kitty push/query sequence for the configured desired flags.
+// Both disambiguation-only and the previous full healthy flag set remain supported.
+constexpr std::string_view kitty_push_query_and_device_attributes()
+{
+  static_assert(kKittyKeyboardDesiredFlags == kKittyKeyboardDisambiguationOnlyFlags || kKittyKeyboardDesiredFlags == kKittyKeyboardHealthyFlags,
+                "unsupported desired Kitty keyboard flags");
+  return kKittyKeyboardDesiredFlags == kKittyKeyboardDisambiguationOnlyFlags ? kKittyDisambiguationOnlyPushQueryAndDeviceAttributes
+                                                                             : kKittyHealthyPushQueryAndDeviceAttributes;
+}
 
 // Return whether `character` is a decimal digit accepted in a keyboard protocol parameter.
 bool is_decimal_digit(char character)
@@ -156,7 +170,7 @@ void KeyboardInputMode::start(Context& context)
 
   context_ = &context;
   kitty_push_requested_ = true;
-  static_cast<void>(context.write_raw_sequence(kKittyPushQueryAndDeviceAttributes));
+  static_cast<void>(context.write_raw_sequence(kitty_push_query_and_device_attributes()));
 
   using Clock = std::chrono::steady_clock;
   auto const deadline = Clock::now() + kKeyboardNegotiationTimeout;

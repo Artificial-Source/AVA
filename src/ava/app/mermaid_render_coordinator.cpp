@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/app/display_settings.h"
 #include "ava/app/mermaid_render_coordinator.h"
+#include "ava/core/Signals.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
 

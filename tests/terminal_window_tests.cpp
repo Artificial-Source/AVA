@@ -11,6 +11,39 @@ namespace terminal = ava::tui::terminal;
 
 namespace {
 
+// Verify that Context is the sole cursor-style owner and emits every DECSCUSR mapping while suppressing duplicate settings.
+void test_context_cursor_settings()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  ScopedEnvVar term_guard("TERM", "xterm-256color");
+  terminal::Context terminal_context(output.get(), input.get());
+
+  long const untouched_default_begin = std::ftell(output.get());
+  terminal_context.reapply_cursor_settings();
+  expect(untouched_default_begin >= 0 && std::ftell(output.get()) == untouched_default_begin,
+         "Context leaves the terminal's inherited default cursor unperturbed until AVA explicitly applies a setting");
+
+  long const begin = std::ftell(output.get());
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Block, true});
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Block, false});
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Underline, true});
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Underline, false});
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, true});
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
+  terminal_context.apply_cursor_settings({terminal::CursorStyle::Default});
+  long const end = std::ftell(output.get());
+
+  constexpr std::string_view expected = "\x1b[1 q\x1b[2 q\x1b[3 q\x1b[4 q\x1b[5 q\x1b[6 q\x1b[0 q";
+  std::string actual(expected.size(), '\0');
+  bool const positions_valid = begin >= 0 && end - begin == static_cast<long>(expected.size());
+  bool const read_succeeded =
+      positions_valid && std::fseek(output.get(), begin, SEEK_SET) == 0 && std::fread(actual.data(), 1, actual.size(), output.get()) == actual.size();
+  expect(read_succeeded && actual == expected && terminal_context.cursor_settings() == terminal::CursorSettings{terminal::CursorStyle::Default},
+         "Context maps cursor styles and blink settings, suppresses duplicates, and retains the applied default");
+}
+
 // Verify that Window exposes writable-area geometry for a non-empty margin and avoids creating a subwindow for an empty one.
 //
 // Runs ncurses against temporary files and repeatedly destroys margin-aware windows so parent/child handle ordering is exercised
@@ -73,5 +106,6 @@ void test_margin_aware_window_geometry_and_lifetime()
 
 void run_terminal_window_tests()
 {
+  test_context_cursor_settings();
   test_margin_aware_window_geometry_and_lifetime();
 }

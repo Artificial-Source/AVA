@@ -872,8 +872,8 @@ ava::core::Result<CommandResult> run_cursor_command(runtime::session_ts& unlocke
   auto settings = load_tui_display_settings(paths);
   if (!settings)
     return std::unexpected(std::move(settings.error()));
-  auto const blink_name = settings->cursor.blink ? "blink" : "steady";
-  return handled_text("Stored TUI cursor " + std::string(tui_cursor_style_name(settings->cursor.style)) + " " + blink_name +
+  auto const blink_name = settings->cursor.blink() ? "blink" : "steady";
+  return handled_text("Stored TUI cursor " + std::string(tui_cursor_style_name(settings->cursor.style())) + " " + blink_name +
                       ".\n  config: " + tui_display_settings_file(paths).string());
 }
 

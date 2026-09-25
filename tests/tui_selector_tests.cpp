@@ -12,6 +12,7 @@
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 #include "ava/tui/runtime_user_turn_selection_internal.h"
 #include "ava/tui/runtime_views_internal.h"
+#include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/theme.h"
 #include "ava/config/model_config.h"
 #include "ava/session/session_store.h"
@@ -934,7 +935,7 @@ void run_tui_selector_tests()
 
     auto cursor_style_overlay = settings_preview_overlay_for_action("settings:cursor.style.bar", snapshot);
     auto cursor_blink_overlay = settings_preview_overlay_for_action("settings:cursor.steady", snapshot);
-    expect(cursor_style_overlay && cursor_style_overlay->cursor_style && *cursor_style_overlay->cursor_style == ava::tui::TerminalCursorStyle::Bar &&
+    expect(cursor_style_overlay && cursor_style_overlay->cursor_style && *cursor_style_overlay->cursor_style == ava::tui::terminal::CursorStyle::Bar &&
                cursor_blink_overlay && cursor_blink_overlay->cursor_blink && !*cursor_blink_overlay->cursor_blink &&
                !settings_preview_overlay_for_action("settings:cursor.style.beam", snapshot),
            "cursor row highlights stage only validated style and blink previews");

@@ -17,12 +17,12 @@
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/runtime_views_internal.h"
 #include "ava/tui/tool_cards.h"
+#include "ava/core/Application.h"
 
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 using runtime_commands::attach_command_argument;
@@ -101,7 +101,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index))
       {
         snapshot.status = "command disabled: " + *disabled_reason;
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
         if (!renderer_.render())
         {
           return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -142,7 +142,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(selected_slash_command_index))
     {
       snapshot.status = "reference disabled: " + *disabled_reason;
-      static_cast<void>(beep());
+      ava::core::Application::instance().terminal_context().beep();
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
     auto selection = navigation_.selected_completion_text(selected_slash_command_index);
@@ -167,7 +167,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(selected_slash_command_index))
     {
       snapshot.status = "path disabled: " + *disabled_reason;
-      static_cast<void>(beep());
+      ava::core::Application::instance().terminal_context().beep();
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
     auto selection = navigation_.selected_completion_text(selected_slash_command_index);
@@ -211,7 +211,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       else
       {
         snapshot.status = "invalid_argument: usage: /stash [pop|clear]";
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
         success = renderer_.request_render();
       }
       //FIXME: how is `success` related to terminal_write_failed ?!
@@ -286,7 +286,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
           if (!options_.on_reload_display_settings)
           {
             open_command_error(snapshot, submitted, "display reload unavailable");
-            static_cast<void>(beep());
+            ava::core::Application::instance().terminal_context().beep();
           }
           else if (auto reloaded = options_.on_reload_display_settings())
           {
@@ -297,13 +297,13 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
           else
           {
             open_command_error(snapshot, submitted, reloaded.error().format());
-            static_cast<void>(beep());
+            ava::core::Application::instance().terminal_context().beep();
           }
         }
         else if (!options_.on_reload_key_bindings)
         {
           open_command_error(snapshot, submitted, "reload unavailable");
-          static_cast<void>(beep());
+          ava::core::Application::instance().terminal_context().beep();
         }
         else if (auto reloaded = options_.on_reload_key_bindings())
         {
@@ -314,7 +314,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         else
         {
           open_command_error(snapshot, submitted, reloaded.error().format());
-          static_cast<void>(beep());
+          ava::core::Application::instance().terminal_context().beep();
         }
         if (!renderer_.render())
         {
@@ -384,7 +384,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       if (attach_target->empty())
       {
         open_command_error(snapshot, submitted, "invalid_argument: usage: /attach <image-path>");
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
         if (!renderer_.render())
         {
           return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -394,7 +394,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       if (!options_.on_attach_image)
       {
         open_command_error(snapshot, submitted, "image attachment import unavailable");
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
         if (!renderer_.render())
         {
           return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -405,7 +405,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       if (!imported)
       {
         open_command_error(snapshot, submitted, imported.error().format());
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
         if (!renderer_.render())
         {
           return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
@@ -438,7 +438,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       {
         auto const status = tool_query->empty() ? std::string("no tool details to show") : std::string("no matching tool details to show");
         open_command_error(snapshot, submitted, status);
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
       }
       if (!renderer_.render())
       {
@@ -458,7 +458,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       else
       {
         open_command_error(snapshot, submitted, diff_query->empty() ? "no tool diff to show" : "no matching tool diff to show");
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
       }
       if (!renderer_.render())
       {
@@ -542,7 +542,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       else
       {
         open_command_error(snapshot, submitted, snapshot.status);
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
       }
       if (!renderer_.render())
       {
@@ -582,7 +582,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         else
         {
           snapshot.status = "no completed long thinking block to expand";
-          static_cast<void>(beep());
+          ava::core::Application::instance().terminal_context().beep();
         }
       }
       else
@@ -598,7 +598,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     }
     RuntimeActiveRunOutcome const outcome = active_run_controller_.run(std::move(submitted));
     return {.disposition = outcome.break_loop ? RuntimeSubmitDisposition::BreakLoop : RuntimeSubmitDisposition::ContinueLoop,
-            .terminal_write_failed = outcome.terminal_write_failed, .terminal_signal_received = outcome.terminal_signal_received};
+            .terminal_write_failed = outcome.terminal_write_failed,
+            .terminal_signal_received = outcome.terminal_signal_received};
   }
   return {};
 }

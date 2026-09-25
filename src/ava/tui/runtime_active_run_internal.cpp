@@ -18,6 +18,7 @@
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/terminal.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/Application.h"
 #include "ava/core/ids.h"
 #include "ava/core/thread.h"
 
@@ -36,7 +37,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-#include <curses.h>
 
 namespace ava::tui {
 namespace detail {
@@ -371,7 +371,7 @@ bool RuntimeActiveRunController::request_stop(RuntimeActiveRunState& state)
   plugin_ui_.cancel_active();
   prompt_coordinator_.fail_pending_requests();
   if (!was_already_requested)
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
   {
     std::lock_guard<std::recursive_mutex> lock(renderer_.ui_mutex);
     presentation_state_.snapshot.status = "stop requested";
@@ -514,7 +514,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
   auto& ui_mutex = renderer_.ui_mutex;
   auto refresh_plugin_surface_fit = [&]() {
-    refresh_terminal_geometry_from_kernel();
+    ava::core::Application::instance().terminal_context().first_screen().refresh_geometry_from_kernel();
     auto const [width, height] = terminal_size();
     snapshot.width = width;
     snapshot.height = height;

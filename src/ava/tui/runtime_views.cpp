@@ -25,8 +25,10 @@ std::vector<std::string> split_key_display(std::string_view keys)
   {
     auto const comma = keys.find(',', start);
     auto end = comma == std::string_view::npos ? keys.size() : comma;
-    while (start < end && std::isspace(static_cast<unsigned char>(keys[start])) != 0) ++start;
-    while (end > start && std::isspace(static_cast<unsigned char>(keys[end - 1])) != 0) --end;
+    while (start < end && std::isspace(static_cast<unsigned char>(keys[start])) != 0)
+      ++start;
+    while (end > start && std::isspace(static_cast<unsigned char>(keys[end - 1])) != 0)
+      --end;
     if (start < end)
       parts.emplace_back(keys.substr(start, end - start));
     if (comma == std::string_view::npos)
@@ -188,16 +190,16 @@ void populate_display_section(SelectListView& view, ComposerSnapshot const& snap
   if (!current_listed && snapshot.image_width_cells >= 8 && snapshot.image_width_cells <= 160)
     add_image_width_action(view, snapshot.image_width_cells, snapshot.image_width_cells);
   add_settings_action_row(view, std::string(kSettingsImageWidthReset), "Width default");
-  auto add_cursor_style = [&](TerminalCursorStyle style, std::string_view token, std::string label) {
+  auto add_cursor_style = [&](terminal::CursorStyle style, std::string_view token, std::string label) {
     add_settings_action_row(view, std::string(kSettingsCursorStylePrefix) + std::string(token), std::move(label),
-                            snapshot.cursor.style == style ? "current" : std::string{});
+                            snapshot.cursor.style() == style ? "current" : std::string{});
   };
-  add_cursor_style(TerminalCursorStyle::Default, "default", "Cursor default");
-  add_cursor_style(TerminalCursorStyle::Block, "block", "Cursor block");
-  add_cursor_style(TerminalCursorStyle::Underline, "underline", "Cursor underline");
-  add_cursor_style(TerminalCursorStyle::Bar, "bar", "Cursor bar");
-  add_settings_action_row(view, std::string(kSettingsCursorBlink), "Cursor blink", snapshot.cursor.blink ? "current" : std::string{});
-  add_settings_action_row(view, std::string(kSettingsCursorSteady), "Cursor steady", snapshot.cursor.blink ? std::string{} : "current");
+  add_cursor_style(terminal::CursorStyle::Default, "default", "Cursor default");
+  add_cursor_style(terminal::CursorStyle::Block, "block", "Cursor block");
+  add_cursor_style(terminal::CursorStyle::Underline, "underline", "Cursor underline");
+  add_cursor_style(terminal::CursorStyle::Bar, "bar", "Cursor bar");
+  add_settings_action_row(view, std::string(kSettingsCursorBlink), "Cursor blink", snapshot.cursor.blink() ? "current" : std::string{});
+  add_settings_action_row(view, std::string(kSettingsCursorSteady), "Cursor steady", snapshot.cursor.blink() ? std::string{} : "current");
   add_settings_action_row(view, std::string(kSettingsDraftThinking), "Thinking blocks", snapshot.thinking_visible ? "visible" : "hidden");
 }
 
@@ -355,10 +357,12 @@ SelectListView branch_summary_operation_view(TuiBranchSummarySnapshot const& sna
     if (label.size() > 256)
     {
       std::size_t prefix = 256;
-      while (prefix > 0 && (static_cast<unsigned char>(label[prefix]) & 0xc0U) == 0x80U) --prefix;
+      while (prefix > 0 && (static_cast<unsigned char>(label[prefix]) & 0xc0U) == 0x80U)
+        --prefix;
       label.resize(prefix);
     }
-    while (!label.empty() && label.back() == ' ') label.pop_back();
+    while (!label.empty() && label.back() == ' ')
+      label.pop_back();
     return label.empty() ? std::string(fallback) : label;
   };
   auto const source = bounded_label(snapshot.source_label, "selected parent");
@@ -544,7 +548,8 @@ ActiveRunHint active_run_hint_for(TuiKeyBindings const& bindings)
 
 std::string compact_path_leaf(std::string path)
 {
-  while (path.size() > 1 && (path.back() == '/' || path.back() == '\\')) path.pop_back();
+  while (path.size() > 1 && (path.back() == '/' || path.back() == '\\'))
+    path.pop_back();
   auto const slash = path.find_last_of("/\\");
   if (slash == std::string::npos)
     return path;
@@ -765,12 +770,9 @@ void DisplayPreviewTransaction::apply_image_overlay(ComposerSnapshot& snapshot) 
       snapshot.show_images = *overlay->show_images;
     if (overlay->image_width_cells)
       snapshot.image_width_cells = *overlay->image_width_cells;
-    if (overlay->cursor_style)
-      snapshot.cursor.style = *overlay->cursor_style;
-    if (overlay->cursor_blink)
-      snapshot.cursor.blink = *overlay->cursor_blink;
+    snapshot.cursor =
+        terminal::CursorSettings{overlay->cursor_style.value_or(snapshot.cursor.style()), overlay->cursor_blink.value_or(snapshot.cursor.blink())};
   }
-  apply_terminal_cursor_settings(snapshot.cursor);
 }
 
 void DisplayPreviewTransaction::apply_theme_overlay() const
@@ -944,13 +946,13 @@ std::optional<DisplayPreviewOverlay> settings_preview_overlay_for_action(std::st
   {
     auto const style = value.substr(kSettingsCursorStylePrefix.size());
     if (style == "default")
-      overlay.cursor_style = TerminalCursorStyle::Default;
+      overlay.cursor_style = terminal::CursorStyle::Default;
     else if (style == "block")
-      overlay.cursor_style = TerminalCursorStyle::Block;
+      overlay.cursor_style = terminal::CursorStyle::Block;
     else if (style == "underline")
-      overlay.cursor_style = TerminalCursorStyle::Underline;
+      overlay.cursor_style = terminal::CursorStyle::Underline;
     else if (style == "bar")
-      overlay.cursor_style = TerminalCursorStyle::Bar;
+      overlay.cursor_style = terminal::CursorStyle::Bar;
     else
       return std::nullopt;
     return overlay;
@@ -1092,9 +1094,12 @@ SelectListView overview_select_list_view(StartupOverviewSnapshot const& overview
     push_overview_row(view, "Resources", std::move(label), std::move(detail));
   }
 
-  for (auto const& name : overview.skill_names) push_overview_row(view, "Skills", name);
-  for (auto const& name : overview.prompt_command_names) push_overview_row(view, "Prompt commands", name);
-  for (auto const& id : overview.plugin_ids) push_overview_row(view, "Plugins", id);
+  for (auto const& name : overview.skill_names)
+    push_overview_row(view, "Skills", name);
+  for (auto const& name : overview.prompt_command_names)
+    push_overview_row(view, "Prompt commands", name);
+  for (auto const& id : overview.plugin_ids)
+    push_overview_row(view, "Plugins", id);
   if (overview.plugin_resource_failure_count && (*overview.plugin_resource_failure_count > 0 || overview.plugin_resource_failure_count_is_lower_bound))
   {
     push_overview_row(view, "Plugins", "Resource failures",

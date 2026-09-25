@@ -5,13 +5,13 @@
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <charconv>
 #include <limits>
 #include <string_view>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 namespace {
@@ -40,7 +40,8 @@ std::string stash_preview(ComposerDraftState const& draft)
     if (preview.size() >= 160)
       break;
   }
-  while (!preview.empty() && preview.back() == ' ') preview.pop_back();
+  while (!preview.empty() && preview.back() == ' ')
+    preview.pop_back();
   if (preview.empty())
     return "(empty preview)";
   auto const safe_end = clamp_composer_draft_cursor(preview, std::min<std::size_t>(preview.size(), 160));
@@ -123,7 +124,8 @@ std::vector<std::uint64_t> PromptStash::ids_newest_first() const
 {
   std::vector<std::uint64_t> ids;
   ids.reserve(entries_.size());
-  for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) ids.push_back(entry->id);
+  for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry)
+    ids.push_back(entry->id);
   return ids;
 }
 
@@ -191,7 +193,7 @@ bool RuntimePromptStashController::trigger()
   if (!presentation_state_.pending_image_attachments.empty())
   {
     snapshot.status = "cannot stash a prompt while image attachments are pending";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
 
@@ -214,7 +216,7 @@ bool RuntimePromptStashController::trigger()
       snapshot.status = "prompt stash exceeds 256 KiB aggregate limit";
       break;
   }
-  static_cast<void>(beep());
+  ava::core::Application::instance().terminal_context().beep();
   return renderer_.request_render();
 }
 
@@ -245,7 +247,7 @@ bool RuntimePromptStashController::restore(std::uint64_t id)
       snapshot.status = "stashed prompt is no longer available";
       break;
   }
-  static_cast<void>(beep());
+  ava::core::Application::instance().terminal_context().beep();
   return renderer_.request_render();
 }
 
@@ -255,14 +257,14 @@ bool RuntimePromptStashController::pop_latest()
   if (!draft_state_.draft.text.empty())
   {
     snapshot.status = "cannot restore a stashed prompt over a nonempty draft";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   auto const ids = stash_.ids_newest_first();
   if (ids.empty())
   {
     snapshot.status = "prompt stash is empty";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   return restore(ids.front());
@@ -319,14 +321,14 @@ std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEve
   if (result.selected_item_index >= snapshot.select_list->items.size())
   {
     snapshot.status = "prompt stash is empty";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   auto const id = stash_id_from_value(snapshot.select_list->items[result.selected_item_index].value);
   if (!id)
   {
     snapshot.status = "stashed prompt selection is invalid";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   return restore(*id);

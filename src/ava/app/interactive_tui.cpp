@@ -136,18 +136,18 @@ int run_tui(InteractiveState state)
   // on_submit (async worker) and TUI-thread auto-reload both publish here; snapshot readers copy under
   // the same mutex. Never hold this mutex across filesystem I/O, catalog work, callbacks, or rendering,
   // and never acquire display_watch_mutex while it is held (lock order is display_watch -> effective).
-  auto effective_display_settings =
-      std::make_shared<ava::app::TuiDisplaySettings>(ava::app::TuiDisplaySettings{.theme = std::nullopt,
-                                                                                  .custom_theme = std::nullopt,
-                                                                                  .show_images = true,
-                                                                                  .image_width_cells = ava::app::kDefaultTuiImageWidthCells,
-                                                                                  .show_images_configured = false,
-                                                                                  .image_width_configured = false,
-                                                                                  .cursor = {},
-                                                                                  .cursor_style_configured = false,
-                                                                                  .cursor_blink_configured = false,
-                                                                                  .mermaid = {},
-                                                                                  .path = ava::app::tui_display_settings_file(invocation_paths)});
+  auto effective_display_settings = std::make_shared<ava::app::TuiDisplaySettings>(
+      ava::app::TuiDisplaySettings{.theme = std::nullopt,
+                                   .custom_theme = std::nullopt,
+                                   .show_images = true,
+                                   .image_width_cells = ava::app::kDefaultTuiImageWidthCells,
+                                   .show_images_configured = false,
+                                   .image_width_configured = false,
+                                   .cursor = ava::tui::terminal::CursorSettings{ava::tui::terminal::CursorStyle::Default},
+                                   .cursor_style_configured = false,
+                                   .cursor_blink_configured = false,
+                                   .mermaid = {},
+                                   .path = ava::app::tui_display_settings_file(invocation_paths)});
   auto effective_display_settings_mutex = std::make_shared<std::mutex>();
   auto mermaid_bridge_created = ava::app::MermaidTuiBridge::create(effective_display_settings->mermaid);
   if (!mermaid_bridge_created)
@@ -876,7 +876,7 @@ int run_tui(InteractiveState state)
           if (!loaded)
             return std::unexpected(std::move(loaded.error()));
           auto const blink = value == "settings:cursor.blink" ? "blink" : "steady";
-          return apply_display_command("/cursor " + std::string(ava::app::tui_cursor_style_name(loaded->cursor.style)) + " " + blink);
+          return apply_display_command("/cursor " + std::string(ava::app::tui_cursor_style_name(loaded->cursor.style())) + " " + blink);
         }
 
         constexpr std::string_view theme_prefix = "theme:";

@@ -10,11 +10,11 @@
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/core/Application.h"
 
 #include <chrono>
 #include <cstddef>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 
@@ -42,7 +42,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, *clicked))
         {
           snapshot.status = "command disabled: " + *disabled_reason;
-          static_cast<void>(beep());
+          ava::core::Application::instance().terminal_context().beep();
         }
         else
         {
@@ -62,7 +62,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(*clicked))
         {
           snapshot.status = "reference disabled: " + *disabled_reason;
-          static_cast<void>(beep());
+          ava::core::Application::instance().terminal_context().beep();
         }
         else
         {
@@ -82,7 +82,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
         if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(*clicked))
         {
           snapshot.status = "path disabled: " + *disabled_reason;
-          static_cast<void>(beep());
+          ava::core::Application::instance().terminal_context().beep();
         }
         else
         {

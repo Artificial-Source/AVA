@@ -15,6 +15,10 @@
 
 namespace ava::tui {
 
+namespace terminal {
+class Context;
+}
+
 [[nodiscard]] std::pair<std::size_t, std::size_t> terminal_size();
 
 enum class WheelDirection
@@ -108,7 +112,8 @@ struct DeferredDetachedViewport
 class RuntimeRenderer final
 {
  public:
-  RuntimeRenderer(ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state);
+  // Render `snapshot` and apply its cursor settings through `terminal_context` when provided.
+  RuntimeRenderer(ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context = nullptr);
 
   [[nodiscard]] bool render();
   [[nodiscard]] bool render_processing_frame();
@@ -158,6 +163,7 @@ class RuntimeRenderer final
   ComposerSnapshot& snapshot_;
   SidebarSnapshot& sidebar_;
   RuntimeDraftState& draft_state_;
+  terminal::Context* terminal_context_ = nullptr;
   RuntimeTranscriptSelectionState transcript_selection_;
   std::ptrdiff_t pending_live_selection_item_index_shift_ = 0;
   TranscriptPositionIndicatorState transcript_position_indicator_;

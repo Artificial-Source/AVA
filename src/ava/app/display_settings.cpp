@@ -846,7 +846,7 @@ TuiDisplaySettings display_settings_from_document_fields(DisplaySettingsDocument
                               .image_width_cells = kDefaultTuiImageWidthCells,
                               .show_images_configured = false,
                               .image_width_configured = false,
-                              .cursor = {},
+                              .cursor = ava::tui::terminal::CursorSettings{ava::tui::terminal::CursorStyle::Default},
                               .cursor_style_configured = false,
                               .cursor_blink_configured = false,
                               .mermaid = document.mermaid.value_or(MermaidDisplaySettings{}),
@@ -855,8 +855,8 @@ TuiDisplaySettings display_settings_from_document_fields(DisplaySettingsDocument
   settings.image_width_cells = document.image_width_cells.value_or(kDefaultTuiImageWidthCells);
   settings.show_images_configured = document.show_images.has_value();
   settings.image_width_configured = document.image_width_cells.has_value();
-  settings.cursor.style = document.cursor_style.value_or(ava::tui::TerminalCursorStyle::Default);
-  settings.cursor.blink = document.cursor_blink.value_or(true);
+  settings.cursor =
+      ava::tui::terminal::CursorSettings{document.cursor_style.value_or(ava::tui::terminal::CursorStyle::Default), document.cursor_blink.value_or(true)};
   settings.cursor_style_configured = document.cursor_style.has_value();
   settings.cursor_blink_configured = document.cursor_blink.has_value();
   return settings;
@@ -984,17 +984,17 @@ std::string tui_image_width_setting_usage()
   return "usage: /image-width <8..160>|reset";
 }
 
-std::optional<ava::tui::TerminalCursorStyle> normalize_tui_cursor_style_setting(std::string_view value)
+std::optional<ava::tui::terminal::CursorStyle> normalize_tui_cursor_style_setting(std::string_view value)
 {
   auto const normalized = lower_ascii(trim_ascii(value));
   if (normalized == "default")
-    return ava::tui::TerminalCursorStyle::Default;
+    return ava::tui::terminal::CursorStyle::Default;
   if (normalized == "block")
-    return ava::tui::TerminalCursorStyle::Block;
+    return ava::tui::terminal::CursorStyle::Block;
   if (normalized == "underline")
-    return ava::tui::TerminalCursorStyle::Underline;
+    return ava::tui::terminal::CursorStyle::Underline;
   if (normalized == "bar")
-    return ava::tui::TerminalCursorStyle::Bar;
+    return ava::tui::terminal::CursorStyle::Bar;
   return std::nullopt;
 }
 
@@ -1008,17 +1008,17 @@ std::optional<bool> normalize_tui_cursor_blink_setting(std::string_view value)
   return std::nullopt;
 }
 
-std::string_view tui_cursor_style_name(ava::tui::TerminalCursorStyle style) noexcept
+std::string_view tui_cursor_style_name(ava::tui::terminal::CursorStyle style) noexcept
 {
   switch (style)
   {
-    case ava::tui::TerminalCursorStyle::Default:
+    case ava::tui::terminal::CursorStyle::Default:
       return "default";
-    case ava::tui::TerminalCursorStyle::Block:
+    case ava::tui::terminal::CursorStyle::Block:
       return "block";
-    case ava::tui::TerminalCursorStyle::Underline:
+    case ava::tui::terminal::CursorStyle::Underline:
       return "underline";
-    case ava::tui::TerminalCursorStyle::Bar:
+    case ava::tui::terminal::CursorStyle::Bar:
       return "bar";
   }
   return "default";
@@ -1594,7 +1594,8 @@ bool tui_display_settings_watch_state_changed(TuiDisplaySettingsWatchState const
 {
   return previous.display_revision != current.display_revision || previous.theme != current.theme || previous.custom_theme_path != current.custom_theme_path ||
          previous.custom_theme_revision != current.custom_theme_revision || previous.show_images != current.show_images ||
-         previous.image_width_cells != current.image_width_cells || previous.cursor != current.cursor || previous.mermaid.enabled != current.mermaid.enabled ||
+         previous.image_width_cells != current.image_width_cells || previous.cursor.style() != current.cursor.style() ||
+         previous.cursor.blink() != current.cursor.blink() || previous.mermaid.enabled != current.mermaid.enabled ||
          previous.mermaid.argv != current.mermaid.argv || previous.custom_theme_catalog.size() != current.custom_theme_catalog.size() ||
          !std::equal(previous.custom_theme_catalog.begin(), previous.custom_theme_catalog.end(), current.custom_theme_catalog.begin(),
                      [](TuiCustomThemeCatalogEntry const& left, TuiCustomThemeCatalogEntry const& right) {
@@ -1639,7 +1640,7 @@ ava::core::VoidResult store_tui_image_width_setting(ava::config::XdgPaths const&
   return store_display_settings_document(*document);
 }
 
-ava::core::VoidResult store_tui_cursor_setting(ava::config::XdgPaths const& paths, ava::tui::TerminalCursorStyle style, std::optional<bool> blink)
+ava::core::VoidResult store_tui_cursor_setting(ava::config::XdgPaths const& paths, ava::tui::terminal::CursorStyle style, std::optional<bool> blink)
 {
   auto document = load_or_default_document(paths);
   if (!document)

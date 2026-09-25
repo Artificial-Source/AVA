@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ava/tui/terminal.h"
+#include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/theme.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/core/result.h"
@@ -58,7 +58,7 @@ struct DisplaySettingsDocument
   std::optional<std::string> theme;
   std::optional<bool> show_images;
   std::optional<std::size_t> image_width_cells;
-  std::optional<ava::tui::TerminalCursorStyle> cursor_style;
+  std::optional<ava::tui::terminal::CursorStyle> cursor_style;
   std::optional<bool> cursor_blink;
   std::optional<MermaidDisplaySettings> mermaid;
   // Unknown top-level fields retained as raw JSON values for forward-compatible updates.
@@ -76,7 +76,7 @@ struct TuiDisplaySettings
   std::size_t image_width_cells = kDefaultTuiImageWidthCells;
   bool show_images_configured = false;
   bool image_width_configured = false;
-  ava::tui::TerminalCursorSettings cursor = {};
+  ava::tui::terminal::CursorSettings cursor{ava::tui::terminal::CursorStyle::Default};
   bool cursor_style_configured = false;
   bool cursor_blink_configured = false;
   MermaidDisplaySettings mermaid;
@@ -129,7 +129,7 @@ struct TuiDisplaySettingsWatchState
   std::optional<std::string> custom_theme_revision;
   bool show_images = true;
   std::size_t image_width_cells = kDefaultTuiImageWidthCells;
-  ava::tui::TerminalCursorSettings cursor = {};
+  ava::tui::terminal::CursorSettings cursor{ava::tui::terminal::CursorStyle::Default};
   MermaidDisplaySettings mermaid;
   // Bounded deterministic catalog of every validated custom theme candidate (stable name order),
   // including themes that are only previewable and not currently configured.
@@ -149,9 +149,9 @@ struct TuiDisplaySettingsWatchState
 [[nodiscard]] std::optional<std::size_t> normalize_tui_image_width_setting(std::string_view value);
 [[nodiscard]] bool is_tui_image_width_reset_value(std::string_view value);
 [[nodiscard]] std::string tui_image_width_setting_usage();
-[[nodiscard]] std::optional<ava::tui::TerminalCursorStyle> normalize_tui_cursor_style_setting(std::string_view value);
+[[nodiscard]] std::optional<ava::tui::terminal::CursorStyle> normalize_tui_cursor_style_setting(std::string_view value);
 [[nodiscard]] std::optional<bool> normalize_tui_cursor_blink_setting(std::string_view value);
-[[nodiscard]] std::string_view tui_cursor_style_name(ava::tui::TerminalCursorStyle style) noexcept;
+[[nodiscard]] std::string_view tui_cursor_style_name(ava::tui::terminal::CursorStyle style) noexcept;
 [[nodiscard]] std::string tui_cursor_setting_usage();
 [[nodiscard]] std::string active_tui_theme_summary();
 [[nodiscard]] ava::core::Result<ava::tui::TuiCustomTheme> load_tui_custom_theme_file(std::filesystem::path const& path);
@@ -167,7 +167,7 @@ struct TuiDisplaySettingsWatchState
 [[nodiscard]] ava::core::VoidResult store_tui_theme_setting(ava::config::XdgPaths const& paths, std::optional<std::string> theme);
 [[nodiscard]] ava::core::VoidResult store_tui_show_images_setting(ava::config::XdgPaths const& paths, std::optional<bool> show_images);
 [[nodiscard]] ava::core::VoidResult store_tui_image_width_setting(ava::config::XdgPaths const& paths, std::optional<std::size_t> image_width_cells);
-[[nodiscard]] ava::core::VoidResult store_tui_cursor_setting(ava::config::XdgPaths const& paths, ava::tui::TerminalCursorStyle style,
+[[nodiscard]] ava::core::VoidResult store_tui_cursor_setting(ava::config::XdgPaths const& paths, ava::tui::terminal::CursorStyle style,
                                                              std::optional<bool> blink);
 
 }  // namespace ava::app

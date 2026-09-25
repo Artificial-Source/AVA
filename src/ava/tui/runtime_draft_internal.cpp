@@ -2,9 +2,9 @@
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
-#include <curses.h>
 
 namespace ava::tui {
 
@@ -82,13 +82,13 @@ bool RuntimeDraftState::copy_selection(ComposerSnapshot& snapshot)
   if (!text || text->empty())
   {
     snapshot.status = "no selection to copy";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return false;
   }
   auto const copied = runtime_transcript::copy_text_to_terminal_clipboard(*text);
   snapshot.status = copied ? "selection copy request sent" : "clipboard copy failed";
   if (!copied)
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
   return copied;
 }
 

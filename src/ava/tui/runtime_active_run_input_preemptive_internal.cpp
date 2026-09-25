@@ -11,10 +11,10 @@
 #include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/core/Application.h"
 
 #include <string>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 using runtime_input::printable_jump_target;
@@ -172,7 +172,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_com
     if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index))
     {
       snapshot.status = "command disabled: " + *disabled_reason;
-      static_cast<void>(beep());
+      ava::core::Application::instance().terminal_context().beep();
     }
     else
     {
@@ -194,7 +194,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_com
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(selected_slash_command_index))
     {
       snapshot.status = "reference disabled: " + *disabled_reason;
-      static_cast<void>(beep());
+      ava::core::Application::instance().terminal_context().beep();
       return to_input_handling(renderer_.request_render());
     }
     auto selection = navigation_.selected_completion_text(selected_slash_command_index);
@@ -214,7 +214,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_com
     if (auto const disabled_reason = navigation_.selected_completion_disabled_reason(selected_slash_command_index))
     {
       snapshot.status = "path disabled: " + *disabled_reason;
-      static_cast<void>(beep());
+      ava::core::Application::instance().terminal_context().beep();
       return to_input_handling(renderer_.request_render());
     }
     auto selection = navigation_.selected_completion_text(selected_slash_command_index);
@@ -247,7 +247,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_com
         {
           path_completion_force_active = false;
           snapshot.status = "path disabled: " + *disabled_reason;
-          static_cast<void>(beep());
+          ava::core::Application::instance().terminal_context().beep();
           return to_input_handling(renderer_.request_render());
         }
         auto selection = navigation_.selected_completion_text(0);

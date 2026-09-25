@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-#include "ava/core/result.h"
 #include "ava/core/Signals.h"
+#include "ava/core/result.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -154,24 +154,6 @@ enum class KeyboardProtocolResponseAction
   DisableModifyOtherKeys
 };
 
-enum class TerminalCursorStyle
-{
-  Default,
-  Block,
-  Underline,
-  Bar
-};
-
-struct TerminalCursorSettings
-{
-  TerminalCursorStyle style = TerminalCursorStyle::Default;
-  bool blink = true;
-
-  bool operator==(TerminalCursorSettings const&) const = default;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
 struct TerminalBackgroundColor
 {
   int red = 0;
@@ -193,10 +175,6 @@ void erase_last_utf8_codepoint(std::string& text);
                                                                          std::optional<std::string_view> term_program);
 [[nodiscard]] std::string_view terminal_modify_other_keys_enable_sequence();
 [[nodiscard]] std::string_view terminal_modify_other_keys_disable_sequence();
-[[nodiscard]] std::string_view terminal_bracketed_paste_enable_sequence();
-[[nodiscard]] std::string_view terminal_bracketed_paste_disable_sequence();
-[[nodiscard]] std::string_view terminal_mouse_enable_sequence();
-[[nodiscard]] std::string_view terminal_mouse_disable_sequence();
 [[nodiscard]] std::optional<int> terminal_kitty_keyboard_flags_response(std::string_view sequence);
 [[nodiscard]] bool terminal_device_attributes_response(std::string_view sequence);
 [[nodiscard]] KeyboardProtocolResponseAction terminal_keyboard_protocol_response_action(std::string_view sequence, bool kitty_response_seen,
@@ -209,14 +187,12 @@ struct TerminalProtocolOwnership
 {
   bool kitty_keyboard_pushed = false;
   int kitty_keyboard_active_flags = 0;
-  int kitty_keyboard_desired_flags = 7;
+  int kitty_keyboard_desired_flags = 1;
   bool alacritty_da2_probe_armed = false;
   bool kitty_keyboard_supported = false;
   bool keyboard_protocol_kitty_response_seen = false;
   bool modify_other_keys_enabled = false;
   bool modify_other_keys_desired = false;
-  bool bracketed_paste_enabled = false;
-  bool mouse_enabled = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -233,17 +209,6 @@ void release_owned_terminal_protocols() noexcept;
 void rearm_owned_terminal_protocols() noexcept;
 // Final session teardown of owned protocols: release plus clear negotiation memory.
 void restore_owned_terminal_protocols() noexcept;
-// TUI-thread-only cursor ownership. Default never writes a reset unless AVA
-// previously forced a DECSCUSR style. Release/reset is shared with handoff and teardown.
-void apply_terminal_cursor_settings(TerminalCursorSettings settings) noexcept;
-[[nodiscard]] TerminalCursorSettings terminal_cursor_settings() noexcept;
-[[nodiscard]] bool terminal_cursor_style_forced() noexcept;
-[[nodiscard]] std::string_view terminal_cursor_style_sequence(TerminalCursorSettings settings) noexcept;
-[[nodiscard]] std::string_view terminal_cursor_style_reset_sequence() noexcept;
-// Apply TIOCGWINSZ via resizeterm only when the kernel size differs from current
-// ncurses geometry. Same-size calls are no-ops so repeated W6 fit refreshes cannot
-// flood KEY_RESIZE. Fail-soft without a TTY or before curses init.
-void refresh_terminal_geometry_from_kernel() noexcept;
 // Nonblocking discard of pending curses then kernel input. No sleep, read loop,
 // output drain, or throw. Safe on partial enter / repeated calls.
 void discard_pending_terminal_input() noexcept;

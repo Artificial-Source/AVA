@@ -6,11 +6,11 @@
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/terminal.h"
 #include "ava/tui/tool_cards.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <utility>
 #include <vector>
-#include <curses.h>
 
 namespace ava::tui {
 
@@ -310,7 +310,7 @@ std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(Inp
     snapshot_.sidebar_drawer_scroll_offset = std::min(max_scroll, snapshot_.sidebar_drawer_scroll_offset + 1);
     return renderer_.request_render();
   }
-  static_cast<void>(beep());
+  ava::core::Application::instance().terminal_context().beep();
   return true;
 }
 

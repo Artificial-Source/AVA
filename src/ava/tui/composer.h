@@ -5,6 +5,7 @@
 #include "ava/agent/subagent_launch.h"
 #include "ava/tui/runtime_plugin_ui.h"
 #include "ava/tui/terminal.h"
+#include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/terminal_image.h"
 #include "ava/tui/text.h"
 #include "ava/tui/theme.h"
@@ -686,7 +687,7 @@ struct ComposerSnapshot
   // Effective image presentation from the application-owned display document.
   bool show_images = true;
   std::size_t image_width_cells = 60;
-  TerminalCursorSettings cursor = {};
+  terminal::CursorSettings cursor{terminal::CursorStyle::Default};
   // Application-owned, path-free startup/resources snapshot. Omitted rather than
   // rebuilt inside the TUI. Presentation-only; never session/provider content.
   std::optional<StartupOverviewSnapshot> startup_overview = std::nullopt;

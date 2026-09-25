@@ -19,12 +19,12 @@
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/terminal.h"
 #include "ava/tui/tool_cards.h"
+#include "ava/core/Application.h"
 
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <curses.h>
 
 namespace ava::tui {
 using runtime_commands::search_command_argument;
@@ -79,7 +79,7 @@ bool RuntimeActiveRunController::restore_latest_queued_message(RuntimeActiveRunS
   if (!restored)
   {
     snapshot.status = restored.error().format();
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   auto const restored_text = restored->steering ? "/steer " + restored->message : restored->message;
@@ -162,7 +162,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     if (*stash_argument == "clear")
       return prompt_stash_.clear();
     snapshot.status = "invalid_argument: usage: /stash [pop|clear]";
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   if (runtime_commands::exact_command(submitted_command, "/jobs"))
@@ -208,7 +208,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
       if (!navigation_.toggle_latest_thinking_details())
       {
         snapshot.status = "no completed long thinking block to expand";
-        static_cast<void>(beep());
+        ava::core::Application::instance().terminal_context().beep();
       }
     }
     else
@@ -237,7 +237,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     else
     {
       snapshot.status = tool_query->empty() ? "no tool details to show" : "no matching tool details to show";
-      static_cast<void>(beep());
+      ava::core::Application::instance().terminal_context().beep();
     }
     clear_local_command_draft();
     return renderer_.request_render();
@@ -250,7 +250,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
   if (dispatch.kind == TuiActiveNonblockingCommandDispatchKind::Blocked)
   {
     snapshot.status = dispatch.status;
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   push_history(input_history, submitted_command);
@@ -278,7 +278,7 @@ std::optional<bool> RuntimeActiveRunController::reject_disabled_visible_completi
   if (auto const disabled_status = detail::disabled_visible_completion_selection_status(current, completion_cache))
   {
     snapshot.status = *disabled_status;
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   return std::nullopt;
@@ -341,7 +341,7 @@ bool RuntimeActiveRunController::queue_active_draft(RuntimeActiveRunState& state
   if (!queued)
   {
     snapshot.status = queued.error().format();
-    static_cast<void>(beep());
+    ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
   push_history(input_history, queued_text);
@@ -459,7 +459,7 @@ bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runt
     }
     auto const handled = subagent_workspace_.handle_input(active_input.event);
     if (handled.beep)
-      static_cast<void>(beep());
+      ava::core::Application::instance().terminal_context().beep();
     return !handled.changed || renderer_.request_render();
   }
   if (auto handled = handle_transcript_search_input(active_input))

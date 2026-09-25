@@ -5,6 +5,7 @@
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime_transcript_selection_internal.h"
 #include "ava/tui/theme.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <array>
@@ -97,7 +98,7 @@ enum class BackgroundRole
 
 struct CursesStyle
 {
-  attr_t attributes = A_NORMAL;
+  attr_t attributes = {};
   NcursesColorRole color = NcursesColorRole::Text;
   BackgroundRole background = BackgroundRole::Screen;
 };
@@ -171,10 +172,11 @@ bool line_contains_osc_sequence(std::string_view line)
 
 void initialize_color_pairs()
 {
+  auto& terminal_context = core::Application::instance().terminal_context();
   static std::optional<std::string> initialized_theme;
   auto const theme = active_tui_theme();
   auto const theme_key = theme.name + "|" + theme.badge + "|" + theme.revision;
-  if (theme.kind == TuiThemeKind::Plain || !has_colors())
+  if (theme.kind == TuiThemeKind::Plain || !terminal_context.has_colors())
   {
     initialized_theme = theme_key;
     return;
@@ -384,7 +386,7 @@ attr_t curses_attributes(CursesStyle const& style)
 {
   if (tui_plain_output())
     return style.attributes;
-  if (!has_colors())
+  if (!core::Application::instance().terminal_context().has_colors())
     return style.attributes;
   return style.attributes | COLOR_PAIR(color_pair_for(style));
 }
@@ -528,7 +530,7 @@ void add_text_chunk(std::string_view text, CursesStyle style)
 
 void draw_styled_line(std::string_view line, bool clear_to_end = true)
 {
-  CursesStyle style{.attributes = A_NORMAL, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen};
+  CursesStyle style{.attributes = {}, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen};
   std::vector<int> codes;
   std::size_t chunk_start = 0;
   for (std::size_t index = 0; index < line.size();)
@@ -570,7 +572,7 @@ void draw_styled_line(std::string_view line, bool clear_to_end = true)
     chunk_start = index;
   }
   add_text_chunk(line.substr(chunk_start), style);
-  attrset(curses_attributes(CursesStyle{.attributes = A_NORMAL, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen}));
+  attrset(curses_attributes(CursesStyle{.attributes = {}, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen}));
   if (clear_to_end)
     clrtoeol();
 }
@@ -2557,24 +2559,33 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
                                 TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation, ScreenRowCache& screen_cache,
                                 bool freeze_transcript_layout, bool allow_frozen_width_mismatch)
 {
+  auto& terminal_context = core::Application::instance().terminal_context();
+  auto& window = terminal_context.stdscr();
+  auto const terminal_rows = terminal_context.rows();
+  auto const terminal_cols = terminal_context.cols();
+  auto move_window = [&window](terminal::Position position) {
+    if (window.is_initialized())
+      window.move(position);
+    else
+      static_cast<void>(move(static_cast<int>(position.row()), static_cast<int>(position.col())));
+  };
   auto& active_image_ids = active_kitty_image_ids();
   initialize_color_pairs();
   auto const width = std::max<std::size_t>(detail::kMinWidth, snapshot.width);
   auto const height = std::max<std::size_t>(detail::kMinHeight, snapshot.height);
   auto const theme = active_tui_theme();
-  auto const style_key =
-      theme.name + "|" + theme.badge + "|" + theme.revision + "|" + (tui_plain_output() ? "plain" : "styled") + "|" + (has_colors() ? "colors" : "mono");
+  auto const style_key = theme.name + "|" + theme.badge + "|" + theme.revision + "|" + (tui_plain_output() ? "plain" : "styled") + "|" +
+                         (terminal_context.has_colors() ? "colors" : "mono");
   auto const invalidate = !screen_cache.valid || screen_cache.width != width || screen_cache.height != height || screen_cache.style_key != style_key;
   if (invalidate)
   {
-    if (!tui_plain_output() && has_colors())
+    if (!tui_plain_output() && terminal_context.has_colors())
     {
-      static_cast<void>(
-          bkgd(curses_attributes(CursesStyle{.attributes = A_NORMAL, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen}) | ' '));
+      static_cast<void>(bkgd(curses_attributes(CursesStyle{.attributes = {}, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen}) | ' '));
     }
     else
     {
-      static_cast<void>(bkgd(A_NORMAL | ' '));
+      static_cast<void>(bkgd(attr_t{} | ' '));
     }
   }
   auto const canvas = composer_canvas_layout(snapshot);
@@ -2590,15 +2601,18 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
   auto const cursor_visible = !snapshot.permission_prompt && !snapshot.question_prompt && !snapshot.command_output && !snapshot.plugin_ui_modal &&
                               !snapshot.select_list && !snapshot.subagent_workspace && !sidebar_drawer_active(snapshot);
   if (!cursor_visible)
-    static_cast<void>(curs_set(0));
-  static_cast<void>(leaveok(stdscr, cursor_visible ? FALSE : TRUE));
+    terminal_context.set_cursor_visible(false);
+  if (window.is_initialized())
+    window.leaveok(!cursor_visible);
+  else
+    static_cast<void>(leaveok(stdscr, cursor_visible ? FALSE : TRUE));
 
   std::vector<std::pair<std::size_t, std::string>> osc_overlay_lines;
   for (auto const index : changed_rows)
   {
-    if (index > static_cast<std::size_t>(LINES > 0 ? LINES - 1 : 0))
+    if (index > static_cast<std::size_t>(terminal_rows > 0 ? terminal_rows - 1 : 0))
       break;
-    move(static_cast<int>(index), 0);
+    move_window({static_cast<uint32_t>(index), 0});
     auto const surface_line = index < surfaces.size() ? surfaces[index] : detail::screen_surface_line("", width);
     if (line_contains_osc_sequence(surface_line))
       osc_overlay_lines.emplace_back(index, surface_line);
@@ -2609,21 +2623,28 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
   cursor.column += canvas.left;
   if (cursor_visible)
   {
-    move(static_cast<int>(std::min<std::size_t>(cursor.row, LINES > 0 ? LINES - 1 : 0)),
-         static_cast<int>(std::min<std::size_t>(cursor.column, COLS > 0 ? COLS - 1 : 0)));
-    static_cast<void>(curs_set(1));
+    move_window({static_cast<uint32_t>(std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0)),
+                 static_cast<uint32_t>(std::min<std::size_t>(cursor.column, terminal_cols > 0 ? terminal_cols - 1 : 0))});
+    terminal_context.set_cursor_visible(true);
   }
 
   auto fail_screen_draw = [&]() -> bool {
     screen_cache.valid = false;
     return false;
   };
-  if (wnoutrefresh(stdscr) == ERR || doupdate() == ERR)
+  if (window.is_initialized())
+  {
+    window.wnoutrefresh();
+    terminal_context.doupdate();
+  }
+  else if (wnoutrefresh(stdscr) == ERR || doupdate() == ERR)
+  {
     return fail_screen_draw();
+  }
   bool wrote_direct_sequences = false;
   for (auto const& [row, line] : osc_overlay_lines)
   {
-    if (row >= static_cast<std::size_t>(LINES > 0 ? LINES : 0))
+    if (row >= static_cast<std::size_t>(terminal_rows))
       continue;
     auto const move = "\x1b[" + std::to_string(row + 1) + ";1H";
     if (std::fwrite(move.data(), 1, move.size(), stdout) != move.size())
@@ -2652,9 +2673,9 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
     }
     for (auto const& graphic : frame.graphics)
     {
-      if (graphic.sequence.empty() || graphic.row >= static_cast<std::size_t>(LINES > 0 ? LINES : 0))
+      if (graphic.sequence.empty() || graphic.row >= static_cast<std::size_t>(terminal_rows))
         continue;
-      auto const column = std::min<std::size_t>(graphic.column, COLS > 0 ? COLS - 1 : 0);
+      auto const column = std::min<std::size_t>(graphic.column, terminal_cols > 0 ? terminal_cols - 1 : 0);
       auto const move = "\x1b[" + std::to_string(graphic.row + 1) + ";" + std::to_string(column + 1) + "H";
       if (std::fwrite(move.data(), 1, move.size(), stdout) != move.size())
         return fail_screen_draw();
@@ -2670,8 +2691,8 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
   }
   if (wrote_direct_sequences && cursor_visible)
   {
-    auto const row = std::min<std::size_t>(cursor.row, LINES > 0 ? LINES - 1 : 0);
-    auto const column = std::min<std::size_t>(cursor.column, COLS > 0 ? COLS - 1 : 0);
+    auto const row = std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0);
+    auto const column = std::min<std::size_t>(cursor.column, terminal_cols > 0 ? terminal_cols - 1 : 0);
     auto const move = "\x1b[" + std::to_string(row + 1) + ";" + std::to_string(column + 1) + "H";
     if (std::fwrite(move.data(), 1, move.size(), stdout) != move.size())
       return fail_screen_draw();
@@ -2696,22 +2717,37 @@ bool detail::draw_processing_footer_cached(ComposerSnapshot const& snapshot, Com
       snapshot.subagent_workspace || sidebar_drawer_active(snapshot))
     return false;
 
+  auto& terminal_context = core::Application::instance().terminal_context();
+  auto& window = terminal_context.stdscr();
+  auto const terminal_rows = terminal_context.rows();
+  auto const terminal_cols = terminal_context.cols();
+  auto move_window = [&window](terminal::Position position) {
+    if (window.is_initialized())
+      window.move(position);
+    else
+      static_cast<void>(move(static_cast<int>(position.row()), static_cast<int>(position.col())));
+  };
   auto const height = std::max<std::size_t>(detail::kMinHeight, snapshot.height);
   auto const canvas = composer_canvas_layout(snapshot);
   auto footer = detail::render_composer_footer_line(snapshot, canvas.content_width);
   if (tui_plain_output())
     footer = strip_sgr_sequences(footer);
-  auto const row = std::min<std::size_t>(height - 1, LINES > 0 ? LINES - 1 : 0);
-  move(static_cast<int>(row), static_cast<int>(canvas.left));
+  auto const row = std::min<std::size_t>(height - 1, terminal_rows > 0 ? terminal_rows - 1 : 0);
+  move_window({static_cast<uint32_t>(row), static_cast<uint32_t>(canvas.left)});
   // Do not clear past the main canvas: that would erase a visible sidebar on every tick.
   draw_styled_line(footer, false);
 
   auto cursor = input_cursor_placement(snapshot, height, canvas.content_width);
   cursor.column += canvas.left;
-  move(static_cast<int>(std::min<std::size_t>(cursor.row, LINES > 0 ? LINES - 1 : 0)),
-       static_cast<int>(std::min<std::size_t>(cursor.column, COLS > 0 ? COLS - 1 : 0)));
-  static_cast<void>(leaveok(stdscr, FALSE));
-  if (wnoutrefresh(stdscr) == ERR || doupdate() == ERR)
+  move_window({static_cast<uint32_t>(std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0)),
+               static_cast<uint32_t>(std::min<std::size_t>(cursor.column, terminal_cols > 0 ? terminal_cols - 1 : 0))});
+  if (window.is_initialized())
+  {
+    window.leaveok(false);
+    window.wnoutrefresh();
+    terminal_context.doupdate();
+  }
+  else if (leaveok(stdscr, FALSE) == ERR || wnoutrefresh(stdscr) == ERR || doupdate() == ERR)
   {
     screen_cache.valid = false;
     return false;
