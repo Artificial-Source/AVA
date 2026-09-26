@@ -294,7 +294,7 @@ int finalize_test_run(bool report_all_passed, bool allow_skip)
   return 0;
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -305,7 +305,7 @@ int main(int argc, char** argv)
 
   // Construct the process Application before other startup work. Its base
   // initializes debugging before constructing the allocator-owned members.
-  TestRunnerApplication application(CWDEBUG_ONLY(debug_suite_token));
+  TestRunnerApplication application{CWDEBUG_ONLY(debug_suite_token)};
 
 #ifdef CWDEBUG
   if (!TestRunnerApplication::debug_setup_succeeded())
