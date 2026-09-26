@@ -20,6 +20,11 @@
 #include "private_convert.h"
 
 namespace ava::tui::terminal {
+namespace {
+
+constexpr std::string_view kQueryBackgroundColor = "\x1b]11;?\x1b\\";
+
+} // namespace
 
 Context::Context(utils::Badge<core::Application>) : default_rendition_(ColorPair{{}, 0})
 {
@@ -337,6 +342,18 @@ bool Context::write_raw_sequence(std::string_view sequence)
   if (!output_file_)
     return false;
   return std::fwrite(sequence.data(), 1, sequence.size(), output_file_) == sequence.size() && std::fflush(output_file_) == 0;
+}
+
+// Ask the terminal for its default background color without exposing raw escape ownership outside Context.
+bool Context::query_background_color()
+{
+  return write_raw_sequence(kQueryBackgroundColor);
+}
+
+// Replay one byte retained by the bounded keyboard negotiation before ncurses reads the terminal descriptor.
+bool Context::try_get_buffered_keyboard_input(wint_t* wch)
+{
+  return keyboard_protocols_.try_get_wch(wch);
 }
 
 // Read a bounded raw byte batch from the configured terminal input descriptor.

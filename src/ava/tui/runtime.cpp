@@ -165,7 +165,7 @@ std::optional<std::string_view> optional_environment_view(char const* name)
   return std::string_view(value);
 }
 
-void maybe_probe_terminal_background_appearance()
+void maybe_probe_terminal_background_appearance(terminal::Context& terminal_context)
 {
   if (!tui_theme_needs_terminal_background_probe())
     return;
@@ -176,7 +176,7 @@ void maybe_probe_terminal_background_appearance()
     return;
 
   arm_terminal_background_response_handler();
-  if (write_terminal_background_query(stdout))
+  if (terminal_context.query_background_color())
     runtime_input::drain_startup_probe_input(kTerminalBackgroundProbeDeadline);
   disarm_terminal_background_response_handler();
 }
@@ -224,7 +224,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   // Probe the direct terminal background once after enter and before first paint.
   // No re-probe on suspend/resume and no late theme flip after presentation starts.
   TerminalBackgroundDetectionGuard terminal_background_detection;
-  maybe_probe_terminal_background_appearance();
+  maybe_probe_terminal_background_appearance(terminal_context);
 
   RuntimePresentationState presentation_state(options);
   auto& snapshot = presentation_state.snapshot;

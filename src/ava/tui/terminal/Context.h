@@ -113,6 +113,14 @@ class Context final
   // Write a raw sequence of characters to the terminal and flush it. Returns true upon success.
   bool write_raw_sequence(std::string_view sequence);
 
+  // Emit the OSC 11 terminal-background query and flush it. Theme policy and reply interpretation remain TUI concerns.
+  [[nodiscard]] bool query_background_color();
+
+  // Return one wide character preserved while KeyboardInputMode negotiated, exactly once and before callers read ncurses input.
+  // UTF-8 split across the negotiation buffer and terminal descriptor is completed here. `wch` is an output parameter; a null pointer
+  // returns false without consuming input. Invalid or truncated UTF-8 is returned byte-by-byte as U+FFFD and cannot alias controls.
+  [[nodiscard]] bool try_get_buffered_keyboard_input(wint_t* wch);
+
   // Read at most 4096 raw bytes currently available from the configured terminal input, waiting no longer than `timeout`.
   //
   // This directly polls and reads the input stream descriptor without changing its blocking flags. It is intended only for short

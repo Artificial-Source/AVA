@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "support/test_harness.h"
+#include "support/terminal_test_support.h"
 #include "support/tui_test_support.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
@@ -155,8 +156,6 @@ void run_tui_terminal_image_tests()
 
 void run_tui_terminal_input_tests_part_1()
 {
-  expect(ava::tui::terminal_escape_delay_ms() == 100,
-         "terminal escape delay is deliberately tuned low enough for responsive Esc while buffering split CSI input");
   auto const osc8_width_sample = std::string("a\x1b]8;;https://example.test\x1b\\b\x1b]8;;\x1b\\");
   expect(ava::tui::detail::terminal_text_columns(osc8_width_sample) == 2 &&
              ava::tui::detail::fit_line_preserving_sgr(std::string("\x1b]8;;https://example.test\x1b\\abcdef\x1b]8;;\x1b\\"), 4).find("\x1b]8;;\x1b\\...") !=
@@ -200,32 +199,6 @@ void run_tui_terminal_input_tests_part_1()
   auto const sanitized_wrap = ava::tui::detail::wrap_transcript_text(std::string(ava::tui::detail::kSgrUnderline) + "ab", 3);
   expect(!sanitized_wrap.empty() && sanitized_wrap[0].find('\x1b') == std::string::npos,
          "production transcript wrapping still sanitizes raw escape sequences before wrapping");
-  auto const kitty_push_sequence = ava::tui::terminal_kitty_keyboard_push_sequence();
-  expect(kitty_push_sequence == std::string_view("\x1b[>7u") &&
-             ava::tui::terminal_kitty_keyboard_query_sequence() == std::string_view("\x1b[>7u\x1b[?u\x1b[c") &&
-             ava::tui::terminal_kitty_keyboard_pop_sequence() == std::string_view("\x1b[<u"),
-         "normal terminal sessions request all supported Kitty key-reporting flags, query support, and restore the stack on exit");
-  constexpr int kKittyDisambiguateEscapeCodes = 1;
-  constexpr int kKittyReportEventTypes = 2;
-  constexpr int kKittyReportAlternateKeys = 4;
-  constexpr int kHealthyKittyFlags = kKittyDisambiguateEscapeCodes | kKittyReportEventTypes | kKittyReportAlternateKeys;
-  expect(kHealthyKittyFlags == 7 && kitty_push_sequence == "\x1b[>7u", "normal Kitty sequence maps all supported key-reporting flags");
-  expect(ava::tui::terminal_modify_other_keys_enable_sequence() == std::string_view("\x1b[>4;2m") &&
-             ava::tui::terminal_modify_other_keys_disable_sequence() == std::string_view("\x1b[>4;0m"),
-         "terminal session has xterm modifyOtherKeys fallback enable and disable sequences");
-  auto const kitty_flags = ava::tui::terminal_kitty_keyboard_flags_response("[?5u");
-  auto const kitty_zero_flags = ava::tui::terminal_kitty_keyboard_flags_response("[?0u");
-  using KeyboardAction = ava::tui::KeyboardProtocolResponseAction;
-  expect(kitty_flags && *kitty_flags == 5 && kitty_zero_flags && *kitty_zero_flags == 0 && !ava::tui::terminal_kitty_keyboard_flags_response("[?u") &&
-             !ava::tui::terminal_kitty_keyboard_flags_response("[?5c") && ava::tui::terminal_device_attributes_response("[?1c") &&
-             ava::tui::terminal_device_attributes_response("[?62;4;52c") && !ava::tui::terminal_device_attributes_response("[?c") &&
-             !ava::tui::terminal_device_attributes_response("[?62;4;52u") &&
-             ava::tui::terminal_keyboard_protocol_response_action("[?0u", false, false) == KeyboardAction::EnableModifyOtherKeys &&
-             ava::tui::terminal_keyboard_protocol_response_action("[?62;4;52c", false, false) == KeyboardAction::EnableModifyOtherKeys &&
-             ava::tui::terminal_keyboard_protocol_response_action("[?62;4;52c", true, false) == KeyboardAction::None &&
-             ava::tui::terminal_keyboard_protocol_response_action("[?5u", false, true) == KeyboardAction::DisableModifyOtherKeys &&
-             ava::tui::terminal_keyboard_protocol_response_action("[?5u", false, false) == KeyboardAction::None,
-         "terminal keyboard negotiation parser recognizes Kitty flag and device-attribute replies and derives fallback actions");
   expect(
       ava::tui::terminal_escape_sequence_key("[27;2;13~") == ava::tui::Key::ShiftEnter &&
           ava::tui::terminal_escape_sequence_key("[13;2u") == ava::tui::Key::ShiftEnter &&
@@ -1670,9 +1643,6 @@ void push_bytes_to_curses(std::string_view bytes)
 
 void test_osc11_background_parser()
 {
-  expect(ava::tui::terminal_background_query_sequence() == std::string_view("\x1b]11;?\x1b\\"),
-         "terminal background probe emits OSC 11 query terminated with ST");
-
   expect(color_eq(ava::tui::terminal_osc11_background_response(osc11_response("rgb:f/f/f")), 255, 255, 255) &&
              color_eq(ava::tui::terminal_osc11_background_response(osc11_response("rgb:ff/ff/ff")), 255, 255, 255) &&
              color_eq(ava::tui::terminal_osc11_background_response(osc11_response("rgb:fff/fff/fff")), 255, 255, 255) &&
@@ -2019,28 +1989,14 @@ std::string read_tmpfile_bytes(FILE* file)
 
 void test_osc11_query_writer_and_environment_gate_seam()
 {
-  auto const expected_query = std::string(ava::tui::terminal_background_query_sequence());
-  expect(expected_query == "\x1b]11;?\x1b\\", "query writer seam uses the ST-terminated OSC 11 probe bytes");
+  ScopedEnvVar term_guard("TERM", "xterm-direct");
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  ava::tui::terminal::Context terminal_context(output.get(), input.get());
+  reset_output_file(output.get());
 
-  ScopedTmpFile allowed;
-
-  expect(ava::tui::write_terminal_background_query(allowed.get()), "query writer reports success after writing the OSC 11 probe");
-  expect(read_tmpfile_bytes(allowed.get()) == expected_query, "query writer emits exact OSC 11 query bytes");
-  expect(!ava::tui::write_terminal_background_query(nullptr), "query writer fails closed on a null stream");
-
-  ScopedTmpFile skipped_tmux;
-  ScopedTmpFile skipped_term;
-  ScopedTmpFile allowed_emit;
-
-  expect(!ava::tui::emit_terminal_background_query_if_environment_allows("/tmp/tmux-1000/default,1,0", "xterm-256color", skipped_tmux.get()) &&
-             read_tmpfile_bytes(skipped_tmux.get()).empty(),
-         "emit seam writes nothing when TMUX suppresses the query");
-  expect(!ava::tui::emit_terminal_background_query_if_environment_allows(std::nullopt, "tmux-256color", skipped_term.get()) &&
-             read_tmpfile_bytes(skipped_term.get()).empty(),
-         "emit seam writes nothing when TERM=tmux* suppresses the query");
-  expect(ava::tui::emit_terminal_background_query_if_environment_allows(std::nullopt, "xterm-256color", allowed_emit.get()) &&
-             read_tmpfile_bytes(allowed_emit.get()) == expected_query,
-         "emit seam writes exact OSC 11 bytes for a direct xterm environment");
+  expect(terminal_context.query_background_color(), "Context reports a successful OSC 11 query write");
+  expect(read_tmpfile_bytes(output.get()) == "\x1b]11;?\x1b\\", "Context owns and emits the exact ST-terminated OSC 11 query bytes");
 }
 
 struct VirtualOsc11Screen
@@ -2274,6 +2230,7 @@ void test_disarmed_and_malformed_osc11_inside_startup_bracketed_paste_preserve_s
   }
 }
 
+#if 0  // Removed duplicate legacy protocol-owner tests; canonical coverage lives in terminal_keyboard_input_mode_tests.cpp.
 struct SequenceCapture
 {
   std::vector<std::string> sequences;
@@ -2460,6 +2417,7 @@ void test_terminal_input_flush_ordering_seam()
 
   reset_lifecycle_test_seams();
 }
+#endif
 
 bool write_all_fd(int fd, std::string_view bytes)
 {
@@ -2836,9 +2794,6 @@ void run_tui_terminal_osc11_theme_tests()
 
 void run_tui_terminal_lifecycle_protocol_tests()
 {
-  test_alacritty_da2_version_gate_and_lifecycle();
-  test_terminal_protocol_lifecycle_kitty_supported_path();
-  test_terminal_input_flush_ordering_seam();
   test_same_size_geometry_refresh_does_not_inject_key_resize();
   test_direct_terminal_ncurses_mouse_sgr_no_composer_leak();
 }

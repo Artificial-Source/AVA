@@ -3,6 +3,8 @@
 #include "utils/macros.h"
 #include "ava/debug/print_members_on.h"
 
+#include <cstddef>
+#include <cwchar>
 #include <string>
 
 namespace ava::tui::terminal {
@@ -11,16 +13,16 @@ class Context;
 
 // Negotiates enhanced keyboard reporting for one terminal Context and restores every mode it may have requested.
 //
-// Construction is inert. Call start once before normal ncurses input processing, then replay try_get_wch() through the
-// future input loop so bytes unrelated to negotiation are not lost. This object and its Context must have nested lifetimes.
+// Construction is inert. Call start once before normal ncurses input processing; Context then replays try_get_wch() through
+// the runtime input loop so bytes unrelated to negotiation are not lost. This object and its Context must have nested lifetimes.
 class KeyboardInputMode final
 {
  private:
   Context* context_ = nullptr;                  // Non-owning active Context, or null while inactive.
   bool kitty_push_requested_ = false;           // Whether a Kitty push write may have activated a stack entry.
   bool modify_other_keys_requested_ = false;    // Whether a modifyOtherKeys write may have activated level 2; this is not confirmation.
-  std::string buffered_input_;                  // Non-protocol bytes consumed from the raw descriptor during negotiation.
-  std::string_view remaining_buffered_input_;   // A view of the remaining buffered input, initialized at the end of start.
+  std::string buffered_input_;                  // Non-protocol raw bytes retained in arrival order across negotiation and handoff.
+  std::size_t buffered_input_offset_ = 0;        // First unconsumed byte; consumed bytes are compacted by the next start.
 
  public:
   // Create an inactive mode manager without reading from or writing to a terminal.
@@ -48,18 +50,11 @@ class KeyboardInputMode final
   // The operation is noexcept and idempotent. State is cleared even when terminal output fails, so a second call emits nothing.
   void stop() noexcept;
 
-  // Move out one byte read during negotiation that was not part of a complete expected protocol reply.
-  // Ordinary text, unrelated escape sequences, malformed replies, and incomplete sequences at the deadline are
-  // preserved byte-for-byte.
-  bool try_get_wch(wint_t* wch)
-  {
-    if (AI_LIKELY(remaining_buffered_input_.empty()))
-      return false;
-
-    *wch = remaining_buffered_input_.front();
-    remaining_buffered_input_.remove_prefix(1);
-    return true;
-  }
+  // Decode and move out one character retained during negotiation. An incomplete UTF-8 prefix is completed from the Context's raw
+  // descriptor before normal ncurses input resumes, so a sequence split at the negotiation boundary remains one wide character.
+  // Invalid or still-truncated UTF-8 consumes one byte as U+FFFD, ensuring malformed input cannot alias a control character.
+  // Returns false without consuming input when `wch` is null or no buffered input remains.
+  bool try_get_wch(wint_t* wch);
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

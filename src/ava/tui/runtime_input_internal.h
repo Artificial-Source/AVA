@@ -8,6 +8,10 @@
 #include <string>
 #include "debug.h"
 
+namespace ava::tui::terminal {
+class Context;
+}
+
 namespace ava::tui::runtime_input {
 
 struct RuntimeInput
@@ -33,6 +37,8 @@ void clear_startup_input_queue();
 [[nodiscard]] bool enqueue_startup_input(RuntimeInput input);
 // Raw terminal read path used by the startup probe. Does not drain the startup queue.
 [[nodiscard]] RuntimeInput read_curses_input_from_terminal();
+// Deterministic Context seam for canonical startup-buffer replay tests.
+[[nodiscard]] RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context);
 // Drain ncurses input for up to `deadline`, enqueueing complete non-discard events.
 // Escape assembly begun at the deadline edge may still use its ordinary 50 ms budget.
 // A bracketed paste already begun may finish under its ordinary 1 s cap so the paste

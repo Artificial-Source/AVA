@@ -352,6 +352,7 @@ def run_case(
                 and initial_kitty_push in output
                 and KITTY_KEYBOARD_QUERY in output
                 and DEVICE_ATTRIBUTES_QUERY in output
+                and MODIFY_OTHER_KEYS_ENABLE in output
                 and (not forced_cursor or CURSOR_STEADY_BAR in output)
             ),
             f"{case} synchronized startup",
@@ -360,6 +361,7 @@ def run_case(
             ("initial Kitty keyboard push", initial_kitty_push),
             ("Kitty keyboard query", KITTY_KEYBOARD_QUERY),
             ("device-attributes query", DEVICE_ATTRIBUTES_QUERY),
+            ("modifyOtherKeys fallback enable", MODIFY_OTHER_KEYS_ENABLE),
         ]
         try:
             require_order(startup, startup_protocols)
@@ -374,15 +376,11 @@ def run_case(
                 if sequence in startup:
                     raise RuntimeError(f"{case} default cursor perturbed DECSCUSR during entry with {sequence!r}; startup={startup!r}")
 
+        # Negotiation is bounded and completed before the first frame. A delayed
+        # device-attributes reply is ordinary unsolicited input and must never
+        # drive a second keyboard-protocol owner.
+        negotiation = b""
         os.write(master_fd, b"\x1b[?1;2c")
-        negotiation = read_until(
-            master_fd,
-            process,
-            lambda output: MODIFY_OTHER_KEYS_ENABLE in output,
-            f"{case} modifyOtherKeys fallback enable",
-        )
-        if MODIFY_OTHER_KEYS_ENABLE not in negotiation:
-            raise RuntimeError("device-attributes response did not enable modifyOtherKeys fallback")
 
         cursor_setup = b""
         if teardown_method == "ctrl_d":

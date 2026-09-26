@@ -12,6 +12,7 @@ namespace ava::tui::terminal {
 namespace {
 
 constexpr std::chrono::milliseconds kKeyboardNegotiationTimeout{50};
+constexpr std::chrono::milliseconds kBufferedUtf8CompletionTimeout{50};
 constexpr int kKittyKeyboardHealthyFlags = 7;
 constexpr int kKittyKeyboardDisambiguationOnlyFlags = 1;
 constexpr int kKittyKeyboardDesiredFlags = kKittyKeyboardDisambiguationOnlyFlags;
@@ -150,6 +151,62 @@ bool consume_modify_other_keys_phase_replies(std::string& bytes)
   return false;
 }
 
+// Return the expected byte width of a valid UTF-8 lead, or one for ASCII and invalid lead bytes.
+std::size_t utf8_width(unsigned char lead)
+{
+  if (lead < 0x80U)
+    return 1;
+  if (lead >= 0xc2U && lead <= 0xdfU)
+    return 2;
+  if (lead >= 0xe0U && lead <= 0xefU)
+    return 3;
+  if (lead >= 0xf0U && lead <= 0xf4U)
+    return 4;
+  return 1;
+}
+
+// Return whether one byte has the UTF-8 continuation form 10xxxxxx.
+bool is_utf8_continuation(unsigned char byte)
+{
+  return (byte & 0xc0U) == 0x80U;
+}
+
+// Reject non-shortest forms, UTF-16 surrogates, values above U+10FFFF, and malformed continuations.
+bool is_valid_utf8_scalar(std::string_view bytes)
+{
+  for (std::size_t index = 1; index < bytes.size(); ++index)
+  {
+    if (!is_utf8_continuation(static_cast<unsigned char>(bytes[index])))
+      return false;
+  }
+  auto const first = static_cast<unsigned char>(bytes[0]);
+  auto const second = bytes.size() > 1 ? static_cast<unsigned char>(bytes[1]) : 0U;
+  if (first == 0xe0U && second < 0xa0U)
+    return false;
+  if (first == 0xedU && second > 0x9fU)
+    return false;
+  if (first == 0xf0U && second < 0x90U)
+    return false;
+  if (first == 0xf4U && second > 0x8fU)
+    return false;
+  return true;
+}
+
+// Decode one already validated UTF-8 sequence to a Unicode scalar value.
+wint_t decode_utf8(std::string_view bytes)
+{
+  auto const first = static_cast<unsigned char>(bytes[0]);
+  if (bytes.size() == 1)
+    return first;
+  if (bytes.size() == 2)
+    return static_cast<wint_t>(((first & 0x1fU) << 6U) | (static_cast<unsigned char>(bytes[1]) & 0x3fU));
+  if (bytes.size() == 3)
+    return static_cast<wint_t>(((first & 0x0fU) << 12U) | ((static_cast<unsigned char>(bytes[1]) & 0x3fU) << 6U) |
+                               (static_cast<unsigned char>(bytes[2]) & 0x3fU));
+  return static_cast<wint_t>(((first & 0x07U) << 18U) | ((static_cast<unsigned char>(bytes[1]) & 0x3fU) << 12U) |
+                             ((static_cast<unsigned char>(bytes[2]) & 0x3fU) << 6U) | (static_cast<unsigned char>(bytes[3]) & 0x3fU));
+}
+
 } // namespace
 
 // Restore terminal keyboard modes on scope exit.
@@ -169,13 +226,18 @@ void KeyboardInputMode::start(Context& context)
   }
 
   context_ = &context;
+  // Compact only bytes already delivered. Unconsumed input predates this handoff
+  // and must remain ahead of any bytes observed by the new negotiation.
+  buffered_input_.erase(0, buffered_input_offset_);
+  buffered_input_offset_ = 0;
+  std::string negotiation_input;
   kitty_push_requested_ = true;
   static_cast<void>(context.write_raw_sequence(kitty_push_query_and_device_attributes()));
 
   using Clock = std::chrono::steady_clock;
   auto const deadline = Clock::now() + kKeyboardNegotiationTimeout;
   bool kitty_enabled = false;
-  bool kitty_fence_seen = consume_kitty_phase_replies(buffered_input_, kitty_enabled);
+  bool kitty_fence_seen = consume_kitty_phase_replies(negotiation_input, kitty_enabled);
   while (!kitty_fence_seen && Clock::now() < deadline)
   {
     auto const remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
@@ -186,8 +248,8 @@ void KeyboardInputMode::start(Context& context)
       std::this_thread::sleep_until(deadline);
       break;
     }
-    buffered_input_ += bytes;
-    kitty_fence_seen = consume_kitty_phase_replies(buffered_input_, kitty_enabled);
+    negotiation_input += bytes;
+    kitty_fence_seen = consume_kitty_phase_replies(negotiation_input, kitty_enabled);
   }
 
   if (!kitty_enabled)
@@ -197,7 +259,7 @@ void KeyboardInputMode::start(Context& context)
     static_cast<void>(context.write_raw_sequence(kModifyOtherKeysSetQueryAndDeviceAttributes));
 
     auto const modify_other_keys_deadline = Clock::now() + kKeyboardNegotiationTimeout;
-    bool modify_other_keys_fence_seen = consume_modify_other_keys_phase_replies(buffered_input_);
+    bool modify_other_keys_fence_seen = consume_modify_other_keys_phase_replies(negotiation_input);
     while (!modify_other_keys_fence_seen && Clock::now() < modify_other_keys_deadline)
     {
       auto const remaining = std::chrono::duration_cast<std::chrono::milliseconds>(modify_other_keys_deadline - Clock::now());
@@ -208,12 +270,60 @@ void KeyboardInputMode::start(Context& context)
         std::this_thread::sleep_until(modify_other_keys_deadline);
         break;
       }
-      buffered_input_ += bytes;
-      modify_other_keys_fence_seen = consume_modify_other_keys_phase_replies(buffered_input_);
+      negotiation_input += bytes;
+      modify_other_keys_fence_seen = consume_modify_other_keys_phase_replies(negotiation_input);
     }
   }
 
-  remaining_buffered_input_ = buffered_input_;
+  buffered_input_ += negotiation_input;
+}
+
+// Replay one logical character while retaining byte order across the raw-negotiation/ncurses boundary.
+bool KeyboardInputMode::try_get_wch(wint_t* wch)
+{
+  if (wch == nullptr || buffered_input_offset_ >= buffered_input_.size())
+    return false;
+
+  auto const lead = static_cast<unsigned char>(buffered_input_[buffered_input_offset_]);
+  auto const width = utf8_width(lead);
+  if (width == 1 && lead >= 0x80U)
+  {
+    *wch = 0xfffd;
+    ++buffered_input_offset_;
+    return true;
+  }
+  if (width > buffered_input_.size() - buffered_input_offset_ && context_ != nullptr)
+  {
+    using Clock = std::chrono::steady_clock;
+    auto const deadline = Clock::now() + kBufferedUtf8CompletionTimeout;
+    while (width > buffered_input_.size() - buffered_input_offset_ && Clock::now() < deadline)
+    {
+      auto const remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - Clock::now());
+      auto bytes = context_->read_raw_input_for(remaining);
+      if (bytes.empty())
+        break;
+      buffered_input_ += bytes;
+    }
+  }
+
+  auto const available = buffered_input_.size() - buffered_input_offset_;
+  if (width > available)
+  {
+    *wch = 0xfffd;
+    ++buffered_input_offset_;
+    return true;
+  }
+
+  auto const candidate = std::string_view(buffered_input_).substr(buffered_input_offset_, width);
+  if (!is_valid_utf8_scalar(candidate))
+  {
+    *wch = 0xfffd;
+    ++buffered_input_offset_;
+    return true;
+  }
+  *wch = decode_utf8(candidate);
+  buffered_input_offset_ += width;
+  return true;
 }
 
 // Best-effort reverse mode requests in the opposite order from activation.

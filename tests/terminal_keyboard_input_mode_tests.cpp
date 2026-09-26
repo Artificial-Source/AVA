@@ -4,6 +4,7 @@
 #include "terminal/Context.h"
 #include "terminal/KeyboardInputMode.h"
 #include "ava/tui/config.h"
+#include "ava/tui/runtime_input_internal.h"
 
 #include <array>
 #include <cstdio>
@@ -206,6 +207,101 @@ void test_unrelated_input_is_buffered()
   expect(take_buffered_input(mode).empty(), "taking buffered negotiation input must clear it");
 }
 
+// Verify Context exposes negotiation-preserved bytes exactly once to the runtime input owner.
+void test_context_replays_preserved_startup_input_once()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  std::string const preserved = std::string("typed") + static_cast<char>(0xc3) + static_cast<char>(0xa9);
+  expect(std::fwrite(preserved.data(), 1, preserved.size(), input.get()) == preserved.size(), "all startup input bytes must be written");
+  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
+  std::rewind(input.get());
+
+  terminal::Context context(output.get(), input.get());
+  std::string replayed;
+  for (std::size_t index = 0; index < 6; ++index)
+    replayed += ava::tui::runtime_input::read_curses_input_from_terminal(context).text;
+
+  expect(replayed == preserved, "runtime input re-encodes canonical wide startup characters to their original UTF-8 text");
+  wint_t value = 0;
+  expect(!context.try_get_buffered_keyboard_input(&value), "Context exposes each negotiation-preserved character exactly once");
+  expect(!context.try_get_buffered_keyboard_input(nullptr), "a null Context output pointer consumes no buffered keyboard input");
+}
+
+// Verify a UTF-8 sequence split exactly at Context's bounded raw-read boundary remains one runtime character.
+void test_runtime_replays_utf8_split_between_negotiation_and_descriptor()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  std::string bytes = "\x1b[?1u\x1b[?1;2c";
+  constexpr std::size_t raw_read_size = 4096;
+  bytes.append(raw_read_size - bytes.size() - 1, 'x');
+  bytes.push_back(static_cast<char>(0xc3));
+  bytes.push_back(static_cast<char>(0xa9));
+  expect(std::fwrite(bytes.data(), 1, bytes.size(), input.get()) == bytes.size(), "split UTF-8 startup fixture must be written completely");
+  std::rewind(input.get());
+
+  terminal::Context context(output.get(), input.get());
+  auto const padding_size = raw_read_size - std::string_view("\x1b[?1u\x1b[?1;2c").size() - 1;
+  for (std::size_t index = 0; index < padding_size; ++index)
+  {
+    auto const input_event = ava::tui::runtime_input::read_curses_input_from_terminal(context);
+    expect(input_event.text == "x", "startup padding remains ordered before the split UTF-8 character");
+  }
+  auto const unicode = ava::tui::runtime_input::read_curses_input_from_terminal(context);
+  expect(unicode.event.key == ava::tui::Key::Character && unicode.text == "\xc3\xa9",
+         "runtime input combines a UTF-8 sequence split between negotiation storage and the descriptor");
+}
+
+// Verify malformed UTF-8 can never be decoded into Escape, a surrogate, or an out-of-range scalar.
+void test_invalid_utf8_replays_as_replacement_characters()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
+  std::string malformed;
+  malformed.append("\xc0\x9b", 2);          // Overlong/control alias.
+  malformed.append("\xe0\x80\x9b", 3);    // Three-byte overlong Escape alias.
+  malformed.append("\xed\xa0\x80", 3);    // UTF-16 high surrogate.
+  malformed.append("\xf4\xbf\xbf\xbf", 4); // Above U+10FFFF.
+  malformed.append("\xf0\x9f", 2);          // Truncated four-byte sequence.
+  malformed += "\x1b[?1u\x1b[?1;2c";
+  prepare_input(input.get(), malformed);
+
+  terminal::KeyboardInputMode mode;
+  mode.start(context);
+  wint_t value = 0;
+  std::size_t replacements = 0;
+  while (mode.try_get_wch(&value))
+  {
+    expect(value == 0xfffd, "invalid UTF-8 startup bytes replay only as replacement characters, never controls or invalid scalars");
+    ++replacements;
+  }
+  expect(replacements == 14, "each malformed or truncated byte is consumed exactly once as U+FFFD");
+  mode.stop();
+}
+
+// Verify handoff compaction drops delivered input while retaining every queued character that has not been observed.
+void test_handoff_preserves_only_unconsumed_input()
+{
+  ScopedTmpFile input;
+  ScopedTmpFile output;
+  terminal::Context context(output.get(), input.get());
+  reset_output_file(output.get());
+
+  prepare_input(input.get(), "abc\x1b[?1u\x1b[?1;2c");
+  terminal::KeyboardInputMode mode;
+  mode.start(context);
+  wint_t first = 0;
+  expect(mode.try_get_wch(&first) && first == L'a', "handoff fixture consumes its first queued character");
+  mode.stop();
+  mode.start(context);
+  expect(take_buffered_input(mode) == "bc", "handoff restart retains unconsumed characters without replaying the consumed prefix");
+  mode.stop();
+}
+
 // Verify that explicit repeated shutdown emits each required restoration sequence only once.
 void test_stop_is_idempotent()
 {
@@ -255,6 +351,10 @@ void run_terminal_keyboard_input_mode_tests()
   test_unsupported_replies_use_modify_other_keys_fallback();
   test_modify_other_keys_reply_is_consumed();
   test_unrelated_input_is_buffered();
+  test_context_replays_preserved_startup_input_once();
+  test_runtime_replays_utf8_split_between_negotiation_and_descriptor();
+  test_invalid_utf8_replays_as_replacement_characters();
+  test_handoff_preserves_only_unconsumed_input();
   test_stop_is_idempotent();
   test_destructor_stops_active_mode();
 }

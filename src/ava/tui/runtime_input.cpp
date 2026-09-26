@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/runtime_input_internal.h"
+#include "terminal/Context.h"
+#include "ava/core/Application.h"
 
 #include <chrono>
 #include <climits>
@@ -79,10 +81,21 @@ RuntimeInput space_input()
                       .resize = false};
 }
 
-std::optional<wchar_t> read_plain_wide_character()
+// Return ncurses-compatible status while reading through the canonical Context first.
+// `value` is a required non-null output parameter, matching wget_wch's caller contract.
+int read_terminal_wch(terminal::Context& terminal_context, wint_t* value)
+{
+  // Canonical Context replay has first authority over bytes consumed by bounded startup negotiation. It returns logical wide characters
+  // with ncurses' ordinary OK status; only after that queue is empty may wget_wch read the terminal and report OK, KEY_CODE_YES, or ERR.
+  if (terminal_context.try_get_buffered_keyboard_input(value))
+    return OK;
+  return wget_wch(stdscr, value);
+}
+
+std::optional<wchar_t> read_plain_wide_character(terminal::Context& terminal_context)
 {
   wint_t value = 0;
-  auto const result = wget_wch(stdscr, &value);
+  auto const result = read_terminal_wch(terminal_context, &value);
   if (result == ERR || result == KEY_CODE_YES)
     return std::nullopt;
   return static_cast<wchar_t>(value);
@@ -91,14 +104,14 @@ std::optional<wchar_t> read_plain_wide_character()
 // Read the body of an escape/control sequence after ESC was already consumed.
 // Bounded by kMaxEscapeSequenceBytes; stops on complete sequence, timeout, or
 // non-backspace KEY_CODE. Caller owns the surrounding wtimeout budget.
-std::string read_escape_sequence_body()
+std::string read_escape_sequence_body(terminal::Context& terminal_context)
 {
   std::string consumed;
   consumed.reserve(32);
   while (consumed.size() < kMaxEscapeSequenceBytes)
   {
     wint_t value = 0;
-    auto const result = wget_wch(stdscr, &value);
+    auto const result = read_terminal_wch(terminal_context, &value);
     if (result == ERR)
       break;
     if (result == KEY_CODE_YES)
@@ -122,13 +135,13 @@ std::string read_escape_sequence_body()
   return consumed;
 }
 
-RuntimeInput read_bracketed_paste()
+RuntimeInput read_bracketed_paste(terminal::Context& terminal_context)
 {
   std::string pasted;
   static_cast<void>(wtimeout(stdscr, 1000));
   while (!Signals::received(terminal_signals) && pasted.size() < kMaxBracketedPasteBytes)
   {
-    auto const character = read_plain_wide_character();
+    auto const character = read_plain_wide_character(terminal_context);
     if (!character)
       break;
     if (*character == L'\x1b')
@@ -137,7 +150,7 @@ RuntimeInput read_bracketed_paste()
       // after ESC. Paste-end ends the paste; an armed OSC 11 reply is handled and
       // discarded without joining the paste payload; all other escape content is
       // preserved under ordinary paste normalization and the byte cap.
-      auto const consumed = read_escape_sequence_body();
+      auto const consumed = read_escape_sequence_body(terminal_context);
       if (consumed == "[201~")
         break;
       if (terminal_background_response_handle(consumed))
@@ -161,20 +174,18 @@ RuntimeInput read_bracketed_paste()
   return character_input(normalize_composer_paste_text(pasted), true);
 }
 
-std::optional<RuntimeInput> read_escape_sequence_input()
+std::optional<RuntimeInput> read_escape_sequence_input(terminal::Context& terminal_context)
 {
   static_cast<void>(wtimeout(stdscr, 50));
-  auto const consumed = read_escape_sequence_body();
+  auto const consumed = read_escape_sequence_body(terminal_context);
   static_cast<void>(wtimeout(stdscr, -1));
 
   if (consumed.empty())
     return std::nullopt;
-  if (terminal_keyboard_protocol_handle_response(consumed))
-    return unknown_input();
   if (terminal_background_response_handle(consumed))
     return unknown_input();
   if (consumed == "[200~")
-    return read_bracketed_paste();
+    return read_bracketed_paste(terminal_context);
   auto event = terminal_escape_sequence_event(consumed);
   if (event.key != Key::Unknown)
     return event_input(std::move(event));
@@ -254,8 +265,13 @@ bool enqueue_startup_input(RuntimeInput input)
 
 RuntimeInput read_curses_input_from_terminal()
 {
+  return read_curses_input_from_terminal(core::Application::instance().terminal_context());
+}
+
+RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context)
+{
   wint_t value = 0;
-  auto const result = wget_wch(stdscr, &value);
+  auto const result = read_terminal_wch(terminal_context, &value);
   if (Signals::received(terminal_signals))
     return key_input(Key::CtrlC);
   if (result == ERR)
@@ -497,7 +513,7 @@ RuntimeInput read_curses_input_from_terminal()
     return key_input(Key::CtrlSpace);
   if (character == 0x1B)
   {
-    if (auto escape_input = read_escape_sequence_input())
+    if (auto escape_input = read_escape_sequence_input(terminal_context))
       return *escape_input;
     return key_input(Key::Escape);
   }
