@@ -9,6 +9,7 @@
 #include "ava/provider/registry.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
+#include "ava/core/utf8.h"
 
 #include <algorithm>
 #include <array>
@@ -29,48 +30,16 @@ bool ascii_space(unsigned char ch)
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
 }
 
-bool utf8_continuation(unsigned char ch)
-{
-  return (ch & 0xc0U) == 0x80U;
-}
-
-std::size_t valid_utf8_sequence_size(std::string_view text, std::size_t index)
-{
-  auto const first = static_cast<unsigned char>(text[index]);
-  if (first < 0x80U)
-    return 1;
-  if (first >= 0xc2U && first <= 0xdfU && index + 1 < text.size() && utf8_continuation(static_cast<unsigned char>(text[index + 1])))
-    return 2;
-  if (first >= 0xe0U && first <= 0xefU && index + 2 < text.size())
-  {
-    auto const second = static_cast<unsigned char>(text[index + 1]);
-    auto const third = static_cast<unsigned char>(text[index + 2]);
-    bool const valid_second = utf8_continuation(second) && !(first == 0xe0U && second < 0xa0U) && !(first == 0xedU && second >= 0xa0U);
-    if (valid_second && utf8_continuation(third))
-      return 3;
-  }
-  if (first >= 0xf0U && first <= 0xf4U && index + 3 < text.size())
-  {
-    auto const second = static_cast<unsigned char>(text[index + 1]);
-    auto const third = static_cast<unsigned char>(text[index + 2]);
-    auto const fourth = static_cast<unsigned char>(text[index + 3]);
-    bool const valid_second = utf8_continuation(second) && !(first == 0xf0U && second < 0x90U) && !(first == 0xf4U && second >= 0x90U);
-    if (valid_second && utf8_continuation(third) && utf8_continuation(fourth))
-      return 4;
-  }
-  return 0;
-}
-
 std::size_t utf8_prefix_size(std::string_view text, std::size_t limit)
 {
   std::size_t index = 0;
   std::size_t last = 0;
   while (index < text.size() && index < limit)
   {
-    auto const size = valid_utf8_sequence_size(text, index);
-    if (size == 0 || index + size > limit)
+    auto const decoded = ava::core::decode_utf8_scalar(text, index);
+    if (!decoded || decoded->length > limit - index)
       break;
-    index += size;
+    index += decoded->length;
     last = index;
   }
   return last;
@@ -160,8 +129,8 @@ std::string normalized_whitespace(std::string_view text)
       ++index;
       continue;
     }
-    auto const size = valid_utf8_sequence_size(text, index);
-    if (size == 0)
+    auto const decoded = ava::core::decode_utf8_scalar(text, index);
+    if (!decoded)
     {
       pending_space = !result.empty();
       ++index;
@@ -170,8 +139,8 @@ std::string normalized_whitespace(std::string_view text)
     if (pending_space)
       result.push_back(' ');
     pending_space = false;
-    result.append(text.substr(index, size));
-    index += size;
+    result.append(text.substr(index, decoded->length));
+    index += decoded->length;
   }
   return result;
 }

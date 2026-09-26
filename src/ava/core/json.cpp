@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/core/json.h"
+#include "ava/core/utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -475,61 +476,16 @@ std::optional<std::string> parse_balanced(std::string_view text, std::size_t sta
   return end ? std::optional<std::string>(std::string(text.substr(start, *end - start))) : std::nullopt;
 }
 
-std::size_t valid_utf8_sequence_length(std::string_view value, std::size_t index) noexcept
-{
-  auto const lead = static_cast<unsigned char>(value[index]);
-  if (lead <= 0x7FU)
-    return 1;
-
-  std::size_t length = 0;
-  unsigned int code_point = 0;
-  unsigned int minimum = 0;
-  if (lead >= 0xC2U && lead <= 0xDFU)
-  {
-    length = 2;
-    code_point = lead & 0x1FU;
-    minimum = 0x80U;
-  }
-  else if (lead >= 0xE0U && lead <= 0xEFU)
-  {
-    length = 3;
-    code_point = lead & 0x0FU;
-    minimum = 0x800U;
-  }
-  else if (lead >= 0xF0U && lead <= 0xF4U)
-  {
-    length = 4;
-    code_point = lead & 0x07U;
-    minimum = 0x10000U;
-  }
-  else
-  {
-    return 0;
-  }
-  if (index + length > value.size())
-    return 0;
-  for (std::size_t offset = 1; offset < length; ++offset)
-  {
-    auto const continuation = static_cast<unsigned char>(value[index + offset]);
-    if ((continuation & 0xC0U) != 0x80U)
-      return 0;
-    code_point = (code_point << 6U) | (continuation & 0x3FU);
-  }
-  if (code_point < minimum || code_point > 0x10FFFFU || (code_point >= 0xD800U && code_point <= 0xDFFFU))
-    return 0;
-  return length;
-}
-
 }  // namespace
 
 bool is_valid_utf8(std::string_view value) noexcept
 {
   for (std::size_t index = 0; index < value.size();)
   {
-    auto const length = valid_utf8_sequence_length(value, index);
-    if (length == 0)
+    auto const decoded = ava::core::decode_utf8_scalar(value, index);
+    if (!decoded)
       return false;
-    index += length;
+    index += decoded->length;
   }
   return true;
 }
@@ -540,15 +496,15 @@ std::string replace_invalid_utf8(std::string_view value)
   result.reserve(value.size());
   for (std::size_t index = 0; index < value.size();)
   {
-    auto const length = valid_utf8_sequence_length(value, index);
-    if (length == 0)
+    auto const decoded = ava::core::decode_utf8_scalar(value, index);
+    if (!decoded)
     {
       result += "\xEF\xBF\xBD";
       ++index;
       continue;
     }
-    result.append(value.substr(index, length));
-    index += length;
+    result.append(value.substr(index, decoded->length));
+    index += decoded->length;
   }
   return result;
 }
@@ -559,17 +515,17 @@ std::string escape(std::string_view value)
   result.reserve(value.size());
   for (std::size_t index = 0; index < value.size();)
   {
-    auto const length = valid_utf8_sequence_length(value, index);
-    if (length == 0)
+    auto const decoded = ava::core::decode_utf8_scalar(value, index);
+    if (!decoded)
     {
       result += "\xEF\xBF\xBD";
       ++index;
       continue;
     }
-    if (length != 1)
+    if (decoded->length != 1)
     {
-      result.append(value.substr(index, length));
-      index += length;
+      result.append(value.substr(index, decoded->length));
+      index += decoded->length;
       continue;
     }
 

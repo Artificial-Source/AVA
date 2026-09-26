@@ -241,9 +241,11 @@ void test_title_text_boundaries()
   auto generated = ava::app::sanitize_generated_session_title("<think>private reasoning</think>\n## `Useful API Implementation Test Plan`\nignored");
   auto marked_up = ava::app::sanitize_generated_session_title("Title: [Useful](https://invalid.example) API Implementation Test Plan");
   auto malformed = ava::app::sanitize_generated_session_title(std::string("bad\x01title", 9));
+  auto malformed_source = ava::app::normalize_session_title_source(std::string("left") + std::string("\xff", 1) + "right");
   auto fallback = ava::app::fallback_session_title(source);
   expect(source == "Build a useful API with tests now" && generated && *generated == "Useful API Implementation Test Plan" && marked_up &&
-             *marked_up == "Useful API Implementation Test Plan" && !malformed && fallback == "Build a useful API with tests now",
+             *marked_up == "Useful API Implementation Test Plan" && !malformed && malformed_source == "left right" &&
+             fallback == "Build a useful API with tests now",
          "session title input strips injected scaffolding and controls while output strips reasoning/markup and deterministic fallback remains bounded");
 
   std::string long_utf8;

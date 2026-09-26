@@ -453,7 +453,21 @@ void test_app_session_fork_from_entry_and_user_turns()
   expect(sessionless_fork && sessionless_fork->handled && !sessionless_fork->session_tree_changed && ephemeral_w->store.session_id() == ephemeral_id_before &&
              !sessionless_fork->output.empty() && sessionless_fork->output[0].find("sessionless") != std::string::npos,
          "sessionless run_fork_command remains a non-switching handled result that must not be treated as an opened snapshot");
+  auto boundary_text = std::string(ava::app::kMaxSessionUserTurnPreviewBytes - 1, 'a') + "é trailing";
+  expect(ephemeral_w
+             ->append_owned(ava::session::SessionEntry{.id = "ephemeral_boundary_user",
+                                                       .parent_id = "",
+                                                       .type = ava::session::EntryType::UserMessage,
+                                                       .timestamp = "2026-05-08T01:00:02Z",
+                                                       .data_json = "{\"text\":\"" + ava::core::json::escape(boundary_text) + "\"}"})
+             .has_value(),
+         "user-turn preview boundary test appends a multibyte user turn");
   CRITICAL_AREA_END_W(ephemeral);
+  auto boundary_listed = ava::app::list_session_user_turns(unlocked_ephemeral);
+  expect(boundary_listed && boundary_listed->turns.size() == 2 && boundary_listed->turns.back().entry_id == "ephemeral_boundary_user" &&
+             boundary_listed->turns.back().preview == std::string(ava::app::kMaxSessionUserTurnPreviewBytes - 1, 'a') &&
+             ava::core::json::is_valid_utf8(boundary_listed->turns.back().preview),
+         "user-turn previews truncate before a UTF-8 scalar that crosses the byte cap");
 
   auto unlocked_empty_session = ava::app::runtime::Session::open(ephemeral_context, ephemeral_request);
   expect(unlocked_empty_session.has_value(), "empty user-turn selector test opens an ephemeral session");

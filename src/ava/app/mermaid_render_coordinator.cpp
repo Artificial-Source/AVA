@@ -4,6 +4,7 @@
 #include "ava/core/Signals.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
+#include "ava/core/utf8.h"
 
 #include <algorithm>
 #include <array>
@@ -247,44 +248,6 @@ void terminate_owned_group(pid_t pid, pid_t pgid, bool group_verified) noexcept
   reap_direct_child(pid);
 }
 
-std::size_t utf8_sequence_size(std::string_view text, std::size_t index) noexcept
-{
-  auto const first = static_cast<unsigned char>(text[index]);
-  if (first < 0x80U)
-    return 1;
-  auto continuation = [&](std::size_t offset) { return index + offset < text.size() && (static_cast<unsigned char>(text[index + offset]) & 0xc0U) == 0x80U; };
-  if (first >= 0xc2U && first <= 0xdfU && continuation(1))
-    return 2;
-  if (first >= 0xe0U && first <= 0xefU && continuation(1) && continuation(2))
-  {
-    auto const second = static_cast<unsigned char>(text[index + 1]);
-    if (!(first == 0xe0U && second < 0xa0U) && !(first == 0xedU && second >= 0xa0U))
-      return 3;
-  }
-  if (first >= 0xf0U && first <= 0xf4U && continuation(1) && continuation(2) && continuation(3))
-  {
-    auto const second = static_cast<unsigned char>(text[index + 1]);
-    if (!(first == 0xf0U && second < 0x90U) && !(first == 0xf4U && second >= 0x90U))
-      return 4;
-  }
-  return 0;
-}
-
-std::uint32_t utf8_code_point(std::string_view text, std::size_t index, std::size_t size) noexcept
-{
-  auto const first = static_cast<unsigned char>(text[index]);
-  if (size == 1)
-    return first;
-  if (size == 2)
-    return ((first & 0x1fU) << 6U) | (static_cast<unsigned char>(text[index + 1]) & 0x3fU);
-  if (size == 3)
-  {
-    return ((first & 0x0fU) << 12U) | ((static_cast<unsigned char>(text[index + 1]) & 0x3fU) << 6U) | (static_cast<unsigned char>(text[index + 2]) & 0x3fU);
-  }
-  return ((first & 0x07U) << 18U) | ((static_cast<unsigned char>(text[index + 1]) & 0x3fU) << 12U) |
-         ((static_cast<unsigned char>(text[index + 2]) & 0x3fU) << 6U) | (static_cast<unsigned char>(text[index + 3]) & 0x3fU);
-}
-
 std::optional<std::string> accept_output(std::string output)
 {
   if (output.empty() || output.size() > kMaxMermaidOutputBytes || !ava::core::json::is_valid_utf8(output))
@@ -298,10 +261,10 @@ std::optional<std::string> accept_output(std::string output)
   std::size_t line_bytes = 0;
   for (std::size_t index = 0; index < output.size();)
   {
-    auto const sequence_size = utf8_sequence_size(output, index);
-    if (sequence_size == 0)
+    auto const decoded = ava::core::decode_utf8_scalar(output, index);
+    if (!decoded)
       return std::nullopt;
-    auto const code_point = utf8_code_point(output, index, sequence_size);
+    auto const code_point = decoded->scalar;
     if (code_point == '\n')
     {
       if (line_bytes > kMaxMermaidOutputLineBytes || ++lines > kMaxMermaidOutputLines)
@@ -315,10 +278,10 @@ std::optional<std::string> accept_output(std::string output)
     {
       return std::nullopt;
     }
-    if (line_bytes > kMaxMermaidOutputLineBytes - sequence_size)
+    if (line_bytes > kMaxMermaidOutputLineBytes - decoded->length)
       return std::nullopt;
-    line_bytes += sequence_size;
-    index += sequence_size;
+    line_bytes += decoded->length;
+    index += decoded->length;
   }
   if (line_bytes > kMaxMermaidOutputLineBytes)
     return std::nullopt;

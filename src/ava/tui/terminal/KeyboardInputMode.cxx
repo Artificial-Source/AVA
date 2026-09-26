@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "Context.h"
 #include "KeyboardInputMode.h"
+#include "ava/core/utf8.h"
 
 #include <chrono>
 #include <string_view>
@@ -151,62 +152,6 @@ bool consume_modify_other_keys_phase_replies(std::string& bytes)
   return false;
 }
 
-// Return the expected byte width of a valid UTF-8 lead, or one for ASCII and invalid lead bytes.
-std::size_t utf8_width(unsigned char lead)
-{
-  if (lead < 0x80U)
-    return 1;
-  if (lead >= 0xc2U && lead <= 0xdfU)
-    return 2;
-  if (lead >= 0xe0U && lead <= 0xefU)
-    return 3;
-  if (lead >= 0xf0U && lead <= 0xf4U)
-    return 4;
-  return 1;
-}
-
-// Return whether one byte has the UTF-8 continuation form 10xxxxxx.
-bool is_utf8_continuation(unsigned char byte)
-{
-  return (byte & 0xc0U) == 0x80U;
-}
-
-// Reject non-shortest forms, UTF-16 surrogates, values above U+10FFFF, and malformed continuations.
-bool is_valid_utf8_scalar(std::string_view bytes)
-{
-  for (std::size_t index = 1; index < bytes.size(); ++index)
-  {
-    if (!is_utf8_continuation(static_cast<unsigned char>(bytes[index])))
-      return false;
-  }
-  auto const first = static_cast<unsigned char>(bytes[0]);
-  auto const second = bytes.size() > 1 ? static_cast<unsigned char>(bytes[1]) : 0U;
-  if (first == 0xe0U && second < 0xa0U)
-    return false;
-  if (first == 0xedU && second > 0x9fU)
-    return false;
-  if (first == 0xf0U && second < 0x90U)
-    return false;
-  if (first == 0xf4U && second > 0x8fU)
-    return false;
-  return true;
-}
-
-// Decode one already validated UTF-8 sequence to a Unicode scalar value.
-wint_t decode_utf8(std::string_view bytes)
-{
-  auto const first = static_cast<unsigned char>(bytes[0]);
-  if (bytes.size() == 1)
-    return first;
-  if (bytes.size() == 2)
-    return static_cast<wint_t>(((first & 0x1fU) << 6U) | (static_cast<unsigned char>(bytes[1]) & 0x3fU));
-  if (bytes.size() == 3)
-    return static_cast<wint_t>(((first & 0x0fU) << 12U) | ((static_cast<unsigned char>(bytes[1]) & 0x3fU) << 6U) |
-                               (static_cast<unsigned char>(bytes[2]) & 0x3fU));
-  return static_cast<wint_t>(((first & 0x07U) << 18U) | ((static_cast<unsigned char>(bytes[1]) & 0x3fU) << 12U) |
-                             ((static_cast<unsigned char>(bytes[2]) & 0x3fU) << 6U) | (static_cast<unsigned char>(bytes[3]) & 0x3fU));
-}
-
 } // namespace
 
 // Restore terminal keyboard modes on scope exit.
@@ -285,8 +230,8 @@ bool KeyboardInputMode::try_get_wch(wint_t* wch)
     return false;
 
   auto const lead = static_cast<unsigned char>(buffered_input_[buffered_input_offset_]);
-  auto const width = utf8_width(lead);
-  if (width == 1 && lead >= 0x80U)
+  auto const width = ava::core::utf8_expected_width(lead);
+  if (width == 0)
   {
     *wch = 0xfffd;
     ++buffered_input_offset_;
@@ -314,15 +259,15 @@ bool KeyboardInputMode::try_get_wch(wint_t* wch)
     return true;
   }
 
-  auto const candidate = std::string_view(buffered_input_).substr(buffered_input_offset_, width);
-  if (!is_valid_utf8_scalar(candidate))
+  auto const decoded = ava::core::decode_utf8_scalar(buffered_input_, buffered_input_offset_);
+  if (!decoded)
   {
     *wch = 0xfffd;
     ++buffered_input_offset_;
     return true;
   }
-  *wch = decode_utf8(candidate);
-  buffered_input_offset_ += width;
+  *wch = static_cast<wint_t>(decoded->scalar);
+  buffered_input_offset_ += decoded->length;
   return true;
 }
 

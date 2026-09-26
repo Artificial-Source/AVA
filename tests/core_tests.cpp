@@ -18,6 +18,7 @@
 #include "debug.h"
 
 void run_core_mode_tests();
+void run_core_utf8_tests();
 void run_test_harness_tests();
 void run_diagnostics_tests();
 void run_acp_tests();
@@ -96,6 +97,7 @@ struct TestSuite
 
 constexpr std::array kTestSuites{
     TestSuite{"core_mode", run_core_mode_tests},
+    TestSuite{"core_utf8", run_core_utf8_tests},
     TestSuite{"test_harness", run_test_harness_tests},
     TestSuite{"diagnostics", run_diagnostics_tests},
     TestSuite{"acp", run_acp_tests},

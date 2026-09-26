@@ -229,6 +229,13 @@ void test_json_escape_control_characters()
   expect(escaped == "a\\u0001\\b\\f", "json_escape escapes all JSON control characters");
 }
 
+void test_json_invalid_utf8_replacement()
+{
+  auto const malformed = std::string("\xe0\x80\x80", 3);
+  expect(ava::core::json::replace_invalid_utf8(malformed) == "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd",
+         "core JSON UTF-8 repair emits one replacement character per invalid byte");
+}
+
 std::string nested_json_object(std::size_t depth)
 {
   std::string json;
@@ -517,6 +524,7 @@ void run_core_mode_tests()
 void run_core_json_permission_tests()
 {
   test_json_escape_control_characters();
+  test_json_invalid_utf8_replacement();
   test_core_json_nesting_limit();
   test_core_json_top_level_lookup();
   test_process_arg_workspace_relative_detection();

@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/text_wrap.h"
+#include "ava/core/utf8.h"
 
 #include <algorithm>
 #include <climits>
@@ -86,47 +87,15 @@ bool is_utf8_continuation(unsigned char byte)
 
 std::size_t utf8_sequence_length(unsigned char byte)
 {
-  if ((byte & 0x80U) == 0)
-    return 1;
-  if (byte >= 0xC2U && byte <= 0xDFU)
-    return 2;
-  if ((byte & 0xF0U) == 0xE0U)
-    return 3;
-  if (byte >= 0xF0U && byte <= 0xF4U)
-    return 4;
-  return 0;
+  return ava::core::utf8_expected_width(byte);
 }
 
 bool decode_utf8_codepoint(std::string_view text, std::size_t start, std::size_t length, char32_t& codepoint)
 {
-  if (start + length > text.size() || length == 0)
+  auto const decoded = ava::core::decode_utf8_scalar(text, start);
+  if (!decoded || decoded->length != length)
     return false;
-  auto const first = static_cast<unsigned char>(text[start]);
-  if (utf8_sequence_length(first) != length)
-    return false;
-  if (length == 1)
-  {
-    codepoint = first;
-    return true;
-  }
-  codepoint = first & ((1U << (7 - length)) - 1U);
-  for (std::size_t offset = 1; offset < length; ++offset)
-  {
-    auto const byte = static_cast<unsigned char>(text[start + offset]);
-    if (!is_utf8_continuation(byte))
-      return false;
-    codepoint = (codepoint << 6U) | (byte & 0x3FU);
-  }
-  if (length == 2 && codepoint < 0x80)
-    return false;
-  if (length == 3 && codepoint < 0x800)
-    return false;
-  if (length == 4 && codepoint < 0x10000)
-    return false;
-  if (codepoint >= 0xD800 && codepoint <= 0xDFFF)
-    return false;
-  if (codepoint > 0x10FFFF)
-    return false;
+  codepoint = static_cast<char32_t>(decoded->scalar);
   return true;
 }
 

@@ -2,6 +2,7 @@
 #include "ava/app/session_user_turns.h"
 #include "ava/session/transcript.h"
 #include "ava/core/error.h"
+#include "ava/core/utf8.h"
 
 #include <algorithm>
 #include <string>
@@ -12,64 +13,16 @@
 namespace ava::app {
 namespace {
 
-bool utf8_continuation(unsigned char byte)
-{
-  return (byte & 0xC0U) == 0x80U;
-}
-
-std::size_t valid_utf8_sequence_size(std::string_view text, std::size_t index)
-{
-  if (index >= text.size())
-    return 0;
-  auto const first = static_cast<unsigned char>(text[index]);
-  if (first < 0x80U)
-    return 1;
-  if (first < 0xC2U || first > 0xF4U)
-    return 0;
-  if (first < 0xE0U)
-  {
-    if (index + 1 >= text.size() || !utf8_continuation(static_cast<unsigned char>(text[index + 1])))
-      return 0;
-    return 2;
-  }
-  if (first < 0xF0U)
-  {
-    if (index + 2 >= text.size())
-      return 0;
-    auto const second = static_cast<unsigned char>(text[index + 1]);
-    auto const third = static_cast<unsigned char>(text[index + 2]);
-    if (!utf8_continuation(second) || !utf8_continuation(third))
-      return 0;
-    if (first == 0xE0U && second < 0xA0U)
-      return 0;
-    if (first == 0xEDU && second >= 0xA0U)
-      return 0;
-    return 3;
-  }
-  if (index + 3 >= text.size())
-    return 0;
-  auto const second = static_cast<unsigned char>(text[index + 1]);
-  auto const third = static_cast<unsigned char>(text[index + 2]);
-  auto const fourth = static_cast<unsigned char>(text[index + 3]);
-  if (!utf8_continuation(second) || !utf8_continuation(third) || !utf8_continuation(fourth))
-    return 0;
-  if (first == 0xF0U && second < 0x90U)
-    return 0;
-  if (first == 0xF4U && second >= 0x90U)
-    return 0;
-  return 4;
-}
-
 std::size_t utf8_prefix_size(std::string_view text, std::size_t limit)
 {
   std::size_t index = 0;
   std::size_t last = 0;
   while (index < text.size() && index < limit)
   {
-    auto const size = valid_utf8_sequence_size(text, index);
-    if (size == 0 || index + size > limit)
+    auto const decoded = ava::core::decode_utf8_scalar(text, index);
+    if (!decoded || decoded->length > limit - index)
       break;
-    index += size;
+    index += decoded->length;
     last = index;
   }
   return last;
