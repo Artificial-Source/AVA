@@ -468,27 +468,49 @@ def scenario_main_permission_flow(ctx: SmokeContext) -> None:
     save_evidence(root, "bounded-local-bash-spill-metadata", seq_expanded)
 
     def resize_spill_modal(width: int, height: int, name: str) -> None:
+        """Wait for the resized modal to paint before jumping to its newly laid-out tail."""
+
         previous = capture(tmux_exe, session)
         tmux(tmux_exe, "resize-window", "-t", session, "-x", str(width), "-y", str(height))
         if capture(tmux_exe, session) == previous:
             wait_for_screen_change(tmux_exe, session, previous, f"{name} resize redraw")
-        wait_for(tmux_exe, session, r"Command /bash", f"{name} modal title after resize")
+        modal_height = min(30, height - 4) if height >= 10 else height
+        top = (height - modal_height) // 2
+        footer_row = top + modal_height - 1
+
+        def resized_modal_painted(screen: str) -> bool:
+            lines = screen.splitlines()
+            return (
+                len(lines) > footer_row
+                and "Command /bash" in lines[top]
+                and re.search(r"\d+-\d+/\d+.*Enter(?:/Esc)? close", lines[footer_row]) is not None
+            )
+
+        # The title survives a resize unchanged; only the footer's new row
+        # proves the TUI has consumed the resize before it handles End.
+        wait_for_screen_state(tmux_exe, session, resized_modal_painted, f"{name} resized modal frame")
         send_keys(tmux_exe, session, "End")
-        lifecycle = wait_for(
-            tmux_exe,
-            session,
-            r"(?s)Command /bash.*truncation:.*full output:.*Enter(?:/Esc)? close",
-            f"{name} lifecycle frame",
-        )
+
+        def bottom_spill_frame(screen: str) -> bool:
+            lines = screen.splitlines()
+            if len(lines) <= footer_row or not resized_modal_painted(screen):
+                return False
+            viewport = re.search(r"(\d+)-(\d+)/(\d+)", lines[footer_row])
+            return (
+                viewport is not None
+                and viewport.group(2) == viewport.group(3)
+                and "… 19800 lines hidden" in screen
+                and "truncation:" in screen
+                and "bytes" in screen
+                and "full output:" in screen
+            )
+
+        # Capturing while ncurses is painting can combine old and new rows.
+        # Require the complete final viewport, not merely a persistent title.
+        lifecycle = wait_for_screen_state(tmux_exe, session, bottom_spill_frame, f"{name} bottom spill frame")
         assert_exact_frame(lifecycle, width, height, name, allow_trimmed_blank_tail=True)
-        if (
-            seq_command in lifecycle
-            or "20001 lines" in lifecycle
-            or "19801 lines hidden" in lifecycle
-            or "… 19800 lines hidden" not in lifecycle
-            or "bytes" not in lifecycle
-        ):
-            raise RuntimeError(f"{name} lost truthful bounded spill metadata or leaked invocation arguments\nscreen:\n{lifecycle}")
+        if seq_command in lifecycle or "20001 lines" in lifecycle or "19801 lines hidden" in lifecycle:
+            raise RuntimeError(f"{name} leaked invocation arguments or displayed incorrect spill counts\nscreen:\n{lifecycle}")
         styled = capture_styled(tmux_exe, session)
         if "\x1b[" in styled:
             raise RuntimeError(f"{name} violated the scenario NO_COLOR contract\nstyled screen:\n{styled!r}")
