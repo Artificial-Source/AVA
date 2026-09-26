@@ -12,7 +12,7 @@
 
 namespace ava::core {
 
-#if CW_DEBUG
+#if CW_DEBUG && !(__has_feature(thread_sanitizer) || defined(__SANITIZE_THREAD__))
 namespace {
 
 bool only_one_thread_remains()
@@ -65,7 +65,8 @@ Application::~Application() noexcept
   // the mutex used by the debug output ostream.
   Vec8Alloc::deinit();
 
-#if CW_DEBUG
+// Don't do this test for ThreadSanitizer build.
+#if CW_DEBUG && !(__has_feature(thread_sanitizer) || defined(__SANITIZE_THREAD__))
   // The Application should only be destructed after joining with all other threads.
   ASSERT(only_one_thread_remains());
 #endif
