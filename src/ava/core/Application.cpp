@@ -4,7 +4,19 @@
 #include <cstdlib>
 #include "debug.h"
 
-#if CW_DEBUG && defined(__linux__)
+#if defined(__SANITIZE_THREAD__)
+# define AVA_WITH_TSAN 1
+#elif defined(__has_feature)
+# if __has_feature(thread_sanitizer)
+#  define AVA_WITH_TSAN 1
+# endif
+#endif
+
+#ifndef AVA_WITH_TSAN
+# define AVA_WITH_TSAN 0
+#endif
+
+#if CW_DEBUG && !AVA_WITH_TSAN && defined(__linux__)
 #include <chrono>
 #include <thread>
 #include <sys/stat.h>
@@ -12,7 +24,7 @@
 
 namespace ava::core {
 
-#if CW_DEBUG && !(__has_feature(thread_sanitizer) || defined(__SANITIZE_THREAD__))
+#if CW_DEBUG && !AVA_WITH_TSAN
 namespace {
 
 bool only_one_thread_remains()
@@ -66,7 +78,7 @@ Application::~Application() noexcept
   Vec8Alloc::deinit();
 
 // Don't do this test for ThreadSanitizer build.
-#if CW_DEBUG && !(__has_feature(thread_sanitizer) || defined(__SANITIZE_THREAD__))
+#if CW_DEBUG && !AVA_WITH_TSAN
   // The Application should only be destructed after joining with all other threads.
   ASSERT(only_one_thread_remains());
 #endif
