@@ -68,8 +68,8 @@ void test_context_balances_handoff_modes()
   {
     terminal::Context context(output.get(), input.get());
     context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
-    context.release_input_modes_for_handoff();
-    context.rearm_input_modes_after_handoff();
+    context.leave_terminal_for_handoff();
+    context.restore_terminal_after_handoff();
   }
 
   std::string const emitted = read_output(output.get());

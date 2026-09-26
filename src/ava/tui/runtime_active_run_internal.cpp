@@ -514,7 +514,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   auto& transcript_scroll_offset = renderer_.transcript_scroll_offset;
   auto& ui_mutex = renderer_.ui_mutex;
   auto refresh_plugin_surface_fit = [&]() {
-    ava::core::Application::instance().terminal_context().first_screen().refresh_geometry_from_kernel();
+    ava::tui::terminal::Context::refresh_geometry_from_kernel();
     auto const [width, height] = terminal_size();
     snapshot.width = width;
     snapshot.height = height;

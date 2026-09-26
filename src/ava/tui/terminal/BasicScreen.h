@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-
 #include <memory>
 
 namespace ava::tui::terminal {
@@ -28,20 +27,6 @@ class BasicScreen
 
   // The destructor must be defined in the .cxx file because of the std::unique_ptr<Handle> with incomplete `Handle`.
   ~BasicScreen();
-
-  // Save ncurses' current program-terminal mode before temporarily returning control to another process.
-  void save_program_mode();
-
-  // Leave ncurses' program-terminal mode after save_program_mode() has captured it.
-  void leave_program_mode();
-
-  // Restore the program-terminal mode previously captured by save_program_mode().
-  void restore_program_mode();
-
-  // Refresh ncurses' dimensions from the kernel terminal size when they differ.
-  //
-  // Missing terminal geometry and uninitialized screens are ignored so resize checks remain safe during partial startup and tests.
-  static void refresh_geometry_from_kernel() noexcept;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 

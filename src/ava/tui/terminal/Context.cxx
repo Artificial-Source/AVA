@@ -1,8 +1,8 @@
 #include "sys.h"
 #include "ColorPalette.h"
 #include "Context.h"
-#include "ava/tui/config.h"
 #include "utils/to_string.h"
+#include "ava/tui/config.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <limits>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 // This header must be included last.
@@ -139,6 +140,26 @@ Context::~Context()
   }
 }
 
+// Leave ncurses before disabling AVA-owned protocols so the handed-off process receives shell presentation with clean input modes.
+void Context::leave_terminal_for_handoff()
+{
+  static_cast<void>(::endwin());
+  keyboard_protocols_.stop();
+  mouse_input_.stop();
+  cursor_state_.release(this);
+}
+
+// Resume through doupdate so ncurses repaints its retained virtual screen before AVA-owned protocols become active again.
+void Context::restore_terminal_after_handoff()
+{
+  refresh_geometry_from_kernel();
+  static_cast<void>(::clearok(::curscr, TRUE));
+  static_cast<void>(::doupdate());
+  mouse_input_.start(*this);
+  keyboard_protocols_.start(*this);
+  cursor_state_.reapply(this);
+}
+
 uint32_t Context::rows() const
 {
   return LINES;
@@ -200,28 +221,28 @@ int Context::terminal_color_index(Color color)
 
 ColorPair Context::create_color_pair(Color foreground, Color background)
 {
-  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << foreground << ", " << background << ") = ");
+  DoutEntering(dc::notice | continued_cf, "Context::create_color_pair(" << foreground << ", " << background << ") = ");
   return priv_create_color_pair(terminal_color_index(foreground), terminal_color_index(background));
 }
 
 // Create a pair from one portable palette foreground and one resolved RGB/default background.
 ColorPair Context::create_color_pair(ColorIndex foreground, Color background)
 {
-  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << utils::to_string(foreground) << ", " << background << ") = ");
+  DoutEntering(dc::notice | continued_cf, "Context::create_color_pair(" << utils::to_string(foreground) << ", " << background << ") = ");
   return priv_create_color_pair(static_cast<int>(foreground), terminal_color_index(background));
 }
 
 // Create a pair from one resolved RGB/default foreground and one portable palette background.
 ColorPair Context::create_color_pair(Color foreground, ColorIndex background)
 {
-  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << foreground << ", " << utils::to_string(background) << ") = ");
+  DoutEntering(dc::notice | continued_cf, "Context::create_color_pair(" << foreground << ", " << utils::to_string(background) << ") = ");
   return priv_create_color_pair(terminal_color_index(foreground), static_cast<int>(background));
 }
 
 // Create a pair directly from two portable palette indexes.
 ColorPair Context::create_color_pair(ColorIndex foreground, ColorIndex background)
 {
-  DoutEntering(dc::notice|continued_cf, "Context::create_color_pair(" << utils::to_string(foreground) << ", " << utils::to_string(background) << ") = ");
+  DoutEntering(dc::notice | continued_cf, "Context::create_color_pair(" << utils::to_string(foreground) << ", " << utils::to_string(background) << ") = ");
   return priv_create_color_pair(static_cast<int>(foreground), static_cast<int>(background));
 }
 
@@ -280,6 +301,20 @@ std::optional<ColorContent> Context::color_content(int color_index) const
 void Context::doupdate()
 {
   ::doupdate();
+}
+
+// Synchronize ncurses geometry only when the kernel reports a real size change, avoiding synthetic KEY_RESIZE events on no-op refreshes.
+//static
+void Context::refresh_geometry_from_kernel() noexcept
+{
+  winsize size{};
+  if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0 || size.ws_col == 0 || ::stdscr == nullptr)
+    return;
+  auto const rows = static_cast<int>(size.ws_row);
+  auto const cols = static_cast<int>(size.ws_col);
+  if (::is_term_resized(rows, cols) == FALSE)
+    return;
+  static_cast<void>(::resizeterm(rows, cols));
 }
 
 int Context::beep()

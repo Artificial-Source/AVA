@@ -1,8 +1,5 @@
 #include "sys.h"
 #include "BasicScreen.h"
-
-#include <sys/ioctl.h>
-#include <unistd.h>
 #include "debug.h"              // ASSERT
 
 // This header must be included last.
@@ -32,7 +29,10 @@ struct BasicScreen::Handle
     delscreen(handle_);
   }
 
-  void use_as_term() { [[maybe_unused]] SCREEN* old_screen = set_term(handle_); }
+  void use_as_term()
+  {
+    [[maybe_unused]] SCREEN* old_screen = set_term(handle_);
+  }
 };
 
 BasicScreen::BasicScreen() = default;
@@ -44,34 +44,6 @@ BasicScreen::BasicScreen(char const* type, FILE* outfd, FILE* infd) : impl_(std:
 BasicScreen::~BasicScreen() = default;
 BasicScreen::BasicScreen(BasicScreen&&) noexcept = default;
 BasicScreen& BasicScreen::operator=(BasicScreen&&) noexcept = default;
-
-void BasicScreen::save_program_mode()
-{
-  static_cast<void>(def_prog_mode());
-}
-
-void BasicScreen::leave_program_mode()
-{
-  static_cast<void>(endwin());
-}
-
-void BasicScreen::restore_program_mode()
-{
-  static_cast<void>(reset_prog_mode());
-}
-
-// Synchronize ncurses' cached dimensions with the kernel without injecting redundant resize events.
-void BasicScreen::refresh_geometry_from_kernel() noexcept
-{
-  winsize size{};
-  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0 || size.ws_col == 0 || stdscr == nullptr)
-    return;
-  auto const rows = static_cast<int>(size.ws_row);
-  auto const cols = static_cast<int>(size.ws_col);
-  if (is_term_resized(rows, cols) == FALSE)
-    return;
-  static_cast<void>(resizeterm(rows, cols));
-}
 
 void BasicScreen::use_as_term()
 {

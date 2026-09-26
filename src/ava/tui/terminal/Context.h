@@ -99,6 +99,10 @@ class Context final
   // Synchronize the virtual screen with the physical screen.
   static void doupdate();                                               // doupdate
 
+  // Synchronize ncurses' cached dimensions with the kernel without injecting redundant resize events.
+  // Missing terminal geometry and uninitialized screens are ignored during partial startup and tests.
+  static void refresh_geometry_from_kernel() noexcept;
+
   // Sound the terminal's audible alarm.
   int beep();                                                           // beep
   // Alert the terminal user by visibly attracting attention.
@@ -138,40 +142,11 @@ class Context final
       cursor_state_.reapply(this);
   }
 
-  // Release keyboard, mouse, paste, and cursor modes before terminal control is handed to another process.
-  // Retained cursor settings survive and can be restored by rearm_input_modes_after_handoff().
-  void release_input_modes_for_handoff()
-  {
-    keyboard_protocols_.stop();
-    mouse_input_.stop();
-    cursor_state_.release(this);
-  }
+  // Return terminal presentation to the invoking environment and release every AVA-owned input and cursor protocol.
+  void leave_terminal_for_handoff();
 
-  // Re-enable terminal input modes and restore retained cursor settings after a handoff.
-  void rearm_input_modes_after_handoff()
-  {
-    mouse_input_.start(*this);
-    keyboard_protocols_.start(*this);
-    cursor_state_.reapply(this);
-  }
-
-  // Save and leave ncurses' program mode, then release owned input and cursor modes before another process takes control of the terminal.
-  void leave_terminal_for_handoff()
-  {
-    first_screen_.save_program_mode();
-    first_screen_.leave_program_mode();
-    release_input_modes_for_handoff();
-  }
-
-  // Restore ncurses and owned terminal modes after a handoff, refresh geometry, and force a complete repaint.
-  void restore_terminal_after_handoff()
-  {
-    first_screen_.restore_program_mode();
-    first_screen_.refresh_geometry_from_kernel();
-    rearm_input_modes_after_handoff();
-    stdscr_.clearok(true);
-    stdscr_.refresh();
-  }
+  // Re-enter ncurses program mode, repaint its retained virtual screen, and explicitly restore every AVA-owned protocol.
+  void restore_terminal_after_handoff();
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 

@@ -2636,7 +2636,7 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   expect(LINES == static_cast<int>(size.ws_row) && COLS == static_cast<int>(size.ws_col), "same-size geometry baseline matches the controlled PTY winsize");
 
   for (int i = 0; i < 8; ++i)
-    ava::tui::terminal::BasicScreen::refresh_geometry_from_kernel();
+    ava::tui::terminal::Context::refresh_geometry_from_kernel();
 
   auto const same_size_resizes = drain_resize_events();
   expect(same_size_resizes == 0, "same-size repeated geometry refresh must not inject KEY_RESIZE (got " + std::to_string(same_size_resizes) + ")");
@@ -2647,7 +2647,7 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   grown.ws_row = 30;
   grown.ws_col = 100;
   static_cast<void>(::ioctl(STDOUT_FILENO, TIOCSWINSZ, &grown));
-  ava::tui::terminal::BasicScreen::refresh_geometry_from_kernel();
+  ava::tui::terminal::Context::refresh_geometry_from_kernel();
   expect(LINES == static_cast<int>(grown.ws_row) && COLS == static_cast<int>(grown.ws_col), "real kernel resize still updates ncurses geometry via resizeterm");
   // Consuming any KEY_RESIZE from the real path is fine; just drain so teardown is clean.
   static_cast<void>(drain_resize_events());
