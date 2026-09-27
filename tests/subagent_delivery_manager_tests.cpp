@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -280,7 +281,8 @@ struct DeliveryFixture
 };
 
 DeliveryFixture make_fixture(std::string_view name, std::shared_ptr<DeliveryFactoryState> state, bool ask_question = false, std::size_t max_attempts = 3,
-                             std::function<void(std::stop_token)> admission_preflight = {}, std::size_t max_retained_finished_jobs = 64)
+                             std::function<void(std::stop_token)> admission_preflight = {}, std::size_t max_retained_finished_jobs = 64,
+                             std::size_t max_retained_parents = 64)
 {
   DeliveryFixture fixture;
   fixture.root = temp_root() / std::string(name);
@@ -298,6 +300,7 @@ DeliveryFixture make_fixture(std::string_view name, std::shared_ptr<DeliveryFact
   fixture.coordinator = *coordinator;
   auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = fixture.coordinator,
                                                             .provider_bundle_factory = delivery_factory(std::move(state), ask_question),
+                                                            .max_retained_parents = max_retained_parents,
                                                             .max_delivery_attempts = max_attempts,
                                                             .admission_preflight = std::move(admission_preflight)});
   expect(manager.has_value(), "delivery fixture creates application manager");
@@ -331,6 +334,61 @@ ava::agent::SubagentCoordinatorJobSnapshot start_completed(DeliveryFixture& fixt
                                                        });
   expect(started.has_value(), "delivery fixture starts terminal background job");
   return started.value_or(ava::agent::SubagentCoordinatorJobSnapshot{});
+}
+
+void test_ordinary_prompt_releases_unused_parents()
+{
+  auto state = std::make_shared<DeliveryFactoryState>();
+  auto fixture = make_fixture("subagent-ordinary-cleanup", state, false, 3, {}, 64, 1);
+  if (!fixture.unlocked_session_opt)
+    return;
+  auto context = fixture.session_r()->replacement_open_context({});
+  fixture.unlocked_session_opt.reset();
+
+  // Each real run uses a distinct session against a one-parent manager. No
+  // explicit detach/release compensates for prompt cleanup in this regression.
+  for (int exit_kind = 0; exit_kind != 5; ++exit_kind)
+  {
+    auto session = ava::app::runtime::Session::open(context);
+    expect(session.has_value(), "ordinary cleanup opens a distinct session");
+    if (!session)
+      break;
+    ava::app::runtime::RunOptions options;
+    options.access_token = "ordinary-test-token";
+    options.stream = true;
+    options.isolate_ambient_extensions = true;
+    if (exit_kind == 2)
+      options.cancel_requested = [] { return true; };
+    if (exit_kind == 3)
+      options.event_sink = [](auto const&) -> ava::core::VoidResult {
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "ordinary test sink failure"));
+      };
+    if (exit_kind == 4)
+      options.cancel_requested = []() -> bool { throw std::runtime_error("ordinary test abandonment"); };
+    std::vector<ava::http::HttpResponse> responses;
+    if (exit_kind != 1)
+      responses.push_back({.status_code = 200, .headers = {}, .body = final_response("ordinary complete")});
+    DeliveryTransport transport(state, std::move(responses));
+    ava::provider::OpenAIProvider provider("https://delivery.example.test");
+    bool abandoned = false;
+    try
+    {
+      auto result = ava::app::run_prompt(*session, "ordinary prompt", provider, transport, options);
+      expect(exit_kind == 0 ? result.has_value() : !result, "ordinary run reaches its expected success or failure exit");
+    }
+    catch (std::runtime_error const& error)
+    {
+      abandoned = std::string_view(error.what()) == "ordinary test abandonment";
+    }
+    expect(abandoned == (exit_kind == 4), "only the injected callback exception abandons admission");
+    auto controller = ava::app::runtime::session_ts::rat(*session)->run_controller();
+    auto id = ava::app::runtime::session_ts::rat(*session)->store.session_id();
+    expect(!controller->snapshot().active, "ordinary completion or abandoned guard leaves the controller idle");
+    bool found = true;
+    auto retained = fixture.manager->retained_session(id, context.workspace_dir, found, true);
+    expect(!found && !retained, "every ordinary exit releases its exact unused parent capsule before returning");
+  }
+  fixture.manager->shutdown();
 }
 
 void test_idle_delivery_and_terminal_before_registration()
@@ -1154,6 +1212,7 @@ void test_same_process_reconciliation_acks_existing_commit_without_rerun()
 
 void run_subagent_delivery_manager_tests()
 {
+  test_ordinary_prompt_releases_unused_parents();
   test_idle_delivery_and_terminal_before_registration();
   test_active_turn_ordering_and_inactive_parent_navigation();
   test_retained_session_workspace_isolation();

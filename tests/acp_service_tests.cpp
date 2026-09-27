@@ -7,6 +7,7 @@
 #include "ava/http/transport.h"
 #include "ava/app/acp/service.h"
 #include "ava/app/runtime_credentials.h"
+#include "ava/app/subagent_delivery_manager.h"
 #include "ava/config/model_config.h"
 #include "ava/session/attachments.h"
 #include "ava/session/record.h"
@@ -190,6 +191,57 @@ void test_acp_session_request_schema_defaults_and_invalid_item_skipping()
   for (auto const& id : created_ids)
     static_cast<void>(
         service.handle_request(Request{.id = std::int64_t(20), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + id + "\"}"}, {}));
+  service.shutdown();
+  std::error_code cleanup;
+  std::filesystem::remove_all(root, cleanup);
+}
+
+void test_acp_prompt_close_cycles_release_parents()
+{
+  using namespace ava::app::acp;
+  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-parent-cycles");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  configure_acp_test_model(root);
+  auto coordinator = ava::agent::SubagentCoordinator::create();
+  expect(coordinator.has_value(), "ACP parent cycles create a coordinator");
+  if (!coordinator)
+    return;
+  auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .max_retained_parents = 1});
+  expect(manager.has_value(), "ACP parent cycles create a bounded manager");
+  if (!manager)
+    return;
+  std::string body;
+  AgentServiceOptions options;
+  options.agent_version = "1";
+  options.launch_root = ava::core::normalized_absolute_path(workspace);
+  options.paths = ava::tests::app_test_paths(root);
+  options.open_context.subagent_delivery_manager = *manager;
+  options.provider_bundle_factory = recording_bundle_factory(&body);
+  AgentService service(options);
+  service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
+  expect(service.handle_request(initialize_request(), {}).has_value(), "ACP parent cycles initialize");
+  for (int cycle = 0; cycle != 4; ++cycle)
+  {
+    auto created = service.handle_request(
+        Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
+    auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
+    expect(id.has_value(), "ACP cycle creates a distinct session beyond manager capacity");
+    if (!id)
+      break;
+    auto prompted =
+        service.handle_request(Request{.id = std::int64_t(3),
+                                       .method = "session/prompt",
+                                       .params_json = std::string("{\"sessionId\":\"") + *id + "\",\"prompt\":[{\"type\":\"text\",\"text\":\"cycle\"}]}"},
+                               {});
+    expect(prompted.has_value(), "ACP cycle prompt is not blocked by earlier unused parents");
+    auto closed =
+        service.handle_request(Request{.id = std::int64_t(4), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
+    expect(closed.has_value(), "ACP cycle closes normally");
+    bool found = true;
+    auto retained = (*manager)->retained_session(*id, workspace, found, true);
+    expect(!found && !retained, "ACP close leaves no unused parent capsule");
+  }
   service.shutdown();
   std::error_code cleanup;
   std::filesystem::remove_all(root, cleanup);
