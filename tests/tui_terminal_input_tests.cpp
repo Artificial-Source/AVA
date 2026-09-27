@@ -1285,6 +1285,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
   if (screen)
   {
     static_cast<void>(set_term(screen));
+    tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
     // Match production color setup before drawing so default-background pairs resolve.
     if (has_colors())
     {
@@ -1406,26 +1407,14 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
       ava::tui::detail::CompletionMatchCache completion_cache;
       ava::tui::detail::TranscriptLayoutCache transcript_cache;
       ava::tui::detail::ScreenRowCache screen_cache;
-      auto const saved_stdout = dup(STDOUT_FILENO);
-      if (saved_stdout < 0 || std::fflush(stdout) != 0 || dup2(fileno(output.get()), STDOUT_FILENO) < 0)
-      {
-        if (saved_stdout >= 0)
-          static_cast<void>(close(saved_stdout));
-        return false;
-      }
-      auto restore_stdout = [&]() {
-        static_cast<void>(std::fflush(stdout));
-        static_cast<void>(dup2(saved_stdout, STDOUT_FILENO));
-        static_cast<void>(close(saved_stdout));
-      };
       auto draw_and_capture = [&]() -> std::optional<std::string> {
-        if (std::fflush(stdout) != 0 || std::fflush(output.get()) != 0 || std::fseek(output.get(), 0, SEEK_END) != 0)
+        if (std::fflush(output.get()) != 0 || std::fseek(output.get(), 0, SEEK_END) != 0)
           return std::nullopt;
         auto const before = std::ftell(output.get());
         if (before < 0 ||
             !ava::tui::detail::draw_screen_cached(graphic_snapshot, completion_cache, graphic_snapshot.file_references_generation, transcript_cache,
                                                   graphic_snapshot.transcript_generation, screen_cache) ||
-            std::fflush(stdout) != 0 || std::fflush(output.get()) != 0)
+            std::fflush(output.get()) != 0)
         {
           return std::nullopt;
         }
@@ -1448,7 +1437,6 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
       auto const invalidated = draw_and_capture();
       graphic_snapshot.pending_attachments.clear();
       auto const removed = draw_and_capture();
-      restore_stdout();
       auto const deletion = ava::tui::delete_kitty_image(424242);
       return first && identical && changed && invalidated && removed && first->find("GRAPHIC_CACHE_FIRST_PAYLOAD") != std::string::npos &&
              identical->find("GRAPHIC_CACHE_FIRST_PAYLOAD") == std::string::npos && changed->find("GRAPHIC_CACHE_CHANGED_PAYLOAD") != std::string::npos &&
@@ -1468,23 +1456,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
                                                               .base64_data = std::make_shared<std::string const>("FOOTER_ONLY_KITTY_MARKER"),
                                                               .dimensions = ava::tui::ImageDimensions{.width_px = 20, .height_px = 20},
                                                               .image_id = 31337}}};
-      auto const saved_stdout = dup(STDOUT_FILENO);
-      if (saved_stdout < 0 || std::fflush(stdout) != 0 || dup2(fileno(output.get()), STDOUT_FILENO) < 0)
-      {
-        if (saved_stdout >= 0)
-          static_cast<void>(close(saved_stdout));
-        return false;
-      }
-      auto restore_stdout = [&]() {
-        static_cast<void>(std::fflush(stdout));
-        static_cast<void>(dup2(saved_stdout, STDOUT_FILENO));
-        static_cast<void>(close(saved_stdout));
-      };
       if (!ava::tui::draw_screen(footer_snapshot))
-      {
-        restore_stdout();
         return false;
-      }
       static_cast<void>(std::fflush(output.get()));
       auto const output_before_footer = std::ftell(output.get());
       auto const footer_canvas = ava::tui::composer_canvas_layout(footer_snapshot);
@@ -1498,7 +1471,6 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
         if (!ava::tui::detail::draw_processing_footer_cached(footer_snapshot, completion_cache, footer_snapshot.file_references_generation, transcript_cache,
                                                              footer_snapshot.transcript_generation, screen_cache))
         {
-          restore_stdout();
           return false;
         }
         int footer_cursor_y = 0;
@@ -1506,7 +1478,6 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
         getyx(stdscr, footer_cursor_y, footer_cursor_x);
         if (footer_cursor_x != static_cast<int>(expected_footer_column - 1) || footer_cursor_y < 0 || footer_cursor_y >= LINES)
         {
-          restore_stdout();
           return false;
         }
       }
@@ -1520,7 +1491,6 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
         footer_output_read = std::fread(footer_output.data(), 1, footer_output.size(), output.get()) == footer_output.size();
         static_cast<void>(std::fseek(output.get(), 0, SEEK_END));
       }
-      restore_stdout();
       auto const footer_output_is_quiet = footer_output_read && footer_output.find("\x1b[?25l") == std::string::npos &&
                                           footer_output.find("\x1b[?25h") == std::string::npos && footer_output.find("\x1b[2J") == std::string::npos &&
                                           footer_output.find("FOOTER_ONLY_KITTY_MARKER") == std::string::npos;
@@ -1863,6 +1833,7 @@ void test_osc11_handler_arming_and_virtual_probe()
   }
 
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   static_cast<void>(raw());
   static_cast<void>(noecho());
   static_cast<void>(keypad(stdscr, TRUE));

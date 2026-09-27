@@ -25,18 +25,19 @@ class ColorPalette
  private:
   std::vector<CIEDE2000::LAB> palette_;         // Live color palette as CIELAB values. The index corresponds to the palette index.
   int last_mutable_palette_index_;              // Exclusive upper bound of the palette prefix assumed to be mutable, or zero.
-  FILE* output_file_;                           // Non-owning terminal output stream used to program and restore mutable entries.
+  Context& context_;                            // Non-owning terminal context used to program and restore mutable entries.
+                                                // Might be different from Application::terminal_context() in the testsuite setting.
   std::vector<Color> colors_;                   // Exact live sRGB values corresponding to palette_.
   std::vector<bool> reserved_mutable_indices_;  // Mutable entries already returned to a color pair and therefore immutable for this Context.
   std::vector<std::pair<int, Color>> restorations_; // Original colors of entries reprogrammed by this instance.
 
  private:
-  // Construct a ColorPalette from the live `colors`, their LAB `palette`, the mutable-prefix bound, and `output_file`.
+  // Construct a ColorPalette from the live `colors`, their LAB `palette`, the mutable-prefix bound, and `context`.
   // Called from ColorPalette::create; the output stream must outlive this object.
-  ColorPalette(std::vector<CIEDE2000::LAB>&& palette, std::vector<Color>&& colors, int last_mutable_palette_index, FILE* output_file)
+  ColorPalette(std::vector<CIEDE2000::LAB>&& palette, std::vector<Color>&& colors, int last_mutable_palette_index, Context& context)
       : palette_(std::move(palette)),
         last_mutable_palette_index_(last_mutable_palette_index),
-        output_file_(output_file),
+        context_(context),
         colors_(std::move(colors)),
         reserved_mutable_indices_(static_cast<std::size_t>(last_mutable_palette_index), false)
   {

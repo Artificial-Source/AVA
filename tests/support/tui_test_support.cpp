@@ -1,10 +1,23 @@
 #include "sys.h"
 #include "tests/support/tui_test_support.h"
+#include "ava/core/Application.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace tui_test_support {
+
+// Make the test's newterm output stream available to the application Context used by the composer renderer.
+ScopedComposerScreenOutput::ScopedComposerScreenOutput(FILE* output)
+{
+  ava::core::Application::instance().terminal_context().bind_external_screen_output_for_test(output);
+}
+
+// Release the borrowed stream before its owning test fixture closes it.
+ScopedComposerScreenOutput::~ScopedComposerScreenOutput()
+{
+  ava::core::Application::instance().terminal_context().bind_external_screen_output_for_test(nullptr);
+}
 
 ScopedTerminalCapabilityProfile::ScopedTerminalCapabilityProfile(std::string term_program_value)
     : term("TERM", "xterm-256color"),

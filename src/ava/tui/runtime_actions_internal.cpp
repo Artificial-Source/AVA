@@ -227,7 +227,7 @@ bool RuntimeActionController::suspend_to_background()
   terminal_reset_mouse_tracking();
 
   {
-    utils::Signal::BlockGuard block_signals({SIGINT | SIGTERM});
+    utils::Signal::BlockGuard block_signals({SIGINT, SIGTERM});
     // Disable AVA-owned protocols after leaving curses so the stopped process's
     // shell inherits balanced keyboard/paste/mouse state. Negotiation preferences
     // are retained so resume can re-arm without re-probing OSC 11.

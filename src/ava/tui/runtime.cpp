@@ -122,11 +122,14 @@ class RuntimeBeforeShutdownGuard
 
 class ComposerTerminalGraphicsGuard
 {
+ private:
+  terminal::Context& terminal_context_;
+
  public:
-  ComposerTerminalGraphicsGuard() = default;
+  ComposerTerminalGraphicsGuard(terminal::Context& terminal_context) : terminal_context_(terminal_context) { }
   ComposerTerminalGraphicsGuard(ComposerTerminalGraphicsGuard const&) = delete;
   ComposerTerminalGraphicsGuard& operator=(ComposerTerminalGraphicsGuard const&) = delete;
-  ~ComposerTerminalGraphicsGuard() { detail::clear_composer_terminal_graphics(); }
+  ~ComposerTerminalGraphicsGuard() { detail::clear_composer_terminal_graphics(terminal_context_); }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -219,7 +222,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   signals_manager.activate_handlers({SIGTERM, SIGINT});
   signals_manager.default_handlers({SIGHUP});
 
-  ComposerTerminalGraphicsGuard graphics_cleanup;
+  ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
   terminal_context.apply_cursor_settings(options.cursor);
   // Probe the direct terminal background once after enter and before first paint.
   // No re-probe on suspend/resume and no late theme flip after presentation starts.

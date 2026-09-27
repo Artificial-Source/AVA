@@ -56,6 +56,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -140,6 +141,7 @@ bool test_changed_session_snapshot_resets_presentation()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -286,6 +288,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -416,6 +419,7 @@ bool test_atomic_search_input_prompt_precedence()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -539,6 +543,7 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -702,6 +707,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -834,6 +840,7 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -933,6 +940,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -1052,6 +1060,7 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   if (!screen)
     return false;
   set_term(screen);
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());
@@ -1149,6 +1158,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   if (!screen)
     return false;
   static_cast<void>(set_term(screen));
+  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
   if (has_colors())
   {
     static_cast<void>(start_color());

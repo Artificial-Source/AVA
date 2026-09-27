@@ -2537,22 +2537,21 @@ std::optional<std::size_t> plugin_ui_modal_option_for_screen_position(ComposerSn
   return detail::plugin_ui_option_for_modal_row(*snapshot.plugin_ui_modal, row - top - 1, modal_width, modal_height);
 }
 
-void detail::clear_composer_terminal_graphics() noexcept
+void detail::clear_composer_terminal_graphics(terminal::Context& terminal_context) noexcept
 {
   auto image_ids = std::exchange(active_kitty_image_ids(), {});
   for (auto const image_id : image_ids)
   {
     try
     {
-      auto const sequence = delete_kitty_image(image_id);
-      static_cast<void>(std::fwrite(sequence.data(), 1, sequence.size(), stdout));
+      static_cast<void>(terminal_context.write_raw_sequence(delete_kitty_image(image_id), false));
     }
     catch (...)
     {
       // Terminal cleanup is best-effort and must not escape teardown.
     }
   }
-  static_cast<void>(std::fflush(stdout));
+  terminal_context.flush_raw();
 }
 
 bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
@@ -2647,9 +2646,9 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
     if (row >= static_cast<std::size_t>(terminal_rows))
       continue;
     auto const move = "\x1b[" + std::to_string(row + 1) + ";1H";
-    if (std::fwrite(move.data(), 1, move.size(), stdout) != move.size())
+    if (!terminal_context.write_raw_sequence(move, false))
       return fail_screen_draw();
-    if (std::fwrite(line.data(), 1, line.size(), stdout) != line.size())
+    if (!terminal_context.write_raw_sequence(line, false))
       return fail_screen_draw();
     wrote_direct_sequences = true;
   }
@@ -2667,7 +2666,7 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
       if (std::ranges::find(current_kitty_image_ids, image_id) != current_kitty_image_ids.end())
         continue;
       auto const sequence = delete_kitty_image(image_id);
-      if (std::fwrite(sequence.data(), 1, sequence.size(), stdout) != sequence.size())
+      if (!terminal_context.write_raw_sequence(sequence, false))
         return fail_screen_draw();
       wrote_direct_sequences = true;
     }
@@ -2677,9 +2676,9 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
         continue;
       auto const column = std::min<std::size_t>(graphic.column, terminal_cols > 0 ? terminal_cols - 1 : 0);
       auto const move = "\x1b[" + std::to_string(graphic.row + 1) + ";" + std::to_string(column + 1) + "H";
-      if (std::fwrite(move.data(), 1, move.size(), stdout) != move.size())
+      if (!terminal_context.write_raw_sequence(move, false))
         return fail_screen_draw();
-      if (std::fwrite(graphic.sequence.data(), 1, graphic.sequence.size(), stdout) != graphic.sequence.size())
+      if (!terminal_context.write_raw_sequence(graphic.sequence, false))
         return fail_screen_draw();
       if (graphic.protocol == TerminalImageProtocol::Kitty && graphic.image_id &&
           std::ranges::find(active_image_ids, *graphic.image_id) == active_image_ids.end())
@@ -2694,10 +2693,10 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
     auto const row = std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0);
     auto const column = std::min<std::size_t>(cursor.column, terminal_cols > 0 ? terminal_cols - 1 : 0);
     auto const move = "\x1b[" + std::to_string(row + 1) + ";" + std::to_string(column + 1) + "H";
-    if (std::fwrite(move.data(), 1, move.size(), stdout) != move.size())
+    if (!terminal_context.write_raw_sequence(move, false))
       return fail_screen_draw();
   }
-  if (std::fflush(stdout) != 0)
+  if (!terminal_context.flush_raw())
     return fail_screen_draw();
   active_image_ids = std::move(current_kitty_image_ids);
   screen_cache.surfaces = std::move(surfaces);

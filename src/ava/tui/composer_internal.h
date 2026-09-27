@@ -529,7 +529,7 @@ inline void refresh_transcript_layout_cache(TranscriptLayoutCache& cache, std::v
                                       bool freeze_transcript_layout = false, bool allow_frozen_width_mismatch = false);
 [[nodiscard]] bool draw_processing_footer_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
                                                  TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation, ScreenRowCache& screen_cache);
-void clear_composer_terminal_graphics() noexcept;
+void clear_composer_terminal_graphics(terminal::Context& terminal_context) noexcept;
 
 [[nodiscard]] std::size_t composer_input_prefix_columns(bool first_line);
 [[nodiscard]] std::string render_composer_footer_line(ComposerSnapshot const& snapshot, std::size_t width);

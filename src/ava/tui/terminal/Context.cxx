@@ -37,6 +37,15 @@ Context::Context(FILE* outfd, FILE* infd) : default_rendition_(ColorPair{{}, 0})
   initialize(outfd, infd);
 }
 
+// Bind raw output to a test-owned newterm screen without taking ownership of its ncurses or FILE* lifetime.
+// The renderer's existing global-stdscr fallback continues to draw to that screen.
+void Context::bind_external_screen_output_for_test(FILE* output)
+{
+  // Use this only with a Context that has not initialized or acquired a screen; bind before drawing and unbind before closing the test stream.
+  ASSERT(!initialized_ && (output_file_ == nullptr || output == nullptr));
+  output_file_ = output;
+}
+
 void Context::initialize(FILE* outfd, FILE* infd)
 {
   DoutEntering(dc::notice, "Context::initialize(" << outfd << ", " << infd << ")");
@@ -337,11 +346,22 @@ int Context::get_escdelay() const
   return ::get_escdelay();
 }
 
-bool Context::write_raw_sequence(std::string_view sequence)
+bool Context::flush_raw()
 {
-  if (!output_file_)
-    return false;
-  return std::fwrite(sequence.data(), 1, sequence.size(), output_file_) == sequence.size() && std::fflush(output_file_) == 0;
+  // Initialize the terminal or bind an external test screen's output before writing.
+  ASSERT(output_file_);
+  bool success = std::fflush(output_file_) == 0;
+  Dout(dc::warning(!success)|error_cf, "std::fflush");
+  return success;
+}
+
+bool Context::write_raw_sequence(std::string_view sequence, bool flush)
+{
+  // Initialize the terminal or bind an external test screen's output before writing.
+  ASSERT(output_file_);
+  size_t count = std::fwrite(sequence.data(), 1, sequence.size(), output_file_);
+  Dout(dc::warning(count != sequence.size())|error_cf, "std::fwrite(..., 1, " << sequence.size() << ", output_file_) = " << count);
+  return count == sequence.size() && (!flush || flush_raw());
 }
 
 // Ask the terminal for its default background color without exposing raw escape ownership outside Context.

@@ -278,7 +278,7 @@ std::vector<Color> ColorPalette::probe_colors(Context& context, int first_color_
     return {};
 
   std::string const queries = osc4_queries(first_color_index, number_of_colors);
-  if (queries.empty() || std::fwrite(queries.data(), 1, queries.size(), context.output_file_) != queries.size() || std::fflush(context.output_file_) != 0)
+  if (queries.empty() || !context.write_raw_sequence(queries))
     return {};
 
   Dout(dc::terminal|continued_cf, "Received from terminal: \"");
@@ -368,8 +368,7 @@ std::unique_ptr<ColorPalette> ColorPalette::create(Context& context)
       Color const original = colors[static_cast<std::size_t>(color_index)];
       Color const replacement{static_cast<std::uint32_t>(original.as_int() ^ 0xffffff)};
       std::string const assignment = osc4_set_color(color_index, replacement);
-      bool const assignment_written = !assignment.empty() && std::fwrite(assignment.data(), 1, assignment.size(), context.output_file_) == assignment.size() &&
-                                      std::fflush(context.output_file_) == 0;
+      bool const assignment_written = !assignment.empty() && context.write_raw_sequence(assignment);
       if (!assignment_written)
         continue;
 
@@ -379,8 +378,7 @@ std::unique_ptr<ColorPalette> ColorPalette::create(Context& context)
 
       // Restore after every emitted test assignment: a missing or mismatched reply does not prove that the terminal ignored it.
       std::string const restoration = osc4_set_color(color_index, original);
-      if (restoration.empty() || std::fwrite(restoration.data(), 1, restoration.size(), context.output_file_) != restoration.size() ||
-          std::fflush(context.output_file_) != 0)
+      if (restoration.empty() || !context.write_raw_sequence(restoration))
       {
         restoration_failed = true;
         break;
@@ -401,7 +399,7 @@ std::unique_ptr<ColorPalette> ColorPalette::create(Context& context)
   for (Color color : colors)
     palette.push_back(rgb_to_lab(color));
 
-  return std::unique_ptr<ColorPalette>(new ColorPalette(std::move(palette), std::move(colors), last_mutable_palette_index, context.output_file_));
+  return std::unique_ptr<ColorPalette>(new ColorPalette(std::move(palette), std::move(colors), last_mutable_palette_index, context));
 }
 
 // Restore reprogrammed entries in reverse allocation.
@@ -411,10 +409,10 @@ ColorPalette::~ColorPalette()
   {
     std::string const assignment = osc4_set_color(restoration->first, restoration->second);
     if (!assignment.empty())
-      static_cast<void>(std::fwrite(assignment.data(), 1, assignment.size(), output_file_));
+      static_cast<void>(context_.write_raw_sequence(assignment, false));
   }
   if (!restorations_.empty())
-    static_cast<void>(std::fflush(output_file_));
+    static_cast<void>(context_.flush_raw());
 }
 
 // Reserve a mutable entry that has become observable through an ncurses color pair.
@@ -452,7 +450,7 @@ int ColorPalette::nearest_indexed_color(Color color)
 
     Color const original = colors_[index];
     std::string const assignment = osc4_set_color(index, color);
-    if (!assignment.empty() && std::fwrite(assignment.data(), 1, assignment.size(), output_file_) == assignment.size() && std::fflush(output_file_) == 0)
+    if (!assignment.empty() && context_.write_raw_sequence(assignment))
     {
       restorations_.emplace_back(index, original);
       colors_[index] = color;
@@ -464,10 +462,7 @@ int ColorPalette::nearest_indexed_color(Color color)
     // A complete write followed by a failed flush may still reach the terminal; restore this entry defensively and do not retry it.
     std::string const restoration = osc4_set_color(index, original);
     if (!restoration.empty())
-    {
-      static_cast<void>(std::fwrite(restoration.data(), 1, restoration.size(), output_file_));
-      static_cast<void>(std::fflush(output_file_));
-    }
+      static_cast<void>(context_.write_raw_sequence(restoration));
     reserve_index(index);
     break;
   }

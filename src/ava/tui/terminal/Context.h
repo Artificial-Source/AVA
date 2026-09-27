@@ -58,6 +58,10 @@ class Context final
   Context(FILE* outfd, FILE* infd);
   ~Context();
 
+  // Bind the output of an externally created ncurses screen to this uninitialized Context for a test.
+  // Pass nullptr after that screen is finished, before its output stream is closed. Production initializes the Context instead.
+  void bind_external_screen_output_for_test(FILE* output);
+
   Rendition const& default_rendition() const { return default_rendition_; }
 
   // Return a ColorPair for `foreground` and `background`, using exact RGB on direct-color terminals and exact or nearest palette
@@ -110,8 +114,10 @@ class Context final
   // Return the ESC delay being used.
   int get_escdelay() const;                                             // get_escdelay
 
+  // Flush output_file_ after a call to write_raw_sequence(..., false).
+  bool flush_raw();
   // Write a raw sequence of characters to the terminal and flush it. Returns true upon success.
-  bool write_raw_sequence(std::string_view sequence);
+  bool write_raw_sequence(std::string_view sequence, bool flush = true);
 
   // Emit the OSC 11 terminal-background query and flush it. Theme policy and reply interpretation remain TUI concerns.
   [[nodiscard]] bool query_background_color();
