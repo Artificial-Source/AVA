@@ -2,14 +2,14 @@
 #include "ava/event/events.h"
 #include "ava/app/command_format.h"
 #include "ava/app/command_tools.h"
-#include "ava/tools/file_tools.h"
-#include "ava/tools/tool_permission.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_event_adapters.h"
 #include "ava/agent/tool_result.h"
 #include "ava/tools/bash_tool.h"
+#include "ava/tools/file_tools.h"
 #include "ava/tools/search_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/lsp/configured_provider.h"
@@ -191,10 +191,9 @@ ava::tools::ToolContext make_tool_context(runtime::session_ts& unlocked_session,
                                                  .data_json = ava::tools::permission_audit_data_json(event)};
         return runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry));
       },
-      .protected_permission_rule_store =
-          ava::permissions::PermissionRuleStore{.global_rules_file = permission_rule_store.global_rules_file,
-                                                .workspace_rules_file = permission_rule_store.workspace_rules_file,
-                                                .workspace_dir = permission_rule_store.workspace_dir},
+      .protected_permission_rule_store = ava::permissions::PermissionRuleStore{.global_rules_file = permission_rule_store.global_rules_file,
+                                                                               .workspace_rules_file = permission_rule_store.workspace_rules_file,
+                                                                               .workspace_dir = permission_rule_store.workspace_dir},
       .anchor_set = anchor_set,
       .ava_authority_roots = ava_authority_roots,
       .process_scope = process_scope,

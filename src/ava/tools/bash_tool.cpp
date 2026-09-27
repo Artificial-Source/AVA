@@ -1,14 +1,12 @@
 #include "sys.h"
 #include "ava/containment/containment.h"
-#include "ava/core/AnchorOpen.h"
-#include "ava/core/AnchorSet.h"
-#include "ava/core/trusted_home.h"
 #include "ava/tools/bash_tool.h"
-#include "ava/tools/tool_permission.h"
 #include "ava/tools/spill_files.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/Signals.h"
+#include "ava/core/trusted_home.h"
 
 #include <algorithm>
 #include <array>
