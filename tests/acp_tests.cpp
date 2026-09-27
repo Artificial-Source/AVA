@@ -13,6 +13,8 @@ void run_acp_tests()
   test_acp_service_gating_reinitialize_and_negotiation();
   test_acp_service_mutating_request_terminal_commits();
   test_acp_session_request_schema_defaults_and_invalid_item_skipping();
+  test_acp_retained_resume_validates_cwd_and_limits();
+  test_acp_prompt_close_cycles_release_parents();
   test_acp_session_capacity_is_reserved_before_persistence();
   test_acp_startup_model_is_pinned_across_config_mutation();
   test_acp_resume_projects_history_for_pinned_startup_model();

@@ -7,6 +7,7 @@
 #include "ava/http/transport.h"
 #include "ava/app/acp/service.h"
 #include "ava/app/runtime_credentials.h"
+#include "ava/app/subagent_delivery_manager.h"
 #include "ava/config/model_config.h"
 #include "ava/session/attachments.h"
 #include "ava/session/record.h"
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -195,6 +197,214 @@ void test_acp_session_request_schema_defaults_and_invalid_item_skipping()
   std::filesystem::remove_all(root, cleanup);
 }
 
+void test_acp_retained_resume_validates_cwd_and_limits()
+{
+  using namespace ava::app::acp;
+  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-retained-contract");
+  auto const workspace = root / "workspace";
+  auto const nested = workspace / "nested";
+  std::filesystem::create_directories(nested);
+  configure_acp_test_model(root);
+  auto coordinator = ava::agent::SubagentCoordinator::create();
+  expect(coordinator.has_value(), "ACP retained fixture creates coordinator");
+  if (!coordinator)
+    return;
+  auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .max_retained_parents = 1});
+  expect(manager.has_value(), "ACP retained fixture creates one-parent manager");
+  if (!manager)
+    return;
+  runtime::OpenContext context;
+  context.paths = ava::tests::app_test_paths(root);
+  context.subagent_delivery_manager = *manager;
+  context.subagent_coordinator = *coordinator;
+  auto original = runtime::Session::open_at(context, workspace, nested);
+  expect(original.has_value(), "ACP retained fixture opens original nested session");
+  if (!original)
+    return;
+  auto const id = runtime::session_ts::rat(*original)->store.session_id();
+  auto controller = runtime::session_ts::rat(*original)->run_controller();
+  struct PendingJob
+  {
+    std::mutex mutex;
+    std::condition_variable_any changed;
+  };
+  auto pending = std::make_shared<PendingJob>();
+  auto job =
+      (*coordinator)
+          ->start_background(
+              id, {.title = "retained ACP job", .child_session_id = "child_acp_retained"}, [pending](ava::agent::BackgroundJobContext const& job_context) {
+                std::unique_lock lock(pending->mutex);
+                pending->changed.wait(lock, job_context.stop_token, [] { return false; });
+                return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Canceled, .final_text = {}, .stop_reason = "canceled"};
+              });
+  expect(job.has_value(), "ACP retained fixture keeps a live child without revoking it on close");
+  std::string body;
+  auto factory = recording_bundle_factory(&body);
+  auto bundle = factory(*original, {}, "retained setup");
+  expect(bundle.has_value(), "ACP retained setup creates fake provider bundle");
+  if (!bundle)
+  {
+    (*manager)->shutdown();
+    return;
+  }
+  auto run = ava::app::run_prompt(*original, "retain parent for live child", *bundle->provider, *bundle->transport, bundle->options);
+  expect(run.has_value(), "real ordinary prompt publishes the retained ACP parent");
+
+  bool observed_bound_policy = false;
+  AgentServiceOptions options;
+  options.agent_version = "1";
+  options.launch_root = ava::core::normalized_absolute_path(workspace);
+  options.paths = context.paths;
+  options.open_context.subagent_delivery_manager = *manager;
+  options.provider_bundle_factory = [&](runtime::session_ts const& session, runtime::RunOptions run_options, std::string_view label) {
+    {
+      SCOPED_CRITICAL_AREA_CR(session_r, session);
+      auto authority = session_r->read_authority_1();
+      auto const limits = session_r->session_read_limits();
+      observed_bound_policy = authority && authority->read_limits().max_file_bytes == kAcpSessionReadLimits.max_file_bytes &&
+                              authority->read_limits().max_line_bytes == kAcpSessionReadLimits.max_line_bytes &&
+                              authority->read_limits().max_entries == kAcpSessionReadLimits.max_entries &&
+                              limits.max_file_bytes == kAcpSessionReadLimits.max_file_bytes && limits.max_line_bytes == kAcpSessionReadLimits.max_line_bytes &&
+                              limits.max_entries == kAcpSessionReadLimits.max_entries && session_r->run_controller() == controller;
+    }
+    return factory(session, std::move(run_options), label);
+  };
+  AgentService service(options);
+  service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
+  expect(service.handle_request(initialize_request(), {}).has_value(), "ACP retained service initializes");
+  auto resume = [&](std::filesystem::path const& cwd) {
+    return service.handle_request(Request{.id = std::int64_t(2),
+                                          .method = "session/resume",
+                                          .params_json = std::string("{\"sessionId\":\"") + id + "\",\"cwd\":\"" + cwd.string() + "\",\"mcpServers\":[]}"},
+                                  {});
+  };
+  auto wrong_cwd = resume(workspace);
+  expect(!wrong_cwd && wrong_cwd.error().code == -32602 && wrong_cwd.error().message.find("persisted session cwd") != std::string::npos,
+         "ACP session/resume rejects retained persisted-cwd mismatch before registry publication");
+  auto matching = resume(nested);
+  expect(matching.has_value(), "ACP session/resume attaches the same retained lease after failed cwd validation");
+  if (matching)
+  {
+    auto prompted =
+        service.handle_request(Request{.id = std::int64_t(3),
+                                       .method = "session/prompt",
+                                       .params_json = std::string("{\"sessionId\":\"") + id + "\",\"prompt\":[{\"type\":\"text\",\"text\":\"resumed\"}]}"},
+                               {});
+    expect(prompted && observed_bound_policy, "ACP retained prompt uses the supplied bound authority and matching invocation limits");
+    auto closed =
+        service.handle_request(Request{.id = std::int64_t(4), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + id + "\"}"}, {});
+    expect(closed.has_value(), "ACP retained host closes without revoking its live child");
+  }
+  if (job)
+  {
+    auto snapshot = (*coordinator)->snapshot(id, job->job.identity.job_id);
+    expect(snapshot && snapshot->job.execution != ava::agent::SubagentExecutionState::Canceled, "ACP close preserves the original live child");
+  }
+  // ACP and legacy readers share the hard line ceiling, but ACP additionally
+  // caps total bytes. Grow through the original owner's unbounded file policy.
+  std::size_t const chunk_bytes = 512 * 1024;
+  bool appended_all = true;
+  for (std::size_t index = 0; index <= kAcpSessionReadLimits.max_file_bytes / chunk_bytes; ++index)
+  {
+    auto appended = controller->append(ava::session::SessionEntry{.id = "acp-retained-growth-" + std::to_string(index),
+                                                                  .parent_id = "",
+                                                                  .type = ava::session::EntryType::UserMessage,
+                                                                  .timestamp = ava::session::now_timestamp(),
+                                                                  .data_json = "{\"text\":\"" + std::string(chunk_bytes, 'x') + "\"}"});
+    appended_all = appended_all && appended.has_value();
+    if (!appended)
+      break;
+  }
+  expect(appended_all, "ACP retained fixture exceeds total bytes through the original append owner");
+  auto too_large = resume(nested);
+  expect(!too_large && too_large.error().message.find("session file exceeds bounded read limit") != std::string::npos,
+         "ACP session/resume enforces bounded history on a retained parent");
+  auto still_available = runtime::Session::open_at(context, workspace, nested, {.requested_session_id = id, .expected_original_cwd = nested});
+  expect(still_available && runtime::session_ts::rat(*still_available)->run_controller() == controller,
+         "failed ACP bounded validation preserves the exact original lease and controller for an unrestricted invocation");
+  service.shutdown();
+  std::error_code cleanup;
+  std::filesystem::remove_all(root, cleanup);
+}
+
+void test_acp_prompt_close_cycles_release_parents()
+{
+  using namespace ava::app::acp;
+  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-parent-cycles");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  configure_acp_test_model(root);
+  auto coordinator = ava::agent::SubagentCoordinator::create();
+  expect(coordinator.has_value(), "ACP parent cycles create a coordinator");
+  if (!coordinator)
+    return;
+  auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .max_retained_parents = 1});
+  expect(manager.has_value(), "ACP parent cycles create a bounded manager");
+  if (!manager)
+    return;
+  std::string body;
+  AgentServiceOptions options;
+  options.agent_version = "1";
+  options.launch_root = ava::core::normalized_absolute_path(workspace);
+  options.paths = ava::tests::app_test_paths(root);
+  options.open_context.subagent_delivery_manager = *manager;
+  options.provider_bundle_factory = recording_bundle_factory(&body);
+  AgentService service(options);
+  service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
+  expect(service.handle_request(initialize_request(), {}).has_value(), "ACP parent cycles initialize");
+  for (int cycle = 0; cycle != 4; ++cycle)
+  {
+    auto created = service.handle_request(
+        Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
+    auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
+    expect(id.has_value(), "ACP cycle creates a distinct session beyond manager capacity");
+    if (!id)
+      break;
+    auto prompted =
+        service.handle_request(Request{.id = std::int64_t(3),
+                                       .method = "session/prompt",
+                                       .params_json = std::string("{\"sessionId\":\"") + *id + "\",\"prompt\":[{\"type\":\"text\",\"text\":\"cycle\"}]}"},
+                               {});
+    expect(prompted.has_value(), "ACP cycle prompt is not blocked by earlier unused parents");
+    auto closed =
+        service.handle_request(Request{.id = std::int64_t(4), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
+    expect(closed.has_value(), "ACP cycle closes normally");
+    bool found = true;
+    auto retained = (*manager)->retained_session(*id, workspace, found, {.exact_session_id = true});
+    expect(!found && !retained, "ACP close leaves no unused parent capsule");
+  }
+  // Close must also release a retained attachment that never enters another
+  // prompt. Seed via the real capsule publication API, then use only the ACP
+  // service's resume/close path (no test-side detach or release).
+  for (int cycle = 0; cycle != 2; ++cycle)
+  {
+    auto context = options.open_context;
+    context.paths = options.paths;
+    auto source = runtime::Session::open_at(context, workspace, workspace);
+    expect(source.has_value(), "ACP close-only fixture opens a parent");
+    if (!source)
+      break;
+    auto published = (*manager)->refresh_parent(*source, {});
+    expect(published.has_value(), "ACP close-only fixture publishes within the one-parent cap");
+    auto const id = runtime::session_ts::rat(*source)->store.session_id();
+    auto resumed =
+        service.handle_request(Request{.id = std::int64_t(5),
+                                       .method = "session/resume",
+                                       .params_json = std::string("{\"sessionId\":\"") + id + "\",\"cwd\":\"" + workspace.string() + "\",\"mcpServers\":[]}"},
+                               {});
+    expect(resumed.has_value(), "ACP close-only path attaches retained parent without a prompt");
+    auto closed =
+        service.handle_request(Request{.id = std::int64_t(6), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + id + "\"}"}, {});
+    expect(closed.has_value(), "ACP close releases a retained attachment without running another prompt");
+    bool found = true;
+    auto retained = (*manager)->retained_session(id, workspace, found, {.exact_session_id = true});
+    expect(!found && !retained, "ACP close alone releases the exact unused retained capsule");
+  }
+  service.shutdown();
+  std::error_code cleanup;
+  std::filesystem::remove_all(root, cleanup);
+}
+
 void test_acp_session_capacity_is_reserved_before_persistence()
 {
   using namespace ava::app::acp;
@@ -253,8 +463,8 @@ void test_acp_startup_model_is_pinned_across_config_mutation()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
-  options.provider_bundle_factory = [&observed_models, base_factory](ava::app::runtime::session_ts const& unlocked_session, ava::app::runtime::RunOptions run_options,
-                                                                     std::string_view label) mutable {
+  options.provider_bundle_factory = [&observed_models, base_factory](ava::app::runtime::session_ts const& unlocked_session,
+                                                                     ava::app::runtime::RunOptions run_options, std::string_view label) mutable {
     observed_models.push_back(ava::app::runtime::session_ts::crat(unlocked_session)->model());
     return base_factory(unlocked_session, std::move(run_options), label);
   };

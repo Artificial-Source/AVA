@@ -2,7 +2,7 @@
 
 #include "ava/agent/tool_dispatch_services.h"
 #include "ava/agent/tool_types.h"
-#include "ava/tools/file_tools.h"
+#include "ava/tools/tool_context.h"
 
 namespace ava::agent {
 

@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/tools/websearch_tool.h"
 #include "ava/core/error.h"
 #include "ava/core/json.h"

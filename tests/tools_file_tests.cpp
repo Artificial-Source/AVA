@@ -5,13 +5,14 @@
 #include "ava/tools/file_tools.h"
 #include "ava/tools/mutation_queue.h"
 #include "ava/tools/secure_workspace.h"
-#include "ava/core/AnchorOpen.h"
-#include "ava/core/AnchorSet.h"
-#include "ava/core/open_beneath.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/session/export.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/AnchorOpen.h"
+#include "ava/core/AnchorSet.h"
 #include "ava/core/json.h"
+#include "ava/core/open_beneath.h"
 #include "ava/core/path.h"
 
 #include <algorithm>
@@ -36,7 +37,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
 #include "debug.h"
 
 namespace {

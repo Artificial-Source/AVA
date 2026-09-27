@@ -4,6 +4,7 @@
 #include "ava/tools/file_tools.h"
 #include "ava/tools/search_tools.h"
 #include "ava/tools/secure_workspace.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/mode.h"
 
@@ -36,6 +37,18 @@ ava::permissions::PermissionRuleStore test_store(std::filesystem::path const& ro
                                                .workspace_rules_file = workspace / ".ava" / "permission-rules.json",
                                                .workspace_dir = workspace,
                                                .anchor_set = *anchors};
+}
+
+ava::permissions::PermissionRuleStore path_only_protection_identity(ava::permissions::PermissionRuleStore const& store)
+{
+  return ava::permissions::PermissionRuleStore{
+      .global_rules_file = store.global_rules_file, .workspace_rules_file = store.workspace_rules_file, .workspace_dir = store.workspace_dir};
+}
+
+bool is_rule_file_protection_error(ava::core::Error const& error)
+{
+  return error.category() == ava::core::ErrorCategory::PermissionDenied &&
+         error.message().find("permission rule files cannot be modified") != std::string::npos;
 }
 
 void write_file_with_mode(std::filesystem::path const& path, std::string const& content, mode_t mode)
@@ -1486,7 +1499,11 @@ void test_file_tools_reject_enforceable_permission_rule_writes()
 
   ava::tools::ToolContext context;
   context.workspace_dir = workspace;
-  context.mcp_global_config_file = store.global_rules_file.parent_path() / "mcp.json";
+  context.protected_permission_rule_store = path_only_protection_identity(store);
+  context.mcp_global_config_file = workspace / "misleading" / "mcp.json";
+  context.plugin_global_plugins_dir = workspace / "misleading-plugins";
+  expect(context.protected_permission_rule_store && context.protected_permission_rule_store->anchor_set == nullptr,
+         "file-tool protection identity is a path-only projection without AnchorSet");
   auto global_write = ava::tools::write_file(context, store.global_rules_file, "{}", ava::tools::WriteOptions{.permission_already_checked = true});
   expect(!global_write && global_write.error().category() == ava::core::ErrorCategory::PermissionDenied,
          "normal file tools cannot write enforceable global permission rule files inside the workspace");
@@ -1496,16 +1513,10 @@ void test_file_tools_reject_enforceable_permission_rule_writes()
   expect(!workspace_edit && workspace_edit.error().category() == ava::core::ErrorCategory::PermissionDenied,
          "normal file tools cannot edit workspace-keyed enforceable permission rule files");
 
-  auto const config_link = workspace / "config-link";
-  std::error_code symlink_error;
-  std::filesystem::create_directory_symlink(store.global_rules_file.parent_path(), config_link, symlink_error);
-  if (!symlink_error)
-  {
-    auto alias_write =
-        ava::tools::write_file(context, config_link / "permission-rules.json", "{}", ava::tools::WriteOptions{.permission_already_checked = true});
-    expect(!alias_write && alias_write.error().category() == ava::core::ErrorCategory::PermissionDenied,
-           "normal file tools use inode comparison for enforceable permission rule file aliases");
-  }
+  auto patch_preflight = ava::tools::ensure_permission(context, ava::permissions::Operation::EditFile, store.global_rules_file, "", "apply_patch",
+                                                       "patch edit requires permission");
+  expect(!patch_preflight && patch_preflight.error().category() == ava::core::ErrorCategory::PermissionDenied,
+         "patch preflight rejects enforceable permission rule file mutation");
 }
 
 void test_file_tools_reject_enforceable_permission_rule_writes_before_registration()
@@ -1513,24 +1524,85 @@ void test_file_tools_reject_enforceable_permission_rule_writes_before_registrati
   auto const root = create_empty_root("permission-rules-unregistered-file-tool-guard");
 
   auto const workspace = root / "workspace";
+  auto const control_config = workspace / "control" / "ava";
+  auto const control_target = control_config / "permission-rules.json";
   std::filesystem::create_directories(workspace);
-  auto const config_dir = workspace / ".config" / "ava";
-  auto const store = ava::permissions::PermissionRuleStore{.global_rules_file = config_dir / "permission-rules.json",
+  std::filesystem::create_directories(control_config);
+  static_cast<void>(::chmod(root.c_str(), S_IRWXU));
+  static_cast<void>(::chmod(workspace.c_str(), S_IRWXU));
+  static_cast<void>(::chmod(control_config.c_str(), S_IRWXU));
+  auto anchors = ava::core::AnchorSet::open({workspace, control_config});
+  expect(anchors.has_value(), "unregistered file-tool guard opens its shared AnchorSet");
+  if (!anchors)
+    return;
+
+  auto const store = ava::permissions::PermissionRuleStore{.global_rules_file = workspace / ".config" / "ava" / "permission-rules.json",
                                                            .workspace_rules_file = workspace / ".ava" / "permission-rules.json",
                                                            .workspace_dir = workspace};
+  auto const workspace_rules_file = ava::permissions::enforceable_permission_rules_file(store, ava::permissions::PermissionRuleScope::Workspace);
+
+  ava::tools::ToolContext inferred;
+  inferred.workspace_dir = workspace;
+  inferred.anchor_set = *anchors;
+  inferred.mcp_global_config_file = control_config / "mcp.json";
+  inferred.plugin_global_plugins_dir = control_config / "plugins";
+  auto inferred_write = ava::tools::write_file(inferred, control_target, "{}", ava::tools::WriteOptions{.permission_already_checked = true});
+  expect(inferred_write.has_value(), inferred_write
+                                         ? "MCP/plugin discovery paths do not protect a sibling control rule file"
+                                         : "MCP/plugin discovery paths do not protect a sibling control rule file: " + inferred_write.error().format());
+
+  expect(!std::filesystem::exists(store.global_rules_file) && !std::filesystem::exists(store.global_rules_file.parent_path()) &&
+             !std::filesystem::exists(workspace_rules_file) && !std::filesystem::exists(workspace_rules_file.parent_path()),
+         "actual protected rule files and parents do not exist before explicit blocked writes");
 
   ava::tools::ToolContext context;
   context.workspace_dir = workspace;
-  context.mcp_global_config_file = config_dir / "mcp.json";
+  context.anchor_set = *anchors;
+  context.protected_permission_rule_store = path_only_protection_identity(store);
+  context.mcp_global_config_file = workspace / "absent" / "mcp.json";
+  context.plugin_global_plugins_dir = workspace / "absent-plugins";
+
+  std::filesystem::create_directories(workspace / ".config");
+  static_cast<void>(::chmod((workspace / ".config").c_str(), S_IRWXU));
+  auto const config_link = workspace / "config-link";
+  std::error_code symlink_error;
+  std::filesystem::create_directory_symlink(workspace / ".config", config_link, symlink_error);
+  expect(!symlink_error, "unregistered file-tool guard creates a directory symlink to the missing-ancestor config root");
+  if (symlink_error)
+    return;
+  auto alias_write =
+      ava::tools::write_file(context, config_link / "ava" / "permission-rules.json", "{}", ava::tools::WriteOptions{.permission_already_checked = true});
+  expect(!alias_write && is_rule_file_protection_error(alias_write.error()),
+         alias_write ? "explicit identity rejects missing-ancestor alias writes"
+                     : "explicit identity rejects missing-ancestor alias writes: " + alias_write.error().format());
 
   auto global_write = ava::tools::write_file(context, store.global_rules_file, "{}", ava::tools::WriteOptions{.permission_already_checked = true});
-  expect(!global_write && global_write.error().category() == ava::core::ErrorCategory::PermissionDenied,
-         "normal file tools reject global permission rule writes before rule store registration");
+  expect(!global_write && is_rule_file_protection_error(global_write.error()),
+         global_write ? "explicit store identity rejects global permission rule writes before files or parents exist"
+                      : "explicit store identity rejects global permission rule writes before files or parents exist: " + global_write.error().format());
 
-  auto const workspace_rules_file = ava::permissions::enforceable_permission_rules_file(store, ava::permissions::PermissionRuleScope::Workspace);
   auto workspace_write = ava::tools::write_file(context, workspace_rules_file, "{}", ava::tools::WriteOptions{.permission_already_checked = true});
-  expect(!workspace_write && workspace_write.error().category() == ava::core::ErrorCategory::PermissionDenied,
-         "normal file tools reject workspace-keyed permission rule writes before rule store registration");
+  expect(!workspace_write && is_rule_file_protection_error(workspace_write.error()),
+         workspace_write
+             ? "explicit store identity rejects workspace-keyed permission rule writes before files or parents exist"
+             : "explicit store identity rejects workspace-keyed permission rule writes before files or parents exist: " + workspace_write.error().format());
+
+  expect(!std::filesystem::exists(store.global_rules_file) && !std::filesystem::exists(store.global_rules_file.parent_path()) &&
+             !std::filesystem::exists(workspace_rules_file) && !std::filesystem::exists(workspace_rules_file.parent_path()),
+         "blocked writes do not create the actual protected rule files or parents");
+
+  write_file_with_mode(store.global_rules_file, "{}", S_IRUSR | S_IWUSR);
+  expect(std::filesystem::exists(store.global_rules_file), "unregistered fixture creates the actual global rule file without engine registration");
+  auto const hardlink = workspace / "permission-rules-hardlink.json";
+  std::error_code hardlink_error;
+  std::filesystem::create_hard_link(store.global_rules_file, hardlink, hardlink_error);
+  expect(!hardlink_error, "unregistered fixture hardlinks the manually created global rule file");
+  if (hardlink_error)
+    return;
+  auto hardlink_write = ava::tools::write_file(context, hardlink, "{}", ava::tools::WriteOptions{.permission_already_checked = true});
+  expect(!hardlink_write && is_rule_file_protection_error(hardlink_write.error()),
+         hardlink_write ? "explicit identity rejects hardlinked unregistered rule files"
+                        : "explicit identity rejects hardlinked unregistered rule files: " + hardlink_write.error().format());
 }
 
 void test_registered_permission_rule_paths_protect_agent_loop_context()
@@ -1547,9 +1619,11 @@ void test_registered_permission_rule_paths_protect_agent_loop_context()
 
   ava::tools::ToolContext context;
   context.workspace_dir = workspace;
+  context.mcp_global_config_file = workspace / "misleading" / "mcp.json";
+  context.plugin_global_plugins_dir = workspace / "misleading-plugins";
   auto global_write = ava::tools::write_file(context, store.global_rules_file, "{}", ava::tools::WriteOptions{.permission_already_checked = true});
   expect(!global_write && global_write.error().category() == ava::core::ErrorCategory::PermissionDenied,
-         "registered enforceable permission rule paths protect agent-loop-style tool contexts");
+         "registered enforceable permission rule paths protect agent-loop-style tool contexts without MCP/plugin inference");
 }
 
 }  // namespace

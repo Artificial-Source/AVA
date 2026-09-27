@@ -2,6 +2,7 @@
 #include "ava/agent/agent_loop_session.h"
 #include "ava/agent/tool_result.h"
 #include "ava/agent/usage_accounting.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/session/assistant_output.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/ids.h"

@@ -30,6 +30,7 @@ void run_agent_loop_tests()
   test_agent_loop_foreground_promotion_wakes_parent_without_restarting_child();
   test_agent_loop_promoted_failure_persists_sanitized_child_error();
   test_agent_loop_task_subagent_propagates_authority_roots_to_foreground_and_background_children();
+  test_agent_loop_task_subagent_inherits_protected_permission_rule_store();
   test_agent_loop_task_subagent_recovers_torn_child_before_resume();
   test_subagent_config_loads_project_definitions();
   test_agent_loop_custom_subagent_definition_controls_prompt_and_tools();

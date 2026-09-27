@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_file.h"
+#include "ava/tools/file_tools.h"
 #include "ava/core/json.h"
 
 namespace ava::agent {

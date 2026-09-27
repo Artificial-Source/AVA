@@ -677,6 +677,7 @@ void test_runtime_ava_authority_roots_are_shared_with_direct_tool_context()
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   auto const roots = ava::app::runtime::session_ts::rat(unlocked_session)->ava_authority_roots_1();
+  auto const rule_store = ava::app::runtime::session_ts::rat(unlocked_session)->permission_rule_store();
   auto const direct_context = ava::app::make_tool_context(unlocked_session, nullptr);
   auto const contains = [&roots](std::filesystem::path const& path) {
     auto const normalized = path.lexically_normal();
@@ -688,6 +689,11 @@ void test_runtime_ava_authority_roots_are_shared_with_direct_tool_context()
   };
   expect(contains(paths.ava_config_dir) && contains(paths.ava_state_dir) && contains(paths.sessions_dir) && direct_context.ava_authority_roots == roots,
          "one bounded deduplicated app helper supplies config, state, session, and credential authority roots to direct command ToolContexts");
+  expect(direct_context.protected_permission_rule_store && direct_context.protected_permission_rule_store->global_rules_file == rule_store.global_rules_file &&
+             direct_context.protected_permission_rule_store->workspace_rules_file == rule_store.workspace_rules_file &&
+             direct_context.protected_permission_rule_store->workspace_dir == rule_store.workspace_dir &&
+             direct_context.protected_permission_rule_store->anchor_set == nullptr,
+         "make_tool_context projects the session permission-rule store as path-only protection identity without AnchorSet");
 }
 
 void test_app_print_mode_model_command_persistent_deny_preflight()

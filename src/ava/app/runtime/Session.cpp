@@ -218,14 +218,16 @@ ava::core::Result<session_ts> Session::open(runtime::OpenContext const& context,
     return std::unexpected(std::move(directories.error()));
   auto const& workspace_dir = directories->first;
 
+  auto const session_read_limits = context.session_read_limits.value_or(ava::session::legacy_unbounded_session_read_limits());
   if (request.requested_session_id && context.subagent_delivery_manager)
   {
     bool retained_found = false;
-    auto retained = context.subagent_delivery_manager->retained_session(*request.requested_session_id, workspace_dir, retained_found, context.exact_session_id);
+    auto retained = context.subagent_delivery_manager->retained_session(
+        *request.requested_session_id, workspace_dir, retained_found,
+        {.exact_session_id = context.exact_session_id, .read_limits = session_read_limits, .expected_original_cwd = request.expected_original_cwd});
     if (retained_found)
       return retained;
   }
-  auto const session_read_limits = context.session_read_limits.value_or(ava::session::legacy_unbounded_session_read_limits());
 
   bool created = true;
   bool created_from_fork = false;
@@ -298,7 +300,9 @@ ava::core::Result<session_ts> Session::open(runtime::OpenContext const& context,
       if (context.subagent_delivery_manager)
       {
         bool retained_found = false;
-        auto retained = context.subagent_delivery_manager->retained_session(sessions->front().session_id, workspace_dir, retained_found, true);
+        auto retained = context.subagent_delivery_manager->retained_session(
+            sessions->front().session_id, workspace_dir, retained_found,
+            {.exact_session_id = true, .read_limits = session_read_limits, .expected_original_cwd = request.expected_original_cwd});
         if (retained_found)
           return retained;
       }
@@ -687,6 +691,8 @@ ava::core::Result<session_ts> Session::open_owned(OpenContext const& context, av
 Session_aggregate_base Session::create_detached_state(ava::session::SessionLease lease, ava::session::SessionReadAuthority authority,
                                                       std::shared_ptr<ava::app::SubagentDeliveryManager> manager) const
 {
+  auto detached_inputs = invocation_inputs();
+  detached_inputs.session_read_limits = authority.read_limits();
   SessionResources session_resources{.lease = std::move(lease),
                                      .session_process_scope = session_process_scope(),
                                      .anchor_set = anchor_set(),
@@ -699,7 +705,7 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                      .diagnostics = diagnostics(),
                                      .mcp_config = mcp_config(),
                                      .provider_catalog = provider_catalog()};
-  return Session_aggregate_base{.invocation_inputs_ = invocation_inputs(),
+  return Session_aggregate_base{.invocation_inputs_ = std::move(detached_inputs),
                                 .resolved_prompt_state_ = resolve_prompt_state(),
                                 .model_selection_ = model_selection(),
                                 .trust_state_ = trust_state(),

@@ -654,9 +654,13 @@ void AcpSessionHost::cancel() noexcept
 
 ava::core::VoidResult AcpSessionHost::close()
 {
+  std::shared_ptr<SubagentDeliveryManager> delivery_manager;
+  std::string parent_session_id;
   {
     std::lock_guard lock(mutex_);
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session_);
+    delivery_manager = session_r->subagent_delivery_manager();
+    parent_session_id = session_r->store.session_id();
     closing_ = true;
     permission_grants_.clear();
     if (active_prompt_ && session_r->run_controller())
@@ -670,6 +674,12 @@ ava::core::VoidResult AcpSessionHost::close()
       }
     }
   }
+  // Detach even if the bounded wait times out and the registry removes us.
+  // Active runs defer release to end-run cleanup; jobs/deliveries remain owned.
+  // Capsule destruction must happen outside both host and Session locks.
+  if (delivery_manager)
+    delivery_manager->release_detached_parent(parent_session_id);
+
   std::unique_lock lock(mutex_);
   if (!idle_.wait_for(lock, options_.close_grace, [&] { return !active_prompt_; }))
     return std::unexpected(session_error("timed out waiting for active prompt to stop", session_id_));

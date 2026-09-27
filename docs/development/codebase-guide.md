@@ -387,14 +387,16 @@ pathname reacquisition for current-runtime reads, or UI transcript layout.
 
 **Owns:** reusable bounded file/read/write/edit/search, patch/diff, shell,
 webfetch/websearch, LSP-tool, spill-file, secure-workspace, ignore-rule, and
-mutation-queue mechanics plus `ToolContext`.
+mutation-queue mechanics plus shared `ToolContext` and tool-permission helpers.
 
-**Key entry points:** `file_tools.h`, `file_io.h`, `bash_tool.h`,
-`search_tools.h`, `lsp_tools.h`, `webfetch_tool.h`, `websearch_tool.h`,
-`secure_workspace.h`, `mutation_queue.h`, and `tool_io.h`.
+**Key entry points:** `tool_context.h`, `tool_permission.h`, `file_tools.h`,
+`file_io.h`, `bash_tool.h`, `search_tools.h`, `lsp_tools.h`, `webfetch_tool.h`,
+`websearch_tool.h`, `secure_workspace.h`, `mutation_queue.h`, and `tool_io.h`.
 
 **Belongs here:** side-effect implementation after policy inputs have been
 supplied, with bounds, descriptors, cancellation, cleanup, and audit facts.
+File-tool mutation protection uses an explicit path-only permission-store
+identity on `ToolContext`, independent of MCP/plugin extension discovery.
 
 **Does not belong here:** model-visible schemas and loop orchestration,
 frontend approval UI, or provider behavior.

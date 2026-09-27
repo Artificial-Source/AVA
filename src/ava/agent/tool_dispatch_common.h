@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ava/agent/tool_types.h"
-#include "ava/tools/file_tools.h"
+#include "ava/tools/tool_context.h"
 #include "ava/core/result.h"
 
 #include <cstddef>

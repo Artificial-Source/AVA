@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-#include "ava/tools/file_tools.h"
+#include "ava/tools/tool_context.h"
 #include "ava/tools/tool_types.h"
 #include "ava/plugin/runner.h"
 #include "ava/core/result.h"

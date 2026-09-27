@@ -2,7 +2,7 @@
 
 #include "ava/agent/assistant_turn.h"
 #include "ava/agent/tool_types.h"
-#include "ava/tools/file_tools.h"
+#include "ava/tools/tool_context.h"
 #include "ava/session/attachments.h"
 #include "ava/session/session_store.h"
 #include "ava/provider/provider.h"

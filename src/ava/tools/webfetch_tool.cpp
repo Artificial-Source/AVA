@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/tools/webfetch_tool.h"
 #include "ava/core/string_utils.h"
 

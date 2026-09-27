@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/tools/lsp_tools.h"
+#include "ava/tools/tool_permission.h"
 
 #include <memory>
 #include <utility>

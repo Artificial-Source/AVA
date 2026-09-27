@@ -7,6 +7,7 @@
 #include "ava/agent/mode.h"
 #include "ava/tools/bash_tool.h"
 #include "ava/tools/spill_files.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/tools/webfetch_tool.h"
 #include "ava/tools/websearch_tool.h"
 #include "ava/session/session_store.h"

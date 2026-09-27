@@ -273,7 +273,7 @@ class Session : protected Session_aggregate_base
   // Snapshot detached-session construction state using lease, authority, and manager while inheriting this session's active state and shared resources.
   //
   // The returned aggregate contains no Session object. Callers may therefore move it into the final session_ts after releasing this session's lock
-  // without destructing a temporary Session at the boundary.
+  // without destructing a temporary Session at the boundary. Invocation read limits follow the supplied authority, not the source session policy.
   Session_aggregate_base create_detached_state(ava::session::SessionLease lease, ava::session::SessionReadAuthority authority,
                                                std::shared_ptr<ava::app::SubagentDeliveryManager> manager) const;
 

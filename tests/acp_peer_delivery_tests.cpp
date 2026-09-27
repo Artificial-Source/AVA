@@ -10,6 +10,7 @@
 #include "ava/app/acp/service.h"
 #include "ava/agent/mode.h"
 #include "ava/tools/file_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/error.h"
 #include "ava/core/ids.h"

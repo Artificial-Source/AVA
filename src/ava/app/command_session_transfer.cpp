@@ -5,6 +5,7 @@
 #include "ava/app/command_tools.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/tools/file_tools.h"
 #include "ava/session/export.h"
 #include "ava/session/record.h"
 #include "ava/session/validation.h"

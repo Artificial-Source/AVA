@@ -137,13 +137,29 @@ ava::core::Result<ava::agent::AgentLoopResult> run_prompt(runtime::session_ts& u
 
 ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::session_ts& unlocked_session, std::string const& user_message,
                                                                    ava::provider::Provider const& provider, ava::http::Transport& transport,
-                                                                   runtime::RunOptions const& options, ActiveRunGuard guard)
+                                                                   runtime::RunOptions const& options, ActiveRunGuard incoming_guard)
 {
   DoutEntering(dc::notice, "run_admitted_prompt(prompt_bytes=" << user_message.size() << ")");
 #ifdef CWDEBUG
   auto&& f = at_scope_end([] { Dout(dc::notice, "Leaving run_admitted_prompt()"); });
 #endif
   AVA_ASSERT_SESSION_UNLOCKED(unlocked_session, "calling run_admitted_prompt");
+
+  // Destruction must follow controller completion, including guard abandonment
+  // during unwinding. Parameters outlive locals, so move admission into a local
+  // declared after cleanup. Neither object retains a Session lock or reference.
+  struct ParentRefresh final
+  {
+    std::shared_ptr<SubagentDeliveryManager> manager;
+    std::string session_id;
+    std::optional<SubagentDeliveryManager::CapsuleGeneration> generation;
+    ~ParentRefresh()
+    {
+      if (manager && generation)
+        manager->release_parent_if_unused(session_id, *generation);
+    }
+  } refresh;
+  ActiveRunGuard guard = std::move(incoming_guard);
 
   std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics_copy;
   std::optional<ava::process::ProcessScopeV1> session_process_scope_copy;
@@ -209,31 +225,17 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
   std::string const provider_id_copy = session_r->model().provider_id;
   bool const offline_copy = session_r->is_offline() || options.offline;
 
-  // Scope of `refresh`.
+  refresh.manager = options.synthetic_subagent_delivery ? nullptr : session_r->subagent_delivery_manager();
+  refresh.session_id = session_id_copy;
+
+  CRITICAL_AREA_END_R(session);
+
+  if (refresh.manager)
   {
-    struct ParentRefresh final
-    {
-      std::shared_ptr<SubagentDeliveryManager> manager;
-      std::string session_id;
-      std::optional<SubagentDeliveryManager::CapsuleGeneration> generation = std::nullopt;
-      ~ParentRefresh()
-      {
-        if (manager && generation)
-          manager->release_parent_if_unused(session_id, *generation);
-      }
-    } refresh{options.synthetic_subagent_delivery ? nullptr : session_r->subagent_delivery_manager(), session_r->store.session_id()};
-
-    CRITICAL_AREA_END_R(session);
-
-    if (refresh.manager)
-    {
-      auto retained = refresh.manager->refresh_parent(unlocked_session, options);
-      if (!retained)
-        return fail_run(std::move(retained.error()));
-      refresh.generation = *retained;
-    }
-
-    // No session lock may be held when refresh is destructed.
+    auto retained = refresh.manager->refresh_parent(unlocked_session, options);
+    if (!retained)
+      return fail_run(std::move(retained.error()));
+    refresh.generation = *retained;
   }
 
   if (offline_copy)
@@ -491,6 +493,10 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
                 .command_executor = runtime_options.command_executor,
                 .cancel_requested = run_cancel_requested,
                 .process_scope = run_process_scope,
+                .protected_permission_rule_store =
+                    ava::permissions::PermissionRuleStore{.global_rules_file = permission_rule_store_copy.global_rules_file,
+                                                          .workspace_rules_file = permission_rule_store_copy.workspace_rules_file,
+                                                          .workspace_dir = permission_rule_store_copy.workspace_dir},
             },
         .subagents = std::move(subagents),
         .tool_visibility = session_r->tool_visibility(),

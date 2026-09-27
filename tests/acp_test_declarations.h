@@ -10,6 +10,8 @@ void test_acp_transport_lf_crlf_and_final_record();
 void test_acp_service_gating_reinitialize_and_negotiation();
 void test_acp_service_mutating_request_terminal_commits();
 void test_acp_session_request_schema_defaults_and_invalid_item_skipping();
+void test_acp_retained_resume_validates_cwd_and_limits();
+void test_acp_prompt_close_cycles_release_parents();
 void test_acp_session_capacity_is_reserved_before_persistence();
 void test_acp_startup_model_is_pinned_across_config_mutation();
 void test_acp_resume_projects_history_for_pinned_startup_model();

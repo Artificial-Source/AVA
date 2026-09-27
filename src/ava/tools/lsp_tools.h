@@ -1,9 +1,7 @@
 #pragma once
 
-#include "ava/tools/file_tools.h"
-
+#include "ava/tools/tool_context.h"
 #include "ava/lsp/lsp_client.h"
-
 #include "ava/core/result.h"
 
 #include <filesystem>
