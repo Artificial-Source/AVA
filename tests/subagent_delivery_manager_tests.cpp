@@ -490,12 +490,12 @@ void test_active_turn_ordering_and_inactive_parent_navigation()
   continue_options.subagent_coordinator = fixture.coordinator;
   continue_options.subagent_delivery_manager = fixture.manager;
   auto unlocked_continued_result = ava::app::runtime::Session::open(continue_options, {.sessionless = false,
-                                                                     .requested_session_id = std::nullopt,
-                                                                     .fork_session_id = std::nullopt,
-                                                                     .initial_session_name = std::nullopt,
-                                                                     .continue_last_session = true,
-                                                                     .initial_reasoning_level = std::nullopt,
-                                                                     .expected_original_cwd = std::nullopt});
+                                                                                       .requested_session_id = std::nullopt,
+                                                                                       .fork_session_id = std::nullopt,
+                                                                                       .initial_session_name = std::nullopt,
+                                                                                       .continue_last_session = true,
+                                                                                       .initial_reasoning_level = std::nullopt,
+                                                                                       .expected_original_cwd = std::nullopt});
   expect(unlocked_continued_result.has_value(), "continue session reopens the retained parent runtime");
   if (!unlocked_continued_result)
     return;
@@ -546,8 +546,7 @@ void test_active_turn_ordering_and_inactive_parent_navigation()
   ava::app::runtime::session_ts& unlocked_replacement = *unlocked_replacement_result;
 
   auto const replacement_id = ava::app::runtime::session_ts::rat(unlocked_replacement)->store.session_id();
-  expect(ava::app::runtime::Session::replace_with(unlocked_fixture_session, unlocked_replacement).has_value(),
-         "navigation replaces the visible session");
+  expect(ava::app::runtime::Session::replace_with(unlocked_fixture_session, unlocked_replacement).has_value(), "navigation replaces the visible session");
 
   CRITICAL_AREA_BEGIN_W(fixture_session);
   ava::app::runtime::OpenContext reopen = base;
@@ -555,12 +554,12 @@ void test_active_turn_ordering_and_inactive_parent_navigation()
   reopen.current_dir = fixture_session_w->current_dir();
   CRITICAL_AREA_END_W(fixture_session);
   auto unlocked_retained_result = ava::app::runtime::Session::open(reopen, {.sessionless = false,
-                                                           .requested_session_id = parent_id.substr(0, 12),
-                                                           .fork_session_id = std::nullopt,
-                                                           .initial_session_name = std::nullopt,
-                                                           .continue_last_session = false,
-                                                           .initial_reasoning_level = std::nullopt,
-                                                           .expected_original_cwd = std::nullopt});
+                                                                            .requested_session_id = parent_id.substr(0, 12),
+                                                                            .fork_session_id = std::nullopt,
+                                                                            .initial_session_name = std::nullopt,
+                                                                            .continue_last_session = false,
+                                                                            .initial_reasoning_level = std::nullopt,
+                                                                            .expected_original_cwd = std::nullopt});
   expect(unlocked_retained_result.has_value(), "retained parent session reopens by prefix");
   if (!unlocked_retained_result)
     return;
@@ -639,8 +638,9 @@ void test_retained_open_enforces_cwd_and_read_policy()
       expect(!rejected && rejected.error().message().find(bound_name + " exceeds bounded read limit") != std::string::npos,
              "explicit and continue retained opens enforce byte, line and entry limits before attachment");
       auto pending = fixture.coordinator->pending_deliveries(id);
-      expect(pending && pending->size() == 1 && fixture.session_r()->lease().active() && fixture.session_r()->run_controller() == controller &&
-                 original_authority && original_authority->load(),
+      auto const original_lease_active = fixture.session_r()->lease().active();
+      auto const retained_controller = fixture.session_r()->run_controller();
+      expect(pending && pending->size() == 1 && original_lease_active && retained_controller == controller && original_authority && original_authority->load(),
              "failed retained validation leaves the original exact lease, controller and pending delivery available");
     }
     auto resumed = ava::app::runtime::Session::open(context, request);
@@ -649,11 +649,12 @@ void test_retained_open_enforces_cwd_and_read_policy()
       continue;
     auto authority = ava::app::runtime::session_ts::rat(*resumed)->read_authority_1();
     auto invocation_limits = ava::app::runtime::session_ts::rat(*resumed)->session_read_limits();
+    auto const resumed_controller = ava::app::runtime::session_ts::rat(*resumed)->run_controller();
+    auto const resumed_append_target = ava::app::runtime::session_ts::rat(*resumed)->append_target();
     expect(authority && authority->load() && authority->read_limits().max_file_bytes == limits.max_file_bytes &&
                authority->read_limits().max_line_bytes == limits.max_line_bytes && authority->read_limits().max_entries == limits.max_entries &&
                invocation_limits.max_file_bytes == limits.max_file_bytes && invocation_limits.max_line_bytes == limits.max_line_bytes &&
-               invocation_limits.max_entries == limits.max_entries && ava::app::runtime::session_ts::rat(*resumed)->run_controller() == controller &&
-               ava::app::runtime::session_ts::rat(*resumed)->append_target() == append_target,
+               invocation_limits.max_entries == limits.max_entries && resumed_controller == controller && resumed_append_target == append_target,
            "retained resume carries requested authority and invocation policy without recreating controller or append target");
   }
 
@@ -701,12 +702,12 @@ void test_retained_session_workspace_isolation()
   foreign.subagent_coordinator = fixture.coordinator;
   foreign.subagent_delivery_manager = fixture.manager;
   auto rejected = ava::app::runtime::Session::open(foreign, {.sessionless = false,
-                                                           .requested_session_id = fixture.session_r()->store.session_id(),
-                                                           .fork_session_id = std::nullopt,
-                                                           .initial_session_name = std::nullopt,
-                                                           .continue_last_session = false,
-                                                           .initial_reasoning_level = std::nullopt,
-                                                           .expected_original_cwd = std::nullopt});
+                                                             .requested_session_id = fixture.session_r()->store.session_id(),
+                                                             .fork_session_id = std::nullopt,
+                                                             .initial_session_name = std::nullopt,
+                                                             .continue_last_session = false,
+                                                             .initial_reasoning_level = std::nullopt,
+                                                             .expected_original_cwd = std::nullopt});
   expect(!rejected && rejected.error().category() == ava::core::ErrorCategory::NotFound &&
              rejected.error().format().find(foreign_workspace.string()) == std::string::npos,
          "shared delivery manager rejects a retained parent from another runtime workspace as NotFound");
@@ -766,7 +767,7 @@ void test_capsule_generation_release_and_active_retention()
 
   auto blocking = std::make_shared<DeliveryBlockingJob>();
   auto job = fixture.coordinator->start_background(fixture_session_id, {.title = "generation race", .child_session_id = "child_generation_race"},
-                                                    [blocking](auto const& context) { return blocking->run(context); });
+                                                   [blocking](auto const& context) { return blocking->run(context); });
   bool job_started = false;
   {
     std::unique_lock lock(blocking->mutex);
@@ -777,7 +778,7 @@ void test_capsule_generation_release_and_active_retention()
   bool retained_for_job_found = false;
   auto retained_for_job = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, retained_for_job_found, {.exact_session_id = true});
   expect(third && fourth && job && job_started && retained_for_job_found && retained_for_job,
-          "deterministic old-release versus newer-refresh/job-start keeps the current generation");
+         "deterministic old-release versus newer-refresh/job-start keeps the current generation");
   {
     std::lock_guard lock(blocking->mutex);
     blocking->release = true;
@@ -827,8 +828,7 @@ void test_runtime_mutations_refresh_retained_delivery_configuration()
                        retained_r->system_prompt() == fixture_session_w->system_prompt() && retained_r->workspace_dir() == fixture_session_w->workspace_dir() &&
                        retained_r->anchor_set() == fixture_session_w->anchor_set();
   }
-  expect(retained_matches,
-          "retained-session attachment returns the latest configuration with the exact logical workspace and shared AnchorSet authority");
+  expect(retained_matches, "retained-session attachment returns the latest configuration with the exact logical workspace and shared AnchorSet authority");
 
   CRITICAL_AREA_END_W(fixture_session);
 
@@ -898,16 +898,15 @@ void test_bounded_delivery_retries()
   auto workspace_dir = session_w->workspace_dir();
   CRITICAL_AREA_END_W(session);
 
-  auto started = coordinator->start_background(session_id, {.title = "retry", .description = "retry", .child_session_id = "child_retry"},
-                                               [](auto const&) {
-                                                 return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
-                                                                                            .final_text = "done",
-                                                                                            .stop_reason = "completed",
-                                                                                            .error = std::nullopt,
-                                                                                            .provider_iterations = 0,
-                                                                                            .tool_calls = 0,
-                                                                                            .tool_iterations = 0};
-                                               });
+  auto started = coordinator->start_background(session_id, {.title = "retry", .description = "retry", .child_session_id = "child_retry"}, [](auto const&) {
+    return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
+                                               .final_text = "done",
+                                               .stop_reason = "completed",
+                                               .error = std::nullopt,
+                                               .provider_iterations = 0,
+                                               .tool_calls = 0,
+                                               .tool_iterations = 0};
+  });
   if (!started)
   {
     expect(false, "bounded retry job starts");
@@ -946,7 +945,7 @@ void test_bounded_delivery_retries()
   auto pending = coordinator->pending_deliveries(session_id);
   auto result = coordinator->result(session_id, started->job.identity.job_id);
   expect(attempts == 2 && factories == 2 && pending && pending->empty() && result && result->job.delivery == ava::agent::SubagentDeliveryState::Attempting &&
-              retained_parent_released,
+             retained_parent_released,
          "automatic delivery internally settles bounded retry exhaustion, releases its capsule, and preserves the public job contract");
   manager->shutdown();
 }
@@ -1002,16 +1001,16 @@ void test_retry_after_synthetic_user_append_uses_same_marker()
   CRITICAL_AREA_BEGIN_W(session);
   auto session_id = session_w->store.session_id();
   CRITICAL_AREA_END_W(session);
-  auto started = coordinator->start_background(session_id, {.title = "retry", .description = "retry", .child_session_id = "child_user_append"},
-                                               [](auto const&) {
-                                                 return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
-                                                                                            .final_text = "retry summary",
-                                                                                            .stop_reason = "completed",
-                                                                                            .error = std::nullopt,
-                                                                                            .provider_iterations = 0,
-                                                                                            .tool_calls = 0,
-                                                                                            .tool_iterations = 0};
-                                               });
+  auto started =
+      coordinator->start_background(session_id, {.title = "retry", .description = "retry", .child_session_id = "child_user_append"}, [](auto const&) {
+        return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
+                                                   .final_text = "retry summary",
+                                                   .stop_reason = "completed",
+                                                   .error = std::nullopt,
+                                                   .provider_iterations = 0,
+                                                   .tool_calls = 0,
+                                                   .tool_iterations = 0};
+      });
   if (!started)
     return;
   expect(state->wait_completed(2), "delivery retries after a failed run that committed only its synthetic user marker");
