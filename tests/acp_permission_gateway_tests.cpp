@@ -10,6 +10,7 @@
 #include "ava/app/acp/service.h"
 #include "ava/app/runtime_credentials.h"
 #include "ava/app/session_run_controller.h"
+#include "ava/app/subagent_delivery_manager.h"
 #include "ava/agent/mode.h"
 #include "ava/mcp/tool_broker.h"
 #include "ava/session/record.h"
@@ -1064,13 +1065,23 @@ void test_acp_close_timeout_is_internal_error_with_eventual_cleanup()
   std::string body;
   std::atomic_bool entered = false;
   std::atomic_bool release = false;
+  auto coordinator = ava::agent::SubagentCoordinator::create();
+  expect(coordinator.has_value(), "ACP close timeout creates coordinator");
+  if (!coordinator)
+    return;
+  auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .max_retained_parents = 1});
+  expect(manager.has_value(), "ACP close timeout uses a one-parent manager");
+  if (!manager)
+    return;
   AgentServiceOptions options;
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = ava::tests::app_test_paths(root);
   options.provider_bundle_factory = recording_bundle_factory(&body, &entered, &release);
+  options.open_context.subagent_delivery_manager = *manager;
   options.close_grace = 5ms;
   AgentService service(options);
+  service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
   static_cast<void>(service.handle_request(initialize_request(), {}));
   auto created = service.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
@@ -1086,12 +1097,16 @@ void test_acp_close_timeout_is_internal_error_with_eventual_cleanup()
                                          .params_json = std::string("{\"sessionId\":\"") + *id + "\",\"prompt\":[{\"type\":\"text\",\"text\":\"block\"}]}"},
                                  {});
     });
-    while (!entered.load(std::memory_order_acquire)) std::this_thread::sleep_for(1ms);
+    while (!entered.load(std::memory_order_acquire))
+      std::this_thread::sleep_for(1ms);
     auto closed =
         service.handle_request(Request{.id = std::int64_t(4), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
     expect(!closed && closed.error().code == -32603, "session/close reports internal stop timeout as -32603, not resource-not-found");
     release.store(true, std::memory_order_release);
     prompt_thread.join();
+    bool retained_found = true;
+    auto retained = (*manager)->retained_session(*id, workspace, retained_found, {.exact_session_id = true});
+    expect(!retained_found && !retained, "end-run cleanup releases the timed-out host's unused capsule after cancellation completes");
     auto absent =
         service.handle_request(Request{.id = std::int64_t(5), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
     expect(!absent && absent.error().code == -32002, "timed-out close removes registry ownership and eventually releases host resources");

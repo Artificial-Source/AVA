@@ -372,6 +372,33 @@ void test_acp_prompt_close_cycles_release_parents()
     auto retained = (*manager)->retained_session(*id, workspace, found, {.exact_session_id = true});
     expect(!found && !retained, "ACP close leaves no unused parent capsule");
   }
+  // Close must also release a retained attachment that never enters another
+  // prompt. Seed via the real capsule publication API, then use only the ACP
+  // service's resume/close path (no test-side detach or release).
+  for (int cycle = 0; cycle != 2; ++cycle)
+  {
+    auto context = options.open_context;
+    context.paths = options.paths;
+    auto source = runtime::Session::open_at(context, workspace, workspace);
+    expect(source.has_value(), "ACP close-only fixture opens a parent");
+    if (!source)
+      break;
+    auto published = (*manager)->refresh_parent(*source, {});
+    expect(published.has_value(), "ACP close-only fixture publishes within the one-parent cap");
+    auto const id = runtime::session_ts::rat(*source)->store.session_id();
+    auto resumed =
+        service.handle_request(Request{.id = std::int64_t(5),
+                                       .method = "session/resume",
+                                       .params_json = std::string("{\"sessionId\":\"") + id + "\",\"cwd\":\"" + workspace.string() + "\",\"mcpServers\":[]}"},
+                               {});
+    expect(resumed.has_value(), "ACP close-only path attaches retained parent without a prompt");
+    auto closed =
+        service.handle_request(Request{.id = std::int64_t(6), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + id + "\"}"}, {});
+    expect(closed.has_value(), "ACP close releases a retained attachment without running another prompt");
+    bool found = true;
+    auto retained = (*manager)->retained_session(id, workspace, found, {.exact_session_id = true});
+    expect(!found && !retained, "ACP close alone releases the exact unused retained capsule");
+  }
   service.shutdown();
   std::error_code cleanup;
   std::filesystem::remove_all(root, cleanup);
