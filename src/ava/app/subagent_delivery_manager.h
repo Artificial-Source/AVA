@@ -32,8 +32,8 @@ class Session;
 struct RetainedSessionOptions
 {
   bool exact_session_id = false;
-  std::optional<ava::session::SessionReadLimits> read_limits;
-  std::optional<std::filesystem::path> expected_original_cwd;
+  std::optional<ava::session::SessionReadLimits> read_limits = std::nullopt;
+  std::optional<std::filesystem::path> expected_original_cwd = std::nullopt;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

@@ -229,13 +229,14 @@ void test_acp_retained_resume_validates_cwd_and_limits()
     std::condition_variable_any changed;
   };
   auto pending = std::make_shared<PendingJob>();
-  auto job = (*coordinator)
-                 ->start_background(id, {.title = "retained ACP job", .child_session_id = "child_acp_retained"},
-                                    [pending](ava::agent::BackgroundJobContext const& job_context) {
-                                      std::unique_lock lock(pending->mutex);
-                                      pending->changed.wait(lock, job_context.stop_token, [] { return false; });
-                                      return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Canceled, .stop_reason = "canceled"};
-                                    });
+  auto job =
+      (*coordinator)
+          ->start_background(
+              id, {.title = "retained ACP job", .child_session_id = "child_acp_retained"}, [pending](ava::agent::BackgroundJobContext const& job_context) {
+                std::unique_lock lock(pending->mutex);
+                pending->changed.wait(lock, job_context.stop_token, [] { return false; });
+                return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Canceled, .final_text = {}, .stop_reason = "canceled"};
+              });
   expect(job.has_value(), "ACP retained fixture keeps a live child without revoking it on close");
   std::string body;
   auto factory = recording_bundle_factory(&body);
@@ -462,8 +463,8 @@ void test_acp_startup_model_is_pinned_across_config_mutation()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
-  options.provider_bundle_factory = [&observed_models, base_factory](ava::app::runtime::session_ts const& unlocked_session, ava::app::runtime::RunOptions run_options,
-                                                                     std::string_view label) mutable {
+  options.provider_bundle_factory = [&observed_models, base_factory](ava::app::runtime::session_ts const& unlocked_session,
+                                                                     ava::app::runtime::RunOptions run_options, std::string_view label) mutable {
     observed_models.push_back(ava::app::runtime::session_ts::crat(unlocked_session)->model());
     return base_factory(unlocked_session, std::move(run_options), label);
   };
