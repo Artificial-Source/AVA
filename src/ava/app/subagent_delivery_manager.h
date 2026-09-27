@@ -4,6 +4,7 @@
 #include "ava/app/runtime_credentials.h"
 #include "ava/app/session_run_controller.h"
 #include "ava/agent/subagent_coordinator.h"
+#include "ava/session/session_store.h"
 #include "ava/core/result.h"
 #include "ava/core/thread.h"
 
@@ -27,6 +28,14 @@ namespace ava::app {
 namespace runtime {
 class Session;
 } // namespace runtime
+
+struct RetainedSessionOptions
+{
+  bool exact_session_id = false;
+  std::optional<ava::session::SessionReadLimits> read_limits;
+  std::optional<std::filesystem::path> expected_original_cwd;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
 
 struct SubagentDeliveryManagerOptions
 {
@@ -181,8 +190,9 @@ class SubagentDeliveryManager final : public std::enable_shared_from_this<Subage
   //
   // On success found is true and the result owns the detached session. When no retained session exists, found is false and callers must ignore the
   // sentinel error result. All genuine lookup or attachment errors set found to true and remain available through the result.
+  // Validate requested read limits and persisted cwd against the exact retained lease before attachment; validation failure leaves the capsule unchanged.
   [[nodiscard]] ava::core::Result<runtime::session_ts> retained_session(std::string_view session_id, std::filesystem::path const& workspace_identity,
-                                                                        bool& found, bool exact_session_id = false);
+                                                                        bool& found, RetainedSessionOptions const& options = {});
 
   void shutdown() noexcept;
 

@@ -1063,7 +1063,7 @@ void test_workspace_revocation_retires_retained_sessions_transactionally()
   ava::tests::FakeTransport stale_transport_after({ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "data: [DONE]\n\n"}});
   auto stale_run_after = ava::app::run_prompt(*session_a, "still must not reach transport", provider, stale_transport_after, run_options);
   bool retained_found = true;
-  auto retained = (*manager)->retained_session(session_a_id, workspace, retained_found, true);
+  auto retained = (*manager)->retained_session(session_a_id, workspace, retained_found, {.exact_session_id = true});
   expect(fresh_b && fresh_b != controller_b && !fresh_b->authority_retired() && session_b_decision == ava::app::ProjectTrustDecision::Denied &&
              session_b_prompt.find(kProjectCanary) == std::string::npos && session_b_ambient_prompt.find(kProjectCanary) == std::string::npos &&
              !stale_run_after && stale_transport_after.requests().empty() && !retained_found && !retained,

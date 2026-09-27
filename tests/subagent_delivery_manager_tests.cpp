@@ -385,7 +385,7 @@ void test_ordinary_prompt_releases_unused_parents()
     auto id = ava::app::runtime::session_ts::rat(*session)->store.session_id();
     expect(!controller->snapshot().active, "ordinary completion or abandoned guard leaves the controller idle");
     bool found = true;
-    auto retained = fixture.manager->retained_session(id, context.workspace_dir, found, true);
+    auto retained = fixture.manager->retained_session(id, context.workspace_dir, found, {.exact_session_id = true});
     expect(!found && !retained, "every ordinary exit releases its exact unused parent capsule before returning");
   }
   fixture.manager->shutdown();
@@ -442,7 +442,7 @@ void test_idle_delivery_and_terminal_before_registration()
   expect(permission_callbacks.load() == 0 && question_callbacks.load() == 0 && exact_file_calls->load() == 0 && command_executor_calls->load() == 0,
          "automatic delivery never invokes frontend, ACP-like file, or command executor callbacks");
   bool released_capsule_found = true;
-  auto released_capsule = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, released_capsule_found, true);
+  auto released_capsule = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, released_capsule_found, {.exact_session_id = true});
   expect(!released_capsule_found && !released_capsule,
          "acknowledged delivery releases its retained parent capsule, exact lease duplicate, and credential snapshot");
   std::size_t factories_after_ack = 0;
@@ -578,7 +578,104 @@ void test_active_turn_ordering_and_inactive_parent_navigation()
   auto snapshot = fixture.coordinator->snapshot(parent_id, started.job.identity.job_id);
   expect(snapshot && snapshot->job.delivery == ava::agent::SubagentDeliveryState::Acknowledged && snapshot->job.delivery_attempts == 1 && factories == 1,
          "inactive parent receives and acknowledges automatic delivery in exactly one attempt");
-  expect(ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.session_id() == replacement_id, "inactive delivery does not change the visible session");
+  expect(ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.session_id() == replacement_id,
+         "inactive delivery does not change the visible session");
+  fixture.manager->shutdown();
+}
+
+void test_retained_open_enforces_cwd_and_read_policy()
+{
+  auto state = std::make_shared<DeliveryFactoryState>();
+  auto admission = std::make_shared<DeliveryAdmissionBarrier>();
+  auto fixture =
+      make_fixture("subagent-retained-open-contract", state, false, 3, [admission](std::stop_token token) { admission->arrive_and_wait(token); }, 64, 1);
+  if (!fixture.unlocked_session_opt)
+    return;
+  auto context = fixture.session_r()->replacement_open_context({});
+  context.exact_session_id = true;
+  auto const id = fixture.session_r()->store.session_id();
+  auto controller = fixture.session_r()->run_controller();
+  auto append_target = fixture.session_r()->append_target();
+  auto original_authority = fixture.session_r()->read_authority_1();
+  auto started = start_completed(fixture, "child_retained_contract");
+  expect(fixture.coordinator->wait(id, started.job.identity.job_id, std::chrono::seconds(2)).has_value(), "retained contract has a pending child");
+  ava::app::runtime::RunOptions run_options;
+  run_options.access_token = "retained-contract-token";
+  run_options.stream = true;
+  run_options.isolate_ambient_extensions = true;
+  DeliveryTransport transport(state, {{.status_code = 200, .headers = {}, .body = final_response("retained parent")}});
+  ava::provider::OpenAIProvider provider("https://delivery.example.test");
+  auto run = ava::app::run_prompt(*fixture.unlocked_session_opt, "retain for pending delivery", provider, transport, run_options);
+  expect(run && admission->wait_reached(), "real ordinary run retains its parent for the pending delivery");
+
+  ava::session::SessionReadLimits const limits{.max_file_bytes = 1024 * 1024, .max_line_bytes = 64 * 1024, .max_entries = 256};
+  context.session_read_limits = limits;
+  for (bool continue_last : {false, true})
+  {
+    ava::app::runtime::SessionLifecycleRequest request;
+    request.continue_last_session = continue_last;
+    if (!continue_last)
+      request.requested_session_id = id;
+    request.expected_original_cwd = context.workspace_dir / "different-cwd";
+    auto wrong_cwd = ava::app::runtime::Session::open(context, request);
+    expect(!wrong_cwd && wrong_cwd.error().category() == ava::core::ErrorCategory::InvalidArgument &&
+               wrong_cwd.error().format().find("persisted_cwd") != std::string::npos && wrong_cwd.error().format().find("requested_cwd") != std::string::npos,
+           "explicit and continue retained opens reject mismatching persisted cwd with ordinary error context");
+    request.expected_original_cwd = context.workspace_dir;
+    for (int field = 0; field != 3; ++field)
+    {
+      auto bounded_context = context;
+      if (field == 0)
+      {
+        bounded_context.session_read_limits->max_file_bytes = 1;
+        bounded_context.session_read_limits->max_line_bytes = 1;
+      }
+      else if (field == 1)
+        bounded_context.session_read_limits->max_line_bytes = 1;
+      else
+        bounded_context.session_read_limits->max_entries = 1;
+      auto rejected = ava::app::runtime::Session::open(bounded_context, request);
+      std::string const bound_name = field == 0 ? "session file" : field == 1 ? "session line" : "session entry count";
+      expect(!rejected && rejected.error().message().find(bound_name + " exceeds bounded read limit") != std::string::npos,
+             "explicit and continue retained opens enforce byte, line and entry limits before attachment");
+      auto pending = fixture.coordinator->pending_deliveries(id);
+      expect(pending && pending->size() == 1 && fixture.session_r()->lease().active() && fixture.session_r()->run_controller() == controller &&
+                 original_authority && original_authority->load(),
+             "failed retained validation leaves the original exact lease, controller and pending delivery available");
+    }
+    auto resumed = ava::app::runtime::Session::open(context, request);
+    expect(resumed.has_value(), "matching persisted cwd and sufficient limits resume after failed validation");
+    if (!resumed)
+      continue;
+    auto authority = ava::app::runtime::session_ts::rat(*resumed)->read_authority_1();
+    auto invocation_limits = ava::app::runtime::session_ts::rat(*resumed)->session_read_limits();
+    expect(authority && authority->load() && authority->read_limits().max_file_bytes == limits.max_file_bytes &&
+               authority->read_limits().max_line_bytes == limits.max_line_bytes && authority->read_limits().max_entries == limits.max_entries &&
+               invocation_limits.max_file_bytes == limits.max_file_bytes && invocation_limits.max_line_bytes == limits.max_line_bytes &&
+               invocation_limits.max_entries == limits.max_entries && ava::app::runtime::session_ts::rat(*resumed)->run_controller() == controller &&
+               ava::app::runtime::session_ts::rat(*resumed)->append_target() == append_target,
+           "retained resume carries requested authority and invocation policy without recreating controller or append target");
+  }
+
+  // A stricter successful invocation must not change the retained capsule's
+  // policy; its authority must continue to enforce its own bound on later reads.
+  auto resumed = ava::app::runtime::Session::open(context, {.requested_session_id = id});
+  auto appended = controller->append(ava::session::SessionEntry{.id = "retained-policy-growth",
+                                                                .parent_id = "",
+                                                                .type = ava::session::EntryType::UserMessage,
+                                                                .timestamp = ava::session::now_timestamp(),
+                                                                .data_json = "{\"text\":\"" + std::string(limits.max_line_bytes, 'x') + "\"}"});
+  expect(appended.has_value(), "retained contract appends a record beyond the resumed invocation's line policy");
+  if (resumed)
+  {
+    auto authority = ava::app::runtime::session_ts::rat(*resumed)->read_authority_1();
+    expect(authority && !authority->load() && !authority->load_bounded(ava::session::legacy_unbounded_session_read_limits()),
+           "returned bound authority cannot widen its requested limits on later reads");
+  }
+  context.session_read_limits.reset();
+  auto wide_resume = ava::app::runtime::Session::open(context, {.requested_session_id = id});
+  expect(wide_resume && original_authority && original_authority->load(), "requested read policy never mutates the retained capsule or original authority");
+  admission->release();
   fixture.manager->shutdown();
 }
 
@@ -642,13 +739,15 @@ void test_capsule_generation_release_and_active_retention()
 
   fixture.manager->release_parent_if_unused(fixture_session_id, *first);
   bool retained_after_old_release_found = false;
-  auto retained_after_old_release = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, retained_after_old_release_found, true);
+  auto retained_after_old_release =
+      fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, retained_after_old_release_found, {.exact_session_id = true});
   expect(retained_after_old_release_found && retained_after_old_release, "an old generation release cannot erase a newer refresh");
 
   auto guard = parent_controller->admit({.request_id = "capsule-active-retention"});
   fixture.manager->release_parent_if_unused(fixture_session_id, *second);
   bool retained_while_active_found = false;
-  auto retained_while_active = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, retained_while_active_found, true);
+  auto retained_while_active =
+      fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, retained_while_active_found, {.exact_session_id = true});
   expect(guard && retained_while_active_found && retained_while_active, "active prompt/controller state retains its exact capsule generation");
   if (guard)
   {
@@ -659,7 +758,7 @@ void test_capsule_generation_release_and_active_retention()
   }
   fixture.manager->release_parent_if_unused(fixture_session_id, *second);
   bool released_found = true;
-  auto released = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, released_found, true);
+  auto released = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, released_found, {.exact_session_id = true});
   expect(!released_found && !released, "the exact current inactive generation releases when no live or pending job needs it");
 
   auto third = fixture.manager->refresh_parent(unlocked_fixture_session, first_options);
@@ -676,7 +775,7 @@ void test_capsule_generation_release_and_active_retention()
   if (third)
     fixture.manager->release_parent_if_unused(fixture_session_id, *third);
   bool retained_for_job_found = false;
-  auto retained_for_job = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, retained_for_job_found, true);
+  auto retained_for_job = fixture.manager->retained_session(fixture_session_id, fixture_workspace_dir, retained_for_job_found, {.exact_session_id = true});
   expect(third && fourth && job && job_started && retained_for_job_found && retained_for_job,
           "deterministic old-release versus newer-refresh/job-start keeps the current generation");
   {
@@ -717,7 +816,8 @@ void test_runtime_mutations_refresh_retained_delivery_configuration()
              "; " + (reasoned ? std::string("reasoning-ok") : reasoned.error().format()));
 
   bool retained_found = false;
-  auto retained = fixture.manager->retained_session(fixture_session_w->store.session_id(), fixture_session_w->workspace_dir(), retained_found, true);
+  auto retained =
+      fixture.manager->retained_session(fixture_session_w->store.session_id(), fixture_session_w->workspace_dir(), retained_found, {.exact_session_id = true});
   bool retained_matches = false;
   if (retained_found && retained)
   {
@@ -835,7 +935,7 @@ void test_bounded_delivery_retries()
   {
     auto pending_now = coordinator->pending_deliveries(session_id);
     bool retained_found = true;
-    auto retained = manager->retained_session(session_id, workspace_dir, retained_found, true);
+    auto retained = manager->retained_session(session_id, workspace_dir, retained_found, {.exact_session_id = true});
     if (pending_now && pending_now->empty() && !retained_found && !retained)
     {
       retained_parent_released = true;
@@ -1215,6 +1315,7 @@ void run_subagent_delivery_manager_tests()
   test_ordinary_prompt_releases_unused_parents();
   test_idle_delivery_and_terminal_before_registration();
   test_active_turn_ordering_and_inactive_parent_navigation();
+  test_retained_open_enforces_cwd_and_read_policy();
   test_retained_session_workspace_isolation();
   test_capsule_generation_release_and_active_retention();
   test_runtime_mutations_refresh_retained_delivery_configuration();

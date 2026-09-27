@@ -1027,7 +1027,7 @@ void SubagentDeliveryManager::release_detached_parent(std::string_view parent_se
 }
 
 ava::core::Result<runtime::session_ts> SubagentDeliveryManager::retained_session(std::string_view session_id, std::filesystem::path const& workspace_identity,
-                                                                                 bool& found, bool exact_session_id)
+                                                                                 bool& found, RetainedSessionOptions const& options)
 {
   found = false;
   auto navigation = reserve_workspace_navigation(workspace_identity);
@@ -1053,7 +1053,7 @@ ava::core::Result<runtime::session_ts> SubagentDeliveryManager::retained_session
         return std::unexpected(retained_owner_not_found(session_id));
       capsule = retained->second;
     }
-    else if (!exact_session_id)
+    else if (!options.exact_session_id)
     {
       for (auto const& [retained_id, retained] : parents_)
       {
@@ -1115,11 +1115,9 @@ ava::core::Result<runtime::session_ts> SubagentDeliveryManager::retained_session
     return std::unexpected(retained_owner_not_found(session_id));
   }
 
+  std::optional<ava::session::SessionReadAuthority> bound_authority;
   auto detached_state_result = [&]() -> ava::core::Result<runtime::Session_aggregate_base> {
     SCOPED_CRITICAL_AREA_R(session_r, capsule->unlocked_session);
-    auto authority = session_r->read_authority_1();
-    if (!authority)
-      return std::unexpected(std::move(authority.error()));
     ava::session::SessionLease lease;
     if (!session_r->sessionless())
     {
@@ -1128,10 +1126,35 @@ ava::core::Result<runtime::session_ts> SubagentDeliveryManager::retained_session
         return std::unexpected(std::move(duplicated.error()));
       lease = std::move(*duplicated);
     }
+    auto const limits = options.read_limits.value_or(session_r->session_read_limits());
+    auto authority = session_r->sessionless() ? ava::session::SessionReadAuthority::create_ephemeral(session_r->store, limits)
+                                              : ava::session::SessionReadAuthority::create_persistent(session_r->store, lease, limits);
+    if (!authority)
+      return std::unexpected(std::move(authority.error()));
+    bound_authority = *authority;
     return session_r->create_detached_state(std::move(lease), *authority, shared_from_this());
   }();
   if (!detached_state_result)
     return std::unexpected(std::move(detached_state_result.error()));
+  // Read only through the newly bound exact-lease authority, outside Session
+  // and manager locks. Failed validation must not attach or alter the capsule.
+  auto const& authority = *bound_authority;
+  auto entries = authority.load();
+  if (!entries)
+    return std::unexpected(std::move(entries.error()));
+  if (options.expected_original_cwd)
+  {
+    auto summary = authority.inspect_bounded(authority.read_limits());
+    if (!summary)
+      return std::unexpected(std::move(summary.error()));
+    auto const persisted_cwd = summary->original_cwd.empty() ? workspace_identity : summary->original_cwd;
+    if (persisted_cwd != *options.expected_original_cwd)
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "requested cwd does not match persisted session cwd");
+      error.with_context("persisted_cwd", persisted_cwd.string()).with_context("requested_cwd", options.expected_original_cwd->string());
+      return std::unexpected(std::move(error));
+    }
+  }
   detached_state_result->created = false;
   auto const attached_id = detached_state_result->store.session_id();
 
