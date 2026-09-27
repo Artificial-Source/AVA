@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/process/scope.h"
+#include "ava/permissions/permission_rules.h"
 
 #include <filesystem>
 #include <functional>
@@ -36,6 +37,9 @@ struct ToolExecutionOptions
   // Run authority copied into each model ToolContext. Child loops replace it
   // with a fresh application/session/run hierarchy before publication.
   std::optional<ava::process::ProcessScopeV1> process_scope = std::nullopt;
+  // Path-only permission-rule-store identity copied into ToolContext. Child
+  // loops inherit this field explicitly. Do not copy AnchorSet.
+  std::optional<ava::permissions::PermissionRuleStore> protected_permission_rule_store = std::nullopt;
 
   // Includes authority roots and capability adapters; never stream this
   // aggregate through generated debug output.

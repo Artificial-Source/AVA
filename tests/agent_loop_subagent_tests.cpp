@@ -961,6 +961,50 @@ void test_agent_loop_task_subagent_propagates_authority_roots_to_foreground_and_
   run_case(true);
 }
 
+void test_agent_loop_task_subagent_inherits_protected_permission_rule_store()
+{
+  auto const root = create_empty_root("agent-task-protected-rule-store");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  ava::session::SessionStore store(
+      ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "parent-protected-store"});
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  auto const protected_file = workspace / "unique-protect" / "permission-rules.json";
+  ava::permissions::PermissionRuleStore const unique_store{.global_rules_file = protected_file,
+                                                           .workspace_rules_file = workspace / "unique-protect" / "workspace-permission-rules.json",
+                                                           .workspace_dir = workspace};
+  ava::tests::FakeTransport transport(
+      {sse_response(
+           tool_call_sse("call_task", "task", R"({"description":"write unique store","prompt":"Write the requested file.","subagent_type":"general"})") +
+           "data: [DONE]\n\n"),
+       sse_response(tool_call_sse("call_write", "write_file", R"({"path":"unique-protect/permission-rules.json","content":"{}"})") + "data: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child finished\"}\n\n"
+                    "data: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent continued\"}\n\n"
+                    "data: [DONE]\n\n")});
+  ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+      .workspace_dir = workspace,
+      .mode = ava::agent::Mode::Build,
+      .model = agent_loop_test::model_invocation_options(),
+      .access_token = "token",
+      .tool_execution =
+          ava::agent::ToolExecutionOptions{
+              .protected_permission_rule_store = unique_store,
+          },
+      .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        return ava::permissions::PermissionResolution::Allow;
+      },
+      .append_entry = append_route_for_test(store),
+      .append_batch = append_batch_route_for_test(store),
+      .session_read_authority = read_authority_for_test(store),
+  });
+  auto result = loop.run_turn("delegate unique store write", store, provider, transport);
+  bool const child_denied =
+      transport.requests().size() >= 3 && transport.requests()[2].body.find("permission rule files cannot be modified") != std::string::npos;
+  expect(result && child_denied && !std::filesystem::exists(protected_file),
+         "foreground child inherits explicit unregistered permission-store identity and rejects unique rule-file writes");
+}
+
 void test_agent_loop_task_subagent_recovers_torn_child_before_resume()
 {
   auto const root = create_empty_root("agent-task-subagent-torn-resume");

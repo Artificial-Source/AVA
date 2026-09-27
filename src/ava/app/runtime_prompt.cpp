@@ -493,6 +493,10 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
                 .command_executor = runtime_options.command_executor,
                 .cancel_requested = run_cancel_requested,
                 .process_scope = run_process_scope,
+                .protected_permission_rule_store =
+                    ava::permissions::PermissionRuleStore{.global_rules_file = permission_rule_store_copy.global_rules_file,
+                                                          .workspace_rules_file = permission_rule_store_copy.workspace_rules_file,
+                                                          .workspace_dir = permission_rule_store_copy.workspace_dir},
             },
         .subagents = std::move(subagents),
         .tool_visibility = session_r->tool_visibility(),

@@ -47,31 +47,6 @@ std::shared_ptr<MutationQueue> effective_mutation_queue(ToolContext const& conte
 
 using ava::core::normalized_absolute_path;
 
-void append_permission_rule_store_for_config_dir(std::vector<ava::permissions::PermissionRuleStore>& stores, ToolContext const& context,
-                                                 std::filesystem::path const& config_dir)
-{
-  if (context.workspace_dir.empty() || config_dir.empty())
-    return;
-  stores.push_back(ava::permissions::PermissionRuleStore{.global_rules_file = config_dir / "permission-rules.json",
-                                                         .workspace_rules_file = context.workspace_dir / ".ava" / "permission-rules.json",
-                                                         .workspace_dir = context.workspace_dir,
-                                                         .anchor_set = context.anchor_set});
-}
-
-std::vector<ava::permissions::PermissionRuleStore> context_permission_rule_stores(ToolContext const& context)
-{
-  std::vector<ava::permissions::PermissionRuleStore> stores;
-  if (!context.mcp_global_config_file.empty())
-  {
-    append_permission_rule_store_for_config_dir(stores, context, context.mcp_global_config_file.parent_path());
-  }
-  if (!context.plugin_global_plugins_dir.empty())
-  {
-    append_permission_rule_store_for_config_dir(stores, context, context.plugin_global_plugins_dir.parent_path());
-  }
-  return stores;
-}
-
 bool is_legacy_workspace_permission_rules_path(ToolContext const& context, std::filesystem::path const& path)
 {
   if (context.workspace_dir.empty())
@@ -84,11 +59,8 @@ bool is_enforceable_permission_rules_path(ToolContext const& context, std::files
 {
   if (ava::permissions::is_registered_enforceable_permission_rules_file(path))
     return true;
-  for (auto const& store : context_permission_rule_stores(context))
-  {
-    if (ava::permissions::is_enforceable_permission_rules_file(store, path))
-      return true;
-  }
+  if (context.protected_permission_rule_store && ava::permissions::is_enforceable_permission_rules_file(*context.protected_permission_rule_store, path))
+    return true;
   return false;
 }
 

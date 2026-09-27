@@ -191,6 +191,10 @@ ava::tools::ToolContext make_tool_context(runtime::session_ts& unlocked_session,
                                                  .data_json = ava::tools::permission_audit_data_json(event)};
         return runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry));
       },
+      .protected_permission_rule_store =
+          ava::permissions::PermissionRuleStore{.global_rules_file = permission_rule_store.global_rules_file,
+                                                .workspace_rules_file = permission_rule_store.workspace_rules_file,
+                                                .workspace_dir = permission_rule_store.workspace_dir},
       .anchor_set = anchor_set,
       .ava_authority_roots = ava_authority_roots,
       .process_scope = process_scope,

@@ -61,6 +61,7 @@ ava::core::VoidResult AgentTurnExecutor::initialize_tools()
                               .cancel_requested = tool_execution.cancel_requested ? tool_execution.cancel_requested : options_.cancel_requested,
                               .redact_permission_audit_arguments = tool_execution.redact_permission_audit_arguments,
                               .require_explicit_file_permissions = tool_execution.require_explicit_file_permissions,
+                              .protected_permission_rule_store = tool_execution.protected_permission_rule_store,
                               .anchor_set = options_.anchor_set,
                               .ava_authority_roots = tool_execution.ava_authority_roots,
                               .exact_file_access = tool_execution.exact_file_access,

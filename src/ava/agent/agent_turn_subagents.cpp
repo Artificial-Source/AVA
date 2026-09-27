@@ -98,6 +98,7 @@ AgentLoopOptions inherited_child_options(AgentLoopOptions const& parent)
   child.tool_execution.exact_file_access = parent.tool_execution.exact_file_access;
   child.tool_execution.command_executor = parent.tool_execution.command_executor;
   child.tool_execution.cancel_requested = parent.tool_execution.cancel_requested;
+  child.tool_execution.protected_permission_rule_store = parent.tool_execution.protected_permission_rule_store;
   child.subagents = parent.subagents;
   child.tool_visibility = parent.tool_visibility;
   child.permission_resolver = parent.permission_resolver;

@@ -6,6 +6,7 @@
 #include "ava/process/scope.h"
 #include "ava/tools/tool_io.h"
 #include "ava/permissions/permission.h"
+#include "ava/permissions/permission_rules.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/mode.h"
 #include "ava/core/result.h"
@@ -109,6 +110,10 @@ struct ToolContext
   // preventing them from entering durable permission audit records.
   bool redact_permission_audit_arguments = false;
   bool require_explicit_file_permissions = false;
+  // Path-only projection of the session permission-rule store used to protect
+  // rule files from ordinary file-tool mutation. This is protection identity,
+  // not mutation or storage authority; never copy AnchorSet into it.
+  std::optional<ava::permissions::PermissionRuleStore> protected_permission_rule_store = std::nullopt;
   // Strict adapters share one descriptor-anchored root across permission
   // identity resolution and the actual built-in file operation.
   std::shared_ptr<SecureWorkspace> secure_workspace = nullptr;
