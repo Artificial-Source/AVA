@@ -4,6 +4,7 @@
 #include "ava/mcp/stdio_client.h"
 #include "ava/mcp/stdio_client_support.h"
 #include "ava/mcp/tool_broker.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/json.h"
 

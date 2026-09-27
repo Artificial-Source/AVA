@@ -5,7 +5,7 @@
 #include "ava/agent/message_builder.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/agent/tool_scheduler.h"
-#include "ava/tools/file_tools.h"
+#include "ava/tools/tool_context.h"
 
 #include <cstddef>
 #include <filesystem>

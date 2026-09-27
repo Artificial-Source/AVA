@@ -2,6 +2,7 @@
 #include "ava/agent/subagent_config.h"
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_task.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/core/json.h"
 #include "ava/core/strict_json.h"
 

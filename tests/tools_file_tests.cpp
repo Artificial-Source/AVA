@@ -3,6 +3,7 @@
 #include "ava/agent/mode.h"
 #include "ava/tools/bash_tool.h"
 #include "ava/tools/file_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/tools/mutation_queue.h"
 #include "ava/tools/secure_workspace.h"
 #include "ava/core/AnchorOpen.h"

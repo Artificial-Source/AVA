@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "ava/diagnostics/safe_failure.h"
+#include "ava/tools/file_tools.h"
 #include "ava/tools/search_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/plugin/discovery.h"
 #include "ava/plugin/enablement.h"

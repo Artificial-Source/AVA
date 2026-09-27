@@ -1,4 +1,5 @@
 #include "tests/support/test_harness.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/session/record.h"
 #include "ava/session/validation.h"
 #include "ava/core/ids.h"

@@ -4,6 +4,7 @@
 #include "ava/tools/search_tools.h"
 #include "ava/tools/secure_workspace.h"
 #include "ava/tools/spill_files.h"
+#include "ava/tools/tool_permission.h"
 
 #include <algorithm>
 #include <cctype>

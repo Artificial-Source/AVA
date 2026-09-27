@@ -18,6 +18,7 @@
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/tools/file_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/theme.h"
 #include "ava/plugin/diagnostics.h"

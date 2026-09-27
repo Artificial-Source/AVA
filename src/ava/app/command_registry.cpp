@@ -9,7 +9,6 @@
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime/command_names.h"
 #include "ava/app/runtime/markdown_files.h"
-#include "ava/tools/file_tools.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/plugin/static_resources.h"
 #include "ava/context/markdown_resource.h"

@@ -3,6 +3,7 @@
 #include "ava/app/command_mcp.h"
 #include "ava/app/command_registry_detail.h"
 #include "ava/app/command_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime/command_names.h"

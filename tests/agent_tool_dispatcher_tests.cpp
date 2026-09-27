@@ -26,6 +26,7 @@
 #include "ava/tools/mutation_queue.h"
 #include "ava/tools/search_tools.h"
 #include "ava/tools/secure_workspace.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/terminal.h"
 #include "ava/plugin/enablement.h"

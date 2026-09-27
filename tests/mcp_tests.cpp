@@ -7,6 +7,7 @@
 #include "ava/app/headless_policy.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/tools/file_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/plugin/enablement.h"
 #include "ava/plugin/tool_broker.h"
 #include "ava/mcp/config.h"

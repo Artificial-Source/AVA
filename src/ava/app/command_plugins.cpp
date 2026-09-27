@@ -2,6 +2,7 @@
 #include "ava/app/command_format.h"
 #include "ava/app/command_plugins.h"
 #include "ava/app/command_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/app/plugin_ui_capability.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"

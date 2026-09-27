@@ -10,6 +10,7 @@ add_library(ava_tools
   "search_tools.cpp"
   "secure_workspace.cpp"
   "spill_files.cpp"
+  "tool_permission.cpp"
   "webfetch_tool.cpp"
   "websearch_tool.cpp"
 )

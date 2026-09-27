@@ -2,6 +2,8 @@
 #include "ava/event/events.h"
 #include "ava/app/command_format.h"
 #include "ava/app/command_tools.h"
+#include "ava/tools/file_tools.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_event_adapters.h"

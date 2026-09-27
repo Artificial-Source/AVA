@@ -3,6 +3,7 @@
 #include "ava/app/command_session_support_internal.h"
 #include "ava/app/command_sessions.h"
 #include "ava/app/command_tools.h"
+#include "ava/tools/file_tools.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/session/export.h"

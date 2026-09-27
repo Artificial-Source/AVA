@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_skill.h"
+#include "ava/tools/tool_permission.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/plugin/discovery.h"
 #include "ava/plugin/enablement.h"
