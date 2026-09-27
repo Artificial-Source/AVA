@@ -755,6 +755,13 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
     {
       return {};
     }
+    if (*resolved == ava::permissions::PermissionResolution::Cancel)
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "agent loop canceled", ava::core::ErrorCode::Canceled);
+      error.with_context("server", server.id);
+      error.with_context("permission_request_id", permission_request_id);
+      return std::unexpected(std::move(error));
+    }
     auto error = ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "LSP server launch denied");
     error.with_context("server", server.id);
     return std::unexpected(std::move(error));

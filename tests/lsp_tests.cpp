@@ -1248,6 +1248,85 @@ void test_lsp_configured_provider_loads_project_config_lazily()
          "configured LSP provider rejects unmatched file extensions through redacted tool error");
 }
 
+void test_lsp_configured_provider_launch_permission_cancel_and_deny()
+{
+  auto const cancel_workspace = make_lsp_workspace("lsp-configured-launch-cancel");
+  std::filesystem::create_directories(cancel_workspace / ".ava");
+  auto const cancel_marker = cancel_workspace / "lsp-launch-cancel-marker.txt";
+  auto const cancel_config_path = cancel_workspace / ".ava" / "lsp.json";
+  {
+    std::ofstream config(cancel_config_path, std::ios::binary | std::ios::trunc);
+    config << "{\"version\":1,\"servers\":[{\"id\":\"fake\",\"argv\":[\"" << ava::core::json::escape(AVA_FAKE_LSP_SERVER_PATH) << "\",\"--cwd-marker\",\""
+           << ava::core::json::escape(cancel_marker.generic_string()) << "\"],\"file_extensions\":[\".cpp\"]}]}";
+  }
+
+  std::string cancel_permission_request_id;
+  auto cancel_provider = ava::lsp::make_configured_lsp_provider(ava::lsp::ConfiguredLspProviderFiles{
+      .global_config_file = cancel_workspace / "missing-global-lsp.json",
+      .project_config_file = cancel_config_path,
+      .workspace_root = cancel_workspace,
+      .anchor_set = lsp_anchors(cancel_workspace),
+      .permission_resolver = [&](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        expect(prompt.operation == ava::permissions::Operation::LspServerLaunch, "configured LSP launch cancel remains distinct from LspQuery approval");
+        cancel_permission_request_id = prompt.permission_request_id;
+        return ava::permissions::PermissionResolutionDecision{ava::permissions::PermissionResolution::Cancel, "canceled by local user"};
+      },
+  });
+  expect(cancel_provider && *cancel_provider != nullptr, cancel_provider
+                                                             ? "configured LSP cancel fixture loads a lazy provider"
+                                                             : "configured LSP cancel fixture loads a lazy provider: " + cancel_provider.error().format());
+  if (!cancel_provider || !*cancel_provider)
+    return;
+
+  auto canceled_query = (*cancel_provider)->diagnostics(cancel_workspace / "main.cpp");
+  expect(!canceled_query && canceled_query.error().code() == ava::core::ErrorCode::Canceled &&
+             canceled_query.error().category() == ava::core::ErrorCategory::Unknown && canceled_query.error().message() == "agent loop canceled" &&
+             canceled_query.error().format().find("server: fake") != std::string::npos &&
+             canceled_query.error().format().find("permission_request_id: " + cancel_permission_request_id) != std::string::npos &&
+             !std::filesystem::exists(cancel_marker),
+         "configured LSP direct query maps launch-permission cancel to canceled without launching");
+
+  ava::tools::ToolContext const cancel_context{.workspace_dir = cancel_workspace, .lsp_diagnostics_provider = *cancel_provider};
+  ava::agent::ToolDispatcher const cancel_dispatcher(cancel_context);
+  auto canceled = cancel_dispatcher.dispatch(
+      ava::agent::ProviderToolCall{.id = "call_lsp_launch_canceled", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
+  expect(canceled && !canceled->success && canceled->payload.status == ava::agent::ToolResultStatus::Canceled &&
+             canceled->result_text.find("canceled") != std::string::npos && !canceled->payload.permission_request_ids.empty() &&
+             std::ranges::find(canceled->payload.permission_request_ids, cancel_permission_request_id) != canceled->payload.permission_request_ids.end() &&
+             !std::filesystem::exists(cancel_marker),
+         "tool dispatcher maps configured LSP launch cancel to Canceled and retains the permission request id");
+
+  auto const deny_workspace = make_lsp_workspace("lsp-configured-launch-deny");
+  std::filesystem::create_directories(deny_workspace / ".ava");
+  auto const deny_marker = deny_workspace / "lsp-launch-deny-marker.txt";
+  auto const deny_config_path = deny_workspace / ".ava" / "lsp.json";
+  {
+    std::ofstream config(deny_config_path, std::ios::binary | std::ios::trunc);
+    config << "{\"version\":1,\"servers\":[{\"id\":\"fake\",\"argv\":[\"" << ava::core::json::escape(AVA_FAKE_LSP_SERVER_PATH) << "\",\"--cwd-marker\",\""
+           << ava::core::json::escape(deny_marker.generic_string()) << "\"],\"file_extensions\":[\".cpp\"]}]}";
+  }
+  auto deny_provider = ava::lsp::make_configured_lsp_provider(ava::lsp::ConfiguredLspProviderFiles{
+      .global_config_file = deny_workspace / "missing-global-lsp.json",
+      .project_config_file = deny_config_path,
+      .workspace_root = deny_workspace,
+      .anchor_set = lsp_anchors(deny_workspace),
+      .permission_resolver = [](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        expect(prompt.operation == ava::permissions::Operation::LspServerLaunch, "configured LSP launch deny remains distinct from LspQuery approval");
+        return ava::permissions::PermissionResolutionDecision{ava::permissions::PermissionResolution::Deny, "denied by local user"};
+      },
+  });
+  expect(deny_provider && *deny_provider != nullptr, deny_provider ? "configured LSP deny fixture loads a lazy provider"
+                                                                   : "configured LSP deny fixture loads a lazy provider: " + deny_provider.error().format());
+  if (!deny_provider || !*deny_provider)
+    return;
+
+  auto denied_query = (*deny_provider)->diagnostics(deny_workspace / "main.cpp");
+  expect(!denied_query && denied_query.error().category() == ava::core::ErrorCategory::PermissionDenied &&
+             denied_query.error().code() != ava::core::ErrorCode::Canceled && denied_query.error().message().find("denied") != std::string::npos &&
+             !std::filesystem::exists(deny_marker),
+         "configured LSP direct query keeps launch-permission deny as PermissionDenied without launching");
+}
+
 void test_lsp_configured_provider_loads_global_config_from_safe_cwd()
 {
   auto const root = create_empty_root("lsp-global-safe-cwd");
@@ -2091,6 +2170,7 @@ void run_lsp_tests()
   test_lsp_dispatcher_preserves_safe_error_context_only();
   test_lsp_dispatcher_bounds_provider_json();
   test_lsp_configured_provider_loads_project_config_lazily();
+  test_lsp_configured_provider_launch_permission_cancel_and_deny();
   test_lsp_configured_provider_loads_global_config_from_safe_cwd();
   test_lsp_configured_provider_timeout_defaults();
   test_lsp_configured_provider_inspection_does_not_launch_servers();
