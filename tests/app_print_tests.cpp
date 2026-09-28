@@ -86,8 +86,7 @@ void test_invocation_signal_policy_mapping()
     expect(signal_policy_for(mode) == InvocationSignalPolicy::SharedBits, "blocking noninteractive modes use shared signal bits");
   expect(signal_policy_for(InvocationMode::ImmediateOutput) == InvocationSignalPolicy::Default,
          "immediate output and parser errors use conventional default signal dispositions");
-  expect(signal_policy_for(InvocationMode::Interactive) == InvocationSignalPolicy::Deferred &&
-             signal_policy_for(InvocationMode::LineShell) == InvocationSignalPolicy::Deferred,
+  expect(signal_policy_for(InvocationMode::Interactive) == InvocationSignalPolicy::Deferred,
          "interactive frontends retain deferred signal activation");
 
   char const* print_argv[] = {"ava", "--session-dir", "/path/that/need/not/exist", "--print", "hello"};

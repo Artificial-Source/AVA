@@ -19,7 +19,6 @@ enum class InvocationMode
   SupportExport,
   ImmediateOutput,
   Interactive,
-  LineShell,
 };
 
 // Describe whether dispatch activates shared bits, defaults, or frontend-owned handling.
@@ -44,7 +43,6 @@ enum class InvocationSignalPolicy
     case InvocationMode::ImmediateOutput:
       return InvocationSignalPolicy::Default;
     case InvocationMode::Interactive:
-    case InvocationMode::LineShell:
       return InvocationSignalPolicy::Deferred;
   }
   return InvocationSignalPolicy::Deferred;

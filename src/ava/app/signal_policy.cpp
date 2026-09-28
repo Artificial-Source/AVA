@@ -24,8 +24,6 @@ InvocationMode invocation_mode(CommandLineInvocation const& invocation)
       return InvocationMode::Print;
     case RuntimeFrontend::Rpc:
       return InvocationMode::Rpc;
-    case RuntimeFrontend::LineShell:
-      return InvocationMode::LineShell;
     case RuntimeFrontend::Interactive:
       return InvocationMode::Interactive;
   }

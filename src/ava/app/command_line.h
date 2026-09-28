@@ -78,7 +78,6 @@ struct ConnectInvocation
 enum class RuntimeFrontend
 {
   Interactive,
-  LineShell,
   Print,
   Rpc,
 };
