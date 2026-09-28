@@ -801,8 +801,6 @@ def run_harness_signal_cleanup_regression(
             str(regression_root),
             "--build-dir",
             str(regression_root),
-            "--root",
-            str(regression_root),
             "--signal-cleanup-regression-child",
             "--signal-cleanup-fixture",
             str(fixture),
@@ -1598,7 +1596,9 @@ def validate_default_package_output(
 
 
 def create_private_base() -> tuple[pathlib.Path, int, OwnedDirectoryIdentity, int]:
-    base_path = pathlib.Path(tempfile.mkdtemp(prefix="ava-package-linux-tests-"))
+    # The build tree may be read-only (and TMPDIR may point into it). Always
+    # allocate the verified, process-owned base in /tmp instead.
+    base_path = pathlib.Path(tempfile.mkdtemp(prefix="ava-package-linux-tests-", dir="/tmp"))
     parent_fd = -1
     base_fd = -1
     try:
@@ -1649,6 +1649,31 @@ def in_repository_probe_parent(repo: pathlib.Path, build_dir: pathlib.Path) -> p
     return repo
 
 
+def prepare_private_workspace() -> PackageTestWorkspace:
+    """Create a private /tmp base and descriptor-owned child for package fixtures.
+
+    The caller owns the returned workspace and must call cleanup() even on
+    failure. Its base and child are unpredictable 0700 directories; neither
+    TMPDIR nor the build tree determines their location.
+    """
+    base_path, base_fd, base_identity, parent_fd = create_private_base()
+    try:
+        child_name, child_identity = create_unique_owned_child(base_fd, base_path)
+    except BaseException:
+        os.close(base_fd)
+        os.close(parent_fd)
+        raise
+    return PackageTestWorkspace(
+        base_path=base_path,
+        base_fd=base_fd,
+        base_identity=base_identity,
+        child_name=child_name,
+        child_identity=child_identity,
+        owns_base=True,
+        base_parent_fd=parent_fd,
+    )
+
+
 def prepare_workspace(requested_root: pathlib.Path, repo: pathlib.Path) -> PackageTestWorkspace:
     """Create a descriptor-owned private child while retaining the caller's logical root spelling.
 
@@ -1663,22 +1688,7 @@ def prepare_workspace(requested_root: pathlib.Path, repo: pathlib.Path) -> Packa
     redirected = is_within(resolved_root, repo_physical)
 
     if redirected:
-        base_path, base_fd, base_identity, parent_fd = create_private_base()
-        try:
-            child_name, child_identity = create_unique_owned_child(base_fd, base_path)
-        except BaseException:
-            os.close(base_fd)
-            os.close(parent_fd)
-            raise
-        return PackageTestWorkspace(
-            base_path=base_path,
-            base_fd=base_fd,
-            base_identity=base_identity,
-            child_name=child_name,
-            child_identity=child_identity,
-            owns_base=True,
-            base_parent_fd=parent_fd,
-        )
+        return prepare_private_workspace()
 
     if existing is None:
         try:
@@ -1734,6 +1744,17 @@ def cleanup_workspace_after_regression(workspace: PackageTestWorkspace, context:
 
 def run_workspace_safety_regressions(repo: pathlib.Path, build_dir: pathlib.Path) -> None:
     """Exercise root ownership and cleanup races without touching caller roots."""
+    private_workspace = prepare_private_workspace()
+    try:
+        if private_workspace.base_path.parent != pathlib.Path("/tmp") or not private_workspace.owns_base:
+            raise RuntimeError("package-test fixtures must use a private /tmp base")
+        private_base = private_workspace.base_path
+        require_workspace_cleanup(private_workspace, "private /tmp workspace cleanup")
+        if private_base.exists():
+            raise RuntimeError("private /tmp workspace base survived cleanup")
+    finally:
+        cleanup_workspace_after_regression(private_workspace, "private /tmp workspace cleanup after failure")
+
     in_repo_parent = in_repository_probe_parent(repo, build_dir)
     in_repo_request = in_repo_parent / f".ava-package-linux-tests-in-repo-root.{secrets.token_hex(12)}"
     in_repo_workspace = prepare_workspace(in_repo_request, repo)
@@ -1747,7 +1768,7 @@ def run_workspace_safety_regressions(repo: pathlib.Path, build_dir: pathlib.Path
     finally:
         cleanup_workspace_after_regression(in_repo_workspace, "in-repository workspace cleanup after failure")
 
-    with tempfile.TemporaryDirectory(prefix="ava-package-linux-tests-regressions-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="ava-package-linux-tests-regressions-", dir="/tmp") as temporary:
         sandbox = pathlib.Path(temporary)
 
         source_physical = sandbox / "source"
@@ -2611,10 +2632,10 @@ def run_main_package_tests(args: argparse.Namespace) -> int:
             with PackageTestTerminationDeferral():
                 run_workspace_safety_regressions(repo, args.build_dir)
             raise_deferred_package_test_termination()
-            # Keep a terminal signal from landing after prepare_workspace()
+            # Keep a terminal signal from landing after prepare_private_workspace()
             # creates its private child but before this finally block can own it.
             with PackageTestTerminationDeferral():
-                workspace = prepare_workspace(args.root, repo)
+                workspace = prepare_private_workspace()
             raise_deferred_package_test_termination()
             return run_package_tests(args, workspace, repo)
         finally:
@@ -2631,7 +2652,6 @@ def main() -> int:
     parser.add_argument("--fake-provider", type=pathlib.Path, required=True)
     parser.add_argument("--repo", type=pathlib.Path, required=True)
     parser.add_argument("--build-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--root", type=pathlib.Path, required=True)
     parser.add_argument("--signal-cleanup-regression-child", action="store_true")
     parser.add_argument("--signal-cleanup-fixture", type=pathlib.Path)
     parser.add_argument("--signal-cleanup-descendant-ready", type=pathlib.Path)

@@ -1213,8 +1213,7 @@ if(Python3_Interpreter_FOUND)
               --ava $<TARGET_FILE:ava>
               --fake-provider $<TARGET_FILE:ava_fake_provider_server>
               --repo ${CMAKE_SOURCE_DIR}
-              --build-dir ${CMAKE_BINARY_DIR}
-              --root ${CMAKE_BINARY_DIR}/package-linux-tests)
+              --build-dir ${CMAKE_BINARY_DIR})
     set_tests_properties(ava_release.package_linux PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 240 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 

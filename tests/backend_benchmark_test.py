@@ -577,16 +577,29 @@ class BenchmarkHarnessTests(unittest.TestCase):
 
     @contextlib.contextmanager
     def live_plugin_comparison_documents(self):
-        repository = pathlib.Path(self.script).resolve().parents[1]
+        """Yield live before/after documents and their temporary checkout paths.
+
+        Pin historical measured commits and the current harness commit in
+        worktrees managed by an isolated local clone. The source repository is
+        read only; all worktrees and their Git metadata are removed on exit.
+        """
+        source_repository = pathlib.Path(self.script).resolve().parents[1]
         before_commit = "13fb0cef5925368fa12f8bcf693235281bce099f"
         after_commit = "2a30f40ec562b49915c3b09369cf4e6897de3d4d"
 
-        def git(*arguments: str) -> str:
-            return run_fixture_git(repository, *arguments)
-
-        harness_commit = git("rev-parse", "HEAD^{commit}")
+        # Worktree registration writes to the managing repository's .git directory.
+        # Clone locally into the fixture so the source checkout can be read-only.
+        # --no-local copies the objects without shared alternates or hard links;
+        # do not make this shallow because the pinned historical commits are needed.
+        harness_commit = run_fixture_git(source_repository, "rev-parse", "HEAD^{commit}")
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
+            repository = root / "repository"
+            run_fixture_git(root, "clone", "--no-local", "--no-checkout", str(source_repository), str(repository))
+
+            def git(*arguments: str) -> str:
+                return run_fixture_git(repository, *arguments)
+
             before_root = root / "before"
             after_root = root / "after"
             harness_root = root / "harness"
@@ -1752,7 +1765,9 @@ class BenchmarkHarnessTests(unittest.TestCase):
             live_before, live_after, before_root, after_root, _harness_root = (
                 live_documents
             )
-            repository = pathlib.Path(self.script).resolve().parents[1]
+            # Remove through the fixture clone that owns this worktree, never
+            # through the read-only source checkout.
+            repository = before_root.parent / "repository"
             run_fixture_git(
                 repository,
                 "worktree",
@@ -1888,7 +1903,8 @@ class BenchmarkHarnessTests(unittest.TestCase):
     def test_comparison_rejects_repository_removed_between_static_and_live_checks(self) -> None:
         with self.live_plugin_comparison_documents() as live_documents:
             before, after, before_root = live_documents[:3]
-            repository = pathlib.Path(self.script).resolve().parents[1]
+            # Simulate disappearance using the fixture clone's worktree registry.
+            repository = before_root.parent / "repository"
             static_validator = self.module._comparison_provenance_mismatches
 
             def remove_after_static(document, cohort):
