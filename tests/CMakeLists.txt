@@ -714,7 +714,6 @@ add_test(
           -DAVA_PYTHON=${Python3_EXECUTABLE}
           -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
           -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-rpc-bash-process-cleanup
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_rpc_bash_process_cleanup.cmake)
 set_tests_properties(ava_cli.headless_rpc_bash_process_cleanup PROPERTIES TIMEOUT 75)
 
@@ -872,6 +871,8 @@ if(Python3_Interpreter_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_test.py
             --script ${CMAKE_SOURCE_DIR}/scripts/benchmark-backend.py
             --process-tests)
+  # Live provenance checks still create fresh worktrees for each case, and
+  # can take longer under a parallel CTest run than when run in isolation.
   set_tests_properties(ava_benchmark.process_harness_self_test PROPERTIES
     TIMEOUT 30
     LABELS "benchmark;process;offline;self-test"

@@ -6,10 +6,6 @@ if(NOT DEFINED AVA_FAKE_PROVIDER_EXE)
   message(FATAL_ERROR "AVA_FAKE_PROVIDER_EXE is required")
 endif()
 
-if(NOT DEFINED AVA_CLI_TEST_ROOT)
-  message(FATAL_ERROR "AVA_CLI_TEST_ROOT is required")
-endif()
-
 # The fake provider is launched through the shared Python owner/broker so every
 # harness has identical process-gate wiring and process-group cleanup. Direct
 # (non-CTest) invocations fall back to the script directory and PATH python3.
@@ -43,11 +39,17 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   math(EXPR AVA_POLL_200 "${AVA_DEBUG_SECONDS} * 20")
 endif()
 
-# Use the CMake-supplied unique build-owned root. Do not copy into a predictable
-# /tmp/<name> path: that races across runs, ignores isolated TMPDIR, and leaks
-# after success. Failure artifacts stay in this bounded build directory; the
-# next invocation starts with REMOVE_RECURSE on the same root.
-get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
+# Command discovery seals the full ancestor chain of HOME. A root inside the
+# build tree becomes stale when parallel CTest cases create sibling artifacts.
+# mktemp atomically creates a private root under /tmp's sticky namespace; do
+# not accept a supplied build-tree root or reuse a predictable /tmp path.
+execute_process(COMMAND mktemp -d /tmp/ava-cli-bash-cleanup.XXXXXXXX
+                OUTPUT_VARIABLE TEST_ROOT OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_VARIABLE TEMP_ERROR RESULT_VARIABLE TEMP_RESULT)
+if(NOT TEMP_RESULT EQUAL 0 OR NOT TEST_ROOT MATCHES "^/tmp/ava-cli-bash-cleanup\\.[A-Za-z0-9]+$"
+   OR NOT IS_DIRECTORY "${TEST_ROOT}" OR IS_SYMLINK "${TEST_ROOT}")
+  message(FATAL_ERROR "failed to create private bash cleanup fixture: ${TEMP_ERROR}")
+endif()
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(HOME_DIR "${TEST_ROOT}/home")
 set(CONFIG_DIR "${TEST_ROOT}/config")
@@ -64,7 +66,6 @@ set(RPC_OUT "${TEST_ROOT}/rpc-output.jsonl")
 set(RPC_ERR "${TEST_ROOT}/rpc-error.log")
 set(DRIVER_FILE "${TEST_ROOT}/driver.sh")
 
-file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}" "${HOME_DIR}" "${CONFIG_DIR}/ava" "${STATE_DIR}/ava/sessions" "${DATA_DIR}")
 # Command planning protects AVA config/session authority roots as well as the
 # workspace; keep this process-cleanup fixture's XDG layout owner-private.

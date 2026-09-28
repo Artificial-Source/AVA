@@ -190,6 +190,25 @@ class BenchmarkHarnessTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.module = load_module(pathlib.Path(cls.script).resolve())
 
+    @classmethod
+    def comparison_fixture_seed(cls, source_repository: pathlib.Path) -> pathlib.Path:
+        """Copy source objects once into a class-owned temporary repository.
+
+        Subsequent per-test clones borrow objects only from this private seed,
+        never from the source checkout. Class cleanup runs after all test worktrees
+        have been removed, including when a test fails.
+        """
+        if "_comparison_seed" not in cls.__dict__:
+            temporary = tempfile.TemporaryDirectory(prefix="ava-bench-comparison-seed-")
+            cls.addClassCleanup(temporary.cleanup)
+            seed = pathlib.Path(temporary.name) / "repository"
+            run_fixture_git(
+                source_repository, "clone", "--no-local", "--no-checkout",
+                str(source_repository), str(seed),
+            )
+            cls._comparison_seed = seed
+        return cls._comparison_seed
+
     def setUp(self) -> None:
         # Most comparator unit tests use synthetic paths; dedicated requalification
         # tests below restore the live Git validator around exact Plugin worktrees.
@@ -588,14 +607,16 @@ class BenchmarkHarnessTests(unittest.TestCase):
         after_commit = "2a30f40ec562b49915c3b09369cf4e6897de3d4d"
 
         # Worktree registration writes to the managing repository's .git directory.
-        # Clone locally into the fixture so the source checkout can be read-only.
-        # --no-local copies the objects without shared alternates or hard links;
-        # do not make this shallow because the pinned historical commits are needed.
+        # Each test gets its own registry and worktrees so destructive provenance
+        # checks cannot affect another test or the read-only source checkout.
+        # The private class-owned seed copies objects without linking to the source;
+        # per-test clones may safely borrow objects from that seed until class cleanup.
         harness_commit = run_fixture_git(source_repository, "rev-parse", "HEAD^{commit}")
+        seed = self.comparison_fixture_seed(source_repository)
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             repository = root / "repository"
-            run_fixture_git(root, "clone", "--no-local", "--no-checkout", str(source_repository), str(repository))
+            run_fixture_git(root, "clone", "--shared", "--no-checkout", str(seed), str(repository))
 
             def git(*arguments: str) -> str:
                 return run_fixture_git(repository, *arguments)

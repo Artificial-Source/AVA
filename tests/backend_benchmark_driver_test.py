@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 TESTS_DIR = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
@@ -68,6 +69,34 @@ def write_canary(path: pathlib.Path, marker: pathlib.Path, code: int = 42) -> No
 
 
 class BenchmarkDriverTests(unittest.TestCase):
+    def test_live_comparison_reuses_private_seed_but_isolates_worktrees(self) -> None:
+        """Two provenance fixtures share only private Git objects, not writable worktrees."""
+        class FixtureCase(harness.BenchmarkHarnessTests):
+            script = SCRIPT_PATH
+
+        FixtureCase.setUpClass()
+        try:
+            case = FixtureCase("test_comparison_resolves_recorded_commits_and_trees")
+            with mock.patch.object(harness, "run_fixture_git", wraps=harness.run_fixture_git) as git:
+                roots = []
+                for _ in range(2):
+                    with case.live_plugin_comparison_documents() as documents:
+                        roots.append(documents[2])
+                        self.assertTrue(documents[2].exists())
+                        self.assertTrue(documents[3].exists())
+                        self.assertTrue(documents[4].exists())
+                    self.assertFalse(roots[-1].exists())
+
+                clones = [call.args for call in git.call_args_list if len(call.args) > 1 and call.args[1] == "clone"]
+                self.assertEqual(len([args for args in clones if "--no-local" in args]), 1)
+                self.assertEqual(len([args for args in clones if "--shared" in args]), 2)
+                self.assertNotEqual(roots[0], roots[1])
+                self.assertTrue(FixtureCase._comparison_seed.exists())
+                seed = FixtureCase._comparison_seed
+        finally:
+            FixtureCase.doClassCleanups()
+        self.assertFalse(seed.exists())
+
     def load_group(
         self,
         process_tests: bool,
