@@ -1650,10 +1650,15 @@ def in_repository_probe_parent(repo: pathlib.Path, build_dir: pathlib.Path) -> p
 
 
 def prepare_workspace(requested_root: pathlib.Path, repo: pathlib.Path) -> PackageTestWorkspace:
-    # Inspect the final component before resolve() so a caller-controlled final
-    # symlink is refused rather than silently redirected through its target.
-    existing = checked_final_directory(requested_root, "package-test root")
-    resolved_root = requested_root.resolve(strict=False)
+    """Create a descriptor-owned private child while retaining the caller's logical root spelling.
+
+    Resolve only to classify repository containment; never pass that physical
+    spelling to the package or model-smoke processes. Refuse a final symlink
+    and preserve the caller-owned parent directory during cleanup.
+    """
+    logical_root = requested_root.absolute()
+    existing = checked_final_directory(logical_root, "package-test root")
+    resolved_root = logical_root.resolve(strict=False)
     repo_physical = physical_existing_directory(repo, "repository")
     redirected = is_within(resolved_root, repo_physical)
 
@@ -1677,29 +1682,29 @@ def prepare_workspace(requested_root: pathlib.Path, repo: pathlib.Path) -> Packa
 
     if existing is None:
         try:
-            os.mkdir(resolved_root, 0o700)
+            os.mkdir(logical_root, 0o700)
         except FileExistsError:
             pass
         except OSError as exc:
-            raise RuntimeError(f"unable to create package-test root {resolved_root}: {exc}") from exc
+            raise RuntimeError(f"unable to create package-test root {logical_root}: {exc}") from exc
 
-    base_fd, opened = open_final_directory(resolved_root, "package-test root")
+    base_fd, opened = open_final_directory(logical_root, "package-test root")
     if existing is not None and directory_identity(existing) != directory_identity(opened):
         os.close(base_fd)
-        raise RuntimeError(f"package-test root changed while opening: {resolved_root}")
+        raise RuntimeError(f"package-test root changed while opening: {logical_root}")
     if opened.st_uid != os.geteuid():
         os.close(base_fd)
-        raise RuntimeError(f"package-test root is not owned by effective user {os.geteuid()}: {resolved_root}")
+        raise RuntimeError(f"package-test root is not owned by effective user {os.geteuid()}: {logical_root}")
     if stat.S_IMODE(opened.st_mode) & 0o022:
         os.close(base_fd)
-        raise RuntimeError(f"package-test root must not be group- or other-writable: {resolved_root}")
+        raise RuntimeError(f"package-test root must not be group- or other-writable: {logical_root}")
     try:
-        child_name, child_identity = create_unique_owned_child(base_fd, resolved_root)
+        child_name, child_identity = create_unique_owned_child(base_fd, logical_root)
     except BaseException:
         os.close(base_fd)
         raise
     return PackageTestWorkspace(
-        base_path=resolved_root,
+        base_path=logical_root,
         base_fd=base_fd,
         base_identity=owned_directory_identity(opened),
         child_name=child_name,
@@ -1816,6 +1821,21 @@ def run_workspace_safety_regressions(repo: pathlib.Path, build_dir: pathlib.Path
                 raise RuntimeError("external caller root content was removed or modified")
         finally:
             cleanup_workspace_after_regression(external_workspace, "external root cleanup after failure")
+
+        # The physical target is needed to decide whether to redirect an
+        # in-repository root, but must not replace the path passed to AVA.
+        external_logical = sandbox / "external-logical"
+        external_logical.symlink_to(external_base, target_is_directory=True)
+        logical_root = external_logical / "new-root"
+        logical_workspace = prepare_workspace(logical_root, repo)
+        try:
+            if logical_workspace.base_path != logical_root or not logical_workspace.root.is_dir():
+                raise RuntimeError("external workspace lost its logical symlink-ancestor spelling")
+            require_workspace_cleanup(logical_workspace, "logical external root cleanup")
+            if not logical_root.is_dir() or not external_logical.is_symlink():
+                raise RuntimeError("logical external root cleanup changed the caller's parent")
+        finally:
+            cleanup_workspace_after_regression(logical_workspace, "logical external root cleanup after failure")
 
         swap_base = sandbox / "top-level-swap"
         swap_base.mkdir(mode=0o700)
