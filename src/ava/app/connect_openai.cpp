@@ -10,6 +10,7 @@
 #include "ava/config/provider_profiles.h"
 #include "ava/provider/catalog.h"
 #include "ava/core/result.h"
+#include "utils/print_pointer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -96,6 +97,16 @@ long long unix_time_seconds()
   return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+bool tcsetattr_with_restart(struct termios const* termios_p)
+{
+  bool success;
+  do
+    success = ::tcsetattr(STDIN_FILENO, TCSAFLUSH, termios_p) == 0;
+  while (!success && errno == EINTR);
+  Dout(dc::warning(!success)|error_cf, "::tcsetattr(STDIN_FILENO, TCSAFLUSH, " << print_pointer(termios_p) << ") == -1");
+  return success;
+}
+
 class ScopedTerminalEcho
 {
  public:
@@ -105,7 +116,7 @@ class ScopedTerminalEcho
       return;
     auto current = original_;
     current.c_lflag &= ~ECHO;
-    if (::tcsetattr(STDIN_FILENO, TCSAFLUSH, &current) != 0)
+    if (!tcsetattr_with_restart(&current))
       active_ = false;
   }
 
@@ -115,7 +126,7 @@ class ScopedTerminalEcho
   ~ScopedTerminalEcho()
   {
     if (active_)
-      static_cast<void>(::tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_));
+      static_cast<void>(tcsetattr_with_restart(&original_));
   }
 
  private:
@@ -134,7 +145,7 @@ class ScopedTerminalRawMode
     current.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
     current.c_cc[VMIN] = 1;
     current.c_cc[VTIME] = 0;
-    if (::tcsetattr(STDIN_FILENO, TCSAFLUSH, &current) != 0)
+    if (!tcsetattr_with_restart(&current))
     {
       active_ = false;
       return;
@@ -148,7 +159,7 @@ class ScopedTerminalRawMode
   {
     if (!active_)
       return;
-    static_cast<void>(::tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_));
+    static_cast<void>(tcsetattr_with_restart(&original_));
   }
 
  private:
