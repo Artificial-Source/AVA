@@ -69,6 +69,17 @@ def write_canary(path: pathlib.Path, marker: pathlib.Path, code: int = 42) -> No
 
 
 class BenchmarkDriverTests(unittest.TestCase):
+    def test_benchmark_temporary_directory_is_named_and_removed_on_failure(self) -> None:
+        """An exceptional fixture exit removes only its owned /tmp/ava-* root."""
+        with self.assertRaisesRegex(RuntimeError, "fixture failure"):
+            with harness.benchmark_temporary_directory() as temporary:
+                root = pathlib.Path(temporary)
+                self.assertEqual(root.parent, pathlib.Path("/tmp"))
+                self.assertTrue(root.name.startswith("ava-bench-test-"))
+                (root / "fixture").write_text("test", encoding="utf-8")
+                raise RuntimeError("fixture failure")
+        self.assertFalse(root.exists())
+
     def test_live_comparison_reuses_private_seed_but_isolates_worktrees(self) -> None:
         """Two provenance fixtures share only private Git objects, not writable worktrees."""
         class FixtureCase(harness.BenchmarkHarnessTests):
@@ -82,6 +93,8 @@ class BenchmarkDriverTests(unittest.TestCase):
                 for _ in range(2):
                     with case.live_plugin_comparison_documents() as documents:
                         roots.append(documents[2])
+                        self.assertEqual(roots[-1].parent.parent, pathlib.Path("/tmp"))
+                        self.assertTrue(roots[-1].parent.name.startswith("ava-bench-test-"))
                         self.assertTrue(documents[2].exists())
                         self.assertTrue(documents[3].exists())
                         self.assertTrue(documents[4].exists())
@@ -93,6 +106,8 @@ class BenchmarkDriverTests(unittest.TestCase):
                 self.assertNotEqual(roots[0], roots[1])
                 self.assertTrue(FixtureCase._comparison_seed.exists())
                 seed = FixtureCase._comparison_seed
+                self.assertEqual(seed.parent.parent, pathlib.Path("/tmp"))
+                self.assertTrue(seed.parent.name.startswith("ava-bench-comparison-seed-"))
         finally:
             FixtureCase.doClassCleanups()
         self.assertFalse(seed.exists())

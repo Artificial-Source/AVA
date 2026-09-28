@@ -36,6 +36,15 @@ _TERMINAL_CONTROL_RE = re.compile(
 )
 
 
+def benchmark_temporary_directory() -> tempfile.TemporaryDirectory:
+    """Create a private, recognizable /tmp fixture removed on context exit.
+
+    All benchmark self-test directories use this owner so a failed test does
+    not leave anonymous tmp* names and exception unwinding cleans them up.
+    """
+    return tempfile.TemporaryDirectory(prefix="ava-bench-test-", dir="/tmp")
+
+
 def sanitize_fixture_git_output(text: str, *, limit: int = _FIXTURE_GIT_OUTPUT_LIMIT) -> str:
     if not text:
         return ""
@@ -65,7 +74,7 @@ class FixtureGitError(RuntimeError):
 
 class _FixtureGitIsolation:
     def __init__(self) -> None:
-        self._temporary = tempfile.TemporaryDirectory(prefix="ava-bench-fixture-git-")
+        self._temporary = tempfile.TemporaryDirectory(prefix="ava-bench-fixture-git-", dir="/tmp")
         self.root = pathlib.Path(self._temporary.name)
         self.hooks_dir = self.root / "hooks"
         self.hooks_dir.mkdir()
@@ -199,7 +208,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
         have been removed, including when a test fails.
         """
         if "_comparison_seed" not in cls.__dict__:
-            temporary = tempfile.TemporaryDirectory(prefix="ava-bench-comparison-seed-")
+            temporary = tempfile.TemporaryDirectory(prefix="ava-bench-comparison-seed-", dir="/tmp")
             cls.addClassCleanup(temporary.cleanup)
             seed = pathlib.Path(temporary.name) / "repository"
             run_fixture_git(
@@ -254,7 +263,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
         )
 
     def test_smoke_without_benchmark_helper_fails_before_execution(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             output = pathlib.Path(temporary) / "out.json"
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
@@ -275,7 +284,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
         self.assertIn("--suite smoke requires an executable --benchmark-helper", stderr.getvalue())
 
     def test_smoke_rejects_non_executable_helper_but_baseline_may_omit_it(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             helper = root / "helper"
             helper.write_text("not executable\n", encoding="utf-8")
@@ -289,7 +298,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             self.assertIsNone(baseline.benchmark_helper)
 
     def test_environment_is_a_fixed_allowlist(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             home = pathlib.Path(temporary) / "home"
             inherited = {
                 "AVA_SELF_TEST_KEEP": "must-not-survive",
@@ -357,7 +366,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             runs=0,
             suite="baseline",
         )
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             project = root / "project"
             project.mkdir()
@@ -453,7 +462,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
         }
 
     def test_file_identity_hashes_bytes_with_python_stdlib(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             path = pathlib.Path(temporary) / "artifact"
             path.write_bytes(b"abc")
             identity = self.module.file_identity(path)
@@ -613,7 +622,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
         # per-test clones may safely borrow objects from that seed until class cleanup.
         harness_commit = run_fixture_git(source_repository, "rev-parse", "HEAD^{commit}")
         seed = self.comparison_fixture_seed(source_repository)
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             repository = root / "repository"
             run_fixture_git(root, "clone", "--shared", "--no-checkout", str(seed), str(repository))
@@ -975,7 +984,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             "case_metrics": {"authority": "legacy_local", "cleanup_scope": "immediate_children_only"},
         }
         completed = self.module.subprocess.CompletedProcess([], 0, self.module.json.dumps(payload), "")
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             project = root / "project"
             project.mkdir()
@@ -995,7 +1004,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             sample_plugin=pathlib.Path("/fixture"),
             runs=1,
         )
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             project = root / "project"
             project.mkdir()
@@ -1006,7 +1015,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
                         self.module.run_process_helper(args, root, project, "supervisor_first_spawn_commit", [], [])
 
     def test_process_argument_validation_rejects_missing_and_nonexecuting_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             output = root / "out.json"
             stderr = io.StringIO()
@@ -1034,7 +1043,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
 
     def test_process_measured_source_root_validation_precedes_execution(self) -> None:
         repository = pathlib.Path(self.script).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             output = root / "out.json"
 
@@ -1068,7 +1077,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
 
     def test_process_default_source_root_retains_script_repository_identity(self) -> None:
         repository = pathlib.Path(self.script).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             args = self.module.build_parser().parse_args(
                 [
                     "--ava", sys.executable,
@@ -1129,7 +1138,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
 
     def test_process_explicit_measured_source_root_is_retained_in_exact_command_and_build_match(self) -> None:
         repository = pathlib.Path(self.script).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             output = root / "out.json"
             argv = [
@@ -1164,7 +1173,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
 
     def test_process_distinct_measured_worktrees_share_one_content_correct_harness(self) -> None:
         harness_repository = pathlib.Path(self.script).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             repository = root / "repository"
             repository.mkdir()
@@ -1267,7 +1276,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             self.assertNotIn("fixture_hashes", comparison.get("mismatches", []))
 
     def test_process_git_pathspec_family_scopes_capture_new_split_files(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             repository = pathlib.Path(temporary) / "repository"
             repository.mkdir()
 
@@ -1366,7 +1375,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
             )
 
     def test_process_force_removes_linked_worktree_with_initialized_submodule_without_deinit(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             root = pathlib.Path(temporary)
             submodule = root / "submodule"
             repository = root / "repository"
@@ -1549,7 +1558,7 @@ class BenchmarkHarnessTests(unittest.TestCase):
         self.assertNotIn(secret, self.module.json.dumps(comparison, sort_keys=True))
 
     def test_comparison_rejects_hostile_recorded_path_symlink_loops(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
+        with benchmark_temporary_directory() as temporary:
             secret = "CANARY_HOSTILE_RECORDED_PATH"
             loop = pathlib.Path(temporary) / secret
             loop.symlink_to(loop.name)
