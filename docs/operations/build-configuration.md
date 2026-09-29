@@ -32,6 +32,7 @@ Pass cache values at configure time, for example `cmake --preset dev -DAVA_ENABL
 
 | Option | Default | Effect |
 | --- | --- | --- |
+| `AVA_ENABLE_GITACHE` | `ON` | Fetches/enables gitache-managed developer dependencies. With it off, required dependency provisioning must already be available. |
 | `EnableAvaBuildTests` | Compatibility-derived | Canonical AICxx/cwds option that builds AVA tests. |
 | `AVA_BUILD_TESTS` | `ON` | Compatibility alias/default input for `EnableAvaBuildTests`. An explicitly supplied `EnableAvaBuildTests` wins. |
 | `EnableAvaSanitizers` | Compatibility-derived | Canonical AICxx/cwds option: AddressSanitizer plus UndefinedBehaviorSanitizer. |
