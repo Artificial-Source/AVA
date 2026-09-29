@@ -10,7 +10,6 @@
 #include "ava/config/provider_profiles.h"
 #include "ava/provider/catalog.h"
 #include "ava/core/result.h"
-#include "utils/print_pointer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -27,6 +26,10 @@
 #include <poll.h>
 #include <termios.h>
 #include <unistd.h>
+
+#ifdef CWDEBUG
+#include "utils/print_pointer.h"
+#endif
 
 namespace ava::app {
 namespace {
