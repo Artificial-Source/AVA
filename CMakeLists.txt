@@ -16,26 +16,21 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Begin of gitache configuration.
 
 include(FetchContent)
-option(AVA_ENABLE_GITACHE "Fetch and enable gitache-managed developer dependencies" ON)
-if(AVA_ENABLE_GITACHE)
-  # If a local gitache directory is present then use that rather than downloading one.
-  if (EXISTS ${CMAKE_CURRENT_LIST_DIR}/gitache/gateway.cmake)
-    # This will disable the use of the GIT_REPOSITORY/GIT_TAG below, and disable the
-    # FetchContent- download and update step. Instead, use the gitache submodule as-is.
-    set(FETCHCONTENT_SOURCE_DIR_GITACHE "${CMAKE_CURRENT_LIST_DIR}/gitache" CACHE INTERNAL "" FORCE)
-  endif ()
+# If a local gitache directory is present then use that rather than downloading one.
+if (EXISTS ${CMAKE_CURRENT_LIST_DIR}/gitache/gateway.cmake)
+  # This will disable the use of the GIT_REPOSITORY/GIT_TAG below, and disable the
+  # FetchContent- download and update step. Instead, use the gitache submodule as-is.
+  set(FETCHCONTENT_SOURCE_DIR_GITACHE "${CMAKE_CURRENT_LIST_DIR}/gitache" CACHE INTERNAL "" FORCE)
+endif ()
 
-  set(GITACHE_PACKAGES libcwd)  # List of requested packages.
+set(GITACHE_PACKAGES libcwd)  # List of requested packages.
 
-  FetchContent_Declare(
-    gitache
-    GIT_REPOSITORY "https://github.com/CarloWood/gitache.git"
-    GIT_TAG        "c5320544dfb15cbc444c3ae260dba382ceff1251"
-  )
-  FetchContent_MakeAvailable(gitache)
-else()
-  message(STATUS "gitache disabled by AVA_ENABLE_GITACHE=OFF")
-endif()
+FetchContent_Declare(
+  gitache
+  GIT_REPOSITORY "https://github.com/CarloWood/gitache.git"
+  GIT_TAG        "c5320544dfb15cbc444c3ae260dba382ceff1251"
+)
+FetchContent_MakeAvailable(gitache)
 # End of gitache configuration.
 
 #==============================================================================
