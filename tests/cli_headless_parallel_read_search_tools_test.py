@@ -191,6 +191,8 @@ def run_print_case(ava: pathlib.Path, provider_exe: pathlib.Path, root: pathlib.
         completed = subprocess.run(
             [
                 str(ava),
+                "--mode",
+                "plan",
                 "--print",
                 "--json",
                 "--allow",
@@ -218,10 +220,9 @@ def run_print_case(ava: pathlib.Path, provider_exe: pathlib.Path, root: pathlib.
         assert_provider_order(records, session_text)
         write_payload = payload_for_call(records, "tool_result", "call_write")
         require(write_payload is not None, "print run missing write tool_result")
-        write_blob = json.dumps(write_payload)
         require(
-            "permission" in write_blob or write_payload.get("status") in {"error", "denied"},
-            f"print write without grant was not denied: {write_payload}",
+            write_payload.get("status") == "error" and write_payload.get("category") == "permission_denied",
+            f"plan-mode print write was not permission-denied: {write_payload}",
         )
         post_payload = payload_for_call(records, "tool_result", "call_post_read")
         require(post_payload is not None, "print run missing post-mutation tool_result")
@@ -351,7 +352,8 @@ def main() -> int:
         run_print_case(ava, provider_exe, root)
         run_rpc_case(ava, provider_exe, root)
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(root)
+        require(not root.exists(), f"owned fixture root was not removed: {root}")
     return 0
 
 
