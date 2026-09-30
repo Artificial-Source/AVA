@@ -346,6 +346,12 @@ int Context::get_escdelay() const
   return ::get_escdelay();
 }
 
+std::string_view Context::keyname(int c) const
+{
+  char const* result = ::keyname(c);
+  return result ? result : "UNKNOWN KEY";
+}
+
 bool Context::flush_raw()
 {
   // Initialize the terminal or bind an external test screen's output before writing.

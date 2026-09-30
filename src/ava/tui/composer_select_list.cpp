@@ -602,55 +602,7 @@ SelectListInputResult handle_select_list_input(SelectListView const& view, Input
     case Key::AltArrowDown:
       result.action = SelectListInputAction::ModelsReorderDown;
       return result;
-    case Key::CtrlU:
-    case Key::CtrlV:
-    case Key::CtrlW:
-    case Key::CtrlY:
-    case Key::CtrlZ:
-    case Key::CtrlSpace:
-    case Key::CtrlSlash:
-    case Key::Ctrl0:
-    case Key::Ctrl1:
-    case Key::Ctrl2:
-    case Key::Ctrl3:
-    case Key::Ctrl4:
-    case Key::Ctrl5:
-    case Key::Ctrl6:
-    case Key::Ctrl7:
-    case Key::Ctrl8:
-    case Key::Ctrl9:
-    case Key::CtrlRightBracket:
-    case Key::CtrlO:
-    case Key::AltBackspace:
-    case Key::AltB:
-    case Key::AltD:
-    case Key::AltDelete:
-    case Key::AltF:
-    case Key::AltH:
-    case Key::AltJ:
-    case Key::AltK:
-    case Key::AltL:
-    case Key::AltW:
-    case Key::CtrlAltRightBracket:
-    case Key::AltY:
-    case Key::MouseLeftPress:
-    case Key::MouseLeftClick:
-    case Key::MouseLeftDrag:
-    case Key::MouseLeftRelease:
-    case Key::MousePointerCancel:
-    case Key::F1:
-    case Key::F2:
-    case Key::F3:
-    case Key::F4:
-    case Key::F5:
-    case Key::F6:
-    case Key::F7:
-    case Key::F8:
-    case Key::F9:
-    case Key::F10:
-    case Key::F11:
-    case Key::F12:
-    case Key::Unknown:
+    default: // Ignore all other values.
       break;
   }
   return result;

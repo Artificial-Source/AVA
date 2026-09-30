@@ -97,6 +97,7 @@ enum class Key
   CtrlO,
   CtrlP,
   CtrlShiftP,
+  CtrlQ,
   CtrlR,
   CtrlRightBracket,
   CtrlS,
@@ -131,7 +132,10 @@ enum class Key
   AltW,
   CtrlAltRightBracket,
   AltY,
-  Unknown
+  Unknown,
+  Resize,
+  Mouse,
+  WideCharacter
 };
 
 struct InputEvent

@@ -1528,6 +1528,8 @@ std::string key_display(Key key)
       return "Ctrl+P";
     case Key::CtrlShiftP:
       return "Shift+Ctrl+P";
+    case Key::CtrlQ:
+      return "Ctrl+Q";
     case Key::CtrlR:
       return "Ctrl+R";
     case Key::CtrlRightBracket:
@@ -1612,6 +1614,9 @@ std::string key_display(Key key)
       return "MousePointerCancel";
     case Key::Character:
     case Key::Unknown:
+    case Key::Resize:
+    case Key::Mouse:
+    case Key::WideCharacter:
       return "";
   }
   return "";

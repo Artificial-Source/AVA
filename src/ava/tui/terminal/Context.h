@@ -113,6 +113,8 @@ class Context final
   int flash();                                                          // flash
   // Return the ESC delay being used.
   int get_escdelay() const;                                             // get_escdelay
+  // Returns a character string corresponding to the key c.
+  std::string_view keyname(int c) const;                                // keyname
 
   // Flush output_file_ after a call to write_raw_sequence(..., false).
   bool flush_raw();
