@@ -602,7 +602,7 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   missing_server.command = missing_command;
   auto const missing_launch_identity = ava::mcp::session_mcp_launch_identity(missing_server, ava::core::normalized_absolute_path(nested));
   run_error_case("[{\"name\":\"missing\",\"command\":\"" + ava::core::json::escape(missing_command) + "\",\"args\":[],\"env\":[]}]",
-                 "MCP server closed before response",
+                 "process executable is unavailable or not executable",
                  {{ava::permissions::Operation::McpServerLaunch, missing_launch_identity}, {ava::permissions::Operation::McpServerConnect, "missing"}});
 
   std::error_code cleanup;
