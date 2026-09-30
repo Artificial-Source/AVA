@@ -425,7 +425,11 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
-  options.open_context.application_process_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  expect(application_scope.has_value(), "ACP MCP fixture admits test-owned application process authority");
+  if (!application_scope)
+    return;
+  options.open_context.application_process_scope = *application_scope;
   options.provider_bundle_factory = sequence_bundle_factory(transport_state, std::move(responses));
   AgentService service(options);
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });

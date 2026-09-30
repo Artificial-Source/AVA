@@ -586,7 +586,11 @@ void test_app_rpc_mcp_command_responses()
   open_context.workspace_dir = workspace;
   open_context.current_dir = workspace;
   open_context.paths = paths;
-  open_context.application_process_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  expect(application_scope.has_value(), "RPC MCP fixture admits test-owned application process authority");
+  if (!application_scope)
+    return;
+  open_context.application_process_scope = *application_scope;
   auto session = ava::app::runtime::Session::open(open_context);
   expect(session.has_value(), "RPC MCP command test opens runtime session");
   if (!session)
