@@ -66,13 +66,6 @@ ava::core::Error cleanup_error(std::string message)
   return ava::core::Error(ava::core::ErrorCategory::Io, std::move(message));
 }
 
-Clock::time_point mcp_lifetime_deadline(McpStdioClientOptions const& options) noexcept
-{
-  auto deadline = saturating_add(Clock::now(), options.startup_timeout);
-  deadline = saturating_add(deadline, options.request_timeout);
-  return saturating_add(deadline, kMcpCleanupBudget);
-}
-
 ava::core::Result<std::filesystem::path> absolute_working_directory(McpServerConfig const& server, McpStdioClientOptions const& options)
 {
   auto working_directory = child_working_dir(server, options);
@@ -306,9 +299,10 @@ ava::core::VoidResult McpStdioClient::launch(CancelCallback const& cancel_reques
   }
 
   auto& supervisor = operation_scope_.supervisor();
-  auto reservation =
-      supervisor.reserve(operation_scope_.owner_prefix(), ava::process::ProcessRoleV1::Mcp,
-                         {.termination_grace = kMcpTerminationGrace, .startup_timeout = remaining, .execution_deadline = mcp_lifetime_deadline(options_)});
+  // Protocol clients may perform multiple bounded requests (including pages).
+  // Their owner and request deadlines govern lifetime, not a one-request cap.
+  auto reservation = supervisor.reserve(operation_scope_.owner_prefix(), ava::process::ProcessRoleV1::Mcp,
+                                        {.termination_grace = kMcpTerminationGrace, .startup_timeout = remaining, .execution_deadline = std::nullopt});
   if (!reservation)
     return std::unexpected(std::move(reservation.error()));
 

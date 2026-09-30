@@ -9,6 +9,7 @@
 #include "ava/tools/tool_permission.h"
 #include "ava/mcp/config.h"
 #include "ava/mcp/stdio_client.h"
+#include "ava/mcp/stdio_client_support.h"
 #include "ava/mcp/tool_broker.h"
 #include "ava/core/error.h"
 #include "ava/core/ids.h"
@@ -55,6 +56,15 @@ std::string mcp_command_text(ava::mcp::McpServerConfig const& server, McpCommand
   for (auto const& arg : server.args)
     text += " " + render(arg);
   return text;
+}
+
+std::string mcp_launch_permission_command(ava::tools::ToolContext const& context, ava::mcp::McpServerConfig const& server, McpCommandTextMode mode)
+{
+  if (server.env.empty())
+    return mcp_command_text(server, mode);
+  ava::mcp::McpStdioClientOptions options;
+  options.workspace_dir = context.workspace_dir;
+  return ava::mcp::session_mcp_launch_identity(server, ava::mcp::child_working_dir(server, options));
 }
 
 std::string mcp_display_path(std::filesystem::path const& path, runtime::session_ts const& unlocked_session)
@@ -241,9 +251,9 @@ ava::core::Result<CommandResult> run_mcp_command(runtime::session_ts& unlocked_s
       return result;
     };
 
-    if (auto permission =
-            ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server->source_path,
-                                          mcp_command_text(*server, McpCommandTextMode::Sanitized), "mcp_tools", "MCP server launch requires permission");
+    if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server->source_path,
+                                                        mcp_launch_permission_command(context, *server, McpCommandTextMode::Sanitized), "mcp_tools",
+                                                        "MCP server launch requires permission");
         !permission)
     {
       return fail(permission.error());
@@ -325,7 +335,8 @@ ava::core::VoidResult ensure_mcp_prompt_permissions(ava::tools::ToolContext cons
                                                     CommandRegistryEntry const& entry)
 {
   if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server.source_path,
-                                                      mcp_command_text(server, McpCommandTextMode::Raw), "mcp_prompt", "MCP server launch requires permission");
+                                                      mcp_launch_permission_command(context, server, McpCommandTextMode::Raw), "mcp_prompt",
+                                                      "MCP server launch requires permission");
       !permission)
     return std::unexpected(std::move(permission.error()));
   if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerConnect, server.source_path, server.id, "mcp_prompt",
@@ -342,9 +353,9 @@ ava::core::VoidResult ensure_mcp_prompt_permissions(ava::tools::ToolContext cons
 
 ava::core::VoidResult ensure_mcp_prompt_server_permission(ava::tools::ToolContext const& context, ava::mcp::McpServerConfig const& server)
 {
-  if (auto permission =
-          ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server.source_path,
-                                        mcp_command_text(server, McpCommandTextMode::Raw), "mcp_prompts", "MCP server launch requires permission");
+  if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server.source_path,
+                                                      mcp_launch_permission_command(context, server, McpCommandTextMode::Raw), "mcp_prompts",
+                                                      "MCP server launch requires permission");
       !permission)
   {
     return std::unexpected(std::move(permission.error()));

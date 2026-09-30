@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -27,7 +28,7 @@ struct McpServerConfig
   McpServerScope scope = McpServerScope::Global;
   std::filesystem::path source_path;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct McpConfig
@@ -36,7 +37,7 @@ struct McpConfig
   std::filesystem::path global_config_file;
   std::filesystem::path project_config_file;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct McpConfigLoadOptions

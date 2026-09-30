@@ -11,6 +11,39 @@ $XDG_CONFIG_HOME/ava/mcp.json
 $WORKSPACE/.ava/mcp.json
 ```
 
+Each server may include an optional `env` **JSON object with string names and
+string values**:
+
+```json
+{
+  "servers": [
+    {
+      "id": "local-server",
+      "command": "/opt/mcp/server",
+      "args": ["--stdio"],
+      "env": {
+        "HOME": "/home/operator",
+        "PATH": "/opt/mcp/bin:/usr/bin:/bin",
+        "API_KEY": "explicitly-configured-value"
+      }
+    }
+  ]
+}
+```
+
+Omitted `env` and `{}` are equivalent. Values are literal: AVA does not merge
+ambient variables, expand `$HOME`, interpolate `${TOKEN}`, or read secrets from
+other files. Non-object `env`, non-string values, duplicate fields/keys (including
+JSON-escaped aliases), empty names, `=` or NUL in names, NUL in values, and `PWD`
+overrides fail closed. `PATH`, when explicit, must have only nonempty absolute
+colon-separated components. Names are limited to 128 bytes, values to 16 KiB,
+and explicit env to 64 entries. The complete environment encoding (each name,
+`=`, value, and trailing NUL) is limited to 1 MiB and is revalidated at launch
+with process-computed `PWD` for the actual child cwd. The existing 256-KiB
+config-file limit applies first and is stricter than that aggregate env limit.
+Errors identify the config/server/field where available without echoing env
+values; generated config debug printing is disabled.
+
 Use `/mcp list` and `/mcp inspect <server_id>` to inspect loaded servers. Use `/trust status` to see whether project MCP config is active.
 
 ## Supported MVP Surface
@@ -24,15 +57,17 @@ Use `/mcp list` and `/mcp inspect <server_id>` to inspect loaded servers. Use `/
 
 ## Process lifecycle and environment
 
-Each stdio MCP start is a one-shot supervised operation: AVA derives an operation owner from the admitted session/run process scope, reserves an `Mcp` Supervisor record, and launches through common `spawn`. There is no persistent MCP daemon or process cache. `/mcp tools`, prompt listing, and tool/resource calls all start a fresh child and shut it down after the bounded protocol exchange. Missing process authority fails before fork.
+Each stdio MCP start is a one-shot supervised operation: AVA derives an operation owner from the admitted session/run process scope, reserves an `Mcp` Supervisor record, and launches through common `spawn`. There is no persistent MCP daemon or process cache. `/mcp tools`, prompt listing, and tool/resource calls all start a fresh child and shut it down after the bounded protocol exchange. Missing process authority fails before fork. Absolute startup and independent per-request deadlines remain bounded; pagination and subsequent valid client requests are not cut off by an artificial one-request total lifetime. Owner shutdown and bounded client cleanup still settle the child.
 
-Child environment is the closed `ava-mcp-explicit-v1` profile: process-computed `PWD`, at most 64 explicit `env` pairs from MCP config, and the trusted `PATH` (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) when config omits `PATH`. Nothing is inherited from the host, including `HOME`, provider credentials, proxy/CA variables, and arbitrary `AVA_*` names. Config JSON syntax is unchanged; secrets and user-specific values such as `HOME` or API keys must be listed under the server's explicit `env`. Duplicate names, `PWD` overrides, and non-absolute `PATH` components are rejected by the process environment policy. Supervisor settlement covers the managed group, including a descendant that outlives a naturally exiting leader.
+Child environment is the closed `ava-mcp-explicit-v1` profile: process-computed `PWD`, at most 64 explicit `env` pairs from MCP config, and the trusted `PATH` (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) when config omits `PATH`. Nothing is inherited from the host, including `HOME`, provider credentials, proxy/CA variables, and arbitrary `AVA_*` names. For both file configs and session/adapter configurations, this intentionally removes the previous ambient host inheritance; secrets and user-specific values such as `HOME` or API keys must be listed under the server's explicit `env`. Duplicate names, `PWD` overrides, and non-absolute `PATH` components are rejected by the process environment policy. Supervisor settlement covers the managed group, including a descendant that outlives a naturally exiting leader.
 
 ## Safety Rules
 
 - Project MCP config cannot run until project trust is granted.
 - Global MCP config cannot point at workspace-relative executable/script paths and does not run with the workspace as process CWD; move project-local server code to project MCP config and trust the workspace.
 - Launching and connecting to a server are permissioned operations.
+- Nonempty explicit env uses the same content-free composition token for broker tool/resource discovery/calls and direct tools/prompt listing/get launch consent. It covers argv boundaries, sorted explicit env, logical child cwd, and clean-environment mode; ordinary env changes do not reuse an exact previous token grant. No-env launch identities/defaults remain compatible. Env values are not included in permission/audit output.
+- The composition token uses the existing noncryptographic FNV-1a fingerprint. It is change detection, **not collision-resistant authorization or secret encryption**: deliberately colliding configurations (or guesses of low-entropy secrets) are not protected. Strong adversarial exact-composition authorization needs a separately reviewed identity contract; do not treat this token as a cryptographic trust boundary. Broad existing MCP grants still have their existing policy semantics.
 - Tool calls are permissioned even when the MCP schema looks read-only.
 - Resources are not silently injected into prompts; the model must request the opaque resource tool and pass the `mcp.resource.read` gate.
 - Resource reads are text-only in the MVP slice; blob-only or missing text content fails closed.

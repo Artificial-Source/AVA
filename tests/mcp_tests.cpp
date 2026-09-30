@@ -7,7 +7,10 @@
 #include "ava/process/environment.h"
 #include "ava/process/scope.h"
 #include "ava/process/supervisor.h"
+#include "ava/app/command_mcp.h"
 #include "ava/app/headless_policy.h"
+#include "ava/app/runtime/OpenContext.h"
+#include "ava/app/runtime/Session.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/tools/file_tools.h"
 #include "ava/tools/tool_permission.h"
@@ -49,6 +52,11 @@ static_assert(
 static_assert(
     !std::is_invocable_v<McpDescriptorExecutor, ava::tools::ToolContext const&, ava::agent::ToolDispatchServices const&, ava::tools::ProviderToolCall const&>);
 
+template <typename T>
+concept HasGeneratedMcpDebugMembers = requires(T const& value, std::ostream& output) { value.print_members(output, ""); };
+static_assert(!HasGeneratedMcpDebugMembers<ava::mcp::McpServerConfig>);
+static_assert(!HasGeneratedMcpDebugMembers<ava::mcp::McpConfig>);
+
 void write_text(std::filesystem::path const& path, std::string const& text)
 {
   std::filesystem::create_directories(path.parent_path());
@@ -89,10 +97,10 @@ bool wait_for_process_group_exit(pid_t pgid)
   return !ava::test::process_group_has_live_member(pgid);
 }
 
-std::string mcp_config_json(std::string id, std::string command, bool enabled = true, std::string args_json = "[]")
+std::string mcp_config_json(std::string id, std::string command, bool enabled = true, std::string args_json = "[]", std::string env_json = "{}")
 {
   return std::string("{\"servers\":[{\"id\":\"") + ava::core::json::escape(id) + "\",\"name\":\"Demo MCP\",\"command\":\"" + ava::core::json::escape(command) +
-         "\",\"args\":" + args_json + ",\"enabled\":" + (enabled ? "true" : "false") + "}]}";
+         "\",\"args\":" + args_json + ",\"env\":" + env_json + ",\"enabled\":" + (enabled ? "true" : "false") + "}]}";
 }
 
 ava::mcp::McpServerConfig fake_server_config(std::filesystem::path const& root)
@@ -199,16 +207,6 @@ void write_executable_script(std::filesystem::path const& path, std::string cons
                                std::filesystem::perm_options::replace);
 }
 
-bool process_is_live_for_test(std::string_view identity)
-{
-#if defined(__linux__)
-  return !identity.empty() && std::filesystem::exists(std::filesystem::path("/proc") / std::string(identity));
-#else
-  static_cast<void>(identity);
-  return true;
-#endif
-}
-
 bool wait_for_process_absent(std::string_view identity)
 {
 #if defined(__linux__)
@@ -261,7 +259,7 @@ void test_mcp_config_parsing()
   auto global = ava::mcp::parse_mcp_config("{\"servers\":[{\"id\":\"demo\",\"command\":\"/bin/demo\",\"args\":[\"--stdio\"]}]}", "/tmp/global-mcp.json",
                                            ava::mcp::McpServerScope::Global);
   expect(global && global->servers.size() == 1 && global->servers[0].enabled && global->servers[0].args.size() == 1 &&
-             global->servers[0].scope == ava::mcp::McpServerScope::Global,
+             global->servers[0].scope == ava::mcp::McpServerScope::Global && global->servers[0].env.empty(),
          global ? "MCP config parses global server defaults" : "MCP config parses global server defaults: " + global.error().format());
 
   auto project = ava::mcp::parse_mcp_config("{\"servers\":[{\"id\":\"demo-project\",\"command\":\"/bin/demo\"}]}", "/tmp/project-mcp.json",
@@ -296,6 +294,89 @@ void test_mcp_config_parsing()
   expect(!duplicate && duplicate.error().message().find("duplicate") != std::string::npos, "MCP config rejects duplicate server ids across scopes");
 }
 
+void test_mcp_config_explicit_environment()
+{
+  auto parse_env = [](std::string const& env) {
+    return ava::mcp::parse_mcp_config(mcp_config_json("demo", "/bin/demo", true, "[]", env), "/tmp/env-mcp.json", ava::mcp::McpServerScope::Global);
+  };
+  auto valid = parse_env(R"({"API_KEY":"CANARY_ENV_SECRET_f4","EMPTY":"","TEXT":"literal $HOME ${TOKEN}\n\u2603","PATH":"/one:/two"})");
+  expect(valid && valid->servers[0].env ==
+                      std::vector<std::pair<std::string, std::string>>{
+                          {"API_KEY", "CANARY_ENV_SECRET_f4"}, {"EMPTY", ""}, {"PATH", "/one:/two"}, {"TEXT", "literal $HOME ${TOKEN}\n\xE2\x98\x83"}},
+         "MCP config retains string env values, escapes, empty strings, and literal non-expanded substitutions");
+  expect(parse_env("{}").has_value(), "MCP empty env remains compatible");
+  auto escaped_field = ava::mcp::parse_mcp_config(R"({"servers":[{"id":"demo","command":"demo","\u0065nv":{"TOKEN":"literal"}}]})", "/tmp/env-mcp.json",
+                                                  ava::mcp::McpServerScope::Global);
+  expect(escaped_field && escaped_field->servers[0].env == std::vector<std::pair<std::string, std::string>>{{"TOKEN", "literal"}},
+         "MCP env field names are decoded as JSON rather than silently ignored");
+  for (auto const& env : std::vector<std::string>{"null",
+                                                  "[]",
+                                                  "false",
+                                                  "42",
+                                                  R"("CANARY_ENV_SECRET_f4")",
+                                                  R"({"TOKEN":false})",
+                                                  R"({"TOKEN":null})",
+                                                  R"({"TOKEN":{}})",
+                                                  R"({"TOKEN":[]})",
+                                                  R"({"TOKEN":1})",
+                                                  R"({"TOKEN":"one","TOKEN":"CANARY_ENV_SECRET_f4"})",
+                                                  R"({"TOKEN":"one","\u0054OKEN":"CANARY_ENV_SECRET_f4"})",
+                                                  R"({"":"CANARY_ENV_SECRET_f4"})",
+                                                  R"({"BAD=NAME":"CANARY_ENV_SECRET_f4"})",
+                                                  R"({"BAD\u0000NAME":"CANARY_ENV_SECRET_f4"})",
+                                                  R"({"TOKEN":"CANARY_ENV_SECRET_f4\u0000"})",
+                                                  R"({"PWD":"CANARY_ENV_SECRET_f4"})",
+                                                  R"({"PATH":"relative"})",
+                                                  R"({"PATH":"/one:"})",
+                                                  R"({"PATH":":/one"})",
+                                                  R"({"PATH":"/one::/two"})",
+                                                  R"({"PATH":"/one:relative"})"})
+  {
+    auto rejected = parse_env(env);
+    auto const diagnostic = rejected ? std::string{} : rejected.error().format();
+    expect(!rejected && diagnostic.find("env-mcp.json") != std::string::npos && diagnostic.find("demo") != std::string::npos &&
+               diagnostic.find("env") != std::string::npos && diagnostic.find("CANARY_ENV_SECRET_f4") == std::string::npos,
+           "MCP invalid env fails closed with config/server/field context and no value disclosure");
+  }
+  for (auto const& fields : {R"("env":{},"env":{"TOKEN":"CANARY_ENV_SECRET_f4"})", R"("env":{},"\u0065nv":{"TOKEN":"CANARY_ENV_SECRET_f4"})"})
+  {
+    auto duplicate = ava::mcp::parse_mcp_config(std::string(R"({"servers":[{"id":"demo","command":"demo",)") + fields + "}]}", "/tmp/env-mcp.json",
+                                                ava::mcp::McpServerScope::Global);
+    expect(!duplicate && duplicate.error().format().find("CANARY_ENV_SECRET_f4") == std::string::npos,
+           "MCP config rejects duplicate env fields including decoded aliases without echoing secrets");
+  }
+  auto malformed = ava::mcp::parse_mcp_config(R"({"servers":[{"id":"demo","command":"demo","env":{"TOKEN":"CANARY_ENV_SECRET_f4",}}]})", "/tmp/env-mcp.json",
+                                              ava::mcp::McpServerScope::Global);
+  expect(!malformed && malformed.error().format().find("CANARY_ENV_SECRET_f4") == std::string::npos, "MCP malformed env JSON is secret-free");
+
+  auto pair_json = [](std::string const& name, std::string const& value) {
+    return "{\"" + ava::core::json::escape(name) + "\":\"" + ava::core::json::escape(value) + "\"}";
+  };
+  expect(parse_env(pair_json(std::string(ava::process::kMaxEnvironmentNameBytesV1, 'N'), "v")).has_value() &&
+             !parse_env(pair_json(std::string(ava::process::kMaxEnvironmentNameBytesV1 + 1, 'N'), "v")),
+         "MCP config applies the shared 128-byte env name bound");
+  expect(parse_env(pair_json("TOKEN", std::string(ava::process::kMaxEnvironmentValueBytesV1, 'v'))).has_value() &&
+             !parse_env(pair_json("TOKEN", std::string(ava::process::kMaxEnvironmentValueBytesV1 + 1, 'v'))),
+         "MCP config applies the shared 16-KiB env value bound");
+  std::string entries = "{";
+  for (std::size_t index = 0; index < ava::process::kMaxMcpExplicitEnvironmentEntriesV1; ++index)
+  {
+    if (index > 0)
+      entries += ',';
+    entries += "\"N" + std::to_string(index) + "\":\"v\"";
+  }
+  expect(parse_env(entries + "}").has_value() && !parse_env(entries + ",\"OVER\":\"v\"}"), "MCP config accepts 64 env entries and rejects 65");
+  // The 256-KiB file bound is stricter than the process's 1-MiB encoding bound.
+  std::string aggregate = "{";
+  for (std::size_t index = 0; index < 64; ++index)
+  {
+    if (index > 0)
+      aggregate += ',';
+    aggregate += "\"N" + std::to_string(index) + "\":\"" + std::string(ava::process::kMaxEnvironmentValueBytesV1, 'v') + "\"";
+  }
+  expect(!parse_env(aggregate + "}"), "MCP file aggregate env over the byte budget fails closed before launch");
+}
+
 void test_session_mcp_launch_identity_is_logical_and_exact()
 {
   auto const root = create_empty_root("mcp-session-launch-identity");
@@ -323,11 +404,16 @@ void test_session_mcp_launch_identity_is_logical_and_exact()
   auto const reordered_identity = ava::mcp::session_mcp_launch_identity(reordered, logical_cwd);
   auto const changed_env_identity = ava::mcp::session_mcp_launch_identity(changed_env, logical_cwd);
   auto const changed_argv_identity = ava::mcp::session_mcp_launch_identity(changed_argv_boundary, logical_cwd);
-  auto const expected_identity =
-      std::string(R"({"argv":["/usr/bin/demo","alpha beta"],"env":[{"name":"A_VALUE","value":"one"},{"name":"Z_VALUE","value":"two"}],"cwd":")") +
-      ava::core::json::escape(logical_cwd.string()) + R"(","clean_environment":true})";
-  expect(identity == expected_identity && identity == reordered_identity && identity != changed_env_identity && identity != changed_argv_identity,
-         "session MCP launch identity binds argv boundaries, sorted explicit env values, logical cwd spelling, and clean environment");
+  expect(identity.starts_with("mcp-composition-v1:") && identity == reordered_identity && identity != changed_env_identity &&
+             identity != changed_argv_identity && identity.find("A_VALUE") == std::string::npos && identity.find("one") == std::string::npos,
+         "MCP nonempty-env composition token detects ordinary argv/env changes without exposing env content");
+  auto no_env = authorized;
+  no_env.env.clear();
+  auto const expected_no_env = std::string(R"({"argv":["/usr/bin/demo","alpha beta"],"env":[],"cwd":")") + ava::core::json::escape(logical_cwd.string()) +
+                               R"(","clean_environment":true})";
+  expect(ava::mcp::session_mcp_launch_identity(no_env, logical_cwd) == expected_no_env, "existing no-env session launch grants retain their identity");
+  auto changed_cwd = ava::mcp::session_mcp_launch_identity(authorized, root);
+  expect(identity != changed_cwd, "MCP env composition token also detects changed logical cwd");
 
   auto anchors = ava::core::AnchorSet::open({root});
   expect(anchors.has_value(), "persistent session MCP launch test opens its shared logical-root anchor");
@@ -1312,6 +1398,146 @@ void test_mcp_ordinary_global_and_project_environment_is_explicit()
   std::filesystem::remove_all(root, remove_error);
 }
 
+void test_mcp_file_environment_launch_and_consent()
+{
+  auto const root = create_empty_root("mcp-file-env-consent");
+  auto const workspace = root / "workspace";
+  auto const marker = root / "environment.txt";
+  auto const paths = ava::tests::app_test_paths(root);
+  std::filesystem::create_directories(workspace);
+  ScopedEnvVar const home("HOME", (root / "home").string());
+  ScopedEnvVar const config_home("XDG_CONFIG_HOME", paths.config_home.string());
+  ScopedEnvVar const parent_secret("AVA_MCP_PARENT_SECRET", "ambient-canary-f4");
+  ScopedEnvVar const parent_marker("AVA_MCP_PARENT_MARKER", "ambient-marker-f4");
+  auto authority = make_mcp_test_authority();
+  if (!authority)
+    return;
+  auto const config_file = paths.ava_config_dir / "mcp.json";
+  auto const secret = std::string("CANARY_EXPLICIT_SECRET_f4");
+  auto const args = "[\"env-marker\",\"" + ava::core::json::escape(marker.string()) + "\"]";
+  auto const env = "{\"AVA_MCP_EXPLICIT\":\"file-value\",\"API_KEY\":\"" + secret + "\",\"PATH\":\"/bounded/file/path\"}";
+  write_text(config_file, mcp_config_json("demo", AVA_FAKE_MCP_SERVER_PATH, true, args, env));
+  auto loaded = ava::mcp::load_mcp_config({.workspace_dir = workspace, .global_config_file = config_file, .project_config_file = {}});
+  expect(loaded && loaded->servers.size() == 1 && loaded->servers[0].env.size() == 3, "explicit env survives MCP file config load");
+  if (!loaded || loaded->servers.size() != 1)
+    return;
+  auto client = ava::mcp::McpStdioClient::start(loaded->servers[0], fake_client_options(workspace, authority->run));
+  expect(client.has_value(), "loaded MCP file env starts a real fake child");
+  if (client)
+  {
+    expect((*client)->shutdown().has_value(), "loaded MCP file env child settles");
+    auto const text = read_text(marker);
+    expect(text.find("EXPLICIT=file-value") != std::string::npos && text.find("PATH=/bounded/file/path") != std::string::npos &&
+               text.find("INHERITED=<unset>") != std::string::npos && text.find("SECRET=<unset>") != std::string::npos,
+           "file-config env reaches the actual child without ambient host credentials or markers");
+  }
+
+  auto const expected_identity = ava::mcp::session_mcp_launch_identity(loaded->servers[0], paths.ava_config_dir);
+  std::vector<ava::permissions::PermissionPrompt> prompts;
+  std::vector<ava::tools::PermissionAuditEvent> audits;
+  auto resolver = [&prompts](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    prompts.push_back(prompt);
+    return ava::permissions::PermissionResolution::Allow;
+  };
+  ava::tools::ToolContext context;
+  context.workspace_dir = workspace;
+  context.mcp_global_config_file = config_file;
+  context.include_project_mcp_config = false;
+  context.process_scope = authority->run;
+  context.permission_resolver = resolver;
+  context.permission_audit_sink = [&audits](ava::tools::PermissionAuditEvent const& event) -> ava::core::VoidResult {
+    audits.push_back(event);
+    return {};
+  };
+  auto dispatcher = ava::agent::ToolDispatcher::create_strict(context);
+  expect(dispatcher.has_value(), "file-config env broker discovers tools and resources");
+  if (dispatcher)
+  {
+    auto called = dispatcher->dispatch({.id = "call_file_env", .name = ava::mcp::mcp_model_tool_name("demo", "echo"), .arguments_json = "{}"});
+    expect(called && called->success, "file-config env broker calls a tool with the same composition identity");
+  }
+  ava::app::runtime::OpenContext options;
+  options.workspace_dir = workspace;
+  options.current_dir = workspace;
+  options.paths = paths;
+  options.offline = true;
+  options.application_process_scope = authority->application;
+  auto session = ava::app::runtime::Session::open(options);
+  expect(session.has_value(), "file env consent test opens an isolated runtime session with process authority");
+  if (session)
+  {
+    auto tools = ava::app::run_mcp_command(*session, {.command = "/mcp tools demo", .permission_resolver = resolver});
+    expect(tools && tools->handled, "direct MCP tools uses loaded file env");
+    auto registry = ava::app::load_command_registry(*session, {.include_prompt_commands = false,
+                                                               .include_skills = false,
+                                                               .include_plugin_commands = false,
+                                                               .include_mcp_prompts = true,
+                                                               .permission_resolver = resolver});
+    auto const* entry = ava::app::find_command_registry_entry(registry, "/mcp:demo:release-notes");
+    expect(entry != nullptr, "direct MCP prompt listing uses loaded file env");
+    if (entry)
+    {
+      auto prompt = ava::app::mcp_prompt_message(*session, {.command = entry->command, .permission_resolver = resolver}, *entry, "topic");
+      expect(prompt && prompt->find("MCP prompt for topic") != std::string::npos, "direct MCP prompt get uses loaded file env");
+    }
+  }
+  for (auto const& tool : {"mcp_discovery", "mcp_resource_discovery", "mcp_demo_echo", "mcp_tools", "mcp_prompts", "mcp_prompt"})
+  {
+    expect(std::ranges::any_of(prompts,
+                               [&](auto const& prompt) {
+                                 return prompt.operation == ava::permissions::Operation::McpServerLaunch && prompt.tool_name == tool &&
+                                        prompt.command == expected_identity;
+                               }),
+           std::string("same file env composition identity is used for ") + tool);
+  }
+  expect(
+      std::ranges::all_of(
+          prompts, [&](auto const& prompt) { return prompt.command.find(secret) == std::string::npos && prompt.reason.find(secret) == std::string::npos; }) &&
+          std::ranges::all_of(audits, [&](auto const& event) { return ava::tools::permission_audit_data_json(event).find(secret) == std::string::npos; }),
+      "human permission inputs and serialized broker audits contain no raw explicit env secret");
+  auto changed = loaded->servers[0];
+  changed.env[0].second += "-changed";
+  expect(expected_identity != ava::mcp::session_mcp_launch_identity(changed, paths.ava_config_dir), "file env edits change the consent composition token");
+  finish_mcp_supervisor(*authority);
+}
+
+void test_mcp_reused_client_outlives_one_request_budget()
+{
+  auto const root = create_empty_root("mcp-reused-client-deadline");
+  auto authority = make_mcp_test_authority();
+  if (!authority)
+    return;
+  auto server = fake_server_config(root);
+  auto const events = root / "events.log";
+  server.env = {{"AVA_FAKE_MCP_EVENT_LOG", events.string()}};
+  auto options = fake_client_options(root, authority->run);
+  options.startup_timeout = std::chrono::seconds(1);
+  options.request_timeout = std::chrono::seconds(1);
+  auto client = ava::mcp::McpStdioClient::start(server, options);
+  expect(client.has_value(), "healthy reused MCP client starts under explicit process authority");
+  if (client)
+  {
+    auto first = (*client)->list_tools();
+    expect(first && !first->empty(), "healthy reused MCP client completes its first bounded request");
+    // Reserve occurred before start returned. Passing this later cutoff also
+    // passes the removed startup + one request + cleanup execution budget.
+    auto const past_old_cutoff =
+        std::chrono::steady_clock::now() + options.startup_timeout + options.request_timeout + std::chrono::seconds(2) + std::chrono::milliseconds(200);
+    std::this_thread::sleep_until(past_old_cutoff);
+    auto second = (*client)->list_tools();
+    expect(second && !second->empty(), "healthy reused MCP client can issue a fresh bounded request after the old artificial lifetime cutoff");
+    auto const event_log = read_text(events);
+    expect(ava::tests::count_substrings(event_log, "launch") == 1 && ava::tests::count_substrings(event_log, "tools/list") == 2,
+           "fake markers confirm two requests reached the same healthy MCP child, with no restart");
+    auto shutdown = (*client)->shutdown();
+    expect(shutdown.has_value(), "reused MCP client shuts down within its normal bounded cleanup deadline");
+  }
+  auto const records = mcp_records(*authority->supervisor);
+  expect(records.size() == 1 && mcp_completely_settled(records.front()) && records.front().reason != ava::process::TerminationReasonV1::DeadlineExpired,
+         "healthy reused MCP child settles once without an artificial lifetime deadline");
+  finish_mcp_supervisor(*authority);
+}
+
 void test_mcp_stdio_environment_validation()
 {
   auto const root = create_empty_root("mcp-environment-validation");
@@ -1562,6 +1788,7 @@ void test_mcp_supervisor_lifecycle()
 void run_mcp_tests()
 {
   test_mcp_config_parsing();
+  test_mcp_config_explicit_environment();
   test_session_mcp_launch_identity_is_logical_and_exact();
   test_mcp_protocol_parsing();
   test_mcp_permission_audit_golden_shape();
@@ -1573,6 +1800,8 @@ void run_mcp_tests()
   test_mcp_strict_session_registry_failures_and_nested_cwd();
   test_mcp_session_environment_is_clean();
   test_mcp_ordinary_global_and_project_environment_is_explicit();
+  test_mcp_file_environment_launch_and_consent();
+  test_mcp_reused_client_outlives_one_request_budget();
   test_mcp_stdio_environment_validation();
   test_mcp_supervisor_lifecycle();
 }

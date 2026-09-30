@@ -129,7 +129,7 @@ McpStdioClientOptions client_options_for_context(ava::tools::ToolContext const& 
 
 std::string launch_permission_command(ava::tools::ToolContext const& context, McpServerConfig const& server)
 {
-  if (!context.session_mcp_config)
+  if (!context.session_mcp_config && server.env.empty())
     return command_text(server);
   auto const options = client_options_for_context(context);
   return session_mcp_launch_identity(server, child_working_dir(server, options));
@@ -490,6 +490,11 @@ std::string session_mcp_launch_identity(McpServerConfig const& server, std::file
         "{\"name\":\"" + ava::core::json::escape(environment[index].first) + "\",\"value\":\"" + ava::core::json::escape(environment[index].second) + "\"}";
   }
   identity += "],\"cwd\":\"" + ava::core::json::escape(canonical_child_cwd.string()) + "\",\"clean_environment\":true}";
+  // Preserve existing no-env session grants. Explicit env must never reach
+  // permission prompts/audits as plaintext. This is a composition change token,
+  // not a cryptographic commitment or protection against chosen collisions.
+  if (!environment.empty())
+    return "mcp-composition-v1:" + fnv1a64_hex(identity);
   return identity;
 }
 

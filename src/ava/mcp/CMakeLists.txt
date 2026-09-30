@@ -19,6 +19,7 @@ target_link_libraries(ava_mcp
     AVA::tools
   PRIVATE
     AVA::diagnostics
+    nlohmann_json::nlohmann_json
 )
 
 ava_apply_debugging(ava_mcp)
