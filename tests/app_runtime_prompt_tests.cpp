@@ -1955,6 +1955,8 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
       return {};
     }
 
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
    private:
     std::shared_ptr<std::vector<std::string>> log_;
     std::shared_ptr<std::mutex> mutex_;

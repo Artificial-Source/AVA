@@ -80,6 +80,8 @@ struct ChildSchedulingEvent
   std::string file_name = {};
   std::thread::id thread = {};
   std::uint64_t order = 0;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 class ChildSchedulingWitness
@@ -122,6 +124,8 @@ class ChildSchedulingWitness
     return events_;
   }
 
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
  private:
   mutable std::mutex mutex_;
   std::vector<ChildSchedulingEvent> events_;
@@ -134,6 +138,8 @@ class ChildSchedulingObserver final : public ava::observability::RunObserver
   explicit ChildSchedulingObserver(std::shared_ptr<ChildSchedulingWitness> witness) : witness_(std::move(witness)) { }
 
   void on_event(ava::observability::TraceEvent const& event) override { witness_->record_trace(event); }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::shared_ptr<ChildSchedulingWitness> witness_;
@@ -162,6 +168,8 @@ class ChildSchedulingExactFileAccess final : public ava::tools::ExactFileAccess
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "child scheduling fixture is read-only"));
   }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::shared_ptr<ChildSchedulingWitness> witness_;
