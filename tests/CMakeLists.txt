@@ -805,6 +805,15 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.fake_provider_owner PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
+    NAME ava_cli.headless_parallel_read_search_tools
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_parallel_read_search_tools_test.py
+            --ava $<TARGET_FILE:ava>
+            --fake-provider $<TARGET_FILE:ava_fake_provider_server>
+            --source ${CMAKE_SOURCE_DIR})
+  set_tests_properties(ava_cli.headless_parallel_read_search_tools PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
     NAME ava_tests.startup_overview_close_wait
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/startup_overview_close_wait_test.py)

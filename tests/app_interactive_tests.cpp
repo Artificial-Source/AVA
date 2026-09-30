@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/test_harness.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/commands.h"
 #include "ava/app/interactive_internal.h"
 #include "ava/app/project_trust.h"
@@ -11,6 +12,7 @@
 #include "ava/core/json.h"
 
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,6 +32,10 @@ ava::app::runtime::session_ts open_test_session(std::filesystem::path const& roo
   options.workspace_dir = workspace;
   options.current_dir = workspace;
   options.paths = paths;
+  auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  expect(application_scope.has_value(), "interactive command fixture owns application process authority");
+  if (application_scope)
+    options.application_process_scope = std::move(*application_scope);
   auto unlocked_session_result = ava::app::runtime::Session::open(options);
   expect(unlocked_session_result.has_value(), "interactive command test opens runtime session");
   return std::move(*unlocked_session_result);
