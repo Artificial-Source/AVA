@@ -163,6 +163,10 @@ void emit_family(std::string_view benchmark_case, double elapsed, bool protocol_
   if (options.benchmark_case == "family-plugin-lifecycle")
     return false;
 #endif
+#if defined(AVA_BENCHMARK_MCP_AUTHORITY_SUPERVISED)
+  if (options.benchmark_case == "family-mcp-lifecycle")
+    return false;
+#endif
   emit_helper_unsupported(options.benchmark_case, "lifecycle_ns", "ns", "caller_not_migrated", kCallerNotMigratedReason, family_case_metrics(authority));
   return true;
 }
