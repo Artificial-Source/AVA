@@ -702,7 +702,6 @@ add_test(
           -DAVA_PYTHON=${Python3_EXECUTABLE}
           -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
           -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-e2e-model-smoke
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_e2e_model_smoke.cmake)
 set_tests_properties(ava_cli.headless_e2e_model_smoke PROPERTIES TIMEOUT 60)
 
