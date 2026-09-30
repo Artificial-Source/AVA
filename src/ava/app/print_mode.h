@@ -5,6 +5,7 @@
 #include "ava/provider/provider.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <functional>
 #include <iosfwd>
 #include <optional>
@@ -45,6 +46,8 @@ struct PrintModeOptions
   bool read_stdin = false;
   PrintOutputFormat output_format = PrintOutputFormat::Text;
   HeadlessPermissionPolicyOptions permission_policy;
+  bool parallel_read_search_tools = false;
+  std::size_t parallel_read_search_max_workers = 4;
   std::optional<std::reference_wrapper<ava::provider::Provider const>> provider_override;
   std::optional<std::reference_wrapper<ava::http::Transport>> transport_override;
 

@@ -3,6 +3,7 @@
 #include "ava/agent/mode.h"
 
 #include <cctype>
+#include <cstddef>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -25,14 +26,22 @@ bool is_cli_option(std::string_view arg)
   return arg == "--help" || arg == "-h" || arg == "--version" || arg == "--mode" || arg == "--session" || arg == "--session-id" || arg == "--continue" ||
          arg == "--resume" || arg == "-c" || arg == "-r" || arg == "--fork" || arg == "--name" || arg == "-n" || arg == "--session-dir" || arg == "--cwd" ||
          arg == "--no-session" || arg == "--offline" || arg == "--trace" || arg == "--thinking" || arg == "--agent" || arg == "--system-prompt" ||
-         arg == "--append-system-prompt" || arg == "--print" || arg == "-p" || arg == "--rpc" || arg == "--acp" || arg == "--json" ||
-         arg == "--output" || arg == "--allow" || arg == "--allow-tool" || arg == "--tools" || arg == "-t" || arg == "--exclude-tools" || arg == "-xt" ||
-         arg == "--no-builtin-tools" || arg == "-nbt" || arg == "--no-tools" || arg == "-nt";
+         arg == "--append-system-prompt" || arg == "--print" || arg == "-p" || arg == "--rpc" || arg == "--acp" || arg == "--json" || arg == "--output" ||
+         arg == "--allow" || arg == "--allow-tool" || arg == "--tools" || arg == "-t" || arg == "--exclude-tools" || arg == "-xt" ||
+         arg == "--no-builtin-tools" || arg == "-nbt" || arg == "--no-tools" || arg == "-nt" || arg == "--parallel-read-search-tools" ||
+         arg == "--parallel-read-search-max-workers";
 }
 
 bool is_cli_file_argument(std::string_view arg)
 {
   return arg.size() > 1 && arg.front() == '@';
+}
+
+std::optional<std::size_t> parse_parallel_read_search_max_workers(std::string_view text)
+{
+  if (text.size() != 1 || text.front() < '1' || text.front() > '4')
+    return std::nullopt;
+  return static_cast<std::size_t>(text.front() - '0');
 }
 
 std::string prompt_reference_for_cli_file_argument(std::string_view path)
@@ -198,13 +207,21 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
   bool rpc_mode = false;
   bool print_output_flag_seen = false;
   bool print_permission_flag_seen = false;
+  bool parallel_tools_flag_seen = false;
+  bool parallel_max_workers_flag_seen = false;
   std::vector<std::string> file_arguments;
+
+  auto reject_parallel_outside_runtime = [&]() -> ImmediateInvocation {
+    return program_error(argv[0], 2, "--parallel-read-search-tools is only supported with --print or --rpc");
+  };
 
   for (int index = 1; index < argc; ++index)
   {
     std::string_view const arg(argv[index]);
     if (arg == "connect" || arg == "login")
     {
+      if (parallel_tools_flag_seen || parallel_max_workers_flag_seen)
+        return reject_parallel_outside_runtime();
       std::optional<std::string> provider;
       if (index + 1 < argc && !std::string_view(argv[index + 1]).starts_with("--"))
         provider = argv[++index];
@@ -212,6 +229,8 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     }
     if (arg == "auth")
     {
+      if (parallel_tools_flag_seen || parallel_max_workers_flag_seen)
+        return reject_parallel_outside_runtime();
       if (index + 1 >= argc || std::string_view(argv[++index]) != "login")
         return program_error(argv[0], 2, "auth requires login");
       std::optional<std::string> provider;
@@ -220,7 +239,11 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       return parse_connect(argc, argv, index, std::move(provider));
     }
     if (arg == "packages" || arg == "package")
+    {
+      if (parallel_tools_flag_seen || parallel_max_workers_flag_seen)
+        return reject_parallel_outside_runtime();
       return ImmediateInvocation{.kind = ImmediateOutputKind::PackageDeferred, .status = 0, .stderr_output = false, .text = {}};
+    }
     if (arg == "--help" || arg == "-h")
       return ImmediateInvocation{.kind = ImmediateOutputKind::Help, .status = 0, .stderr_output = false, .text = {}};
     if (arg == "--version")
@@ -315,6 +338,32 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
       command.tool_visibility.mode = ava::agent::ToolVisibilityMode::NoTools;
       continue;
     }
+    if (arg == "--parallel-read-search-tools")
+    {
+      if (parallel_tools_flag_seen)
+        return program_error(argv[0], 2, "--parallel-read-search-tools may be specified only once");
+      parallel_tools_flag_seen = true;
+      command.parallel_read_search_tools = true;
+      continue;
+    }
+    if (arg == "--parallel-read-search-max-workers")
+    {
+      if (index + 1 >= argc || is_cli_option(argv[index + 1]))
+        return program_error(argv[0], 2, "--parallel-read-search-max-workers requires an integer from 1 to 4");
+      auto const parsed = parse_parallel_read_search_max_workers(argv[index + 1]);
+      if (!parsed)
+        return program_error(argv[0], 2, "--parallel-read-search-max-workers requires an integer from 1 to 4");
+      if (parallel_max_workers_flag_seen)
+      {
+        if (*parsed != command.parallel_read_search_max_workers)
+          return program_error(argv[0], 2, "--parallel-read-search-max-workers has conflicting values");
+        return program_error(argv[0], 2, "--parallel-read-search-max-workers may be specified only once");
+      }
+      parallel_max_workers_flag_seen = true;
+      command.parallel_read_search_max_workers = *parsed;
+      ++index;
+      continue;
+    }
     auto require_value = [&](std::string_view message) -> std::optional<ImmediateInvocation> {
       if (index + 1 < argc)
         return std::nullopt;
@@ -394,6 +443,10 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     return program_error(argv[0], 2, "--json and --output text/json are only supported with --print; use --rpc or --output rpc for RPC");
   if (!print_mode && !rpc_mode && print_permission_flag_seen)
     return program_error(argv[0], 2, "--allow and --allow-tool are only supported with --print or --rpc");
+  if (parallel_max_workers_flag_seen && !parallel_tools_flag_seen)
+    return program_error(argv[0], 2, "--parallel-read-search-max-workers requires --parallel-read-search-tools");
+  if (!print_mode && !rpc_mode && (parallel_tools_flag_seen || parallel_max_workers_flag_seen))
+    return reject_parallel_outside_runtime();
   int const persisted_modes = (command.requested_session_id ? 1 : 0) + (command.continue_last_session ? 1 : 0) + (command.fork_session_id ? 1 : 0);
   if (persisted_modes > 1)
     return program_error(argv[0], 2, "use only one of --session/--session-id, --continue/--resume, or --fork");
@@ -403,9 +456,7 @@ CommandLineInvocation parse_command_line(int argc, char const* const* argv)
     return program_error(argv[0], 2, "interactive TUI requires a terminal on both stdin and stdout; use --print or --rpc for non-interactive runs");
 
   prepend_file_arguments_to_prompt(command.print_prompt, file_arguments);
-  command.frontend = print_mode   ? RuntimeFrontend::Print
-                     : rpc_mode   ? RuntimeFrontend::Rpc
-                                  : RuntimeFrontend::Interactive;
+  command.frontend = print_mode ? RuntimeFrontend::Print : rpc_mode ? RuntimeFrontend::Rpc : RuntimeFrontend::Interactive;
   return command;
 }
 

@@ -18,11 +18,13 @@
 #include "ava/core/json.h"
 
 #include <climits>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
@@ -86,8 +88,7 @@ void test_invocation_signal_policy_mapping()
     expect(signal_policy_for(mode) == InvocationSignalPolicy::SharedBits, "blocking noninteractive modes use shared signal bits");
   expect(signal_policy_for(InvocationMode::ImmediateOutput) == InvocationSignalPolicy::Default,
          "immediate output and parser errors use conventional default signal dispositions");
-  expect(signal_policy_for(InvocationMode::Interactive) == InvocationSignalPolicy::Deferred,
-         "interactive frontends retain deferred signal activation");
+  expect(signal_policy_for(InvocationMode::Interactive) == InvocationSignalPolicy::Deferred, "interactive frontends retain deferred signal activation");
 
   char const* print_argv[] = {"ava", "--session-dir", "/path/that/need/not/exist", "--print", "hello"};
   auto print = ava::app::parse_command_line(5, print_argv);
@@ -114,6 +115,115 @@ void test_invocation_signal_policy_mapping()
   expect(connect && connect->provider == "openai" && connect->source == ava::app::ConnectCredentialSource::HeadlessOAuth &&
              ava::app::invocation_mode(login) == InvocationMode::Connect,
          "auth login alias resolves completely to connect mode before dispatch");
+}
+
+void test_parallel_read_search_cli_flags()
+{
+  auto expect_immediate = [](ava::app::CommandLineInvocation const& invocation, int status, std::string_view needle, std::string_view message) {
+    auto const* output = std::get_if<ava::app::ImmediateInvocation>(&invocation);
+    expect(output && output->status == status && output->stderr_output && output->text.find(std::string(needle)) != std::string::npos, std::string(message));
+  };
+  auto expect_runtime = [](ava::app::CommandLineInvocation const& invocation, ava::app::RuntimeFrontend frontend, bool enabled, std::size_t workers,
+                           std::string_view message) {
+    auto const* command = std::get_if<ava::app::RuntimeInvocation>(&invocation);
+    expect(command && command->frontend == frontend && command->parallel_read_search_tools == enabled && command->parallel_read_search_max_workers == workers,
+           std::string(message));
+  };
+
+  char const* print_argv[] = {"ava", "--print", "hello"};
+  expect_runtime(ava::app::parse_command_line(3, print_argv), ava::app::RuntimeFrontend::Print, false, 4,
+                 "print mode defaults keep parallel read/search disabled with max workers 4");
+
+  char const* rpc_argv[] = {"ava", "--rpc"};
+  expect_runtime(ava::app::parse_command_line(2, rpc_argv), ava::app::RuntimeFrontend::Rpc, false, 4,
+                 "RPC mode defaults keep parallel read/search disabled with max workers 4");
+
+  char const* print_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools"};
+  expect_runtime(ava::app::parse_command_line(4, print_enable_argv), ava::app::RuntimeFrontend::Print, true, 4,
+                 "print mode accepts --parallel-read-search-tools with default max workers 4");
+
+  char const* rpc_enable_argv[] = {"ava", "--rpc", "--parallel-read-search-tools"};
+  expect_runtime(ava::app::parse_command_line(3, rpc_enable_argv), ava::app::RuntimeFrontend::Rpc, true, 4,
+                 "RPC mode accepts --parallel-read-search-tools with default max workers 4");
+
+  char const* order_argv[] = {"ava", "--parallel-read-search-tools", "--print", "hello", "--parallel-read-search-max-workers", "2"};
+  expect_runtime(ava::app::parse_command_line(6, order_argv), ava::app::RuntimeFrontend::Print, true, 2,
+                 "parallel read/search flags are accepted before --print");
+
+  char const* rpc_order_argv[] = {"ava", "--parallel-read-search-max-workers", "1", "--rpc", "--parallel-read-search-tools"};
+  expect_runtime(ava::app::parse_command_line(5, rpc_order_argv), ava::app::RuntimeFrontend::Rpc, true, 1,
+                 "max-workers may appear before the enabling flag and --rpc");
+
+  char const* mode_rpc_argv[] = {"ava", "--mode", "rpc", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "4"};
+  expect_runtime(ava::app::parse_command_line(6, mode_rpc_argv), ava::app::RuntimeFrontend::Rpc, true, 4, "--mode rpc accepts the public parallel opt-in");
+
+  for (char const* workers : {"1", "4"})
+  {
+    char const* endpoint_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", workers};
+    expect_runtime(ava::app::parse_command_line(6, endpoint_argv), ava::app::RuntimeFrontend::Print, true, static_cast<std::size_t>(workers[0] - '0'),
+                   "parallel max-workers accepts 1 and 4 inclusive");
+  }
+
+  char const* missing_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers"};
+  expect_immediate(ava::app::parse_command_line(5, missing_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+                   "missing max-workers value is rejected");
+
+  char const* option_value_argv[] = {"ava", "--print", "hello", "--parallel-read-search-max-workers", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(5, option_value_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+                   "max-workers followed by another option is treated as a missing value");
+
+  for (char const* bad : {"0", "5", "01", "+2", "-1", "2.0", "abc", ""})
+  {
+    char const* bad_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", bad};
+    expect_immediate(ava::app::parse_command_line(6, bad_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+                     "malformed or out-of-bounds max-workers values are rejected");
+  }
+
+  char const* workers_without_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-max-workers", "2"};
+  expect_immediate(ava::app::parse_command_line(5, workers_without_enable_argv), 2, "--parallel-read-search-max-workers requires --parallel-read-search-tools",
+                   "max-workers without the enabling flag is rejected");
+
+  char const* duplicate_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(5, duplicate_enable_argv), 2, "--parallel-read-search-tools may be specified only once",
+                   "duplicate enabling flags are rejected");
+
+  char const* duplicate_workers_argv[] = {
+      "ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "2", "--parallel-read-search-max-workers", "2"};
+  expect_immediate(ava::app::parse_command_line(8, duplicate_workers_argv), 2, "--parallel-read-search-max-workers may be specified only once",
+                   "duplicate max-workers values are rejected");
+
+  char const* conflict_workers_argv[] = {
+      "ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "2", "--parallel-read-search-max-workers", "3"};
+  expect_immediate(ava::app::parse_command_line(8, conflict_workers_argv), 2, "--parallel-read-search-max-workers has conflicting values",
+                   "conflicting max-workers values are rejected");
+
+  char const* interactive_argv[] = {"ava", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(2, interactive_argv), 2, "--parallel-read-search-tools is only supported with --print or --rpc",
+                   "interactive mode rejects the public parallel opt-in");
+
+  char const* connect_after_argv[] = {"ava", "--parallel-read-search-tools", "connect", "openai"};
+  expect_immediate(ava::app::parse_command_line(4, connect_after_argv), 2, "--parallel-read-search-tools is only supported with --print or --rpc",
+                   "connect after the public parallel opt-in is rejected");
+
+  char const* connect_before_argv[] = {"ava", "connect", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(3, connect_before_argv), 2, "unknown connect option",
+                   "connect rejects the public parallel opt-in as an unknown connect option");
+
+  char const* doctor_argv[] = {"ava", "doctor", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(3, doctor_argv), 2, "Usage: ava doctor [--json]", "doctor rejects extra parallel opt-in flags");
+
+  char const* acp_argv[] = {"ava", "--acp", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(3, acp_argv), 2, "--acp is a standalone mode", "ACP standalone validation rejects the public parallel opt-in");
+
+  char const* acp_before_help_argv[] = {"ava", "--parallel-read-search-tools", "--help", "--acp"};
+  expect_immediate(ava::app::parse_command_line(4, acp_before_help_argv), 2, "--acp is a standalone mode",
+                   "ACP standalone validation retains precedence over help when parallel flags are present");
+
+  char const* help_after_argv[] = {"ava", "--parallel-read-search-tools", "--help"};
+  auto help = ava::app::parse_command_line(3, help_after_argv);
+  auto const* help_output = std::get_if<ava::app::ImmediateInvocation>(&help);
+  expect(help_output && help_output->kind == ava::app::ImmediateOutputKind::Help && help_output->status == 0,
+         "help retains precedence when it is reached after the parallel opt-in flag");
 }
 
 void test_headless_permission_policy()
@@ -1208,6 +1318,7 @@ void run_app_print_tests()
 {
   test_app_print_prompt_merging();
   test_invocation_signal_policy_mapping();
+  test_parallel_read_search_cli_flags();
   test_headless_permission_policy();
   test_app_print_text_mode_outputs_final_text_only();
   test_app_print_text_mode_sanitizes_terminal_output_and_diagnostics_when_requested();

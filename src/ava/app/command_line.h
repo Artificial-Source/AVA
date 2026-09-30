@@ -7,6 +7,7 @@
 #include "ava/app/runtime.h"
 #include "ava/agent/tool_visibility.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -103,6 +104,8 @@ struct RuntimeInvocation
   ava::agent::ToolVisibilityOptions tool_visibility;
   std::optional<std::string> requested_primary_agent;
   std::optional<std::string> initial_reasoning_level;
+  bool parallel_read_search_tools = false;
+  std::size_t parallel_read_search_max_workers = 4;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
