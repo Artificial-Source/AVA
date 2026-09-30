@@ -8,6 +8,7 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/json.h"
 
 #include <filesystem>
 #include <string>
@@ -61,6 +62,12 @@ std::size_t count_exact_lines(std::string const& text, std::string_view needle)
     pos = end == std::string::npos ? text.size() : end + 1;
   }
   return count;
+}
+
+std::string mcp_config_with_event_log(std::string_view command, std::filesystem::path const& event_log)
+{
+  return std::string("{\"servers\":[{\"id\":\"demo\",\"name\":\"Demo MCP\",\"command\":\"") + ava::core::json::escape(command) +
+         "\",\"env\":{\"AVA_FAKE_MCP_EVENT_LOG\":\"" + ava::core::json::escape(event_log.string()) + "\"},\"enabled\":true}]}";
 }
 
 std::string joined_output(ava::app::interactive_internal::InteractiveResult const& result)
@@ -122,13 +129,12 @@ void test_interactive_mcp_prompt_submission_resolves_once()
   auto const event_log = root / "mcp-events.log";
   auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(trusted.has_value(), trusted ? "interactive MCP test trusts project" : "interactive MCP test trusts project: " + trusted.error().format());
-  write_app_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH));
+  write_app_test_file(workspace / ".ava" / "mcp.json", mcp_config_with_event_log(AVA_FAKE_MCP_SERVER_PATH, event_log));
   write_app_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md",
                       "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
 
   auto unlocked_session = open_test_session(root, workspace);
   ava::app::interactive_internal::InteractiveState state{.unlocked_session = unlocked_session};
-  ScopedEnvVar event_log_env("AVA_FAKE_MCP_EVENT_LOG", event_log.string());
   auto ask = allow_all_permissions();
 
   expect(!ava::app::is_backend_command_1("/release-notes", unlocked_session), "interactive passive lookup does not start MCP for short aliases");

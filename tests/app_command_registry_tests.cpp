@@ -83,10 +83,16 @@ std::size_t count_exact_lines(std::string const& text, std::string_view needle)
   return count;
 }
 
-std::string mcp_server_config_json(std::string_view id, std::string_view name, std::string_view command, std::string_view args_json = "[]")
+std::string mcp_server_config_json(std::string_view id, std::string_view name, std::string_view command, std::string_view args_json = "[]",
+                                   std::string_view env_json = "{}")
 {
   return std::string("{\"servers\":[{\"id\":\"") + ava::core::json::escape(id) + "\",\"name\":\"" + ava::core::json::escape(name) + "\",\"command\":\"" +
-         ava::core::json::escape(command) + "\",\"args\":" + std::string(args_json) + ",\"enabled\":true}]}";
+         ava::core::json::escape(command) + "\",\"args\":" + std::string(args_json) + ",\"env\":" + std::string(env_json) + ",\"enabled\":true}]}";
+}
+
+std::string mcp_event_log_env_json(std::filesystem::path const& event_log)
+{
+  return std::string("{\"AVA_FAKE_MCP_EVENT_LOG\":\"") + ava::core::json::escape(event_log.string()) + "\"}";
 }
 
 ava::app::CommandRegistryEntry const* find_entry(ava::app::CommandRegistry const& registry, std::string_view command)
@@ -1011,12 +1017,12 @@ void test_passive_command_lookup_does_not_start_mcp_and_submission_resolves_once
   auto const event_log = root / "mcp-events.log";
   auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(trusted.has_value(), trusted ? "MCP resolve test trusts project" : "MCP resolve test trusts project: " + trusted.error().format());
-  write_app_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH));
+  write_app_test_file(workspace / ".ava" / "mcp.json",
+                      mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[]", mcp_event_log_env_json(event_log)));
   write_app_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md",
                       "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
 
   auto unlocked_session = open_test_session(root, workspace);
-  ScopedEnvVar event_log_env("AVA_FAKE_MCP_EVENT_LOG", event_log.string());
 
   expect(!ava::app::command_registry_contains(unlocked_session, "/release-notes"),
          "passive lookup does not treat undiscovered MCP prompt aliases as known commands");
@@ -1089,11 +1095,25 @@ void test_mcp_prompt_listing_failures_are_diagnostics_not_unknown()
   write_app_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH));
   auto denied_session = open_test_session(root, workspace);
   auto denied = ava::app::resolve_command_registry_entry(denied_session, "/release-notes", deny_all_permissions());
-  expect(!denied && denied.error().message().find("permission_denied") != std::string::npos,
+  expect(!denied && denied.error().code() != ava::core::ErrorCode::Canceled && denied.error().message().find("permission_denied") != std::string::npos,
          denied ? "denied MCP listing must not report success" : "denied MCP listing reports the permission diagnostic");
   auto denied_run = ava::app::run_command(denied_session, ava::app::CommandRequest{.command = "/release-notes", .permission_resolver = deny_all_permissions()});
   expect(denied_run && denied_run->handled && !denied_run->output.empty() && denied_run->output[0].find("permission_denied") != std::string::npos,
          "denied MCP listing is surfaced as a diagnostic rather than unknown");
+
+  auto const canceled_root = create_empty_root("command-registry-canceled-demo");
+  auto const canceled_workspace = canceled_root / "canceled-workspace";
+  auto const canceled_paths = app_test_paths(canceled_root);
+  auto canceled_trusted = ava::app::set_project_trust_decision(canceled_paths, canceled_workspace, true);
+  expect(canceled_trusted.has_value(),
+         canceled_trusted ? "canceled-name denial test trusts project" : "canceled-name denial test trusts project: " + canceled_trusted.error().format());
+  write_app_test_file(canceled_workspace / ".ava" / "mcp.json", app_test_mcp_config_json("canceled-demo", "Canceled Demo", AVA_FAKE_MCP_SERVER_PATH));
+  auto canceled_name_session = open_test_session(canceled_root, canceled_workspace);
+  auto denied_canceled_name = ava::app::resolve_command_registry_entry(canceled_name_session, "/release-notes", deny_all_permissions());
+  expect(!denied_canceled_name && denied_canceled_name.error().code() != ava::core::ErrorCode::Canceled &&
+             denied_canceled_name.error().message().find("permission_denied") != std::string::npos,
+         denied_canceled_name ? "denied MCP server whose id/path contains canceled must not succeed"
+                              : "denied MCP listing for id/path containing canceled stays a permission failure, not cancellation");
 
   write_app_test_file(workspace / ".ava" / "mcp.json", mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[\"exit-initialize\"]"));
   auto failed_session = open_test_session(root, workspace);

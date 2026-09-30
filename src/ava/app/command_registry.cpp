@@ -254,8 +254,7 @@ bool is_skill_or_plugin_token(std::string_view token) noexcept
 
 ava::core::Error command_discovery_error(CommandRegistryDiagnostic const& diagnostic)
 {
-  bool const canceled = diagnostic.message.find("canceled") != std::string::npos;
-  return ava::core::Error(ava::core::ErrorCategory::Unknown, diagnostic.message, canceled ? ava::core::ErrorCode::Canceled : ava::core::ErrorCode::Unspecified);
+  return ava::core::Error(ava::core::ErrorCategory::Unknown, diagnostic.message, diagnostic.error_code);
 }
 
 bool command_was_canceled(std::function<bool()> const& cancel_requested)

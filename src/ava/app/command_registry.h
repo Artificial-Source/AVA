@@ -3,6 +3,7 @@
 #include "ava/app/runtime.h"
 #include "ava/mcp/stdio_client.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/error.h"
 #include "ava/core/result.h"
 
 #include <cstdint>
@@ -66,6 +67,7 @@ struct CommandRegistryDiagnostic
   std::string source_id = {};
   std::filesystem::path path = {};
   std::string message = {};
+  ava::core::ErrorCode error_code = ava::core::ErrorCode::Unspecified;
   std::string winner_source = {};
   std::string winner_source_id = {};
   std::filesystem::path winner_path = {};
