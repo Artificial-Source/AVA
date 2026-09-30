@@ -108,8 +108,8 @@ AgentLoopOptions inherited_child_options(AgentLoopOptions const& parent)
   child.child_compaction_blueprint = parent.child_compaction_blueprint;
   child.transport_factory = parent.transport_factory;
   child.session_read_limits = parent.session_read_limits;
-  child.parallel_read_search_tools = parent.parallel_read_search_tools;
-  child.parallel_read_search_max_workers = parent.parallel_read_search_max_workers;
+  // The parent's ordinary-run read/search scheduling opt-in is not a child
+  // execution capability; children keep the loop's sequential tool defaults.
   child.observation = parent.observation;
   child.subagent_launch.display = parent.subagent_launch.display;
   // Anchors, resource capabilities and observation deliberately share ownership
