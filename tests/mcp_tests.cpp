@@ -404,7 +404,7 @@ void test_session_mcp_launch_identity_is_logical_and_exact()
   auto const reordered_identity = ava::mcp::session_mcp_launch_identity(reordered, logical_cwd);
   auto const changed_env_identity = ava::mcp::session_mcp_launch_identity(changed_env, logical_cwd);
   auto const changed_argv_identity = ava::mcp::session_mcp_launch_identity(changed_argv_boundary, logical_cwd);
-  expect(identity.starts_with("mcp-composition-v1:") && identity == reordered_identity && identity != changed_env_identity &&
+  expect(identity.starts_with("mcp-composition-v2:") && identity == reordered_identity && identity != changed_env_identity &&
              identity != changed_argv_identity && identity.find("A_VALUE") == std::string::npos && identity.find("one") == std::string::npos,
          "MCP nonempty-env composition token detects ordinary argv/env changes without exposing env content");
   auto no_env = authorized;
@@ -450,11 +450,36 @@ void test_session_mcp_launch_identity_is_logical_and_exact()
   auto exact_match = ava::permissions::match_persistent_permission_rule(store, prompt(identity));
   auto env_mismatch = ava::permissions::match_persistent_permission_rule(store, prompt(changed_env_identity));
   auto argv_mismatch = ava::permissions::match_persistent_permission_rule(store, prompt(changed_argv_identity));
-  expect(rule && exact_match && *exact_match && (*exact_match)->rule_id == rule->rule_id && env_mismatch && !*env_mismatch && argv_mismatch && !*argv_mismatch,
-         "persistent session MCP launch Allow does not match a changed env value or colliding space-joined argv boundary");
+  auto cwd_mismatch = ava::permissions::match_persistent_permission_rule(store, prompt(changed_cwd));
+  auto v1_mismatch = ava::permissions::match_persistent_permission_rule(store, prompt("mcp-composition-v1:4336b8f32f3eb21c"));
+  expect(rule && exact_match && *exact_match && (*exact_match)->rule_id == rule->rule_id && env_mismatch && !*env_mismatch && argv_mismatch &&
+             !*argv_mismatch && cwd_mismatch && !*cwd_mismatch && v1_mismatch && !*v1_mismatch,
+         "persistent session MCP launch Allow does not match changed env, argv boundary, cwd, or a stale v1 composition token");
 
   std::error_code cleanup;
   std::filesystem::remove_all(root, cleanup);
+}
+
+void test_session_mcp_launch_identity_sha256_known_answer()
+{
+  // Independently computed with Python hashlib.sha256 over Sha256Builder's
+  // little-endian 64-bit length-prefixed fields: domain separator
+  // "ava-mcp-launch-composition-v2", then the complete canonical identity JSON.
+  std::filesystem::path const fixed_cwd{"/workspace/mcp-composition-v2"};
+  ava::mcp::McpServerConfig authorized{.id = "demo",
+                                       .name = "Demo",
+                                       .command = "/usr/bin/demo",
+                                       .args = {"alpha beta"},
+                                       .env = {{"Z_VALUE", "two"}, {"A_VALUE", "one"}},
+                                       .enabled = true,
+                                       .scope = ava::mcp::McpServerScope::Project,
+                                       .source_path = {}};
+  auto const identity = ava::mcp::session_mcp_launch_identity(authorized, fixed_cwd);
+  constexpr char const kExpected[] = "mcp-composition-v2:b1a4398151fcb2a70158ef0c499082cfbdd26542f183f028cbc9986ed9ae0446";
+  constexpr char const kStaleV1[] = "mcp-composition-v1:4336b8f32f3eb21c";
+  expect(identity == kExpected && identity != kStaleV1 && identity.find("A_VALUE") == std::string::npos && identity.find("one") == std::string::npos &&
+             identity.find("Z_VALUE") == std::string::npos && identity.find("two") == std::string::npos,
+         "fixed-cwd nonempty MCP launch identity matches the independent SHA-256 known answer without exposing env content");
 }
 
 void test_mcp_protocol_parsing()
@@ -1790,6 +1815,7 @@ void run_mcp_tests()
   test_mcp_config_parsing();
   test_mcp_config_explicit_environment();
   test_session_mcp_launch_identity_is_logical_and_exact();
+  test_session_mcp_launch_identity_sha256_known_answer();
   test_mcp_protocol_parsing();
   test_mcp_permission_audit_golden_shape();
   test_mcp_stdio_client_lists_and_calls_tools();

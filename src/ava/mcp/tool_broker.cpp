@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/command/environment.h"
 #include "ava/diagnostics/safe_failure.h"
 #include "ava/tools/tool_permission.h"
 #include "ava/mcp/config.h"
@@ -491,10 +492,16 @@ std::string session_mcp_launch_identity(McpServerConfig const& server, std::file
   }
   identity += "],\"cwd\":\"" + ava::core::json::escape(canonical_child_cwd.string()) + "\",\"clean_environment\":true}";
   // Preserve existing no-env session grants. Explicit env must never reach
-  // permission prompts/audits as plaintext. This is a composition change token,
-  // not a cryptographic commitment or protection against chosen collisions.
+  // permission prompts/audits as plaintext. Nonempty env uses a domain-separated
+  // SHA-256 composition binding so trusted-project exact grants cannot cheaply
+  // collide; this is not encryption of env values.
   if (!environment.empty())
-    return "mcp-composition-v1:" + fnv1a64_hex(identity);
+  {
+    ava::command::detail::Sha256Builder hash;
+    hash.append_field("ava-mcp-launch-composition-v2");
+    hash.append_field(identity);
+    return "mcp-composition-v2:" + hash.hex();
+  }
   return identity;
 }
 

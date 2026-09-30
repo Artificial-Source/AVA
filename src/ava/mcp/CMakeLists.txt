@@ -18,6 +18,7 @@ target_link_libraries(ava_mcp
     AVA::process
     AVA::tools
   PRIVATE
+    AVA::command
     AVA::diagnostics
     nlohmann_json::nlohmann_json
 )

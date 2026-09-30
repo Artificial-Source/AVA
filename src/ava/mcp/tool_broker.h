@@ -35,9 +35,10 @@ struct McpBrokeredTool
 using McpBrokeredToolVisitor = std::function<ava::core::VoidResult(McpBrokeredTool const&)>;
 
 // Canonical launch composition spelling. Nonempty env is represented by a
-// content-free noncryptographic change token, not collision-resistant authority.
-// No-env session identities retain their existing spelling and are not truncated:
-// identities above the persistent-rule command bound fail closed.
+// content-free domain-separated SHA-256 composition token: collision-resistant
+// exact-grant binding, not encryption or secrecy. No-env session identities
+// retain their existing spelling and are not truncated: identities above the
+// persistent-rule command bound fail closed.
 [[nodiscard]] std::string session_mcp_launch_identity(McpServerConfig const& server, std::filesystem::path const& canonical_child_cwd);
 [[nodiscard]] std::string mcp_model_tool_name(std::string_view server_id, std::string_view tool_name);
 [[nodiscard]] std::string mcp_model_resource_tool_name(std::string_view server_id, std::string_view resource_uri);
