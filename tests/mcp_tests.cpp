@@ -29,10 +29,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -1602,6 +1604,43 @@ std::string mcp_handshake_then(std::string const& body)
          body;
 }
 
+class McpMonitorGate final
+{
+ public:
+  ~McpMonitorGate() { release(); }
+
+  void arrive_and_wait()
+  {
+    std::unique_lock lock(mutex_);
+    reached_ = true;
+    changed_.notify_all();
+    changed_.wait(lock, [&] { return released_; });
+  }
+
+  bool wait_until(std::chrono::steady_clock::time_point deadline)
+  {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_until(lock, deadline, [&] { return reached_; });
+  }
+
+  void release() noexcept
+  {
+    {
+      std::lock_guard lock(mutex_);
+      released_ = true;
+    }
+    changed_.notify_all();
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  bool reached_ = false;
+  bool released_ = false;
+};
+
 void test_mcp_supervisor_lifecycle()
 {
   if (ava::process::platform_support_v1() != ava::process::PlatformSupportV1::Posix)
@@ -1831,16 +1870,33 @@ void test_mcp_supervisor_lifecycle()
   auto owner_authority = make_mcp_test_authority();
   if (!owner_authority)
     return;
-  auto owned = ava::mcp::McpStdioClient::start(fake_server_config(root), fake_client_options(workspace, owner_authority->run));
+  auto const owner_event_log = root / "owner-events.txt";
+  auto owner_server = fake_server_config(root);
+  owner_server.env.emplace_back("AVA_FAKE_MCP_EVENT_LOG", owner_event_log.string());
+  auto owned = ava::mcp::McpStdioClient::start(owner_server, fake_client_options(workspace, owner_authority->run));
   expect(owned.has_value(), "session/run shutdown fixture initializes");
-  auto stopped = owner_authority->supervisor->request_stop(owner_authority->run.owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown,
-                                                           std::chrono::steady_clock::now() + std::chrono::seconds(2));
-  expect(stopped && stopped->matched == 1, "run-prefix stop matches the live MCP operation");
   if (owned)
   {
+    auto discovered = (*owned)->list_tools();
+    expect(discovered && ava::tests::count_substrings(read_text(owner_event_log), "tools/list") == 1,
+           "owner-stop fixture records an allowed discovery on the healthy peer");
+    // Shared ownership keeps the monitor's deterministic test gate alive.
+    auto gate = std::make_shared<McpMonitorGate>();
+    auto& supervisor = *owner_authority->supervisor;
+    ava::process::testing::SupervisorTestAccess::set_after_poll_snapshot_hook(supervisor, [gate] { gate->arrive_and_wait(); });
+    bool const reached = gate->wait_until(std::chrono::steady_clock::now() + std::chrono::seconds(2));
+    auto stopped = supervisor.request_stop(owner_authority->run.owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown,
+                                           std::chrono::steady_clock::now() + std::chrono::seconds(2));
+    expect(reached && stopped && stopped->matched == 1 && supervisor.snapshot().live_records == 1,
+           "run-prefix stop commits while the monitor cannot signal or settle the live MCP operation");
     auto listed = (*owned)->list_tools();
-    expect(!listed, "MCP I/O fails after owner-prefix shutdown");
+    expect(!listed && listed.error().code() == ava::core::ErrorCode::Canceled && ava::tests::count_substrings(read_text(owner_event_log), "tools/list") == 1,
+           "MCP I/O fails after owner-prefix shutdown with typed cancellation before monitor signaling");
+    ava::process::testing::SupervisorTestAccess::clear_after_poll_snapshot_hook(supervisor);
+    gate->release();
     static_cast<void>((*owned)->shutdown(std::chrono::milliseconds(500)));
+    expect(ava::tests::count_substrings(read_text(owner_event_log), "tools/list") == 1,
+           "fake marker proves no new tools/list reached the peer after committed owner stop");
   }
   auto owner_records = mcp_records(*owner_authority->supervisor);
   expect(owner_records.size() == 1 && mcp_completely_settled(owner_records.front()) &&

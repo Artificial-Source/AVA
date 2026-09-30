@@ -151,6 +151,9 @@ class McpStdioClient final
     AVA_DEBUG_PRINT_MEMBERS_ON
   };
 
+  [[nodiscard]] ava::core::VoidResult check_committed_stop();
+  [[nodiscard]] ava::core::VoidResult check_interruption(std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
+                                                         std::string_view timeout_message, CancelCallback const& cancel_requested);
   [[nodiscard]] ava::core::VoidResult launch(CancelCallback const& cancel_requested);
   [[nodiscard]] ava::core::VoidResult initialize(CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::Result<JsonRpcResponse> request(std::string_view method, std::string_view params_json, std::chrono::milliseconds timeout,
@@ -168,7 +171,7 @@ class McpStdioClient final
                                                         CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::Error peer_closed_error(std::string_view closed_message, std::optional<std::size_t> response_bytes = std::nullopt) const;
   [[nodiscard]] ava::core::VoidResult drain_stdout(bool enforce_message_limit);
-  [[nodiscard]] ava::core::VoidResult drain_stderr();
+  [[nodiscard]] ava::core::VoidResult drain_stderr(bool observe_stop = true);
   [[nodiscard]] ava::core::VoidResult drain_for_cleanup(std::chrono::steady_clock::time_point deadline) noexcept;
   [[nodiscard]] ava::core::VoidResult settle_failure(ava::process::TerminationReasonV1 reason);
   [[nodiscard]] ava::core::Error fail_process(ava::process::TerminationReasonV1 reason, ava::core::Error error);

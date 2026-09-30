@@ -421,6 +421,18 @@ ava::core::Result<StopResultV1> Supervisor::request_stop(OwnerPathV1 const& owne
   return result;
 }
 
+ava::core::Result<std::optional<TerminationReasonV1>> Supervisor::committed_stop_reason(ProcessHandle const& handle) const
+{
+  auto const state = implementation_->state;
+  if (!handle.valid() || handle.state_->supervisor.lock().get() != state.get())
+    return std::unexpected(detail::invalid_error("process handle does not belong to this supervisor"));
+  std::lock_guard lock(state->mutex);
+  auto const found = state->records.find(handle.state_->record);
+  if (found == state->records.end())
+    return std::unexpected(detail::invalid_error("process handle has no retained supervisor record"));
+  return found->second->reason;
+}
+
 ava::core::Result<ExitStatusV1> Supervisor::wait(ProcessHandle const& handle, ProcessDeadline deadline) const
 {
   auto state = implementation_->state;

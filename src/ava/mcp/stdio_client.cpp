@@ -277,6 +277,56 @@ bool McpStdioClient::stderr_truncated() const noexcept
   return stderr_truncated_;
 }
 
+ava::core::VoidResult McpStdioClient::check_committed_stop()
+{
+  auto observed = operation_scope_.supervisor().committed_stop_reason(process_handle_);
+  if (!observed)
+    return std::unexpected(process_io_error("failed to observe MCP process stop; close and reconnect the MCP client", server_));
+  if (!*observed || **observed == ava::process::TerminationReasonV1::NaturalExit)
+    return {};
+
+  auto const reason = **observed;
+  auto error = [&] {
+    switch (reason)
+    {
+      case ava::process::TerminationReasonV1::Canceled:
+      case ava::process::TerminationReasonV1::OwnerShutdown:
+      case ava::process::TerminationReasonV1::ApplicationShutdown:
+        return canceled_error("MCP request canceled by process stop", server_);
+      case ava::process::TerminationReasonV1::DeadlineExpired:
+        return protocol_error("MCP process deadline expired", server_);
+      case ava::process::TerminationReasonV1::OutputLimit:
+        return stdout_limit_error("MCP process stopped at output limit", server_, options_, stdout_buffer_.size());
+      default:
+        return protocol_error("MCP process stopped before response", server_);
+    }
+  }();
+  error.with_context("reason", std::string(ava::process::to_string(reason)));
+  // The Supervisor already owns this stop and its cleanup budget. Observation
+  // rejects protocol I/O without issuing another stop or waiting for settlement.
+  return std::unexpected(std::move(error));
+}
+
+ava::core::VoidResult McpStdioClient::check_interruption(Clock::time_point deadline, std::chrono::milliseconds timeout, std::string_view timeout_message,
+                                                         CancelCallback const& cancel_requested)
+{
+  if (auto stopped = check_committed_stop(); !stopped)
+    return stopped;
+  auto const interrupted = interruption_reason(deadline, cancel_requested);
+  // Cancellation callbacks may commit an owner stop. Observe again so the
+  // first Supervisor reason wins before any I/O or buffered response acceptance.
+  if (auto stopped = check_committed_stop(); !stopped)
+    return stopped;
+  if (!interrupted)
+    return {};
+  if (*interrupted == ava::process::TerminationReasonV1::Canceled)
+    return std::unexpected(fail_process(*interrupted, canceled_error("MCP request canceled", server_)));
+  auto error = protocol_error(std::string(timeout_message), server_);
+  error.with_context("timeout_ms", std::to_string(timeout.count()));
+  add_bounded_stream_metadata(error, stdout_buffer_, stderr_tail_, stderr_truncated_);
+  return std::unexpected(fail_process(*interrupted, std::move(error)));
+}
+
 ava::core::VoidResult McpStdioClient::launch(CancelCallback const& cancel_requested)
 {
   auto working_directory = absolute_working_directory(server_, options_);
@@ -782,6 +832,8 @@ ava::core::Result<McpStdioClient::JsonRpcResponse> McpStdioClient::request(std::
                                                                            std::chrono::milliseconds timeout, std::string_view timeout_message,
                                                                            CancelCallback cancel_requested, Clock::time_point deadline)
 {
+  if (auto stopped = check_committed_stop(); !stopped)
+    return std::unexpected(std::move(stopped.error()));
   if (deadline == Clock::time_point{})
     deadline = Clock::now() + timeout;
   auto const request_id = "ava_mcp_" + std::to_string(next_request_id_++);
@@ -831,6 +883,8 @@ ava::core::Result<McpStdioClient::JsonRpcResponse> McpStdioClient::request(std::
       error.with_context("response_bytes", std::to_string(message->size()));
       return std::unexpected(std::move(error));
     }
+    if (auto stopped = check_committed_stop(); !stopped)
+      return std::unexpected(std::move(stopped.error()));
     return JsonRpcResponse{.result_json = std::move(*result_json), .raw_json = std::move(*message)};
   }
 }
@@ -838,6 +892,8 @@ ava::core::Result<McpStdioClient::JsonRpcResponse> McpStdioClient::request(std::
 ava::core::VoidResult McpStdioClient::write_message(std::string_view message, Clock::time_point deadline, std::chrono::milliseconds timeout,
                                                     std::string_view timeout_message, std::string_view closed_message, CancelCallback cancel_requested)
 {
+  if (auto stopped = check_committed_stop(); !stopped)
+    return stopped;
   auto const frame = compact_json_line(message);
   if (frame.size() - 1 > options_.max_message_bytes)
   {
@@ -851,14 +907,8 @@ ava::core::VoidResult McpStdioClient::write_message(std::string_view message, Cl
   std::size_t offset = 0;
   while (offset < frame.size())
   {
-    if (auto interrupted = interruption_reason(deadline, cancel_requested))
-    {
-      if (*interrupted == ava::process::TerminationReasonV1::Canceled)
-        return std::unexpected(fail_process(*interrupted, canceled_error("MCP request canceled", server_)));
-      auto error = protocol_error(std::string(timeout_message), server_);
-      error.with_context("timeout_ms", std::to_string(timeout.count()));
-      return std::unexpected(fail_process(*interrupted, std::move(error)));
-    }
+    if (auto interrupted = check_interruption(deadline, timeout, timeout_message, cancel_requested); !interrupted)
+      return std::unexpected(std::move(interrupted.error()));
 
     auto written = standard_input_.write(readable_bytes(std::string_view(frame).substr(offset)));
     if (!written)
@@ -914,24 +964,23 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
   bool process_finished = false;
   while (true)
   {
-    if (is_canceled(cancel_requested))
-      return std::unexpected(fail_process(ava::process::TerminationReasonV1::Canceled, canceled_error("MCP request canceled", server_)));
+    // Complete queued frames retain the existing deadline behavior, but never
+    // bypass a committed non-natural stop or cancellation observation.
+    if (auto interrupted = check_interruption(Clock::time_point::max(), timeout, timeout_message, cancel_requested); !interrupted)
+      return std::unexpected(std::move(interrupted.error()));
 
     auto extracted = try_extract_message();
     if (!extracted)
       return std::unexpected(std::move(extracted.error()));
     if (*extracted)
-      return std::move(**extracted);
-
-    if (auto interrupted = interruption_reason(deadline, cancel_requested))
     {
-      if (*interrupted == ava::process::TerminationReasonV1::Canceled)
-        return std::unexpected(fail_process(*interrupted, canceled_error("MCP request canceled", server_)));
-      auto error = protocol_error(std::string(timeout_message), server_);
-      error.with_context("timeout_ms", std::to_string(timeout.count()));
-      add_bounded_stream_metadata(error, stdout_buffer_, stderr_tail_, stderr_truncated_);
-      return std::unexpected(fail_process(*interrupted, std::move(error)));
+      if (auto stopped = check_committed_stop(); !stopped)
+        return std::unexpected(std::move(stopped.error()));
+      return std::move(**extracted);
     }
+
+    if (auto interrupted = check_interruption(deadline, timeout, timeout_message, cancel_requested); !interrupted)
+      return std::unexpected(std::move(interrupted.error()));
 
     if (auto drained = drain_stderr(); !drained)
       return std::unexpected(std::move(drained.error()));
@@ -953,7 +1002,11 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
     if (process_finished || !standard_output_.valid())
     {
       auto const status_deadline = std::min(deadline, saturating_add(Clock::now(), kNaturalStatusObservation));
+      if (auto stopped = check_committed_stop(); !stopped)
+        return std::unexpected(std::move(stopped.error()));
       auto observed = operation_scope_.supervisor().wait(process_handle_, status_deadline);
+      if (auto stopped = check_committed_stop(); !stopped)
+        return std::unexpected(std::move(stopped.error()));
       if (observed)
         settlement_ = *observed;
       return std::unexpected(peer_closed_error(closed_message, stdout_buffer_.size()));
@@ -974,9 +1027,13 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
     }
 
     auto const activity_deadline = std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval));
+    if (auto stopped = check_committed_stop(); !stopped)
+      return std::unexpected(std::move(stopped.error()));
     auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches, activity_deadline);
     if (!activity)
       return std::unexpected(process_io_error("failed while observing MCP process streams", server_));
+    if (auto stopped = check_committed_stop(); !stopped)
+      return std::unexpected(std::move(stopped.error()));
     process_finished = activity->process_finished;
   }
 }
@@ -986,14 +1043,8 @@ ava::core::VoidResult McpStdioClient::wait_for_writable(Clock::time_point deadli
 {
   while (true)
   {
-    if (auto interrupted = interruption_reason(deadline, cancel_requested))
-    {
-      if (*interrupted == ava::process::TerminationReasonV1::Canceled)
-        return std::unexpected(fail_process(*interrupted, canceled_error("MCP request canceled", server_)));
-      auto error = protocol_error(std::string(timeout_message), server_);
-      error.with_context("timeout_ms", std::to_string(timeout.count()));
-      return std::unexpected(fail_process(*interrupted, std::move(error)));
-    }
+    if (auto interrupted = check_interruption(deadline, timeout, timeout_message, cancel_requested); !interrupted)
+      return std::unexpected(std::move(interrupted.error()));
     if (!standard_input_.valid())
       return std::unexpected(peer_closed_error(closed_message));
 
@@ -1018,10 +1069,14 @@ ava::core::VoidResult McpStdioClient::wait_for_writable(Clock::time_point deadli
       watches.push_back(std::move(*stderr_watch));
     }
 
+    if (auto stopped = check_committed_stop(); !stopped)
+      return std::unexpected(std::move(stopped.error()));
     auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches,
                                                                     std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval)));
     if (!activity)
       return std::unexpected(process_io_error("failed while observing the MCP request stream", server_));
+    if (auto stopped = check_committed_stop(); !stopped)
+      return stopped;
     if (auto drained = drain_stderr(); !drained)
       return std::unexpected(std::move(drained.error()));
     if (auto drained = drain_stdout(true); !drained)
@@ -1063,6 +1118,11 @@ ava::core::VoidResult McpStdioClient::drain_stdout(bool enforce_message_limit)
   std::array<char, 4096> buffer{};
   for (int reads = 0; reads < kMaxDrainReadsPerObservation; ++reads)
   {
+    if (enforce_message_limit)
+    {
+      if (auto stopped = check_committed_stop(); !stopped)
+        return stopped;
+    }
     auto read = standard_output_.read(writable_bytes(buffer));
     if (!read)
       return std::unexpected(process_io_error("failed to read MCP stdout", server_));
@@ -1134,13 +1194,18 @@ ava::core::VoidResult McpStdioClient::drain_stdout(bool enforce_message_limit)
   return {};
 }
 
-ava::core::VoidResult McpStdioClient::drain_stderr()
+ava::core::VoidResult McpStdioClient::drain_stderr(bool observe_stop)
 {
   if (!standard_error_.valid())
     return {};
   std::array<char, 4096> buffer{};
   for (int reads = 0; reads < kMaxDrainReadsPerObservation; ++reads)
   {
+    if (observe_stop)
+    {
+      if (auto stopped = check_committed_stop(); !stopped)
+        return stopped;
+    }
     auto read = standard_error_.read(writable_bytes(buffer));
     if (!read)
       return std::unexpected(process_io_error("failed to read MCP stderr", server_));
@@ -1205,7 +1270,7 @@ ava::core::VoidResult McpStdioClient::drain_for_cleanup(Clock::time_point deadli
       static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, 0, true));
     }
     static_cast<void>(drain_stdout(false));
-    static_cast<void>(drain_stderr());
+    static_cast<void>(drain_stderr(false));
     if (Clock::now() >= deadline || !process_handle_.valid())
       return {};
 
@@ -1225,7 +1290,7 @@ ava::core::VoidResult McpStdioClient::drain_for_cleanup(Clock::time_point deadli
     }
     static_cast<void>(operation_scope_.supervisor().wait_for_activity(process_handle_, watches, deadline));
     static_cast<void>(drain_stdout(false));
-    static_cast<void>(drain_stderr());
+    static_cast<void>(drain_stderr(false));
   }
   catch (...)
   {
