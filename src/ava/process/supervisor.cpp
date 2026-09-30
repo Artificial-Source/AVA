@@ -113,6 +113,8 @@ ava::core::Result<PipeIoResultV1> PipeEndpoint::write(std::span<std::byte const>
     return PipeIoResultV1{.bytes = static_cast<std::size_t>(result), .state = PipeIoStateV1::Progress};
   if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK)
     return PipeIoResultV1{.bytes = 0, .state = PipeIoStateV1::WouldBlock};
+  if (saved_errno == EPIPE || saved_errno == ECONNRESET)
+    return PipeIoResultV1{.bytes = 0, .state = PipeIoStateV1::EndOfStream};
   return std::unexpected(detail::io_error("failed to write a process pipe endpoint", saved_errno));
 #endif
 }

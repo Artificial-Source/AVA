@@ -526,6 +526,32 @@ void test_exact_environment_signal_reset_and_descriptor_closure()
          "exec closes an undeclared non-CLOEXEC parent descriptor rather than leaking ambient authority");
 }
 
+void test_write_to_closed_reader()
+{
+  auto application = application_owner();
+  ava::process::Supervisor supervisor;
+  SupervisorFallback fallback(supervisor);
+  auto child =
+      spawn_fake(supervisor, operation_owner(application), ava::process::ProcessRoleV1::Mcp, fake_spec("ready-gate", ava::process::StreamModeV1::Capture));
+  if (!child || !child->standard_input || !child->standard_output)
+  {
+    expect(false, "closed-reader fixture returns capture endpoints");
+    return;
+  }
+
+  auto const deadline = std::chrono::steady_clock::now() + 3s;
+  std::string marker;
+  bool const ready = read_until(*child->standard_output, marker, "READY\n", deadline);
+  bool const released = ready && write_text(*child->standard_input, "G", deadline);
+  auto status = released ? wait_for(supervisor, child->handle) : std::nullopt;
+  // Settlement proves the fake has closed its reader; the parent's writer
+  // remains valid so this exercises peer closure rather than local closure.
+  std::string_view const text = "after-exit";
+  auto written = child->standard_input->write(std::span(reinterpret_cast<std::byte const*>(text.data()), text.size()));
+  expect(status && status->exit_code == 0 && child->standard_input->valid() && written && written->bytes == 0 && written->state == PipeIoStateV1::EndOfStream,
+         "neutral pipe writes to a closed peer reader report EndOfStream without a native IO error");
+}
+
 void test_closed_pipes_and_flood_draining()
 {
   auto application = application_owner();
@@ -1002,6 +1028,7 @@ void run_process_supervisor_posix_tests()
   test_matching_common_logical_cwd_executes();
   test_natural_exit_does_not_pay_termination_grace();
   test_exact_environment_signal_reset_and_descriptor_closure();
+  test_write_to_closed_reader();
   test_closed_pipes_and_flood_draining();
   test_term_kill_first_reason_and_leader_first_cleanup();
   test_cancel_deadline_owner_isolation_and_unrelated_child();

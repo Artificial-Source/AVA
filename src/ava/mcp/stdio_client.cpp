@@ -911,6 +911,7 @@ ava::core::Result<std::optional<std::string>> McpStdioClient::try_extract_messag
 ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point deadline, std::chrono::milliseconds timeout, std::string_view timeout_message,
                                                             std::string_view closed_message, CancelCallback cancel_requested)
 {
+  bool process_finished = false;
   while (true)
   {
     if (is_canceled(cancel_requested))
@@ -934,6 +935,7 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
 
     if (auto drained = drain_stderr(); !drained)
       return std::unexpected(std::move(drained.error()));
+    auto const buffered_bytes = stdout_buffer_.size();
     if (auto drained = drain_stdout(true); !drained)
     {
       if (output_limit_error(drained.error()))
@@ -942,8 +944,13 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
     }
     if (stdout_buffer_.find('\n') != std::string::npos)
       continue;
+    // A finished handle cannot signal more activity. Drain already-queued
+    // bytes in bounded batches up to the message cap, but never wait again
+    // after a final drain makes no progress. Complete frames remain readable.
+    if (process_finished && stdout_buffer_.size() > buffered_bytes)
+      continue;
 
-    if (!standard_output_.valid())
+    if (process_finished || !standard_output_.valid())
     {
       auto const status_deadline = std::min(deadline, saturating_add(Clock::now(), kNaturalStatusObservation));
       auto observed = operation_scope_.supervisor().wait(process_handle_, status_deadline);
@@ -970,6 +977,7 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
     auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches, activity_deadline);
     if (!activity)
       return std::unexpected(process_io_error("failed while observing MCP process streams", server_));
+    process_finished = activity->process_finished;
   }
 }
 

@@ -7,6 +7,7 @@
 #include "ava/process/environment.h"
 #include "ava/process/scope.h"
 #include "ava/process/supervisor.h"
+#include "ava/process/supervisor_test_support.h"
 #include "ava/app/command_mcp.h"
 #include "ava/app/headless_policy.h"
 #include "ava/app/runtime/OpenContext.h"
@@ -1058,6 +1059,7 @@ void test_mcp_tool_dispatcher_audits_permission_denials()
                                      : ava::mcp::mcp_model_tool_name("demo", "echo");
     auto const arguments_json = denied_operation == ava::permissions::Operation::McpResourceRead ? "{}" : "{\"text\":\"hello\"}";
     ava::agent::ToolDispatcher dispatcher(context);
+    auto const records_before_denial = authority ? mcp_records(*authority->supervisor).size() : 0;
     prompts.clear();
     audits.clear();
     operation_to_deny = denied_operation;
@@ -1070,8 +1072,8 @@ void test_mcp_tool_dispatcher_audits_permission_denials()
     if (authority && (denied_operation == ava::permissions::Operation::McpServerLaunch || denied_operation == ava::permissions::Operation::McpServerConnect))
     {
       auto const snapshot = authority->supervisor->snapshot();
-      expect(!snapshot.monitor_started && snapshot.live_records == 0 && mcp_records(*authority->supervisor).empty(),
-             "denied MCP " + suffix + " starts no supervised child");
+      expect(snapshot.live_records == 0 && mcp_records(*authority->supervisor).size() == records_before_denial,
+             "denied MCP " + suffix + " starts no new supervised child after registry discovery");
       finish_mcp_supervisor(*authority);
     }
     if (denied_operation == ava::permissions::Operation::McpResourceRead)
@@ -1721,6 +1723,48 @@ void test_mcp_supervisor_lifecycle()
   auto partial_records = mcp_records(*partial_authority->supervisor);
   expect(partial_records.size() == 1 && mcp_completely_settled(partial_records.front()), "partial MCP frame timeout settles completely");
   finish_mcp_supervisor(*partial_authority);
+
+  auto queued_authority = make_mcp_test_authority();
+  if (!queued_authority)
+    return;
+  auto const queued_script = root / "queued-response.sh";
+  write_executable_script(queued_script,
+                          mcp_handshake_then("IFS= read -r req || exit 1\n"
+                                             "id=$(printf '%s' \"$req\" | sed 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/')\n"
+                                             "printf '%s\\n' \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":\\\"$id\\\",\\\"result\\\":{\\\"tools\\\":[]}}\"\n"));
+  auto queued_server = fake_server_config(root);
+  queued_server.command = queued_script.string();
+  auto queued = ava::mcp::McpStdioClient::start(queued_server, fake_client_options(workspace, queued_authority->run));
+  expect(queued.has_value(), "queued-response fixture initializes");
+  if (queued)
+  {
+    int cancel_observations = 0;
+    bool settled_before_read = false;
+    auto listed = (*queued)->list_tools([&] {
+      // The first two observations gate list_tools and its write. The third
+      // gates the read, after the request was written: await actual settlement,
+      // not elapsed time, before allowing the queued response to be consumed.
+      if (++cancel_observations != 3)
+        return false;
+      auto& supervisor = *queued_authority->supervisor;
+      auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        auto const cycle = ava::process::testing::SupervisorTestAccess::monitor_cycle(supervisor);
+        if (supervisor.snapshot().live_records == 0)
+        {
+          settled_before_read = true;
+          break;
+        }
+        if (!ava::process::testing::SupervisorTestAccess::wait_for_monitor_cycle(supervisor, cycle, deadline))
+          break;
+      }
+      return false;
+    });
+    expect(settled_before_read && listed && listed->empty(), "a naturally settled MCP peer's complete queued response remains readable");
+    static_cast<void>((*queued)->shutdown(std::chrono::milliseconds(500)));
+  }
+  finish_mcp_supervisor(*queued_authority);
 
   auto live_authority = make_mcp_test_authority();
   if (!live_authority)
