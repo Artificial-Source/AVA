@@ -10,10 +10,12 @@
 #include "ava/mcp/config.h"
 #include "ava/mcp/stdio_client.h"
 #include "ava/mcp/tool_broker.h"
+#include "ava/core/error.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/string_utils.h"
 
+#include <filesystem>
 #include <sstream>
 #include <utility>
 
@@ -50,7 +52,8 @@ std::string mcp_command_text(ava::mcp::McpServerConfig const& server, McpCommand
 {
   auto render = [mode](std::string const& part) { return mode == McpCommandTextMode::Sanitized ? sanitize_inline_text(part) : part; };
   std::string text = render(server.command);
-  for (auto const& arg : server.args) text += " " + render(arg);
+  for (auto const& arg : server.args)
+    text += " " + render(arg);
   return text;
 }
 
@@ -73,7 +76,8 @@ std::string format_mcp_server_not_found_text(ava::mcp::McpConfig const& config, 
   if (!config.servers.empty())
   {
     output += "\nConfigured MCP servers:";
-    for (auto const& server : config.servers) output += "\n  " + sanitize_inline_text(server.id);
+    for (auto const& server : config.servers)
+      output += "\n  " + sanitize_inline_text(server.id);
   }
   return output;
 }
@@ -237,9 +241,9 @@ ava::core::Result<CommandResult> run_mcp_command(runtime::session_ts& unlocked_s
       return result;
     };
 
-    if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server->source_path,
-                                                        mcp_command_text(*server, McpCommandTextMode::Sanitized),
-                                                        "mcp_tools", "MCP server launch requires permission");
+    if (auto permission =
+            ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server->source_path,
+                                          mcp_command_text(*server, McpCommandTextMode::Sanitized), "mcp_tools", "MCP server launch requires permission");
         !permission)
     {
       return fail(permission.error());
@@ -320,8 +324,7 @@ ava::core::VoidResult ensure_mcp_prompt_permissions(ava::tools::ToolContext cons
                                                     CommandRegistryEntry const& entry)
 {
   if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server.source_path,
-                                                      mcp_command_text(server, McpCommandTextMode::Raw),
-                                                      "mcp_prompt", "MCP server launch requires permission");
+                                                      mcp_command_text(server, McpCommandTextMode::Raw), "mcp_prompt", "MCP server launch requires permission");
       !permission)
     return std::unexpected(std::move(permission.error()));
   if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerConnect, server.source_path, server.id, "mcp_prompt",
@@ -338,9 +341,9 @@ ava::core::VoidResult ensure_mcp_prompt_permissions(ava::tools::ToolContext cons
 
 ava::core::VoidResult ensure_mcp_prompt_server_permission(ava::tools::ToolContext const& context, ava::mcp::McpServerConfig const& server)
 {
-  if (auto permission = ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server.source_path,
-                                                      mcp_command_text(server, McpCommandTextMode::Raw),
-                                                      "mcp_prompts", "MCP server launch requires permission");
+  if (auto permission =
+          ava::tools::ensure_permission(context, ava::permissions::Operation::McpServerLaunch, server.source_path,
+                                        mcp_command_text(server, McpCommandTextMode::Raw), "mcp_prompts", "MCP server launch requires permission");
       !permission)
   {
     return std::unexpected(std::move(permission.error()));
@@ -437,8 +440,25 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
   context.current_tool_name = "mcp_prompts";
   context.cancel_requested = options.cancel_requested;
 
+  auto record_mcp_failure = [&](std::string source_id, std::filesystem::path const& path, ava::core::Error const& error) {
+    add_diagnostic(builder,
+                   CommandRegistryDiagnostic{
+                       .source = to_string(UnifiedCommandSource::McpPrompt), .source_id = std::move(source_id), .path = path, .message = error.format()});
+    return error.code() == ava::core::ErrorCode::Canceled;
+  };
+
   for (auto const& server : config->servers)
   {
+    if (options.cancel_requested && options.cancel_requested())
+    {
+      add_diagnostic(
+          builder, CommandRegistryDiagnostic{
+                       .source = to_string(UnifiedCommandSource::McpPrompt),
+                       .source_id = server.id,
+                       .path = server.source_path,
+                       .message = ava::core::Error(ava::core::ErrorCategory::Unknown, "MCP prompt listing canceled", ava::core::ErrorCode::Canceled).format()});
+      return;
+    }
     if (!server.enabled)
       continue;
     if (!runtime::valid_command_segment(server.id))
@@ -451,37 +471,29 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
     }
     if (auto permission = ensure_mcp_prompt_server_permission(context, server); !permission)
     {
-      add_diagnostic(builder, CommandRegistryDiagnostic{.source = to_string(UnifiedCommandSource::McpPrompt),
-                                                        .source_id = server.id,
-                                                        .path = server.source_path,
-                                                        .message = permission.error().format()});
+      if (record_mcp_failure(server.id, server.source_path, permission.error()))
+        return;
       continue;
     }
     auto client = ava::mcp::McpStdioClient::start(server, ava::mcp::McpStdioClientOptions{.workspace_dir = workspace_dir}, options.cancel_requested);
     if (!client)
     {
-      add_diagnostic(
-          builder,
-          CommandRegistryDiagnostic{
-              .source = to_string(UnifiedCommandSource::McpPrompt), .source_id = server.id, .path = server.source_path, .message = client.error().format()});
+      if (record_mcp_failure(server.id, server.source_path, client.error()))
+        return;
       continue;
     }
     auto prompts = (*client)->list_prompts(options.cancel_requested);
     auto shutdown = (*client)->shutdown();
     if (!prompts)
     {
-      add_diagnostic(
-          builder,
-          CommandRegistryDiagnostic{
-              .source = to_string(UnifiedCommandSource::McpPrompt), .source_id = server.id, .path = server.source_path, .message = prompts.error().format()});
+      if (record_mcp_failure(server.id, server.source_path, prompts.error()))
+        return;
       continue;
     }
     if (!shutdown)
     {
-      add_diagnostic(
-          builder,
-          CommandRegistryDiagnostic{
-              .source = to_string(UnifiedCommandSource::McpPrompt), .source_id = server.id, .path = server.source_path, .message = shutdown.error().format()});
+      if (record_mcp_failure(server.id, server.source_path, shutdown.error()))
+        return;
       continue;
     }
     for (auto const& prompt : *prompts)

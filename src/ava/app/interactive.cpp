@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/http/curl_transport.h"
+#include "ava/app/command_registry.h"
 #include "ava/app/commands.h"
 #include "ava/app/interactive.h"
 #include "ava/app/interactive_internal.h"
@@ -104,7 +105,53 @@ InteractiveResult handle_interactive_submission(InteractiveState& state, std::st
   InteractiveResult line_result;
   if (line.empty())
     return line_result;
-  if (ava::app::is_backend_command_1(line, unlocked_session))
+
+  auto apply_command_result = [&](ava::core::Result<ava::app::CommandResult> command_result) -> InteractiveResult {
+    if (!command_result)
+    {
+      add_output(line_result, command_result.error().format());
+      return line_result;
+    }
+    line_result.quit = command_result->quit;
+    line_result.session_tree_changed = command_result->session_tree_changed;
+    line_result.output = std::move(command_result->output);
+    line_result.tool_timeline = std::move(command_result->tool_timeline);
+    if (command_result->prompt_message)
+    {
+      return with_provider_runtime(state, "\nthis command expands to a prompt and needs provider auth.",
+                                   [&](ava::provider::Provider const& provider, ava::http::Transport& transport, ava::app::runtime::RunOptions run_options) {
+                                     run_options.permission_resolver = permission_resolver;
+                                     run_options.question_resolver = question_resolver;
+                                     run_options.event_sink = std::move(event_sink);
+                                     run_options.cancel_requested = std::move(cancel_requested);
+                                     run_options.take_steering_messages = std::move(take_steering_messages);
+                                     if (!request_id.empty())
+                                       run_options.request_id = request_id;
+                                     run_options.on_subagent_launch = on_subagent_launch;
+                                     auto result = ava::app::run_prompt(unlocked_session, *command_result->prompt_message, provider, transport, run_options);
+                                     InteractiveResult prompt_result;
+                                     if (!result)
+                                     {
+                                       add_output(prompt_result, result.error().format());
+                                       return prompt_result;
+                                     }
+                                     prompt_result.ordinary_turn_committed = true;
+                                     prompt_result.tool_timeline = std::move(result->tool_timeline);
+                                     if (!result->final_text.empty())
+                                     {
+                                       add_output(prompt_result, result->final_text);
+                                     }
+                                     else
+                                     {
+                                       add_output(prompt_result, "done");
+                                     }
+                                     return prompt_result;
+                                   });
+    }
+    return line_result;
+  };
+
+  if (ava::app::is_backend_command(line))
   {
     if (is_compact_command(line))
     {
@@ -157,61 +204,39 @@ InteractiveResult handle_interactive_submission(InteractiveState& state, std::st
           },
           summary_provider_id);
     }
-    auto command_result = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = line,
-                                                                                           .permission_resolver = permission_resolver,
-                                                                                           .question_resolver = question_resolver,
-                                                                                           .cancel_requested = cancel_requested,
-                                                                                           .plugin_ui_capability = std::move(plugin_ui_capability),
-                                                                                           .hotkeys = hotkeys});
-    if (!command_result)
-    {
-      add_output(line_result, command_result.error().format());
-      return line_result;
-    }
-    line_result.quit = command_result->quit;
-    line_result.session_tree_changed = command_result->session_tree_changed;
-    line_result.output = std::move(command_result->output);
-    line_result.tool_timeline = std::move(command_result->tool_timeline);
-    if (command_result->prompt_message)
-    {
-      return with_provider_runtime(state, "\nthis command expands to a prompt and needs provider auth.",
-                                   [&](ava::provider::Provider const& provider, ava::http::Transport& transport, ava::app::runtime::RunOptions run_options) {
-                                     run_options.permission_resolver = permission_resolver;
-                                     run_options.question_resolver = question_resolver;
-                                     run_options.event_sink = std::move(event_sink);
-                                     run_options.cancel_requested = std::move(cancel_requested);
-                                     run_options.take_steering_messages = std::move(take_steering_messages);
-                                     if (!request_id.empty())
-                                       run_options.request_id = request_id;
-                                     run_options.on_subagent_launch = on_subagent_launch;
-                                     auto result = ava::app::run_prompt(unlocked_session, *command_result->prompt_message, provider, transport, run_options);
-                                     InteractiveResult prompt_result;
-                                     if (!result)
-                                     {
-                                       add_output(prompt_result, result.error().format());
-                                       return prompt_result;
-                                     }
-                                     prompt_result.ordinary_turn_committed = true;
-                                     prompt_result.tool_timeline = std::move(result->tool_timeline);
-                                     if (!result->final_text.empty())
-                                     {
-                                       add_output(prompt_result, result->final_text);
-                                     }
-                                     else
-                                     {
-                                       add_output(prompt_result, "done");
-                                     }
-                                     return prompt_result;
-                                   });
-    }
-    return line_result;
+    return apply_command_result(ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = line,
+                                                                                                 .permission_resolver = permission_resolver,
+                                                                                                 .question_resolver = question_resolver,
+                                                                                                 .cancel_requested = cancel_requested,
+                                                                                                 .plugin_ui_capability = std::move(plugin_ui_capability),
+                                                                                                 .hotkeys = hotkeys}));
   }
   if (line.starts_with('/'))
   {
-    auto const end = line.find_first_of(" \t\r\n");
-    auto const command = line.substr(0, end == std::string::npos ? line.size() : end);
-    add_output(line_result, "Unknown command: " + command + ". Type /help to list commands.");
-    return line_result;
+    auto resolved = ava::app::resolve_command_registry_entry(unlocked_session, line, permission_resolver, cancel_requested);
+    if (!resolved)
+    {
+      add_output(line_result, resolved.error().message());
+      return line_result;
+    }
+    if (!*resolved)
+    {
+      auto const end = line.find_first_of(" \t\r\n");
+      auto const command = line.substr(0, end == std::string::npos ? line.size() : end);
+      if (command.starts_with("/skill:") || command.starts_with("/mcp:") || command.starts_with("/plugin:"))
+        add_output(line_result, "command not found: " + command);
+      else
+        add_output(line_result, "Unknown command: " + command + ". Type /help to list commands.");
+      return line_result;
+    }
+    return apply_command_result(ava::app::run_registry_command(unlocked_session,
+                                                               ava::app::CommandRequest{.command = line,
+                                                                                        .permission_resolver = permission_resolver,
+                                                                                        .question_resolver = question_resolver,
+                                                                                        .cancel_requested = cancel_requested,
+                                                                                        .plugin_ui_capability = std::move(plugin_ui_capability),
+                                                                                        .hotkeys = hotkeys},
+                                                               **resolved));
   }
 
   return with_provider_runtime(state, "\nslash tool commands still work offline.",
