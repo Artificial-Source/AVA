@@ -256,11 +256,12 @@ ava::core::Result<CommandResult> run_mcp_command(runtime::session_ts& unlocked_s
     }
 
     ava::mcp::McpStdioClientOptions options;
-    options.workspace_dir = runtime::session_ts::rat(unlocked_session)->workspace_dir();
-    auto client = ava::mcp::McpStdioClient::start(*server, options);
+    options.workspace_dir = context.workspace_dir;
+    options.process_scope = context.process_scope;
+    auto client = ava::mcp::McpStdioClient::start(*server, options, request.cancel_requested);
     if (!client)
       return fail(client.error());
-    auto tools = (*client)->list_tools();
+    auto tools = (*client)->list_tools(request.cancel_requested);
     auto const initialization = (*client)->initialization();
     auto shutdown = (*client)->shutdown();
     if (!tools)
@@ -385,8 +386,10 @@ ava::core::Result<std::string> mcp_prompt_message(runtime::session_ts& unlocked_
   if (auto permission = ensure_mcp_prompt_permissions(context, *server, entry); !permission)
     return std::unexpected(std::move(permission.error()));
 
-  std::filesystem::path workspace_dir = runtime::session_ts::rat(unlocked_session)->workspace_dir();
-  auto client = ava::mcp::McpStdioClient::start(*server, ava::mcp::McpStdioClientOptions{.workspace_dir = std::move(workspace_dir)}, request.cancel_requested);
+  ava::mcp::McpStdioClientOptions client_options;
+  client_options.workspace_dir = context.workspace_dir;
+  client_options.process_scope = context.process_scope;
+  auto client = ava::mcp::McpStdioClient::start(*server, std::move(client_options), request.cancel_requested);
   if (!client)
     return std::unexpected(std::move(client.error()));
   auto prompt = (*client)->get_prompt(entry.mcp_prompt_name, *arguments, request.cancel_requested);
@@ -417,6 +420,7 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
 
   CRITICAL_AREA_BEGIN_R(session);
   auto const workspace_dir = session_r->workspace_dir();
+  auto const session_process_scope = session_r->session_process_scope();
   auto context =
       ava::tools::ToolContext{.workspace_dir = workspace_dir,
                               .mode = session_r->mode(),
@@ -430,6 +434,7 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
                                                                         .data_json = ava::tools::permission_audit_data_json(event)};
                                 return runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry));
                               },
+                              .process_scope = session_process_scope,
                               .session_id = session_r->store.session_id(),
                               .provider_id = session_r->model().provider_id,
                               .model_id = session_r->model().model_id,
@@ -441,9 +446,11 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
   context.cancel_requested = options.cancel_requested;
 
   auto record_mcp_failure = [&](std::string source_id, std::filesystem::path const& path, ava::core::Error const& error) {
-    add_diagnostic(builder,
-                   CommandRegistryDiagnostic{
-                       .source = to_string(UnifiedCommandSource::McpPrompt), .source_id = std::move(source_id), .path = path, .message = error.format()});
+    add_diagnostic(builder, CommandRegistryDiagnostic{.source = to_string(UnifiedCommandSource::McpPrompt),
+                                                      .source_id = std::move(source_id),
+                                                      .path = path,
+                                                      .message = error.format(),
+                                                      .error_code = error.code()});
     return error.code() == ava::core::ErrorCode::Canceled;
   };
 
@@ -451,12 +458,13 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
   {
     if (options.cancel_requested && options.cancel_requested())
     {
-      add_diagnostic(
-          builder, CommandRegistryDiagnostic{
-                       .source = to_string(UnifiedCommandSource::McpPrompt),
-                       .source_id = server.id,
-                       .path = server.source_path,
-                       .message = ava::core::Error(ava::core::ErrorCategory::Unknown, "MCP prompt listing canceled", ava::core::ErrorCode::Canceled).format()});
+      add_diagnostic(builder,
+                     CommandRegistryDiagnostic{
+                         .source = to_string(UnifiedCommandSource::McpPrompt),
+                         .source_id = server.id,
+                         .path = server.source_path,
+                         .message = ava::core::Error(ava::core::ErrorCategory::Unknown, "MCP prompt listing canceled", ava::core::ErrorCode::Canceled).format(),
+                         .error_code = ava::core::ErrorCode::Canceled});
       return;
     }
     if (!server.enabled)
@@ -475,7 +483,8 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
         return;
       continue;
     }
-    auto client = ava::mcp::McpStdioClient::start(server, ava::mcp::McpStdioClientOptions{.workspace_dir = workspace_dir}, options.cancel_requested);
+    auto client = ava::mcp::McpStdioClient::start(
+        server, ava::mcp::McpStdioClientOptions{.workspace_dir = workspace_dir, .process_scope = session_process_scope}, options.cancel_requested);
     if (!client)
     {
       if (record_mcp_failure(server.id, server.source_path, client.error()))

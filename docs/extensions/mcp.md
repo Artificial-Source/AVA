@@ -22,6 +22,12 @@ Use `/mcp list` and `/mcp inspect <server_id>` to inspect loaded servers. Use `/
 - permission/audit coverage for `mcp.server.launch`, `mcp.server.connect`, `mcp.tool.call`, and `mcp.resource.read`;
 - headless `--allow-tool mcp` for explicitly approved automation flows.
 
+## Process lifecycle and environment
+
+Each stdio MCP start is a one-shot supervised operation: AVA derives an operation owner from the admitted session/run process scope, reserves an `Mcp` Supervisor record, and launches through common `spawn`. There is no persistent MCP daemon or process cache. `/mcp tools`, prompt listing, and tool/resource calls all start a fresh child and shut it down after the bounded protocol exchange. Missing process authority fails before fork.
+
+Child environment is the closed `ava-mcp-explicit-v1` profile: process-computed `PWD`, at most 64 explicit `env` pairs from MCP config, and the trusted `PATH` (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) when config omits `PATH`. Nothing is inherited from the host, including `HOME`, provider credentials, proxy/CA variables, and arbitrary `AVA_*` names. Config JSON syntax is unchanged; secrets and user-specific values such as `HOME` or API keys must be listed under the server's explicit `env`. Duplicate names, `PWD` overrides, and non-absolute `PATH` components are rejected by the process environment policy. Supervisor settlement covers the managed group, including a descendant that outlives a naturally exiting leader.
+
 ## Safety Rules
 
 - Project MCP config cannot run until project trust is granted.

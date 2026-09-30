@@ -1033,6 +1033,22 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.plugin_runner_static_contract_negative PROPERTIES TIMEOUT 15)
 
   add_test(
+    NAME ava_tests.mcp_stdio_static_contract
+    COMMAND ${CMAKE_COMMAND}
+            -DAVA_MCP_STDIO_DIR=${CMAKE_SOURCE_DIR}/src/ava/mcp
+            -DAVA_MCP_CMAKE=${CMAKE_SOURCE_DIR}/src/ava/mcp/CMakeLists.txt
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract.cmake)
+  set_tests_properties(ava_tests.mcp_stdio_static_contract PROPERTIES TIMEOUT 15)
+
+  add_test(
+    NAME ava_tests.mcp_stdio_static_contract_negative
+    COMMAND ${CMAKE_COMMAND}
+            -DAVA_MCP_STDIO_SCANNER=${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract.cmake
+            -DAVA_MCP_STDIO_NEGATIVE_ROOT=${CMAKE_BINARY_DIR}/mcp-stdio-scanner-negative
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract_negative.cmake)
+  set_tests_properties(ava_tests.mcp_stdio_static_contract_negative PROPERTIES TIMEOUT 15)
+
+  add_test(
     NAME ava_cli.doctor_support
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/doctor_support_cli_test.py

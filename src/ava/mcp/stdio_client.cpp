@@ -1,45 +1,100 @@
 #include "sys.h"
 #include "ava/diagnostics/safe_failure.h"
+#include "ava/process/environment.h"
 #include "ava/mcp/protocol.h"
 #include "ava/mcp/stdio_client.h"
-#include "ava/mcp/stdio_client_support.h"
+#include "ava/mcp/stdio_client_internal.h"
+#include "ava/core/error.h"
 #include "ava/core/json.h"
 #include "ava/core/strict_json.h"
 #include "ava/core/version.h"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
-#include <cerrno>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string_view>
-#include <thread>
+#include <system_error>
 #include <utility>
 #include <vector>
-#include <fcntl.h>
-#include <poll.h>
-#include <signal.h>
-#include <unistd.h>
 #include "debug.h"
 
 namespace ava::mcp {
 namespace {
 
-constexpr int kMaxDrainReadsPerPoll = 16;
+using Clock = std::chrono::steady_clock;
+using namespace std::chrono_literals;
+
+constexpr int kMaxDrainReadsPerObservation = 16;
 constexpr std::size_t kMaxMcpListPages = 8;
 constexpr std::size_t kMaxMcpPaginationCursorBytes = 64 * 1024;
-constexpr std::size_t kMaxMcpEnvironmentVariables = 64;
-constexpr std::size_t kMaxMcpEnvironmentValueBytes = 16 * 1024;
+constexpr auto kMcpTerminationGrace = 100ms;
+constexpr auto kMcpCleanupBudget = 2s;
+constexpr auto kMcpSettlementObservationBudget = 250ms;
+constexpr auto kMcpMaximumShutdownGrace = 5s;
+constexpr auto kCancellationObservationInterval = 10ms;
+constexpr auto kNaturalStatusObservation = 50ms;
+constexpr std::uint32_t kInputWatch = 1;
+constexpr std::uint32_t kStdoutWatch = 2;
+constexpr std::uint32_t kStderrWatch = 3;
 
-bool valid_environment_name(std::string_view name)
+std::span<std::byte> writable_bytes(std::array<char, 4096>& buffer) noexcept
 {
-  if (name.empty() || name.size() > 128 || !(std::isalpha(static_cast<unsigned char>(name.front())) || name.front() == '_'))
-    return false;
-  return std::ranges::all_of(name.substr(1), [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return std::isalnum(byte) || ch == '_';
-  });
+  return {reinterpret_cast<std::byte*>(buffer.data()), buffer.size()};
+}
+
+std::span<std::byte const> readable_bytes(std::string_view value) noexcept
+{
+  return {reinterpret_cast<std::byte const*>(value.data()), value.size()};
+}
+
+bool output_limit_error(ava::core::Error const& error)
+{
+  return std::ranges::any_of(error.context(), [](ava::core::ErrorContext const& context) { return context.key == "output_limit" && context.value == "true"; });
+}
+
+ava::core::Error process_io_error(std::string message, McpServerConfig const& server)
+{
+  return mcp_error(ava::core::ErrorCategory::Io, std::move(message), server);
+}
+
+ava::core::Error cleanup_error(std::string message)
+{
+  return ava::core::Error(ava::core::ErrorCategory::Io, std::move(message));
+}
+
+Clock::time_point mcp_lifetime_deadline(McpStdioClientOptions const& options) noexcept
+{
+  auto deadline = saturating_add(Clock::now(), options.startup_timeout);
+  deadline = saturating_add(deadline, options.request_timeout);
+  return saturating_add(deadline, kMcpCleanupBudget);
+}
+
+ava::core::Result<std::filesystem::path> absolute_working_directory(McpServerConfig const& server, McpStdioClientOptions const& options)
+{
+  auto working_directory = child_working_dir(server, options);
+  if (working_directory.empty())
+    return std::unexpected(mcp_error(ava::core::ErrorCategory::InvalidArgument, "MCP working directory is unavailable", server));
+  if (!working_directory.is_absolute())
+  {
+    std::error_code error;
+    working_directory = std::filesystem::absolute(working_directory, error);
+    if (error || !working_directory.is_absolute())
+      return std::unexpected(mcp_error(ava::core::ErrorCategory::Io, "failed to resolve the MCP working directory", server));
+  }
+  return working_directory.lexically_normal();
+}
+
+std::vector<ava::process::EnvironmentVariableV1> explicit_environment(McpServerConfig const& server)
+{
+  std::vector<ava::process::EnvironmentVariableV1> variables;
+  variables.reserve(server.env.size());
+  for (auto const& [name, value] : server.env)
+    variables.push_back({.name = name, .value = value});
+  return variables;
 }
 
 std::string compact_json_line(std::string_view message)
@@ -87,32 +142,70 @@ ava::core::Result<std::optional<std::string>> pagination_cursor(std::string_view
   return std::optional<std::string>(std::move(*cursor));
 }
 
-ava::core::VoidResult validate_environment(McpServerConfig const& server)
+std::optional<ava::process::TerminationReasonV1> interruption_reason(Clock::time_point deadline, CancelCallback const& cancel_requested) noexcept
 {
-  if (server.env.size() > kMaxMcpEnvironmentVariables)
-    return std::unexpected(mcp_error(ava::core::ErrorCategory::InvalidArgument, "too many MCP environment variables", server));
-  std::vector<std::string_view> seen;
-  for (auto const& [name, value] : server.env)
-  {
-    if (!valid_environment_name(name) || value.size() > kMaxMcpEnvironmentValueBytes || value.find('\0') != std::string::npos)
-      return std::unexpected(mcp_error(ava::core::ErrorCategory::InvalidArgument, "MCP environment variable is invalid", server));
-    if (std::ranges::find(seen, name) != seen.end())
-      return std::unexpected(mcp_error(ava::core::ErrorCategory::InvalidArgument, "duplicate MCP environment variable", server));
-    seen.push_back(name);
-  }
-  return {};
+  if (Clock::now() >= deadline)
+    return ava::process::TerminationReasonV1::DeadlineExpired;
+  if (is_canceled(cancel_requested))
+    return ava::process::TerminationReasonV1::Canceled;
+  if (Clock::now() >= deadline)
+    return ava::process::TerminationReasonV1::DeadlineExpired;
+  return std::nullopt;
+}
+
+void add_bounded_stream_metadata(ava::core::Error& error, std::string const& stdout_buffer, std::string const& stderr_tail, bool stderr_truncated)
+{
+  error.with_context("response_bytes", std::to_string(stdout_buffer.size()));
+  error.with_context("stderr_bytes", std::to_string(stderr_tail.size()));
+  error.with_context("stderr_truncated", stderr_truncated ? "true" : "false");
+}
+
+ava::core::Error stdout_limit_error(std::string message, McpServerConfig const& server, McpStdioClientOptions const& options, std::size_t queued_bytes)
+{
+  auto error = protocol_error(std::move(message), server);
+  error.with_context("max_bytes", std::to_string(options.max_message_bytes));
+  error.with_context("queued_bytes", std::to_string(queued_bytes));
+  error.with_context("output_limit", "true");
+  return error;
 }
 
 }  // namespace
 
-McpStdioClient::McpStdioClient(McpServerConfig server, McpStdioClientOptions options) : server_(std::move(server)), options_(std::move(options))
+McpStdioClient::McpStdioClient(McpServerConfig server, McpStdioClientOptions options, ava::process::ProcessScopeV1 operation_scope,
+                               Clock::time_point startup_deadline)
+    : server_(std::move(server)),
+      options_(std::move(options)),
+      startup_deadline_(startup_deadline == Clock::time_point{} ? saturating_add(Clock::now(), options_.startup_timeout) : startup_deadline),
+      operation_scope_(std::move(operation_scope))
 {
+  options_.process_scope.reset();
 }
 
-McpStdioClient::~McpStdioClient()
+McpStdioClient::~McpStdioClient() noexcept
 {
-  terminate_child();
-  close_fds();
+  try
+  {
+    standard_input_.close();
+    if (process_handle_.valid() && !settlement_)
+    {
+      if (settlement_error_)
+      {
+        // A bounded explicit wait may fail while the Supervisor still owns a
+        // runnable group. Destruction gets one fresh bounded observation so a
+        // sticky reporting error cannot suppress owner cleanup.
+        settlement_error_.reset();
+        cleanup_deadline_.reset();
+        observation_deadline_.reset();
+      }
+      auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kMcpCleanupBudget));
+      auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kMcpSettlementObservationBudget));
+      static_cast<void>(settle_until(ava::process::TerminationReasonV1::OwnerShutdown, cleanup_deadline, observation_deadline));
+    }
+  }
+  catch (...)
+  {
+  }
+  close_endpoints();
 }
 
 ava::core::Result<std::unique_ptr<McpStdioClient>> McpStdioClient::start(McpServerConfig server, McpStdioClientOptions options, CancelCallback cancel_requested)
@@ -121,18 +214,21 @@ ava::core::Result<std::unique_ptr<McpStdioClient>> McpStdioClient::start(McpServ
   {
     return std::unexpected(mcp_error(ava::core::ErrorCategory::InvalidArgument, "MCP server command must not be empty", server));
   }
-  if (auto valid_env = validate_environment(server); !valid_env)
-    return std::unexpected(std::move(valid_env.error()));
   if (options.workspace_dir.empty())
-    options.workspace_dir = std::filesystem::current_path();
-  if (options.startup_timeout < std::chrono::milliseconds(50) || options.startup_timeout > std::chrono::seconds(30))
+  {
+    std::error_code error;
+    options.workspace_dir = std::filesystem::current_path(error);
+    if (error || options.workspace_dir.empty())
+      return std::unexpected(mcp_error(ava::core::ErrorCategory::Io, "MCP workspace directory is unavailable", server));
+  }
+  if (options.startup_timeout < 50ms || options.startup_timeout > 30s)
   {
     auto error = mcp_error(ava::core::ErrorCategory::InvalidArgument, "MCP startup timeout is out of bounds", server);
     error.with_context("min_ms", "50");
     error.with_context("max_ms", "30000");
     return std::unexpected(std::move(error));
   }
-  if (options.request_timeout < std::chrono::milliseconds(50) || options.request_timeout > std::chrono::seconds(30))
+  if (options.request_timeout < 50ms || options.request_timeout > 30s)
   {
     auto error = mcp_error(ava::core::ErrorCategory::InvalidArgument, "MCP request timeout is out of bounds", server);
     error.with_context("min_ms", "50");
@@ -143,18 +239,28 @@ ava::core::Result<std::unique_ptr<McpStdioClient>> McpStdioClient::start(McpServ
   {
     return std::unexpected(mcp_error(ava::core::ErrorCategory::InvalidArgument, "MCP client byte limits must be non-zero", server));
   }
+  if (!options.process_scope)
+    return std::unexpected(mcp_error(ava::core::ErrorCategory::Configuration, "MCP process authority is required", server));
   if (is_canceled(cancel_requested))
   {
     return std::unexpected(canceled_error("MCP startup canceled", server));
   }
 
-  auto client = std::make_unique<McpStdioClient>(std::move(server), std::move(options));
-  if (auto launched = client->launch(); !launched)
+  auto operation_scope = options.process_scope->operation();
+  if (!operation_scope)
+  {
+    auto error = mcp_error(ava::core::ErrorCategory::Configuration, "failed to derive MCP operation process authority", server);
+    error.with_context("cause", operation_scope.error().message());
+    return std::unexpected(std::move(error));
+  }
+  options.process_scope.reset();
+
+  auto const startup_deadline = saturating_add(Clock::now(), options.startup_timeout);
+  auto client = std::make_unique<McpStdioClient>(std::move(server), std::move(options), std::move(*operation_scope), startup_deadline);
+  if (auto launched = client->launch(cancel_requested); !launched)
     return std::unexpected(std::move(launched.error()));
   if (auto initialized = client->initialize(cancel_requested); !initialized)
-  {
     return std::unexpected(std::move(initialized.error()));
-  }
   return client;
 }
 
@@ -178,149 +284,210 @@ bool McpStdioClient::stderr_truncated() const noexcept
   return stderr_truncated_;
 }
 
-ava::core::VoidResult McpStdioClient::launch()
+ava::core::VoidResult McpStdioClient::launch(CancelCallback const& cancel_requested)
 {
-  auto stdin_pipe = make_pipe(server_);
-  if (!stdin_pipe)
-    return std::unexpected(std::move(stdin_pipe.error()));
-  UniqueFd stdin_read((*stdin_pipe)[0]);
-  UniqueFd stdin_write((*stdin_pipe)[1]);
+  auto working_directory = absolute_working_directory(server_, options_);
+  if (!working_directory)
+    return std::unexpected(std::move(working_directory.error()));
+  auto environment = ava::process::make_mcp_environment_v1(*working_directory, explicit_environment(server_));
+  if (!environment)
+    return std::unexpected(mcp_error(ava::core::ErrorCategory::Configuration, "failed to create the MCP process environment", server_));
+  auto arguments = mcp_argv(server_);
+  auto executable = mcp_executable(server_, *working_directory);
+  if (is_canceled(cancel_requested))
+    return std::unexpected(canceled_error("MCP startup canceled", server_));
 
-  auto stdout_pipe = make_pipe(server_);
-  if (!stdout_pipe)
-    return std::unexpected(std::move(stdout_pipe.error()));
-  UniqueFd stdout_read((*stdout_pipe)[0]);
-  UniqueFd stdout_write((*stdout_pipe)[1]);
-
-  auto stderr_pipe = make_pipe(server_);
-  if (!stderr_pipe)
-    return std::unexpected(std::move(stderr_pipe.error()));
-  UniqueFd stderr_read((*stderr_pipe)[0]);
-  UniqueFd stderr_write((*stderr_pipe)[1]);
-
-  auto argv_strings = mcp_argv(server_);
-  std::vector<char*> argv;
-  argv.reserve(argv_strings.size() + 1);
-  for (auto& arg : argv_strings) argv.push_back(arg.data());
-  argv.push_back(nullptr);
-  auto const explicit_path = std::ranges::find_if(server_.env, [](auto const& variable) { return variable.first == "PATH"; });
-  std::string_view const execution_path = explicit_path == server_.env.end() ? std::string_view(kTrustedExecPath) : std::string_view(explicit_path->second);
-
-  std::vector<std::string> environment_strings;
-  std::vector<std::string> inherited_names;
-  if (!options_.clean_environment)
+  auto const remaining = std::chrono::duration_cast<std::chrono::milliseconds>(startup_deadline_ - Clock::now());
+  if (remaining <= 0ms)
   {
-    for (char** inherited = ::environ; inherited != nullptr && *inherited != nullptr; ++inherited)
-    {
-      std::string_view const variable(*inherited);
-      auto const separator = variable.find('=');
-      if (separator == std::string_view::npos || separator == 0)
-        continue;
-      auto const name = variable.substr(0, separator);
-      if (name == "PATH" || name == "PWD" || std::ranges::any_of(server_.env, [&](auto const& override) { return override.first == name; }) ||
-          std::ranges::find(inherited_names, name) != inherited_names.end())
-        continue;
-      inherited_names.emplace_back(name);
-      environment_strings.emplace_back(variable);
-    }
-  }
-  environment_strings.reserve(environment_strings.size() + server_.env.size() + 1);
-  if (explicit_path == server_.env.end())
-    environment_strings.emplace_back(std::string("PATH=") + kTrustedExecPath);
-  for (auto const& [name, value] : server_.env) environment_strings.push_back(name + "=" + value);
-
-  std::vector<char*> environment;
-  environment.reserve(environment_strings.size() + 1);
-  for (auto& value : environment_strings) environment.push_back(value.data());
-  environment.push_back(nullptr);
-
-  auto executable = server_.command;
-  if (executable.find('/') == std::string::npos)
-  {
-    std::string_view paths(execution_path);
-    while (!paths.empty())
-    {
-      auto const separator = paths.find(':');
-      auto const directory = paths.substr(0, separator);
-      auto candidate = std::filesystem::path(directory) / executable;
-      if (::access(candidate.c_str(), X_OK) == 0)
-      {
-        executable = candidate.string();
-        break;
-      }
-      if (separator == std::string_view::npos)
-        break;
-      paths.remove_prefix(separator + 1);
-    }
-    if (executable.find('/') == std::string::npos)
-      return std::unexpected(mcp_error(ava::core::ErrorCategory::NotFound, "MCP executable was not found on the configured PATH", server_));
+    auto error = protocol_error("timed out preparing MCP startup", server_);
+    error.with_context("timeout_ms", std::to_string(options_.startup_timeout.count()));
+    return std::unexpected(std::move(error));
   }
 
-  auto const cwd = child_working_dir(server_, options_).string();
-  // Set PWD to the logical cwd so that child processes preserve symlinked
-  // path components instead of the physical path that getcwd() would return.
-  environment_strings.emplace_back(std::string("PWD=") + cwd);
-  // Rebuild environment pointers to include PWD.
-  environment.clear();
-  environment.reserve(environment_strings.size() + 1);
-  for (auto& value : environment_strings) environment.push_back(value.data());
-  environment.push_back(nullptr);
-  pid_t const pid = fork();
-  if (pid < 0)
-    return std::unexpected(errno_error("failed to fork MCP server process", server_));
+  auto& supervisor = operation_scope_.supervisor();
+  auto reservation =
+      supervisor.reserve(operation_scope_.owner_prefix(), ava::process::ProcessRoleV1::Mcp,
+                         {.termination_grace = kMcpTerminationGrace, .startup_timeout = remaining, .execution_deadline = mcp_lifetime_deadline(options_)});
+  if (!reservation)
+    return std::unexpected(std::move(reservation.error()));
 
-  if (pid == 0)
+  auto spawned = supervisor.spawn(std::move(*reservation), {.executable = std::move(executable),
+                                                            .argv = std::move(arguments),
+                                                            .environment = std::move(*environment),
+                                                            .cwd = working_directory->string(),
+                                                            .stdin_mode = ava::process::StreamModeV1::Capture,
+                                                            .stdout_mode = ava::process::StreamModeV1::Capture,
+                                                            .stderr_mode = ava::process::StreamModeV1::Capture,
+                                                            .cancel_requested = cancel_requested});
+  if (!spawned)
   {
-    setpgid(0, 0);
-    stdin_write.reset();
-    stdout_read.reset();
-    stderr_read.reset();
-    if (dup2(stdin_read.get(), STDIN_FILENO) < 0)
-      _exit(127);
-    if (dup2(stdout_write.get(), STDOUT_FILENO) < 0)
-      _exit(127);
-    if (dup2(stderr_write.get(), STDERR_FILENO) < 0)
-      _exit(127);
-    stdin_read.reset();
-    stdout_write.reset();
-    stderr_write.reset();
-    if (chdir(cwd.c_str()) != 0)
-      _exit(127);
-    close_nonstandard_fds();
-    // argv/environment storage is fully prepared before fork. The child does
-    // no allocator-backed environment mutation in the post-fork path.
-    execve(executable.c_str(), argv.data(), environment.data());
-    _exit(127);
+    auto error = std::move(spawned.error());
+    bool const startup_canceled = std::ranges::any_of(error.context(), [](ava::core::ErrorContext const& context) {
+      return context.key == "reason" && context.value == ava::process::to_string(ava::process::TerminationReasonV1::Canceled);
+    });
+    if (!startup_canceled)
+      return std::unexpected(std::move(error));
+    auto canceled = canceled_error("MCP startup canceled", server_);
+    canceled.with_context("reason", std::string(ava::process::to_string(ava::process::TerminationReasonV1::Canceled)));
+    return std::unexpected(std::move(canceled));
   }
 
-  pid_ = static_cast<int>(pid);
-  can_signal_group_ = set_child_process_group(pid);
-  stdin_read.reset();
-  stdout_write.reset();
-  stderr_write.reset();
-  stdin_fd_ = stdin_write.release();
-  stdout_fd_ = stdout_read.release();
-  stderr_fd_ = stderr_read.release();
-
-  if (auto nonblocking = set_pipe_nonblocking(stdin_fd_); !nonblocking)
+  process_handle_ = std::move(spawned->handle);
+  if (spawned->standard_input)
+    standard_input_ = std::move(*spawned->standard_input);
+  if (spawned->standard_output)
+    standard_output_ = std::move(*spawned->standard_output);
+  if (spawned->standard_error)
+    standard_error_ = std::move(*spawned->standard_error);
+  if (!standard_input_.valid() || !standard_output_.valid() || !standard_error_.valid())
   {
-    terminate_child();
-    close_fds();
-    return std::unexpected(std::move(nonblocking.error()));
-  }
-  if (auto nonblocking = set_pipe_nonblocking(stdout_fd_); !nonblocking)
-  {
-    terminate_child();
-    close_fds();
-    return std::unexpected(std::move(nonblocking.error()));
-  }
-  if (auto nonblocking = set_pipe_nonblocking(stderr_fd_); !nonblocking)
-  {
-    terminate_child();
-    close_fds();
-    return std::unexpected(std::move(nonblocking.error()));
+    auto error = protocol_error("MCP process did not provide its captured streams", server_);
+    return std::unexpected(fail_process(ava::process::TerminationReasonV1::ProtocolFailure, std::move(error)));
   }
   return {};
+}
+
+std::optional<ava::process::ExitStatusV1> McpStdioClient::observe_settlement() const
+{
+  if (settlement_)
+    return settlement_;
+  if (!process_handle_.valid())
+    return std::nullopt;
+  auto observed = operation_scope_.supervisor().try_wait(process_handle_);
+  if (!observed || !*observed)
+    return std::nullopt;
+  return **observed;
+}
+
+ava::core::VoidResult McpStdioClient::settled_cleanup_result() const
+{
+  if (settlement_error_)
+    return std::unexpected(*settlement_error_);
+  if (!settlement_)
+    return std::unexpected(cleanup_error("MCP process cleanup has not settled"));
+  if (settlement_->cleanup != ava::process::CleanupStateV1::Complete)
+    return std::unexpected(cleanup_error("MCP process cleanup is incomplete"));
+  return {};
+}
+
+ava::core::VoidResult McpStdioClient::settle_until(ava::process::TerminationReasonV1 reason, Clock::time_point cleanup_deadline,
+                                                   Clock::time_point observation_deadline)
+{
+  if (settlement_ || settlement_error_)
+    return settled_cleanup_result();
+  if (!process_handle_.valid())
+  {
+    settlement_error_ = cleanup_error("MCP process cleanup handle is unavailable");
+    return std::unexpected(*settlement_error_);
+  }
+
+  if (!cleanup_deadline_)
+    cleanup_deadline_ = cleanup_deadline;
+  if (!observation_deadline_)
+    observation_deadline_ = observation_deadline;
+  cleanup_deadline = *cleanup_deadline_;
+  observation_deadline = *observation_deadline_;
+  standard_input_.close();
+
+  if (auto observed = observe_settlement())
+    settlement_ = *observed;
+  if (!settlement_ && !stop_requested_)
+  {
+    // The caller observation remains bounded by observation_deadline. Retain
+    // Supervisor cleanup authority for one destructor retry beyond that bound
+    // so a surfaced wait error cannot immediately strand a runnable child at
+    // the Supervisor's hard cleanup horizon.
+    auto const supervisor_cleanup_deadline = saturating_add(observation_deadline, kMcpCleanupBudget);
+    auto stopped = operation_scope_.supervisor().request_stop(process_handle_, reason, supervisor_cleanup_deadline);
+    if (!stopped)
+    {
+      settlement_error_ = cleanup_error("failed to request MCP process cleanup");
+      settlement_error_->with_context("cause", stopped.error().message());
+      return std::unexpected(*settlement_error_);
+    }
+    stop_requested_ = true;
+  }
+
+  while (!settlement_ && Clock::now() < observation_deadline)
+  {
+    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, saturating_add(Clock::now(), 10ms))));
+    if (auto observed = observe_settlement())
+      settlement_ = *observed;
+  }
+  if (!settlement_)
+  {
+    auto observed = operation_scope_.supervisor().wait(process_handle_, observation_deadline);
+    if (observed)
+      settlement_ = *observed;
+  }
+  while (settlement_ && (standard_output_.valid() || standard_error_.valid()) && Clock::now() < observation_deadline)
+    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, saturating_add(Clock::now(), 10ms))));
+  static_cast<void>(drain_for_cleanup(Clock::now()));
+  close_endpoints();
+
+  if (!settlement_)
+  {
+    settlement_error_ = cleanup_error("MCP process cleanup did not settle before its bounded deadline");
+    return std::unexpected(*settlement_error_);
+  }
+  return settled_cleanup_result();
+}
+
+ava::core::VoidResult McpStdioClient::settle_failure(ava::process::TerminationReasonV1 reason)
+{
+  if (settlement_ || settlement_error_)
+    return settled_cleanup_result();
+  auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kMcpCleanupBudget));
+  auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kMcpSettlementObservationBudget));
+  return settle_until(reason, cleanup_deadline, observation_deadline);
+}
+
+ava::core::Error McpStdioClient::fail_process(ava::process::TerminationReasonV1 reason, ava::core::Error error)
+{
+  auto settled = settle_failure(reason);
+  if (!settled)
+    return std::move(settled.error());
+  return error;
+}
+
+ava::core::VoidResult McpStdioClient::shutdown(std::chrono::milliseconds grace)
+{
+  if (grace < 0ms || grace > kMcpMaximumShutdownGrace)
+    return std::unexpected(mcp_error(ava::core::ErrorCategory::InvalidArgument, "MCP shutdown grace is out of bounds", server_));
+  if (settlement_ || settlement_error_)
+    return settled_cleanup_result();
+
+  standard_input_.close();
+  auto const natural_deadline = saturating_add(Clock::now(), grace);
+  while (!settlement_ && Clock::now() < natural_deadline)
+  {
+    static_cast<void>(drain_for_cleanup(std::min(natural_deadline, saturating_add(Clock::now(), 10ms))));
+    if (auto observed = observe_settlement())
+      settlement_ = *observed;
+  }
+  if (auto observed = observe_settlement())
+    settlement_ = *observed;
+  if (settlement_)
+  {
+    auto const drain_deadline = saturating_add(Clock::now(), kMcpSettlementObservationBudget);
+    while ((standard_output_.valid() || standard_error_.valid()) && Clock::now() < drain_deadline)
+      static_cast<void>(drain_for_cleanup(std::min(drain_deadline, saturating_add(Clock::now(), 10ms))));
+    static_cast<void>(drain_for_cleanup(Clock::now()));
+    close_endpoints();
+    return settled_cleanup_result();
+  }
+
+  auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kMcpCleanupBudget));
+  auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kMcpSettlementObservationBudget));
+  return settle_until(ava::process::TerminationReasonV1::OwnerShutdown, cleanup_deadline, observation_deadline);
+}
+
+void McpStdioClient::close_endpoints() noexcept
+{
+  standard_input_.close();
+  standard_output_.close();
+  standard_error_.close();
 }
 
 ava::core::VoidResult McpStdioClient::initialize(CancelCallback cancel_requested)
@@ -329,7 +496,7 @@ ava::core::VoidResult McpStdioClient::initialize(CancelCallback cancel_requested
       "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"ava\","
       "\"version\":\"" +
       std::string(ava::core::version::kFullVersion) + "\"}}";
-  auto response = request("initialize", params, options_.startup_timeout, "timed out waiting for MCP initialization", cancel_requested);
+  auto response = request("initialize", params, options_.startup_timeout, "timed out waiting for MCP initialization", cancel_requested, startup_deadline_);
   if (!response)
     return std::unexpected(std::move(response.error()));
   auto const protocol_version = ava::core::json::string_field(response->result_json, "protocolVersion");
@@ -347,8 +514,7 @@ ava::core::VoidResult McpStdioClient::initialize(CancelCallback cancel_requested
                                       .raw_json = response->raw_json};
 
   std::string const notification = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}";
-  auto const deadline = std::chrono::steady_clock::now() + options_.request_timeout;
-  return write_message(notification, deadline, options_.request_timeout, "timed out writing MCP initialized notification",
+  return write_message(notification, startup_deadline_, options_.startup_timeout, "timed out writing MCP initialized notification",
                        "MCP server closed before initialized notification", cancel_requested);
 }
 
@@ -620,9 +786,10 @@ ava::core::Result<McpResourceReadResult> McpStdioClient::read_resource(std::stri
 
 ava::core::Result<McpStdioClient::JsonRpcResponse> McpStdioClient::request(std::string_view method, std::string_view params_json,
                                                                            std::chrono::milliseconds timeout, std::string_view timeout_message,
-                                                                           CancelCallback cancel_requested)
+                                                                           CancelCallback cancel_requested, Clock::time_point deadline)
 {
-  auto const deadline = std::chrono::steady_clock::now() + timeout;
+  if (deadline == Clock::time_point{})
+    deadline = Clock::now() + timeout;
   auto const request_id = "ava_mcp_" + std::to_string(next_request_id_++);
   std::string const request_json =
       "{\"jsonrpc\":\"2.0\",\"id\":" + json_string(request_id) + ",\"method\":" + json_string(method) + ",\"params\":" + std::string(params_json) + "}";
@@ -674,13 +841,9 @@ ava::core::Result<McpStdioClient::JsonRpcResponse> McpStdioClient::request(std::
   }
 }
 
-ava::core::VoidResult McpStdioClient::write_message(std::string_view message, std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
+ava::core::VoidResult McpStdioClient::write_message(std::string_view message, Clock::time_point deadline, std::chrono::milliseconds timeout,
                                                     std::string_view timeout_message, std::string_view closed_message, CancelCallback cancel_requested)
 {
-  if (auto reaped = reap_child(); !reaped)
-    return std::unexpected(std::move(reaped.error()));
-  if (stdin_fd_ < 0)
-    return std::unexpected(peer_closed_error(closed_message));
   auto const frame = compact_json_line(message);
   if (frame.size() - 1 > options_.max_message_bytes)
   {
@@ -688,31 +851,39 @@ ava::core::VoidResult McpStdioClient::write_message(std::string_view message, st
     error.with_context("max_bytes", std::to_string(options_.max_message_bytes));
     return std::unexpected(std::move(error));
   }
+  if (!standard_input_.valid())
+    return std::unexpected(peer_closed_error(closed_message));
+
   std::size_t offset = 0;
   while (offset < frame.size())
   {
-    if (is_canceled(cancel_requested))
+    if (auto interrupted = interruption_reason(deadline, cancel_requested))
     {
-      terminate_child();
-      return std::unexpected(canceled_error("MCP request canceled", server_));
+      if (*interrupted == ava::process::TerminationReasonV1::Canceled)
+        return std::unexpected(fail_process(*interrupted, canceled_error("MCP request canceled", server_)));
+      auto error = protocol_error(std::string(timeout_message), server_);
+      error.with_context("timeout_ms", std::to_string(timeout.count()));
+      return std::unexpected(fail_process(*interrupted, std::move(error)));
     }
-    auto const bytes = write_retry(stdin_fd_, frame.data() + offset, frame.size() - offset);
-    if (bytes > 0)
+
+    auto written = standard_input_.write(readable_bytes(std::string_view(frame).substr(offset)));
+    if (!written)
     {
-      offset += static_cast<std::size_t>(bytes);
+      auto error = process_io_error("failed to write MCP request", server_);
+      return std::unexpected(std::move(error));
+    }
+    if (written->state == ava::process::PipeIoStateV1::Progress && written->bytes != 0)
+    {
+      offset += written->bytes;
       continue;
     }
-    if (bytes == 0 || errno == EPIPE)
-      return std::unexpected(peer_closed_error(closed_message));
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
+    if (written->state == ava::process::PipeIoStateV1::WouldBlock)
     {
       if (auto writable = wait_for_writable(deadline, timeout, timeout_message, closed_message, cancel_requested); !writable)
-      {
         return std::unexpected(std::move(writable.error()));
-      }
       continue;
     }
-    return std::unexpected(errno_error("failed to write MCP request", server_));
+    return std::unexpected(peer_closed_error(closed_message));
   }
   return {};
 }
@@ -724,19 +895,17 @@ ava::core::Result<std::optional<std::string>> McpStdioClient::try_extract_messag
   {
     if (stdout_buffer_.size() > options_.max_message_bytes)
     {
-      auto error = protocol_error("MCP message exceeds size cap before newline", server_);
-      error.with_context("max_bytes", std::to_string(options_.max_message_bytes));
-      terminate_child();
-      return std::unexpected(std::move(error));
+      auto error = stdout_limit_error("MCP message exceeds size cap before newline", server_, options_, stdout_buffer_.size());
+      static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, 0, true));
+      return std::unexpected(fail_process(ava::process::TerminationReasonV1::OutputLimit, std::move(error)));
     }
     return std::optional<std::string>{};
   }
   if (newline > options_.max_message_bytes)
   {
-    auto error = protocol_error("MCP message exceeds size cap", server_);
-    error.with_context("max_bytes", std::to_string(options_.max_message_bytes));
-    terminate_child();
-    return std::unexpected(std::move(error));
+    auto error = stdout_limit_error("MCP message exceeds size cap", server_, options_, stdout_buffer_.size());
+    static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, 0, true));
+    return std::unexpected(fail_process(ava::process::TerminationReasonV1::OutputLimit, std::move(error)));
   }
   auto message = stdout_buffer_.substr(0, newline);
   stdout_buffer_.erase(0, newline + 1);
@@ -745,119 +914,139 @@ ava::core::Result<std::optional<std::string>> McpStdioClient::try_extract_messag
   return std::optional<std::string>{std::move(message)};
 }
 
-ava::core::Result<std::string> McpStdioClient::read_message(std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
-                                                            std::string_view timeout_message, std::string_view closed_message, CancelCallback cancel_requested)
+ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point deadline, std::chrono::milliseconds timeout, std::string_view timeout_message,
+                                                            std::string_view closed_message, CancelCallback cancel_requested)
 {
   while (true)
   {
     if (is_canceled(cancel_requested))
-    {
-      terminate_child();
-      return std::unexpected(canceled_error("MCP request canceled", server_));
-    }
+      return std::unexpected(fail_process(ava::process::TerminationReasonV1::Canceled, canceled_error("MCP request canceled", server_)));
+
     auto extracted = try_extract_message();
     if (!extracted)
       return std::unexpected(std::move(extracted.error()));
     if (*extracted)
       return std::move(**extracted);
 
-    if (stdout_fd_ < 0)
+    if (auto interrupted = interruption_reason(deadline, cancel_requested))
     {
-      auto const reap_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(10);
-      do
-      {
-        if (auto reaped = reap_child(); !reaped)
-          return std::unexpected(std::move(reaped.error()));
-        if (child_exited_)
-          break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      } while (std::chrono::steady_clock::now() < reap_deadline);
-      return std::unexpected(peer_closed_error(closed_message, stdout_buffer_.size()));
-    }
-    if (auto reaped = reap_child(); !reaped)
-      return std::unexpected(std::move(reaped.error()));
-    if (std::chrono::steady_clock::now() >= deadline)
-    {
+      if (*interrupted == ava::process::TerminationReasonV1::Canceled)
+        return std::unexpected(fail_process(*interrupted, canceled_error("MCP request canceled", server_)));
       auto error = protocol_error(std::string(timeout_message), server_);
       error.with_context("timeout_ms", std::to_string(timeout.count()));
-      error.with_context("response_bytes", std::to_string(stdout_buffer_.size()));
-      error.with_context("stderr_bytes", std::to_string(stderr_tail_.size()));
-      error.with_context("stderr_truncated", stderr_truncated_ ? "true" : "false");
-      terminate_child();
-      return std::unexpected(std::move(error));
+      add_bounded_stream_metadata(error, stdout_buffer_, stderr_tail_, stderr_truncated_);
+      return std::unexpected(fail_process(*interrupted, std::move(error)));
     }
 
-    std::array<pollfd, 2> fds{pollfd{.fd = stdout_fd_, .events = POLLIN, .revents = 0}, pollfd{.fd = stderr_fd_, .events = POLLIN, .revents = 0}};
-    int const poll_timeout = static_cast<int>(std::min<std::size_t>(remaining_ms(deadline), 100));
-    int const polled = poll(fds.data(), fds.size(), poll_timeout);
-    if (polled < 0)
+    if (auto drained = drain_stderr(); !drained)
+      return std::unexpected(std::move(drained.error()));
+    if (auto drained = drain_stdout(true); !drained)
     {
-      if (errno == EINTR)
-        continue;
-      return std::unexpected(errno_error("failed to poll MCP process pipes", server_));
+      if (output_limit_error(drained.error()))
+        return std::unexpected(fail_process(ava::process::TerminationReasonV1::OutputLimit, std::move(drained.error())));
+      return std::unexpected(std::move(drained.error()));
     }
-    if (polled == 0)
+    if (stdout_buffer_.find('\n') != std::string::npos)
       continue;
-    if (fds[1].revents != 0)
+
+    if (!standard_output_.valid())
     {
-      if (auto drained = drain_stderr(); !drained)
-        return std::unexpected(std::move(drained.error()));
+      auto const status_deadline = std::min(deadline, saturating_add(Clock::now(), kNaturalStatusObservation));
+      auto observed = operation_scope_.supervisor().wait(process_handle_, status_deadline);
+      if (observed)
+        settlement_ = *observed;
+      return std::unexpected(peer_closed_error(closed_message, stdout_buffer_.size()));
     }
-    if (fds[0].revents != 0)
+
+    std::vector<ava::process::PipeWatchV1> watches;
+    watches.reserve(2);
+    auto stdout_watch = standard_output_.watch(ava::process::PipeInterestV1::Readable, kStdoutWatch);
+    if (!stdout_watch)
+      return std::unexpected(process_io_error("failed to watch MCP stdout", server_));
+    watches.push_back(std::move(*stdout_watch));
+    if (standard_error_.valid())
     {
-      if (auto drained = drain_stdout(); !drained)
-        return std::unexpected(std::move(drained.error()));
+      auto stderr_watch = standard_error_.watch(ava::process::PipeInterestV1::Readable, kStderrWatch);
+      if (!stderr_watch)
+        return std::unexpected(process_io_error("failed to watch MCP stderr", server_));
+      watches.push_back(std::move(*stderr_watch));
     }
+
+    auto const activity_deadline = std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval));
+    auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches, activity_deadline);
+    if (!activity)
+      return std::unexpected(process_io_error("failed while observing MCP process streams", server_));
   }
 }
 
-ava::core::VoidResult McpStdioClient::wait_for_writable(std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
-                                                        std::string_view timeout_message, std::string_view closed_message, CancelCallback cancel_requested)
+ava::core::VoidResult McpStdioClient::wait_for_writable(Clock::time_point deadline, std::chrono::milliseconds timeout, std::string_view timeout_message,
+                                                        std::string_view closed_message, CancelCallback cancel_requested)
 {
   while (true)
   {
-    if (is_canceled(cancel_requested))
+    if (auto interrupted = interruption_reason(deadline, cancel_requested))
     {
-      terminate_child();
-      return std::unexpected(canceled_error("MCP request canceled", server_));
-    }
-    if (auto reaped = reap_child(); !reaped)
-      return std::unexpected(std::move(reaped.error()));
-    if (stdin_fd_ < 0)
-      return std::unexpected(peer_closed_error(closed_message));
-    if (std::chrono::steady_clock::now() >= deadline)
-    {
+      if (*interrupted == ava::process::TerminationReasonV1::Canceled)
+        return std::unexpected(fail_process(*interrupted, canceled_error("MCP request canceled", server_)));
       auto error = protocol_error(std::string(timeout_message), server_);
       error.with_context("timeout_ms", std::to_string(timeout.count()));
-      terminate_child();
-      return std::unexpected(std::move(error));
+      return std::unexpected(fail_process(*interrupted, std::move(error)));
     }
-    std::array<pollfd, 2> fds{pollfd{.fd = stdin_fd_, .events = POLLOUT, .revents = 0}, pollfd{.fd = stderr_fd_, .events = POLLIN, .revents = 0}};
-    int const poll_timeout = static_cast<int>(std::min<std::size_t>(remaining_ms(deadline), 100));
-    int const polled = poll(fds.data(), fds.size(), poll_timeout);
-    if (polled < 0)
-    {
-      if (errno == EINTR)
-        continue;
-      return std::unexpected(errno_error("failed to poll MCP request pipe", server_));
-    }
-    if (fds[1].revents != 0)
-    {
-      if (auto drained = drain_stderr(); !drained)
-        return std::unexpected(std::move(drained.error()));
-    }
-    if ((fds[0].revents & POLLOUT) != 0)
-      return {};
-    if ((fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+    if (!standard_input_.valid())
       return std::unexpected(peer_closed_error(closed_message));
+
+    std::vector<ava::process::PipeWatchV1> watches;
+    watches.reserve(3);
+    auto input_watch = standard_input_.watch(ava::process::PipeInterestV1::Writable, kInputWatch);
+    if (!input_watch)
+      return std::unexpected(process_io_error("failed to watch MCP stdin", server_));
+    watches.push_back(std::move(*input_watch));
+    if (standard_output_.valid())
+    {
+      auto stdout_watch = standard_output_.watch(ava::process::PipeInterestV1::Readable, kStdoutWatch);
+      if (!stdout_watch)
+        return std::unexpected(process_io_error("failed to watch MCP stdout", server_));
+      watches.push_back(std::move(*stdout_watch));
+    }
+    if (standard_error_.valid())
+    {
+      auto stderr_watch = standard_error_.watch(ava::process::PipeInterestV1::Readable, kStderrWatch);
+      if (!stderr_watch)
+        return std::unexpected(process_io_error("failed to watch MCP stderr", server_));
+      watches.push_back(std::move(*stderr_watch));
+    }
+
+    auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches,
+                                                                    std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval)));
+    if (!activity)
+      return std::unexpected(process_io_error("failed while observing the MCP request stream", server_));
+    if (auto drained = drain_stderr(); !drained)
+      return std::unexpected(std::move(drained.error()));
+    if (auto drained = drain_stdout(true); !drained)
+    {
+      if (output_limit_error(drained.error()))
+        return std::unexpected(fail_process(ava::process::TerminationReasonV1::OutputLimit, std::move(drained.error())));
+      return std::unexpected(std::move(drained.error()));
+    }
+    auto const input_ready = std::ranges::find_if(activity->ready, [](ava::process::PipeReadyV1 const& ready) { return ready.token == kInputWatch; });
+    if (input_ready != activity->ready.end() && input_ready->writable)
+      return {};
+    if (input_ready != activity->ready.end() && (input_ready->peer_closed || input_ready->error))
+      return std::unexpected(peer_closed_error(closed_message));
+    if (activity->process_finished)
+    {
+      if (auto observed = observe_settlement())
+        settlement_ = *observed;
+      return std::unexpected(peer_closed_error(closed_message));
+    }
   }
 }
 
 ava::core::Error McpStdioClient::peer_closed_error(std::string_view closed_message, std::optional<std::size_t> response_bytes) const
 {
   auto error = protocol_error(std::string(closed_message), server_);
-  if (child_exited_)
-    error.with_context("status", exit_detail(child_status_));
+  if (auto status = observe_settlement())
+    error.with_context("status", exit_detail(*status));
   if (response_bytes)
     error.with_context("response_bytes", std::to_string(*response_bytes));
   error.with_context("stderr_bytes", std::to_string(stderr_tail_.size()));
@@ -865,98 +1054,130 @@ ava::core::Error McpStdioClient::peer_closed_error(std::string_view closed_messa
   return error;
 }
 
-ava::core::VoidResult McpStdioClient::drain_stdout()
+ava::core::VoidResult McpStdioClient::drain_stdout(bool enforce_message_limit)
 {
-  if (stdout_fd_ < 0)
+  if (!standard_output_.valid())
     return {};
   std::array<char, 4096> buffer{};
-  int reads = 0;
-  while (true)
+  for (int reads = 0; reads < kMaxDrainReadsPerObservation; ++reads)
   {
-    auto const bytes = read_retry(stdout_fd_, buffer.data(), buffer.size());
-    if (bytes > 0)
+    auto read = standard_output_.read(writable_bytes(buffer));
+    if (!read)
+      return std::unexpected(process_io_error("failed to read MCP stdout", server_));
+    if (read->state == ava::process::PipeIoStateV1::WouldBlock)
+      return {};
+    if (read->state == ava::process::PipeIoStateV1::EndOfStream)
     {
-      Dout(dc::mcp, "operation=stdout state=read bytes=" << bytes);
-      stdout_buffer_.append(buffer.data(), static_cast<std::size_t>(bytes));
-      if (++reads >= kMaxDrainReadsPerPoll)
-        return {};
+      standard_output_.close();
+      return {};
+    }
+    if (read->state != ava::process::PipeIoStateV1::Progress || read->bytes == 0)
+      return std::unexpected(process_io_error("MCP stdout returned an invalid stream state", server_));
+
+    Dout(dc::mcp, "operation=stdout state=read bytes=" << read->bytes);
+    if (enforce_message_limit)
+    {
+      if (stdout_buffer_.size() > options_.max_message_bytes || read->bytes > std::numeric_limits<std::size_t>::max() - stdout_buffer_.size() ||
+          stdout_buffer_.size() + read->bytes > options_.max_message_bytes + 1)
+      {
+        auto const attempted_bytes = read->bytes > std::numeric_limits<std::size_t>::max() - stdout_buffer_.size() ? std::numeric_limits<std::size_t>::max()
+                                                                                                                   : stdout_buffer_.size() + read->bytes;
+        static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, read->bytes, true));
+        return std::unexpected(stdout_limit_error("MCP message exceeds size cap before newline", server_, options_, attempted_bytes));
+      }
+      try
+      {
+        stdout_buffer_.append(buffer.data(), read->bytes);
+      }
+      catch (...)
+      {
+        static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, read->bytes, true));
+        return std::unexpected(process_io_error("failed to retain bounded MCP stdout", server_));
+      }
+      bool const truncated = stdout_buffer_.size() > options_.max_message_bytes;
+      if (auto accounted = operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, read->bytes, truncated);
+          !accounted)
+      {
+        return std::unexpected(process_io_error("failed to account MCP stdout", server_));
+      }
+      if (truncated)
+        return std::unexpected(stdout_limit_error("MCP message exceeds size cap before newline", server_, options_, stdout_buffer_.size()));
       continue;
     }
-    if (bytes == 0)
+
+    bool const truncated =
+        read->bytes > options_.max_message_bytes || stdout_buffer_.size() > options_.max_message_bytes - std::min(options_.max_message_bytes, read->bytes);
+    try
     {
-      close_fd(stdout_fd_);
-      return {};
+      if (read->bytes >= options_.max_message_bytes)
+        stdout_buffer_.assign(buffer.data() + (read->bytes - options_.max_message_bytes), options_.max_message_bytes);
+      else
+      {
+        if (stdout_buffer_.size() > options_.max_message_bytes - read->bytes)
+          stdout_buffer_.erase(0, stdout_buffer_.size() - (options_.max_message_bytes - read->bytes));
+        stdout_buffer_.append(buffer.data(), read->bytes);
+      }
     }
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
-      return {};
-    return std::unexpected(errno_error("failed to read MCP stdout", server_));
+    catch (...)
+    {
+      static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, read->bytes, true));
+      return std::unexpected(process_io_error("failed to retain bounded MCP stdout", server_));
+    }
+    if (auto accounted = operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, read->bytes, truncated);
+        !accounted)
+    {
+      return std::unexpected(process_io_error("failed to account MCP stdout", server_));
+    }
   }
+  return {};
 }
 
 ava::core::VoidResult McpStdioClient::drain_stderr()
 {
-  if (stderr_fd_ < 0)
+  if (!standard_error_.valid())
     return {};
   std::array<char, 4096> buffer{};
-  int reads = 0;
-  while (true)
+  for (int reads = 0; reads < kMaxDrainReadsPerObservation; ++reads)
   {
-    auto const bytes = read_retry(stderr_fd_, buffer.data(), buffer.size());
-    if (bytes > 0)
+    auto read = standard_error_.read(writable_bytes(buffer));
+    if (!read)
+      return std::unexpected(process_io_error("failed to read MCP stderr", server_));
+    if (read->state == ava::process::PipeIoStateV1::WouldBlock)
+      return {};
+    if (read->state == ava::process::PipeIoStateV1::EndOfStream)
     {
-      Dout(dc::mcp, "operation=stderr state=read bytes=" << bytes << " retained_bytes=" << stderr_tail_.size());
-      append_stderr(std::string_view(buffer.data(), static_cast<std::size_t>(bytes)));
-      if (++reads >= kMaxDrainReadsPerPoll)
-        return {};
-      continue;
-    }
-    if (bytes == 0)
-    {
-      close_fd(stderr_fd_);
+      standard_error_.close();
       return {};
     }
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
-      return {};
-    return std::unexpected(errno_error("failed to read MCP stderr", server_));
-  }
-}
+    if (read->state != ava::process::PipeIoStateV1::Progress || read->bytes == 0)
+      return std::unexpected(process_io_error("MCP stderr returned an invalid stream state", server_));
 
-ava::core::VoidResult McpStdioClient::reap_child()
-{
-  if (pid_ <= 0 || child_exited_)
-    return {};
-  int status = 0;
-  auto const waited = waitpid_retry(static_cast<pid_t>(pid_), &status, WNOHANG);
-  if (waited < 0)
-  {
-    if (errno == ECHILD)
+    auto const retained_before = stderr_tail_.size();
+    bool const truncated = stderr_truncated_ || retained_before > options_.max_stderr_bytes - std::min(options_.max_stderr_bytes, read->bytes);
+    Dout(dc::mcp, "operation=stderr state=read bytes=" << read->bytes << " retained_bytes=" << retained_before);
+    try
     {
-      pid_ = -1;
-      child_exited_ = true;
-      return {};
+      append_stderr(std::string_view(buffer.data(), read->bytes));
     }
-    return std::unexpected(errno_error("failed to reap MCP server process", server_));
+    catch (...)
+    {
+      static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardError, read->bytes, true));
+      return std::unexpected(process_io_error("failed to retain bounded MCP stderr", server_));
+    }
+    if (auto accounted = operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardError, read->bytes,
+                                                                      truncated || stderr_truncated_);
+        !accounted)
+    {
+      return std::unexpected(process_io_error("failed to account MCP stderr", server_));
+    }
   }
-  if (waited == 0)
-    return {};
-  child_status_ = status;
-  child_exited_ = true;
-  close_fd(stdin_fd_);
-  return {};
-}
-
-ava::core::VoidResult McpStdioClient::set_pipe_nonblocking(int fd)
-{
-  int const flags = fcntl(fd, F_GETFL, 0);
-  if (flags < 0)
-    return std::unexpected(errno_error("failed to inspect MCP pipe flags", server_));
-  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
-    return std::unexpected(errno_error("failed to set MCP pipe nonblocking", server_));
   return {};
 }
 
 void McpStdioClient::append_stderr(std::string_view chunk)
 {
+  if (chunk.empty())
+    return;
   if (chunk.size() >= options_.max_stderr_bytes)
   {
     stderr_tail_ = std::string(chunk.substr(chunk.size() - options_.max_stderr_bytes));
@@ -972,75 +1193,41 @@ void McpStdioClient::append_stderr(std::string_view chunk)
   stderr_tail_.append(chunk);
 }
 
-void McpStdioClient::close_fds() noexcept
+ava::core::VoidResult McpStdioClient::drain_for_cleanup(Clock::time_point deadline) noexcept
 {
-  close_fd(stdin_fd_);
-  close_fd(stdout_fd_);
-  close_fd(stderr_fd_);
-}
-
-void McpStdioClient::terminate_child() noexcept
-{
-  if (pid_ <= 0 || child_exited_)
-    return;
-  close_fd(stdin_fd_);
-  if (can_signal_group_)
+  try
   {
-    kill(-static_cast<pid_t>(pid_), SIGTERM);
-  }
-  else
-  {
-    kill(static_cast<pid_t>(pid_), SIGTERM);
-  }
-  auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    int status = 0;
-    auto const waited = waitpid_retry(static_cast<pid_t>(pid_), &status, WNOHANG);
-    if (waited == pid_)
+    if (stdout_buffer_.size() > options_.max_message_bytes)
     {
-      child_status_ = status;
-      child_exited_ = true;
-      return;
+      stdout_buffer_.erase(0, stdout_buffer_.size() - options_.max_message_bytes);
+      static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, 0, true));
     }
-    if (waited < 0)
-      return;
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-  }
-  if (can_signal_group_)
-  {
-    kill(-static_cast<pid_t>(pid_), SIGKILL);
-  }
-  else
-  {
-    kill(static_cast<pid_t>(pid_), SIGKILL);
-  }
-  int status = 0;
-  if (waitpid_retry(static_cast<pid_t>(pid_), &status, 0) == pid_)
-  {
-    child_status_ = status;
-    child_exited_ = true;
-  }
-}
+    static_cast<void>(drain_stdout(false));
+    static_cast<void>(drain_stderr());
+    if (Clock::now() >= deadline || !process_handle_.valid())
+      return {};
 
-ava::core::VoidResult McpStdioClient::shutdown(std::chrono::milliseconds grace)
-{
-  close_fd(stdin_fd_);
-  auto const deadline = std::chrono::steady_clock::now() + grace;
-  while (pid_ > 0 && !child_exited_ && std::chrono::steady_clock::now() < deadline)
-  {
-    if (auto drained = drain_stdout(); !drained)
-      return std::unexpected(std::move(drained.error()));
-    if (auto drained = drain_stderr(); !drained)
-      return std::unexpected(std::move(drained.error()));
-    if (auto reaped = reap_child(); !reaped)
-      return std::unexpected(std::move(reaped.error()));
-    if (!child_exited_)
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::vector<ava::process::PipeWatchV1> watches;
+    watches.reserve(2);
+    if (standard_output_.valid())
+    {
+      auto watch = standard_output_.watch(ava::process::PipeInterestV1::Readable, kStdoutWatch);
+      if (watch)
+        watches.push_back(std::move(*watch));
+    }
+    if (standard_error_.valid())
+    {
+      auto watch = standard_error_.watch(ava::process::PipeInterestV1::Readable, kStderrWatch);
+      if (watch)
+        watches.push_back(std::move(*watch));
+    }
+    static_cast<void>(operation_scope_.supervisor().wait_for_activity(process_handle_, watches, deadline));
+    static_cast<void>(drain_stdout(false));
+    static_cast<void>(drain_stderr());
   }
-  if (pid_ > 0 && !child_exited_)
-    terminate_child();
-  close_fds();
+  catch (...)
+  {
+  }
   return {};
 }
 

@@ -4,6 +4,9 @@
 #include "tests/support/process_group_test_support.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
+#include "ava/process/environment.h"
+#include "ava/process/scope.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/headless_policy.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/tools/file_tools.h"
@@ -25,6 +28,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -103,21 +107,136 @@ ava::mcp::McpServerConfig fake_server_config(std::filesystem::path const& root)
                                    .source_path = root / "mcp.json"};
 }
 
-ava::mcp::McpStdioClientOptions fake_client_options(std::filesystem::path const& workspace)
+struct McpTestAuthority
+{
+  std::shared_ptr<ava::process::Supervisor> supervisor;
+  ava::process::ProcessScopeV1 application;
+  ava::process::ProcessScopeV1 session;
+  ava::process::ProcessScopeV1 run;
+};
+
+std::optional<McpTestAuthority> make_mcp_test_authority()
+{
+  auto supervisor = std::make_shared<ava::process::Supervisor>();
+  auto application = ava::process::ProcessScopeV1::application(supervisor);
+  if (!application)
+  {
+    expect(false, "MCP test application scope: " + application.error().format());
+    return std::nullopt;
+  }
+  auto session = application->session();
+  if (!session)
+  {
+    expect(false, "MCP test session scope: " + session.error().format());
+    return std::nullopt;
+  }
+  auto run = session->run();
+  if (!run)
+  {
+    expect(false, "MCP test run scope: " + run.error().format());
+    return std::nullopt;
+  }
+  return McpTestAuthority{.supervisor = std::move(supervisor), .application = std::move(*application), .session = std::move(*session), .run = std::move(*run)};
+}
+
+std::optional<ava::process::ProcessScopeV1> mcp_test_run_scope()
+{
+  auto authority = make_mcp_test_authority();
+  if (!authority)
+    return std::nullopt;
+  return authority->run;
+}
+
+void attach_mcp_process_scope(ava::tools::ToolContext& context)
+{
+  if (!context.process_scope)
+    context.process_scope = mcp_test_run_scope();
+}
+
+ava::mcp::McpStdioClientOptions fake_client_options(std::filesystem::path const& workspace,
+                                                    std::optional<ava::process::ProcessScopeV1> process_scope = std::nullopt)
 {
   ava::mcp::McpStdioClientOptions options;
   options.workspace_dir = workspace;
   options.startup_timeout = std::chrono::seconds(5);
   options.request_timeout = std::chrono::seconds(5);
+  if (process_scope)
+    options.process_scope = std::move(*process_scope);
+  else
+    options.process_scope = mcp_test_run_scope();
   return options;
+}
+
+std::vector<ava::process::ProcessSnapshotRecordV1> mcp_records(ava::process::Supervisor const& supervisor)
+{
+  auto snapshot = supervisor.snapshot();
+  std::vector<ava::process::ProcessSnapshotRecordV1> records;
+  for (auto const& record : snapshot.records)
+  {
+    if (record.role == ava::process::ProcessRoleV1::Mcp)
+      records.push_back(record);
+  }
+  return records;
+}
+
+bool mcp_completely_settled(ava::process::ProcessSnapshotRecordV1 const& record)
+{
+  return record.state == ava::process::ProcessStateV1::Finished && record.cleanup == ava::process::CleanupStateV1::Complete && record.settlement_count == 1;
+}
+
+void finish_mcp_supervisor(McpTestAuthority& authority)
+{
+  authority.supervisor->stop_accepting();
+  auto const result = authority.supervisor->shutdown(std::chrono::steady_clock::now() + std::chrono::seconds(2));
+  expect(result.complete && result.incomplete_count == 0 && authority.supervisor->snapshot().live_records == 0,
+         "MCP process test supervisor finishes with no live records");
+}
+
+void write_executable_script(std::filesystem::path const& path, std::string const& text)
+{
+  write_text(path, text);
+  std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::owner_exec,
+                               std::filesystem::perm_options::replace);
+}
+
+bool process_is_live_for_test(std::string_view identity)
+{
+#if defined(__linux__)
+  return !identity.empty() && std::filesystem::exists(std::filesystem::path("/proc") / std::string(identity));
+#else
+  static_cast<void>(identity);
+  return true;
+#endif
+}
+
+bool wait_for_process_absent(std::string_view identity)
+{
+#if defined(__linux__)
+  if (identity.empty())
+    return false;
+  auto const path = std::filesystem::path("/proc") / std::string(identity);
+  auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    if (!std::filesystem::exists(path))
+      return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return !std::filesystem::exists(path);
+#else
+  static_cast<void>(identity);
+  return true;
+#endif
 }
 
 std::string nested_arrays_json(std::size_t depth)
 {
   std::string text;
   text.reserve(depth * 2);
-  for (std::size_t index = 0; index < depth; ++index) text += '[';
-  for (std::size_t index = 0; index < depth; ++index) text += ']';
+  for (std::size_t index = 0; index < depth; ++index)
+    text += '[';
+  for (std::size_t index = 0; index < depth; ++index)
+    text += ']';
   return text;
 }
 
@@ -681,6 +800,7 @@ void test_mcp_tool_dispatcher()
     return {};
   };
   context.cancel_requested = [&] { return cancel_requested; };
+  attach_mcp_process_scope(context);
 
   auto const model_tool_name = ava::mcp::mcp_model_tool_name("demo", "echo");
   auto const resource_tool_name = ava::mcp::mcp_model_resource_tool_name("demo", "file:///workspace/notes.md");
@@ -818,6 +938,9 @@ void test_mcp_tool_dispatcher_audits_permission_denials()
       audits.push_back(event);
       return {};
     };
+    auto authority = make_mcp_test_authority();
+    if (authority)
+      context.process_scope = authority->run;
 
     auto const model_tool_name = denied_operation == ava::permissions::Operation::McpResourceRead
                                      ? ava::mcp::mcp_model_resource_tool_name("demo", "file:///workspace/notes.md")
@@ -833,6 +956,13 @@ void test_mcp_tool_dispatcher_audits_permission_denials()
     expect(dispatched && !dispatched->success && dispatched->result_text.find("permission_denied") != std::string::npos,
            dispatched ? "MCP dispatcher reports support-safe permission denial for " + suffix
                       : "MCP dispatcher reports support-safe permission denial for " + suffix + ": " + dispatched.error().format());
+    if (authority && (denied_operation == ava::permissions::Operation::McpServerLaunch || denied_operation == ava::permissions::Operation::McpServerConnect))
+    {
+      auto const snapshot = authority->supervisor->snapshot();
+      expect(!snapshot.monitor_started && snapshot.live_records == 0 && mcp_records(*authority->supervisor).empty(),
+             "denied MCP " + suffix + " starts no supervised child");
+      finish_mcp_supervisor(*authority);
+    }
     if (denied_operation == ava::permissions::Operation::McpResourceRead)
     {
       expect(dispatched && dispatched->result_text.find("file:///workspace/notes.md") == std::string::npos,
@@ -898,6 +1028,7 @@ void test_mcp_tool_dispatcher_contains_tool_errors()
     prompts.push_back(prompt);
     return ava::permissions::PermissionResolution::Allow;
   };
+  attach_mcp_process_scope(context);
 
   auto const model_tool_name = ava::mcp::mcp_model_tool_name("demo", "echo");
   ava::agent::ToolDispatcher dispatcher(context);
@@ -924,6 +1055,7 @@ void test_mcp_tool_dispatcher_contains_tool_errors()
   text_context.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
     return ava::permissions::PermissionResolution::Allow;
   };
+  attach_mcp_process_scope(text_context);
   ava::agent::ToolDispatcher text_dispatcher(text_context);
   auto text_dispatched = text_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_mcp_canceled_text_error", .name = model_tool_name, .arguments_json = "{\"text\":\"hello\"}"});
@@ -957,6 +1089,7 @@ void test_mcp_strict_session_registry_failures_and_nested_cwd()
     context.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
       return ava::permissions::PermissionResolution::Allow;
     };
+    attach_mcp_process_scope(context);
     return context;
   };
   auto context_for = [&](ava::mcp::McpServerConfig server) {
@@ -1032,7 +1165,8 @@ void test_mcp_strict_session_registry_failures_and_nested_cwd()
   auto legacy = ava::agent::ToolDispatcher::create_strict(std::move(legacy_context));
   bool legacy_has_plugin = false;
   if (legacy)
-    for (auto const& metadata : legacy->registered_tool_metadata()) legacy_has_plugin = legacy_has_plugin || metadata.name == plugin_name;
+    for (auto const& metadata : legacy->registered_tool_metadata())
+      legacy_has_plugin = legacy_has_plugin || metadata.name == plugin_name;
   expect(legacy && legacy_has_plugin, "legacy registry behavior still includes an enabled plugin beside session MCP");
 
   auto first_collision = fake_server_config(root);
@@ -1086,6 +1220,7 @@ void test_mcp_session_environment_is_clean()
     context.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
       return ava::permissions::PermissionResolution::Allow;
     };
+    attach_mcp_process_scope(context);
     return context;
   };
 
@@ -1113,7 +1248,7 @@ void test_mcp_session_environment_is_clean()
   std::filesystem::remove_all(root, remove_error);
 }
 
-void test_mcp_ordinary_global_and_project_environment_is_inherited()
+void test_mcp_ordinary_global_and_project_environment_is_explicit()
 {
   auto const root = create_empty_root("mcp-ordinary-inherited-env");
 
@@ -1134,12 +1269,12 @@ void test_mcp_ordinary_global_and_project_environment_is_inherited()
   context.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
     return ava::permissions::PermissionResolution::Allow;
   };
+  attach_mcp_process_scope(context);
   auto inherited = ava::agent::ToolDispatcher::create_strict(std::move(context));
   auto const inherited_marker = read_text(marker);
-  expect(inherited && inherited_marker.find("EXPLICIT=parent-value") != std::string::npos &&
-             inherited_marker.find("INHERITED=parent-marker") != std::string::npos &&
+  expect(inherited && inherited_marker.find("EXPLICIT=<unset>") != std::string::npos && inherited_marker.find("INHERITED=<unset>") != std::string::npos &&
              inherited_marker.find("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin") != std::string::npos,
-         inherited ? "ordinary loaded global MCP inherits benign parent variables and replaces parent PATH with the trusted default"
+         inherited ? "ordinary loaded global MCP receives only trusted PATH and explicit config values"
                    : "ordinary loaded global MCP environment discovery failed: " + inherited.error().format());
 
   std::filesystem::remove(marker);
@@ -1151,6 +1286,7 @@ void test_mcp_ordinary_global_and_project_environment_is_inherited()
   suppressed_context.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
     return ava::permissions::PermissionResolution::Allow;
   };
+  attach_mcp_process_scope(suppressed_context);
   auto suppressed = ava::agent::ToolDispatcher::create_strict(std::move(suppressed_context));
   expect(suppressed && !std::filesystem::exists(marker),
          suppressed ? "disabled global MCP ignores an explicitly supplied config path"
@@ -1167,9 +1303,9 @@ void test_mcp_ordinary_global_and_project_environment_is_inherited()
   {
     static_cast<void>((*explicit_path)->shutdown());
     auto const explicit_marker = read_text(marker);
-    expect(explicit_marker.find("EXPLICIT=project-value") != std::string::npos && explicit_marker.find("INHERITED=parent-marker") != std::string::npos &&
-               explicit_marker.find("PATH=/bounded/project/path") != std::string::npos,
-           "ordinary project MCP retains inherited variables while applying exact explicit value and PATH overrides");
+    expect(explicit_marker.find("EXPLICIT=project-value") != std::string::npos && explicit_marker.find("INHERITED=<unset>") != std::string::npos &&
+               explicit_marker.find("SECRET=<unset>") != std::string::npos && explicit_marker.find("PATH=/bounded/project/path") != std::string::npos,
+           "ordinary project MCP applies explicit values without ambient parent inheritance");
   }
 
   std::error_code remove_error;
@@ -1179,10 +1315,246 @@ void test_mcp_ordinary_global_and_project_environment_is_inherited()
 void test_mcp_stdio_environment_validation()
 {
   auto const root = create_empty_root("mcp-environment-validation");
+  auto authority = make_mcp_test_authority();
+  if (!authority)
+    return;
   auto server = fake_server_config(root);
   server.env = {{"DUPLICATE", "one"}, {"DUPLICATE", "two"}};
-  auto duplicate = ava::mcp::McpStdioClient::start(server, fake_client_options(root));
-  expect(!duplicate && duplicate.error().message().find("duplicate") != std::string::npos, "MCP stdio rejects duplicate environment names before launch");
+  auto duplicate = ava::mcp::McpStdioClient::start(server, fake_client_options(root, authority->run));
+  auto after_duplicate = authority->supervisor->snapshot();
+  expect(!duplicate && duplicate.error().message().find("process environment") != std::string::npos && !after_duplicate.monitor_started &&
+             after_duplicate.live_records == 0,
+         "MCP stdio rejects duplicate environment names before launch");
+
+  server.env = {{"PWD", "/caller"}};
+  auto reserved_pwd = ava::mcp::McpStdioClient::start(server, fake_client_options(root, authority->run));
+  expect(!reserved_pwd && reserved_pwd.error().message().find("process environment") != std::string::npos,
+         "MCP stdio rejects reserved PWD from explicit configuration");
+
+  server.env = {{"PATH", "relative:path"}};
+  auto invalid_path = ava::mcp::McpStdioClient::start(server, fake_client_options(root, authority->run));
+  expect(!invalid_path && invalid_path.error().message().find("process environment") != std::string::npos, "MCP stdio rejects a non-absolute explicit PATH");
+  finish_mcp_supervisor(*authority);
+}
+
+std::string mcp_handshake_then(std::string const& body)
+{
+  return "#!/bin/sh\n"
+         "IFS= read -r req || exit 1\n"
+         "id=$(printf '%s' \"$req\" | sed 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/')\n"
+         "printf '%s\\n' "
+         "\"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":\\\"$id\\\",\\\"result\\\":{\\\"protocolVersion\\\":\\\"2024-11-05\\\",\\\"capabilities\\\":{},"
+         "\\\"serverInfo\\\":{\\\"name\\\":\\\"fake-mcp\\\",\\\"version\\\":\\\"1.0.0\\\"}}}\"\n"
+         "IFS= read -r _ || true\n" +
+         body;
+}
+
+void test_mcp_supervisor_lifecycle()
+{
+  if (ava::process::platform_support_v1() != ava::process::PlatformSupportV1::Posix)
+  {
+    expect(true, "MCP Supervisor client is intentionally unsupported on this platform");
+    return;
+  }
+
+  auto const root = create_empty_root("mcp-supervisor-lifecycle");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+
+  auto missing_authority = make_mcp_test_authority();
+  if (!missing_authority)
+    return;
+  auto const missing_marker = root / "missing-scope-ran";
+  auto const missing_script = root / "missing-scope.sh";
+  write_executable_script(missing_script, "#!/bin/sh\ntouch \"" + missing_marker.string() + "\"\nexec \"$@\"\n");
+  auto missing_server = fake_server_config(root);
+  missing_server.command = missing_script.string();
+  missing_server.args = {AVA_FAKE_MCP_SERVER_PATH};
+  auto missing_options = fake_client_options(workspace, missing_authority->run);
+  missing_options.process_scope.reset();
+  auto missing = ava::mcp::McpStdioClient::start(missing_server, missing_options);
+  auto after_missing = missing_authority->supervisor->snapshot();
+  expect(!missing && missing.error().message().find("authority is required") != std::string::npos && !after_missing.monitor_started &&
+             after_missing.live_records == 0 && !std::filesystem::exists(missing_marker),
+         "missing MCP process scope fails before reservation and spawn");
+  finish_mcp_supervisor(*missing_authority);
+
+  auto env_authority = make_mcp_test_authority();
+  if (!env_authority)
+    return;
+  auto const env_marker = root / "canary-env.txt";
+  auto const env_script = root / "env-canary.sh";
+  write_executable_script(env_script,
+                          "#!/bin/sh\n"
+                          "{\n"
+                          "  printf 'HOME=%s\\n' \"${HOME-<unset>}\"\n"
+                          "  printf 'OPENAI_API_KEY=%s\\n' \"${OPENAI_API_KEY-<unset>}\"\n"
+                          "  printf 'PWD=%s\\n' \"${PWD-<unset>}\"\n"
+                          "  printf 'PATH=%s\\n' \"${PATH-<unset>}\"\n"
+                          "} > \"" +
+                              env_marker.string() +
+                              "\"\n"
+                              "exec \"$@\"\n");
+  ScopedEnvVar const home_canary("HOME", "/tmp/mcp-home-canary");
+  ScopedEnvVar const api_canary("OPENAI_API_KEY", "sk-mcp-must-not-leak");
+  auto env_server = fake_server_config(root);
+  env_server.command = env_script.string();
+  env_server.args = {AVA_FAKE_MCP_SERVER_PATH};
+  auto env_client = ava::mcp::McpStdioClient::start(env_server, fake_client_options(workspace, env_authority->run));
+  expect(env_client.has_value(), env_client ? "MCP env canary fixture initializes" : "MCP env canary fixture initializes: " + env_client.error().format());
+  if (env_client)
+    static_cast<void>((*env_client)->shutdown(std::chrono::milliseconds(500)));
+  auto const env_text = read_text(env_marker);
+  auto const expected_pwd = ava::core::normalized_absolute_path(workspace).string();
+  expect(env_text.find("HOME=<unset>") != std::string::npos && env_text.find("OPENAI_API_KEY=<unset>") != std::string::npos &&
+             env_text.find("PWD=" + expected_pwd) != std::string::npos &&
+             env_text.find("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin") != std::string::npos &&
+             env_text.find("sk-mcp-must-not-leak") == std::string::npos && env_text.find("mcp-home-canary") == std::string::npos,
+         "MCP child receives synthetic PWD and trusted PATH without ambient HOME or API credentials");
+  auto env_records = mcp_records(*env_authority->supervisor);
+  expect(env_records.size() == 1 && mcp_completely_settled(env_records.front()), "MCP env canary process settles under supervision");
+  finish_mcp_supervisor(*env_authority);
+
+  auto pre_cancel_authority = make_mcp_test_authority();
+  if (!pre_cancel_authority)
+    return;
+  auto pre_cancel_server = fake_server_config(root);
+  pre_cancel_server.command = missing_script.string();
+  pre_cancel_server.args = {AVA_FAKE_MCP_SERVER_PATH};
+  auto pre_canceled = ava::mcp::McpStdioClient::start(pre_cancel_server, fake_client_options(workspace, pre_cancel_authority->run), [] { return true; });
+  auto after_pre_cancel = pre_cancel_authority->supervisor->snapshot();
+  expect(!pre_canceled && pre_canceled.error().code() == ava::core::ErrorCode::Canceled && !after_pre_cancel.monitor_started &&
+             after_pre_cancel.live_records == 0 && !std::filesystem::exists(missing_marker),
+         "pre-canceled MCP startup creates no child or process record");
+  finish_mcp_supervisor(*pre_cancel_authority);
+
+  auto flood_authority = make_mcp_test_authority();
+  if (!flood_authority)
+    return;
+  auto const flood_script = root / "stdout-flood.sh";
+  write_executable_script(flood_script, mcp_handshake_then("dd if=/dev/zero bs=1024 count=64 2>/dev/null | tr '\\0' 'x'\nsleep 30\n"));
+  auto flood_server = fake_server_config(root);
+  flood_server.command = flood_script.string();
+  auto flood_options = fake_client_options(workspace, flood_authority->run);
+  flood_options.max_message_bytes = 256;
+  flood_options.startup_timeout = std::chrono::milliseconds(800);
+  auto flood = ava::mcp::McpStdioClient::start(flood_server, flood_options);
+  expect(!flood || !(*flood)->list_tools(), "MCP stdout flood is rejected as a bounded output failure");
+  if (flood)
+    static_cast<void>((*flood)->shutdown(std::chrono::milliseconds(500)));
+  auto flood_records = mcp_records(*flood_authority->supervisor);
+  expect(flood_records.size() == 1 && mcp_completely_settled(flood_records.front()) &&
+             (flood_records.front().reason == ava::process::TerminationReasonV1::OutputLimit ||
+              flood_records.front().reason == ava::process::TerminationReasonV1::DeadlineExpired ||
+              flood_records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown),
+         "bounded MCP stdout flood settles once under Supervisor accounting");
+  finish_mcp_supervisor(*flood_authority);
+
+  auto partial_authority = make_mcp_test_authority();
+  if (!partial_authority)
+    return;
+  auto const partial_script = root / "partial-frame.sh";
+  write_executable_script(partial_script, mcp_handshake_then("printf '{'\nsleep 30\n"));
+  auto partial_server = fake_server_config(root);
+  partial_server.command = partial_script.string();
+  auto partial_options = fake_client_options(workspace, partial_authority->run);
+  partial_options.request_timeout = std::chrono::milliseconds(200);
+  auto partial = ava::mcp::McpStdioClient::start(partial_server, partial_options);
+  expect(partial.has_value(), "partial-frame fixture initializes");
+  if (partial)
+  {
+    auto listed = (*partial)->list_tools();
+    expect(!listed && listed.error().message().find("timed out") != std::string::npos, "partial MCP frames expire the request deadline without restarting it");
+    static_cast<void>((*partial)->shutdown(std::chrono::milliseconds(500)));
+  }
+  auto partial_records = mcp_records(*partial_authority->supervisor);
+  expect(partial_records.size() == 1 && mcp_completely_settled(partial_records.front()), "partial MCP frame timeout settles completely");
+  finish_mcp_supervisor(*partial_authority);
+
+  auto live_authority = make_mcp_test_authority();
+  if (!live_authority)
+    return;
+  auto live = ava::mcp::McpStdioClient::start(fake_server_config(root), fake_client_options(workspace, live_authority->run));
+  expect(live.has_value(), "live MCP shutdown fixture initializes");
+  if (live)
+  {
+    auto shutdown = (*live)->shutdown(std::chrono::milliseconds(500));
+    expect(shutdown.has_value(), "shutdown while a live MCP server is connected settles completely");
+    auto again = (*live)->shutdown(std::chrono::milliseconds(250));
+    expect(again.has_value(), "MCP shutdown is idempotent after settlement");
+  }
+  auto live_records = mcp_records(*live_authority->supervisor);
+  expect(live_records.size() == 1 && mcp_completely_settled(live_records.front()), "live MCP shutdown produces one complete Supervisor settlement");
+  finish_mcp_supervisor(*live_authority);
+
+  auto descendant_authority = make_mcp_test_authority();
+  if (!descendant_authority)
+    return;
+  auto const descendant_marker = root / "descendant-pid";
+  auto const descendant_script = root / "descendant.sh";
+  write_executable_script(descendant_script, mcp_handshake_then("(\n  trap '' TERM\n  while true; do sleep 1; done\n) &\n"
+                                                                "printf '%s\\n' \"$!\" > \"" +
+                                                                descendant_marker.string() +
+                                                                "\"\n"
+                                                                "exit 0\n"));
+  auto descendant_server = fake_server_config(root);
+  descendant_server.command = descendant_script.string();
+  auto descendant = ava::mcp::McpStdioClient::start(descendant_server, fake_client_options(workspace, descendant_authority->run));
+  expect(descendant.has_value(), "natural-leader descendant fixture initializes");
+  std::string descendant_pid;
+  if (descendant)
+  {
+    auto listed = (*descendant)->list_tools();
+    expect(!listed, "natural leader exit is a bounded protocol failure to the caller");
+    static_cast<void>((*descendant)->shutdown(std::chrono::milliseconds(500)));
+    descendant_pid = read_text(descendant_marker);
+  }
+  auto descendant_records = mcp_records(*descendant_authority->supervisor);
+  expect(descendant_records.size() == 1 && mcp_completely_settled(descendant_records.front()) &&
+             descendant_records.front().reason == ava::process::TerminationReasonV1::NaturalExit && wait_for_process_absent(descendant_pid),
+         "Supervisor cleans a same-group TERM-refusing descendant after natural MCP leader exit");
+  finish_mcp_supervisor(*descendant_authority);
+
+  auto refusal_authority = make_mcp_test_authority();
+  if (!refusal_authority)
+    return;
+  auto const refusal_script = root / "term-refusal.sh";
+  write_executable_script(refusal_script, mcp_handshake_then("trap '' TERM\nwhile true; do sleep 1; done\n"));
+  auto refusal_server = fake_server_config(root);
+  refusal_server.command = refusal_script.string();
+  auto refusal = ava::mcp::McpStdioClient::start(refusal_server, fake_client_options(workspace, refusal_authority->run));
+  auto const refusal_started = std::chrono::steady_clock::now();
+  auto refusal_shutdown = refusal ? (*refusal)->shutdown(std::chrono::milliseconds(250)) : ava::core::VoidResult(std::unexpected(refusal.error()));
+  auto const refusal_elapsed = std::chrono::steady_clock::now() - refusal_started;
+  expect(refusal_shutdown && refusal_elapsed < std::chrono::seconds(3), "MCP shutdown escalates TERM refusal within one bounded cleanup deadline");
+  auto refusal_records = mcp_records(*refusal_authority->supervisor);
+  expect(refusal_records.size() == 1 && mcp_completely_settled(refusal_records.front()) &&
+             refusal_records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown,
+         "explicit MCP TERM-refusal cleanup is owner shutdown with complete settlement");
+  finish_mcp_supervisor(*refusal_authority);
+
+  auto owner_authority = make_mcp_test_authority();
+  if (!owner_authority)
+    return;
+  auto owned = ava::mcp::McpStdioClient::start(fake_server_config(root), fake_client_options(workspace, owner_authority->run));
+  expect(owned.has_value(), "session/run shutdown fixture initializes");
+  auto stopped = owner_authority->supervisor->request_stop(owner_authority->run.owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown,
+                                                           std::chrono::steady_clock::now() + std::chrono::seconds(2));
+  expect(stopped && stopped->matched == 1, "run-prefix stop matches the live MCP operation");
+  if (owned)
+  {
+    auto listed = (*owned)->list_tools();
+    expect(!listed, "MCP I/O fails after owner-prefix shutdown");
+    static_cast<void>((*owned)->shutdown(std::chrono::milliseconds(500)));
+  }
+  auto owner_records = mcp_records(*owner_authority->supervisor);
+  expect(owner_records.size() == 1 && mcp_completely_settled(owner_records.front()) &&
+             owner_records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown && owner_authority->supervisor->snapshot().live_records == 0,
+         "session/run shutdown through Supervisor settles the MCP child once");
+  finish_mcp_supervisor(*owner_authority);
+
+  std::error_code remove_error;
+  std::filesystem::remove_all(root, remove_error);
 }
 
 }  // namespace
@@ -1200,6 +1572,7 @@ void run_mcp_tests()
   test_mcp_headless_policy_allows_resource_reads();
   test_mcp_strict_session_registry_failures_and_nested_cwd();
   test_mcp_session_environment_is_clean();
-  test_mcp_ordinary_global_and_project_environment_is_inherited();
+  test_mcp_ordinary_global_and_project_environment_is_explicit();
   test_mcp_stdio_environment_validation();
+  test_mcp_supervisor_lifecycle();
 }

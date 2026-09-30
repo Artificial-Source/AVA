@@ -15,6 +15,7 @@ target_include_directories(ava_mcp
 
 target_link_libraries(ava_mcp
   PUBLIC
+    AVA::process
     AVA::tools
   PRIVATE
     AVA::diagnostics
