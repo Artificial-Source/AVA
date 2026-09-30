@@ -95,6 +95,9 @@ void test_interactive_unknown_and_builtin_slash_behavior()
   auto const root = create_empty_root("interactive-slash-classification");
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
+  auto const private_home = root / "home";
+  std::filesystem::create_directories(private_home);
+  ScopedEnvVar home("HOME", private_home.string());
   auto unlocked_session = open_test_session(root, workspace);
   ava::app::interactive_internal::InteractiveState state{.unlocked_session = unlocked_session};
 
@@ -110,12 +113,12 @@ void test_interactive_unknown_and_builtin_slash_behavior()
   auto missing_skill = ava::app::interactive_internal::handle_interactive_submission(state, "/skill:missing");
   expect(!missing_skill.ordinary_turn_committed && !missing_skill.output.empty() &&
              missing_skill.output[0].find("command not found: /skill:missing") != std::string::npos,
-         "missing namespaced skills stay local command-not-found");
+         "missing namespaced skills stay local command-not-found: " + joined_output(missing_skill));
 
   auto missing_plugin = ava::app::interactive_internal::handle_interactive_submission(state, "/plugin:missing:cmd");
   expect(!missing_plugin.ordinary_turn_committed && !missing_plugin.output.empty() &&
              missing_plugin.output[0].find("command not found: /plugin:missing:cmd") != std::string::npos,
-         "missing namespaced plugins stay local command-not-found");
+         "missing namespaced plugins stay local command-not-found: " + joined_output(missing_plugin));
 }
 
 void test_interactive_mcp_prompt_submission_resolves_once()
@@ -127,6 +130,9 @@ void test_interactive_mcp_prompt_submission_resolves_once()
   auto const workspace = root / "workspace";
   auto const paths = app_test_paths(root);
   auto const event_log = root / "mcp-events.log";
+  auto const private_home = root / "home";
+  std::filesystem::create_directories(private_home);
+  ScopedEnvVar home("HOME", private_home.string());
   auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(trusted.has_value(), trusted ? "interactive MCP test trusts project" : "interactive MCP test trusts project: " + trusted.error().format());
   write_app_test_file(workspace / ".ava" / "mcp.json", mcp_config_with_event_log(AVA_FAKE_MCP_SERVER_PATH, event_log));
