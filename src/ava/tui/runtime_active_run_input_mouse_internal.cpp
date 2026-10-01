@@ -29,6 +29,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_mou
   auto& path_completion_force_active = draft_state_.path_completion_force_active;
   auto& completion_cache = renderer_.completion_cache;
 
+  using Key = terminal::Key;
   if (active_event.key == Key::MouseLeftPress || active_event.key == Key::MouseLeftClick || active_event.key == Key::MouseLeftDrag ||
       active_event.key == Key::MouseLeftRelease || active_event.key == Key::MousePointerCancel)
   {
@@ -194,7 +195,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_res
     snapshot.status = "queued-message restore is available during active runs";
     return to_input_handling(renderer_.request_render());
   }
-  if (active_event.key == Key::Space)
+  if (active_event.key == terminal::Key::Space)
   {
     insert_active_text(active_input);
     return to_input_handling(renderer_.request_render());

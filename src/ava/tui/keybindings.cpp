@@ -364,9 +364,9 @@ std::vector<std::string> split_comma_list(std::string_view text)
   return parts;
 }
 
-ava::core::Result<std::vector<Key>> parse_key_list(std::string_view text)
+ava::core::Result<std::vector<terminal::Key>> parse_key_list(std::string_view text)
 {
-  std::vector<Key> keys;
+  std::vector<terminal::Key> keys;
   for (auto const& part : split_comma_list(text))
   {
     auto const key = parse_key_name(part);
@@ -387,9 +387,9 @@ ava::core::Result<std::vector<Key>> parse_key_list(std::string_view text)
   return keys;
 }
 
-ava::core::Result<std::vector<Key>> parse_key_values(std::vector<std::string> const& values)
+ava::core::Result<std::vector<terminal::Key>> parse_key_values(std::vector<std::string> const& values)
 {
-  std::vector<Key> keys;
+  std::vector<terminal::Key> keys;
   for (auto const& value : values)
   {
     auto parsed = parse_key_list(value);
@@ -644,7 +644,7 @@ ava::core::Result<std::vector<ParsedKeyBindingEntry>> parse_key_binding_entries(
   }
 }
 
-std::optional<std::vector<Key>*> keys_for_action(TuiKeyBindings& bindings, TuiAction action)
+std::optional<std::vector<terminal::Key>*> keys_for_action(TuiKeyBindings& bindings, TuiAction action)
 {
   for (auto& [candidate, keys] : bindings.bindings)
   {
@@ -760,19 +760,19 @@ bool actions_can_share_key(TuiAction lhs, TuiAction rhs)
   return is_ctrl_c_semantic(lhs) && is_ctrl_c_semantic(rhs);
 }
 
-void remove_keys_from_other_actions(TuiKeyBindings& bindings, TuiAction action, std::vector<Key> const& keys_to_remove)
+void remove_keys_from_other_actions(TuiKeyBindings& bindings, TuiAction action, std::vector<terminal::Key> const& keys_to_remove)
 {
   for (auto& [candidate, keys] : bindings.bindings)
   {
     if (actions_can_share_key(action, candidate))
       continue;
-    std::erase_if(keys, [&](Key key) { return std::ranges::find(keys_to_remove, key) != keys_to_remove.end(); });
+    std::erase_if(keys, [&](terminal::Key key) { return std::ranges::find(keys_to_remove, key) != keys_to_remove.end(); });
   }
 }
 
-ava::core::VoidResult validate_user_key_conflicts(std::vector<std::pair<TuiAction, std::vector<Key>>> const& overrides)
+ava::core::VoidResult validate_user_key_conflicts(std::vector<std::pair<TuiAction, std::vector<terminal::Key>>> const& overrides)
 {
-  std::vector<std::pair<Key, TuiAction>> claims;
+  std::vector<std::pair<terminal::Key, TuiAction>> claims;
   for (auto const& [action, keys] : overrides)
   {
     for (auto const key : keys)
@@ -1009,7 +1009,7 @@ void append_json_string(std::string& output, std::string_view text)
   output.push_back('"');
 }
 
-bool has_same_context_default_key_conflict(TuiKeyBindings const& bindings, TuiAction action, std::vector<Key> const& keys)
+bool has_same_context_default_key_conflict(TuiKeyBindings const& bindings, TuiAction action, std::vector<terminal::Key> const& keys)
 {
   auto const session_precedence_over_models = [](TuiAction current, TuiAction candidate) {
     return (current == TuiAction::SessionTogglePath && candidate == TuiAction::ModelsToggleProvider) ||
@@ -1032,6 +1032,7 @@ bool has_same_context_default_key_conflict(TuiKeyBindings const& bindings, TuiAc
 
 TuiKeyBindings default_key_bindings()
 {
+  using Key = terminal::Key;
   return TuiKeyBindings{.bindings = {{TuiAction::Submit, {Key::Enter}},
                                      {TuiAction::NewLine, {Key::ShiftEnter, Key::CtrlEnter}},
                                      {TuiAction::Cancel, {Key::Escape}},
@@ -1120,7 +1121,7 @@ TuiKeyBindings default_key_bindings()
                                      {TuiAction::ModelsReorderDown, {Key::AltArrowDown}}}};
 }
 
-std::optional<TuiAction> action_for_key(TuiKeyBindings const& bindings, Key key)
+std::optional<TuiAction> action_for_key(TuiKeyBindings const& bindings, terminal::Key key)
 {
   for (auto const& [action, keys] : bindings.bindings)
   {
@@ -1130,7 +1131,7 @@ std::optional<TuiAction> action_for_key(TuiKeyBindings const& bindings, Key key)
   return std::nullopt;
 }
 
-bool key_matches_action(TuiKeyBindings const& bindings, TuiAction action, Key key)
+bool key_matches_action(TuiKeyBindings const& bindings, TuiAction action, terminal::Key key)
 {
   for (auto const& [candidate, keys] : bindings.bindings)
   {
@@ -1140,8 +1141,9 @@ bool key_matches_action(TuiKeyBindings const& bindings, TuiAction action, Key ke
   return false;
 }
 
-std::optional<Key> parse_key_name(std::string_view text)
+std::optional<terminal::Key> parse_key_name(std::string_view text)
 {
+  using Key = terminal::Key;
   auto const normalized = normalize_token(text);
   if (normalized == "enter" || normalized == "return")
     return Key::Enter;
@@ -1380,8 +1382,9 @@ std::optional<Key> parse_key_name(std::string_view text)
   return std::nullopt;
 }
 
-std::string key_display(Key key)
+std::string key_display(terminal::Key key)
 {
+  using Key = terminal::Key;
   switch (key)
   {
     case Key::Enter:
@@ -2262,7 +2265,7 @@ ava::core::Result<TuiKeyBindings> parse_key_bindings_json(std::string_view json,
   if (!entries)
     return std::unexpected(std::move(entries.error()));
 
-  std::vector<std::pair<TuiAction, std::vector<Key>>> overrides;
+  std::vector<std::pair<TuiAction, std::vector<terminal::Key>>> overrides;
   overrides.reserve(entries->size());
   for (auto const& entry : *entries)
   {

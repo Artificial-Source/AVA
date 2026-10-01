@@ -83,7 +83,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
   expect(keybindings_init && keybindings_init->handled && !keybindings_init->output.empty() &&
              keybindings_init->output[0].find("Created keybindings starter file") != std::string::npos &&
              keybindings_init->output[0].find(keybinds_file.string()) != std::string::npos && initialized_keybinds &&
-             ava::tui::key_matches_action(*initialized_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::Enter),
+             ava::tui::key_matches_action(*initialized_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::Enter),
          "command dispatcher /keybindings init writes a validated starter file to the runtime config dir");
   auto keybindings_validate = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/keybindings validate"});
   expect(keybindings_validate && keybindings_validate->handled && !keybindings_validate->output.empty() &&
@@ -138,8 +138,8 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
              keybindings_import_force->output[0].find(import_source.string()) != std::string::npos &&
              keybindings_import_force->output[0].find(keybinds_file.string()) != std::string::npos &&
              keybindings_import_force->output[0].find("/reload keybindings") != std::string::npos && installed_import_content == valid_import_content &&
-             imported_keybinds && ava::tui::key_matches_action(*imported_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::AltH) &&
-             ava::tui::key_matches_action(*imported_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::Key::CtrlO),
+             imported_keybinds && ava::tui::key_matches_action(*imported_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::AltH) &&
+             ava::tui::key_matches_action(*imported_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::terminal::Key::CtrlO),
          "command dispatcher /keybindings import --force validates and installs a relative source file");
   auto keybindings_set = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/keybindings set cursor_left Alt+H"});
   auto const set_keybinds = ava::tui::load_key_bindings(keybinds_file);
@@ -150,8 +150,8 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
              keybindings_set->output[0].find("keys: Alt+H") != std::string::npos &&
              keybindings_set->output[0].find("/reload keybindings") != std::string::npos &&
              set_content.find("\"tui.editor.cursorLeft\": \"Alt+H\"") != std::string::npos && set_content.find("\"cursor_left\"") == std::string::npos &&
-             set_keybinds && ava::tui::key_matches_action(*set_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::AltH) &&
-             !ava::tui::key_matches_action(*set_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::ArrowLeft),
+             set_keybinds && ava::tui::key_matches_action(*set_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::AltH) &&
+             !ava::tui::key_matches_action(*set_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::ArrowLeft),
          "command dispatcher /keybindings set validates, canonicalizes, and edits one action in keybinds.json");
   auto keybindings_set_multi = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/keybindings set cursor_left Left,Alt+H"});
   auto const set_multi_keybinds = ava::tui::load_key_bindings(keybinds_file);
@@ -159,8 +159,8 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
   expect(keybindings_set_multi && keybindings_set_multi->handled && !keybindings_set_multi->output.empty() &&
              keybindings_set_multi->output[0].find("keys: Left, Alt+H") != std::string::npos &&
              set_multi_content.find("\"tui.editor.cursorLeft\": [\"Left\", \"Alt+H\"]") != std::string::npos && set_multi_keybinds &&
-             ava::tui::key_matches_action(*set_multi_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::ArrowLeft) &&
-             ava::tui::key_matches_action(*set_multi_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::AltH),
+             ava::tui::key_matches_action(*set_multi_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::ArrowLeft) &&
+             ava::tui::key_matches_action(*set_multi_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::AltH),
          "command dispatcher /keybindings set accepts comma-separated key lists");
   auto const before_failed_set_content = read_keybinds_file();
   auto keybindings_set_conflict = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/keybindings set app.tools.expand Alt+H"});
@@ -185,8 +185,8 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
              keybindings_reset->output[0].find("action: cursor_left") != std::string::npos &&
              keybindings_reset->output[0].find("/reload keybindings") != std::string::npos &&
              reset_content.find("tui.editor.cursorLeft") == std::string::npos && reset_content.find("cursor_left") == std::string::npos && reset_keybinds &&
-             ava::tui::key_matches_action(*reset_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::ArrowLeft) &&
-             !ava::tui::key_matches_action(*reset_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::AltH),
+             ava::tui::key_matches_action(*reset_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::ArrowLeft) &&
+             !ava::tui::key_matches_action(*reset_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::AltH),
          "command dispatcher /keybindings reset removes equivalent action aliases and restores default bindings");
   auto keybindings_reset_missing = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/keybindings reset cursor_left"});
   expect(keybindings_reset_missing && keybindings_reset_missing->handled && !keybindings_reset_missing->output.empty() &&

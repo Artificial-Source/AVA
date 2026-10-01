@@ -886,6 +886,7 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
     return renderer_.request_render();
   }
 
+  using Key = terminal::Key;
   SelectListInputResult input_result;
   if (event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick)
   {

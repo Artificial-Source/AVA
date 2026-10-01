@@ -1153,6 +1153,7 @@ TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::handle_mouse(Inp
                                                                              std::function<bool(std::size_t)> const& toggle_tool,
                                                                              std::function<bool(std::size_t)> const& toggle_thinking, Clock::time_point now)
 {
+  using Key = terminal::Key;
   auto const key = event.key;
   if (key == Key::MousePointerCancel)
   {

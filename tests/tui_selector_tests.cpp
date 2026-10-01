@@ -51,10 +51,10 @@ void run_tui_selector_tests()
   branch_dispatch_view.items.push_back(branch_item("opaque-parent", "Parent"));
   auto const branch_dispatch_bindings = ava::tui::parse_key_bindings_json("{\"app.sessions.summarizeParent\":\"F8\"}");
   auto const branch_dispatch = branch_dispatch_bindings ? ava::tui::handle_select_list_input(
-                                                              branch_dispatch_view, ava::tui::InputEvent{.key = ava::tui::Key::F8}, *branch_dispatch_bindings)
+                                                              branch_dispatch_view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::F8}, *branch_dispatch_bindings)
                                                         : ava::tui::SelectListInputResult{};
   auto const default_branch_dispatch =
-      ava::tui::handle_select_list_input(branch_dispatch_view, ava::tui::InputEvent{.key = ava::tui::Key::F8}, ava::tui::default_key_bindings());
+      ava::tui::handle_select_list_input(branch_dispatch_view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::F8}, ava::tui::default_key_bindings());
   expect(branch_dispatch.action == ava::tui::SelectListInputAction::SummarizeParent && branch_dispatch.selected_item_index == std::size_t{0} &&
              default_branch_dispatch.action == ava::tui::SelectListInputAction::None,
          "session parent-summary key dispatch is semantic, configurable, and default-unbound");
@@ -62,19 +62,19 @@ void run_tui_selector_tests()
   auto const branch_input_bindings = ava::tui::default_key_bindings();
   expect(
       ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
-                                                           ava::tui::InputEvent{.key = ava::tui::Key::Enter},
+                                                           ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
                                                            branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Confirm &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Generating, ava::tui::InputEvent{.key = ava::tui::Key::Enter},
+          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Generating, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
                                                                branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Preparing, ava::tui::InputEvent{.key = ava::tui::Key::Escape},
+          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Preparing, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape},
                                                                branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Cancel &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Appending, ava::tui::InputEvent{.key = ava::tui::Key::CtrlD},
+          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Appending, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlD},
                                                                branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Exit &&
           ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
-                                                               ava::tui::InputEvent{.key = ava::tui::Key::CtrlL},
+                                                               ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlL},
                                                                branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block &&
           ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
-                                                               ava::tui::InputEvent{.key = ava::tui::Key::ArrowDown},
+                                                               ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown},
                                                                branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block,
       "nonterminal parent-summary state gates submission, model selection, and navigation while preserving only confirm, cancel, and exit intents");
 
@@ -1208,16 +1208,16 @@ void run_tui_selector_tests()
   fork_picker.query = "beta";
   auto const beta_matches = ava::tui::filter_select_list_items(fork_picker);
   expect(beta_matches.size() == 1 && fork_picker.items[beta_matches.front()].value == "entry_user_b", "user-turn picker filters by bounded preview text");
-  auto filtered_input = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'x'});
+  auto filtered_input = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'x'});
   expect(filtered_input.action == ava::tui::SelectListInputAction::Redraw && filtered_input.query == "betax",
          "user-turn picker accepts incremental filter input without mutation");
   fork_picker.query = "beta";
   fork_picker.selected_item_index = ava::tui::clamp_select_list_selection(fork_picker, 0);
-  auto resolve_input = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  auto resolve_input = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(resolve_input.action == ava::tui::SelectListInputAction::Resolve && resolve_input.selected_item_index == 1 &&
              fork_picker.items[resolve_input.selected_item_index].value == "entry_user_b",
          "user-turn picker Enter resolves the filtered earlier entry id rather than the tip");
-  auto cancel_input = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::Key::Escape});
+  auto cancel_input = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
   expect(cancel_input.action == ava::tui::SelectListInputAction::Cancel, "user-turn picker Escape cancels without mutation");
 
   auto empty_result = ava::app::user_turn_selector_view(std::vector<ava::app::SessionUserTurn>{}, "Fork from user turn");
@@ -1271,7 +1271,7 @@ void run_tui_selector_tests()
   // Production-path evidence for ForkUserTurn / CopyUserTurn Enter resolution (F-003).
   fork_picker.query = "alpha";
   fork_picker.selected_item_index = ava::tui::clamp_select_list_selection(fork_picker, 0);
-  auto const enter_resolve = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  auto const enter_resolve = ava::tui::handle_select_list_input(fork_picker, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(enter_resolve.action == ava::tui::SelectListInputAction::Resolve && enter_resolve.selected_item_index < fork_picker.items.size() &&
              fork_picker.items[enter_resolve.selected_item_index].value == "entry_user_a",
          "ForkUserTurn Enter resolves the filtered earlier stable entry id");
@@ -1734,14 +1734,14 @@ void run_tui_selector_tests()
   expect(workspace_controller.open_selector(time_zero) && workspace_controller.selector_active() && list_calls == 1,
          "shared subagent controller opens the selector without changing the parent composer state");
   ava::tui::InputEvent type_query;
-  type_query.key = ava::tui::Key::Character;
+  type_query.key = ava::tui::terminal::Key::Character;
   type_query.character = 'n';
   type_query.text = "n";
   auto query_result = workspace_controller.handle_input(type_query, time_zero);
   expect(query_result.changed && controller_snapshot.select_list && controller_snapshot.select_list->query == "n",
          "subagent controller owns selector filtering");
   ava::tui::InputEvent enter_workspace;
-  enter_workspace.key = ava::tui::Key::Enter;
+  enter_workspace.key = ava::tui::terminal::Key::Enter;
   auto opened_workspace = workspace_controller.handle_input(enter_workspace, time_zero);
   expect(opened_workspace.changed && workspace_controller.workspace_active() && workspace_controller.active_job_id() == "job-new" && inspect_calls == 1 &&
              !inspected_generations.front() && controller_snapshot.subagent_workspace && controller_snapshot.subagent_workspace->messages.size() == 1 &&
@@ -1758,12 +1758,12 @@ void run_tui_selector_tests()
          "subagent polling updates launch metadata while preserving hidden selection and publishes only newly committed messages");
   auto const bottom_offset = controller_snapshot.subagent_workspace ? controller_snapshot.subagent_workspace->scroll_offset : 0;
   ava::tui::InputEvent up_three;
-  up_three.key = ava::tui::Key::ArrowUp;
+  up_three.key = ava::tui::terminal::Key::ArrowUp;
   auto scrolled_up = workspace_controller.handle_input(up_three);
   expect(scrolled_up.changed && controller_snapshot.subagent_workspace && bottom_offset >= controller_snapshot.subagent_workspace->scroll_offset + 3,
          "workspace Up scrolls exactly three rendered rows within bounds");
   ava::tui::InputEvent page_up;
-  page_up.key = ava::tui::Key::PageUp;
+  page_up.key = ava::tui::terminal::Key::PageUp;
   auto const before_page = controller_snapshot.subagent_workspace ? controller_snapshot.subagent_workspace->scroll_offset : 0;
   auto paged_up = workspace_controller.handle_input(page_up);
   expect(paged_up.changed && controller_snapshot.subagent_workspace && before_page >= controller_snapshot.subagent_workspace->scroll_offset + 5,
@@ -1786,7 +1786,7 @@ void run_tui_selector_tests()
              !controller_snapshot.subagent_workspace->refresh_unavailable && inspect_calls == 4,
          "a successful metadata and known-generation refresh clears transient unavailable state");
   ava::tui::InputEvent escape_workspace;
-  escape_workspace.key = ava::tui::Key::Escape;
+  escape_workspace.key = ava::tui::terminal::Key::Escape;
   auto escaped_to_selector = workspace_controller.handle_input(escape_workspace);
   expect(escaped_to_selector.changed && workspace_controller.selector_active() && controller_snapshot.select_list &&
              controller_snapshot.select_list->query == "n" &&
@@ -1794,13 +1794,13 @@ void run_tui_selector_tests()
          "workspace Esc returns to the same selector query and hidden job selection after launch metadata refresh");
   static_cast<void>(workspace_controller.handle_input(enter_workspace));
   ava::tui::InputEvent next_job;
-  next_job.key = ava::tui::Key::Tab;
+  next_job.key = ava::tui::terminal::Key::Tab;
   auto cycled = workspace_controller.handle_input(next_job);
   expect(cycled.changed && workspace_controller.active_job_id() == "job-old" && controller_snapshot.subagent_workspace &&
              controller_snapshot.subagent_workspace->terminal && controller_snapshot.subagent_workspace->launch_detail == "thinking high",
          "workspace Tab cycles launch metadata by hidden job identity and opens the terminal frozen frame");
   ava::tui::InputEvent cancel_job;
-  cancel_job.key = ava::tui::Key::Character;
+  cancel_job.key = ava::tui::terminal::Key::Character;
   cancel_job.character = 'C';
   cancel_job.text = "C";
   cancel_outcome = ava::tui::SubagentWorkspaceCancelOutcome::CancellationRequested;
@@ -1823,7 +1823,7 @@ void run_tui_selector_tests()
              controller_snapshot.subagent_workspace->notice == "Cancel unavailable",
          "cancel errors map to Cancel unavailable with a beep");
   ava::tui::InputEvent promote_job;
-  promote_job.key = ava::tui::Key::Character;
+  promote_job.key = ava::tui::terminal::Key::Character;
   promote_job.character = 'P';
   promote_job.text = "P";
   promote_outcome = ava::tui::SubagentWorkspacePromoteOutcome::CurrentlyBackground;

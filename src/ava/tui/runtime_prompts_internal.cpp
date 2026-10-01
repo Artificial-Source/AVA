@@ -29,9 +29,10 @@ using runtime_views::permission_prompt_view;
 using runtime_views::question_answer_from_view;
 using runtime_views::question_prompt_view;
 
-bool detail::prompt_wheel_input_suppressed(Key key, std::optional<std::chrono::steady_clock::time_point> const& deadline,
+bool detail::prompt_wheel_input_suppressed(terminal::Key key, std::optional<std::chrono::steady_clock::time_point> const& deadline,
                                            std::chrono::steady_clock::time_point now)
 {
+  using Key = terminal::Key;
   return (key == Key::MouseWheelUp || key == Key::MouseWheelDown) && deadline && now < *deadline;
 }
 
@@ -104,6 +105,7 @@ void RuntimePromptCoordinator::emit_prompt_audit(std::string status, std::string
 ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptCoordinator::resolve_permission_prompt(
     ava::permissions::PermissionPrompt const& prompt, std::function<bool()> const& stop_requested, std::function<bool()> const& request_stop)
 {
+  using Key = terminal::Key;
   auto& options = options_;
   auto& snapshot = snapshot_;
   auto& command_session_grants = session_grants_;
@@ -477,6 +479,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
 
   while (true)
   {
+    using Key = terminal::Key;
     if (auto answer = auto_resolve_question())
       return std::move(*answer);
     auto const question_input = read_question_input();

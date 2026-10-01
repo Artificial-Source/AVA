@@ -1,8 +1,9 @@
 #include "sys.h"
 #include "ColorPalette.h"
 #include "Context.h"
-#include "utils/to_string.h"
 #include "ava/tui/config.h"
+#include "ava/tui/encode_wide_character.h"
+#include "utils/to_string.h"
 
 #include <algorithm>
 #include <array>
@@ -444,6 +445,324 @@ bool Context::can_change_colors() const
   // Do not call this function if we don't have a color palette; for example when a direct-color terminal is being used (COLORS == 0x1000000).
   ASSERT(color_palette_);
   return color_palette_->last_mutable_palette_index() > 0;
+}
+
+int Context::read_wch(wint_t* wch_out)
+{
+  // Canonical Context replay has first authority over bytes consumed by bounded startup negotiation. It returns logical wide characters
+  // with ncurses' ordinary OK status; only after that queue is empty may wget_wch read the terminal and report OK, KEY_CODE_YES, or ERR.
+  if (AI_UNLIKELY(keyboard_protocols_.try_get_wch(wch_out)))
+    return OK;
+  return ::get_wch(wch_out);
+}
+
+Key Context::read_curses_key(wint_t& value)
+{
+  int const result = read_wch(&value);
+  if (result == ERR)
+    return Key::Unknown;
+  if (result == KEY_CODE_YES)
+  {
+    struct Entry
+    {
+      std::string_view name;
+      Key key;
+    };
+
+    static constexpr std::array<Entry, 35> table = {{
+      {}, {}, {},
+      {"kri", Key::ShiftArrowUp},
+      {"kind", Key::ShiftArrowDown},
+      {"kEND6", Key::ShiftCtrlEnd},
+      {}, {},
+      {"kEND5", Key::CtrlEnd},
+      {"kHOM6", Key::ShiftCtrlHome},
+      {"kRIT6", Key::ShiftCtrlArrowRight},
+      {"kRIT4", Key::ShiftAltArrowRight},
+      {"kHOM5", Key::CtrlHome},
+      {"kRIT5", Key::CtrlArrowRight},
+      {},
+      {"kLFT6", Key::ShiftCtrlArrowLeft},
+      {"kLFT4", Key::ShiftAltArrowLeft},
+      {"kDN3", Key::AltArrowDown},
+      {"kLFT5", Key::CtrlArrowLeft},
+      {"kDN2", Key::ShiftArrowDown},
+      {"kEND2", Key::ShiftEnd},
+      {}, {},
+      {"kRIT3", Key::AltArrowRight},
+      {"kHOM2", Key::ShiftHome},
+      {"kRIT2", Key::ShiftArrowRight},
+      {},
+      {"kUP3", Key::AltArrowUp},
+      {"kLFT3", Key::AltArrowLeft},
+      {"kUP2", Key::ShiftArrowUp},
+      {"kLFT2", Key::ShiftArrowLeft},
+      {},
+      {"kDC3", Key::AltDelete},
+      {},
+      {"kDC2", Key::ShiftDelete},
+    }};
+
+    std::string_view const key_name = keyname(value);
+
+    if (3 <= key_name.size() && key_name.size() <= 5)
+    {
+      static std::array<unsigned char, 256> asso_values = {
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        15, 13,  1,  3,  0, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 15, 35, 35,
+        10, 35, 35,  5, 35, 35, 35, 35,  0,  4,
+        10, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+         0, 35, 35, 35, 35,  0, 35, 35, 35, 35,
+         0, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+        35, 35, 35, 35, 35, 35
+      };
+
+      unsigned int const key =
+        key_name.size() + asso_values[static_cast<unsigned char>(key_name[2])] + asso_values[static_cast<unsigned char>(key_name.back())];
+
+      if (key < table.size())
+      {
+        Entry const& entry = table[key];
+        if (key_name == entry.name)
+          return entry.key;
+      }
+    }
+
+    switch (static_cast<int>(value))
+    {
+      case KEY_ENTER:
+        return Key::Enter;
+      case KEY_BACKSPACE:
+        return Key::Backspace;
+#ifdef KEY_BTAB
+      case KEY_BTAB:
+        return Key::ShiftTab;
+#endif
+#if defined(KEY_SDC) && (!defined(KEY_DC) || KEY_SDC != KEY_DC)
+      case KEY_SDC:
+        return Key::ShiftDelete;
+#endif
+#ifdef KEY_DC
+      case KEY_DC:
+        return Key::Delete;
+#endif
+#ifdef KEY_IC
+      case KEY_IC:
+        return Key::Insert;
+#endif
+#ifdef KEY_CLEAR
+      case KEY_CLEAR:
+        return Key::Clear;
+#endif
+      case KEY_UP:
+        return Key::ArrowUp;
+      case KEY_DOWN:
+        return Key::ArrowDown;
+      case KEY_LEFT:
+        return Key::ArrowLeft;
+      case KEY_RIGHT:
+        return Key::ArrowRight;
+#ifdef KEY_SLEFT
+      case KEY_SLEFT:
+        return Key::ShiftArrowLeft;
+#endif
+#ifdef KEY_SRIGHT
+      case KEY_SRIGHT:
+        return Key::ShiftArrowRight;
+#endif
+#ifdef KEY_SUP
+      case KEY_SUP:
+        return Key::ShiftArrowUp;
+#endif
+#ifdef KEY_SDOWN
+      case KEY_SDOWN:
+        return Key::ShiftArrowDown;
+#endif
+#ifdef KEY_SR
+      case KEY_SR:
+        return Key::ShiftArrowUp;
+#endif
+#ifdef KEY_SF
+      case KEY_SF:
+        return Key::ShiftArrowDown;
+#endif
+#ifdef KEY_SHOME
+      case KEY_SHOME:
+        return Key::ShiftHome;
+#endif
+#ifdef KEY_SEND
+      case KEY_SEND:
+        return Key::ShiftEnd;
+#endif
+      case KEY_PPAGE:
+        return Key::PageUp;
+      case KEY_NPAGE:
+        return Key::PageDown;
+#ifdef KEY_HOME
+      case KEY_HOME:
+        return Key::Home;
+#endif
+#ifdef KEY_END
+      case KEY_END:
+        return Key::End;
+#endif
+#ifdef KEY_F
+      case KEY_F(1):
+        return Key::F1;
+      case KEY_F(2):
+        return Key::F2;
+      case KEY_F(3):
+        return Key::F3;
+      case KEY_F(4):
+        return Key::F4;
+      case KEY_F(5):
+        return Key::F5;
+      case KEY_F(6):
+        return Key::F6;
+      case KEY_F(7):
+        return Key::F7;
+      case KEY_F(8):
+        return Key::F8;
+      case KEY_F(9):
+        return Key::F9;
+      case KEY_F(10):
+        return Key::F10;
+      case KEY_F(11):
+        return Key::F11;
+      case KEY_F(12):
+        return Key::F12;
+#endif
+#ifdef KEY_RESIZE
+      case KEY_RESIZE:
+        return Key::Resize;
+#endif
+#ifdef KEY_MOUSE
+      case KEY_MOUSE:
+        return Key::Mouse;
+#endif
+      default:
+        return Key::Unknown;
+    }
+  }
+
+  wchar_t const character = static_cast<wchar_t>(value);
+  if (character == L'\r')
+    return Key::Enter;
+  if (character == L'\n')
+    return Key::ShiftEnter;
+  if (character == L'\t')
+    return Key::Tab;
+  if (character == L' ')
+    return Key::Space;
+  if (character == 0x00)
+    return Key::CtrlSpace;
+  if (character == 0x1B)
+    return Key::Escape;
+  if (character == 0x01)
+    return Key::CtrlA;
+  if (character == 0x02)
+    return Key::CtrlB;
+  if (character == 0x03)
+    return Key::CtrlC;
+  if (character == 0x04)
+    return Key::CtrlD;
+  if (character == 0x05)
+    return Key::CtrlE;
+  if (character == 0x06)
+    return Key::CtrlF;
+  if (character == 0x07)
+    return Key::CtrlG;
+  if (character == 0x08)
+    return Key::CtrlH;
+  if (character == 0x0B)
+    return Key::CtrlK;
+  if (character == 0x0C)
+    return Key::CtrlL;
+  if (character == 0x1F)
+    return Key::CtrlMinus;
+  if (character == 0x0E)
+    return Key::CtrlN;
+  if (character == 0x0F)
+    return Key::CtrlO;
+  if (character == 0x10)
+    return Key::CtrlP;
+  if (character == 0x11)
+    return Key::CtrlQ;
+  if (character == 0x12)
+    return Key::CtrlR;
+  if (character == 0x13)
+    return Key::CtrlS;
+  if (character == 0x14)
+    return Key::CtrlT;
+  if (character == 0x15)
+    return Key::CtrlU;
+  if (character == 0x16)
+    return Key::CtrlV;
+  if (character == 0x17)
+    return Key::CtrlW;
+  if (character == 0x18)
+    return Key::CtrlX;
+  if (character == 0x19)
+    return Key::CtrlY;
+  if (character == 0x1A)
+    return Key::CtrlZ;
+  if (character == 0x1C)
+    return Key::Unknown;                // Not handled.
+  if (character == 0x1D)
+    return Key::CtrlRightBracket;
+  if (character == 0x1E)
+    return Key::Unknown;                // Not handled.
+  if (character == 0x7F)
+    return Key::Backspace;
+  // Paranoia check: all control characters should be handled.
+  ASSERT(character >= 0x20);
+  return Key::WideCharacter;
+}
+
+std::optional<wchar_t> Context::read_plain_wide_character()
+{
+  wint_t value = 0;
+  auto const result = read_wch(&value);
+  if (result == ERR || result == KEY_CODE_YES)
+    return std::nullopt;
+  return static_cast<wchar_t>(value);
+}
+
+bool Context::append_escape_sequence_character(std::string& consumed_out)
+{
+  wint_t value = 0;
+  auto const result = read_wch(&value);
+  if (result == ERR)
+    return false;
+  if (result == KEY_CODE_YES)
+  {
+    if (static_cast<int>(value) == KEY_BACKSPACE)
+      consumed_out.push_back('\x7f');
+    else
+      return false;
+  }
+  else if (auto encoded = runtime_input::encode_wide_character(static_cast<wchar_t>(value)))
+    consumed_out += *encoded;
+  return true;
 }
 
 } // namespace ava::tui::terminal

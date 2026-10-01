@@ -677,10 +677,10 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
       body.valid && page == std::max<std::size_t>(1, body.transcript_height / 2) && page != std::size_t{6} && page_offset == page &&
       plain_arrow_step_offset == 3 && bounded_oldest > 0 && clamped_oldest == bounded_oldest && clamped_live_tail == 0 && tiny_page == 1 &&
       draft_state.draft.text == wrapped_draft_before && draft_state.draft.cursor == wrapped_cursor_before &&
-      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::HistoryPrev, ava::tui::Key::ArrowUp) &&
-      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::HistoryNext, ava::tui::Key::ArrowDown) &&
-      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::CursorUp, ava::tui::Key::ArrowUp) &&
-      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::CursorDown, ava::tui::Key::ArrowDown);
+      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::HistoryPrev, ava::tui::terminal::Key::ArrowUp) &&
+      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::HistoryNext, ava::tui::terminal::Key::ArrowDown) &&
+      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::CursorUp, ava::tui::terminal::Key::ArrowUp) &&
+      !ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::CursorDown, ava::tui::terminal::Key::ArrowDown);
 
   bool const passed = wheel_up_detached && wheel_reverse_reattached && wheel_step_is_three && wheel_clamps_at_oldest && detached &&
                       oldest_status == "oldest retained user turn" && oldest_boundary_offset == oldest_offset && next_offset < oldest_offset &&
@@ -688,9 +688,9 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
                       prev_status == "previous retained user turn" && live_offset == 0 && next_item_index == 2 && prev_item_index == 0 &&
                       past_last_offset == 0 && past_last_status == "live tail" && live_status == "live tail" && already_live_offset == 0 &&
                       already_live_status == "live tail" && draft_unchanged && body_page_and_plain_arrow_sovereignty &&
-                      ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::MessagePrev, ava::tui::Key::AltK) &&
-                      ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::MessageNext, ava::tui::Key::AltJ) &&
-                      ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::JumpToBottom, ava::tui::Key::CtrlEnd);
+                      ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::MessagePrev, ava::tui::terminal::Key::AltK) &&
+                      ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::MessageNext, ava::tui::terminal::Key::AltJ) &&
+                      ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::JumpToBottom, ava::tui::terminal::Key::CtrlEnd);
 
   static_cast<void>(endwin());
   delscreen(screen);
@@ -1348,21 +1348,21 @@ void run_tui_composer_rendering_tests_part_1()
     using Clock = ava::tui::WheelBurstGovernor::Clock;
     auto const started_at = Clock::time_point{};
     ava::tui::WheelBurstGovernor governor;
-    auto const first_up = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelUp, started_at);
-    auto const same_direction_at_16 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelUp, started_at + std::chrono::milliseconds(16));
-    auto const same_direction_at_39 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelUp, started_at + std::chrono::milliseconds(39));
-    auto const same_direction_at_40 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelUp, started_at + std::chrono::milliseconds(40));
-    auto const reverse_immediate = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelDown, started_at + std::chrono::milliseconds(40));
+    auto const first_up = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at);
+    auto const same_direction_at_16 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(16));
+    auto const same_direction_at_39 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(39));
+    auto const same_direction_at_40 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(40));
+    auto const reverse_immediate = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(40));
     auto const same_reverse_within_window =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelDown, started_at + std::chrono::milliseconds(56));
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(56));
     auto const same_reverse_at_interval =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelDown, started_at + std::chrono::milliseconds(80));
-    auto const keyboard = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::ArrowDown, started_at + std::chrono::milliseconds(81));
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(80));
+    auto const keyboard = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::ArrowDown, started_at + std::chrono::milliseconds(81));
     auto const accepted_after_non_wheel =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelUp, started_at + std::chrono::milliseconds(81));
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(81));
     governor.reset();
     auto const accepted_after_explicit_reset =
-        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::Key::MouseWheelDown, started_at + std::chrono::milliseconds(81));
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(81));
     expect(
         ava::tui::kTranscriptWheelScrollRows == 3 && first_up && !same_direction_at_16 && !same_direction_at_39 && same_direction_at_40 && reverse_immediate &&
             !same_reverse_within_window && same_reverse_at_interval && keyboard && accepted_after_non_wheel && accepted_after_explicit_reset,
@@ -1374,10 +1374,10 @@ void run_tui_composer_rendering_tests_part_1()
     auto const paint_completed_at = Clock::time_point{} + std::chrono::milliseconds(60);
     auto const deadline = paint_completed_at + ava::tui::WheelBurstGovernor::kAcceptedEventInterval;
     auto const queued_wheel =
-        ava::tui::detail::prompt_wheel_input_suppressed(ava::tui::Key::MouseWheelDown, deadline, paint_completed_at + std::chrono::milliseconds(1));
+        ava::tui::detail::prompt_wheel_input_suppressed(ava::tui::terminal::Key::MouseWheelDown, deadline, paint_completed_at + std::chrono::milliseconds(1));
     auto const confirmation =
-        ava::tui::detail::prompt_wheel_input_suppressed(ava::tui::Key::Enter, deadline, paint_completed_at + std::chrono::milliseconds(1));
-    auto const wheel_at_deadline = ava::tui::detail::prompt_wheel_input_suppressed(ava::tui::Key::MouseWheelUp, deadline, deadline);
+        ava::tui::detail::prompt_wheel_input_suppressed(ava::tui::terminal::Key::Enter, deadline, paint_completed_at + std::chrono::milliseconds(1));
+    auto const wheel_at_deadline = ava::tui::detail::prompt_wheel_input_suppressed(ava::tui::terminal::Key::MouseWheelUp, deadline, deadline);
     expect(queued_wheel && !confirmation && !wheel_at_deadline,
            "prompt wheel suppression discards queued wheels after a slow paint while confirmation bypasses the deadline");
   }
@@ -3494,9 +3494,9 @@ void run_tui_composer_rendering_tests_part_4()
   for (auto& binding : bindings.bindings)
   {
     if (binding.first == ava::tui::TuiAction::Cancel)
-      binding.second = {ava::tui::Key::F9};
+      binding.second = {ava::tui::terminal::Key::F9};
     if (binding.first == ava::tui::TuiAction::JumpToBottom)
-      binding.second = {ava::tui::Key::End};
+      binding.second = {ava::tui::terminal::Key::End};
   }
   auto const custom_hint = ava::tui::runtime_views::active_run_hint_for(bindings);
   for (auto& binding : bindings.bindings)

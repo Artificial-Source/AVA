@@ -910,6 +910,7 @@ PermissionPromptRememberAvailability permission_prompt_remember_availability(ava
 PermissionPromptInputResult handle_permission_prompt_input(PermissionPromptChoice selected_choice, InputEvent event, bool allow_session_available,
                                                            bool allow_remember_available, bool deny_remember_available)
 {
+  using Key = terminal::Key;
   switch (event.key)
   {
     case Key::Character:
@@ -967,6 +968,8 @@ PermissionPromptInputResult handle_permission_prompt_input(PermissionPromptChoic
 
 PermissionPromptInputResult handle_permission_prompt_input(PermissionPromptView const& prompt, InputEvent event)
 {
+  using Key = terminal::Key;
+
   PermissionPromptInputResult result{.selected_choice = prompt.selected_choice,
                                      .action = PermissionPromptInputAction::None,
                                      .guidance_mode = prompt.guidance_mode,
@@ -1200,6 +1203,7 @@ QuestionPromptInputResult handle_question_prompt_input(QuestionPromptView const&
   };
 
   clamp_selection();
+  using Key = terminal::Key;
   switch (event.key)
   {
     case Key::Character:

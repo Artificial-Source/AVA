@@ -33,6 +33,7 @@ detail::ActiveRunCancelDisposition detail::active_run_cancel_disposition(bool ha
 RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_preemptive_input(RuntimeActiveRunState& state,
                                                                                               runtime_input::RuntimeInput const& active_input)
 {
+  using Key = terminal::Key;
   auto const& active_event = active_input.event;
   auto& snapshot = presentation_state_.snapshot;
   auto& draft = draft_state_.draft;
@@ -326,7 +327,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_act
   {
     if (auto handled = reject_disabled_visible_completion())
       return to_input_handling(*handled);
-    if (active_event.key == Key::Enter && draft_state.convert_backslash_enter_to_newline(snapshot))
+    if (active_event.key == terminal::Key::Enter && draft_state.convert_backslash_enter_to_newline(snapshot))
       return to_input_handling(renderer_.request_render());
     renderer_.clear_transcript_selection();
     if (auto handled = run_active_command(state))

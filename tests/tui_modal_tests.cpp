@@ -25,29 +25,29 @@ void run_tui_modal_tests_part_1()
       .allow_custom = true,
       .selected_option_index = 0,
       .custom_text = ""};
-  auto question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = '2'});
+  auto question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = '2'});
   expect(
       question_input.action == ava::tui::QuestionPromptInputAction::Resolve && question_input.selected_option_index == 1 && question_input.options[1].selected,
       "question prompt numeric shortcut selects and resolves a single-select option");
-  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'x'});
+  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'x'});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && question_input.custom_text == "x" &&
              std::ranges::none_of(question_input.options, [](ava::tui::QuestionPromptOptionView const& option) { return option.selected; }),
          "question prompt custom text edits clear single-select option state");
   single_question.custom_text = question_input.custom_text;
-  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = ' '});
+  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = ' '});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && question_input.custom_text == "x ",
          "question prompt custom text can include spaces after typing starts");
   single_question.custom_text = question_input.custom_text;
-  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::Key::Space});
+  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Space});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && question_input.custom_text == "x  ",
          "question prompt semantic Space appends to existing custom text");
   single_question.custom_text = question_input.custom_text;
   question_input = ava::tui::handle_question_prompt_input(
-      single_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = static_cast<char>(0xC3), .text = "\xC3\xA9"});
+      single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = static_cast<char>(0xC3), .text = "\xC3\xA9"});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && question_input.custom_text == std::string("x  ") + "\xC3\xA9",
          "question prompt custom text preserves utf-8 input");
   single_question.custom_text = "x";
-  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::Key::Backspace});
+  question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Backspace});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && question_input.custom_text.empty(),
          "question prompt backspace edits custom text");
   auto secret_question = ava::tui::QuestionPromptView{.header = "Connect",
@@ -58,7 +58,7 @@ void run_tui_modal_tests_part_1()
                                                       .secret = true,
                                                       .selected_option_index = 0,
                                                       .custom_text = ""};
-  question_input = ava::tui::handle_question_prompt_input(secret_question, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  question_input = ava::tui::handle_question_prompt_input(secret_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && question_input.custom_text.empty(),
          "question prompt enter keeps an empty single custom answer open");
 
@@ -70,11 +70,11 @@ void run_tui_modal_tests_part_1()
                                                     .allow_custom = false,
                                                     .selected_option_index = 0,
                                                     .custom_text = ""};
-  question_input = ava::tui::handle_question_prompt_input(copy_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'c'});
+  question_input = ava::tui::handle_question_prompt_input(copy_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'c'});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Copy && question_input.copy_text == "https://auth.openai.com" &&
              std::ranges::none_of(question_input.options, [](ava::tui::QuestionPromptOptionView const& option) { return option.selected; }),
          "question prompt copy shortcut copies without resolving a single-select option");
-  question_input = ava::tui::handle_question_prompt_input(copy_question, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  question_input = ava::tui::handle_question_prompt_input(copy_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Resolve && question_input.options[0].selected,
          "question prompt enter confirms the selected non-copy option");
 
@@ -86,22 +86,22 @@ void run_tui_modal_tests_part_1()
       .allow_custom = true,
       .selected_option_index = 0,
       .custom_text = ""};
-  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = ' '});
+  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = ' '});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && question_input.options[0].selected,
          "question prompt space toggles selected multi-select option");
   multi_question.options = question_input.options;
-  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::Key::Space});
+  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Space});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && !question_input.options[0].selected,
          "question prompt semantic Space toggles selected multi-select option");
   multi_question.options = question_input.options;
-  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = '2'});
+  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = '2'});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Redraw && !question_input.options[0].selected && question_input.options[1].selected,
          "question prompt numeric shortcut toggles multi-select options without resolving");
   multi_question.options = question_input.options;
-  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Resolve && !question_input.options[0].selected && question_input.options[1].selected,
          "question prompt enter resolves current multi-select choices");
-  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::Key::Escape});
+  question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Cancel, "question prompt escape cancels safely");
   auto empty_multi_question = multi_question;
   for (auto& option : empty_multi_question.options) option.selected = false;
@@ -507,19 +507,19 @@ void run_tui_modal_tests_part_3()
   }
   auto question_navigation_prompt = ava::tui::QuestionPromptView{
       .header = "Choose one", .question = "Pick an option", .options = long_question_options, .selected_option_index = 0, .custom_text = {}};
-  auto question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::Key::ArrowDown});
+  auto question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown});
   expect(question_navigation.action == ava::tui::QuestionPromptInputAction::Redraw && question_navigation.selected_option_index == 1,
          "question modal down arrow advances the selected option");
   question_navigation_prompt.selected_option_index = question_navigation.selected_option_index;
-  question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::Key::PageDown});
+  question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::PageDown});
   expect(question_navigation.action == ava::tui::QuestionPromptInputAction::Redraw && question_navigation.selected_option_index == 6,
          "question modal PageDown advances by a viewport-sized page");
   question_navigation_prompt.selected_option_index = question_navigation.selected_option_index;
-  question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::Key::End});
+  question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::End});
   expect(question_navigation.action == ava::tui::QuestionPromptInputAction::Redraw && question_navigation.selected_option_index == 11,
          "question modal End moves to the final option");
   question_navigation_prompt.selected_option_index = question_navigation.selected_option_index;
-  question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::Key::MouseWheelUp});
+  question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::MouseWheelUp});
   expect(question_navigation.action == ava::tui::QuestionPromptInputAction::Redraw && question_navigation.selected_option_index == 10,
          "question modal mouse wheel uses the same selection path as arrow navigation");
 
@@ -907,18 +907,18 @@ void run_tui_modal_tests_part_3()
                                                           .searchable = true,
                                                           .selected_option_index = 0,
                                                           .custom_text = ""};
-  auto searchable_input = ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'h'});
+  auto searchable_input = ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'h'});
   expect(searchable_input.action == ava::tui::QuestionPromptInputAction::Redraw && searchable_input.custom_text == "h" &&
              searchable_input.selected_option_index == 1,
          "searchable question typing filters and moves selection to the first match");
   searchable_question.custom_text = "anth";
   searchable_question.selected_option_index = 1;
-  searchable_input = ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  searchable_input = ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(searchable_input.action == ava::tui::QuestionPromptInputAction::Resolve && searchable_input.options[1].selected,
          "searchable question enter selects the matched provider option");
   searchable_question.custom_text = "custom-provider";
   searchable_question.selected_option_index = 0;
-  searchable_input = ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  searchable_input = ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   auto const custom_search_answer =
       ava::tui::question_answer_from_prompt_view(ava::tui::QuestionPromptView{.header = searchable_question.header,
                                                                               .question = searchable_question.question,
@@ -1114,10 +1114,10 @@ void run_tui_modal_tests_part_3()
   auto selector_matches = ava::tui::filter_select_list_items(selector);
   expect(selector_matches.size() == 1 && selector_matches.front() == 1,
          "select-list fuzzy filter matches provider/model labels and preserves original row ids");
-  auto selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'g'});
+  auto selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'g'});
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.query == "sonnetg" && selector_input.selected_item_index == 0,
          "select-list typing updates the search query and clamps to empty-match selection safely");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::Space});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Space});
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.query == "sonnet ",
          "select-list semantic Space remains searchable text instead of losing spaces in modal queries");
   auto const selector_keybinds = ava::tui::parse_key_bindings_json(
@@ -1129,18 +1129,18 @@ void run_tui_modal_tests_part_3()
   auto bound_selector = selector;
   bound_selector.query.clear();
   bound_selector.selected_item_index = 0;
-  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlN}, selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlN}, selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 1,
          "select-list uses configured down binding before raw Ctrl+N modal actions");
   bound_selector.selected_item_index = 1;
-  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlP}, selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlP}, selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 0,
          "select-list uses configured up binding before raw Ctrl+P modal actions");
   bound_selector.selected_item_index = 0;
-  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::Space}, selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Space}, selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Resolve && selector_input.selected_item_index == 0,
          "select-list configured Space confirms instead of appending query text");
-  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlW}, selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlW}, selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Cancel,
          "select-list uses configured cancel binding before raw composer delete-word actions");
   auto const session_selector_keybinds = ava::tui::parse_key_bindings_json(
@@ -1151,111 +1151,111 @@ void run_tui_modal_tests_part_3()
   auto const session_selector_bindings = session_selector_keybinds ? *session_selector_keybinds : ava::tui::default_key_bindings();
   auto session_bound_selector = selector;
   session_bound_selector.query = "custom";
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlO}, session_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlO}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::TogglePathDisplay && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.togglePath binding before raw composer details actions");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlY}, session_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlY}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::CycleSort && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.toggleSort binding before raw composer yank actions");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlU}, session_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlU}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleNamedFilter && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.toggleNamedFilter binding before raw composer line deletion");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlK}, session_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlK}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Rename && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.rename binding before raw composer line-end deletion");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::AltD}, session_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltD}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Archive && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.delete binding before raw composer word deletion");
   auto const tree_selector_keybinds = ava::tui::parse_key_bindings_json(tui_test_support::tree_action_key_bindings_json());
   expect(static_cast<bool>(tree_selector_keybinds), "tree selector custom keybind fixture parses");
   auto const tree_selector_bindings = tree_selector_keybinds ? *tree_selector_keybinds : ava::tui::default_key_bindings();
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlO}, tree_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlO}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchParent && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.tree.foldOrUp binding before raw composer details actions");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlY}, tree_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlY}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchChild && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.tree.unfoldOrDown binding before raw composer yank actions");
   selector_input = ava::tui::handle_select_list_input(
-      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'L', .text = "L"}, tree_selector_bindings);
+      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'L', .text = "L"}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Label && selector_input.query == session_bound_selector.query,
          "select-list routes Pi app.tree.editLabel Shift+L binding to the existing label draft action");
   selector_input = ava::tui::handle_select_list_input(
-      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'l', .text = "l"}, tree_selector_bindings);
+      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'l', .text = "l"}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.query == session_bound_selector.query + "l",
          "select-list keeps ordinary lowercase l as searchable text when Shift+L is bound");
   selector_input = ava::tui::handle_select_list_input(
-      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'T', .text = "T"}, tree_selector_bindings);
+      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'T', .text = "T"}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleLabelTimestamp && selector_input.query == session_bound_selector.query,
          "select-list routes Pi app.tree.toggleLabelTimestamp Shift+T binding to the label-time toggle");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlSpace}, tree_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlSpace}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleNamedFilter && selector_input.query == session_bound_selector.query,
          "select-list routes Pi app.tree.filter.labeledOnly to the existing named/labeled filter");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlSlash}, tree_selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlSlash}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleArchivedFilter && selector_input.query == session_bound_selector.query,
          "select-list routes Pi app.tree.filter.all to the existing archived visibility filter");
   selector_input = ava::tui::handle_select_list_input(
-      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 't', .text = "t"}, tree_selector_bindings);
+      session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 't', .text = "t"}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.query == session_bound_selector.query + "t",
          "select-list keeps ordinary lowercase t as searchable text when Shift+T is bound");
   selector.query = "ghost";
   selector.selected_item_index = 2;
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw, "select-list enter refuses disabled model/provider rows without resolving");
   selector.query = "claude";
   selector.selected_item_index = 0;
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(selector_input.action == ava::tui::SelectListInputAction::Resolve && selector_input.selected_item_index == 1,
          "select-list enter resolves the highlighted enabled fuzzy match");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::Escape});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
   expect(selector_input.action == ava::tui::SelectListInputAction::Cancel, "select-list escape cancels the modal safely");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::MouseLeftClick});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::MouseLeftClick});
   expect(selector_input.action == ava::tui::SelectListInputAction::None && selector_input.query == selector.query,
          "select-list raw mouse clicks are resolved by rendered modal hit-testing instead of triggering keyboard-only actions");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlT});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlT});
   expect(selector_input.action == ava::tui::SelectListInputAction::CycleSort && selector_input.query == selector.query,
          "select-list ctrl+t exposes a modal sort-cycle action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlS});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlS});
   expect(selector_input.action == ava::tui::SelectListInputAction::CycleSort && selector_input.query == selector.query,
          "select-list ctrl+s exposes the Pi-compatible modal sort-cycle action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlN});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlN});
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleNamedFilter && selector_input.query == selector.query,
          "select-list ctrl+n exposes a modal named-session filter action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlP});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlP});
   expect(selector_input.action == ava::tui::SelectListInputAction::TogglePathDisplay && selector_input.query == selector.query,
          "select-list ctrl+p exposes a modal path-display toggle without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlA});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlA});
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleArchivedFilter && selector_input.query == selector.query,
          "select-list ctrl+a exposes a modal archived-session filter toggle without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlX});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlX});
   expect(selector_input.action == ava::tui::SelectListInputAction::ModelsClearAll && selector_input.query == selector.query,
          "select-list ctrl+x exposes a scoped-model clear action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlR});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlR});
   expect(selector_input.action == ava::tui::SelectListInputAction::Rename && selector_input.query == selector.query,
          "select-list ctrl+r exposes a modal rename action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlL});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlL});
   expect(selector_input.action == ava::tui::SelectListInputAction::Label && selector_input.query == selector.query,
          "select-list ctrl+l exposes a modal label action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlD});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlD});
   expect(selector_input.action == ava::tui::SelectListInputAction::Archive && selector_input.query == selector.query,
          "select-list ctrl+d exposes a modal archive action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlBackspace});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlBackspace});
   expect(selector_input.action == ava::tui::SelectListInputAction::None && selector_input.query == selector.query,
          "select-list ctrl+backspace is non-destructive while the search query is non-empty");
   auto empty_query_selector = selector;
   empty_query_selector.query.clear();
-  selector_input = ava::tui::handle_select_list_input(empty_query_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlBackspace});
+  selector_input = ava::tui::handle_select_list_input(empty_query_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlBackspace});
   expect(selector_input.action == ava::tui::SelectListInputAction::ArchiveNoninvasive && selector_input.query.empty(),
          "select-list ctrl+backspace archives only when the selector search query is empty");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::AltArrowLeft});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltArrowLeft});
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchParent && selector_input.query == selector.query,
          "select-list alt-left exposes a modal parent-branch action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlArrowLeft});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlArrowLeft});
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchParent && selector_input.query == selector.query,
          "select-list ctrl-left exposes a modal parent-branch action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::AltArrowRight});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltArrowRight});
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchChild && selector_input.query == selector.query,
          "select-list alt-right exposes a modal child-branch action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlArrowRight});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlArrowRight});
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchChild && selector_input.query == selector.query,
          "select-list ctrl-right exposes a modal child-branch action without clearing search state");
   ava::tui::SelectListView paged_selector{.title = "Paged",
@@ -1278,48 +1278,48 @@ void run_tui_modal_tests_part_3()
                                                                 .enabled = true,
                                                                 .disabled_reason = {}});
   }
-  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::Key::PageDown});
+  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::PageDown});
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 5,
          "select-list PageDown jumps five visible rows");
   auto bound_paged_selector = paged_selector;
-  selector_input = ava::tui::handle_select_list_input(bound_paged_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlY}, selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(bound_paged_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlY}, selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 5,
          "select-list uses configured page-down binding before raw Ctrl+Y composer yank actions");
   bound_paged_selector.selected_item_index = 5;
-  selector_input = ava::tui::handle_select_list_input(bound_paged_selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlO}, selector_bindings);
+  selector_input = ava::tui::handle_select_list_input(bound_paged_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlO}, selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 0,
          "select-list uses configured page-up binding before raw Ctrl+O details actions");
   paged_selector.selected_item_index = 5;
-  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::Key::PageDown});
+  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::PageDown});
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 7,
          "select-list PageDown clamps at the last matching row instead of wrapping");
   paged_selector.selected_item_index = 7;
-  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::Key::PageUp});
+  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::PageUp});
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 2,
          "select-list PageUp jumps five visible rows");
   paged_selector.selected_item_index = 0;
-  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::Key::PageUp});
+  selector_input = ava::tui::handle_select_list_input(paged_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::PageUp});
   expect(selector_input.action == ava::tui::SelectListInputAction::Redraw && selector_input.selected_item_index == 0,
          "select-list PageUp clamps at the first matching row instead of wrapping");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::CtrlEnter});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlEnter});
   expect(selector_input.action == ava::tui::SelectListInputAction::None && selector_input.query == selector.query,
          "select-list ctrl+enter remains a composer-only newline alias and does not trigger modal actions");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::AltEnter});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltEnter});
   expect(selector_input.action == ava::tui::SelectListInputAction::None && selector_input.query == selector.query,
          "select-list alt+enter remains a composer-only follow-up/submit action and does not trigger modal actions");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::ShiftTab});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ShiftTab});
   expect(selector_input.action == ava::tui::SelectListInputAction::None && selector_input.query == selector.query,
          "select-list shift+tab remains an app-level reasoning shortcut and does not trigger modal actions");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::AltArrowLeft});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltArrowLeft});
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchParent && selector_input.query == selector.query,
          "select-list alt+left triggers parent-branch navigation in modal context");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::AltArrowRight});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltArrowRight});
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchChild && selector_input.query == selector.query,
          "select-list alt+right triggers child-branch navigation in modal context");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::AltArrowUp});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltArrowUp});
   expect(selector_input.action == ava::tui::SelectListInputAction::ModelsReorderUp && selector_input.query == selector.query,
          "select-list alt+up exposes a scoped-model reorder-up action without clearing search state");
-  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::Key::AltArrowDown});
+  selector_input = ava::tui::handle_select_list_input(selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltArrowDown});
   expect(selector_input.action == ava::tui::SelectListInputAction::ModelsReorderDown && selector_input.query == selector.query,
          "select-list alt+down exposes a scoped-model reorder-down action without clearing search state");
 

@@ -691,7 +691,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
         // Ctrl+C cannot authorize a plugin action and retains its stop semantics.
         // Every other key uses freshly queried terminal geometry before the
         // modal can navigate or resolve; KEY_RESIZE always repaints afterward.
-        auto const geometry_changed = input.event.key != Key::CtrlC && refresh_plugin_surface_fit();
+        auto const geometry_changed = input.event.key != terminal::Key::CtrlC && refresh_plugin_surface_fit();
         if (input.resize)
           return renderer.render();
         if (geometry_changed)

@@ -18,6 +18,7 @@ add_library(ava_tui
   "composer_subagent_workspace.cpp"
   "composer_text.cpp"
   "composer_transcript.cpp"
+  "encode_wide_character.cpp"
   "event_state.cpp"
   "keybindings.cpp"
   "mermaid_projection.cpp"

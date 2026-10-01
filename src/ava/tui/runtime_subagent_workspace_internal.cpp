@@ -371,6 +371,7 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
 {
   if (!active())
     return {};
+  using Key = terminal::Key;
   RuntimeSubagentWorkspaceInputResult result{.handled = true};
   if (mode_ == Mode::Selector)
   {

@@ -28,7 +28,7 @@ struct RuntimeDraftState
   bool copy_selection(ComposerSnapshot& snapshot);
   void extend_selection(TuiAction movement, ComposerSnapshot& snapshot);
   void extend_selection_to(std::size_t target, ComposerSnapshot& snapshot);
-  bool extend_selection_for_key(Key key, ComposerSnapshot& snapshot);
+  bool extend_selection_for_key(terminal::Key key, ComposerSnapshot& snapshot);
   void insert_newline();
   bool convert_backslash_enter_to_newline(ComposerSnapshot& snapshot);
 

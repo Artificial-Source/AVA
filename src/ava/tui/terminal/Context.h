@@ -8,6 +8,7 @@
 #include "Cursor.h"
 #include "KeyboardInputMode.h"
 #include "MouseInputMode.h"
+#include "ScopedTimeout.h"
 #include "utils/Badge.h"
 
 #include <chrono>
@@ -25,6 +26,131 @@ class Application;
 namespace ava::tui::terminal {
 
 class ColorPalette;
+
+enum class Key
+{
+  Character,
+  Enter,
+  Backspace,
+  ShiftBackspace,
+  CtrlBackspace,
+  Delete,
+  ShiftDelete,
+  Insert,
+  Clear,
+  Tab,
+  Space,
+  CtrlSpace,
+  Ctrl0,
+  Ctrl1,
+  Ctrl2,
+  Ctrl3,
+  Ctrl4,
+  Ctrl5,
+  Ctrl6,
+  Ctrl7,
+  Ctrl8,
+  Ctrl9,
+  ShiftTab,
+  ShiftL,
+  ShiftT,
+  Escape,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ShiftArrowUp,
+  ShiftArrowDown,
+  ShiftArrowLeft,
+  ShiftArrowRight,
+  ShiftCtrlArrowLeft,
+  ShiftCtrlArrowRight,
+  ShiftAltArrowLeft,
+  ShiftAltArrowRight,
+  CtrlArrowLeft,
+  CtrlArrowRight,
+  AltArrowUp,
+  AltArrowDown,
+  AltArrowLeft,
+  AltArrowRight,
+  PageUp,
+  PageDown,
+  Home,
+  End,
+  CtrlHome,
+  CtrlEnd,
+  ShiftHome,
+  ShiftEnd,
+  ShiftCtrlHome,
+  ShiftCtrlEnd,
+  MouseWheelUp,
+  MouseWheelDown,
+  MouseLeftPress,
+  MouseLeftClick,
+  MouseLeftDrag,
+  MouseLeftRelease,
+  // Cancels an in-progress AVA press/drag/header-arm without starting selection.
+  // Emitted for Shift-modified button reports and shared protocol handoff boundaries.
+  MousePointerCancel,
+  ShiftEnter,
+  CtrlEnter,
+  AltEnter,
+  CtrlA,
+  CtrlB,
+  CtrlC,
+  CtrlD,
+  CtrlE,
+  CtrlF,
+  CtrlG,
+  CtrlH,
+  CtrlK,
+  CtrlL,
+  CtrlMinus,
+  CtrlSlash,
+  CtrlN,
+  CtrlO,
+  CtrlP,
+  CtrlShiftP,
+  CtrlQ,
+  CtrlR,
+  CtrlRightBracket,
+  CtrlS,
+  CtrlT,
+  CtrlU,
+  CtrlV,
+  CtrlW,
+  CtrlX,
+  CtrlY,
+  CtrlZ,
+  F1,
+  F2,
+  F3,
+  F4,
+  F5,
+  F6,
+  F7,
+  F8,
+  F9,
+  F10,
+  F11,
+  F12,
+  AltBackspace,
+  AltB,
+  AltD,
+  AltDelete,
+  AltF,
+  AltH,
+  AltJ,
+  AltK,
+  AltL,
+  AltW,
+  CtrlAltRightBracket,
+  AltY,
+  Unknown,
+  Resize,
+  Mouse,
+  WideCharacter
+};
 
 // Context
 //
@@ -164,17 +290,35 @@ class Context final
   // Re-enter ncurses program mode, repaint its retained virtual screen, and explicitly restore every AVA-owned protocol.
   void restore_terminal_after_handoff();
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // Read one ncurses Key from the terminal input. Called from read_curses_input_from_terminal.
+  Key read_curses_key(wint_t& value);
+
+  // Read the next character iff that is a plain wide character (not a KEY_CODE).
+  std::optional<wchar_t> read_plain_wide_character();
+
+  // Read one character of an escape/control sequence after ESC was already consumed.
+  // Returns true if another character could be appended.
+  bool append_escape_sequence_character(std::string& consumed_out);
+
+  // Set a temporary timeout on stdsrc.
+  ScopedTimeout timeout(std::chrono::milliseconds delay_ms) { return {delay_ms}; }
 
  private:
   // Return the next input value, or -1 when the configured stdscr timeout expires or input fails.
   int try_get_wch();                                                    // get_wch
+
+  // Return ncurses-compatible status while reading through the canonical Context first.
+  // `wch_out` is a required non-null output parameter, matching wget_wch's caller contract.
+  int read_wch(wint_t* wch_out);
 
   // Convert `color` to a direct color or stable palette index. Called by create_color_pair.
   int terminal_color_index(Color color);
 
   // Register one pair from already resolved terminal color indexes.
   ColorPair priv_create_color_pair(int foreground_index, int background_index);
+
+ public:
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 } // namespace ava::tui::terminal

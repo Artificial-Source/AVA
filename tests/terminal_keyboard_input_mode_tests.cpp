@@ -249,7 +249,7 @@ void test_runtime_replays_utf8_split_between_negotiation_and_descriptor()
     expect(input_event.text == "x", "startup padding remains ordered before the split UTF-8 character");
   }
   auto const unicode = ava::tui::runtime_input::read_curses_input_from_terminal(context);
-  expect(unicode.event.key == ava::tui::Key::Character && unicode.text == "\xc3\xa9",
+  expect(unicode.event.key == ava::tui::terminal::Key::Character && unicode.text == "\xc3\xa9",
          "runtime input combines a UTF-8 sequence split between negotiation storage and the descriptor");
 }
 

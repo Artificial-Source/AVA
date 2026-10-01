@@ -39,8 +39,9 @@ void WheelBurstGovernor::reset()
   last_accepted_direction_.reset();
 }
 
-bool runtime_wheel_input_accepted(WheelBurstGovernor& governor, Key key, WheelBurstGovernor::Clock::time_point now)
+bool runtime_wheel_input_accepted(WheelBurstGovernor& governor, terminal::Key key, WheelBurstGovernor::Clock::time_point now)
 {
+  using Key = terminal::Key;
   if (key == Key::MouseWheelUp)
     return governor.accept(WheelDirection::Up, now);
   if (key == Key::MouseWheelDown)
@@ -222,6 +223,7 @@ bool RuntimeRenderer::prepare_transcript_selection_authority()
 TranscriptSelectionMouseResult RuntimeRenderer::handle_transcript_selection_mouse(InputEvent const& event, std::function<bool(std::size_t)> const& toggle_tool,
                                                                                   std::function<bool(std::size_t)> const& toggle_thinking)
 {
+  using Key = terminal::Key;
   std::lock_guard<std::recursive_mutex> lock(ui_mutex);
   if (event.key == Key::MousePointerCancel)
   {

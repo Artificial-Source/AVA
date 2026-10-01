@@ -200,240 +200,240 @@ void run_tui_terminal_input_tests_part_1()
   expect(!sanitized_wrap.empty() && sanitized_wrap[0].find('\x1b') == std::string::npos,
          "production transcript wrapping still sanitizes raw escape sequences before wrapping");
   expect(
-      ava::tui::terminal_escape_sequence_key("[27;2;13~") == ava::tui::Key::ShiftEnter &&
-          ava::tui::terminal_escape_sequence_key("[13;2u") == ava::tui::Key::ShiftEnter &&
-          ava::tui::terminal_escape_sequence_key("[13;2~") == ava::tui::Key::ShiftEnter &&
-          ava::tui::terminal_escape_sequence_key("[27;5;13~") == ava::tui::Key::CtrlEnter &&
-          ava::tui::terminal_escape_sequence_key("[13;5u") == ava::tui::Key::CtrlEnter &&
-          ava::tui::terminal_escape_sequence_key("[13;5~") == ava::tui::Key::CtrlEnter &&
-          ava::tui::terminal_escape_sequence_key("[27;3;13~") == ava::tui::Key::AltEnter &&
-          ava::tui::terminal_escape_sequence_key("[13;3u") == ava::tui::Key::AltEnter &&
-          ava::tui::terminal_escape_sequence_key("[13;3~") == ava::tui::Key::AltEnter &&
-          ava::tui::terminal_escape_sequence_key("\r") == ava::tui::Key::AltEnter && ava::tui::terminal_escape_sequence_complete("\r") &&
-          ava::tui::terminal_escape_sequence_key("[Z") == ava::tui::Key::ShiftTab &&
-          ava::tui::terminal_escape_sequence_key("[1;6P") == ava::tui::Key::CtrlShiftP &&
-          ava::tui::terminal_escape_sequence_key("[80;6u") == ava::tui::Key::CtrlShiftP &&
-          ava::tui::terminal_escape_sequence_key("[1079::112;6u") == ava::tui::Key::CtrlShiftP &&
-          ava::tui::terminal_escape_sequence_key("[103;5u") == ava::tui::Key::CtrlG && ava::tui::terminal_escape_sequence_key("[3~") == ava::tui::Key::Delete &&
-          ava::tui::terminal_escape_sequence_key("[3$") == ava::tui::Key::ShiftDelete && ava::tui::terminal_escape_sequence_complete("[3$") &&
-          ava::tui::terminal_escape_sequence_key("[3;2~") == ava::tui::Key::ShiftDelete &&
-          ava::tui::terminal_escape_sequence_key("[2~") == ava::tui::Key::Insert && ava::tui::terminal_escape_sequence_key("[5~") == ava::tui::Key::PageUp &&
-          ava::tui::terminal_escape_sequence_key("[6~") == ava::tui::Key::PageDown &&
-          ava::tui::terminal_escape_sequence_key("[5;2~") == ava::tui::Key::PageUp &&
-          ava::tui::terminal_escape_sequence_key("[6;2~") == ava::tui::Key::PageDown && ava::tui::terminal_escape_sequence_key("OP") == ava::tui::Key::F1 &&
-          ava::tui::terminal_escape_sequence_key("OQ") == ava::tui::Key::F2 && ava::tui::terminal_escape_sequence_key("[11~") == ava::tui::Key::F1 &&
-          ava::tui::terminal_escape_sequence_key("[12~") == ava::tui::Key::F2 && ava::tui::terminal_escape_sequence_key("[24~") == ava::tui::Key::F12 &&
-          ava::tui::terminal_escape_sequence_key("[H") == ava::tui::Key::Home && ava::tui::terminal_escape_sequence_key("OH") == ava::tui::Key::Home &&
-          ava::tui::terminal_escape_sequence_key("[1~") == ava::tui::Key::Home && ava::tui::terminal_escape_sequence_key("[7~") == ava::tui::Key::Home &&
-          ava::tui::terminal_escape_sequence_key("[1;5H") == ava::tui::Key::CtrlHome &&
-          ava::tui::terminal_escape_sequence_key("[7;5~") == ava::tui::Key::CtrlHome &&
-          ava::tui::terminal_escape_sequence_key("[1;6H") == ava::tui::Key::ShiftCtrlHome &&
-          ava::tui::terminal_escape_sequence_key("[7;6~") == ava::tui::Key::ShiftCtrlHome &&
-          ava::tui::terminal_escape_sequence_key("[1;2H") == ava::tui::Key::ShiftHome &&
-          ava::tui::terminal_escape_sequence_key("[2H") == ava::tui::Key::ShiftHome &&
-          ava::tui::terminal_escape_sequence_key("[7$") == ava::tui::Key::ShiftHome &&
-          ava::tui::terminal_escape_sequence_key("[7;2~") == ava::tui::Key::ShiftHome && ava::tui::terminal_escape_sequence_key("[F") == ava::tui::Key::End &&
-          ava::tui::terminal_escape_sequence_key("OF") == ava::tui::Key::End && ava::tui::terminal_escape_sequence_key("[4~") == ava::tui::Key::End &&
-          ava::tui::terminal_escape_sequence_key("[8~") == ava::tui::Key::End && ava::tui::terminal_escape_sequence_key("[1;5F") == ava::tui::Key::CtrlEnd &&
-          ava::tui::terminal_escape_sequence_key("[8;5~") == ava::tui::Key::CtrlEnd &&
-          ava::tui::terminal_escape_sequence_key("[1;6F") == ava::tui::Key::ShiftCtrlEnd &&
-          ava::tui::terminal_escape_sequence_key("[8;6~") == ava::tui::Key::ShiftCtrlEnd &&
-          ava::tui::terminal_escape_sequence_key("[1;2F") == ava::tui::Key::ShiftEnd &&
-          ava::tui::terminal_escape_sequence_key("[2F") == ava::tui::Key::ShiftEnd &&
-          ava::tui::terminal_escape_sequence_key("[8$") == ava::tui::Key::ShiftEnd &&
-          ava::tui::terminal_escape_sequence_key("[8;2~") == ava::tui::Key::ShiftEnd &&
-          ava::tui::terminal_escape_sequence_key("[45;5u") == ava::tui::Key::CtrlMinus &&
-          ava::tui::terminal_escape_sequence_key(std::string_view("\x1f", 1)) == ava::tui::Key::CtrlMinus &&
-          ava::tui::terminal_escape_sequence_key(std::string_view("\x1d", 1)) == ava::tui::Key::CtrlAltRightBracket &&
-          ava::tui::terminal_escape_sequence_key("[3;3~") == ava::tui::Key::AltDelete &&
-          ava::tui::terminal_escape_sequence_key("[1;5D") == ava::tui::Key::CtrlArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[1;5C") == ava::tui::Key::CtrlArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[5D") == ava::tui::Key::CtrlArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[5C") == ava::tui::Key::CtrlArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[1;2D") == ava::tui::Key::ShiftArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[1;2C") == ava::tui::Key::ShiftArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[2D") == ava::tui::Key::ShiftArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[2C") == ava::tui::Key::ShiftArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[d") == ava::tui::Key::ShiftArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[c") == ava::tui::Key::ShiftArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[1;2A") == ava::tui::Key::ShiftArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[1;2B") == ava::tui::Key::ShiftArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[2A") == ava::tui::Key::ShiftArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[2B") == ava::tui::Key::ShiftArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[a") == ava::tui::Key::ShiftArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[b") == ava::tui::Key::ShiftArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[1;6D") == ava::tui::Key::ShiftCtrlArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[1;6C") == ava::tui::Key::ShiftCtrlArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[6D") == ava::tui::Key::ShiftCtrlArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[6C") == ava::tui::Key::ShiftCtrlArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[1;4D") == ava::tui::Key::ShiftAltArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[1;4C") == ava::tui::Key::ShiftAltArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[4D") == ava::tui::Key::ShiftAltArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[4C") == ava::tui::Key::ShiftAltArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[1;3A") == ava::tui::Key::AltArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[3A") == ava::tui::Key::AltArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[1;3B") == ava::tui::Key::AltArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[3B") == ava::tui::Key::AltArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[1;3D") == ava::tui::Key::AltArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[1;3C") == ava::tui::Key::AltArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[3D") == ava::tui::Key::AltArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[3C") == ava::tui::Key::AltArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[A") == ava::tui::Key::ArrowUp && ava::tui::terminal_escape_sequence_key("[B") == ava::tui::Key::ArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[C") == ava::tui::Key::ArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[D") == ava::tui::Key::ArrowLeft && ava::tui::terminal_escape_sequence_key("OA") == ava::tui::Key::ArrowUp &&
-          ava::tui::terminal_escape_sequence_key("OB") == ava::tui::Key::ArrowDown &&
-          ava::tui::terminal_escape_sequence_key("OC") == ava::tui::Key::ArrowRight &&
-          ava::tui::terminal_escape_sequence_key("OD") == ava::tui::Key::ArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[1;1A") == ava::tui::Key::ArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[1;1B") == ava::tui::Key::ArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[1;1C") == ava::tui::Key::ArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[1;1D") == ava::tui::Key::ArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[57417u") == ava::tui::Key::ArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[57418u") == ava::tui::Key::ArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[57419u") == ava::tui::Key::ArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[57420u") == ava::tui::Key::ArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[57419;2u") == ava::tui::Key::ShiftArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[57420;2u") == ava::tui::Key::ShiftArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[57417;2u") == ava::tui::Key::ShiftArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[57418;2u") == ava::tui::Key::ShiftArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[57417;5u") == ava::tui::Key::CtrlArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[57418;5u") == ava::tui::Key::CtrlArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[57417;3u") == ava::tui::Key::AltArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[57418;3u") == ava::tui::Key::AltArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[57417;6u") == ava::tui::Key::ShiftCtrlArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[57418;6u") == ava::tui::Key::ShiftCtrlArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[57417;4u") == ava::tui::Key::ShiftAltArrowLeft &&
-          ava::tui::terminal_escape_sequence_key("[57418;4u") == ava::tui::Key::ShiftAltArrowRight &&
-          ava::tui::terminal_escape_sequence_key("[57419;3u") == ava::tui::Key::AltArrowUp &&
-          ava::tui::terminal_escape_sequence_key("[57420;3u") == ava::tui::Key::AltArrowDown &&
-          ava::tui::terminal_escape_sequence_key("[57421u") == ava::tui::Key::PageUp &&
-          ava::tui::terminal_escape_sequence_key("[57422u") == ava::tui::Key::PageDown &&
-          ava::tui::terminal_escape_sequence_key("[57423u") == ava::tui::Key::Home && ava::tui::terminal_escape_sequence_key("[57424u") == ava::tui::Key::End &&
-          ava::tui::terminal_escape_sequence_key("[57423;5u") == ava::tui::Key::CtrlHome &&
-          ava::tui::terminal_escape_sequence_key("[57424;5u") == ava::tui::Key::CtrlEnd &&
-          ava::tui::terminal_escape_sequence_key("[57423;6u") == ava::tui::Key::ShiftCtrlHome &&
-          ava::tui::terminal_escape_sequence_key("[57424;6u") == ava::tui::Key::ShiftCtrlEnd &&
-          ava::tui::terminal_escape_sequence_key("[57423;2u") == ava::tui::Key::ShiftHome &&
-          ava::tui::terminal_escape_sequence_key("[57424;2u") == ava::tui::Key::ShiftEnd &&
-          ava::tui::terminal_escape_sequence_key("[57426u") == ava::tui::Key::Delete &&
-          ava::tui::terminal_escape_sequence_key("[57426;2u") == ava::tui::Key::ShiftDelete &&
-          ava::tui::terminal_escape_sequence_key("[57426;3u") == ava::tui::Key::AltDelete &&
-          ava::tui::terminal_escape_sequence_key("[127;2u") == ava::tui::Key::ShiftBackspace &&
-          ava::tui::terminal_escape_sequence_key("[127;5u") == ava::tui::Key::CtrlBackspace &&
-          ava::tui::terminal_escape_sequence_key("[99;5u") == ava::tui::Key::CtrlC &&
-          ava::tui::terminal_escape_sequence_key("[120;5u") == ava::tui::Key::CtrlX &&
-          ava::tui::terminal_escape_sequence_key("[1089::99;5u") == ava::tui::Key::CtrlC &&
-          ava::tui::terminal_escape_sequence_key("[99;5:2u") == ava::tui::Key::CtrlC &&
-          ava::tui::terminal_escape_sequence_key("[99;5:3u") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[100;3u") == ava::tui::Key::AltD &&
-          ava::tui::terminal_escape_sequence_key("[27;5;99~") == ava::tui::Key::CtrlC &&
-          ava::tui::terminal_escape_sequence_key("[27;5;100~") == ava::tui::Key::CtrlD &&
-          ava::tui::terminal_escape_sequence_key("[27;5;45~") == ava::tui::Key::CtrlMinus &&
-          ava::tui::terminal_escape_sequence_key("[27;6;80~") == ava::tui::Key::CtrlShiftP &&
-          ava::tui::terminal_escape_sequence_key("[27;3;100~") == ava::tui::Key::AltD &&
-          ava::tui::terminal_escape_sequence_key("[27;2;127~") == ava::tui::Key::ShiftBackspace &&
-          ava::tui::terminal_escape_sequence_key("[27;5;127~") == ava::tui::Key::CtrlBackspace &&
-          ava::tui::terminal_escape_sequence_key("[27;3;127~") == ava::tui::Key::AltBackspace &&
-          ava::tui::terminal_escape_sequence_key("[27;1;127~") == ava::tui::Key::Backspace &&
-          ava::tui::terminal_escape_sequence_key("[27;1;27~") == ava::tui::Key::Escape &&
-          ava::tui::terminal_escape_sequence_key(std::string_view("\x00", 1)) == ava::tui::Key::CtrlSpace &&
-          ava::tui::terminal_escape_sequence_key("[32;5u") == ava::tui::Key::CtrlSpace &&
-          ava::tui::terminal_escape_sequence_key("[27;5;32~") == ava::tui::Key::CtrlSpace &&
-          ava::tui::terminal_escape_sequence_key("[48;5u") == ava::tui::Key::Ctrl0 &&
-          ava::tui::terminal_escape_sequence_key("[49;5u") == ava::tui::Key::Ctrl1 &&
-          ava::tui::terminal_escape_sequence_key("[57;5u") == ava::tui::Key::Ctrl9 &&
-          ava::tui::terminal_escape_sequence_key("[27;5;49~") == ava::tui::Key::Ctrl1 &&
-          ava::tui::terminal_escape_sequence_key("[47;5u") == ava::tui::Key::CtrlSlash &&
-          ava::tui::terminal_escape_sequence_key("[47::91;5u") == ava::tui::Key::CtrlSlash &&
-          ava::tui::terminal_escape_sequence_key("[27;5;47~") == ava::tui::Key::CtrlSlash &&
-          ava::tui::terminal_escape_sequence_key("[27;2;9~") == ava::tui::Key::ShiftTab &&
-          ava::tui::terminal_escape_sequence_key("[<64;12;9M") == ava::tui::Key::MouseWheelUp &&
-          ava::tui::terminal_escape_sequence_key("[<65;12;9M") == ava::tui::Key::MouseWheelDown &&
-          ava::tui::terminal_escape_sequence_key("[<68;12;9M") == ava::tui::Key::MouseWheelUp &&
-          ava::tui::terminal_escape_sequence_key("[<69;12;9M") == ava::tui::Key::MouseWheelDown &&
-          ava::tui::terminal_escape_sequence_key("[<0;12;9M") == ava::tui::Key::MouseLeftPress &&
-          ava::tui::terminal_escape_sequence_key("[<32;12;9M") == ava::tui::Key::MouseLeftDrag &&
-          ava::tui::terminal_escape_sequence_key("[<64;12;9m") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[<65;12;9m") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[<0;12;9m") == ava::tui::Key::MouseLeftRelease &&
-          ava::tui::terminal_escape_sequence_key(std::string_view("\x7f", 1)) == ava::tui::Key::AltBackspace &&
-          ava::tui::terminal_escape_sequence_key(std::string_view("\b", 1)) == ava::tui::Key::AltBackspace &&
-          ava::tui::terminal_escape_sequence_key("b") == ava::tui::Key::AltB && ava::tui::terminal_escape_sequence_key("d") == ava::tui::Key::AltD &&
-          ava::tui::terminal_escape_sequence_key("f") == ava::tui::Key::AltF && ava::tui::terminal_escape_sequence_key("h") == ava::tui::Key::AltH &&
-          ava::tui::terminal_escape_sequence_key("j") == ava::tui::Key::AltJ && ava::tui::terminal_escape_sequence_key("k") == ava::tui::Key::AltK &&
-          ava::tui::terminal_escape_sequence_key("l") == ava::tui::Key::AltL && ava::tui::terminal_escape_sequence_key("w") == ava::tui::Key::AltW &&
-          ava::tui::terminal_escape_sequence_key("y") == ava::tui::Key::AltY && ava::tui::terminal_escape_sequence_key("[13;2") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[13;5") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[27;2;13") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[999999999999999999999;2u") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[200~") == ava::tui::Key::Unknown,
+      ava::tui::terminal_escape_sequence_key("[27;2;13~") == ava::tui::terminal::Key::ShiftEnter &&
+          ava::tui::terminal_escape_sequence_key("[13;2u") == ava::tui::terminal::Key::ShiftEnter &&
+          ava::tui::terminal_escape_sequence_key("[13;2~") == ava::tui::terminal::Key::ShiftEnter &&
+          ava::tui::terminal_escape_sequence_key("[27;5;13~") == ava::tui::terminal::Key::CtrlEnter &&
+          ava::tui::terminal_escape_sequence_key("[13;5u") == ava::tui::terminal::Key::CtrlEnter &&
+          ava::tui::terminal_escape_sequence_key("[13;5~") == ava::tui::terminal::Key::CtrlEnter &&
+          ava::tui::terminal_escape_sequence_key("[27;3;13~") == ava::tui::terminal::Key::AltEnter &&
+          ava::tui::terminal_escape_sequence_key("[13;3u") == ava::tui::terminal::Key::AltEnter &&
+          ava::tui::terminal_escape_sequence_key("[13;3~") == ava::tui::terminal::Key::AltEnter &&
+          ava::tui::terminal_escape_sequence_key("\r") == ava::tui::terminal::Key::AltEnter && ava::tui::terminal_escape_sequence_complete("\r") &&
+          ava::tui::terminal_escape_sequence_key("[Z") == ava::tui::terminal::Key::ShiftTab &&
+          ava::tui::terminal_escape_sequence_key("[1;6P") == ava::tui::terminal::Key::CtrlShiftP &&
+          ava::tui::terminal_escape_sequence_key("[80;6u") == ava::tui::terminal::Key::CtrlShiftP &&
+          ava::tui::terminal_escape_sequence_key("[1079::112;6u") == ava::tui::terminal::Key::CtrlShiftP &&
+          ava::tui::terminal_escape_sequence_key("[103;5u") == ava::tui::terminal::Key::CtrlG && ava::tui::terminal_escape_sequence_key("[3~") == ava::tui::terminal::Key::Delete &&
+          ava::tui::terminal_escape_sequence_key("[3$") == ava::tui::terminal::Key::ShiftDelete && ava::tui::terminal_escape_sequence_complete("[3$") &&
+          ava::tui::terminal_escape_sequence_key("[3;2~") == ava::tui::terminal::Key::ShiftDelete &&
+          ava::tui::terminal_escape_sequence_key("[2~") == ava::tui::terminal::Key::Insert && ava::tui::terminal_escape_sequence_key("[5~") == ava::tui::terminal::Key::PageUp &&
+          ava::tui::terminal_escape_sequence_key("[6~") == ava::tui::terminal::Key::PageDown &&
+          ava::tui::terminal_escape_sequence_key("[5;2~") == ava::tui::terminal::Key::PageUp &&
+          ava::tui::terminal_escape_sequence_key("[6;2~") == ava::tui::terminal::Key::PageDown && ava::tui::terminal_escape_sequence_key("OP") == ava::tui::terminal::Key::F1 &&
+          ava::tui::terminal_escape_sequence_key("OQ") == ava::tui::terminal::Key::F2 && ava::tui::terminal_escape_sequence_key("[11~") == ava::tui::terminal::Key::F1 &&
+          ava::tui::terminal_escape_sequence_key("[12~") == ava::tui::terminal::Key::F2 && ava::tui::terminal_escape_sequence_key("[24~") == ava::tui::terminal::Key::F12 &&
+          ava::tui::terminal_escape_sequence_key("[H") == ava::tui::terminal::Key::Home && ava::tui::terminal_escape_sequence_key("OH") == ava::tui::terminal::Key::Home &&
+          ava::tui::terminal_escape_sequence_key("[1~") == ava::tui::terminal::Key::Home && ava::tui::terminal_escape_sequence_key("[7~") == ava::tui::terminal::Key::Home &&
+          ava::tui::terminal_escape_sequence_key("[1;5H") == ava::tui::terminal::Key::CtrlHome &&
+          ava::tui::terminal_escape_sequence_key("[7;5~") == ava::tui::terminal::Key::CtrlHome &&
+          ava::tui::terminal_escape_sequence_key("[1;6H") == ava::tui::terminal::Key::ShiftCtrlHome &&
+          ava::tui::terminal_escape_sequence_key("[7;6~") == ava::tui::terminal::Key::ShiftCtrlHome &&
+          ava::tui::terminal_escape_sequence_key("[1;2H") == ava::tui::terminal::Key::ShiftHome &&
+          ava::tui::terminal_escape_sequence_key("[2H") == ava::tui::terminal::Key::ShiftHome &&
+          ava::tui::terminal_escape_sequence_key("[7$") == ava::tui::terminal::Key::ShiftHome &&
+          ava::tui::terminal_escape_sequence_key("[7;2~") == ava::tui::terminal::Key::ShiftHome && ava::tui::terminal_escape_sequence_key("[F") == ava::tui::terminal::Key::End &&
+          ava::tui::terminal_escape_sequence_key("OF") == ava::tui::terminal::Key::End && ava::tui::terminal_escape_sequence_key("[4~") == ava::tui::terminal::Key::End &&
+          ava::tui::terminal_escape_sequence_key("[8~") == ava::tui::terminal::Key::End && ava::tui::terminal_escape_sequence_key("[1;5F") == ava::tui::terminal::Key::CtrlEnd &&
+          ava::tui::terminal_escape_sequence_key("[8;5~") == ava::tui::terminal::Key::CtrlEnd &&
+          ava::tui::terminal_escape_sequence_key("[1;6F") == ava::tui::terminal::Key::ShiftCtrlEnd &&
+          ava::tui::terminal_escape_sequence_key("[8;6~") == ava::tui::terminal::Key::ShiftCtrlEnd &&
+          ava::tui::terminal_escape_sequence_key("[1;2F") == ava::tui::terminal::Key::ShiftEnd &&
+          ava::tui::terminal_escape_sequence_key("[2F") == ava::tui::terminal::Key::ShiftEnd &&
+          ava::tui::terminal_escape_sequence_key("[8$") == ava::tui::terminal::Key::ShiftEnd &&
+          ava::tui::terminal_escape_sequence_key("[8;2~") == ava::tui::terminal::Key::ShiftEnd &&
+          ava::tui::terminal_escape_sequence_key("[45;5u") == ava::tui::terminal::Key::CtrlMinus &&
+          ava::tui::terminal_escape_sequence_key(std::string_view("\x1f", 1)) == ava::tui::terminal::Key::CtrlMinus &&
+          ava::tui::terminal_escape_sequence_key(std::string_view("\x1d", 1)) == ava::tui::terminal::Key::CtrlAltRightBracket &&
+          ava::tui::terminal_escape_sequence_key("[3;3~") == ava::tui::terminal::Key::AltDelete &&
+          ava::tui::terminal_escape_sequence_key("[1;5D") == ava::tui::terminal::Key::CtrlArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[1;5C") == ava::tui::terminal::Key::CtrlArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[5D") == ava::tui::terminal::Key::CtrlArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[5C") == ava::tui::terminal::Key::CtrlArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[1;2D") == ava::tui::terminal::Key::ShiftArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[1;2C") == ava::tui::terminal::Key::ShiftArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[2D") == ava::tui::terminal::Key::ShiftArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[2C") == ava::tui::terminal::Key::ShiftArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[d") == ava::tui::terminal::Key::ShiftArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[c") == ava::tui::terminal::Key::ShiftArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[1;2A") == ava::tui::terminal::Key::ShiftArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[1;2B") == ava::tui::terminal::Key::ShiftArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[2A") == ava::tui::terminal::Key::ShiftArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[2B") == ava::tui::terminal::Key::ShiftArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[a") == ava::tui::terminal::Key::ShiftArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[b") == ava::tui::terminal::Key::ShiftArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[1;6D") == ava::tui::terminal::Key::ShiftCtrlArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[1;6C") == ava::tui::terminal::Key::ShiftCtrlArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[6D") == ava::tui::terminal::Key::ShiftCtrlArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[6C") == ava::tui::terminal::Key::ShiftCtrlArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[1;4D") == ava::tui::terminal::Key::ShiftAltArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[1;4C") == ava::tui::terminal::Key::ShiftAltArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[4D") == ava::tui::terminal::Key::ShiftAltArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[4C") == ava::tui::terminal::Key::ShiftAltArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[1;3A") == ava::tui::terminal::Key::AltArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[3A") == ava::tui::terminal::Key::AltArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[1;3B") == ava::tui::terminal::Key::AltArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[3B") == ava::tui::terminal::Key::AltArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[1;3D") == ava::tui::terminal::Key::AltArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[1;3C") == ava::tui::terminal::Key::AltArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[3D") == ava::tui::terminal::Key::AltArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[3C") == ava::tui::terminal::Key::AltArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[A") == ava::tui::terminal::Key::ArrowUp && ava::tui::terminal_escape_sequence_key("[B") == ava::tui::terminal::Key::ArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[C") == ava::tui::terminal::Key::ArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[D") == ava::tui::terminal::Key::ArrowLeft && ava::tui::terminal_escape_sequence_key("OA") == ava::tui::terminal::Key::ArrowUp &&
+          ava::tui::terminal_escape_sequence_key("OB") == ava::tui::terminal::Key::ArrowDown &&
+          ava::tui::terminal_escape_sequence_key("OC") == ava::tui::terminal::Key::ArrowRight &&
+          ava::tui::terminal_escape_sequence_key("OD") == ava::tui::terminal::Key::ArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[1;1A") == ava::tui::terminal::Key::ArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[1;1B") == ava::tui::terminal::Key::ArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[1;1C") == ava::tui::terminal::Key::ArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[1;1D") == ava::tui::terminal::Key::ArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[57417u") == ava::tui::terminal::Key::ArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[57418u") == ava::tui::terminal::Key::ArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[57419u") == ava::tui::terminal::Key::ArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[57420u") == ava::tui::terminal::Key::ArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[57419;2u") == ava::tui::terminal::Key::ShiftArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[57420;2u") == ava::tui::terminal::Key::ShiftArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[57417;2u") == ava::tui::terminal::Key::ShiftArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[57418;2u") == ava::tui::terminal::Key::ShiftArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[57417;5u") == ava::tui::terminal::Key::CtrlArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[57418;5u") == ava::tui::terminal::Key::CtrlArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[57417;3u") == ava::tui::terminal::Key::AltArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[57418;3u") == ava::tui::terminal::Key::AltArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[57417;6u") == ava::tui::terminal::Key::ShiftCtrlArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[57418;6u") == ava::tui::terminal::Key::ShiftCtrlArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[57417;4u") == ava::tui::terminal::Key::ShiftAltArrowLeft &&
+          ava::tui::terminal_escape_sequence_key("[57418;4u") == ava::tui::terminal::Key::ShiftAltArrowRight &&
+          ava::tui::terminal_escape_sequence_key("[57419;3u") == ava::tui::terminal::Key::AltArrowUp &&
+          ava::tui::terminal_escape_sequence_key("[57420;3u") == ava::tui::terminal::Key::AltArrowDown &&
+          ava::tui::terminal_escape_sequence_key("[57421u") == ava::tui::terminal::Key::PageUp &&
+          ava::tui::terminal_escape_sequence_key("[57422u") == ava::tui::terminal::Key::PageDown &&
+          ava::tui::terminal_escape_sequence_key("[57423u") == ava::tui::terminal::Key::Home && ava::tui::terminal_escape_sequence_key("[57424u") == ava::tui::terminal::Key::End &&
+          ava::tui::terminal_escape_sequence_key("[57423;5u") == ava::tui::terminal::Key::CtrlHome &&
+          ava::tui::terminal_escape_sequence_key("[57424;5u") == ava::tui::terminal::Key::CtrlEnd &&
+          ava::tui::terminal_escape_sequence_key("[57423;6u") == ava::tui::terminal::Key::ShiftCtrlHome &&
+          ava::tui::terminal_escape_sequence_key("[57424;6u") == ava::tui::terminal::Key::ShiftCtrlEnd &&
+          ava::tui::terminal_escape_sequence_key("[57423;2u") == ava::tui::terminal::Key::ShiftHome &&
+          ava::tui::terminal_escape_sequence_key("[57424;2u") == ava::tui::terminal::Key::ShiftEnd &&
+          ava::tui::terminal_escape_sequence_key("[57426u") == ava::tui::terminal::Key::Delete &&
+          ava::tui::terminal_escape_sequence_key("[57426;2u") == ava::tui::terminal::Key::ShiftDelete &&
+          ava::tui::terminal_escape_sequence_key("[57426;3u") == ava::tui::terminal::Key::AltDelete &&
+          ava::tui::terminal_escape_sequence_key("[127;2u") == ava::tui::terminal::Key::ShiftBackspace &&
+          ava::tui::terminal_escape_sequence_key("[127;5u") == ava::tui::terminal::Key::CtrlBackspace &&
+          ava::tui::terminal_escape_sequence_key("[99;5u") == ava::tui::terminal::Key::CtrlC &&
+          ava::tui::terminal_escape_sequence_key("[120;5u") == ava::tui::terminal::Key::CtrlX &&
+          ava::tui::terminal_escape_sequence_key("[1089::99;5u") == ava::tui::terminal::Key::CtrlC &&
+          ava::tui::terminal_escape_sequence_key("[99;5:2u") == ava::tui::terminal::Key::CtrlC &&
+          ava::tui::terminal_escape_sequence_key("[99;5:3u") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[100;3u") == ava::tui::terminal::Key::AltD &&
+          ava::tui::terminal_escape_sequence_key("[27;5;99~") == ava::tui::terminal::Key::CtrlC &&
+          ava::tui::terminal_escape_sequence_key("[27;5;100~") == ava::tui::terminal::Key::CtrlD &&
+          ava::tui::terminal_escape_sequence_key("[27;5;45~") == ava::tui::terminal::Key::CtrlMinus &&
+          ava::tui::terminal_escape_sequence_key("[27;6;80~") == ava::tui::terminal::Key::CtrlShiftP &&
+          ava::tui::terminal_escape_sequence_key("[27;3;100~") == ava::tui::terminal::Key::AltD &&
+          ava::tui::terminal_escape_sequence_key("[27;2;127~") == ava::tui::terminal::Key::ShiftBackspace &&
+          ava::tui::terminal_escape_sequence_key("[27;5;127~") == ava::tui::terminal::Key::CtrlBackspace &&
+          ava::tui::terminal_escape_sequence_key("[27;3;127~") == ava::tui::terminal::Key::AltBackspace &&
+          ava::tui::terminal_escape_sequence_key("[27;1;127~") == ava::tui::terminal::Key::Backspace &&
+          ava::tui::terminal_escape_sequence_key("[27;1;27~") == ava::tui::terminal::Key::Escape &&
+          ava::tui::terminal_escape_sequence_key(std::string_view("\x00", 1)) == ava::tui::terminal::Key::CtrlSpace &&
+          ava::tui::terminal_escape_sequence_key("[32;5u") == ava::tui::terminal::Key::CtrlSpace &&
+          ava::tui::terminal_escape_sequence_key("[27;5;32~") == ava::tui::terminal::Key::CtrlSpace &&
+          ava::tui::terminal_escape_sequence_key("[48;5u") == ava::tui::terminal::Key::Ctrl0 &&
+          ava::tui::terminal_escape_sequence_key("[49;5u") == ava::tui::terminal::Key::Ctrl1 &&
+          ava::tui::terminal_escape_sequence_key("[57;5u") == ava::tui::terminal::Key::Ctrl9 &&
+          ava::tui::terminal_escape_sequence_key("[27;5;49~") == ava::tui::terminal::Key::Ctrl1 &&
+          ava::tui::terminal_escape_sequence_key("[47;5u") == ava::tui::terminal::Key::CtrlSlash &&
+          ava::tui::terminal_escape_sequence_key("[47::91;5u") == ava::tui::terminal::Key::CtrlSlash &&
+          ava::tui::terminal_escape_sequence_key("[27;5;47~") == ava::tui::terminal::Key::CtrlSlash &&
+          ava::tui::terminal_escape_sequence_key("[27;2;9~") == ava::tui::terminal::Key::ShiftTab &&
+          ava::tui::terminal_escape_sequence_key("[<64;12;9M") == ava::tui::terminal::Key::MouseWheelUp &&
+          ava::tui::terminal_escape_sequence_key("[<65;12;9M") == ava::tui::terminal::Key::MouseWheelDown &&
+          ava::tui::terminal_escape_sequence_key("[<68;12;9M") == ava::tui::terminal::Key::MouseWheelUp &&
+          ava::tui::terminal_escape_sequence_key("[<69;12;9M") == ava::tui::terminal::Key::MouseWheelDown &&
+          ava::tui::terminal_escape_sequence_key("[<0;12;9M") == ava::tui::terminal::Key::MouseLeftPress &&
+          ava::tui::terminal_escape_sequence_key("[<32;12;9M") == ava::tui::terminal::Key::MouseLeftDrag &&
+          ava::tui::terminal_escape_sequence_key("[<64;12;9m") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[<65;12;9m") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[<0;12;9m") == ava::tui::terminal::Key::MouseLeftRelease &&
+          ava::tui::terminal_escape_sequence_key(std::string_view("\x7f", 1)) == ava::tui::terminal::Key::AltBackspace &&
+          ava::tui::terminal_escape_sequence_key(std::string_view("\b", 1)) == ava::tui::terminal::Key::AltBackspace &&
+          ava::tui::terminal_escape_sequence_key("b") == ava::tui::terminal::Key::AltB && ava::tui::terminal_escape_sequence_key("d") == ava::tui::terminal::Key::AltD &&
+          ava::tui::terminal_escape_sequence_key("f") == ava::tui::terminal::Key::AltF && ava::tui::terminal_escape_sequence_key("h") == ava::tui::terminal::Key::AltH &&
+          ava::tui::terminal_escape_sequence_key("j") == ava::tui::terminal::Key::AltJ && ava::tui::terminal_escape_sequence_key("k") == ava::tui::terminal::Key::AltK &&
+          ava::tui::terminal_escape_sequence_key("l") == ava::tui::terminal::Key::AltL && ava::tui::terminal_escape_sequence_key("w") == ava::tui::terminal::Key::AltW &&
+          ava::tui::terminal_escape_sequence_key("y") == ava::tui::terminal::Key::AltY && ava::tui::terminal_escape_sequence_key("[13;2") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[13;5") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[27;2;13") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[999999999999999999999;2u") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[200~") == ava::tui::terminal::Key::Unknown,
       "terminal escape parser maps complete modified Enter CSI forms without treating partial keys or paste markers as "
       "text");
-  expect(ava::tui::terminal_escape_sequence_key("[1;1:1A") == ava::tui::Key::ArrowUp &&
-             ava::tui::terminal_escape_sequence_key("[1;1:1B") == ava::tui::Key::ArrowDown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:2C") == ava::tui::Key::ArrowRight &&
-             ava::tui::terminal_escape_sequence_key("[1;1:2D") == ava::tui::Key::ArrowLeft &&
-             ava::tui::terminal_escape_sequence_key("[1;2:1A") == ava::tui::Key::ShiftArrowUp &&
-             ava::tui::terminal_escape_sequence_key("[1;3:2B") == ava::tui::Key::AltArrowDown &&
-             ava::tui::terminal_escape_sequence_key("[1;5:1D") == ava::tui::Key::CtrlArrowLeft &&
-             ava::tui::terminal_escape_sequence_key("[1;6:2C") == ava::tui::Key::ShiftCtrlArrowRight &&
-             ava::tui::terminal_escape_sequence_key("[1;129:1B") == ava::tui::Key::ArrowDown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:3A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;2:3B") == ava::tui::Key::Unknown && ava::tui::terminal_escape_sequence_should_discard("[1;1:3A"),
+  expect(ava::tui::terminal_escape_sequence_key("[1;1:1A") == ava::tui::terminal::Key::ArrowUp &&
+             ava::tui::terminal_escape_sequence_key("[1;1:1B") == ava::tui::terminal::Key::ArrowDown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:2C") == ava::tui::terminal::Key::ArrowRight &&
+             ava::tui::terminal_escape_sequence_key("[1;1:2D") == ava::tui::terminal::Key::ArrowLeft &&
+             ava::tui::terminal_escape_sequence_key("[1;2:1A") == ava::tui::terminal::Key::ShiftArrowUp &&
+             ava::tui::terminal_escape_sequence_key("[1;3:2B") == ava::tui::terminal::Key::AltArrowDown &&
+             ava::tui::terminal_escape_sequence_key("[1;5:1D") == ava::tui::terminal::Key::CtrlArrowLeft &&
+             ava::tui::terminal_escape_sequence_key("[1;6:2C") == ava::tui::terminal::Key::ShiftCtrlArrowRight &&
+             ava::tui::terminal_escape_sequence_key("[1;129:1B") == ava::tui::terminal::Key::ArrowDown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:3A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;2:3B") == ava::tui::terminal::Key::Unknown && ava::tui::terminal_escape_sequence_should_discard("[1;1:3A"),
          "terminal escape parser decodes Kitty special-CSI arrow press and repeat events with modifiers while consuming releases");
   expect(
-      ava::tui::terminal_escape_sequence_key("[1;1:1H") == ava::tui::Key::Home && ava::tui::terminal_escape_sequence_key("[1;1:2F") == ava::tui::Key::End &&
-          ava::tui::terminal_escape_sequence_key("[1;5:1H") == ava::tui::Key::CtrlHome &&
-          ava::tui::terminal_escape_sequence_key("[1;6:2F") == ava::tui::Key::ShiftCtrlEnd &&
-          ava::tui::terminal_escape_sequence_key("[1;1:3H") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[7;1:1~") == ava::tui::Key::Home && ava::tui::terminal_escape_sequence_key("[8;1:2~") == ava::tui::Key::End &&
-          ava::tui::terminal_escape_sequence_key("[5;1:1~") == ava::tui::Key::PageUp &&
-          ava::tui::terminal_escape_sequence_key("[6;1:2~") == ava::tui::Key::PageDown &&
-          ava::tui::terminal_escape_sequence_key("[2;1:1~") == ava::tui::Key::Insert &&
-          ava::tui::terminal_escape_sequence_key("[3;2:2~") == ava::tui::Key::ShiftDelete &&
-          ava::tui::terminal_escape_sequence_key("[5;1:3~") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[1;1:1P") == ava::tui::Key::F1 && ava::tui::terminal_escape_sequence_key("[1;1:2S") == ava::tui::Key::F4 &&
-          ava::tui::terminal_escape_sequence_key("[15;1:1~") == ava::tui::Key::F5 && ava::tui::terminal_escape_sequence_key("[24;1:2~") == ava::tui::Key::F12 &&
-          ava::tui::terminal_escape_sequence_key("[1;1:3P") == ava::tui::Key::Unknown &&
-          ava::tui::terminal_escape_sequence_key("[15;1:3~") == ava::tui::Key::Unknown && ava::tui::terminal_escape_sequence_should_discard("[5;1:3~"),
+      ava::tui::terminal_escape_sequence_key("[1;1:1H") == ava::tui::terminal::Key::Home && ava::tui::terminal_escape_sequence_key("[1;1:2F") == ava::tui::terminal::Key::End &&
+          ava::tui::terminal_escape_sequence_key("[1;5:1H") == ava::tui::terminal::Key::CtrlHome &&
+          ava::tui::terminal_escape_sequence_key("[1;6:2F") == ava::tui::terminal::Key::ShiftCtrlEnd &&
+          ava::tui::terminal_escape_sequence_key("[1;1:3H") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[7;1:1~") == ava::tui::terminal::Key::Home && ava::tui::terminal_escape_sequence_key("[8;1:2~") == ava::tui::terminal::Key::End &&
+          ava::tui::terminal_escape_sequence_key("[5;1:1~") == ava::tui::terminal::Key::PageUp &&
+          ava::tui::terminal_escape_sequence_key("[6;1:2~") == ava::tui::terminal::Key::PageDown &&
+          ava::tui::terminal_escape_sequence_key("[2;1:1~") == ava::tui::terminal::Key::Insert &&
+          ava::tui::terminal_escape_sequence_key("[3;2:2~") == ava::tui::terminal::Key::ShiftDelete &&
+          ava::tui::terminal_escape_sequence_key("[5;1:3~") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[1;1:1P") == ava::tui::terminal::Key::F1 && ava::tui::terminal_escape_sequence_key("[1;1:2S") == ava::tui::terminal::Key::F4 &&
+          ava::tui::terminal_escape_sequence_key("[15;1:1~") == ava::tui::terminal::Key::F5 && ava::tui::terminal_escape_sequence_key("[24;1:2~") == ava::tui::terminal::Key::F12 &&
+          ava::tui::terminal_escape_sequence_key("[1;1:3P") == ava::tui::terminal::Key::Unknown &&
+          ava::tui::terminal_escape_sequence_key("[15;1:3~") == ava::tui::terminal::Key::Unknown && ava::tui::terminal_escape_sequence_should_discard("[5;1:3~"),
       "terminal escape parser applies Kitty event suffixes to Home, End, tilde special keys, and function keys");
-  expect(ava::tui::terminal_escape_sequence_key("[1;1:A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:0A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:4A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;:1A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;0:1A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1:1A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:1xA") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:1;2A") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[5;1:~") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[5;1:0~") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[5;1:9~") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:Q") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:4Q") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[1;1:1xQ") == ava::tui::Key::Unknown,
+  expect(ava::tui::terminal_escape_sequence_key("[1;1:A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:0A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:4A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;:1A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;0:1A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1:1A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:1xA") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:1;2A") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[5;1:~") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[5;1:0~") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[5;1:9~") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:Q") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:4Q") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[1;1:1xQ") == ava::tui::terminal::Key::Unknown,
          "terminal escape parser fails closed on malformed Kitty special-CSI modifiers, event types, and trailing fields");
-  expect(ava::tui::terminal_escape_sequence_key("[A") == ava::tui::Key::ArrowUp && ava::tui::terminal_escape_sequence_key("OB") == ava::tui::Key::ArrowDown &&
-             ava::tui::terminal_escape_sequence_key("[1;5D") == ava::tui::Key::CtrlArrowLeft &&
-             ava::tui::terminal_escape_sequence_key("[H") == ava::tui::Key::Home && ava::tui::terminal_escape_sequence_key("OF") == ava::tui::Key::End &&
-             ava::tui::terminal_escape_sequence_key("[5~") == ava::tui::Key::PageUp && ava::tui::terminal_escape_sequence_key("[24~") == ava::tui::Key::F12 &&
-             ava::tui::terminal_escape_sequence_key("[57420;1:2u") == ava::tui::Key::ArrowDown &&
-             ava::tui::terminal_escape_sequence_key("[1;129B") == ava::tui::Key::ArrowDown,
+  expect(ava::tui::terminal_escape_sequence_key("[A") == ava::tui::terminal::Key::ArrowUp && ava::tui::terminal_escape_sequence_key("OB") == ava::tui::terminal::Key::ArrowDown &&
+             ava::tui::terminal_escape_sequence_key("[1;5D") == ava::tui::terminal::Key::CtrlArrowLeft &&
+             ava::tui::terminal_escape_sequence_key("[H") == ava::tui::terminal::Key::Home && ava::tui::terminal_escape_sequence_key("OF") == ava::tui::terminal::Key::End &&
+             ava::tui::terminal_escape_sequence_key("[5~") == ava::tui::terminal::Key::PageUp && ava::tui::terminal_escape_sequence_key("[24~") == ava::tui::terminal::Key::F12 &&
+             ava::tui::terminal_escape_sequence_key("[57420;1:2u") == ava::tui::terminal::Key::ArrowDown &&
+             ava::tui::terminal_escape_sequence_key("[1;129B") == ava::tui::terminal::Key::ArrowDown,
          "terminal escape parser retains legacy CSI, SS3, modified, CSI-u, and tmux-compatible lock-modifier forms");
-  expect(ava::tui::terminal_escape_sequence_key("[1;129B") == ava::tui::Key::ArrowDown &&
-             ava::tui::terminal_escape_sequence_key("[1;193A") == ava::tui::Key::ArrowUp &&
-             ava::tui::terminal_escape_sequence_key("[1;130A") == ava::tui::Key::ShiftArrowUp &&
-             ava::tui::terminal_escape_sequence_key("[1;133D") == ava::tui::Key::CtrlArrowLeft &&
-             ava::tui::terminal_escape_sequence_key("[1;17B") == ava::tui::Key::Unknown &&
-             ava::tui::terminal_escape_sequence_key("[57420;129u") == ava::tui::Key::ArrowDown &&
-             ava::tui::terminal_escape_sequence_key("[5;129~") == ava::tui::Key::PageUp &&
-             ava::tui::terminal_escape_sequence_key("[6;129~") == ava::tui::Key::PageDown &&
-             ava::tui::terminal_escape_sequence_key("[1;129H") == ava::tui::Key::Home &&
-             ava::tui::terminal_escape_sequence_key("[1;129F") == ava::tui::Key::End &&
-             ava::tui::terminal_escape_sequence_key("[1;130H") == ava::tui::Key::ShiftHome &&
-             ava::tui::terminal_escape_sequence_key("[1;133F") == ava::tui::Key::CtrlEnd &&
-             ava::tui::terminal_escape_sequence_key("[3;129~") == ava::tui::Key::Delete &&
-             ava::tui::terminal_escape_sequence_key("[3;130~") == ava::tui::Key::ShiftDelete &&
-             ava::tui::terminal_escape_sequence_key("[3;131~") == ava::tui::Key::AltDelete,
+  expect(ava::tui::terminal_escape_sequence_key("[1;129B") == ava::tui::terminal::Key::ArrowDown &&
+             ava::tui::terminal_escape_sequence_key("[1;193A") == ava::tui::terminal::Key::ArrowUp &&
+             ava::tui::terminal_escape_sequence_key("[1;130A") == ava::tui::terminal::Key::ShiftArrowUp &&
+             ava::tui::terminal_escape_sequence_key("[1;133D") == ava::tui::terminal::Key::CtrlArrowLeft &&
+             ava::tui::terminal_escape_sequence_key("[1;17B") == ava::tui::terminal::Key::Unknown &&
+             ava::tui::terminal_escape_sequence_key("[57420;129u") == ava::tui::terminal::Key::ArrowDown &&
+             ava::tui::terminal_escape_sequence_key("[5;129~") == ava::tui::terminal::Key::PageUp &&
+             ava::tui::terminal_escape_sequence_key("[6;129~") == ava::tui::terminal::Key::PageDown &&
+             ava::tui::terminal_escape_sequence_key("[1;129H") == ava::tui::terminal::Key::Home &&
+             ava::tui::terminal_escape_sequence_key("[1;129F") == ava::tui::terminal::Key::End &&
+             ava::tui::terminal_escape_sequence_key("[1;130H") == ava::tui::terminal::Key::ShiftHome &&
+             ava::tui::terminal_escape_sequence_key("[1;133F") == ava::tui::terminal::Key::CtrlEnd &&
+             ava::tui::terminal_escape_sequence_key("[3;129~") == ava::tui::terminal::Key::Delete &&
+             ava::tui::terminal_escape_sequence_key("[3;130~") == ava::tui::terminal::Key::ShiftDelete &&
+             ava::tui::terminal_escape_sequence_key("[3;131~") == ava::tui::terminal::Key::AltDelete,
          "terminal escape parser ignores Ghostty Kitty lock modifiers for physical navigation keys");
   auto const kitty_keypad_one = ava::tui::terminal_escape_sequence_event("[57400u");
   auto const kitty_keypad_plus = ava::tui::terminal_escape_sequence_event("[57413u");
@@ -442,10 +442,10 @@ void run_tui_terminal_input_tests_part_1()
   auto const kitty_release_letter = ava::tui::terminal_escape_sequence_event("[97;1:3u");
   auto const modify_plain_letter = ava::tui::terminal_escape_sequence_event("[27;1;120~");
   auto const modify_shifted_letter = ava::tui::terminal_escape_sequence_event("[27;2;69~");
-  expect(kitty_keypad_one.key == ava::tui::Key::Character && kitty_keypad_one.text == "1" && kitty_keypad_plus.key == ava::tui::Key::Character &&
-             kitty_keypad_plus.text == "+" && kitty_shifted_letter.key == ava::tui::Key::Character && kitty_shifted_letter.text == "A" &&
-             kitty_repeat_letter.key == ava::tui::Key::Character && kitty_repeat_letter.text == "a" && kitty_release_letter.key == ava::tui::Key::Unknown &&
-             modify_plain_letter.key == ava::tui::Key::Character && modify_plain_letter.text == "x" && modify_shifted_letter.key == ava::tui::Key::Character &&
+  expect(kitty_keypad_one.key == ava::tui::terminal::Key::Character && kitty_keypad_one.text == "1" && kitty_keypad_plus.key == ava::tui::terminal::Key::Character &&
+             kitty_keypad_plus.text == "+" && kitty_shifted_letter.key == ava::tui::terminal::Key::Character && kitty_shifted_letter.text == "A" &&
+             kitty_repeat_letter.key == ava::tui::terminal::Key::Character && kitty_repeat_letter.text == "a" && kitty_release_letter.key == ava::tui::terminal::Key::Unknown &&
+             modify_plain_letter.key == ava::tui::terminal::Key::Character && modify_plain_letter.text == "x" && modify_shifted_letter.key == ava::tui::terminal::Key::Character &&
              modify_shifted_letter.text == "E",
          "terminal escape parser decodes Kitty CSI-u and xterm modifyOtherKeys printable reports while ignoring releases");
   auto const legacy_mouse_sequence = [](unsigned int button, unsigned int column, unsigned int row) {
@@ -472,16 +472,16 @@ void run_tui_terminal_input_tests_part_1()
   auto const legacy_release = ava::tui::terminal_escape_sequence_event(legacy_mouse_sequence(3, 14, 10));
   auto const legacy_post_release_hover = ava::tui::terminal_escape_sequence_event(legacy_mouse_sequence(32, 15, 10));
   auto const legacy_wheel = ava::tui::terminal_escape_sequence_event(legacy_mouse_sequence(64, 21, 7));
-  expect(sgr_hover.key == ava::tui::Key::Unknown && sgr_press.key == ava::tui::Key::MouseLeftPress && sgr_press.mouse_column == 12 &&
-             sgr_press.mouse_row == 9 && sgr_drag.key == ava::tui::Key::MouseLeftDrag && sgr_drag.mouse_column == 14 && sgr_drag.mouse_row == 10 &&
-             sgr_release.key == ava::tui::Key::MouseLeftRelease && sgr_release.mouse_column == 14 && sgr_release.mouse_row == 10 &&
-             sgr_post_release_hover.key == ava::tui::Key::Unknown && sgr_shift_press.key == ava::tui::Key::MousePointerCancel &&
-             sgr_shift_press.mouse_column == 12 && sgr_shift_press.mouse_row == 9 && sgr_shift_motion.key == ava::tui::Key::MousePointerCancel &&
-             sgr_wheel.key == ava::tui::Key::MouseWheelDown && sgr_wheel.mouse_column == 21 && sgr_wheel.mouse_row == 7 &&
-             sgr_shift_wheel.key == ava::tui::Key::MouseWheelDown && sgr_shift_wheel.mouse_column == 22 && sgr_shift_wheel.mouse_row == 8 &&
-             legacy_hover.key == ava::tui::Key::Unknown && legacy_press.key == ava::tui::Key::MouseLeftPress &&
-             legacy_drag.key == ava::tui::Key::MouseLeftDrag && legacy_release.key == ava::tui::Key::MouseLeftRelease &&
-             legacy_post_release_hover.key == ava::tui::Key::Unknown && legacy_wheel.key == ava::tui::Key::MouseWheelUp && legacy_wheel.mouse_column == 21 &&
+  expect(sgr_hover.key == ava::tui::terminal::Key::Unknown && sgr_press.key == ava::tui::terminal::Key::MouseLeftPress && sgr_press.mouse_column == 12 &&
+             sgr_press.mouse_row == 9 && sgr_drag.key == ava::tui::terminal::Key::MouseLeftDrag && sgr_drag.mouse_column == 14 && sgr_drag.mouse_row == 10 &&
+             sgr_release.key == ava::tui::terminal::Key::MouseLeftRelease && sgr_release.mouse_column == 14 && sgr_release.mouse_row == 10 &&
+             sgr_post_release_hover.key == ava::tui::terminal::Key::Unknown && sgr_shift_press.key == ava::tui::terminal::Key::MousePointerCancel &&
+             sgr_shift_press.mouse_column == 12 && sgr_shift_press.mouse_row == 9 && sgr_shift_motion.key == ava::tui::terminal::Key::MousePointerCancel &&
+             sgr_wheel.key == ava::tui::terminal::Key::MouseWheelDown && sgr_wheel.mouse_column == 21 && sgr_wheel.mouse_row == 7 &&
+             sgr_shift_wheel.key == ava::tui::terminal::Key::MouseWheelDown && sgr_shift_wheel.mouse_column == 22 && sgr_shift_wheel.mouse_row == 8 &&
+             legacy_hover.key == ava::tui::terminal::Key::Unknown && legacy_press.key == ava::tui::terminal::Key::MouseLeftPress &&
+             legacy_drag.key == ava::tui::terminal::Key::MouseLeftDrag && legacy_release.key == ava::tui::terminal::Key::MouseLeftRelease &&
+             legacy_post_release_hover.key == ava::tui::terminal::Key::Unknown && legacy_wheel.key == ava::tui::terminal::Key::MouseWheelUp && legacy_wheel.mouse_column == 21 &&
              legacy_wheel.mouse_row == 7,
          "terminal mouse protocols preserve real press-drag-release lifecycles, ignore hover, cancel on Shift, and preserve wheels");
 #ifdef NCURSES_MOUSE_VERSION
@@ -494,13 +494,13 @@ void run_tui_terminal_input_tests_part_1()
   auto const ncurses_click = ava::tui::terminal_ncurses_mouse_event(BUTTON1_CLICKED, 9, 10);
 #ifdef BUTTON_SHIFT
   auto const ncurses_shift_press = ava::tui::terminal_ncurses_mouse_event(BUTTON1_PRESSED | BUTTON_SHIFT, 3, 4);
-  auto const ncurses_shift_ok = ncurses_shift_press.key == ava::tui::Key::MousePointerCancel;
+  auto const ncurses_shift_ok = ncurses_shift_press.key == ava::tui::terminal::Key::MousePointerCancel;
 #else
   auto const ncurses_shift_ok = true;
 #endif
-  expect(ncurses_hover.key == ava::tui::Key::Unknown && ncurses_press.key == ava::tui::Key::MouseLeftPress &&
-             ncurses_drag.key == ava::tui::Key::MouseLeftDrag && ncurses_release.key == ava::tui::Key::MouseLeftRelease &&
-             ncurses_after_release.key == ava::tui::Key::Unknown && ncurses_click.key == ava::tui::Key::MouseLeftClick && ncurses_shift_ok,
+  expect(ncurses_hover.key == ava::tui::terminal::Key::Unknown && ncurses_press.key == ava::tui::terminal::Key::MouseLeftPress &&
+             ncurses_drag.key == ava::tui::terminal::Key::MouseLeftDrag && ncurses_release.key == ava::tui::terminal::Key::MouseLeftRelease &&
+             ncurses_after_release.key == ava::tui::terminal::Key::Unknown && ncurses_click.key == ava::tui::terminal::Key::MouseLeftClick && ncurses_shift_ok,
          "ncurses mouse reports preserve owned left-button lifecycle, click fallback, and Shift pointer cancel");
 #endif
   expect(ava::tui::terminal_escape_sequence_complete("[13;2u") && ava::tui::terminal_escape_sequence_complete("[?25l") &&
@@ -1737,7 +1737,7 @@ void test_startup_input_fifo_order_and_cap()
   ava::tui::runtime_input::clear_startup_input_queue();
   expect(ava::tui::runtime_input::startup_input_queue_size() == 0, "startup input queue begins empty");
 
-  auto key = [](ava::tui::Key k) {
+  auto key = [](ava::tui::terminal::Key k) {
     return ava::tui::runtime_input::RuntimeInput{.event = ava::tui::InputEvent{.key = k, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
                                                  .text = {},
                                                  .bracketed_paste = false,
@@ -1745,30 +1745,30 @@ void test_startup_input_fifo_order_and_cap()
   };
   auto character = [](char ch) {
     return ava::tui::runtime_input::RuntimeInput{
-        .event = ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = ch, .text = std::string(1, ch), .mouse_column = 0, .mouse_row = 0},
+        .event = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = ch, .text = std::string(1, ch), .mouse_column = 0, .mouse_row = 0},
         .text = std::string(1, ch),
         .bracketed_paste = false,
         .resize = false};
   };
   auto paste = ava::tui::runtime_input::RuntimeInput{
-      .event = ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'p', .text = "pasted", .mouse_column = 0, .mouse_row = 0},
+      .event = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'p', .text = "pasted", .mouse_column = 0, .mouse_row = 0},
       .text = "pasted",
       .bracketed_paste = true,
       .resize = false};
   auto resize = ava::tui::runtime_input::RuntimeInput{
-      .event = ava::tui::InputEvent{.key = ava::tui::Key::Unknown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
+      .event = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Unknown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
       .text = {},
       .bracketed_paste = false,
       .resize = true};
 
   expect(ava::tui::runtime_input::enqueue_startup_input(character('a')) && ava::tui::runtime_input::enqueue_startup_input(resize) &&
-             ava::tui::runtime_input::enqueue_startup_input(key(ava::tui::Key::Enter)) && ava::tui::runtime_input::enqueue_startup_input(std::move(paste)) &&
+             ava::tui::runtime_input::enqueue_startup_input(key(ava::tui::terminal::Key::Enter)) && ava::tui::runtime_input::enqueue_startup_input(std::move(paste)) &&
              ava::tui::runtime_input::startup_input_queue_size() == 4,
          "startup input queue preserves insertion order for key, resize, and complete paste events");
 
   auto first = ava::tui::runtime_input::poll_curses_input();
   auto second = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(0));
-  expect(first && first->event.key == ava::tui::Key::Character && first->text == "a" && second && second->resize &&
+  expect(first && first->event.key == ava::tui::terminal::Key::Character && first->text == "a" && second && second->resize &&
              ava::tui::runtime_input::startup_input_queue_size() == 2,
          "poll and timeout reads drain the startup FIFO before touching ncurses");
 
@@ -1776,7 +1776,7 @@ void test_startup_input_fifo_order_and_cap()
   auto third = ava::tui::runtime_input::read_curses_input();
   auto fourth = ava::tui::runtime_input::read_curses_input();
   expect(
-      third.event.key == ava::tui::Key::Enter && fourth.bracketed_paste && fourth.text == "pasted" && ava::tui::runtime_input::startup_input_queue_size() == 0,
+      third.event.key == ava::tui::terminal::Key::Enter && fourth.bracketed_paste && fourth.text == "pasted" && ava::tui::runtime_input::startup_input_queue_size() == 0,
       "blocking reads drain remaining startup FIFO events in order");
 
   for (std::size_t index = 0; index < 64; ++index)
@@ -1864,7 +1864,7 @@ void test_osc11_handler_arming_and_virtual_probe()
          "virtual probe applies OSC 11 light theme without exposing raw reply bytes");
 
   auto const queued = ava::tui::runtime_input::poll_curses_input();
-  expect(queued && queued->event.key == ava::tui::Key::Character && queued->text == "z" && ava::tui::runtime_input::startup_input_queue_size() == 0,
+  expect(queued && queued->event.key == ava::tui::terminal::Key::Character && queued->text == "z" && ava::tui::runtime_input::startup_input_queue_size() == 0,
          "virtual probe preserves a key typed during OSC 11 drain and discards Kitty protocol replies");
 
   // Ensure no raw OSC payload leaked into the queued event text.
@@ -2407,7 +2407,7 @@ bool write_all_fd(int fd, std::string_view bytes)
 
 bool looks_like_leaked_sgr_mouse_payload(ava::tui::runtime_input::RuntimeInput const& input)
 {
-  if (input.event.key != ava::tui::Key::Character && input.event.key != ava::tui::Key::Space)
+  if (input.event.key != ava::tui::terminal::Key::Character && input.event.key != ava::tui::terminal::Key::Space)
     return false;
   auto const& text = input.text.empty() ? input.event.text : input.text;
   if (text.empty())
@@ -2683,7 +2683,7 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
       expect(write_all_fd(master_fd, sequence), std::string("direct-terminal mouse PTY can write ") + std::string(label));
     };
 
-    auto expect_mouse = [&](std::string_view label, ava::tui::Key key, std::size_t column, std::size_t row) {
+    auto expect_mouse = [&](std::string_view label, ava::tui::terminal::Key key, std::size_t column, std::size_t row) {
       auto input_event = read_direct_mouse_event(label);
       if (!input_event)
         return;
@@ -2695,29 +2695,29 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
 
     // Feed serially: ncurses mouse FIFO is shallow; batching drops intermediate reports.
     feed("press", "\x1b[<0;10;5M");
-    expect_mouse("left press", ava::tui::Key::MouseLeftPress, 10, 5);
+    expect_mouse("left press", ava::tui::terminal::Key::MouseLeftPress, 10, 5);
 
     feed("drag", "\x1b[<32;12;6M");
-    expect_mouse("left drag", ava::tui::Key::MouseLeftDrag, 12, 6);
+    expect_mouse("left drag", ava::tui::terminal::Key::MouseLeftDrag, 12, 6);
 
     feed("release", "\x1b[<0;12;6m");
-    expect_mouse("left release", ava::tui::Key::MouseLeftRelease, 12, 6);
+    expect_mouse("left release", ava::tui::terminal::Key::MouseLeftRelease, 12, 6);
 
     feed("wheel up", "\x1b[<64;20;8M");
-    expect_mouse("wheel up", ava::tui::Key::MouseWheelUp, 20, 8);
+    expect_mouse("wheel up", ava::tui::terminal::Key::MouseWheelUp, 20, 8);
 
     feed("wheel down", "\x1b[<65;20;8M");
-    expect_mouse("wheel down", ava::tui::Key::MouseWheelDown, 20, 8);
+    expect_mouse("wheel down", ava::tui::terminal::Key::MouseWheelDown, 20, 8);
 
     feed("shift press", "\x1b[<4;15;9M");
-    expect_mouse("shift press cancel", ava::tui::Key::MousePointerCancel, 15, 9);
+    expect_mouse("shift press cancel", ava::tui::terminal::Key::MousePointerCancel, 15, 9);
 
     // Ordinary text must still reach the composer path after mouse traffic.
     feed("plain z", "z");
     auto plain = read_direct_mouse_event("plain z");
     if (plain)
     {
-      expect(plain->event.key == ava::tui::Key::Character && plain->text == "z",
+      expect(plain->event.key == ava::tui::terminal::Key::Character && plain->text == "z",
              "direct-terminal mouse mode preserves ordinary character input after SGR traffic");
     }
     expect_no_residual_mouse_payload("plain z");
@@ -2730,9 +2730,9 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
     auto const raw_wheel_up = ava::tui::terminal_escape_sequence_event("[<64;21;9M");
     auto const raw_wheel_down = ava::tui::terminal_escape_sequence_event("[<65;21;9M");
     auto const raw_shift = ava::tui::terminal_escape_sequence_event("[<4;11;7M");
-    expect(raw_press.key == ava::tui::Key::MouseLeftPress && raw_drag.key == ava::tui::Key::MouseLeftDrag &&
-               raw_release.key == ava::tui::Key::MouseLeftRelease && raw_wheel_up.key == ava::tui::Key::MouseWheelUp &&
-               raw_wheel_down.key == ava::tui::Key::MouseWheelDown && raw_shift.key == ava::tui::Key::MousePointerCancel,
+    expect(raw_press.key == ava::tui::terminal::Key::MouseLeftPress && raw_drag.key == ava::tui::terminal::Key::MouseLeftDrag &&
+               raw_release.key == ava::tui::terminal::Key::MouseLeftRelease && raw_wheel_up.key == ava::tui::terminal::Key::MouseWheelUp &&
+               raw_wheel_down.key == ava::tui::terminal::Key::MouseWheelDown && raw_shift.key == ava::tui::terminal::Key::MousePointerCancel,
            "raw SGR mouse parser (tmux/multiplexer path) still classifies press/drag/release/wheel/shift");
   }
 

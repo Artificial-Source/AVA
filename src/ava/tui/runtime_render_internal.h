@@ -49,7 +49,7 @@ class WheelBurstGovernor final
   std::optional<WheelDirection> last_accepted_direction_ = std::nullopt;
 };
 
-[[nodiscard]] bool runtime_wheel_input_accepted(WheelBurstGovernor& governor, Key key,
+[[nodiscard]] bool runtime_wheel_input_accepted(WheelBurstGovernor& governor, terminal::Key key,
                                                 WheelBurstGovernor::Clock::time_point now = WheelBurstGovernor::Clock::now());
 
 enum class FrameRenderKind

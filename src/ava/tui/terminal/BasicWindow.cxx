@@ -85,7 +85,7 @@ struct BasicWindow::Handle
 
  public:
   // Construct an Handle representing stdscr.
-  Handle() : handle_(stdscr) { default_window_initialization(); }
+  Handle() : handle_(::stdscr) { default_window_initialization(); }
 
   // Wrap an ncurses WINDOW handle returned by a window-creation function.
   // The pointer must be non-null and is owned by this Handle, except for stdscr which is owned by ncurses itself.
@@ -120,7 +120,7 @@ struct BasicWindow::Handle
 
   ~Handle()
   {
-    if (handle_ == stdscr)
+    if (handle_ == ::stdscr)
       return;
     // https://invisible-island.net/ncurses/man/curs_window.3x.html
     //

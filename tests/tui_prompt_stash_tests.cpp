@@ -177,7 +177,7 @@ void test_prompt_stash_runtime_controller()
              presentation.snapshot.status == "prompt stash opened",
          "prompt stash trigger opens the newest-first selector when the draft is empty and reports the selector state");
   auto const count_before_cancel = controller.stash().size();
-  expect(controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::Key::Escape}).value_or(false) &&
+  expect(controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape}).value_or(false) &&
              active_list == ava::tui::ActiveSelectList::None && controller.stash().size() == count_before_cancel &&
              presentation.snapshot.status == "view canceled",
          "prompt stash selector Esc closes without mutation and reports cancellation");
@@ -185,8 +185,8 @@ void test_prompt_stash_runtime_controller()
   ava::tui::reset_composer_draft(draft_state.draft, "newest selector draft");
   expect(controller.trigger(), "prompt stash runtime fixture stores a second entry");
   expect(controller.open_selector(), "prompt stash runtime fixture reopens selector");
-  expect(controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::Key::ArrowDown}).value_or(false) &&
-             controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::Key::Enter}).value_or(false) &&
+  expect(controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown}).value_or(false) &&
+             controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter}).value_or(false) &&
              draft_state.draft.text == "attachment-owned draft" && controller.stash().size() == 1 && presentation.snapshot.status == "stashed prompt restored",
          "prompt stash selector restores and removes an arbitrary older entry by selected identity and reports success");
 

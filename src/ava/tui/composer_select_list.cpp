@@ -275,6 +275,7 @@ std::string character_text(InputEvent const& event)
 
 bool event_matches_action(InputEvent const& event, TuiKeyBindings const& bindings, TuiAction action)
 {
+  using Key = terminal::Key;
   if (key_matches_action(bindings, action, event.key))
     return true;
   // Some terminals report Shift+L/T as an uppercase character rather than Key::ShiftL/T.
@@ -289,6 +290,7 @@ bool event_matches_action(InputEvent const& event, TuiKeyBindings const& binding
 
 InputEvent select_list_bound_event(InputEvent event, TuiKeyBindings const& bindings)
 {
+  using Key = terminal::Key;
   auto bound = [&](TuiAction action) { return event_matches_action(event, bindings, action); };
   if (bound(TuiAction::SelectConfirm))
     return InputEvent{.key = Key::Enter};
@@ -425,6 +427,7 @@ SelectListInputResult handle_select_list_input(SelectListView const& view, Input
     return current;
   };
 
+  using Key = terminal::Key;
   switch (event.key)
   {
     case Key::Character: {

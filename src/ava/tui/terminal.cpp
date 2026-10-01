@@ -23,7 +23,7 @@ constexpr std::size_t kOsc11ResponseMaxBytes = 256;
 bool g_left_mouse_down = false;
 bool g_terminal_background_response_handler_armed = false;
 
-InputEvent key_event(Key key)
+InputEvent key_event(terminal::Key key)
 {
   return InputEvent{.key = key, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
 }
@@ -207,8 +207,10 @@ int effective_kitty_modifiers(int modifiers)
   return modifiers & ~kKittyLockModifiers;
 }
 
-Key cursor_key_from_direction_and_modifiers(int direction, int modifiers)
+terminal::Key cursor_key_from_direction_and_modifiers(int direction, int modifiers)
 {
+  using Key = terminal::Key;
+
   auto const effective_modifiers = effective_kitty_modifiers(modifiers);
   if ((effective_modifiers & ~(kKittyModifierShift | kKittyModifierAlt | kKittyModifierCtrl)) != 0)
     return Key::Unknown;
@@ -259,11 +261,14 @@ Key cursor_key_from_direction_and_modifiers(int direction, int modifiers)
   }
 }
 
-Key home_end_key_from_modifiers(bool home, int modifiers)
+terminal::Key home_end_key_from_modifiers(bool home, int modifiers)
 {
+  using Key = terminal::Key;
+
   auto const effective_modifiers = effective_kitty_modifiers(modifiers);
   if ((effective_modifiers & ~(kKittyModifierShift | kKittyModifierCtrl)) != 0)
     return Key::Unknown;
+
   auto const has_shift = (effective_modifiers & kKittyModifierShift) != 0;
   auto const has_ctrl = (effective_modifiers & kKittyModifierCtrl) != 0;
   if (has_shift && has_ctrl)
@@ -275,8 +280,10 @@ Key home_end_key_from_modifiers(bool home, int modifiers)
   return home ? Key::Home : Key::End;
 }
 
-Key csi_home_end_key(std::string_view sequence)
+terminal::Key csi_home_end_key(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   if (sequence == "OH")
     return Key::Home;
   if (sequence == "OF")
@@ -296,8 +303,10 @@ Key csi_home_end_key(std::string_view sequence)
   return home_end_key_from_modifiers(home, modifier_value - 1);
 }
 
-Key csi_cursor_key(std::string_view sequence)
+terminal::Key csi_cursor_key(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   if (sequence.size() == 2 && sequence[0] == 'O')
   {
     switch (sequence[1])
@@ -476,8 +485,10 @@ int text_identity_codepoint(int codepoint)
   return lowercase_ascii_letter(normalize_kitty_functional_codepoint(codepoint));
 }
 
-Key control_key_from_codepoint(int codepoint)
+terminal::Key control_key_from_codepoint(int codepoint)
 {
+  using Key = terminal::Key;
+
   switch (codepoint)
   {
     case '0':
@@ -555,8 +566,10 @@ Key control_key_from_codepoint(int codepoint)
   }
 }
 
-Key alt_key_from_codepoint(int codepoint)
+terminal::Key alt_key_from_codepoint(int codepoint)
 {
+  using Key = terminal::Key;
+
   switch (codepoint)
   {
     case 'b':
@@ -582,8 +595,10 @@ Key alt_key_from_codepoint(int codepoint)
   }
 }
 
-Key key_from_codepoint_and_modifiers(int codepoint, int modifiers)
+terminal::Key key_from_codepoint_and_modifiers(int codepoint, int modifiers)
 {
+  using Key = terminal::Key;
+
   auto const effective_modifiers = effective_kitty_modifiers(modifiers);
   if ((effective_modifiers & kKittyModifierSuper) != 0)
     return Key::Unknown;
@@ -670,8 +685,10 @@ Key key_from_codepoint_and_modifiers(int codepoint, int modifiers)
   }
 }
 
-Key key_from_kitty_csi_u_sequence(std::string_view sequence)
+terminal::Key key_from_kitty_csi_u_sequence(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   auto const parsed = parse_kitty_csi_u_sequence(sequence);
   if (!parsed)
     return Key::Unknown;
@@ -736,7 +753,7 @@ std::optional<InputEvent> kitty_csi_u_printable_event(std::string_view sequence)
   append_utf8_codepoint(text, codepoint);
   if (text.empty())
     return std::nullopt;
-  return InputEvent{.key = Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
+  return InputEvent{.key = terminal::Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
 }
 
 std::optional<ModifyOtherKeysSequence> parse_modify_other_keys_sequence(std::string_view sequence)
@@ -760,16 +777,20 @@ std::optional<ModifyOtherKeysSequence> parse_modify_other_keys_sequence(std::str
   return ModifyOtherKeysSequence{.codepoint = *codepoint, .modifiers = *modifier_value - 1};
 }
 
-Key key_from_modify_other_keys_sequence(std::string_view sequence)
+terminal::Key key_from_modify_other_keys_sequence(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   auto const parsed = parse_modify_other_keys_sequence(sequence);
   if (!parsed)
     return Key::Unknown;
   return key_from_codepoint_and_modifiers(parsed->codepoint, parsed->modifiers);
 }
 
-Key function_key_from_number(int number)
+terminal::Key function_key_from_number(int number)
 {
+  using Key = terminal::Key;
+
   switch (number)
   {
     case 11:
@@ -801,8 +822,10 @@ Key function_key_from_number(int number)
   }
 }
 
-Key function_key_from_sequence(std::string_view sequence)
+terminal::Key function_key_from_sequence(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   if (sequence == "OP")
     return Key::F1;
   if (sequence == "OQ")
@@ -871,7 +894,7 @@ std::optional<InputEvent> modify_other_keys_printable_event(std::string_view seq
   append_utf8_codepoint(text, codepoint);
   if (text.empty())
     return std::nullopt;
-  return InputEvent{.key = Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
+  return InputEvent{.key = terminal::Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
 }
 
 bool is_modified_enter_csi_u(std::string_view sequence, int expected_modifiers)
@@ -987,8 +1010,10 @@ bool is_legacy_alt_enter_sequence(std::string_view sequence)
   return is_legacy_modified_enter_sequence(sequence, 3);
 }
 
-Key page_key_from_csi_tilde(std::string_view sequence)
+terminal::Key page_key_from_csi_tilde(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   if (!sequence.starts_with('[') || sequence.empty() || sequence.back() != '~')
     return Key::Unknown;
 
@@ -1028,6 +1053,7 @@ Key page_key_from_csi_tilde(std::string_view sequence)
 InputEvent normalized_left_mouse_event(bool shift, bool wheel_up, bool wheel_down, bool press, bool release, bool motion, bool clicked, std::size_t column,
                                        std::size_t row)
 {
+  using Key = terminal::Key;
   auto event = key_event(Key::Unknown);
   if (wheel_up || wheel_down)
   {
@@ -1097,8 +1123,10 @@ std::optional<InputEvent> sgr_mouse_event(std::string_view sequence)
                                      static_cast<std::size_t>(*row));
 }
 
-Key sgr_mouse_key(std::string_view sequence)
+terminal::Key sgr_mouse_key(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   if (auto event = sgr_mouse_event(sequence))
     return event->key;
   return Key::Unknown;
@@ -1117,7 +1145,7 @@ std::optional<InputEvent> legacy_mouse_event(std::string_view sequence)
   auto const column_byte = static_cast<unsigned char>(sequence[3]);
   auto const row_byte = static_cast<unsigned char>(sequence[4]);
   if (button_byte < 32 || column_byte < 32 || row_byte < 32)
-    return key_event(Key::Unknown);
+    return key_event(terminal::Key::Unknown);
   auto const button = static_cast<unsigned int>(button_byte - 32U);
   auto const is_motion = (button & 32U) != 0;
   auto const is_wheel = (button & 64U) != 0;
@@ -1128,8 +1156,10 @@ std::optional<InputEvent> legacy_mouse_event(std::string_view sequence)
                                      static_cast<std::size_t>(column_byte - 32U), static_cast<std::size_t>(row_byte - 32U));
 }
 
-Key legacy_mouse_key(std::string_view sequence)
+terminal::Key legacy_mouse_key(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   if (auto event = legacy_mouse_event(sequence))
     return event->key;
   return Key::Unknown;
@@ -1384,7 +1414,7 @@ InputEvent terminal_ncurses_mouse_event(std::uint64_t button_state, std::size_t 
   static_cast<void>(button_state);
   static_cast<void>(column);
   static_cast<void>(row);
-  return key_event(Key::Unknown);
+  return key_event(terminal::Key::Unknown);
 #endif
 }
 
@@ -1400,17 +1430,19 @@ InputEvent terminal_escape_sequence_event(std::string_view sequence)
   if (auto event = legacy_mouse_event(sequence))
     return *event;
   auto const key = terminal_escape_sequence_key(sequence);
-  if (key != Key::Unknown)
+  if (key != terminal::Key::Unknown)
     return key_event(key);
   if (auto event = kitty_csi_u_printable_event(sequence))
     return *event;
   if (auto event = modify_other_keys_printable_event(sequence))
     return *event;
-  return key_event(Key::Unknown);
+  return key_event(terminal::Key::Unknown);
 }
 
-Key terminal_escape_sequence_key(std::string_view sequence)
+terminal::Key terminal_escape_sequence_key(std::string_view sequence)
 {
+  using Key = terminal::Key;
+
   if (sequence == "\x7f" || sequence == "\b")
     return Key::AltBackspace;
   if (sequence == "\x1d")
@@ -1535,7 +1567,7 @@ bool terminal_escape_sequence_should_discard(std::string_view sequence)
     return false;
   if (sequence == "[200~")
     return false;
-  return terminal_escape_sequence_key(sequence) == Key::Unknown;
+  return terminal_escape_sequence_key(sequence) == terminal::Key::Unknown;
 }
 
 bool terminal_is_tty()

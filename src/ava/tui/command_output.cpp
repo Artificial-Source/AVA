@@ -408,6 +408,7 @@ CommandOutputInputResult handle_command_output_input(CommandOutputView const& vi
   auto const max_scroll = command_output_max_scroll_offset(view, width, height, presentation);
   auto result = CommandOutputInputResult{.scroll_offset = std::min(view.scroll_offset, max_scroll)};
   auto const page = std::max<std::size_t>(command_output_body_height(height), 1);
+  using Key = terminal::Key;
   switch (event.key)
   {
     case Key::Escape:

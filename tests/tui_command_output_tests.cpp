@@ -43,19 +43,19 @@ void test_command_output_rendering_and_input()
              frame_contains(frame, "Enter close") && ava::tui::command_output_max_scroll_offset(view, 60, 10) > 0,
          "command output renders bounded token-only chrome with scroll controls");
 
-  auto end = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::Key::End}, 60, 10);
+  auto end = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::End}, 60, 10);
   expect(end.action == ava::tui::CommandOutputInputAction::Redraw && end.scroll_offset == ava::tui::command_output_max_scroll_offset(view, 60, 10),
          "command output End moves to the final wrapped row");
   view.scroll_offset = end.scroll_offset;
-  auto page_up = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::Key::PageUp}, 60, 10);
-  auto arrow_up = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::Key::ArrowUp}, 60, 10);
-  auto wheel_up = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::Key::MouseWheelUp}, 60, 10);
-  auto home = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::Key::Home}, 60, 10);
+  auto page_up = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::PageUp}, 60, 10);
+  auto arrow_up = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowUp}, 60, 10);
+  auto wheel_up = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::MouseWheelUp}, 60, 10);
+  auto home = ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Home}, 60, 10);
   expect(page_up.scroll_offset < end.scroll_offset && arrow_up.scroll_offset + 1 == end.scroll_offset && wheel_up.scroll_offset == arrow_up.scroll_offset &&
              home.scroll_offset == 0,
          "command output arrows, PageUp, Home, and mouse wheel share bounded scrolling");
 
-  for (auto const key : {ava::tui::Key::Escape, ava::tui::Key::CtrlC, ava::tui::Key::Enter})
+  for (auto const key : {ava::tui::terminal::Key::Escape, ava::tui::terminal::Key::CtrlC, ava::tui::terminal::Key::Enter})
   {
     expect(ava::tui::handle_command_output_input(view, ava::tui::InputEvent{.key = key}, 60, 10).action == ava::tui::CommandOutputInputAction::Dismiss,
            "command output supports each required dismissal key");

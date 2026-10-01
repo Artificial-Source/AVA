@@ -1347,8 +1347,8 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   auto selected_reply =
       std::async(std::launch::async, [endpoint = *endpoint, selection]() { return endpoint.present(selection, endpoint.deadline, [] { return false; }); });
   bool const opened = open_plugin_modal(coordinator, snapshot, selected_reply);
-  auto down = ava::tui::InputEvent{.key = ava::tui::Key::ArrowDown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
-  auto enter = ava::tui::InputEvent{.key = ava::tui::Key::Enter, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
+  auto down = ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
+  auto enter = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
   auto const down_result = coordinator.handle_input(snapshot, down);
   auto const enter_result = coordinator.handle_input(snapshot, enter);
   auto const selected = selected_reply.get();
@@ -1366,7 +1366,7 @@ void test_tui_plugin_ui_modal_input_conflict_cancel_and_deadline()
   auto escape_reply = std::async(
       std::launch::async, [endpoint = *endpoint, escape_confirm]() { return endpoint.present(escape_confirm, endpoint.deadline, [] { return false; }); });
   bool const escape_opened = open_plugin_modal(coordinator, snapshot, escape_reply);
-  auto escape = ava::tui::InputEvent{.key = ava::tui::Key::Escape, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
+  auto escape = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
   auto const escape_input = coordinator.handle_input(snapshot, escape);
   auto const escaped = escape_reply.get();
   expect(escape_opened && escape_input == ava::tui::TuiPluginUiInputResult::Redraw && escaped.action == ava::tui::TuiPluginUiReplyKind::Cancel &&
@@ -1494,8 +1494,8 @@ void test_tui_plugin_ui_attribution_fit_policy()
       EnterThenArrow,
       PollThenInput,
     };
-    auto const arrow = ava::tui::InputEvent{.key = ava::tui::Key::ArrowDown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
-    auto const enter = ava::tui::InputEvent{.key = ava::tui::Key::Enter, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
+    auto const arrow = ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
+    auto const enter = ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0};
 
     for (std::size_t height = 8; height <= 12; ++height)
     {

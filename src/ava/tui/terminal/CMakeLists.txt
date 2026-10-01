@@ -20,6 +20,7 @@ target_sources(ava_terminal
     "Spacer.cxx"
     "Pad.cxx"
     "Paragraph.cxx"
+    "ScopedTimeout.cxx"
     "TextSpan.cxx"
     "Window.cxx"
     "WindowBorder.cxx"

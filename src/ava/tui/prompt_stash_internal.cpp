@@ -290,6 +290,7 @@ std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEve
   if (active_select_list_ != ActiveSelectList::PromptStash || !snapshot.select_list)
     return std::nullopt;
 
+  using Key = terminal::Key;
   SelectListInputResult result;
   if (event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick)
   {

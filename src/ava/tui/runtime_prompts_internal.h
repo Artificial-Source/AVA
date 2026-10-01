@@ -20,7 +20,7 @@
 namespace ava::tui {
 
 namespace detail {
-[[nodiscard]] bool prompt_wheel_input_suppressed(Key key, std::optional<std::chrono::steady_clock::time_point> const& deadline,
+[[nodiscard]] bool prompt_wheel_input_suppressed(terminal::Key key, std::optional<std::chrono::steady_clock::time_point> const& deadline,
                                                  std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 } // namespace detail
 

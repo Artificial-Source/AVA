@@ -659,6 +659,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
 
   while (true)
   {
+    using Key = terminal::Key;
     if (!service_mermaid_presentation())
     {
       terminal_write_failed = true;

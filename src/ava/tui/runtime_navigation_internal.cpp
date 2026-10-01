@@ -269,6 +269,8 @@ std::size_t RuntimeNavigationController::sidebar_drawer_page_size() const
 
 std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(InputEvent const& event)
 {
+  using Key = terminal::Key;
+
   if (!sidebar_drawer_focused())
     return std::nullopt;
   if (event.key == Key::Escape || key_matches_action(options_.key_bindings, TuiAction::Cancel, event.key))

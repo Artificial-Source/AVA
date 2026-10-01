@@ -24,6 +24,7 @@ constexpr std::size_t kKeyboardScrollRows = 3;
 // Composer edit/delete/cursor/undo/redo/yank.
 RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_composer_edit(runtime_input::RuntimeInput const& active_input)
 {
+  using Key = terminal::Key;
   auto const& active_event = active_input.event;
   auto& draft = draft_state_.draft;
   auto& draft_state = draft_state_;
@@ -254,7 +255,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_nav
     }
     return to_input_handling(renderer_.request_render());
   }
-  if (active_event.key == Key::ArrowUp)
+  if (active_event.key == terminal::Key::ArrowUp)
   {
     navigation_.scroll_up(kKeyboardScrollRows);
     return to_input_handling(renderer_.request_render());
@@ -351,7 +352,7 @@ RuntimeActiveRunController::InputHandling RuntimeActiveRunController::handle_nav
     }
     return to_input_handling(renderer_.request_render());
   }
-  if (active_event.key == Key::ArrowDown)
+  if (active_event.key == terminal::Key::ArrowDown)
   {
     navigation_.scroll_down(kKeyboardScrollRows);
     return to_input_handling(renderer_.request_render());

@@ -128,8 +128,9 @@ void RuntimeDraftState::extend_selection_to(std::size_t target, ComposerSnapshot
   snapshot.status = selection_bounds() ? "selection active" : "selection boundary";
 }
 
-bool RuntimeDraftState::extend_selection_for_key(Key key, ComposerSnapshot& snapshot)
+bool RuntimeDraftState::extend_selection_for_key(terminal::Key key, ComposerSnapshot& snapshot)
 {
+  using Key = terminal::Key;
   switch (key)
   {
     case Key::ShiftArrowUp:

@@ -17,93 +17,93 @@
 
 void run_tui_permission_tests_part_1()
 {
-  auto prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::Key::Tab});
+  auto prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt tab toggles focus to allow");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::Tab});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Deny,
          "permission prompt tab toggles focus back to deny");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::ArrowLeft});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowLeft});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Deny,
          "permission prompt left arrow selects deny");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::Key::ArrowRight});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowRight});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt right arrow selects allow");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::ArrowUp});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowUp});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Deny,
          "permission prompt up arrow selects the previous action consistently with list modals");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::Key::ArrowDown});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt down arrow selects the next action consistently with list modals");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllow, "permission prompt enter confirms selected allow");
   prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = ' '});
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = ' '});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt space confirms selected deny");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::Space});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Space});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllow, "permission prompt semantic Space confirms the selected choice");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::Escape});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt escape resolves deny");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::CtrlC});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlC});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt ctrl-c resolves deny");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::CtrlD});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlD});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt ctrl-d resolves deny");
   prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'A'});
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'A'});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllow, "permission prompt A resolves allow");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'D'});
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'D'});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt D resolves deny");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'x'});
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'x'});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::None && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt ignores unmapped character keys without changing focus");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'S'}, false);
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'S'}, false);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::None && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt ignores session shortcut when session grant is unavailable");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'R'}, false, false, false);
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, false);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::None && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt ignores remembered-rule shortcut when rule storage is unavailable");
   prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::Tab}, false, true, true);
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab}, false, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::DenyRemember,
          "permission prompt cycles to remembered deny when rule storage is available");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::DenyRemember, ava::tui::InputEvent{.key = ava::tui::Key::Enter},
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::DenyRemember, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
                                                           false, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDenyRemember, "permission prompt enter confirms remembered deny");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'R'}, false, true, true);
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, true, true);
   expect(
       prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::AllowRemember,
       "permission prompt R toggles the selected allow choice into a remembered allow");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowRemember, ava::tui::InputEvent{.key = ava::tui::Key::Enter},
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowRemember, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
                                                           false, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllowRemember, "permission prompt enter confirms remembered allow");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'R'}, false, false, true);
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::DenyRemember,
          "permission prompt keeps remembered deny available when a Critical command cannot be remembered as allow");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'R'}, false, false, true);
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::None && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt does not expose remembered allow when the backend only permits one-shot approval");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'S'}, true, true, true);
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'S'}, true, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllowSession &&
              prompt_input.selected_choice == ava::tui::PermissionPromptChoice::AllowSession,
          "permission prompt S resolves allow session when session grant is available");
   prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::Key::Tab}, true, true, true);
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab}, true, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::AllowSession,
          "permission prompt tab advances from allow to allow session when available");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowSession, ava::tui::InputEvent{.key = ava::tui::Key::Tab}, true,
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowSession, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab}, true,
                                                           true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::DenyRemember,
          "permission prompt tab advances from allow session to remembered deny when available");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowSession,
-                                                          ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'R'}, true, true, true);
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, true, true, true);
   expect(
       prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::AllowRemember,
       "permission prompt R toggles allow session into remembered allow");
@@ -121,74 +121,74 @@ void run_tui_permission_tests_part_1()
 
   ava::tui::PermissionPromptView guidance_prompt{
       .tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = "ask", .selected_choice = ava::tui::PermissionPromptChoice::Allow};
-  auto guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'G'});
+  auto guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'G'});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_mode &&
              guidance_input.selected_choice == ava::tui::PermissionPromptChoice::Deny && guidance_input.guidance_text.empty(),
          "permission prompt G enters guidance mode as one-shot reject without resolving");
   guidance_prompt.guidance_mode = true;
   guidance_prompt.selected_choice = ava::tui::PermissionPromptChoice::Deny;
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'A'});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'A'});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_mode && guidance_input.guidance_text == "A" &&
              guidance_input.selected_choice == ava::tui::PermissionPromptChoice::Deny,
          "permission guidance mode treats A as text and never authorizes");
   guidance_prompt.guidance_text = "A";
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Space});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Space});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_text == "A ",
          "permission guidance mode Space appends a space instead of resolving");
   guidance_prompt.guidance_text = "A ";
   guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt,
-                                                            ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'x', .text = "safe\nline\x01"});
+                                                            ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'x', .text = "safe\nline\x01"});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_text == "A safeline",
          "permission guidance mode strips controls and newlines from pasted text");
   guidance_prompt.guidance_text = "base";
   // Combining acute accent on 'e' (U+0301) is one compact cluster with the base.
   guidance_input = ava::tui::handle_permission_prompt_input(
-      guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = '\0', .text = std::string("e\xCC\x81")});
+      guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = '\0', .text = std::string("e\xCC\x81")});
   expect(guidance_input.guidance_text == std::string("basee\xCC\x81"), "permission guidance mode appends combining clusters intact");
   guidance_prompt.guidance_text = guidance_input.guidance_text;
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Backspace});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Backspace});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_text == "base",
          "permission guidance Backspace removes one compact cluster atomically");
   // ZWJ family emoji cluster must erase as one unit.
   std::string const zwj_family = "\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7";
   guidance_prompt.guidance_text = "x" + zwj_family;
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Backspace});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Backspace});
   expect(guidance_input.guidance_text == "x", "permission guidance Backspace removes a ZWJ emoji cluster atomically");
 
   guidance_prompt.guidance_text = std::string(ava::permissions::kMaxPermissionUserGuidanceBytes, 'a');
   auto const at_cap = guidance_prompt.guidance_text;
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'z'});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'z'});
   expect(guidance_input.guidance_text == at_cap && guidance_input.guidance_text.size() == ava::permissions::kMaxPermissionUserGuidanceBytes,
          "permission guidance enforces the exact 2048-byte cap without growth");
   // Multi-byte cluster at the boundary must not partially split.
   guidance_prompt.guidance_text = std::string(ava::permissions::kMaxPermissionUserGuidanceBytes - 1, 'b');
   guidance_input = ava::tui::handle_permission_prompt_input(
-      guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = '\0', .text = std::string("\xC3\xA9")});  // é
+      guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = '\0', .text = std::string("\xC3\xA9")});  // é
   expect(guidance_input.guidance_text.size() == ava::permissions::kMaxPermissionUserGuidanceBytes - 1 &&
              guidance_input.guidance_text.find("\xC3") == std::string::npos,
          "permission guidance over-cap rejects a multi-byte cluster without splitting it");
 
   guidance_prompt.guidance_text = "do not escalate";
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny &&
              guidance_input.selected_choice == ava::tui::PermissionPromptChoice::Deny && guidance_input.guidance_text == "do not escalate",
          "permission guidance Enter resolves one-shot reject with the optional text");
 
   guidance_prompt.guidance_text = "will discard";
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Escape});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny && guidance_input.guidance_text.empty(),
          "permission guidance Escape resolves reject with no guidance");
   guidance_prompt.guidance_text = "will discard";
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::CtrlC});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlC});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny && guidance_input.guidance_text.empty(),
          "permission guidance Ctrl-C resolves reject with no guidance");
   guidance_prompt.guidance_text = "will discard";
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::CtrlD});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlD});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny && guidance_input.guidance_text.empty(),
          "permission guidance Ctrl-D resolves reject with no guidance");
 
   guidance_prompt.guidance_text = "locked";
-  for (auto const key : {ava::tui::Key::Tab, ava::tui::Key::ArrowLeft, ava::tui::Key::ArrowRight, ava::tui::Key::ArrowUp, ava::tui::Key::ArrowDown})
+  for (auto const key : {ava::tui::terminal::Key::Tab, ava::tui::terminal::Key::ArrowLeft, ava::tui::terminal::Key::ArrowRight, ava::tui::terminal::Key::ArrowUp, ava::tui::terminal::Key::ArrowDown})
   {
     guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = key});
     expect(guidance_input.action == ava::tui::PermissionPromptInputAction::None && guidance_input.guidance_mode &&
@@ -198,13 +198,13 @@ void run_tui_permission_tests_part_1()
 
   guidance_prompt.guidance_mode = true;
   guidance_prompt.guidance_text.clear();
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::Key::Enter});
+  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny && guidance_input.guidance_text.empty(),
          "empty guidance Enter is ordinary one-shot reject");
 
   // Choice-only overload remains unchanged: G is unmapped there.
   auto choice_only = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                              ava::tui::InputEvent{.key = ava::tui::Key::Character, .character = 'G'});
+                                                              ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'G'});
   expect(choice_only.action == ava::tui::PermissionPromptInputAction::None && choice_only.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "choice-only permission input overload leaves G unmapped for compatibility");
 

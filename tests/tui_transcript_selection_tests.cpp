@@ -40,7 +40,7 @@ ava::tui::detail::TranscriptLayoutCache selection_cache(ava::tui::detail::Transc
   return cache;
 }
 
-ava::tui::InputEvent mouse_event(ava::tui::Key key, std::size_t row, std::size_t column)
+ava::tui::InputEvent mouse_event(ava::tui::terminal::Key key, std::size_t row, std::size_t column)
 {
   return ava::tui::InputEvent{.key = key, .mouse_column = column, .mouse_row = row};
 }
@@ -186,9 +186,9 @@ void run_tui_transcript_selection_tests()
     std::size_t click_scroll = 0;
     auto never = [](std::size_t) { return false; };
     auto click = [&](std::size_t row, std::size_t column, std::chrono::milliseconds at) {
-      static_cast<void>(handle(click_state, mouse_event(ava::tui::Key::MouseLeftPress, row, column), click_snapshot, click_cache, &click_draft, click_scroll,
+      static_cast<void>(handle(click_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, row, column), click_snapshot, click_cache, &click_draft, click_scroll,
                                never, never, 0, started + at));
-      static_cast<void>(handle(click_state, mouse_event(ava::tui::Key::MouseLeftRelease, row, column), click_snapshot, click_cache, &click_draft, click_scroll,
+      static_cast<void>(handle(click_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, row, column), click_snapshot, click_cache, &click_draft, click_scroll,
                                never, never, 0, started + at + std::chrono::milliseconds(1)));
     };
 
@@ -214,7 +214,7 @@ void run_tui_transcript_selection_tests()
     // A pointer cancel invalidates the click chain, while a proven cap shift remaps it.
     click_state.clear();
     click(1, 2, std::chrono::milliseconds(1100));
-    static_cast<void>(handle(click_state, mouse_event(ava::tui::Key::MousePointerCancel, 1, 2), click_snapshot, click_cache, &click_draft, click_scroll, never,
+    static_cast<void>(handle(click_state, mouse_event(ava::tui::terminal::Key::MousePointerCancel, 1, 2), click_snapshot, click_cache, &click_draft, click_scroll, never,
                              never, 0, started + std::chrono::milliseconds(1150)));
     click(1, 2, std::chrono::milliseconds(1200));
     auto const cancel_failed_closed = click_state.empty();
@@ -253,39 +253,39 @@ void run_tui_transcript_selection_tests()
     ava::tui::RuntimeDraftState drag_draft;
     std::size_t drag_scroll = 0;
     auto never = [](std::size_t) { return false; };
-    auto send = [&](ava::tui::Key key, std::size_t row, std::size_t column, int milliseconds) {
+    auto send = [&](ava::tui::terminal::Key key, std::size_t row, std::size_t column, int milliseconds) {
       return handle(drag_state, mouse_event(key, row, column), drag_snapshot, drag_cache, &drag_draft, drag_scroll, never, never, 0,
                     started + std::chrono::milliseconds(milliseconds));
     };
 
     // Double-click beta, then extend by complete words into the second visual row.
-    static_cast<void>(send(ava::tui::Key::MouseLeftPress, 1, 10, 0));
-    static_cast<void>(send(ava::tui::Key::MouseLeftRelease, 1, 10, 1));
-    static_cast<void>(send(ava::tui::Key::MouseLeftPress, 1, 10, 100));
-    static_cast<void>(send(ava::tui::Key::MouseLeftDrag, 2, 8, 110));
-    static_cast<void>(send(ava::tui::Key::MouseLeftRelease, 2, 8, 111));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftPress, 1, 10, 0));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftRelease, 1, 10, 1));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftPress, 1, 10, 100));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftDrag, 2, 8, 110));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftRelease, 2, 8, 111));
     auto const forward_range = drag_state.range();
     auto const forward_text = forward_range ? ava::tui::extract_transcript_selection_text(granular_layout, *forward_range, 1024).text : std::string{};
 
     // The same granular drag in reverse includes complete target and anchor words.
     drag_state.clear();
-    static_cast<void>(send(ava::tui::Key::MouseLeftPress, 2, 8, 200));
-    static_cast<void>(send(ava::tui::Key::MouseLeftRelease, 2, 8, 201));
-    static_cast<void>(send(ava::tui::Key::MouseLeftPress, 2, 8, 300));
-    static_cast<void>(send(ava::tui::Key::MouseLeftDrag, 1, 2, 310));
-    static_cast<void>(send(ava::tui::Key::MouseLeftRelease, 1, 2, 311));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftPress, 2, 8, 200));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftRelease, 2, 8, 201));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftPress, 2, 8, 300));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftDrag, 1, 2, 310));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftRelease, 1, 2, 311));
     auto const backward_range = drag_state.range();
     auto const backward_text = backward_range ? ava::tui::extract_transcript_selection_text(granular_layout, *backward_range, 1024).text : std::string{};
 
     // Triple-click a row, then extend by complete rendered visual rows.
     drag_state.clear();
-    static_cast<void>(send(ava::tui::Key::MouseLeftPress, 1, 2, 400));
-    static_cast<void>(send(ava::tui::Key::MouseLeftRelease, 1, 2, 401));
-    static_cast<void>(send(ava::tui::Key::MouseLeftPress, 1, 2, 500));
-    static_cast<void>(send(ava::tui::Key::MouseLeftRelease, 1, 2, 501));
-    static_cast<void>(send(ava::tui::Key::MouseLeftPress, 1, 2, 600));
-    static_cast<void>(send(ava::tui::Key::MouseLeftDrag, 2, 2, 610));
-    static_cast<void>(send(ava::tui::Key::MouseLeftRelease, 2, 2, 611));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftPress, 1, 2, 400));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftRelease, 1, 2, 401));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftPress, 1, 2, 500));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftRelease, 1, 2, 501));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftPress, 1, 2, 600));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftDrag, 2, 2, 610));
+    static_cast<void>(send(ava::tui::terminal::Key::MouseLeftRelease, 2, 2, 611));
     auto const line_range = drag_state.range();
     auto const line_text = line_range ? ava::tui::extract_transcript_selection_text(granular_layout, *line_range, 1024).text : std::string{};
 
@@ -384,33 +384,33 @@ void run_tui_transcript_selection_tests()
   };
   auto never_toggle = [](std::size_t) { return false; };
 
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftRelease, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
   expect(toggles == 1 && last_toggled == 0 && state.empty(), "transcript header press/release without movement preserves click-to-toggle fallback");
 
   // Rapid action clicks on a tool/thinking header must continue toggling. They
   // are not eligible for body double/triple-click word or line selection.
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftRelease, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftClick, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftClick, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftClick, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftClick, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
   expect(toggles == 4 && last_toggled == 0 && state.empty(),
          "rapid press/release and complete-click header actions keep toggling instead of entering the body multi-click selection chain");
 
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftRelease, 2, 5), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 2, 5), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
   auto header_drag = state.range();
   expect(toggles == 4 && header_drag && header_drag->anchor.item_index == 0 && header_drag->anchor.line_offset == 0 && header_drag->focus.line_offset == 1 &&
              !draft.selection_bounds(),
          "transcript header drag anchors at the original press endpoint, does not toggle, and clears draft selection");
 
   state.clear();
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftDrag, 2, 5), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 2, 5), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
   expect(state.empty(), "transcript hover or drag without an owned press never starts selection");
 
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftPress, 2, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftDrag, 2, 6), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftRelease, 2, 6), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 2, 2), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 2, 6), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 2, 6), snapshot, cache, &draft, scroll, toggle_tool, never_toggle));
   expect(state.range().has_value() && !state.dragging(), "transcript body drag remains selected after release");
   snapshot.status = "selection copy request sent";
   auto const copied_frame = ava::tui::render_composer(snapshot);
@@ -440,9 +440,9 @@ void run_tui_transcript_selection_tests()
   scroll = 0;
   using SelectionClock = ava::tui::RuntimeTranscriptSelectionState::Clock;
   auto const held_started = SelectionClock::time_point{};
-  static_cast<void>(handle(autoscroll_state, mouse_event(ava::tui::Key::MouseLeftPress, 2, 2), snapshot, scrolling_cache, &draft, scroll, never_toggle,
+  static_cast<void>(handle(autoscroll_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 2, 2), snapshot, scrolling_cache, &draft, scroll, never_toggle,
                            never_toggle, 0, held_started));
-  static_cast<void>(handle(autoscroll_state, mouse_event(ava::tui::Key::MouseLeftDrag, 1, 2), snapshot, scrolling_cache, &draft, scroll, never_toggle,
+  static_cast<void>(handle(autoscroll_state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 1, 2), snapshot, scrolling_cache, &draft, scroll, never_toggle,
                            never_toggle, 0, held_started));
   auto const held_wait = autoscroll_state.time_until_edge_autoscroll(held_started);
   auto const early_tick = autoscroll_state.tick_edge_autoscroll(snapshot, scrolling_cache, scroll, 0, held_started + std::chrono::milliseconds(49));
@@ -474,13 +474,13 @@ void run_tui_transcript_selection_tests()
     ava::tui::RuntimeTranscriptSelectionState top_row_drag;
     std::size_t top_row_scroll = 0;
     // A press on the first screen row starts transcript selection; no dead chrome zone remains.
-    static_cast<void>(handle(top_row_drag, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), top_row_snapshot, top_row_cache, &draft, top_row_scroll,
+    static_cast<void>(handle(top_row_drag, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), top_row_snapshot, top_row_cache, &draft, top_row_scroll,
                              never_toggle, never_toggle));
     expect(!top_row_drag.empty(), "first screen row is transcript, not reserved overview chrome");
     // Dragging back to the first row still autoscrolls at the upper edge.
-    static_cast<void>(handle(top_row_drag, mouse_event(ava::tui::Key::MouseLeftPress, 3, 2), top_row_snapshot, top_row_cache, &draft, top_row_scroll,
+    static_cast<void>(handle(top_row_drag, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 3, 2), top_row_snapshot, top_row_cache, &draft, top_row_scroll,
                              never_toggle, never_toggle));
-    static_cast<void>(handle(top_row_drag, mouse_event(ava::tui::Key::MouseLeftDrag, 1, 2), top_row_snapshot, top_row_cache, &draft, top_row_scroll,
+    static_cast<void>(handle(top_row_drag, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 1, 2), top_row_snapshot, top_row_cache, &draft, top_row_scroll,
                              never_toggle, never_toggle));
     expect(top_row_scroll == 1 && top_row_drag.range(),
            "transcript selection drag to the first row autoscrolls at the upper edge while retaining selection authority");
@@ -513,9 +513,9 @@ void run_tui_transcript_selection_tests()
   snapshot.transcript[1].text = "same";
   snapshot.transcript[1].stream_id = "stable-stream";
   snapshot.transcript[1].append_only_stream = true;
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftPress, 2, 2), snapshot, duplicate_cache, &draft, scroll, never_toggle, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftDrag, 2, 5), snapshot, duplicate_cache, &draft, scroll, never_toggle, never_toggle));
-  static_cast<void>(handle(state, mouse_event(ava::tui::Key::MouseLeftRelease, 2, 5), snapshot, duplicate_cache, &draft, scroll, never_toggle, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 2, 2), snapshot, duplicate_cache, &draft, scroll, never_toggle, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 2, 5), snapshot, duplicate_cache, &draft, scroll, never_toggle, never_toggle));
+  static_cast<void>(handle(state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 2, 5), snapshot, duplicate_cache, &draft, scroll, never_toggle, never_toggle));
   expect(state.range() && state.range()->anchor.item_index == 1 && state.range()->focus.item_index == 1,
          "transcript selection ownership is item-indexed and independent of duplicate rendered text");
 
@@ -580,21 +580,21 @@ void run_tui_transcript_selection_tests()
       return item < frozen_snapshot.transcript.size() && frozen_snapshot.transcript[item].tool.has_value();
     };
 
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
     expect(frozen_state.dragging(), "frozen tool header press arms without forcing a live layout rebuild");
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftRelease, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
     expect(tool_toggles == 1 && tool_toggle_index == 0 && !frozen_state.dragging(),
            "frozen detached tool header release maps through deferred item_index_shift onto the same live source");
 
     // Body drag under the same frozen authority keeps frozen indices (no live rebuild).
     tool_toggles = 0;
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftPress, 2, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 2, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftDrag, 2, 6), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 2, 6), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftRelease, 2, 6), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 2, 6), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
     expect(tool_toggles == 0 && frozen_state.range() && frozen_state.range()->anchor.item_index == 1 && frozen_state.range()->focus.item_index == 1,
            "frozen body selection retains frozen item indices and does not force live rebuild or toggle");
@@ -611,9 +611,9 @@ void run_tui_transcript_selection_tests()
       think_toggle_index = item;
       return item < frozen_snapshot.transcript.size() && !frozen_snapshot.transcript[item].tool.has_value();
     };
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), frozen_snapshot, frozen_think_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), frozen_snapshot, frozen_think_cache, &frozen_draft, frozen_scroll,
                              never_toggle, toggle_live_think, /*frozen_to_live_shift=*/-1));
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftRelease, 1, 2), frozen_snapshot, frozen_think_cache, &frozen_draft,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 1, 2), frozen_snapshot, frozen_think_cache, &frozen_draft,
                              frozen_scroll, never_toggle, toggle_live_think, /*frozen_to_live_shift=*/-1));
     expect(think_toggles == 1 && think_toggle_index == 1,
            "frozen detached thinking header release maps through deferred item_index_shift onto the same live source");
@@ -621,11 +621,11 @@ void run_tui_transcript_selection_tests()
     // Source replacement after arm fails closed (same mapped index, incompatible identity).
     tool_toggles = 0;
     tool_toggle_index = std::string::npos;
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
     expect(frozen_state.dragging(), "tool header arms before source replacement");
     frozen_snapshot.transcript[0] = ava::tui::TranscriptItem{.label = "ava", .text = "replaced"};
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftRelease, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
     expect(tool_toggles == 0 && !frozen_state.dragging(), "header toggle fails closed when the mapped live source was replaced");
 
@@ -639,7 +639,7 @@ void run_tui_transcript_selection_tests()
     frozen_snapshot.transcript[0].tool->call_id = "call-tool";
     tool_toggles = 0;
     tool_toggle_index = std::string::npos;
-    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::Key::MouseLeftClick, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
+    static_cast<void>(handle(frozen_state, mouse_event(ava::tui::terminal::Key::MouseLeftClick, 1, 2), frozen_snapshot, frozen_tool_cache, &frozen_draft, frozen_scroll,
                              toggle_live_tool, never_toggle, /*frozen_to_live_shift=*/-1));
     expect(tool_toggles == 1 && tool_toggle_index == 0, "frozen tool header click maps through deferred item_index_shift");
   }
@@ -664,20 +664,20 @@ void run_tui_transcript_selection_tests()
       return true;
     };
 
-    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
+    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
                              toggle_cancel, never_toggle));
     expect(cancel_state.dragging(), "header press arms before cancel");
-    auto const cancel_armed = handle(cancel_state, mouse_event(ava::tui::Key::MousePointerCancel, 1, 2), cancel_snapshot, cancel_cache, &cancel_draft,
+    auto const cancel_armed = handle(cancel_state, mouse_event(ava::tui::terminal::Key::MousePointerCancel, 1, 2), cancel_snapshot, cancel_cache, &cancel_draft,
                                      cancel_scroll, toggle_cancel, never_toggle);
     expect(cancel_armed == ava::tui::TranscriptSelectionMouseResult::HandledNeedsRender && !cancel_state.dragging() && cancel_toggles == 0,
            "MousePointerCancel clears HeaderArmed without toggling");
-    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::Key::MouseLeftRelease, 1, 2), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
+    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 1, 2), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
                              toggle_cancel, never_toggle));
     expect(cancel_toggles == 0, "release after pointer cancel cannot toggle an armed header");
 
-    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::Key::MouseLeftPress, 2, 2), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
+    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 2, 2), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
                              toggle_cancel, never_toggle));
-    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::Key::MouseLeftDrag, 2, 6), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
+    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 2, 6), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
                              toggle_cancel, never_toggle));
     expect(cancel_state.dragging() && cancel_state.range(), "body drag establishes an in-flight selection");
     auto const focus_before = cancel_state.range()->focus.display_column;
@@ -686,11 +686,11 @@ void run_tui_transcript_selection_tests()
            "cancel_pointer_interaction ends Selecting while preserving the range");
     // Production terminals cannot emit Drag after cancel without a new press (g_left_mouse_down
     // is cleared). Release/hover alone must not toggle or mutate the preserved range.
-    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::Key::MouseLeftRelease, 2, 10), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
+    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 2, 10), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
                              toggle_cancel, never_toggle));
     expect(!cancel_state.dragging() && cancel_toggles == 0 && cancel_state.range() && cancel_state.range()->focus.display_column == focus_before,
            "release after cancel cannot toggle or extend a previously cancelled interaction");
-    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::Key::MousePointerCancel, 2, 10), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
+    static_cast<void>(handle(cancel_state, mouse_event(ava::tui::terminal::Key::MousePointerCancel, 2, 10), cancel_snapshot, cancel_cache, &cancel_draft, cancel_scroll,
                              toggle_cancel, never_toggle));
     expect(cancel_state.range() && cancel_state.range()->focus.display_column == focus_before, "repeated pointer cancel preserves the committed range");
   }
@@ -743,10 +743,10 @@ void run_tui_transcript_selection_tests()
     ava::tui::RuntimeDraftState copy_draft;
     std::size_t copy_scroll = 0;
     static_cast<void>(
-        handle(copy_state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), copy_snapshot, copy_cache, &copy_draft, copy_scroll, never_toggle, never_toggle));
+        handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), copy_snapshot, copy_cache, &copy_draft, copy_scroll, never_toggle, never_toggle));
     static_cast<void>(
-        handle(copy_state, mouse_event(ava::tui::Key::MouseLeftDrag, 5, 8), copy_snapshot, copy_cache, &copy_draft, copy_scroll, never_toggle, never_toggle));
-    static_cast<void>(handle(copy_state, mouse_event(ava::tui::Key::MouseLeftRelease, 5, 8), copy_snapshot, copy_cache, &copy_draft, copy_scroll, never_toggle,
+        handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 5, 8), copy_snapshot, copy_cache, &copy_draft, copy_scroll, never_toggle, never_toggle));
+    static_cast<void>(handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 5, 8), copy_snapshot, copy_cache, &copy_draft, copy_scroll, never_toggle,
                              never_toggle));
     expect(copy_state.range().has_value(), "multi-row selection range is established before oversize growth");
     copy_cache.layout.lines.assign(kRows, std::string(20 * 1024, 'x'));
@@ -778,11 +778,11 @@ void run_tui_transcript_selection_tests()
     ava::tui::RuntimeTranscriptSelectionState copy_state;
     ava::tui::RuntimeDraftState copy_draft;
     std::size_t copy_scroll = 0;
-    static_cast<void>(handle(copy_state, mouse_event(ava::tui::Key::MouseLeftPress, 1, 2), copy_snapshot, frozen_private_cache, &copy_draft, copy_scroll,
+    static_cast<void>(handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftPress, 1, 2), copy_snapshot, frozen_private_cache, &copy_draft, copy_scroll,
                              never_toggle, never_toggle, /*frozen_to_live_shift=*/-1));
-    static_cast<void>(handle(copy_state, mouse_event(ava::tui::Key::MouseLeftDrag, 3, 20), copy_snapshot, frozen_private_cache, &copy_draft, copy_scroll,
+    static_cast<void>(handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 3, 20), copy_snapshot, frozen_private_cache, &copy_draft, copy_scroll,
                              never_toggle, never_toggle, /*frozen_to_live_shift=*/-1));
-    static_cast<void>(handle(copy_state, mouse_event(ava::tui::Key::MouseLeftRelease, 3, 20), copy_snapshot, frozen_private_cache, &copy_draft, copy_scroll,
+    static_cast<void>(handle(copy_state, mouse_event(ava::tui::terminal::Key::MouseLeftRelease, 3, 20), copy_snapshot, frozen_private_cache, &copy_draft, copy_scroll,
                              never_toggle, never_toggle, /*frozen_to_live_shift=*/-1));
     auto const copy_range = copy_state.range();
     auto const expected_text =

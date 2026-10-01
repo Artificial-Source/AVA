@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "terminal/Context.h"
 #include "ava/core/Signals.h"
 #include "ava/core/result.h"
 
@@ -13,134 +14,9 @@
 
 namespace ava::tui {
 
-enum class Key
-{
-  Character,
-  Enter,
-  Backspace,
-  ShiftBackspace,
-  CtrlBackspace,
-  Delete,
-  ShiftDelete,
-  Insert,
-  Clear,
-  Tab,
-  Space,
-  CtrlSpace,
-  Ctrl0,
-  Ctrl1,
-  Ctrl2,
-  Ctrl3,
-  Ctrl4,
-  Ctrl5,
-  Ctrl6,
-  Ctrl7,
-  Ctrl8,
-  Ctrl9,
-  ShiftTab,
-  ShiftL,
-  ShiftT,
-  Escape,
-  ArrowUp,
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
-  ShiftArrowUp,
-  ShiftArrowDown,
-  ShiftArrowLeft,
-  ShiftArrowRight,
-  ShiftCtrlArrowLeft,
-  ShiftCtrlArrowRight,
-  ShiftAltArrowLeft,
-  ShiftAltArrowRight,
-  CtrlArrowLeft,
-  CtrlArrowRight,
-  AltArrowUp,
-  AltArrowDown,
-  AltArrowLeft,
-  AltArrowRight,
-  PageUp,
-  PageDown,
-  Home,
-  End,
-  CtrlHome,
-  CtrlEnd,
-  ShiftHome,
-  ShiftEnd,
-  ShiftCtrlHome,
-  ShiftCtrlEnd,
-  MouseWheelUp,
-  MouseWheelDown,
-  MouseLeftPress,
-  MouseLeftClick,
-  MouseLeftDrag,
-  MouseLeftRelease,
-  // Cancels an in-progress AVA press/drag/header-arm without starting selection.
-  // Emitted for Shift-modified button reports and shared protocol handoff boundaries.
-  MousePointerCancel,
-  ShiftEnter,
-  CtrlEnter,
-  AltEnter,
-  CtrlA,
-  CtrlB,
-  CtrlC,
-  CtrlD,
-  CtrlE,
-  CtrlF,
-  CtrlG,
-  CtrlH,
-  CtrlK,
-  CtrlL,
-  CtrlMinus,
-  CtrlSlash,
-  CtrlN,
-  CtrlO,
-  CtrlP,
-  CtrlShiftP,
-  CtrlQ,
-  CtrlR,
-  CtrlRightBracket,
-  CtrlS,
-  CtrlT,
-  CtrlU,
-  CtrlV,
-  CtrlW,
-  CtrlX,
-  CtrlY,
-  CtrlZ,
-  F1,
-  F2,
-  F3,
-  F4,
-  F5,
-  F6,
-  F7,
-  F8,
-  F9,
-  F10,
-  F11,
-  F12,
-  AltBackspace,
-  AltB,
-  AltD,
-  AltDelete,
-  AltF,
-  AltH,
-  AltJ,
-  AltK,
-  AltL,
-  AltW,
-  CtrlAltRightBracket,
-  AltY,
-  Unknown,
-  Resize,
-  Mouse,
-  WideCharacter
-};
-
 struct InputEvent
 {
-  Key key = Key::Unknown;
+  terminal::Key key = terminal::Key::Unknown;
   char character = '\0';
   std::string text = {};
   std::size_t mouse_column = 0;
@@ -177,7 +53,7 @@ void disarm_terminal_background_response_handler();
 // before/after protocol disable/rearm and after Shift-modified reports so a later
 // unmodified hover/release cannot extend a cancelled interaction.
 void terminal_reset_mouse_tracking() noexcept;
-[[nodiscard]] Key terminal_escape_sequence_key(std::string_view sequence);
+[[nodiscard]] terminal::Key terminal_escape_sequence_key(std::string_view sequence);
 [[nodiscard]] bool terminal_escape_sequence_complete(std::string_view sequence);
 [[nodiscard]] bool terminal_escape_sequence_should_discard(std::string_view sequence);
 [[nodiscard]] bool terminal_is_tty();

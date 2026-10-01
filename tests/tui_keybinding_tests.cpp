@@ -79,39 +79,39 @@ void run_tui_keybinding_tests()
   auto const parsed_f2 = ava::tui::parse_key_name("F2");
   auto const parsed_f12 = ava::tui::parse_key_name("F12");
   expect(
-      key_bindings && ava::tui::action_for_key(*key_bindings, ava::tui::Key::CtrlT) == ava::tui::TuiAction::Submit &&
-          ava::tui::action_for_key(*key_bindings, ava::tui::Key::CtrlD) == ava::tui::TuiAction::VariantCycle &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::VariantCycle, ava::tui::Key::ShiftTab) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::Key::CtrlArrowLeft) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::Key::AltArrowLeft) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::Key::AltB) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::Key::CtrlArrowRight) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::Key::AltArrowRight) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::Key::AltF) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::JumpForward, ava::tui::Key::CtrlRightBracket) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::JumpBackward, ava::tui::Key::CtrlAltRightBracket) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::Key::Delete) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteWordBackward, ava::tui::Key::AltBackspace) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::Key::AltD) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::Key::AltDelete) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::NewLine, ava::tui::Key::CtrlEnter) &&
-          !ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::NewLine, ava::tui::Key::AltEnter) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::MessageFollowUp, ava::tui::Key::AltEnter) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::Undo, ava::tui::Key::CtrlMinus) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::Suspend, ava::tui::Key::CtrlZ) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::Key::CtrlV) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::Redo, ava::tui::Key::CtrlR) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DetailsToggle, ava::tui::Key::CtrlO) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelSelect, ava::tui::Key::CtrlL) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelCycleForward, ava::tui::Key::CtrlP) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelCycleBackward, ava::tui::Key::CtrlShiftP) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsSave, ava::tui::Key::CtrlS) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsEnableAll, ava::tui::Key::CtrlA) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsClearAll, ava::tui::Key::CtrlX) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsToggleProvider, ava::tui::Key::CtrlP) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsReorderUp, ava::tui::Key::AltArrowUp) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsReorderDown, ava::tui::Key::AltArrowDown) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::MessageDequeue, ava::tui::Key::AltArrowUp) && parsed_ctrl_s &&
+      key_bindings && ava::tui::action_for_key(*key_bindings, ava::tui::terminal::Key::CtrlT) == ava::tui::TuiAction::Submit &&
+          ava::tui::action_for_key(*key_bindings, ava::tui::terminal::Key::CtrlD) == ava::tui::TuiAction::VariantCycle &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::VariantCycle, ava::tui::terminal::Key::ShiftTab) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::terminal::Key::CtrlArrowLeft) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::terminal::Key::AltArrowLeft) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::terminal::Key::AltB) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::terminal::Key::CtrlArrowRight) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::terminal::Key::AltArrowRight) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::terminal::Key::AltF) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::JumpForward, ava::tui::terminal::Key::CtrlRightBracket) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::JumpBackward, ava::tui::terminal::Key::CtrlAltRightBracket) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::terminal::Key::Delete) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteWordBackward, ava::tui::terminal::Key::AltBackspace) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::terminal::Key::AltD) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::terminal::Key::AltDelete) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::NewLine, ava::tui::terminal::Key::CtrlEnter) &&
+          !ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::NewLine, ava::tui::terminal::Key::AltEnter) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::MessageFollowUp, ava::tui::terminal::Key::AltEnter) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::Undo, ava::tui::terminal::Key::CtrlMinus) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::Suspend, ava::tui::terminal::Key::CtrlZ) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::terminal::Key::CtrlV) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::Redo, ava::tui::terminal::Key::CtrlR) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DetailsToggle, ava::tui::terminal::Key::CtrlO) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelSelect, ava::tui::terminal::Key::CtrlL) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelCycleForward, ava::tui::terminal::Key::CtrlP) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelCycleBackward, ava::tui::terminal::Key::CtrlShiftP) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsSave, ava::tui::terminal::Key::CtrlS) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsEnableAll, ava::tui::terminal::Key::CtrlA) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsClearAll, ava::tui::terminal::Key::CtrlX) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsToggleProvider, ava::tui::terminal::Key::CtrlP) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsReorderUp, ava::tui::terminal::Key::AltArrowUp) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::ModelsReorderDown, ava::tui::terminal::Key::AltArrowDown) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::MessageDequeue, ava::tui::terminal::Key::AltArrowUp) && parsed_ctrl_s &&
           ava::tui::key_display(*parsed_ctrl_s) == "Ctrl+S" && parsed_ctrl_l && ava::tui::key_display(*parsed_ctrl_l) == "Ctrl+L" && parsed_ctrl_shift_p &&
           ava::tui::key_display(*parsed_ctrl_shift_p) == "Shift+Ctrl+P" && parsed_ctrl_g && ava::tui::key_display(*parsed_ctrl_g) == "Ctrl+G" &&
           parsed_alt_up && ava::tui::key_display(*parsed_alt_up) == "Alt+Up" && parsed_alt_down && ava::tui::key_display(*parsed_alt_down) == "Alt+Down" &&
@@ -145,136 +145,136 @@ void run_tui_keybinding_tests()
           parsed_shift_end && ava::tui::key_display(*parsed_shift_end) == "Shift+End" && parsed_shift_ctrl_home &&
           ava::tui::key_display(*parsed_shift_ctrl_home) == "Shift+Ctrl+Home" && parsed_ctrl_shift_end &&
           ava::tui::key_display(*parsed_ctrl_shift_end) == "Shift+Ctrl+End" && parsed_f2 && ava::tui::key_display(*parsed_f2) == "F2" && parsed_f12 &&
-          ava::tui::key_display(*parsed_f12) == "F12" && ava::tui::parse_key_name("Ctrl+H") == ava::tui::Key::CtrlH &&
-          ava::tui::key_display(ava::tui::Key::CtrlH) == "Ctrl+H" &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::YankPop, ava::tui::Key::AltY) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteToLineStart, ava::tui::Key::CtrlU) &&
-          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::AutocompleteAccept, ava::tui::Key::Tab) &&
+          ava::tui::key_display(*parsed_f12) == "F12" && ava::tui::parse_key_name("Ctrl+H") == ava::tui::terminal::Key::CtrlH &&
+          ava::tui::key_display(ava::tui::terminal::Key::CtrlH) == "Ctrl+H" &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::YankPop, ava::tui::terminal::Key::AltY) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::DeleteToLineStart, ava::tui::terminal::Key::CtrlU) &&
+          ava::tui::key_matches_action(*key_bindings, ava::tui::TuiAction::AutocompleteAccept, ava::tui::terminal::Key::Tab) &&
           ava::tui::keys_display(*key_bindings, ava::tui::TuiAction::CursorWordRight).find("Ctrl+Right") != std::string::npos &&
           ava::tui::keys_display(*key_bindings, ava::tui::TuiAction::Submit).find("Ctrl+T") != std::string::npos,
       "tui keybind parser maps configured keys to semantic actions and display text");
   auto const function_key_bindings = ava::tui::parse_key_bindings_json("{\"tui.editor.cursorLineEnd\":\"F2\"}");
-  expect(function_key_bindings && ava::tui::key_matches_action(*function_key_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::Key::F2),
+  expect(function_key_bindings && ava::tui::key_matches_action(*function_key_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::terminal::Key::F2),
          "tui keybind parser accepts Pi-style function keys for configurable actions");
   auto const special_key_bindings = ava::tui::parse_key_bindings_json("{\"tui.editor.cursorLineStart\":\"Insert\",\"tui.editor.cursorLineEnd\":\"Clear\"}");
-  expect(special_key_bindings && ava::tui::key_matches_action(*special_key_bindings, ava::tui::TuiAction::CursorLineStart, ava::tui::Key::Insert) &&
-             ava::tui::key_matches_action(*special_key_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::Key::Clear),
+  expect(special_key_bindings && ava::tui::key_matches_action(*special_key_bindings, ava::tui::TuiAction::CursorLineStart, ava::tui::terminal::Key::Insert) &&
+             ava::tui::key_matches_action(*special_key_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::terminal::Key::Clear),
          "tui keybind parser accepts Pi-style Insert and Clear special keys");
   auto const ctrl_digit_bindings = ava::tui::parse_key_bindings_json("{\"tui.editor.cursorLineEnd\":\"Ctrl+1\"}");
-  expect(ctrl_digit_bindings && ava::tui::key_matches_action(*ctrl_digit_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::Key::Ctrl1),
+  expect(ctrl_digit_bindings && ava::tui::key_matches_action(*ctrl_digit_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::terminal::Key::Ctrl1),
          "tui keybind parser accepts Pi-style Ctrl+digit special keys");
   auto const prompt_navigation_bindings = ava::tui::parse_key_bindings_json(
       "{\"app.transcript.copyLatestAssistant\":\"F7\",\"promptStash\":\"F8\","
       "\"transcriptHalfPageUp\":\"F9\",\"halfPageDown\":\"F10\"}");
-  expect(prompt_navigation_bindings && ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::CopyLatestAssistant, ava::tui::Key::F7) &&
-             ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::PromptStash, ava::tui::Key::F8) &&
-             ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::TranscriptHalfPageUp, ava::tui::Key::F9) &&
-             ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::TranscriptHalfPageDown, ava::tui::Key::F10) &&
+  expect(prompt_navigation_bindings && ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::CopyLatestAssistant, ava::tui::terminal::Key::F7) &&
+             ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::PromptStash, ava::tui::terminal::Key::F8) &&
+             ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::TranscriptHalfPageUp, ava::tui::terminal::Key::F9) &&
+             ava::tui::key_matches_action(*prompt_navigation_bindings, ava::tui::TuiAction::TranscriptHalfPageDown, ava::tui::terminal::Key::F10) &&
              ava::tui::key_binding_config_action_id(ava::tui::TuiAction::CopyLatestAssistant) == "app.transcript.copyLatestAssistant" &&
              ava::tui::key_binding_config_action_id(ava::tui::TuiAction::PromptStash) == "app.prompt.stash" &&
              ava::tui::key_binding_config_action_id(ava::tui::TuiAction::TranscriptHalfPageUp) == "app.transcript.halfPageUp" &&
              ava::tui::key_binding_config_action_id(ava::tui::TuiAction::TranscriptHalfPageDown) == "app.transcript.halfPageDown",
          "tui keybind parser accepts canonical and supported aliases for copy, prompt stash, and transcript half-page actions");
   auto const default_bindings = ava::tui::default_key_bindings();
-  expect(!ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryPrev, ava::tui::Key::ArrowUp) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryNext, ava::tui::Key::ArrowDown) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::NewLine, ava::tui::Key::ShiftEnter) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::NewLine, ava::tui::Key::CtrlEnter) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::NewLine, ava::tui::Key::AltEnter) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessageFollowUp, ava::tui::Key::AltEnter) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::PalettePrev, ava::tui::Key::ArrowUp) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPrev, ava::tui::Key::ArrowUp) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectNext, ava::tui::Key::ArrowDown) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPageUp, ava::tui::Key::PageUp) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPageDown, ava::tui::Key::PageDown) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectConfirm, ava::tui::Key::Enter) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectCancel, ava::tui::Key::Escape) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectCancel, ava::tui::Key::CtrlC) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionTogglePath, ava::tui::Key::CtrlP) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionToggleSort, ava::tui::Key::CtrlS) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionToggleSort, ava::tui::Key::CtrlT) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionToggleNamedFilter, ava::tui::Key::CtrlN) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionRename, ava::tui::Key::CtrlR) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionArchive, ava::tui::Key::CtrlD) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionArchiveNoninvasive, ava::tui::Key::CtrlBackspace) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::Key::CtrlArrowLeft) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::Key::AltArrowLeft) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::Key::CtrlArrowRight) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::Key::AltArrowRight) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeEditLabel, ava::tui::Key::ShiftL) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeToggleLabelTimestamp, ava::tui::Key::ShiftT) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorUp, ava::tui::Key::ArrowUp) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorDown, ava::tui::Key::ArrowDown) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryPrev, ava::tui::Key::AltK) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryNext, ava::tui::Key::AltJ) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorUp, ava::tui::Key::AltK) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorDown, ava::tui::Key::AltJ) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessagePrev, ava::tui::Key::AltK) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessageNext, ava::tui::Key::AltJ) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::JumpToBottom, ava::tui::Key::CtrlEnd) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPrev, ava::tui::Key::AltK) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectNext, ava::tui::Key::AltJ) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectConfirm, ava::tui::Key::CtrlEnd) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::Key::CtrlArrowLeft) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::Key::AltArrowLeft) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::Key::AltB) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::Key::CtrlArrowRight) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::Key::AltArrowRight) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::Key::AltF) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::JumpForward, ava::tui::Key::CtrlRightBracket) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::JumpBackward, ava::tui::Key::CtrlAltRightBracket) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorLineStart, ava::tui::Key::Home) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::Key::End) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::Key::Delete) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::Key::ShiftDelete) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::Key::CtrlD) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteBackward, ava::tui::Key::ShiftBackspace) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteBackward, ava::tui::Key::CtrlH) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Exit, ava::tui::Key::CtrlD) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteWordBackward, ava::tui::Key::AltBackspace) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::Key::AltD) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::Key::AltDelete) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModeToggle, ava::tui::Key::Tab) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::AutocompleteAccept, ava::tui::Key::Tab) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Undo, ava::tui::Key::CtrlZ) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Undo, ava::tui::Key::CtrlMinus) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Suspend, ava::tui::Key::CtrlZ) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::Key::CtrlV) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Redo, ava::tui::Key::CtrlR) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Yank, ava::tui::Key::CtrlY) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::YankPop, ava::tui::Key::AltY) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DetailsToggle, ava::tui::Key::CtrlO) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CopySelection, ava::tui::Key::CtrlC) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ClearInput, ava::tui::Key::CtrlC) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CopyLatestAssistant, ava::tui::Key::F5) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::PromptStash, ava::tui::Key::F6) &&
+  expect(!ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryPrev, ava::tui::terminal::Key::ArrowUp) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryNext, ava::tui::terminal::Key::ArrowDown) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::NewLine, ava::tui::terminal::Key::ShiftEnter) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::NewLine, ava::tui::terminal::Key::CtrlEnter) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::NewLine, ava::tui::terminal::Key::AltEnter) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessageFollowUp, ava::tui::terminal::Key::AltEnter) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::PalettePrev, ava::tui::terminal::Key::ArrowUp) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPrev, ava::tui::terminal::Key::ArrowUp) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectNext, ava::tui::terminal::Key::ArrowDown) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPageUp, ava::tui::terminal::Key::PageUp) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPageDown, ava::tui::terminal::Key::PageDown) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectConfirm, ava::tui::terminal::Key::Enter) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectCancel, ava::tui::terminal::Key::Escape) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectCancel, ava::tui::terminal::Key::CtrlC) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionTogglePath, ava::tui::terminal::Key::CtrlP) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionToggleSort, ava::tui::terminal::Key::CtrlS) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionToggleSort, ava::tui::terminal::Key::CtrlT) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionToggleNamedFilter, ava::tui::terminal::Key::CtrlN) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionRename, ava::tui::terminal::Key::CtrlR) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionArchive, ava::tui::terminal::Key::CtrlD) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SessionArchiveNoninvasive, ava::tui::terminal::Key::CtrlBackspace) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::terminal::Key::CtrlArrowLeft) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::terminal::Key::AltArrowLeft) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::terminal::Key::CtrlArrowRight) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::terminal::Key::AltArrowRight) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeEditLabel, ava::tui::terminal::Key::ShiftL) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TreeToggleLabelTimestamp, ava::tui::terminal::Key::ShiftT) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorUp, ava::tui::terminal::Key::ArrowUp) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorDown, ava::tui::terminal::Key::ArrowDown) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryPrev, ava::tui::terminal::Key::AltK) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::HistoryNext, ava::tui::terminal::Key::AltJ) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorUp, ava::tui::terminal::Key::AltK) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorDown, ava::tui::terminal::Key::AltJ) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessagePrev, ava::tui::terminal::Key::AltK) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessageNext, ava::tui::terminal::Key::AltJ) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::JumpToBottom, ava::tui::terminal::Key::CtrlEnd) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectPrev, ava::tui::terminal::Key::AltK) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectNext, ava::tui::terminal::Key::AltJ) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::SelectConfirm, ava::tui::terminal::Key::CtrlEnd) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::terminal::Key::CtrlArrowLeft) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::terminal::Key::AltArrowLeft) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordLeft, ava::tui::terminal::Key::AltB) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::terminal::Key::CtrlArrowRight) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::terminal::Key::AltArrowRight) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorWordRight, ava::tui::terminal::Key::AltF) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::JumpForward, ava::tui::terminal::Key::CtrlRightBracket) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::JumpBackward, ava::tui::terminal::Key::CtrlAltRightBracket) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorLineStart, ava::tui::terminal::Key::Home) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CursorLineEnd, ava::tui::terminal::Key::End) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::terminal::Key::Delete) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::terminal::Key::ShiftDelete) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteForward, ava::tui::terminal::Key::CtrlD) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteBackward, ava::tui::terminal::Key::ShiftBackspace) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteBackward, ava::tui::terminal::Key::CtrlH) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Exit, ava::tui::terminal::Key::CtrlD) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteWordBackward, ava::tui::terminal::Key::AltBackspace) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::terminal::Key::AltD) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DeleteWordForward, ava::tui::terminal::Key::AltDelete) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModeToggle, ava::tui::terminal::Key::Tab) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::AutocompleteAccept, ava::tui::terminal::Key::Tab) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Undo, ava::tui::terminal::Key::CtrlZ) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Undo, ava::tui::terminal::Key::CtrlMinus) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Suspend, ava::tui::terminal::Key::CtrlZ) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::terminal::Key::CtrlV) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Redo, ava::tui::terminal::Key::CtrlR) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Yank, ava::tui::terminal::Key::CtrlY) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::YankPop, ava::tui::terminal::Key::AltY) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::DetailsToggle, ava::tui::terminal::Key::CtrlO) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CopySelection, ava::tui::terminal::Key::CtrlC) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ClearInput, ava::tui::terminal::Key::CtrlC) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::CopyLatestAssistant, ava::tui::terminal::Key::F5) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::PromptStash, ava::tui::terminal::Key::F6) &&
              ava::tui::keys_display(default_bindings, ava::tui::TuiAction::TranscriptHalfPageUp).empty() &&
              ava::tui::keys_display(default_bindings, ava::tui::TuiAction::TranscriptHalfPageDown).empty() &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TranscriptHalfPageUp, ava::tui::Key::CtrlU) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TranscriptHalfPageDown, ava::tui::Key::CtrlD) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ExternalEditor, ava::tui::Key::CtrlG) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::VariantCycle, ava::tui::Key::ShiftTab) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::VariantCycle, ava::tui::Key::CtrlT) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ReasoningSelect, ava::tui::Key::CtrlT) &&
-             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ThinkingToggle, ava::tui::Key::CtrlT) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelSelect, ava::tui::Key::CtrlL) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelCycleForward, ava::tui::Key::CtrlP) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelCycleBackward, ava::tui::Key::CtrlShiftP) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsSave, ava::tui::Key::CtrlS) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsEnableAll, ava::tui::Key::CtrlA) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsClearAll, ava::tui::Key::CtrlX) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsToggleProvider, ava::tui::Key::CtrlP) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsReorderUp, ava::tui::Key::AltArrowUp) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsReorderDown, ava::tui::Key::AltArrowDown) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessageDequeue, ava::tui::Key::AltArrowUp) &&
-             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Interrupt, ava::tui::Key::CtrlC),
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TranscriptHalfPageUp, ava::tui::terminal::Key::CtrlU) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::TranscriptHalfPageDown, ava::tui::terminal::Key::CtrlD) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ExternalEditor, ava::tui::terminal::Key::CtrlG) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::VariantCycle, ava::tui::terminal::Key::ShiftTab) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::VariantCycle, ava::tui::terminal::Key::CtrlT) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ReasoningSelect, ava::tui::terminal::Key::CtrlT) &&
+             !ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ThinkingToggle, ava::tui::terminal::Key::CtrlT) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelSelect, ava::tui::terminal::Key::CtrlL) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelCycleForward, ava::tui::terminal::Key::CtrlP) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelCycleBackward, ava::tui::terminal::Key::CtrlShiftP) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsSave, ava::tui::terminal::Key::CtrlS) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsEnableAll, ava::tui::terminal::Key::CtrlA) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsClearAll, ava::tui::terminal::Key::CtrlX) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsToggleProvider, ava::tui::terminal::Key::CtrlP) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsReorderUp, ava::tui::terminal::Key::AltArrowUp) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::ModelsReorderDown, ava::tui::terminal::Key::AltArrowDown) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::MessageDequeue, ava::tui::terminal::Key::AltArrowUp) &&
+             ava::tui::key_matches_action(default_bindings, ava::tui::TuiAction::Interrupt, ava::tui::terminal::Key::CtrlC),
          "tui default keybinds preserve context-specific semantic actions for shared keys");
   auto const navigation_key_bindings =
       ava::tui::parse_key_bindings_json("{\"message_prev\":\"PageUp\",\"message_next\":\"PageDown\",\"jump_to_bottom\":\"Ctrl+T\"}");
   expect(
-      navigation_key_bindings && ava::tui::key_matches_action(*navigation_key_bindings, ava::tui::TuiAction::MessagePrev, ava::tui::Key::PageUp) &&
-          ava::tui::key_matches_action(*navigation_key_bindings, ava::tui::TuiAction::MessageNext, ava::tui::Key::PageDown) &&
-          ava::tui::key_matches_action(*navigation_key_bindings, ava::tui::TuiAction::JumpToBottom, ava::tui::Key::CtrlT) &&
+      navigation_key_bindings && ava::tui::key_matches_action(*navigation_key_bindings, ava::tui::TuiAction::MessagePrev, ava::tui::terminal::Key::PageUp) &&
+          ava::tui::key_matches_action(*navigation_key_bindings, ava::tui::TuiAction::MessageNext, ava::tui::terminal::Key::PageDown) &&
+          ava::tui::key_matches_action(*navigation_key_bindings, ava::tui::TuiAction::JumpToBottom, ava::tui::terminal::Key::CtrlT) &&
           ava::tui::action_name(ava::tui::TuiAction::CursorUp) == "cursor_up" && ava::tui::action_name(ava::tui::TuiAction::CursorDown) == "cursor_down" &&
           ava::tui::action_name(ava::tui::TuiAction::JumpForward) == "jump_forward" &&
           ava::tui::action_name(ava::tui::TuiAction::JumpBackward) == "jump_backward" &&
@@ -596,39 +596,39 @@ void run_tui_keybinding_tests()
   expect(!ava::tui::parse_key_bindings_json("{\"submit\":\"Hyper+Enter\"}"), "tui keybind parser rejects unknown key names");
   expect(!ava::tui::parse_key_bindings_json("{\"submt\":\"Enter\"}"), "tui keybind parser rejects unknown action names");
   auto const escaped_action_keybinds = ava::tui::parse_key_bindings_json("{\"\\u0073\\u0075\\u0062\\u006d\\u0069\\u0074\":\"Ctrl+T\"}");
-  expect(escaped_action_keybinds && ava::tui::key_matches_action(*escaped_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::CtrlT),
+  expect(escaped_action_keybinds && ava::tui::key_matches_action(*escaped_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::CtrlT),
          "tui keybind parser accepts JSON unicode escapes in action names");
   auto const space_action_keybinds = ava::tui::parse_key_bindings_json("{\"tui.input.submit\":\"Space\"}");
-  expect(space_action_keybinds && ava::tui::key_matches_action(*space_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::Space),
+  expect(space_action_keybinds && ava::tui::key_matches_action(*space_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::Space),
          "tui keybind parser accepts Pi-style Space key names for semantic bindings");
   auto const ctrl_space_action_keybinds = ava::tui::parse_key_bindings_json("{\"tui.input.submit\":\"Ctrl+Space\"}");
-  expect(ctrl_space_action_keybinds && ava::tui::key_matches_action(*ctrl_space_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::CtrlSpace),
+  expect(ctrl_space_action_keybinds && ava::tui::key_matches_action(*ctrl_space_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::CtrlSpace),
          "tui keybind parser accepts Pi-style Ctrl+Space key names for semantic bindings");
   auto const ctrl_slash_action_keybinds = ava::tui::parse_key_bindings_json("{\"tui.input.submit\":\"Ctrl+/\"}");
-  expect(ctrl_slash_action_keybinds && ava::tui::key_matches_action(*ctrl_slash_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::CtrlSlash),
+  expect(ctrl_slash_action_keybinds && ava::tui::key_matches_action(*ctrl_slash_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::CtrlSlash),
          "tui keybind parser accepts Pi-style Ctrl+/ key names for semantic bindings");
   auto const select_action_keybinds = ava::tui::parse_key_bindings_json(
       "{\"tui.select.confirm\":[\"Enter\",\"Space\"],\"tui.select.cancel\":[\"Escape\",\"Ctrl+W\"],"
       "\"tui.select.up\":\"Ctrl+P\",\"tui.select.down\":\"Ctrl+N\","
       "\"tui.select.pageUp\":\"Ctrl+O\",\"tui.select.pageDown\":\"Ctrl+Y\"}");
-  expect(select_action_keybinds && ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectConfirm, ava::tui::Key::Enter) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectConfirm, ava::tui::Key::Space) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::Enter) &&
-             !ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::Space) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectCancel, ava::tui::Key::Escape) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectCancel, ava::tui::Key::CtrlW) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::Cancel, ava::tui::Key::Escape) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::DeleteWordBackward, ava::tui::Key::CtrlW) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectPrev, ava::tui::Key::CtrlP) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectNext, ava::tui::Key::CtrlN) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectPageUp, ava::tui::Key::CtrlO) &&
-             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectPageDown, ava::tui::Key::CtrlY),
+  expect(select_action_keybinds && ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectConfirm, ava::tui::terminal::Key::Enter) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectConfirm, ava::tui::terminal::Key::Space) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::Enter) &&
+             !ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::Space) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectCancel, ava::tui::terminal::Key::Escape) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectCancel, ava::tui::terminal::Key::CtrlW) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::Cancel, ava::tui::terminal::Key::Escape) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::DeleteWordBackward, ava::tui::terminal::Key::CtrlW) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectPrev, ava::tui::terminal::Key::CtrlP) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectNext, ava::tui::terminal::Key::CtrlN) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectPageUp, ava::tui::terminal::Key::CtrlO) &&
+             ava::tui::key_matches_action(*select_action_keybinds, ava::tui::TuiAction::SelectPageDown, ava::tui::terminal::Key::CtrlY),
          "tui keybind parser maps Pi select action ids to context-specific select-list actions");
   expect(!ava::tui::parse_key_bindings_json("{\"submit\":123}"), "tui keybind parser rejects non-string action values");
   auto const array_action_keybinds = ava::tui::parse_key_bindings_json("{\"cursor_line_start\":[\"Home\",\"Ctrl+A\"],\"message_dequeue\":[\"Alt+Up\"]}");
-  expect(array_action_keybinds && ava::tui::key_matches_action(*array_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::Key::Home) &&
-             ava::tui::key_matches_action(*array_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::Key::CtrlA) &&
-             ava::tui::key_matches_action(*array_action_keybinds, ava::tui::TuiAction::MessageDequeue, ava::tui::Key::AltArrowUp),
+  expect(array_action_keybinds && ava::tui::key_matches_action(*array_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::terminal::Key::Home) &&
+             ava::tui::key_matches_action(*array_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::terminal::Key::CtrlA) &&
+             ava::tui::key_matches_action(*array_action_keybinds, ava::tui::TuiAction::MessageDequeue, ava::tui::terminal::Key::AltArrowUp),
          "tui keybind parser accepts Pi-style arrays of key names");
   auto const namespaced_action_keybinds = ava::tui::parse_key_bindings_json(
       "{\"tui.editor.cursorLineStart\":[\"Home\",\"Ctrl+A\"],\"app.message.dequeue\":[\"Alt+Up\"],"
@@ -639,67 +639,67 @@ void run_tui_keybinding_tests()
       "\"app.clipboard.pasteImage\":\"Ctrl+V\","
       "\"app.tree.editLabel\":\"Shift+L\","
       "\"app.tools.expand\":\"Ctrl+O\",\"tui.editor.deleteCharBackward\":[\"Backspace\",\"Ctrl+H\"]}");
-  expect(namespaced_action_keybinds && ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::Key::Home) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::Key::CtrlA) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::MessageDequeue, ava::tui::Key::AltArrowUp) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::MessageFollowUp, ava::tui::Key::AltEnter) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::ClearInput, ava::tui::Key::CtrlC) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::ExternalEditor, ava::tui::Key::CtrlG) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::Suspend, ava::tui::Key::CtrlZ) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::Key::CtrlV) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::Key::CtrlO) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::TreeEditLabel, ava::tui::Key::ShiftL) &&
-             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::DeleteBackward, ava::tui::Key::CtrlH),
+  expect(namespaced_action_keybinds && ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::terminal::Key::Home) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::CursorLineStart, ava::tui::terminal::Key::CtrlA) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::MessageDequeue, ava::tui::terminal::Key::AltArrowUp) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::MessageFollowUp, ava::tui::terminal::Key::AltEnter) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::ClearInput, ava::tui::terminal::Key::CtrlC) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::ExternalEditor, ava::tui::terminal::Key::CtrlG) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::Suspend, ava::tui::terminal::Key::CtrlZ) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::terminal::Key::CtrlV) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::terminal::Key::CtrlO) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::TreeEditLabel, ava::tui::terminal::Key::ShiftL) &&
+             ava::tui::key_matches_action(*namespaced_action_keybinds, ava::tui::TuiAction::DeleteBackward, ava::tui::terminal::Key::CtrlH),
          "tui keybind parser accepts matching Pi namespaced action ids and Ctrl+H");
   auto const vim_action_keybinds = ava::tui::parse_key_bindings_json(
       "{\"tui.editor.cursorLeft\":[\"Left\",\"Alt+H\"],\"tui.editor.cursorDown\":[\"Down\",\"Alt+J\"],"
       "\"tui.editor.cursorUp\":[\"Up\",\"Alt+K\"],\"tui.editor.cursorRight\":[\"Right\",\"Alt+L\"],"
       "\"tui.editor.cursorWordRight\":[\"Alt+Right\",\"Alt+W\"]}");
-  expect(vim_action_keybinds && ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::AltH) &&
-             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorDown, ava::tui::Key::AltJ) &&
-             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorUp, ava::tui::Key::AltK) &&
-             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorRight, ava::tui::Key::AltL) &&
-             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorWordRight, ava::tui::Key::AltW),
+  expect(vim_action_keybinds && ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::AltH) &&
+             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorDown, ava::tui::terminal::Key::AltJ) &&
+             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorUp, ava::tui::terminal::Key::AltK) &&
+             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorRight, ava::tui::terminal::Key::AltL) &&
+             ava::tui::key_matches_action(*vim_action_keybinds, ava::tui::TuiAction::CursorWordRight, ava::tui::terminal::Key::AltW),
          "tui keybind parser accepts Pi Vim-style Alt+H/J/K/L and Alt+W cursor aliases");
   auto const legacy_action_keybinds = ava::tui::parse_key_bindings_json(
       "{\"cursorLineEnd\":[\"End\",\"Ctrl+E\"],\"expandTools\":\"Ctrl+O\","
       "\"toggleThinking\":\"Ctrl+T\",\"followUp\":\"Alt+Enter\"}");
-  expect(legacy_action_keybinds && ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::CursorLineEnd, ava::tui::Key::End) &&
-             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::CursorLineEnd, ava::tui::Key::CtrlE) &&
-             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::Key::CtrlO) &&
-             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::Key::CtrlT) &&
-             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::MessageFollowUp, ava::tui::Key::AltEnter),
+  expect(legacy_action_keybinds && ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::CursorLineEnd, ava::tui::terminal::Key::End) &&
+             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::CursorLineEnd, ava::tui::terminal::Key::CtrlE) &&
+             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::terminal::Key::CtrlO) &&
+             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::terminal::Key::CtrlT) &&
+             ava::tui::key_matches_action(*legacy_action_keybinds, ava::tui::TuiAction::MessageFollowUp, ava::tui::terminal::Key::AltEnter),
          "tui keybind parser accepts legacy camelCase action aliases where AVA has matching semantics");
   auto const thinking_toggle_keybinds = ava::tui::parse_key_bindings_json("{\"app.thinking.toggle\":\"Ctrl+T\"}");
-  expect(thinking_toggle_keybinds && ava::tui::key_matches_action(*thinking_toggle_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::Key::CtrlT) &&
-             !ava::tui::key_matches_action(*thinking_toggle_keybinds, ava::tui::TuiAction::ReasoningSelect, ava::tui::Key::CtrlT) &&
-             !ava::tui::key_matches_action(*thinking_toggle_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::Key::CtrlT),
+  expect(thinking_toggle_keybinds && ava::tui::key_matches_action(*thinking_toggle_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::terminal::Key::CtrlT) &&
+             !ava::tui::key_matches_action(*thinking_toggle_keybinds, ava::tui::TuiAction::ReasoningSelect, ava::tui::terminal::Key::CtrlT) &&
+             !ava::tui::key_matches_action(*thinking_toggle_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::terminal::Key::CtrlT),
          "tui keybind parser retains the configurable Pi thinking visibility toggle action id");
   auto const reasoning_select_keybinds = ava::tui::parse_key_bindings_json("{\"app.thinking.select\":\"Ctrl+T\"}");
-  expect(reasoning_select_keybinds && ava::tui::key_matches_action(*reasoning_select_keybinds, ava::tui::TuiAction::ReasoningSelect, ava::tui::Key::CtrlT) &&
-             !ava::tui::key_matches_action(*reasoning_select_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::Key::CtrlT),
+  expect(reasoning_select_keybinds && ava::tui::key_matches_action(*reasoning_select_keybinds, ava::tui::TuiAction::ReasoningSelect, ava::tui::terminal::Key::CtrlT) &&
+             !ava::tui::key_matches_action(*reasoning_select_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::terminal::Key::CtrlT),
          "tui keybind parser accepts the thinking-mode selector action id");
   expect(!ava::tui::parse_key_bindings_json("{\"reasoning_select\":\"Ctrl+T\",\"thinking_toggle\":\"Ctrl+T\"}"),
          "tui keybind parser preserves duplicate conflict detection across thinking selector and visibility actions");
   auto const namespaced_over_legacy_keybinds =
       ava::tui::parse_key_bindings_json("{\"app.tools.expand\":\"Ctrl+O\",\"expandTools\":\"Ctrl+T\",\"variant_cycle\":\"Ctrl+T\"}");
   expect(namespaced_over_legacy_keybinds &&
-             ava::tui::key_matches_action(*namespaced_over_legacy_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::Key::CtrlO) &&
-             !ava::tui::key_matches_action(*namespaced_over_legacy_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::Key::CtrlT) &&
-             ava::tui::key_matches_action(*namespaced_over_legacy_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::Key::CtrlT),
+             ava::tui::key_matches_action(*namespaced_over_legacy_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::terminal::Key::CtrlO) &&
+             !ava::tui::key_matches_action(*namespaced_over_legacy_keybinds, ava::tui::TuiAction::DetailsToggle, ava::tui::terminal::Key::CtrlT) &&
+             ava::tui::key_matches_action(*namespaced_over_legacy_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::terminal::Key::CtrlT),
          "tui keybind parser gives namespaced action ids precedence over legacy aliases before conflict checks");
   auto const later_current_alias_keybinds = ava::tui::parse_key_bindings_json("{\"tui.input.submit\":\"Ctrl+T\",\"submit\":\"Ctrl+D\"}");
-  expect(later_current_alias_keybinds && ava::tui::key_matches_action(*later_current_alias_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::CtrlD) &&
-             !ava::tui::key_matches_action(*later_current_alias_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::CtrlT),
+  expect(later_current_alias_keybinds && ava::tui::key_matches_action(*later_current_alias_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::CtrlD) &&
+             !ava::tui::key_matches_action(*later_current_alias_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::CtrlT),
          "tui keybind parser lets the later current-form alias win for the same effective action");
   auto const copy_action_keybinds = ava::tui::parse_key_bindings_json("{\"tui.input.copy\":\"Ctrl+C\"}");
-  expect(copy_action_keybinds && ava::tui::key_matches_action(*copy_action_keybinds, ava::tui::TuiAction::CopySelection, ava::tui::Key::CtrlC) &&
-             ava::tui::key_matches_action(*copy_action_keybinds, ava::tui::TuiAction::ClearInput, ava::tui::Key::CtrlC) &&
-             ava::tui::key_matches_action(*copy_action_keybinds, ava::tui::TuiAction::Interrupt, ava::tui::Key::CtrlC),
+  expect(copy_action_keybinds && ava::tui::key_matches_action(*copy_action_keybinds, ava::tui::TuiAction::CopySelection, ava::tui::terminal::Key::CtrlC) &&
+             ava::tui::key_matches_action(*copy_action_keybinds, ava::tui::TuiAction::ClearInput, ava::tui::terminal::Key::CtrlC) &&
+             ava::tui::key_matches_action(*copy_action_keybinds, ava::tui::TuiAction::Interrupt, ava::tui::terminal::Key::CtrlC),
          "tui keybind parser accepts Pi copy action ids while preserving Ctrl+C clear and interrupt fallbacks");
   auto const session_delete_noninvasive_keybinds = ava::tui::parse_key_bindings_json("{\"app.session.deleteNoninvasive\":\"Ctrl+Backspace\"}");
   expect(session_delete_noninvasive_keybinds &&
-             ava::tui::key_matches_action(*session_delete_noninvasive_keybinds, ava::tui::TuiAction::SessionArchiveNoninvasive, ava::tui::Key::CtrlBackspace),
+             ava::tui::key_matches_action(*session_delete_noninvasive_keybinds, ava::tui::TuiAction::SessionArchiveNoninvasive, ava::tui::terminal::Key::CtrlBackspace),
          "tui keybind parser accepts Pi session non-invasive delete action id");
   auto const branch_summary_keybinds = ava::tui::parse_key_bindings_json("{\"app.sessions.summarizeParent\":\"F8\"}");
   auto const branch_summary_alias_keybinds = ava::tui::parse_key_bindings_json("{\"sessionSummarizeParent\":\"F9\"}");
@@ -707,8 +707,8 @@ void run_tui_keybinding_tests()
       branch_summary_keybinds ? ava::tui::key_binding_help_items(*branch_summary_keybinds) : std::vector<ava::tui::TuiKeyBindingHelpItem>{};
   auto const branch_summary_help_item = std::ranges::find_if(branch_summary_help, [](auto const& item) { return item.action == "session_summarize_parent"; });
   expect(branch_summary_keybinds && branch_summary_alias_keybinds &&
-             ava::tui::key_matches_action(*branch_summary_keybinds, ava::tui::TuiAction::SessionSummarizeParent, ava::tui::Key::F8) &&
-             ava::tui::key_matches_action(*branch_summary_alias_keybinds, ava::tui::TuiAction::SessionSummarizeParent, ava::tui::Key::F9) &&
+             ava::tui::key_matches_action(*branch_summary_keybinds, ava::tui::TuiAction::SessionSummarizeParent, ava::tui::terminal::Key::F8) &&
+             ava::tui::key_matches_action(*branch_summary_alias_keybinds, ava::tui::TuiAction::SessionSummarizeParent, ava::tui::terminal::Key::F9) &&
              ava::tui::key_binding_action_from_name("app.session.summarizeParent") == ava::tui::TuiAction::SessionSummarizeParent &&
              ava::tui::key_binding_config_action_id(ava::tui::TuiAction::SessionSummarizeParent) == "app.sessions.summarizeParent" &&
              branch_summary_help_item != branch_summary_help.end() && branch_summary_help_item->label == "Summarize abandoned parent" &&
@@ -722,23 +722,23 @@ void run_tui_keybinding_tests()
       "\"app.session.toggleNamedFilter\":\"Ctrl+U\","
       "\"app.session.rename\":\"Ctrl+K\","
       "\"app.session.delete\":\"Alt+D\"}");
-  expect(session_action_keybinds && ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionNew, ava::tui::Key::AltH) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionTree, ava::tui::Key::AltJ) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionFork, ava::tui::Key::AltK) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionResume, ava::tui::Key::AltL) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionTogglePath, ava::tui::Key::CtrlO) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionToggleSort, ava::tui::Key::CtrlY) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionToggleNamedFilter, ava::tui::Key::CtrlU) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionRename, ava::tui::Key::CtrlK) &&
-             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionArchive, ava::tui::Key::AltD),
+  expect(session_action_keybinds && ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionNew, ava::tui::terminal::Key::AltH) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionTree, ava::tui::terminal::Key::AltJ) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionFork, ava::tui::terminal::Key::AltK) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionResume, ava::tui::terminal::Key::AltL) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionTogglePath, ava::tui::terminal::Key::CtrlO) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionToggleSort, ava::tui::terminal::Key::CtrlY) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionToggleNamedFilter, ava::tui::terminal::Key::CtrlU) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionRename, ava::tui::terminal::Key::CtrlK) &&
+             ava::tui::key_matches_action(*session_action_keybinds, ava::tui::TuiAction::SessionArchive, ava::tui::terminal::Key::AltD),
          "tui keybind parser accepts Pi session action ids");
   auto const tree_action_keybinds = ava::tui::parse_key_bindings_json(tui_test_support::tree_action_key_bindings_json());
-  expect(tree_action_keybinds && ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::Key::CtrlO) &&
-             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::Key::CtrlY) &&
-             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeEditLabel, ava::tui::Key::ShiftL) &&
-             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeToggleLabelTimestamp, ava::tui::Key::ShiftT) &&
-             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeFilterLabeledOnly, ava::tui::Key::CtrlSpace) &&
-             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeFilterAll, ava::tui::Key::CtrlSlash),
+  expect(tree_action_keybinds && ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::terminal::Key::CtrlO) &&
+             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::terminal::Key::CtrlY) &&
+             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeEditLabel, ava::tui::terminal::Key::ShiftL) &&
+             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeToggleLabelTimestamp, ava::tui::terminal::Key::ShiftT) &&
+             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeFilterLabeledOnly, ava::tui::terminal::Key::CtrlSpace) &&
+             ava::tui::key_matches_action(*tree_action_keybinds, ava::tui::TuiAction::TreeFilterAll, ava::tui::terminal::Key::CtrlSlash),
          "tui keybind parser accepts Pi tree branch navigation, label, and equivalent filter action ids");
   expect(!ava::tui::parse_key_bindings_json("{\"app.tree.filter.noTools\":\"Ctrl+T\"}"),
          "tui keybind parser rejects Pi tree filter ids without an AVA session-selector equivalent");
@@ -758,9 +758,9 @@ void run_tui_keybinding_tests()
              conflicting_select_keybinds_error.find("select_cancel") != std::string::npos,
          "tui keybind parser rejects conflicts within the select-list keybinding context");
   auto const shadowing_keybinds = ava::tui::parse_key_bindings_json("{\"submit\":\"Ctrl+D\"}");
-  expect(shadowing_keybinds && ava::tui::key_matches_action(*shadowing_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::CtrlD) &&
-             !ava::tui::key_matches_action(*shadowing_keybinds, ava::tui::TuiAction::DeleteForward, ava::tui::Key::CtrlD) &&
-             !ava::tui::key_matches_action(*shadowing_keybinds, ava::tui::TuiAction::Exit, ava::tui::Key::CtrlD),
+  expect(shadowing_keybinds && ava::tui::key_matches_action(*shadowing_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::CtrlD) &&
+             !ava::tui::key_matches_action(*shadowing_keybinds, ava::tui::TuiAction::DeleteForward, ava::tui::terminal::Key::CtrlD) &&
+             !ava::tui::key_matches_action(*shadowing_keybinds, ava::tui::TuiAction::Exit, ava::tui::terminal::Key::CtrlD),
          "tui keybind parser lets custom bindings shadow shared default keys without flagging conflicts");
 
   auto const default_config_json = ava::tui::default_key_bindings_config_json();
@@ -791,36 +791,36 @@ void run_tui_keybinding_tests()
           default_config_json.find("\"message_next\"") != std::string::npos && default_config_json.find("\"jump_to_bottom\"") != std::string::npos &&
           default_config_json.find("\"history_prev\"") == std::string::npos && default_config_json.find("cursor_up") == std::string::npos &&
           default_config_json.find("cursor_down") == std::string::npos && default_config_json.find("\"mode_toggle\"") == std::string::npos &&
-          default_config_keybinds && ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::Key::CtrlB) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::CopySelection, ava::tui::Key::CtrlC) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ClearInput, ava::tui::Key::CtrlC) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ExternalEditor, ava::tui::Key::CtrlG) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::Suspend, ava::tui::Key::CtrlZ) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::Key::CtrlV) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::Interrupt, ava::tui::Key::CtrlC) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionTogglePath, ava::tui::Key::CtrlP) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionToggleSort, ava::tui::Key::CtrlS) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionToggleNamedFilter, ava::tui::Key::CtrlN) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionRename, ava::tui::Key::CtrlR) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionArchive, ava::tui::Key::CtrlD) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionArchiveNoninvasive, ava::tui::Key::CtrlBackspace) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::Key::CtrlArrowLeft) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::Key::CtrlArrowRight) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeEditLabel, ava::tui::Key::ShiftL) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeToggleLabelTimestamp, ava::tui::Key::ShiftT) &&
-          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeFilterLabeledOnly, ava::tui::Key::CtrlN) &&
-          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeFilterAll, ava::tui::Key::CtrlA) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ModelsClearAll, ava::tui::Key::CtrlX) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ReasoningSelect, ava::tui::Key::CtrlT) &&
-          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::Key::CtrlT) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::MessageFollowUp, ava::tui::Key::AltEnter) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::MessagePrev, ava::tui::Key::AltK) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::MessageNext, ava::tui::Key::AltJ) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::JumpToBottom, ava::tui::Key::CtrlEnd) &&
-          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::HistoryPrev, ava::tui::Key::AltK) &&
-          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::CursorUp, ava::tui::Key::AltK) &&
-          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SelectPrev, ava::tui::Key::AltK) &&
-          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::Enter),
+          default_config_keybinds && ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::CursorLeft, ava::tui::terminal::Key::CtrlB) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::CopySelection, ava::tui::terminal::Key::CtrlC) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ClearInput, ava::tui::terminal::Key::CtrlC) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ExternalEditor, ava::tui::terminal::Key::CtrlG) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::Suspend, ava::tui::terminal::Key::CtrlZ) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ClipboardPasteImage, ava::tui::terminal::Key::CtrlV) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::Interrupt, ava::tui::terminal::Key::CtrlC) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionTogglePath, ava::tui::terminal::Key::CtrlP) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionToggleSort, ava::tui::terminal::Key::CtrlS) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionToggleNamedFilter, ava::tui::terminal::Key::CtrlN) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionRename, ava::tui::terminal::Key::CtrlR) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionArchive, ava::tui::terminal::Key::CtrlD) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SessionArchiveNoninvasive, ava::tui::terminal::Key::CtrlBackspace) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeFoldOrUp, ava::tui::terminal::Key::CtrlArrowLeft) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeUnfoldOrDown, ava::tui::terminal::Key::CtrlArrowRight) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeEditLabel, ava::tui::terminal::Key::ShiftL) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeToggleLabelTimestamp, ava::tui::terminal::Key::ShiftT) &&
+          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeFilterLabeledOnly, ava::tui::terminal::Key::CtrlN) &&
+          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::TreeFilterAll, ava::tui::terminal::Key::CtrlA) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ModelsClearAll, ava::tui::terminal::Key::CtrlX) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ReasoningSelect, ava::tui::terminal::Key::CtrlT) &&
+          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::ThinkingToggle, ava::tui::terminal::Key::CtrlT) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::MessageFollowUp, ava::tui::terminal::Key::AltEnter) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::MessagePrev, ava::tui::terminal::Key::AltK) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::MessageNext, ava::tui::terminal::Key::AltJ) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::JumpToBottom, ava::tui::terminal::Key::CtrlEnd) &&
+          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::HistoryPrev, ava::tui::terminal::Key::AltK) &&
+          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::CursorUp, ava::tui::terminal::Key::AltK) &&
+          !ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::SelectPrev, ava::tui::terminal::Key::AltK) &&
+          ava::tui::key_matches_action(*default_config_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::Enter),
       "tui keybind default config template uses Pi-style ids and remains valid with intentional shared defaults");
 
   auto const root = create_empty_root("tui-keybinds");
@@ -829,16 +829,16 @@ void run_tui_keybinding_tests()
   std::filesystem::create_directories(keybind_root);
   auto const keybinds_file = keybind_root / "keybinds.json";
   auto const missing_keybinds = ava::tui::load_key_bindings(keybinds_file);
-  expect(missing_keybinds && ava::tui::key_matches_action(*missing_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::Enter),
+  expect(missing_keybinds && ava::tui::key_matches_action(*missing_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::Enter),
          "tui keybind file loader falls back to defaults when the file is missing");
   {
     std::ofstream output(keybinds_file);
     output << "{\"submit\":\"Ctrl+T\",\"variant_cycle\":[\"Shift+Tab\",\"Ctrl+D\"]}";
   }
   auto const loaded_keybinds = ava::tui::load_key_bindings(keybinds_file);
-  expect(loaded_keybinds && ava::tui::key_matches_action(*loaded_keybinds, ava::tui::TuiAction::Submit, ava::tui::Key::CtrlT) &&
-             ava::tui::key_matches_action(*loaded_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::Key::ShiftTab) &&
-             ava::tui::key_matches_action(*loaded_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::Key::CtrlD),
+  expect(loaded_keybinds && ava::tui::key_matches_action(*loaded_keybinds, ava::tui::TuiAction::Submit, ava::tui::terminal::Key::CtrlT) &&
+             ava::tui::key_matches_action(*loaded_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::terminal::Key::ShiftTab) &&
+             ava::tui::key_matches_action(*loaded_keybinds, ava::tui::TuiAction::VariantCycle, ava::tui::terminal::Key::CtrlD),
          "tui keybind file loader reads valid configured string and array bindings");
   {
     std::ofstream output(keybinds_file);

@@ -559,6 +559,7 @@ TuiPluginUiInputResult RuntimePluginUiCoordinator::handle_input(ComposerSnapshot
   if (!snapshot.plugin_ui_modal)
     return TuiPluginUiInputResult::Unhandled;
 
+  using Key = terminal::Key;
   if (event.key == Key::CtrlC)
   {
     cancel_active();

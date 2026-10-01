@@ -106,7 +106,7 @@ enum class TuiAction
 
 struct TuiKeyBindings
 {
-  std::vector<std::pair<TuiAction, std::vector<Key>>> bindings;
+  std::vector<std::pair<TuiAction, std::vector<terminal::Key>>> bindings;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -126,10 +126,10 @@ struct TuiKeyBindingHelpItem
 [[nodiscard]] TuiKeyBindings default_key_bindings();
 // Returns the first configured action for a key. Runtime dispatch should prefer
 // key_matches_action() when shared keys need context-specific handling.
-[[nodiscard]] std::optional<TuiAction> action_for_key(TuiKeyBindings const& bindings, Key key);
-[[nodiscard]] bool key_matches_action(TuiKeyBindings const& bindings, TuiAction action, Key key);
-[[nodiscard]] std::optional<Key> parse_key_name(std::string_view text);
-[[nodiscard]] std::string key_display(Key key);
+[[nodiscard]] std::optional<TuiAction> action_for_key(TuiKeyBindings const& bindings, terminal::Key key);
+[[nodiscard]] bool key_matches_action(TuiKeyBindings const& bindings, TuiAction action, terminal::Key key);
+[[nodiscard]] std::optional<terminal::Key> parse_key_name(std::string_view text);
+[[nodiscard]] std::string key_display(terminal::Key key);
 [[nodiscard]] std::string action_name(TuiAction action);
 // Concise human primary label for help/hotkeys/settings. Canonical ids stay on action_name().
 [[nodiscard]] std::string action_label(TuiAction action);

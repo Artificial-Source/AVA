@@ -391,6 +391,7 @@ void RuntimeActiveRunController::insert_active_text(runtime_input::RuntimeInput 
 
 std::optional<bool> RuntimeActiveRunController::handle_transcript_search_input(runtime_input::RuntimeInput const& active_input)
 {
+  using Key = terminal::Key;
   if (!transcript_search_.is_open())
     return std::nullopt;
   if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
@@ -410,6 +411,7 @@ std::optional<bool> RuntimeActiveRunController::handle_transcript_search_input(r
 
 bool RuntimeActiveRunController::handle_input(RuntimeActiveRunState& state, runtime_input::RuntimeInput const& active_input)
 {
+  using Key = terminal::Key;
   auto& snapshot = presentation_state_.snapshot;
   if (snapshot.command_output && !snapshot.permission_prompt && !snapshot.question_prompt)
   {
