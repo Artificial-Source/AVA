@@ -11,17 +11,6 @@
 
 namespace tui_test_support {
 
-// Bind an externally created ncurses screen's output to the canonical Context while a test draws.
-// The caller keeps the FILE* alive until this guard has been destroyed; the test tears down its ncurses screen separately.
-class ScopedComposerScreenOutput
-{
- public:
-  explicit ScopedComposerScreenOutput(FILE* output);
-  ScopedComposerScreenOutput(ScopedComposerScreenOutput const&) = delete;
-  ScopedComposerScreenOutput& operator=(ScopedComposerScreenOutput const&) = delete;
-  ~ScopedComposerScreenOutput();
-};
-
 struct ScopedTerminalCapabilityProfile
 {
   explicit ScopedTerminalCapabilityProfile(std::string term_program_value);

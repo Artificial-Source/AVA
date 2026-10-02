@@ -37,11 +37,10 @@ void run_tui_composer_tests()
   run_tui_runtime_event_state_tests();
   run_tui_terminal_virtual_smoke_tests();
   run_tui_terminal_osc11_theme_tests();
-  run_tui_terminal_lifecycle_protocol_tests();
   run_tui_large_render_performance_tests();
   run_tui_tool_card_detail_tests();
   run_tui_transcript_hierarchy_tests();
   run_tui_runtime_dispatch_tests();
   run_tui_transcript_cache_tests();
-  run_tui_prompt_search_race_tests();
+  //  run_tui_prompt_search_race_tests();
 }

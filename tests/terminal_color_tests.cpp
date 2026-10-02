@@ -3,9 +3,11 @@
 #include "support/test_harness.h"
 #include "terminal/ColorPalette.h"
 #include "terminal/Context.h"
+#include "ava/core/Application.h"
 
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -87,25 +89,21 @@ void test_osc4_palette_protocol()
 // Verify mutable-prefix detection, exact-color reuse, programming of free entries, and destruction-time restoration.
 void test_mutable_palette_probe()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  // This will be read by the terminal::Context constructor.
-  write_OSC4_reply(input.get(), 16);
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
 
   // Prepare mock replies for this tests probes.
+  reset_terminal_input_file(input);
   std::string replies;
   for (int index = 0; index != 16; ++index)
     replies += "\x1b]4;" + std::to_string(index) + ";rgb:10/20/30\x1b\\";
   replies += "\x1b]4;7;rgb:ef/df/cf\x1b\\";  // The complemented test color was accepted.
   replies += "\x1b]4;15;rgb:10/20/30\x1b\\"; // The second assignment was ignored.
-  expect(std::fwrite(replies.data(), 1, replies.size(), input.get()) == replies.size(), "all simulated OSC 4 replies must be written");
-  std::rewind(input.get());
+  expect(std::fwrite(replies.data(), 1, replies.size(), input) == replies.size(), "all simulated OSC 4 replies must be written");
+  std::rewind(input);
 
   {
-    ScopedEnvVar term_guard("TERM", "xterm-16color");
-    terminal::Context terminal_context(output.get(), input.get());
+    terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
     std::unique_ptr<terminal::ColorPalette> const palette = terminal::ColorPalette::create(terminal_context);
     expect(palette != nullptr, "a complete OSC 4 exchange must create a live ColorPalette");
     if (palette)
@@ -125,8 +123,8 @@ void test_mutable_palette_probe()
     }
   }
 
-  std::fflush(output.get());
-  std::string const emitted = read_all(output.get());
+  std::fflush(output);
+  std::string const emitted = read_all(output);
   expect(emitted.find("\x1b]4;7;rgb:ef/df/cf\x1b\\\x1b]4;7;?\x1b\\\x1b]4;7;rgb:10/20/30\x1b\\") != std::string::npos,
          "a successful mutability probe must assign, verify, and restore the boundary color");
   expect(emitted.find("\x1b]4;15;rgb:ef/df/cf\x1b\\\x1b]4;15;?\x1b\\\x1b]4;15;rgb:10/20/30\x1b\\") != std::string::npos,
@@ -171,17 +169,10 @@ std::size_t count_occurrences(std::string_view haystack, std::string_view needle
 // requested green and blue must map to their nearby cube colors rather than basic yellow and black or unmodified grayscale slots.
 void test_xterm_indexed_colors_use_standard_palette()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  // This will be read by the terminal::Context constructor.
-  write_OSC4_reply(input.get(), 256);
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
-  std::rewind(input.get());
+  FILE* output = process_terminal_test_output();
 
   {
-    ScopedEnvVar term_guard("TERM", "xterm-256color");
-    terminal::Context terminal_context(output.get(), input.get());
+    terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
     expect(!terminal::ColorPaletteTestAccess::probe(terminal_context, 224), "a single-index probe with no OSC 4 reply must return no Color");
     expect(terminal::ColorPaletteTestAccess::probe(terminal_context, 224, 3).empty(), "a batched probe with no OSC 4 replies must return no colors");
     expect(!terminal::ColorPalette::create(terminal_context), "an input stream with no OSC 4 replies must produce no live ColorPalette");
@@ -192,8 +183,8 @@ void test_xterm_indexed_colors_use_standard_palette()
     window.refresh();
   }
 
-  std::fflush(output.get());
-  std::string const emitted = read_all(output.get());
+  std::fflush(output);
+  std::string const emitted = read_all(output);
   expect(emitted.find("\x1b]4;224;?\x1b\\") != std::string::npos, "the single-index probe must emit an OSC 4 query for its passed index");
   expect(emitted.find("38;5;149") != std::string::npos, "xterm-256color must map green 0xa8e050 to nearby green cube entry 149");
   expect(emitted.find("48;5;17") != std::string::npos, "xterm-256color must map blue 0x102850 to nearby blue cube entry 17");
@@ -204,13 +195,7 @@ void test_xterm_indexed_colors_use_standard_palette()
 // Verify that portable palette indexes remain exact across every typed ColorIndex pair overload.
 void test_portable_color_index_pairs()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
-  std::rewind(input.get());
-
-  ScopedEnvVar term_guard("TERM", "xterm-direct");
-  terminal::Context terminal_context(output.get(), input.get());
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
   using enum terminal::ColorIndex;
 
   std::array<terminal::ColorPair, 3> const pairs{
@@ -233,11 +218,42 @@ void test_portable_color_index_pairs()
 
 } // namespace
 
-void run_terminal_color_tests()
+// Configure TERM and protocol replies before the Application initializes its one Context for this color case.
+void prepare_terminal_color_test_case(std::string_view test_case, FILE* input, FILE*)
 {
-  test_srgb_cielab_round_trip();
-  test_osc4_palette_protocol();
-  test_mutable_palette_probe();
-  test_xterm_indexed_colors_use_standard_palette();
-  test_portable_color_index_pairs();
+  if (test_case == "mutable_palette")
+  {
+    static_cast<void>(setenv("TERM", "xterm-16color", 1));
+    write_OSC4_reply(input, 16);
+    write_KeyboardInputMode_reply(input, SupportedMode::KittyProtocol);
+  }
+  else if (test_case == "xterm_indexed")
+  {
+    static_cast<void>(setenv("TERM", "xterm-256color", 1));
+    write_OSC4_reply(input, 256);
+    write_KeyboardInputMode_reply(input, SupportedMode::KittyProtocol);
+  }
+  else
+  {
+    static_cast<void>(setenv("TERM", "xterm-direct", 1));
+    write_KeyboardInputMode_reply(input, SupportedMode::KittyProtocol);
+  }
+  std::rewind(input);
+}
+
+// Run one color case in its initialization-specific process.
+void run_terminal_color_test_case(std::string_view test_case)
+{
+  if (test_case == "srgb_round_trip")
+    test_srgb_cielab_round_trip();
+  else if (test_case == "osc4_protocol")
+    test_osc4_palette_protocol();
+  else if (test_case == "mutable_palette")
+    test_mutable_palette_probe();
+  else if (test_case == "xterm_indexed")
+    test_xterm_indexed_colors_use_standard_palette();
+  else if (test_case == "portable_pairs")
+    test_portable_color_index_pairs();
+  else
+    expect(false, "unknown terminal color test case: " + std::string(test_case));
 }

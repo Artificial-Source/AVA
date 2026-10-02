@@ -5,11 +5,11 @@
 #include "terminal/KeyboardInputMode.h"
 #include "ava/tui/config.h"
 #include "ava/tui/runtime_input_internal.h"
+#include "ava/core/Application.h"
 
 #include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <optional>
 #include <string>
 #include <string_view>
 
@@ -23,52 +23,13 @@ constexpr std::string_view kRequestDeviceAttributes = "\x1b[c";
 constexpr std::string_view kDisableModifyOtherKeys = "\x1b[>4;0m";
 constexpr std::string_view kPopKittyKeyboard = "\x1b[<u";
 
-// Temporarily remove one environment variable and restore its exact prior state on destruction.
-class ScopedUnsetEnvVar
+// Verify the process Context retained the escape delay selected before its one-time initialization.
+void test_context_escape_delay_configuration(int expected_delay_ms)
 {
- public:
-  explicit ScopedUnsetEnvVar(char const* name) : name_(name)
-  {
-    if (char const* value = std::getenv(name))
-      previous_ = value;
-    static_cast<void>(unsetenv(name));
-  }
-
-  ScopedUnsetEnvVar(ScopedUnsetEnvVar const&) = delete;
-  ScopedUnsetEnvVar& operator=(ScopedUnsetEnvVar const&) = delete;
-
-  ~ScopedUnsetEnvVar()
-  {
-    if (previous_)
-      static_cast<void>(setenv(name_.c_str(), previous_->c_str(), 1));
-    else
-      static_cast<void>(unsetenv(name_.c_str()));
-  }
-
- private:
-  std::string name_;
-  std::optional<std::string> previous_;
-};
-
-// Verify that Context applies AVA's default only when ESCDELAY does not provide an explicit ncurses value.
-void test_context_escape_delay_configuration()
-{
-  {
-    ScopedUnsetEnvVar escdelay_guard("ESCDELAY");
-    ScopedTmpFile input;
-    ScopedTmpFile output;
-    terminal::Context context(output.get(), input.get());
-    expect(context.get_escdelay() == ava::tui::config::default_terminal_escape_delay_ms, "Context must use AVA's short Escape delay when ESCDELAY is unset");
-  }
-
-  {
-    constexpr int configured_delay_ms = 2.25 * ava::tui::config::default_terminal_escape_delay_ms;
-    ScopedEnvVar escdelay_guard("ESCDELAY", std::to_string(configured_delay_ms));
-    ScopedTmpFile input;
-    ScopedTmpFile output;
-    terminal::Context context(output.get(), input.get());
-    expect(context.get_escdelay() == configured_delay_ms, "an explicit ESCDELAY must take precedence over AVA's default");
-  }
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  expect(context.get_escdelay() == expected_delay_ms, expected_delay_ms == ava::tui::config::default_terminal_escape_delay_ms
+                                                          ? "Context must use AVA's short Escape delay when ESCDELAY is unset"
+                                                          : "an explicit ESCDELAY must take precedence over AVA's default");
 }
 
 // Replace the contents of `file` with `bytes` and rewind it for Context input.
@@ -103,19 +64,19 @@ std::size_t count_occurrences(std::string_view bytes, std::string_view sequence)
 // Verify that a nonzero Kitty flags reply wins and cleanup only pops the possibly successful Kitty push.
 void test_kitty_reply_selects_kitty()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
   // Context starts its owned KeyboardInputMode, so prepare fresh input only after construction for this separate negotiation.
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
-  std::rewind(input.get());
+  write_KeyboardInputMode_reply(input, SupportedMode::KittyProtocol);
+  std::rewind(input);
   terminal::KeyboardInputMode mode;
   mode.start(context);
   mode.stop();
 
-  std::string const emitted = read_output(output.get());
+  std::string const emitted = read_output(output);
   expect(emitted.find("\x1b[>1u\x1b[?u\x1b[c") != std::string::npos, "startup must push Kitty flag 1, query flags, and request device attributes");
   expect(count_occurrences(emitted, kPopKittyKeyboard) == 1, "Kitty cleanup must pop exactly one possibly successful push");
   expect(emitted.find(kModifyOtherKeysLevel2) == std::string::npos, "a nonzero Kitty reply must avoid the xterm fallback");
@@ -125,19 +86,19 @@ void test_kitty_reply_selects_kitty()
 // Verify that fenced unsupported replies select the fallback and cleanup reverses both possible activations.
 void test_unsupported_replies_use_modify_other_keys_fallback()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
   // Context starts its owned KeyboardInputMode, so prepare fresh input only after construction for this separate negotiation.
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::None);
-  std::rewind(input.get());
+  write_KeyboardInputMode_reply(input, SupportedMode::None);
+  std::rewind(input);
   terminal::KeyboardInputMode mode;
   mode.start(context);
   mode.stop();
 
-  std::string const emitted = read_output(output.get());
+  std::string const emitted = read_output(output);
   expect(count_occurrences(emitted, kModifyOtherKeysLevel2) == 1, "missing Kitty replies must request modifyOtherKeys level 2 once");
   expect(emitted.find(std::string(kModifyOtherKeysLevel2) + std::string(kQueryModifyOtherKeys) + std::string(kRequestDeviceAttributes)) != std::string::npos,
          "the modifyOtherKeys fallback must set level 2, query it, and request its device-attributes fence");
@@ -159,17 +120,17 @@ std::string take_buffered_input(terminal::KeyboardInputMode& mode)
 // Verify that one preloaded read can cross phase boundaries while each parser consumes only its own fenced replies.
 void test_modify_other_keys_reply_is_consumed()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
   std::string const before = "before\x1b[>4;;2m";
   std::string const after = "after\x1b[>";
-  expect(std::fwrite(before.data(), 1, before.size(), input.get()) == before.size(), "all leading keyboard negotiation input must be written");
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::ModifyOtherKeys);
-  expect(std::fwrite(after.data(), 1, after.size(), input.get()) == after.size(), "all trailing keyboard negotiation input must be written");
-  std::rewind(input.get());
+  expect(std::fwrite(before.data(), 1, before.size(), input) == before.size(), "all leading keyboard negotiation input must be written");
+  write_KeyboardInputMode_reply(input, SupportedMode::ModifyOtherKeys);
+  expect(std::fwrite(after.data(), 1, after.size(), input) == after.size(), "all trailing keyboard negotiation input must be written");
+  std::rewind(input);
 
   terminal::KeyboardInputMode mode;
   mode.start(context);
@@ -177,7 +138,7 @@ void test_modify_other_keys_reply_is_consumed()
          "valid fallback replies must be consumed while malformed, unrelated, and incomplete bytes remain byte-for-byte");
   mode.stop();
 
-  std::string const emitted = read_output(output.get());
+  std::string const emitted = read_output(output);
   expect(emitted.find(std::string(kModifyOtherKeysLevel2) + std::string(kQueryModifyOtherKeys) + std::string(kRequestDeviceAttributes)) != std::string::npos,
          "supported modifyOtherKeys negotiation must emit one ordered set, query, and fence request");
   expect(count_occurrences(emitted, kDisableModifyOtherKeys) == 1,
@@ -187,19 +148,19 @@ void test_modify_other_keys_reply_is_consumed()
 // Verify that only complete expected protocol replies are consumed and all other raw bytes remain replayable exactly once.
 void test_unrelated_input_is_buffered()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
   // Context starts its owned KeyboardInputMode, so these are fresh replies for mode.start below.
   std::string const unrelated1 = "text\x1b[31m\x1b[?xu\x1b[?1;;2c";
   std::string const unrelated2 = "\x1b[";
   std::string const unrelated = unrelated1 + unrelated2;
-  expect(std::fwrite(unrelated1.data(), 1, unrelated1.size(), input.get()) == unrelated1.size(), "all unrelated1 keyboard negotiation input must be written");
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
-  expect(std::fwrite(unrelated2.data(), 1, unrelated2.size(), input.get()) == unrelated2.size(), "all unrelated2 keyboard negotiation input must be written");
-  std::rewind(input.get());
+  expect(std::fwrite(unrelated1.data(), 1, unrelated1.size(), input) == unrelated1.size(), "all unrelated1 keyboard negotiation input must be written");
+  write_KeyboardInputMode_reply(input, SupportedMode::KittyProtocol);
+  expect(std::fwrite(unrelated2.data(), 1, unrelated2.size(), input) == unrelated2.size(), "all unrelated2 keyboard negotiation input must be written");
+  std::rewind(input);
 
   terminal::KeyboardInputMode mode;
   mode.start(context);
@@ -210,14 +171,8 @@ void test_unrelated_input_is_buffered()
 // Verify Context exposes negotiation-preserved bytes exactly once to the runtime input owner.
 void test_context_replays_preserved_startup_input_once()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
   std::string const preserved = std::string("typed") + static_cast<char>(0xc3) + static_cast<char>(0xa9);
-  expect(std::fwrite(preserved.data(), 1, preserved.size(), input.get()) == preserved.size(), "all startup input bytes must be written");
-  write_KeyboardInputMode_reply(input.get(), SupportedMode::KittyProtocol);
-  std::rewind(input.get());
-
-  terminal::Context context(output.get(), input.get());
   std::string replayed;
   for (std::size_t index = 0; index < 6; ++index)
     replayed += ava::tui::runtime_input::read_curses_input_from_terminal(context).text;
@@ -231,17 +186,8 @@ void test_context_replays_preserved_startup_input_once()
 // Verify a UTF-8 sequence split exactly at Context's bounded raw-read boundary remains one runtime character.
 void test_runtime_replays_utf8_split_between_negotiation_and_descriptor()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  std::string bytes = "\x1b[?1u\x1b[?1;2c";
   constexpr std::size_t raw_read_size = 4096;
-  bytes.append(raw_read_size - bytes.size() - 1, 'x');
-  bytes.push_back(static_cast<char>(0xc3));
-  bytes.push_back(static_cast<char>(0xa9));
-  expect(std::fwrite(bytes.data(), 1, bytes.size(), input.get()) == bytes.size(), "split UTF-8 startup fixture must be written completely");
-  std::rewind(input.get());
-
-  terminal::Context context(output.get(), input.get());
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
   auto const padding_size = raw_read_size - std::string_view("\x1b[?1u\x1b[?1;2c").size() - 1;
   for (std::size_t index = 0; index < padding_size; ++index)
   {
@@ -256,10 +202,10 @@ void test_runtime_replays_utf8_split_between_negotiation_and_descriptor()
 // Verify malformed UTF-8 can never be decoded into Escape, a surrogate, or an out-of-range scalar.
 void test_invalid_utf8_replays_as_replacement_characters()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
   std::string malformed;
   malformed.append("\xc0\x9b", 2);          // Overlong/control alias.
@@ -268,7 +214,7 @@ void test_invalid_utf8_replays_as_replacement_characters()
   malformed.append("\xf4\xbf\xbf\xbf", 4); // Above U+10FFFF.
   malformed.append("\xf0\x9f", 2);          // Truncated four-byte sequence.
   malformed += "\x1b[?1u\x1b[?1;2c";
-  prepare_input(input.get(), malformed);
+  prepare_input(input, malformed);
 
   terminal::KeyboardInputMode mode;
   mode.start(context);
@@ -286,12 +232,12 @@ void test_invalid_utf8_replays_as_replacement_characters()
 // Verify handoff compaction drops delivered input while retaining every queued character that has not been observed.
 void test_handoff_preserves_only_unconsumed_input()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
-  prepare_input(input.get(), "abc\x1b[?1u\x1b[?1;2c");
+  prepare_input(input, "abc\x1b[?1u\x1b[?1;2c");
   terminal::KeyboardInputMode mode;
   mode.start(context);
   wint_t first = 0;
@@ -305,18 +251,18 @@ void test_handoff_preserves_only_unconsumed_input()
 // Verify that explicit repeated shutdown emits each required restoration sequence only once.
 void test_stop_is_idempotent()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
-  prepare_input(input.get(), {});
+  prepare_input(input, {});
   terminal::KeyboardInputMode mode;
   mode.start(context);
   mode.stop();
   mode.stop();
 
-  std::string const emitted = read_output(output.get());
+  std::string const emitted = read_output(output);
   expect(count_occurrences(emitted, kDisableModifyOtherKeys) == 1, "calling stop twice must emit the modifyOtherKeys cleanup only once");
   expect(count_occurrences(emitted, kPopKittyKeyboard) == 1, "calling stop twice must emit the Kitty pop only once");
 }
@@ -324,37 +270,79 @@ void test_stop_is_idempotent()
 // Verify that destruction performs the same best-effort restoration when callers omit stop.
 void test_destructor_stops_active_mode()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  terminal::Context context(output.get(), input.get());
-  reset_output_file(output.get());
+  FILE* input = process_terminal_test_input();
+  FILE* output = process_terminal_test_output();
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  reset_output_file(output);
 
   {
-    prepare_input(input.get(), {});
+    prepare_input(input, {});
     terminal::KeyboardInputMode mode;
     mode.start(context);
   }
 
-  std::string const emitted = read_output(output.get());
+  std::string const emitted = read_output(output);
   expect(count_occurrences(emitted, kDisableModifyOtherKeys) == 1, "destruction must disable a requested modifyOtherKeys fallback");
   expect(count_occurrences(emitted, kPopKittyKeyboard) == 1, "destruction must pop a possibly successful Kitty push");
 }
 
 } // namespace
 
-// Run deterministic keyboard protocol negotiation and lifecycle tests with a direct-color TERM to avoid palette probing.
-void run_terminal_keyboard_input_mode_tests()
+// Configure environment and startup bytes before the Application initializes its sole Context for one isolated case.
+void prepare_terminal_keyboard_input_mode_test_case(std::string_view test_case, FILE* input, FILE*)
 {
-  ScopedEnvVar term_guard("TERM", "xterm-direct");
-  test_context_escape_delay_configuration();
-  test_kitty_reply_selects_kitty();
-  test_unsupported_replies_use_modify_other_keys_fallback();
-  test_modify_other_keys_reply_is_consumed();
-  test_unrelated_input_is_buffered();
-  test_context_replays_preserved_startup_input_once();
-  test_runtime_replays_utf8_split_between_negotiation_and_descriptor();
-  test_invalid_utf8_replays_as_replacement_characters();
-  test_handoff_preserves_only_unconsumed_input();
-  test_stop_is_idempotent();
-  test_destructor_stops_active_mode();
+  static_cast<void>(setenv("TERM", "xterm-direct", 1));
+  if (test_case == "escape_delay_configured")
+    static_cast<void>(setenv("ESCDELAY", std::to_string(static_cast<int>(2.25 * ava::tui::config::default_terminal_escape_delay_ms)).c_str(), 1));
+  else
+    static_cast<void>(unsetenv("ESCDELAY"));
+
+  if (test_case == "startup_input_replay")
+  {
+    std::string const preserved = std::string("typed") + static_cast<char>(0xc3) + static_cast<char>(0xa9);
+    expect(std::fwrite(preserved.data(), 1, preserved.size(), input) == preserved.size(), "all startup input bytes must be written");
+    write_KeyboardInputMode_reply(input, SupportedMode::KittyProtocol);
+  }
+  else if (test_case == "split_utf8_replay")
+  {
+    std::string bytes = "\x1b[?1u\x1b[?1;2c";
+    constexpr std::size_t raw_read_size = 4096;
+    bytes.append(raw_read_size - bytes.size() - 1, 'x');
+    bytes.push_back(static_cast<char>(0xc3));
+    bytes.push_back(static_cast<char>(0xa9));
+    expect(std::fwrite(bytes.data(), 1, bytes.size(), input) == bytes.size(), "split UTF-8 startup fixture must be written completely");
+  }
+  std::rewind(input);
+}
+
+// Run exactly one keyboard case so every initialization-sensitive scenario receives a fresh process Context.
+void run_terminal_keyboard_input_mode_test_case(std::string_view test_case)
+{
+  constexpr int configured_delay_ms = 2.25 * ava::tui::config::default_terminal_escape_delay_ms;
+  if (test_case == "escape_delay_default")
+    test_context_escape_delay_configuration(ava::tui::config::default_terminal_escape_delay_ms);
+  else if (test_case == "escape_delay_configured")
+    test_context_escape_delay_configuration(configured_delay_ms);
+  else if (test_case == "kitty_reply")
+    test_kitty_reply_selects_kitty();
+  else if (test_case == "fallback_reply")
+    test_unsupported_replies_use_modify_other_keys_fallback();
+  else if (test_case == "modify_other_keys_reply")
+    test_modify_other_keys_reply_is_consumed();
+  else if (test_case == "unrelated_input")
+    test_unrelated_input_is_buffered();
+  else if (test_case == "startup_input_replay")
+    test_context_replays_preserved_startup_input_once();
+  else if (test_case == "split_utf8_replay")
+    test_runtime_replays_utf8_split_between_negotiation_and_descriptor();
+  else if (test_case == "invalid_utf8")
+    test_invalid_utf8_replays_as_replacement_characters();
+  else if (test_case == "handoff_input")
+    test_handoff_preserves_only_unconsumed_input();
+  else if (test_case == "idempotent_stop")
+    test_stop_is_idempotent();
+  else if (test_case == "destructor_stop")
+    test_destructor_stops_active_mode();
+  else
+    expect(false, "unknown terminal keyboard input mode test case: " + std::string(test_case));
 }

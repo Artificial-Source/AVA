@@ -12,11 +12,13 @@
 #include "terminal/Pad.h"
 #include "terminal/Rendition.h"
 #include "terminal/TextSpan.h"
+#include "ava/core/Application.h"
 
 #include <array>
 #include <clocale>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -180,14 +182,7 @@ struct TestPad : public terminal::Pad
 // the pad is inspected through Window::instr.
 void test_pad_generate_comment_example()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  // This will be read by the terminal::Context constructor.
-  write_OSC4_reply(input.get(), 256);
-  std::rewind(input.get());
-  terminal::Context terminal_context(output.get(), input.get());
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
 
   bool const color_support = terminal_context.has_colors();
   expect(color_support, "TERM=xterm-256color must provide colors for the terminal::Pad test");
@@ -366,6 +361,14 @@ void test_paragraph_wrap_compact_clusters()
 }
 
 } // namespace
+
+// Configure and preload the process streams before the Application initializes the paragraph-test Context.
+void prepare_terminal_paragraph_tests(FILE* input, FILE*)
+{
+  static_cast<void>(setenv("TERM", "xterm-256color", 1));
+  write_OSC4_reply(input, 256);
+  std::rewind(input);
+}
 
 void run_terminal_paragraph_tests()
 {

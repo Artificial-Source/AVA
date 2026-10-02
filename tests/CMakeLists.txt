@@ -397,12 +397,10 @@ set(AVA_TEST_SUITES
   mermaid_render
   permission_rules
   tui_composer
-  terminal_color
-  terminal_keyboard_input_mode
-  terminal_mouse_input_mode
   terminal_horizontal_layout
   terminal_paragraph
   terminal_window
+  tui_terminal_geometry
   run_observer
   runtime_diagnostics
   containment
@@ -418,6 +416,49 @@ foreach(AVA_TEST_SUITE IN LISTS AVA_TEST_SUITES)
   # after LibcwdOutputSink installs its validated per-suite private stream.
   set_tests_properties(ava_tests.${AVA_TEST_SUITE} PROPERTIES
     ENVIRONMENT "LIBCWD_NO_STARTUP_MSGS=1;AVA_NO_DEBUG_OUTPUT=1")
+endforeach()
+
+# Register initialization-sensitive terminal cases separately so each receives one fresh Application-owned Context.
+set(AVA_TERMINAL_KEYBOARD_CASES
+  escape_delay_default
+  escape_delay_configured
+  kitty_reply
+  fallback_reply
+  modify_other_keys_reply
+  unrelated_input
+  startup_input_replay
+  split_utf8_replay
+  invalid_utf8
+  handoff_input
+  idempotent_stop
+  destructor_stop
+)
+set(AVA_TERMINAL_MOUSE_CASES context_lifecycle handoff_lifecycle)
+set(AVA_TERMINAL_COLOR_CASES srgb_round_trip osc4_protocol mutable_palette xterm_indexed portable_pairs)
+foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
+  add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
+    COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
+endforeach()
+foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_MOUSE_CASES)
+  add_test(NAME ava_tests.terminal_mouse_input_mode.${AVA_TERMINAL_CASE}
+    COMMAND ava_tests terminal_mouse_input_mode ${AVA_TERMINAL_CASE})
+endforeach()
+foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_COLOR_CASES)
+  add_test(NAME ava_tests.terminal_color.${AVA_TERMINAL_CASE}
+    COMMAND ava_tests terminal_color ${AVA_TERMINAL_CASE})
+endforeach()
+foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color)
+  if (AVA_TERMINAL_SUITE STREQUAL "terminal_keyboard_input_mode")
+    set(AVA_TERMINAL_CASES ${AVA_TERMINAL_KEYBOARD_CASES})
+  elseif(AVA_TERMINAL_SUITE STREQUAL "terminal_mouse_input_mode")
+    set(AVA_TERMINAL_CASES ${AVA_TERMINAL_MOUSE_CASES})
+  else()
+    set(AVA_TERMINAL_CASES ${AVA_TERMINAL_COLOR_CASES})
+  endif()
+  foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_CASES)
+    set_tests_properties(ava_tests.${AVA_TERMINAL_SUITE}.${AVA_TERMINAL_CASE} PROPERTIES
+      ENVIRONMENT "LIBCWD_NO_STARTUP_MSGS=1;AVA_NO_DEBUG_OUTPUT=1")
+  endforeach()
 endforeach()
 set_tests_properties(ava_tests.provider_live_smoke PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(ava_tests.process_adoption_posix PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45 LABELS "process;posix;adoption;offline")

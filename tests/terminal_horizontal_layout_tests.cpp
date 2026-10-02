@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "support/terminal_test_support.h"
 #include "support/test_harness.h"
 #include "terminal/BasicWindow.h"
 #include "terminal/ColorPair.h"
@@ -9,10 +10,12 @@
 #include "terminal/Paragraph.h"
 #include "terminal/Spacer.h"
 #include "terminal/TextSpan.h"
+#include "ava/core/Application.h"
 
 #include <clocale>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -141,11 +144,7 @@ struct TestPad : public terminal::Pad
 // right-aligned Paragraph, leading filler moves that prefix to the right edge and all retained trailing spaces are clipped.
 void test_mixed_width_text_span_rendering()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  terminal::Context terminal_context(output.get(), input.get());
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
 
   bool const color_support = terminal_context.has_colors();
   expect(color_support, "TERM=xterm-256color must provide colors for the terminal::Pad test");
@@ -342,6 +341,12 @@ void test_mixed_width_text_span_rendering()
 }
 
 } // namespace
+
+// Configure the terminal before the Application initializes the Context used by rendering tests.
+void prepare_terminal_horizontal_layout_tests(FILE*, FILE*)
+{
+  static_cast<void>(setenv("TERM", "xterm-256color", 1));
+}
 
 // Run deterministic HorizontalLayout width negotiation and terminal-backed mixed-width rendering coverage.
 void run_terminal_horizontal_layout_tests()

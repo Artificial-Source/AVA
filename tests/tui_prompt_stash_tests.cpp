@@ -12,6 +12,7 @@
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/session/attachments.h"
+#include "ava/core/Application.h"
 
 #include <cstdio>
 #include <string>
@@ -126,15 +127,7 @@ void test_prompt_stash_store_semantics()
 
 void test_prompt_stash_runtime_controller()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  auto* screen = newterm("xterm-256color", output.get(), input.get());
-  if (!screen)
-  {
-    expect(false, "prompt stash runtime test creates a private curses screen");
-    return;
-  }
-  static_cast<void>(set_term(screen));
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(20, 80));
 
   ava::tui::TuiRuntimeOptions options;
@@ -203,9 +196,6 @@ void test_prompt_stash_runtime_controller()
   expect(controller.trigger() && controller.stash().size() == 1, "prompt stash runtime fixture stores an entry for clear");
   expect(controller.clear() && controller.stash().empty() && presentation.snapshot.status == "prompt stash cleared",
          "prompt stash clear command path empties runtime-owned memory and reports success");
-
-  static_cast<void>(endwin());
-  delscreen(screen);
 }
 
 void test_latest_assistant_copy_decisions()

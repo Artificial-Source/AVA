@@ -213,10 +213,9 @@ int run_interactive_composer(TuiRuntimeOptions options)
   }
 
   core::Application& application = core::Application::instance();
-  terminal::Context& terminal_context = application.terminal_context();
   core::Signals& signals_manager = application.signals_manager();
-
-  terminal_context.initialize();
+  application.initialize_terminal_context();
+  terminal::Context& terminal_context = application.terminal_context();
 
   // Activate signal handlers for the TUI.
   signals_manager.activate_handlers({SIGTERM, SIGINT});

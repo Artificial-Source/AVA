@@ -49,6 +49,10 @@ class Application
 
   Vec8Alloc vec8alloc() const { return vec8alloc_; }
 
+  // Initialize the application's terminal Context with `outfd` and `infd`.
+  // Null streams select the process's standard terminal; tests can supply streams that outlive this Application.
+  void initialize_terminal_context(FILE* outfd = nullptr, FILE* infd = nullptr) { terminal_context_.initialize(outfd, infd); }
+
   [[nodiscard]] virtual std::string_view application_name() const noexcept = 0;
 
   // Accessors
@@ -56,8 +60,18 @@ class Application
   Signals& signals_manager() { return signals_manager_; }
   Signals const& signals_manager() const { return signals_manager_; }
 
-  tui::terminal::Context& terminal_context() { return terminal_context_; }
-  tui::terminal::Context const& terminal_context() const { return terminal_context_; }
+  tui::terminal::Context& terminal_context()
+  {
+    // Call initialize_terminal_context(), before accessing Application::terminal_context();
+    ASSERT(terminal_context_.is_initialized());
+    return terminal_context_;
+  }
+  tui::terminal::Context const& terminal_context() const
+  {
+    // Call initialize_terminal_context(), before accessing Application::terminal_context();
+    ASSERT(terminal_context_.is_initialized());
+    return terminal_context_;
+  }
 
   // Can't print mpp_.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

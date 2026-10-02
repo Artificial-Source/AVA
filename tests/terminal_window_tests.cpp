@@ -1,10 +1,13 @@
 #include "sys.h"
+#include "support/terminal_test_support.h"
 #include "support/test_harness.h"
 #include "terminal/ColorPair.h"
 #include "terminal/Context.h"
 #include "terminal/Window.h"
+#include "ava/core/Application.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string_view>
 
 namespace terminal = ava::tui::terminal;
@@ -14,17 +17,15 @@ namespace {
 // Verify that Context is the sole cursor-style owner and emits every DECSCUSR mapping while suppressing duplicate settings.
 void test_context_cursor_settings()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  terminal::Context terminal_context(output.get(), input.get());
+  FILE* output = process_terminal_test_output();
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
 
-  long const untouched_default_begin = std::ftell(output.get());
+  long const untouched_default_begin = std::ftell(output);
   terminal_context.reapply_cursor_settings();
-  expect(untouched_default_begin >= 0 && std::ftell(output.get()) == untouched_default_begin,
+  expect(untouched_default_begin >= 0 && std::ftell(output) == untouched_default_begin,
          "Context leaves the terminal's inherited default cursor unperturbed until AVA explicitly applies a setting");
 
-  long const begin = std::ftell(output.get());
+  long const begin = std::ftell(output);
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Block, true});
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Block, false});
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Underline, true});
@@ -33,13 +34,13 @@ void test_context_cursor_settings()
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Default});
-  long const end = std::ftell(output.get());
+  long const end = std::ftell(output);
 
   constexpr std::string_view expected = "\x1b[1 q\x1b[2 q\x1b[3 q\x1b[4 q\x1b[5 q\x1b[6 q\x1b[0 q";
   std::string actual(expected.size(), '\0');
   bool const positions_valid = begin >= 0 && end - begin == static_cast<long>(expected.size());
   bool const read_succeeded =
-      positions_valid && std::fseek(output.get(), begin, SEEK_SET) == 0 && std::fread(actual.data(), 1, actual.size(), output.get()) == actual.size();
+      positions_valid && std::fseek(output, begin, SEEK_SET) == 0 && std::fread(actual.data(), 1, actual.size(), output) == actual.size();
   expect(read_succeeded && actual == expected && terminal_context.cursor_settings() == terminal::CursorSettings{terminal::CursorStyle::Default},
          "Context maps cursor styles and blink settings, suppresses duplicates, and retains the applied default");
 }
@@ -50,27 +51,24 @@ void test_context_cursor_settings()
 // without writing to a real terminal.
 void test_margin_aware_window_geometry_and_lifetime()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  terminal::Context terminal_context(output.get(), input.get());
+  FILE* output = process_terminal_test_output();
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
 
   // A visibility change can reset DECSCUSR state without changing the retained settings. Verify that Context's repair path
   // emits the retained sequence on every call instead of letting CursorState's ordinary duplicate suppression hide it.
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
-  long const reapply_begin = std::ftell(output.get());
+  long const reapply_begin = std::ftell(output);
   terminal_context.reapply_cursor_settings();
   terminal_context.reapply_cursor_settings();
-  long const reapply_end = std::ftell(output.get());
+  long const reapply_end = std::ftell(output);
   char reapplied_sequences[10]{};
   bool const positions_valid = reapply_begin >= 0 && reapply_end >= reapply_begin;
-  bool const seek_succeeded = positions_valid && std::fseek(output.get(), reapply_begin, SEEK_SET) == 0;
-  std::size_t const bytes_read = seek_succeeded ? std::fread(reapplied_sequences, 1, sizeof(reapplied_sequences), output.get()) : 0;
+  bool const seek_succeeded = positions_valid && std::fseek(output, reapply_begin, SEEK_SET) == 0;
+  std::size_t const bytes_read = seek_succeeded ? std::fread(reapplied_sequences, 1, sizeof(reapplied_sequences), output) : 0;
   expect(positions_valid && reapply_end - reapply_begin == static_cast<long>(sizeof(reapplied_sequences)) && bytes_read == sizeof(reapplied_sequences) &&
              std::string_view{reapplied_sequences, sizeof(reapplied_sequences)} == "\x1b[6 q\x1b[6 q",
          "reapplying cursor settings must always emit the retained shape and blink sequence");
-  static_cast<void>(std::fseek(output.get(), 0, SEEK_END));
+  static_cast<void>(std::fseek(output, 0, SEEK_END));
 
   terminal::Rendition const background_rendition{{}};
 
@@ -103,6 +101,12 @@ void test_margin_aware_window_geometry_and_lifetime()
 }
 
 } // namespace
+
+// Configure the terminal before the Application initializes the Context used by window tests.
+void prepare_terminal_window_tests(FILE*, FILE*)
+{
+  static_cast<void>(setenv("TERM", "xterm-256color", 1));
+}
 
 void run_terminal_window_tests()
 {

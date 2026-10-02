@@ -31,25 +31,12 @@ Context::Context(utils::Badge<core::Application>) : default_rendition_(ColorPair
 {
 }
 
-Context::Context(FILE* outfd, FILE* infd) : default_rendition_(ColorPair{{}, 0})
-{
-  // This constructor is intended for CTests; pass appropriate FILE*'s.
-  ASSERT(outfd != nullptr && infd != nullptr);
-  initialize(outfd, infd);
-}
-
-// Bind raw output to a test-owned newterm screen without taking ownership of its ncurses or FILE* lifetime.
-// The renderer's existing global-stdscr fallback continues to draw to that screen.
-void Context::bind_external_screen_output_for_test(FILE* output)
-{
-  // Use this only with a Context that has not initialized or acquired a screen; bind before drawing and unbind before closing the test stream.
-  ASSERT(!initialized_ && (output_file_ == nullptr || output == nullptr));
-  output_file_ = output;
-}
-
 void Context::initialize(FILE* outfd, FILE* infd)
 {
   DoutEntering(dc::notice, "Context::initialize(" << outfd << ", " << infd << ")");
+
+  // Only initialize the terminal::Context once.
+  ASSERT(!initialized_);
 
   setlocale(LC_ALL, "");
 

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "terminal_test_support.h"
+#include "ava/core/Application.h"
 
 #include <array>
 #include <cerrno>
@@ -18,6 +19,18 @@ constexpr std::array<unsigned int, 6> xterm_cube_levels = {0x00, 0x5f, 0x87, 0xa
 
 } // namespace
 
+// Return the input stream shared with the Application-owned Context.
+FILE* process_terminal_test_input()
+{
+  return ava::core::Application::instance().terminal_context().input_stream();
+}
+
+// Return the output stream shared with the Application-owned Context.
+FILE* process_terminal_test_output()
+{
+  return ava::core::Application::instance().terminal_context().output_stream();
+}
+
 void reset_output_file(FILE* file)
 {
   if (std::fflush(file) != 0)
@@ -30,6 +43,12 @@ void reset_output_file(FILE* file)
     throw std::system_error(errno, std::generic_category(), "rewind test output");
 
   std::clearerr(file);
+}
+
+// Clear startup replies from the terminal input stream before writing a later protocol exchange.
+void reset_terminal_input_file(FILE* file)
+{
+  reset_output_file(file);
 }
 
 // Write the ordered OSC 4 replies for a fixed xterm-style 16- or 256-color palette and its subsequent write-test probes to `file`.

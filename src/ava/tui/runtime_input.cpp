@@ -237,7 +237,6 @@ RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context
   }
   if (key == Key::Space)
     return space_input();
-#ifdef KEY_RESIZE
   if (key == Key::Resize)
   {
     return RuntimeInput{.event = InputEvent{.key = Key::Unknown, .character = '\0', .text = {}, .mouse_column = 0, .mouse_row = 0},
@@ -245,17 +244,19 @@ RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context
                         .bracketed_paste = false,
                         .resize = true};
   }
-#endif
-#ifdef KEY_MOUSE
   if (key == Key::Mouse)
   {
+#if 0
     MEVENT mouse{};
     if (getmouse(&mouse) != OK)
       return unknown_input();
     return event_input(terminal_ncurses_mouse_event(static_cast<std::uint64_t>(mouse.bstate), static_cast<std::size_t>(mouse.x + 1),
                                                     static_cast<std::size_t>(mouse.y + 1)));
-  }
+#else
+    // Mouse events are not supported at the moment.
+    return unknown_input();
 #endif
+  }
 
   return key_input(key);
 }

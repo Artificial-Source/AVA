@@ -162,7 +162,7 @@ class Context final
   friend class ColorPalette;
 
  private:
-  BasicScreen first_screen_;                                    // Owns the screen iff `outfd` and `infd` are passed to the constructor.
+  BasicScreen first_screen_;                                    // Owns the screen iff initialize receives explicit terminal streams.
   BasicWindow stdscr_;                                          // The entire surface of the current terminal screen.
   FILE* input_file_ = nullptr;                                  // Non-owning stream from the terminal emulator.
   FILE* output_file_ = nullptr;                                 // Non-owning stream connected to the terminal emulator.
@@ -180,13 +180,12 @@ class Context final
   Context(utils::Badge<core::Application>);
   void initialize(FILE* outfd = nullptr, FILE* infd = nullptr);
 
-  // Used by the testsuite.
-  Context(FILE* outfd, FILE* infd);
   ~Context();
 
-  // Bind the output of an externally created ncurses screen to this uninitialized Context for a test.
-  // Pass nullptr after that screen is finished, before its output stream is closed. Production initializes the Context instead.
-  void bind_external_screen_output_for_test(FILE* output);
+  // Return the borrowed streams supplied at initialization for protocol IO and test fixtures.
+  // Both are non-null after initialize and remain owned by the caller for the Context's entire lifetime.
+  FILE* input_stream() const { return input_file_; }
+  FILE* output_stream() const { return output_file_; }
 
   Rendition const& default_rendition() const { return default_rendition_; }
 
@@ -319,6 +318,11 @@ class Context final
 
  public:
   AVA_DEBUG_PRINT_MEMBERS_ON
+
+#if CW_DEBUG
+  // Used by the accessor core::Application::terminal_context.
+  bool is_initialized() const { return initialized_; }
+#endif
 };
 
 } // namespace ava::tui::terminal

@@ -1,9 +1,12 @@
 #include "sys.h"
+#include "support/terminal_test_support.h"
 #include "support/test_harness.h"
 #include "terminal/Context.h"
+#include "ava/core/Application.h"
 
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -38,15 +41,9 @@ std::size_t count_occurrences(std::string_view bytes, std::string_view sequence)
 }
 
 // Verify that Context owns one balanced mouse-reporting and bracketed-paste lifecycle without probing for support.
-void test_context_balances_mouse_input_modes()
+void test_context_balances_mouse_input_modes(FILE* output)
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  {
-    terminal::Context context(output.get(), input.get());
-  }
-
-  std::string const emitted = read_output(output.get());
+  std::string const emitted = read_output(output);
   std::size_t const mouse_enable = emitted.find(kMouseEnableSequence);
   std::size_t const paste_enable = emitted.find(kBracketedPasteEnableSequence);
   std::size_t const paste_disable = emitted.find(kBracketedPasteDisableSequence);
@@ -63,16 +60,16 @@ void test_context_balances_mouse_input_modes()
 // Verify that Context alone releases and rearms mouse, paste, keyboard, and retained cursor modes across a temporary terminal handoff.
 void test_context_balances_handoff_modes()
 {
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  {
-    terminal::Context context(output.get(), input.get());
-    context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
-    context.leave_terminal_for_handoff();
-    context.restore_terminal_after_handoff();
-  }
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  context.apply_cursor_settings({terminal::CursorStyle::Bar, false});
+  context.leave_terminal_for_handoff();
+  context.restore_terminal_after_handoff();
+}
 
-  std::string const emitted = read_output(output.get());
+// Verify handoff and final Application teardown emitted balanced protocol transitions.
+void verify_context_balances_handoff_modes(FILE* output)
+{
+  std::string const emitted = read_output(output);
   expect(count_occurrences(emitted, kMouseEnableSequence) == 2 && count_occurrences(emitted, kMouseDisableSequence) == 2 &&
              count_occurrences(emitted, kBracketedPasteEnableSequence) == 2 && count_occurrences(emitted, kBracketedPasteDisableSequence) == 2,
          "Context balances mouse and bracketed-paste modes across handoff, rearm, and final destruction");
@@ -82,10 +79,28 @@ void test_context_balances_handoff_modes()
 
 } // namespace
 
-// Run deterministic terminal mouse-mode lifecycle tests with a direct-color TERM to avoid palette probing.
-void run_terminal_mouse_input_mode_tests()
+// Configure the direct-color terminal before the Application initializes its Context.
+void prepare_terminal_mouse_input_mode_test_case(std::string_view, FILE*, FILE*)
 {
-  ScopedEnvVar term_guard("TERM", "xterm-direct");
-  test_context_balances_mouse_input_modes();
-  test_context_balances_handoff_modes();
+  static_cast<void>(setenv("TERM", "xterm-direct", 1));
+}
+
+// Exercise the live portion of one isolated mouse lifecycle case.
+void run_terminal_mouse_input_mode_test_case(std::string_view test_case)
+{
+  if (test_case == "context_lifecycle")
+    return;
+  if (test_case == "handoff_lifecycle")
+    test_context_balances_handoff_modes();
+  else
+    expect(false, "unknown terminal mouse input mode test case: " + std::string(test_case));
+}
+
+// Check output that is complete only after TestRunnerApplication has destroyed its Context.
+void verify_terminal_mouse_input_mode_test_case(std::string_view test_case, FILE* output)
+{
+  if (test_case == "context_lifecycle")
+    test_context_balances_mouse_input_modes(output);
+  else if (test_case == "handoff_lifecycle")
+    verify_context_balances_handoff_modes(output);
 }
