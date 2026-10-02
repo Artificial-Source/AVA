@@ -2150,194 +2150,7 @@ void test_disarmed_and_malformed_osc11_inside_startup_bracketed_paste_preserve_s
   }
 }
 
-#if 0  // Removed duplicate legacy protocol-owner tests; canonical coverage lives in terminal_keyboard_input_mode_tests.cpp.
-struct SequenceCapture
-{
-  std::vector<std::string> sequences;
-};
-
-SequenceCapture* g_sequence_capture = nullptr;
-
-void capture_terminal_sequence(std::string_view sequence)
-{
-  if (g_sequence_capture != nullptr)
-    g_sequence_capture->sequences.emplace_back(sequence);
-}
-
-int g_flushinp_calls = 0;
-int g_tcflush_calls = 0;
-int g_tcflush_last_fd = -1;
-int g_tcflush_last_selector = -1;
-std::vector<char> g_flush_order;
-
-void capture_flushinp() noexcept
-{
-  ++g_flushinp_calls;
-  g_flush_order.push_back('i');
-}
-
-int capture_tcflush(int fd, int queue_selector) noexcept
-{
-  ++g_tcflush_calls;
-  g_tcflush_last_fd = fd;
-  g_tcflush_last_selector = queue_selector;
-  g_flush_order.push_back('t');
-  return 0;
-}
-
-void reset_lifecycle_test_seams()
-{
-  ava::tui::detail::reset_terminal_sequence_writer_for_test();
-  ava::tui::detail::reset_terminal_input_flush_hooks_for_test();
-  ava::tui::detail::reset_terminal_protocol_ownership_for_test();
-  g_sequence_capture = nullptr;
-  g_flushinp_calls = 0;
-  g_tcflush_calls = 0;
-  g_tcflush_last_fd = -1;
-  g_tcflush_last_selector = -1;
-  g_flush_order.clear();
-}
-
-std::size_t count_sequence(std::vector<std::string> const& sequences, std::string_view needle)
-{
-  return static_cast<std::size_t>(std::count(sequences.begin(), sequences.end(), std::string(needle)));
-}
-
-bool sequences_contain(std::vector<std::string> const& sequences, std::string_view needle)
-{
-  return std::find(sequences.begin(), sequences.end(), std::string(needle)) != sequences.end();
-}
-
-void test_alacritty_da2_version_gate_and_lifecycle()
-{
-  expect(ava::tui::terminal_alacritty_da2_probe_environment_allows_query(std::nullopt, "xterm-256color", "Alacritty") &&
-             !ava::tui::terminal_alacritty_da2_probe_environment_allows_query(std::nullopt, "xterm-256color", "ghostty") &&
-             !ava::tui::terminal_alacritty_da2_probe_environment_allows_query("/tmp/tmux", "xterm-256color", "Alacritty") &&
-             !ava::tui::terminal_alacritty_da2_probe_environment_allows_query(std::nullopt, "tmux-256color", "Alacritty") &&
-             !ava::tui::terminal_alacritty_da2_probe_environment_allows_query(std::nullopt, "screen-256color", "Alacritty"),
-         "only a positively identified direct Alacritty is eligible for the DA2 query");
-
-  auto const version_2401 = ava::tui::terminal_alacritty_da2_version("[>0;2401;1c");
-  auto const version_2402 = ava::tui::terminal_alacritty_da2_version("[>0;2402;1c");
-  expect(version_2401 && *version_2401 == 2401 && version_2402 && *version_2402 == 2402 && ava::tui::terminal_alacritty_da2_version("[>0;1;1c") == 1 &&
-             ava::tui::terminal_alacritty_da2_version("[>0;999999;1c") == 999999,
-         "strict Alacritty DA2 parsing preserves the exact 2401/2402 boundary and accepted version range");
-  for (auto const malformed : {std::string_view("[>0;0;1c"), std::string_view("[>0;1000000;1c"), std::string_view("[>1;2402;1c"),
-                               std::string_view("[>0;2402;0c"), std::string_view("[>0;2402;1;2c"), std::string_view("[>0;24x2;1c"),
-                               std::string_view("[>0;2402;1C"), std::string_view("[?0;2402;1c"), std::string_view("[>0;2402;1cjunk")})
-  {
-    expect(!ava::tui::terminal_alacritty_da2_version(malformed), "malformed or non-Alacritty DA2 reply is rejected: " + std::string(malformed));
-  }
-
-  constexpr std::string_view fragmented_reply = "[>0;2402;1c";
-  for (std::size_t length = 1; length < fragmented_reply.size(); ++length)
-  {
-    expect(!ava::tui::terminal_escape_sequence_complete(fragmented_reply.substr(0, length)),
-           "fragmented DA2 reply remains incomplete until its strict final byte");
-  }
-  expect(ava::tui::terminal_escape_sequence_complete(fragmented_reply), "the complete fragmented DA2 reply becomes one bounded CSI sequence");
-
-  // Every environment uses disambiguation-only flags without an Alacritty event-type probe.
-  for (auto const& environment : {std::pair{std::string(""), std::string("xterm-256color")}, std::pair{std::string("ghostty"), std::string("xterm-256color")},
-                                  std::pair{std::string("Alacritty"), std::string("tmux-256color")}})
-  {
-    ScopedEnvVar term_program_guard("TERM_PROGRAM", environment.first);
-    ScopedEnvVar term_guard("TERM", environment.second);
-    ScopedEnvVar tmux_guard("TMUX", "");
-    reset_lifecycle_test_seams();
-    SequenceCapture capture;
-    g_sequence_capture = &capture;
-    ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
-    ava::tui::arm_owned_terminal_protocols_on_enter();
-    auto const ownership = ava::tui::terminal_protocol_ownership();
-    expect(ownership.kitty_keyboard_active_flags == 1 && ownership.kitty_keyboard_desired_flags == 1 && !ownership.alacritty_da2_probe_armed &&
-               count_sequence(capture.sequences, "\x1b[>1u\x1b[?u\x1b[c") == 1 &&
-               !sequences_contain(capture.sequences, ava::tui::terminal_alacritty_da2_query_sequence()) &&
-               !ava::tui::terminal_keyboard_protocol_handle_response("[>0;2402;1c"),
-           "Kitty sessions use disambiguation-only flags and do not need or trust unsolicited DA2 replies");
-    ava::tui::restore_owned_terminal_protocols();
-    reset_lifecycle_test_seams();
-  }
-
-  // Direct Alacritty also keeps disambiguation-only flags because AVA no longer requests event types.
-  {
-    ScopedEnvVar term_program_guard("TERM_PROGRAM", "Alacritty");
-    ScopedEnvVar term_guard("TERM", "xterm-256color");
-    ScopedEnvVar tmux_guard("TMUX", "");
-    reset_lifecycle_test_seams();
-    SequenceCapture capture;
-    g_sequence_capture = &capture;
-    ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
-    ava::tui::arm_owned_terminal_protocols_on_enter();
-    auto ownership = ava::tui::terminal_protocol_ownership();
-    expect(ownership.kitty_keyboard_active_flags == 1 && ownership.kitty_keyboard_desired_flags == 1 && !ownership.alacritty_da2_probe_armed &&
-               sequences_contain(capture.sequences, "\x1b[>1u\x1b[?u\x1b[c") &&
-               !sequences_contain(capture.sequences, ava::tui::terminal_alacritty_da2_query_sequence()),
-           "direct Alacritty uses flags 1 without issuing an irrelevant event-type compatibility query");
-    ava::tui::release_owned_terminal_protocols();
-    ava::tui::rearm_owned_terminal_protocols();
-    ownership = ava::tui::terminal_protocol_ownership();
-    expect(ownership.kitty_keyboard_active_flags == 1 && ownership.kitty_keyboard_desired_flags == 1 && !ownership.alacritty_da2_probe_armed &&
-               count_sequence(capture.sequences, "\x1b[>1u") == 1 && !ava::tui::terminal_keyboard_protocol_handle_response("[>0;2402;1c"),
-           "flags 1 survive handoff and rearm without accepting an unsolicited DA2 upgrade");
-    ava::tui::restore_owned_terminal_protocols();
-    reset_lifecycle_test_seams();
-  }
-}
-
-void test_terminal_protocol_lifecycle_kitty_supported_path()
-{
-  ScopedEnvVar term_program_guard("TERM_PROGRAM", "ghostty");
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedEnvVar tmux_guard("TMUX", "");
-  reset_lifecycle_test_seams();
-  SequenceCapture capture;
-  g_sequence_capture = &capture;
-  ava::tui::detail::set_terminal_sequence_writer_for_test(&capture_terminal_sequence);
-
-  ava::tui::arm_owned_terminal_protocols_on_enter();
-  expect(ava::tui::terminal_keyboard_protocol_handle_response("[?5u"), "lifecycle test injects Kitty flags>0 reply");
-  auto ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.kitty_keyboard_supported && ownership.keyboard_protocol_kitty_response_seen && !ownership.modify_other_keys_desired &&
-             !ownership.modify_other_keys_enabled,
-         "Kitty-supported negotiation leaves modifyOtherKeys off");
-
-  // Force-enable then ensure a later positive Kitty reply disables and forgets desire.
-  expect(ava::tui::terminal_keyboard_protocol_handle_response("[?0u") && ava::tui::terminal_protocol_ownership().modify_other_keys_desired,
-         "flags=0 can enable modifyOtherKeys mid-session");
-  expect(ava::tui::terminal_keyboard_protocol_handle_response("[?5u") && !ava::tui::terminal_protocol_ownership().modify_other_keys_desired &&
-             !ava::tui::terminal_protocol_ownership().modify_other_keys_enabled,
-         "later Kitty support disables modifyOtherKeys and clears desire");
-
-  ava::tui::release_owned_terminal_protocols();
-  ava::tui::rearm_owned_terminal_protocols();
-  ownership = ava::tui::terminal_protocol_ownership();
-  expect(ownership.kitty_keyboard_pushed && !ownership.modify_other_keys_enabled &&
-             count_sequence(capture.sequences, ava::tui::terminal_modify_other_keys_enable_sequence()) == 1,
-         "Kitty-supported resume re-pushes keyboard protocol without re-enabling modifyOtherKeys");
-  expect(!sequences_contain(capture.sequences, ava::tui::terminal_background_query_sequence()), "Kitty-supported handoff/resume never emits OSC 11");
-
-  ava::tui::restore_owned_terminal_protocols();
-  reset_lifecycle_test_seams();
-}
-
-void test_terminal_input_flush_ordering_seam()
-{
-  reset_lifecycle_test_seams();
-  ava::tui::detail::set_terminal_input_flush_hooks_for_test(&capture_flushinp, &capture_tcflush);
-
-  ava::tui::discard_pending_terminal_input();
-  expect(g_flushinp_calls == 1 && g_tcflush_calls == 1 && g_tcflush_last_fd == STDIN_FILENO && g_tcflush_last_selector == TCIFLUSH &&
-             g_flush_order.size() == 2 && g_flush_order[0] == 'i' && g_flush_order[1] == 't',
-         "final input flush calls flushinp then tcflush(TCIFLUSH) exactly once each");
-
-  ava::tui::discard_pending_terminal_input();
-  expect(g_flushinp_calls == 2 && g_tcflush_calls == 2 && g_flush_order == std::vector<char>({'i', 't', 'i', 't'}),
-         "input flush remains ordered and fail-soft across repeated restore-safe calls");
-
-  reset_lifecycle_test_seams();
-}
-
+// Write the complete byte sequence to the PTY master, returning false on a failed write.
 bool write_all_fd(int fd, std::string_view bytes)
 {
   auto const* cursor = bytes.data();
@@ -2353,6 +2166,7 @@ bool write_all_fd(int fd, std::string_view bytes)
   return true;
 }
 
+// Flag text that resembles an SGR mouse report accidentally exposed as ordinary input.
 bool looks_like_leaked_sgr_mouse_payload(ava::tui::runtime_input::RuntimeInput const& input)
 {
   if (input.event.key != ava::tui::terminal::Key::Character && input.event.key != ava::tui::terminal::Key::Space)
@@ -2364,6 +2178,7 @@ bool looks_like_leaked_sgr_mouse_payload(ava::tui::runtime_input::RuntimeInput c
   return text.find_first_of("0123456789;Mm") != std::string::npos;
 }
 
+// Read a bounded event from the PTY and report a missing event with its label.
 std::optional<ava::tui::runtime_input::RuntimeInput> read_direct_mouse_event(std::string_view label)
 {
   auto input = ava::tui::runtime_input::read_curses_input_with_timeout(std::chrono::milliseconds(100));
@@ -2371,6 +2186,7 @@ std::optional<ava::tui::runtime_input::RuntimeInput> read_direct_mouse_event(std
   return input;
 }
 
+// Drain unexpected input after a mouse report; failures include the triggering label.
 void expect_no_residual_mouse_payload(std::string_view label)
 {
   auto residual = ava::tui::runtime_input::poll_curses_input();
@@ -2384,7 +2200,6 @@ void expect_no_residual_mouse_payload(std::string_view label)
     residual = ava::tui::runtime_input::poll_curses_input();
   }
 }
-#endif
 
 // Same-size geometry refresh must not inject KEY_RESIZE. Plugin surface fit checks
 // refresh repeatedly; unconditional resizeterm floods the input queue on some hosts.

@@ -21,6 +21,7 @@
 #undef stderr
 #undef stdin
 #undef stdout
+#undef timeout
 
 // Sanity check.
 #if NCURSES_WIDECHAR != 1
