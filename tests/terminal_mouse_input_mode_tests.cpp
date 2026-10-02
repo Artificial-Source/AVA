@@ -2,6 +2,7 @@
 #include "support/terminal_test_support.h"
 #include "support/test_harness.h"
 #include "terminal/Context.h"
+#include "terminal/MouseEvent.h"
 #include "ava/core/Application.h"
 
 #include <array>
@@ -66,6 +67,38 @@ void test_context_balances_handoff_modes()
   context.restore_terminal_after_handoff();
 }
 
+// Decode real SGR mouse bytes through ncurses, checking coordinates, wheels, modifiers, motion, and empty-queue failure.
+void test_mouse_event_decoding()
+{
+  terminal::Context& context = ava::core::Application::instance().terminal_context();
+  FILE* input = process_terminal_test_input();
+  constexpr std::string_view reports = "\x1b[<28;13;7M\x1b[<0;13;7m\x1b[<64;3;2M\x1b[<65;3;2M\x1b[<35;3;2M";
+  reset_output_file(input);
+  expect(std::fwrite(reports.data(), 1, reports.size(), input) == reports.size(), "mouse reports must be written completely");
+  std::rewind(input);
+  constexpr std::array<uint16_t, 5> buttons{1, 1, 4, 5, 0};
+  constexpr std::array actions{terminal::MouseButtonEvent::pressed, terminal::MouseButtonEvent::released, terminal::MouseButtonEvent::pressed,
+                               terminal::MouseButtonEvent::pressed, terminal::MouseButtonEvent::moved};
+  for (std::size_t index = 0; index < buttons.size(); ++index)
+  {
+    // Ncurses can batch reports; later reads may reach EOF while decoded mouse data remains queued.
+    wint_t value = 0;
+    auto const key = context.read_curses_key(value);
+    if (index == 0)
+      expect(key == terminal::Key::Mouse, "ncurses must recognize SGR mouse input");
+    auto event = terminal::get_mouse_event();
+    expect(event.has_value(), "get_mouse_event must decode the queued report");
+    if (!event)
+      return;
+    expect(event->button() == buttons[index], "mouse button numbers must preserve wheel direction");
+    expect(event->position().row() == (index < 2 ? 6U : 1U) && event->position().col() == (index < 2 ? 12U : 2U),
+           "mouse coordinates must be zero-based in row, column order");
+    expect(event->event() == actions[index], "mouse action must distinguish press, release, and motion");
+    expect(static_cast<uint8_t>(event->modifiers()) == (index == 0 ? 7 : 0), "Shift, Alt, and Ctrl modifiers must combine independently");
+  }
+  expect(!terminal::get_mouse_event(), "an empty mouse queue must return nullopt rather than an invented event");
+}
+
 // Verify handoff and final Application teardown emitted balanced protocol transitions.
 void verify_context_balances_handoff_modes(FILE* output)
 {
@@ -89,7 +122,10 @@ void prepare_terminal_mouse_input_mode_test_case(std::string_view, FILE*, FILE*)
 void run_terminal_mouse_input_mode_test_case(std::string_view test_case)
 {
   if (test_case == "context_lifecycle")
+  {
+    test_mouse_event_decoding();
     return;
+  }
   if (test_case == "handoff_lifecycle")
     test_context_balances_handoff_modes();
   else

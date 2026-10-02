@@ -4,7 +4,9 @@
 
 #include <array>
 #include <optional>
-#include <curses.h>
+
+// This header must be included last.
+#include "private_convert.h"
 
 namespace ava::tui::terminal {
 
@@ -12,27 +14,34 @@ namespace ava::tui::terminal {
 // A native report is consumed even when validation fails; no partially decoded event escapes to callers.
 std::optional<MouseEvent> get_mouse_event()
 {
+#ifdef NCURSES_MOUSE_VERSION
   MEVENT native{};
   if (::getmouse(&native) == ERR)
     return std::nullopt;
   if (AI_UNLIKELY(native.x < 0 || native.y < 0))
     return std::nullopt;
 
+  // Older mouse interfaces do not define button five; zero masks omit it from both scans.
+#ifdef BUTTON5_PRESSED
+  constexpr std::array<mmask_t, 5> button5_actions{BUTTON5_PRESSED, BUTTON5_RELEASED, BUTTON5_CLICKED, BUTTON5_DOUBLE_CLICKED, BUTTON5_TRIPLE_CLICKED};
+#else
+  constexpr std::array<mmask_t, 5> button5_actions{};
+#endif
   // Identify the button independently of its action, using all action bits belonging to each button.
   constexpr std::array<mmask_t, 5> button_masks{
       BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED | BUTTON1_TRIPLE_CLICKED,
       BUTTON2_PRESSED | BUTTON2_RELEASED | BUTTON2_CLICKED | BUTTON2_DOUBLE_CLICKED | BUTTON2_TRIPLE_CLICKED,
       BUTTON3_PRESSED | BUTTON3_RELEASED | BUTTON3_CLICKED | BUTTON3_DOUBLE_CLICKED | BUTTON3_TRIPLE_CLICKED,
       BUTTON4_PRESSED | BUTTON4_RELEASED | BUTTON4_CLICKED | BUTTON4_DOUBLE_CLICKED | BUTTON4_TRIPLE_CLICKED,
-      BUTTON5_PRESSED | BUTTON5_RELEASED | BUTTON5_CLICKED | BUTTON5_DOUBLE_CLICKED | BUTTON5_TRIPLE_CLICKED,
+      button5_actions[0] | button5_actions[1] | button5_actions[2] | button5_actions[3] | button5_actions[4],
   };
   // Identify the action independently of its button, using the corresponding bit from every button.
   constexpr std::array<mmask_t, 5> action_masks{
-      BUTTON1_PRESSED | BUTTON2_PRESSED | BUTTON3_PRESSED | BUTTON4_PRESSED | BUTTON5_PRESSED,
-      BUTTON1_RELEASED | BUTTON2_RELEASED | BUTTON3_RELEASED | BUTTON4_RELEASED | BUTTON5_RELEASED,
-      BUTTON1_CLICKED | BUTTON2_CLICKED | BUTTON3_CLICKED | BUTTON4_CLICKED | BUTTON5_CLICKED,
-      BUTTON1_DOUBLE_CLICKED | BUTTON2_DOUBLE_CLICKED | BUTTON3_DOUBLE_CLICKED | BUTTON4_DOUBLE_CLICKED | BUTTON5_DOUBLE_CLICKED,
-      BUTTON1_TRIPLE_CLICKED | BUTTON2_TRIPLE_CLICKED | BUTTON3_TRIPLE_CLICKED | BUTTON4_TRIPLE_CLICKED | BUTTON5_TRIPLE_CLICKED,
+      BUTTON1_PRESSED | BUTTON2_PRESSED | BUTTON3_PRESSED | BUTTON4_PRESSED | button5_actions[0],
+      BUTTON1_RELEASED | BUTTON2_RELEASED | BUTTON3_RELEASED | BUTTON4_RELEASED | button5_actions[1],
+      BUTTON1_CLICKED | BUTTON2_CLICKED | BUTTON3_CLICKED | BUTTON4_CLICKED | button5_actions[2],
+      BUTTON1_DOUBLE_CLICKED | BUTTON2_DOUBLE_CLICKED | BUTTON3_DOUBLE_CLICKED | BUTTON4_DOUBLE_CLICKED | button5_actions[3],
+      BUTTON1_TRIPLE_CLICKED | BUTTON2_TRIPLE_CLICKED | BUTTON3_TRIPLE_CLICKED | BUTTON4_TRIPLE_CLICKED | button5_actions[4],
   };
   constexpr std::array actions{MouseButtonEvent::pressed, MouseButtonEvent::released, MouseButtonEvent::clicked, MouseButtonEvent::double_clicked,
                                MouseButtonEvent::triple_clicked};
@@ -60,14 +69,19 @@ std::optional<MouseEvent> get_mouse_event()
   }
 
   uint8_t modifiers = 0;
+#ifdef BUTTON_SHIFT
   if ((native.bstate & BUTTON_SHIFT) != 0)
     modifiers |= static_cast<uint8_t>(MouseButtonModifier::Shift);
+#endif
   if ((native.bstate & BUTTON_ALT) != 0)
     modifiers |= static_cast<uint8_t>(MouseButtonModifier::Alt);
   if ((native.bstate & BUTTON_CTRL) != 0)
     modifiers |= static_cast<uint8_t>(MouseButtonModifier::Ctrl);
 
   return MouseEvent{Position{static_cast<uint32_t>(native.y), static_cast<uint32_t>(native.x)}, button, *action, static_cast<MouseButtonModifier>(modifiers)};
+#else
+  return std::nullopt;
+#endif
 }
 
 } // namespace ava::tui::terminal

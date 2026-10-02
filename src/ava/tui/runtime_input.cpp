@@ -1,8 +1,9 @@
 #include "sys.h"
 #include "composer_editor.h"
-#include "runtime_input_internal.h"
 #include "encode_wide_character.h"
+#include "runtime_input_internal.h"
 #include "terminal/Context.h"
+#include "terminal/MouseEvent.h"
 #include "ava/core/Application.h"
 
 #include <chrono>
@@ -13,8 +14,6 @@
 #include <deque>
 #include <string_view>
 #include <utility>
-
-#include "terminal/private_convert.h"
 
 namespace ava::tui::runtime_input {
 using Signals = core::Signals;
@@ -248,16 +247,10 @@ RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context
   }
   if (key == Key::Mouse)
   {
-#if 1
-    MEVENT mouse{};
-    if (getmouse(&mouse) != OK)
+    auto mouse_event = terminal::get_mouse_event();
+    if (!mouse_event)
       return unknown_input();
-    return event_input(terminal_ncurses_mouse_event(static_cast<std::uint64_t>(mouse.bstate), static_cast<std::size_t>(mouse.x + 1),
-                                                    static_cast<std::size_t>(mouse.y + 1)));
-#else
-    // Mouse events are not supported at the moment.
-    return unknown_input();
-#endif
+    return event_input(terminal_ncurses_mouse_event(*mouse_event));
   }
 
   return key_input(key);

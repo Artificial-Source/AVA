@@ -1,11 +1,5 @@
 #include "sys.h"
 #include "ava/tui/terminal.h"
-
-#include <curses.h>
-#if !defined(NCURSES_WIDECHAR) || NCURSES_WIDECHAR != 1
-#error "AVA requires ncursesw with wide-character support."
-#endif
-
 #include "ava/tui/theme.h"
 #include "ava/core/error.h"
 
@@ -753,7 +747,8 @@ std::optional<InputEvent> kitty_csi_u_printable_event(std::string_view sequence)
   append_utf8_codepoint(text, codepoint);
   if (text.empty())
     return std::nullopt;
-  return InputEvent{.key = terminal::Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
+  return InputEvent{
+      .key = terminal::Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
 }
 
 std::optional<ModifyOtherKeysSequence> parse_modify_other_keys_sequence(std::string_view sequence)
@@ -894,7 +889,8 @@ std::optional<InputEvent> modify_other_keys_printable_event(std::string_view seq
   append_utf8_codepoint(text, codepoint);
   if (text.empty())
     return std::nullopt;
-  return InputEvent{.key = terminal::Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
+  return InputEvent{
+      .key = terminal::Key::Character, .character = text.size() == 1 ? text.front() : '\0', .text = std::move(text), .mouse_column = 0, .mouse_row = 0};
 }
 
 bool is_modified_enter_csi_u(std::string_view sequence, int expected_modifiers)
@@ -1304,12 +1300,6 @@ int rgb_luminance(TerminalBackgroundColor const& color)
 
 }  // namespace
 
-bool detail::force_terminal_cursor_visible() noexcept
-{
-  static_cast<void>(curs_set(0));
-  return curs_set(1) != ERR;
-}
-
 void erase_last_utf8_codepoint(std::string& text)
 {
   if (text.empty())
@@ -1394,28 +1384,19 @@ bool terminal_background_response_handle(std::string_view sequence)
   return true;
 }
 
-InputEvent terminal_ncurses_mouse_event(std::uint64_t button_state, std::size_t column, std::size_t row)
+// Apply the same pointer-ownership rules as escape-sequence input without depending on native ncurses masks.
+InputEvent terminal_ncurses_mouse_event(terminal::MouseEvent const& mouse_event)
 {
-#ifdef NCURSES_MOUSE_VERSION
-  auto const matches = [button_state](mmask_t mask) { return (static_cast<mmask_t>(button_state) & mask) != 0; };
-#ifdef BUTTON_SHIFT
-  auto const shift = matches(BUTTON_SHIFT);
-#else
-  auto const shift = false;
-#endif
-#ifdef BUTTON5_PRESSED
-  auto const wheel_down = matches(BUTTON5_PRESSED);
-#else
-  auto const wheel_down = false;
-#endif
-  return normalized_left_mouse_event(shift, matches(BUTTON4_PRESSED), wheel_down, matches(BUTTON1_PRESSED), matches(BUTTON1_RELEASED),
-                                     matches(REPORT_MOUSE_POSITION), matches(BUTTON1_CLICKED), column, row);
-#else
-  static_cast<void>(button_state);
-  static_cast<void>(column);
-  static_cast<void>(row);
-  return key_event(terminal::Key::Unknown);
-#endif
+  using terminal::MouseButtonEvent;
+  auto const shift = (static_cast<uint8_t>(mouse_event.modifiers()) & static_cast<uint8_t>(terminal::MouseButtonModifier::Shift)) != 0;
+  auto const pressed = mouse_event.event() == MouseButtonEvent::pressed;
+  auto const left = mouse_event.button() == 1;
+  // Frontend mouse coordinates follow the one-based escape-protocol convention; Position is zero-based.
+  auto const column = static_cast<std::size_t>(mouse_event.position().col()) + 1;
+  auto const row = static_cast<std::size_t>(mouse_event.position().row()) + 1;
+  return normalized_left_mouse_event(shift, mouse_event.button() == 4 && pressed, mouse_event.button() == 5 && pressed, left && pressed,
+                                     left && mouse_event.event() == MouseButtonEvent::released, mouse_event.event() == MouseButtonEvent::moved,
+                                     left && mouse_event.event() == MouseButtonEvent::clicked, column, row);
 }
 
 void terminal_reset_mouse_tracking() noexcept

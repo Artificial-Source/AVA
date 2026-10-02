@@ -24,8 +24,8 @@
 #undef timeout
 
 // Sanity check.
-#if NCURSES_WIDECHAR != 1
-#error "NCURSES_WIDECHAR is expected to be defined to 1."
+#if !defined(NCURSES_WIDECHAR) || NCURSES_WIDECHAR != 1
+#error "NCURSES_WIDECHAR is expected to be defined to 1: AVA requires ncursesw with wide-character support."
 #endif
 
 using Attributes = ava::tui::terminal::Attributes;

@@ -39,6 +39,14 @@
 #endif
 
 namespace {
+
+// Toggle visibility to reassert the physical cursor even when ncurses already considers it visible.
+void force_terminal_cursor_visible() noexcept
+{
+  ava::tui::terminal::BasicWindow::curs_set(0);
+  ava::tui::terminal::BasicWindow::curs_set(1);
+}
+
 void test_tui_terminal_image_support()
 {
   auto const unknown = ava::tui::detect_terminal_image_capabilities(ava::tui::TerminalEnvironment{});
@@ -515,25 +523,34 @@ void run_tui_terminal_input_tests_part_1()
              legacy_post_release_hover.key == ava::tui::terminal::Key::Unknown && legacy_wheel.key == ava::tui::terminal::Key::MouseWheelUp &&
              legacy_wheel.mouse_column == 21 && legacy_wheel.mouse_row == 7,
          "terminal mouse protocols preserve real press-drag-release lifecycles, ignore hover, cancel on Shift, and preserve wheels");
-#ifdef NCURSES_MOUSE_VERSION
   ava::tui::terminal_reset_mouse_tracking();
-  auto const ncurses_hover = ava::tui::terminal_ncurses_mouse_event(REPORT_MOUSE_POSITION, 3, 4);
-  auto const ncurses_press = ava::tui::terminal_ncurses_mouse_event(BUTTON1_PRESSED, 3, 4);
-  auto const ncurses_drag = ava::tui::terminal_ncurses_mouse_event(REPORT_MOUSE_POSITION, 5, 6);
-  auto const ncurses_release = ava::tui::terminal_ncurses_mouse_event(BUTTON1_RELEASED, 5, 6);
-  auto const ncurses_after_release = ava::tui::terminal_ncurses_mouse_event(REPORT_MOUSE_POSITION, 7, 8);
-  auto const ncurses_click = ava::tui::terminal_ncurses_mouse_event(BUTTON1_CLICKED, 9, 10);
-#ifdef BUTTON_SHIFT
-  auto const ncurses_shift_press = ava::tui::terminal_ncurses_mouse_event(BUTTON1_PRESSED | BUTTON_SHIFT, 3, 4);
-  auto const ncurses_shift_ok = ncurses_shift_press.key == ava::tui::terminal::Key::MousePointerCancel;
-#else
-  auto const ncurses_shift_ok = true;
-#endif
+  using ava::tui::terminal::MouseButtonEvent;
+  using ava::tui::terminal::MouseButtonModifier;
+  using ava::tui::terminal::MouseEvent;
+  using ava::tui::terminal::Position;
+  auto const ncurses_hover = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{4, 3}, 0, MouseButtonEvent::moved, MouseButtonModifier::None});
+  auto const ncurses_press = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{4, 3}, 1, MouseButtonEvent::pressed, MouseButtonModifier::None});
+  auto const ncurses_drag = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{6, 5}, 0, MouseButtonEvent::moved, MouseButtonModifier::None});
+  auto const ncurses_release = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{6, 5}, 1, MouseButtonEvent::released, MouseButtonModifier::None});
+  auto const ncurses_after_release = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{8, 7}, 0, MouseButtonEvent::moved, MouseButtonModifier::None});
+  auto const ncurses_click = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{10, 9}, 1, MouseButtonEvent::clicked, MouseButtonModifier::None});
+  auto const ncurses_shift_press = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{4, 3}, 1, MouseButtonEvent::pressed, MouseButtonModifier::Shift});
+  auto const ncurses_wheel_up = ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{12, 11}, 4, MouseButtonEvent::pressed, MouseButtonModifier::None});
+  auto const ncurses_shift_wheel_down =
+      ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{14, 13}, 5, MouseButtonEvent::pressed, MouseButtonModifier::Shift});
+  auto const ncurses_right_press =
+      ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{16, 15}, 3, MouseButtonEvent::pressed, MouseButtonModifier::None});
+  auto const ncurses_double_click =
+      ava::tui::terminal_ncurses_mouse_event(MouseEvent{Position{18, 17}, 1, MouseButtonEvent::double_clicked, MouseButtonModifier::None});
   expect(ncurses_hover.key == ava::tui::terminal::Key::Unknown && ncurses_press.key == ava::tui::terminal::Key::MouseLeftPress &&
              ncurses_drag.key == ava::tui::terminal::Key::MouseLeftDrag && ncurses_release.key == ava::tui::terminal::Key::MouseLeftRelease &&
-             ncurses_after_release.key == ava::tui::terminal::Key::Unknown && ncurses_click.key == ava::tui::terminal::Key::MouseLeftClick && ncurses_shift_ok,
-         "ncurses mouse reports preserve owned left-button lifecycle, click fallback, and Shift pointer cancel");
-#endif
+             ncurses_after_release.key == ava::tui::terminal::Key::Unknown && ncurses_click.key == ava::tui::terminal::Key::MouseLeftClick &&
+             ncurses_shift_press.key == ava::tui::terminal::Key::MousePointerCancel && ncurses_wheel_up.key == ava::tui::terminal::Key::MouseWheelUp &&
+             ncurses_wheel_up.mouse_column == 12 && ncurses_wheel_up.mouse_row == 13 &&
+             ncurses_shift_wheel_down.key == ava::tui::terminal::Key::MouseWheelDown && ncurses_shift_wheel_down.mouse_column == 14 &&
+             ncurses_shift_wheel_down.mouse_row == 15 && ncurses_right_press.key == ava::tui::terminal::Key::Unknown &&
+             ncurses_double_click.key == ava::tui::terminal::Key::Unknown,
+         "ncurses mouse reports preserve owned left-button lifecycle, click fallback, wheels, Shift handling, and unsupported events");
   expect(ava::tui::terminal_escape_sequence_complete("[13;2u") && ava::tui::terminal_escape_sequence_complete("[?25l") &&
              ava::tui::terminal_escape_sequence_complete("[45;5u") && ava::tui::terminal_escape_sequence_complete("[3;3~") &&
              ava::tui::terminal_escape_sequence_complete("[<0;12;9M") && ava::tui::terminal_escape_sequence_complete(legacy_mouse_sequence(0, 12, 9)) &&
@@ -1274,7 +1291,6 @@ struct VirtualTerminalResult
   bool processing_footer_updates_stable = false;
   bool processing_footer_output_is_quiet = false;
   bool processing_footer_output_is_plain = false;
-  bool cursor_forced_visible_for_teardown = false;
   bool checked_builtin_dark_default_screen_bg = false;
   bool builtin_dark_stdscr_background_is_default = false;
 };
@@ -1562,7 +1578,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     result.processing_footer_output_is_plain = true;
     result.processing_footer_updates_stable = exercise_processing_footer(ordinary_footer_snapshot) && exercise_processing_footer(centered_footer_snapshot) &&
                                               exercise_processing_footer(rail_footer_snapshot) && exercise_processing_footer(narrow_footer_snapshot);
-    result.cursor_forced_visible_for_teardown = ava::tui::detail::force_terminal_cursor_visible();
+    force_terminal_cursor_visible();
   }
 
   return result;
@@ -1575,8 +1591,7 @@ void test_ncurses_newterm_smoke_without_real_tty(VirtualTerminalProfile const& p
   expect(result.screen_created, "ncurses smoke test uses the runner-initialized screen without a real terminal for " + profile.name);
   expect(result.base_drawn && result.modal_drawn && result.cursor_restored_after_modal && result.cached_row_draw_preserves_unchanged_lower_row &&
              result.graphic_overlay_cache_stable && result.processing_footer_updates_stable && result.processing_footer_output_is_quiet &&
-             result.processing_footer_output_is_plain && result.cursor_forced_visible_for_teardown &&
-             (!result.checked_builtin_dark_default_screen_bg || result.builtin_dark_stdscr_background_is_default),
+             result.processing_footer_output_is_plain && (!result.checked_builtin_dark_default_screen_bg || result.builtin_dark_stdscr_background_is_default),
          "ncurses smoke test draws base/modal frames, preserves unchanged rows, suppresses identical graphic payloads while retransmitting changes and "
          "invalidations and deleting removed Kitty images, updates processing footers without terminal clears, cursor toggles, graphics, or NO_COLOR bold "
          "styling, restores the cursor, and preserves the terminal-default background for " +

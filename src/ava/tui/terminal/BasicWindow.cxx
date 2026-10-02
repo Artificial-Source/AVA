@@ -1749,6 +1749,7 @@ void BasicWindow::inwstr(Position pos, wchar_t* str, int n) const
   ASSERT(res != ERR);
 }
 
+//static
 void BasicWindow::curs_set(int visibility)
 {
   [[maybe_unused]] int res = Handle::curs_set(visibility);

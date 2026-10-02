@@ -38,7 +38,7 @@ class MouseEvent
   MouseButtonModifier modifiers_;       // Modifier keys that were pressed.
 
  public:
-  // Construct an event from screen position, button number, device id, event type, and modifier mask.
+  // Construct an event from screen position, button number, event type, and modifier mask.
   MouseEvent(Position position, uint16_t button, MouseButtonEvent event, MouseButtonModifier modifiers)
       : position_(position), button_(button), event_(event), modifiers_(modifiers)
   {
@@ -58,6 +58,7 @@ class MouseEvent
 // Call on the terminal input thread after receiving Key::Mouse with mouse reporting enabled.
 // Returns nullopt when getmouse fails, coordinates are negative, or the report cannot represent a single action.
 // Modifier values are bitwise combined; motion without a button action is returned as moved with button zero.
+// Without ncurses mouse support this always returns nullopt; unavailable Shift or button-five support is not decoded.
 [[nodiscard]] std::optional<MouseEvent> get_mouse_event();
 
 } // namespace ava::tui::terminal
