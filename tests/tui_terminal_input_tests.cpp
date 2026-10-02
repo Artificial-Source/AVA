@@ -24,6 +24,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1278,6 +1279,41 @@ struct VirtualTerminalResult
   bool builtin_dark_stdscr_background_is_default = false;
 };
 
+// Describe one case's terminal capabilities so preparation and rendering use the same profile.
+std::optional<VirtualTerminalProfile> virtual_terminal_profile(std::string_view test_case)
+{
+  if (test_case == "baseline")
+    return VirtualTerminalProfile{.name = "xterm baseline", .term = "xterm-256color"};
+  if (test_case == "no_color")
+    return VirtualTerminalProfile{.name = "xterm NO_COLOR", .term = "xterm-256color", .no_color = true};
+  if (test_case == "screen")
+    return VirtualTerminalProfile{.name = "screen/tmux terminfo", .term = "screen-256color"};
+  if (test_case == "tmux")
+  {
+    return VirtualTerminalProfile{.name = "tmux-like environment",
+                                  .term = "xterm-256color",
+                                  .term_program = "tmux",
+                                  .colorterm = "truecolor",
+                                  .tmux = "/tmp/tmux-1000/default,123,0",
+                                  .tmux_pane = "%1"};
+  }
+  if (test_case == "kitty")
+  {
+    return VirtualTerminalProfile{
+        .name = "kitty-like environment", .term = "xterm-256color", .term_program = "kitty", .colorterm = "truecolor", .kitty_window_id = "1"};
+  }
+  if (test_case == "wezterm")
+  {
+    return VirtualTerminalProfile{.name = "wezterm over ssh-like environment",
+                                  .term = "xterm-256color",
+                                  .term_program = "WezTerm",
+                                  .colorterm = "truecolor",
+                                  .ssh_tty = "/dev/pts/99",
+                                  .wezterm_exec = "/usr/bin/wezterm"};
+  }
+  return std::nullopt;
+}
+
 std::optional<std::string> ncurses_screen_row(std::size_t row)
 {
   if (row >= static_cast<std::size_t>(LINES > 0 ? LINES : 0))
@@ -1294,34 +1330,16 @@ std::optional<std::string> ncurses_screen_row(std::size_t row)
   return text;
 }
 
+// Exercise rendering on the one ncurses screen initialized by the test runner for `profile`.
+// Reads the runner's output stream to check that cached frame updates do not emit unexpected controls.
 VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile const& profile)
 {
-  ScopedEnvVar term_guard("TERM", profile.term);
-  ScopedEnvVar term_program_guard("TERM_PROGRAM", profile.term_program);
-  ScopedEnvVar colorterm_guard("COLORTERM", profile.colorterm);
-  ScopedEnvVar tmux_guard("TMUX", profile.tmux);
-  ScopedEnvVar tmux_pane_guard("TMUX_PANE", profile.tmux_pane);
-  ScopedEnvVar ssh_tty_guard("SSH_TTY", profile.ssh_tty);
-  ScopedEnvVar kitty_window_guard("KITTY_WINDOW_ID", profile.kitty_window_id);
-  ScopedEnvVar wezterm_exec_guard("WEZTERM_EXECUTABLE", profile.wezterm_exec);
-  ScopedEnvVar no_color_guard("NO_COLOR", profile.no_color ? "1" : "");
-
   VirtualTerminalResult result;
-//  ScopedTmpFile input;
-//  ScopedTmpFile output;
-
-//  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-//  result.screen_created = screen != nullptr;
-//  if (screen)
+  ava::tui::terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
+  FILE* output = terminal_context.output_stream();
+  result.screen_created = stdscr != nullptr;
+  if (result.screen_created)
   {
-//    static_cast<void>(set_term(screen));
-//    tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-    // Match production color setup before drawing so default-background pairs resolve.
-//    if (has_colors())
-//    {
-//      static_cast<void>(start_color());
-//      static_cast<void>(use_default_colors());
-//    }
     int rows = 0;
     int columns = 0;
     getmaxyx(stdscr, rows, columns);
@@ -1343,7 +1361,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     auto const canvas = ava::tui::composer_canvas_layout(snapshot);
     auto const expected_column = canvas.left + ava::tui::detail::input_cursor_column(snapshot, canvas.content_width);
     result.base_drawn = ava::tui::draw_screen(snapshot);
-    // initialize_color_pairs caches statically across SCREENs; assert default screen bg once on the dark baseline.
+    // Check the terminal-default background on the isolated dark baseline screen.
     if (!profile.no_color && profile.name == "xterm baseline" && has_colors())
     {
       result.checked_builtin_dark_default_screen_bg = true;
@@ -1438,23 +1456,23 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
       ava::tui::detail::TranscriptLayoutCache transcript_cache;
       ava::tui::detail::ScreenRowCache screen_cache;
       auto draw_and_capture = [&]() -> std::optional<std::string> {
-        if (std::fflush(output.get()) != 0 || std::fseek(output.get(), 0, SEEK_END) != 0)
+        if (std::fflush(output) != 0 || std::fseek(output, 0, SEEK_END) != 0)
           return std::nullopt;
-        auto const before = std::ftell(output.get());
+        auto const before = std::ftell(output);
         if (before < 0 ||
             !ava::tui::detail::draw_screen_cached(graphic_snapshot, completion_cache, graphic_snapshot.file_references_generation, transcript_cache,
                                                   graphic_snapshot.transcript_generation, screen_cache) ||
-            std::fflush(output.get()) != 0)
+            std::fflush(output) != 0)
         {
           return std::nullopt;
         }
-        auto const after = std::ftell(output.get());
-        if (after < before || std::fseek(output.get(), before, SEEK_SET) != 0)
+        auto const after = std::ftell(output);
+        if (after < before || std::fseek(output, before, SEEK_SET) != 0)
           return std::nullopt;
         std::string captured(static_cast<std::size_t>(after - before), '\0');
-        if (!captured.empty() && std::fread(captured.data(), 1, captured.size(), output.get()) != captured.size())
+        if (!captured.empty() && std::fread(captured.data(), 1, captured.size(), output) != captured.size())
           return std::nullopt;
-        if (std::fseek(output.get(), 0, SEEK_END) != 0)
+        if (std::fseek(output, 0, SEEK_END) != 0)
           return std::nullopt;
         return captured;
       };
@@ -1488,8 +1506,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
                                                               .image_id = 31337}}};
       if (!ava::tui::draw_screen(footer_snapshot))
         return false;
-      static_cast<void>(std::fflush(output.get()));
-      auto const output_before_footer = std::ftell(output.get());
+      static_cast<void>(std::fflush(output));
+      auto const output_before_footer = std::ftell(output);
       auto const footer_canvas = ava::tui::composer_canvas_layout(footer_snapshot);
       auto const expected_footer_column = footer_canvas.left + ava::tui::detail::input_cursor_column(footer_snapshot, footer_canvas.content_width);
       ava::tui::detail::CompletionMatchCache completion_cache;
@@ -1511,15 +1529,15 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
           return false;
         }
       }
-      static_cast<void>(std::fflush(output.get()));
-      auto const output_after_footer = std::ftell(output.get());
+      static_cast<void>(std::fflush(output));
+      auto const output_after_footer = std::ftell(output);
       std::string footer_output;
       bool footer_output_read = false;
-      if (output_before_footer >= 0 && output_after_footer >= output_before_footer && std::fseek(output.get(), output_before_footer, SEEK_SET) == 0)
+      if (output_before_footer >= 0 && output_after_footer >= output_before_footer && std::fseek(output, output_before_footer, SEEK_SET) == 0)
       {
         footer_output.resize(static_cast<std::size_t>(output_after_footer - output_before_footer));
-        footer_output_read = std::fread(footer_output.data(), 1, footer_output.size(), output.get()) == footer_output.size();
-        static_cast<void>(std::fseek(output.get(), 0, SEEK_END));
+        footer_output_read = std::fread(footer_output.data(), 1, footer_output.size(), output) == footer_output.size();
+        static_cast<void>(std::fseek(output, 0, SEEK_END));
       }
       auto const footer_output_is_quiet = footer_output_read && footer_output.find("\x1b[?25l") == std::string::npos &&
                                           footer_output.find("\x1b[?25h") == std::string::npos && footer_output.find("\x1b[2J") == std::string::npos &&
@@ -1545,69 +1563,58 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     result.processing_footer_updates_stable = exercise_processing_footer(ordinary_footer_snapshot) && exercise_processing_footer(centered_footer_snapshot) &&
                                               exercise_processing_footer(rail_footer_snapshot) && exercise_processing_footer(narrow_footer_snapshot);
     result.cursor_forced_visible_for_teardown = ava::tui::detail::force_terminal_cursor_visible();
-//    static_cast<void>(endwin());
-//    delscreen(screen);
   }
 
   return result;
 }
 
-void test_ncurses_newterm_smoke_without_real_tty()
+// Assert one virtual rendering profile's output without acquiring another ncurses screen.
+void test_ncurses_newterm_smoke_without_real_tty(VirtualTerminalProfile const& profile)
 {
-  char const* previous_locale_value = std::setlocale(LC_ALL, nullptr);
-  std::string const previous_locale = previous_locale_value == nullptr ? "C" : previous_locale_value;
-  static_cast<void>(std::setlocale(LC_ALL, ""));
-
-  std::vector<VirtualTerminalProfile> const profiles = {
-      {.name = "xterm baseline", .term = "xterm-256color"},
-      {.name = "xterm NO_COLOR", .term = "xterm-256color", .no_color = true},
-      {.name = "screen/tmux terminfo", .term = "screen-256color"},
-      {.name = "tmux-like environment",
-       .term = "xterm-256color",
-       .term_program = "tmux",
-       .colorterm = "truecolor",
-       .tmux = "/tmp/tmux-1000/default,123,0",
-       .tmux_pane = "%1"},
-      {.name = "kitty-like environment", .term = "xterm-256color", .term_program = "kitty", .colorterm = "truecolor", .kitty_window_id = "1"},
-      {.name = "wezterm over ssh-like environment",
-       .term = "xterm-256color",
-       .term_program = "WezTerm",
-       .colorterm = "truecolor",
-       .ssh_tty = "/dev/pts/99",
-       .wezterm_exec = "/usr/bin/wezterm"}};
-
-  std::size_t exercised = 0;
-  bool checked_default_screen_bg = false;
-  for (auto const& profile : profiles)
+  auto const result = exercise_virtual_terminal_profile(profile);
+  expect(result.screen_created, "ncurses smoke test uses the runner-initialized screen without a real terminal for " + profile.name);
+  expect(result.base_drawn && result.modal_drawn && result.cursor_restored_after_modal && result.cached_row_draw_preserves_unchanged_lower_row &&
+             result.graphic_overlay_cache_stable && result.processing_footer_updates_stable && result.processing_footer_output_is_quiet &&
+             result.processing_footer_output_is_plain && result.cursor_forced_visible_for_teardown &&
+             (!result.checked_builtin_dark_default_screen_bg || result.builtin_dark_stdscr_background_is_default),
+         "ncurses smoke test draws base/modal frames, preserves unchanged rows, suppresses identical graphic payloads while retransmitting changes and "
+         "invalidations and deleting removed Kitty images, updates processing footers without terminal clears, cursor toggles, graphics, or NO_COLOR bold "
+         "styling, restores the cursor, and preserves the terminal-default background for " +
+             profile.name);
+  if (profile.name == "xterm baseline")
   {
-    auto const result = exercise_virtual_terminal_profile(profile);
-    if (result.screen_created)
-      ++exercised;
-    expect(result.screen_created, "ncurses smoke test creates a screen without a real terminal for " + profile.name);
-    expect(result.base_drawn && result.modal_drawn && result.cursor_restored_after_modal && result.cached_row_draw_preserves_unchanged_lower_row &&
-               result.graphic_overlay_cache_stable && result.processing_footer_updates_stable && result.processing_footer_output_is_quiet &&
-               result.processing_footer_output_is_plain && result.cursor_forced_visible_for_teardown &&
-               (!result.checked_builtin_dark_default_screen_bg || result.builtin_dark_stdscr_background_is_default),
-           "ncurses smoke test draws base/modal frames, preserves unchanged rows, suppresses identical graphic payloads while retransmitting changes and "
-           "invalidations and deleting removed Kitty images, updates processing footers without terminal clears, cursor toggles, graphics, or NO_COLOR bold "
-           "styling, forces the cursor visible for teardown, and keeps the built-in dark stdscr background pair at terminal default (-1) for " +
-               profile.name);
-    if (result.checked_builtin_dark_default_screen_bg)
-      checked_default_screen_bg = true;
+    expect(result.checked_builtin_dark_default_screen_bg && result.builtin_dark_stdscr_background_is_default,
+           "ncurses smoke test verifies built-in dark stdscr background uses terminal default color on the baseline profile");
   }
-  expect(checked_default_screen_bg,
-         "ncurses smoke test verifies built-in dark stdscr background uses terminal default color on one supported baseline profile");
-  expect(exercised == profiles.size(),
-         "ncurses smoke test covers xterm and screen terminfo plus tmux, kitty, wezterm, and ssh-like environment "
-         "variables");
-  static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
 }
 
 }  // namespace
 
-void run_tui_terminal_virtual_smoke_tests()
+// Configure one virtual terminal profile before the runner initializes the Application-owned Context.
+void prepare_tui_terminal_virtual_smoke_test_case(std::string_view test_case, FILE*, FILE*)
 {
-  test_ncurses_newterm_smoke_without_real_tty();
+  auto const profile = virtual_terminal_profile(test_case);
+  if (!profile)
+    throw std::invalid_argument("unknown virtual terminal profile: " + std::string(test_case));
+
+  static_cast<void>(setenv("TERM", profile->term.c_str(), 1));
+  static_cast<void>(setenv("TERM_PROGRAM", profile->term_program.c_str(), 1));
+  static_cast<void>(setenv("COLORTERM", profile->colorterm.c_str(), 1));
+  static_cast<void>(setenv("TMUX", profile->tmux.c_str(), 1));
+  static_cast<void>(setenv("TMUX_PANE", profile->tmux_pane.c_str(), 1));
+  static_cast<void>(setenv("SSH_TTY", profile->ssh_tty.c_str(), 1));
+  static_cast<void>(setenv("KITTY_WINDOW_ID", profile->kitty_window_id.c_str(), 1));
+  static_cast<void>(setenv("WEZTERM_EXECUTABLE", profile->wezterm_exec.c_str(), 1));
+  static_cast<void>(setenv("NO_COLOR", profile->no_color ? "1" : "", 1));
+}
+
+// Run exactly one rendering profile against the runner-initialized Application terminal Context.
+void run_tui_terminal_virtual_smoke_test_case(std::string_view test_case)
+{
+  auto const profile = virtual_terminal_profile(test_case);
+  expect(profile.has_value(), "unknown TUI terminal virtual smoke test case: " + std::string(test_case));
+  if (profile)
+    test_ncurses_newterm_smoke_without_real_tty(*profile);
 }
 
 namespace {
@@ -2250,91 +2257,27 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   ava::tui::runtime_input::clear_startup_input_queue();
 }
 
-#if 0
-// Deterministic openpty/newterm regression for direct terminfo where kmous=ESC[<.
-// Virtual unget_wch tests cannot reproduce ncurses KEY_MOUSE matching + getmouse.
-void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
+// Direct-PTY regression for terminfo where kmous=ESC[<. Virtual unget_wch tests
+// cannot reproduce ncurses KEY_MOUSE matching + getmouse.
+void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak(int master_fd)
 {
 #ifdef NCURSES_MOUSE_VERSION
-  char const* previous_locale_value = std::setlocale(LC_ALL, nullptr);
-  std::string const previous_locale = previous_locale_value == nullptr ? "C" : previous_locale_value;
-  static_cast<void>(std::setlocale(LC_ALL, ""));
-
-  // Prefer Ghostty terminfo when present; otherwise the confirmed xterm-256color kmous=ESC[< path.
-  char const* term_name = "xterm-256color";
-  if (::access("/usr/share/terminfo/x/xterm-ghostty", R_OK) == 0)
-    term_name = "xterm-ghostty";
-
-  ScopedEnvVar term_guard("TERM", term_name);
-  ScopedEnvVar tmux_guard("TMUX", "");
-  ScopedEnvVar term_program_guard("TERM_PROGRAM", "");
-
   ava::tui::terminal_reset_mouse_tracking();
   ava::tui::runtime_input::clear_startup_input_queue();
 
-  int master_fd = ::posix_openpt(O_RDWR | O_NOCTTY);
-  expect(master_fd >= 0, "direct-terminal mouse PTY can open a master");
+  expect(master_fd >= 0, "direct-terminal mouse test receives the runner-owned PTY master");
   if (master_fd < 0)
-  {
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
     return;
-  }
-  if (::grantpt(master_fd) != 0 || ::unlockpt(master_fd) != 0)
-  {
-    expect(false, "direct-terminal mouse PTY can grant/unlock the slave");
-    static_cast<void>(::close(master_fd));
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
-    return;
-  }
-  char* slave_name = ::ptsname(master_fd);
-  expect(slave_name != nullptr, "direct-terminal mouse PTY exposes a slave name");
-  if (slave_name == nullptr)
-  {
-    static_cast<void>(::close(master_fd));
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
-    return;
-  }
-  int slave_fd = ::open(slave_name, O_RDWR | O_NOCTTY);
-  expect(slave_fd >= 0, "direct-terminal mouse PTY can open the slave");
-  if (slave_fd < 0)
-  {
-    static_cast<void>(::close(master_fd));
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
-    return;
-  }
-
-  winsize size{};
-  size.ws_row = 24;
-  size.ws_col = 80;
-  static_cast<void>(::ioctl(slave_fd, TIOCSWINSZ, &size));
-
-  int output_fd = ::dup(slave_fd);
-  FILE* input = ::fdopen(slave_fd, "r+");
-  FILE* output = output_fd >= 0 ? ::fdopen(output_fd, "w") : nullptr;
-  expect(input != nullptr && output != nullptr, "direct-terminal mouse PTY can fdopen slave streams");
-  if (!input || !output)
-  {
-    if (input)
-      static_cast<void>(std::fclose(input));
-    else
-      static_cast<void>(::close(slave_fd));
-    if (output)
-      static_cast<void>(std::fclose(output));
-    else if (output_fd >= 0)
-      static_cast<void>(::close(output_fd));
-    static_cast<void>(::close(master_fd));
-    static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
-    return;
-  }
 
   {
-    ava::tui::terminal::Context terminal_context(output, input);
-    static_cast<void>(keypad(stdscr, TRUE));
-    static_cast<void>(wtimeout(stdscr, 100));
+    ava::tui::terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
+    [[maybe_unused]] auto scoped_timeout = (terminal_context.timeout)(std::chrono::milliseconds(100));
 
     char const* kmous = tigetstr("kmous");
     bool const kmous_is_sgr_prefix = kmous != nullptr && kmous != reinterpret_cast<char*>(-1) && std::string_view(kmous) == "\x1b[<";
-    expect(kmous_is_sgr_prefix, std::string("direct-terminal mouse regression requires kmous=ESC[< under TERM=") + term_name);
+    char const* term_name = std::getenv("TERM");
+    expect(kmous_is_sgr_prefix,
+           std::string("direct-terminal mouse regression requires kmous=ESC[< under TERM=") + (term_name == nullptr ? "<unset>" : term_name));
 
     expect(has_mouse(), "terminal Context mouse mode initializes the ncurses mouse driver");
 
@@ -2396,17 +2339,13 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak()
            "raw SGR mouse parser (tmux/multiplexer path) still classifies press/drag/release/wheel/shift");
   }
 
-  static_cast<void>(std::fclose(input));
-  static_cast<void>(std::fclose(output));
-  static_cast<void>(::close(master_fd));
   ava::tui::runtime_input::clear_startup_input_queue();
   ava::tui::terminal_reset_mouse_tracking();
-  static_cast<void>(std::setlocale(LC_ALL, previous_locale.c_str()));
 #else
+  static_cast<void>(master_fd);
   expect(true, "ncurses mouse support unavailable; direct-terminal mouse PTY regression skipped");
 #endif
 }
-#endif
 
 }  // namespace
 
@@ -2427,5 +2366,10 @@ void run_tui_terminal_osc11_theme_tests()
 void run_tui_terminal_lifecycle_protocol_tests()
 {
   test_same_size_geometry_refresh_does_not_inject_key_resize();
-  //  test_direct_terminal_ncurses_mouse_sgr_no_composer_leak();
+}
+
+// Exercise the mouse regression using the runner-owned PTY master and the initialized Application Context.
+void run_tui_terminal_mouse_sgr_tests(int master_fd)
+{
+  test_direct_terminal_ncurses_mouse_sgr_no_composer_leak(master_fd);
 }

@@ -88,6 +88,7 @@ void run_terminal_horizontal_layout_tests();
 void run_terminal_paragraph_tests();
 void run_terminal_window_tests();
 void run_tui_terminal_lifecycle_protocol_tests();
+void run_tui_terminal_mouse_sgr_tests(int master_fd);
 void prepare_terminal_horizontal_layout_tests(FILE*, FILE*);
 void prepare_terminal_paragraph_tests(FILE*, FILE*);
 void prepare_terminal_window_tests(FILE*, FILE*);
@@ -98,6 +99,8 @@ void run_terminal_mouse_input_mode_test_case(std::string_view);
 void verify_terminal_mouse_input_mode_test_case(std::string_view, FILE* output);
 void prepare_terminal_color_test_case(std::string_view, FILE*, FILE*);
 void run_terminal_color_test_case(std::string_view);
+void prepare_tui_terminal_virtual_smoke_test_case(std::string_view, FILE*, FILE*);
+void run_tui_terminal_virtual_smoke_test_case(std::string_view);
 void run_run_observer_tests();
 void run_runtime_diagnostics_tests();
 void run_containment_tests();
@@ -111,6 +114,7 @@ struct TestSuite
 {
   std::string_view name;
   void (*run)();
+  void (*run_with_pty)(int master_fd) = nullptr;
 };
 
 constexpr std::array kTestSuites{
@@ -175,6 +179,7 @@ constexpr std::array kTestSuites{
     TestSuite{"terminal_paragraph", run_terminal_paragraph_tests},
     TestSuite{"terminal_window", run_terminal_window_tests},
     TestSuite{"tui_terminal_geometry", run_tui_terminal_lifecycle_protocol_tests},
+    TestSuite{"tui_terminal_mouse_sgr", nullptr, run_tui_terminal_mouse_sgr_tests},
     TestSuite{"run_observer", run_run_observer_tests},
     TestSuite{"runtime_diagnostics", run_runtime_diagnostics_tests},
     TestSuite{"containment", run_containment_tests},
@@ -202,6 +207,7 @@ constexpr std::array<std::string_view, 12> kKeyboardCases{
 };
 constexpr std::array<std::string_view, 2> kMouseCases{"context_lifecycle", "handoff_lifecycle"};
 constexpr std::array<std::string_view, 5> kColorCases{"srgb_round_trip", "osc4_protocol", "mutable_palette", "xterm_indexed", "portable_pairs"};
+constexpr std::array<std::string_view, 6> kVirtualTerminalCases{"baseline", "no_color", "screen", "tmux", "kitty", "wezterm"};
 
 constexpr std::array kIsolatedTerminalSuites{
     IsolatedTerminalSuite{"terminal_keyboard_input_mode", kKeyboardCases, prepare_terminal_keyboard_input_mode_test_case,
@@ -209,6 +215,8 @@ constexpr std::array kIsolatedTerminalSuites{
     IsolatedTerminalSuite{"terminal_mouse_input_mode", kMouseCases, prepare_terminal_mouse_input_mode_test_case, run_terminal_mouse_input_mode_test_case,
                           verify_terminal_mouse_input_mode_test_case},
     IsolatedTerminalSuite{"terminal_color", kColorCases, prepare_terminal_color_test_case, run_terminal_color_test_case, nullptr},
+    IsolatedTerminalSuite{"tui_terminal_virtual_smoke", kVirtualTerminalCases, prepare_tui_terminal_virtual_smoke_test_case,
+                          run_tui_terminal_virtual_smoke_test_case, nullptr},
 };
 
 // Own the test executable's Application lifecycle and install its per-suite
@@ -333,15 +341,19 @@ bool has_terminal_case(IsolatedTerminalSuite const& suite, std::string_view test
 bool is_direct_terminal_suite(std::string_view name)
 {
   return name == "tui_composer" || name == "terminal_horizontal_layout" || name == "terminal_paragraph" || name == "terminal_window" ||
-         name == "tui_terminal_geometry";
+         name == "tui_terminal_geometry" || name == "tui_terminal_mouse_sgr";
 }
 
-void run_suite(TestSuite const& suite)
+// Run a registered suite, passing the fixture's master descriptor only to PTY-backed tests that request it.
+void run_suite(TestSuite const& suite, int master_fd = -1)
 {
   ava::tests::clear_skip();
   try
   {
-    suite.run();
+    if (suite.run_with_pty)
+      suite.run_with_pty(master_fd);
+    else
+      suite.run();
   }
   catch (std::exception const& ex)
   {
@@ -390,7 +402,7 @@ struct OwnedTestFixtureGuard
     terminal_output.emplace();
   }
 
-  // Create process-lifetime PTY streams for the geometry case before the Application initializes ncurses.
+  // Create process-lifetime PTY streams before the Application initializes ncurses.
   void prepare_terminal_pty_streams()
   {
     saved_stdout = ::dup(STDOUT_FILENO);
@@ -419,6 +431,9 @@ struct OwnedTestFixtureGuard
 
   // Return the prepared process terminal output stream.
   FILE* output() { return pty_output != nullptr ? pty_output : terminal_output->get(); }
+
+  // Return the owned PTY master used to inject test input into the Application's terminal.
+  int master() const { return master_fd; }
 
   // Release PTY resources only after the Application and its Context have been destroyed.
   ~OwnedTestFixtureGuard() noexcept
@@ -449,9 +464,18 @@ struct OwnedTestFixtureGuard
 // Configure one ordinary terminal suite before Context initialization.
 void prepare_direct_terminal_suite(std::string_view suite_name, OwnedTestFixtureGuard& fixtures)
 {
-  if (suite_name == "tui_terminal_geometry")
+  if (suite_name == "tui_terminal_geometry" || suite_name == "tui_terminal_mouse_sgr")
   {
-    static_cast<void>(setenv("TERM", "xterm-256color", 1));
+    // Match the mouse regression's original Ghostty preference before Context caches terminfo at startup.
+    char const* term = "xterm-256color";
+    if (suite_name == "tui_terminal_mouse_sgr" && ::access("/usr/share/terminfo/x/xterm-ghostty", R_OK) == 0)
+      term = "xterm-ghostty";
+    static_cast<void>(setenv("TERM", term, 1));
+    if (suite_name == "tui_terminal_mouse_sgr")
+    {
+      static_cast<void>(setenv("TMUX", "", 1));
+      static_cast<void>(setenv("TERM_PROGRAM", "", 1));
+    }
     fixtures.prepare_terminal_pty_streams();
   }
   else
@@ -616,7 +640,7 @@ int main(int argc, char** argv)
     else if (argc == 2)
     {
       if (ordinary_suite != nullptr)
-        run_suite(*ordinary_suite);
+        run_suite(*ordinary_suite, owned_fixtures.master());
       else
         run_isolated_terminal_suite(*isolated_suite);
     }

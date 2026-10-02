@@ -14,6 +14,8 @@
 #include <string_view>
 #include <utility>
 
+#include "terminal/private_convert.h"
+
 namespace ava::tui::runtime_input {
 using Signals = core::Signals;
 using Key = terminal::Key;
@@ -246,7 +248,7 @@ RuntimeInput read_curses_input_from_terminal(terminal::Context& terminal_context
   }
   if (key == Key::Mouse)
   {
-#if 0
+#if 1
     MEVENT mouse{};
     if (getmouse(&mouse) != OK)
       return unknown_input();
