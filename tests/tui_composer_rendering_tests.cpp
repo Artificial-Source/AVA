@@ -23,6 +23,7 @@
 #include "ava/tui/terminal.h"
 #include "ava/tui/terminal_image.h"
 #include "ava/tui/theme.h"
+#include "ava/core/Application.h"
 #include "ava/core/thread.h"
 
 #include <algorithm>
@@ -46,23 +47,9 @@
 
 namespace {
 
-#if 0
 bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(20, 180));
 
   ava::tui::TuiRuntimeOptions options;
@@ -127,27 +114,12 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
                                 renderer.transcript_layout_cache.layout_build_count == full_layout_builds + 1 &&
                                 !renderer.has_deferred_detached_transcript_update();
 
-  static_cast<void>(endwin());
-  delscreen(screen);
   return direct_refresh_passed && scheduled_render_passed && full_sync_passed;
 }
 
 bool test_changed_session_snapshot_resets_presentation()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(18, 96));
 
   std::size_t job_list_calls = 0;
@@ -274,27 +246,12 @@ bool test_changed_session_snapshot_resets_presentation()
 
   auto const jobs_still_available = subagent_workspace.open_selector() && subagent_workspace.active() && job_list_calls == 1;
 
-  static_cast<void>(endwin());
-  delscreen(screen);
   return changed_state_ok && unchanged_state_ok && jobs_still_available;
 }
 
 bool test_active_run_session_transition_discards_prior_session_events()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(18, 96));
 
   bool finish_called = false;
@@ -405,27 +362,12 @@ bool test_active_run_session_transition_discards_prior_session_events()
                       presentation.snapshot.context_source_count == std::optional<std::size_t>{7} &&
                       presentation.sidebar.context_source_count == std::optional<std::size_t>{7} && draft_state.input_history.empty() && !history_restored;
 
-  static_cast<void>(endwin());
-  delscreen(screen);
   return passed;
 }
 
 bool test_atomic_search_input_prompt_precedence()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(12, 80));
 
   ava::tui::TuiRuntimeOptions options;
@@ -529,27 +471,12 @@ bool test_atomic_search_input_prompt_precedence()
       coordinator.fail_pending_requests();
   }
 
-  static_cast<void>(endwin());
-  delscreen(screen);
   return passed;
 }
 
 bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(24, 80));
 
   ava::tui::TuiRuntimeOptions options;
@@ -693,27 +620,12 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
                       ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::MessageNext, ava::tui::terminal::Key::AltJ) &&
                       ava::tui::key_matches_action(options.key_bindings, ava::tui::TuiAction::JumpToBottom, ava::tui::terminal::Key::CtrlEnd);
 
-  static_cast<void>(endwin());
-  delscreen(screen);
   return passed;
 }
 
 bool test_detached_completion_publish_preserves_numbered_window()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(32, 120));
 
   auto numbered_window = [](std::vector<std::string> const& surfaces) {
@@ -766,11 +678,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
   ava::tui::RuntimeRenderer renderer(presentation.snapshot, presentation.sidebar, draft_state);
 
   if (!renderer.render())
-  {
-    static_cast<void>(endwin());
-    delscreen(screen);
     return false;
-  }
 
   auto const [width, height] = ava::tui::terminal_size();
   presentation.snapshot.width = width;
@@ -779,23 +687,14 @@ bool test_detached_completion_publish_preserves_numbered_window()
       presentation.snapshot, width, height, renderer.completion_cache, presentation.snapshot.file_references_generation, renderer.transcript_layout_cache,
       presentation.snapshot.transcript_generation);
   if (max_scroll == 0)
-  {
-    static_cast<void>(endwin());
-    delscreen(screen);
     return false;
-  }
-
   // Detach while the active-run contextual row is already reserved (processing=true, count=0).
   renderer.transcript_scroll_offset = std::min<std::size_t>(3, max_scroll);
   renderer.detached_sidebar_snapshot = presentation.sidebar;
   presentation.snapshot.transcript_scroll_offset = renderer.transcript_scroll_offset;
   presentation.snapshot.transcript_new_output_count = 0;
   if (!renderer.render())
-  {
-    static_cast<void>(endwin());
-    delscreen(screen);
     return false;
-  }
 
   auto const detached_scroll = renderer.transcript_scroll_offset;
   auto const detached_max_scroll = ava::tui::detail::composer_max_transcript_scroll_offset_cached(
@@ -826,27 +725,12 @@ bool test_detached_completion_publish_preserves_numbered_window()
                       presentation.snapshot.transcript_scroll_offset == renderer.transcript_scroll_offset && renderer.transcript_scroll_offset > 0 &&
                       draft_state.draft.text == draft_before && presentation.snapshot.input == draft_before && !presentation.snapshot.processing;
 
-  static_cast<void>(endwin());
-  delscreen(screen);
   return passed;
 }
 
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(24, 80));
 
   auto exercise = [](std::vector<ava::tui::TranscriptItem> transcript, std::string_view session_id) {
@@ -895,60 +779,18 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
       exercise({ava::tui::TranscriptItem{.label = "you", .text = "short alpha"}, ava::tui::TranscriptItem{.label = "ava", .text = "short beta"}},
                "message-boundary-fitting");
 
-  static_cast<void>(endwin());
-  delscreen(screen);
   return empty_ok && fitting_ok;
 }
-#endif
 
 }  // namespace
-
-#if 0
-void run_tui_prompt_search_race_tests()
-{
-  expect(
-      test_changed_session_snapshot_resets_presentation(),
-      "an authoritative changed-session snapshot clears old transcript/tool rows, advances generation, resets queued/sidebar/draft/selection/search/scroll and "
-      "frozen presentation state through their owners, applies the new session/model/reasoning/todos, preserves application-scoped jobs, and leaves an "
-      "unchanged-session transcript intact");
-  expect(
-      test_active_run_session_transition_discards_prior_session_events(),
-      "an active-run authoritative session transition discards old submitted/event/tool/queue/finish/sidebar/todo state, resets event receipt suppression and "
-      "history, and presents only the new-session receipt and hydrated state");
-  expect(test_transcript_search_controller_tail_refresh_avoids_full_layout(),
-         "an open 1,000-item transcript search over a roomy 180x20 idle-sidebar layout keeps the captured 141-column transcript geometry while its modal "
-         "uses the 120-column canvas, then a shift-zero tail refresh directly renders and updates exactly one authoritative item/projection/match/modal row "
-         "without rebuilding the renderer layout or synchronizing its deferred viewport; a forced full scheduled render still freezes that underlying layout, "
-         "retains the +1 direct work, and leaves the deferred viewport pending; a later explicit full synchronization projects only the search modal, "
-         "rebuilds the same 141-column underlying layout once, restores the modal, and consumes the deferred viewport");
-  expect(test_atomic_search_input_prompt_precedence(),
-         "actual prompt-coordinator locking linearizes retained search input before provider enqueue, then lets the queued prompt discard stale input and run "
-         "before-prompt ahead of nested resolution across 50 synchronized repetitions");
-  // After virtual-terminal smoke: full RuntimeRenderer::render initializes the static color-pair cache.
-  expect(test_detached_completion_publish_preserves_numbered_window(),
-         "detached completion publishes N-new chrome authority before sync so the numbered transcript window and draft stay put while the deferred viewport is "
-         "consumed");
-}
 
 bool test_display_settings_reload_poll_outcome_and_preview_staging()
 {
   // Reproduces W2-001 through RuntimeActionController + preview reapply: optional snapshot is the
   // applied signal (no value inference), hydrate does not final-render, overlay is staged before paint.
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
   ScopedEnvVar no_color_guard("NO_COLOR", "");
   ScopedEnvVar theme_env_guard("AVA_TUI_THEME", "");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  static_cast<void>(set_term(screen));
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(24, 100));
 
   ava::tui::clear_tui_theme_preview();
@@ -1049,26 +891,12 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
 
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme(std::nullopt);
-  static_cast<void>(endwin());
-  delscreen(screen);
   return applied_signal && hydrate_kept_prior_overlay && staged_before_render && rendered && esc_restores_new_authority && unchanged_signal;
 }
 
 bool test_display_settings_reload_rebuilds_open_startup_overview()
 {
-  ScopedEnvVar term_guard("TERM", "xterm-256color");
-  ScopedTmpFile input;
-  ScopedTmpFile output;
-  SCREEN* screen = newterm(nullptr, output.get(), input.get());
-  if (!screen)
-    return false;
-  set_term(screen);
-  tui_test_support::ScopedComposerScreenOutput screen_output(output.get());
-  if (has_colors())
-  {
-    static_cast<void>(start_color());
-    static_cast<void>(use_default_colors());
-  }
+  static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(resizeterm(24, 100));
 
   ava::tui::clear_tui_theme_preview();
@@ -1136,7 +964,7 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
                        presentation.snapshot.select_list->query == "theme" &&
                        std::ranges::any_of(presentation.snapshot.select_list->items,
                                            [](auto const& item) { return item.group == "Display" && item.label == "Theme" && item.detail == "sunrise"; }) &&
-      // Open overview suppresses the idle transcript receipt; status still updates.
+                       // Open overview suppresses the idle transcript receipt; status still updates.
                        presentation.snapshot.status == "display theme auto-reloaded" &&
                        std::ranges::none_of(presentation.snapshot.transcript,
                                             [](auto const& item) { return item.text.find("display theme auto-reloaded") != std::string::npos; });
@@ -1146,11 +974,8 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
 
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme(std::nullopt);
-  static_cast<void>(endwin());
-  delscreen(screen);
   return rebuilt && rendered;
 }
-#endif
 
 bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
 {
@@ -1227,27 +1052,86 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   return models_ok && malformed_ok && theme_ok && keybindings_ok && bare_ok;
 }
 
+// Exercise one rendering case on the runner-initialized application screen and report its original expectation.
+// The caller selects a registered `test_case` and runs each case in a fresh process to avoid ncurses state leaking between cases.
+void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
+{
+  if (test_case == "search_tail")
+  {
+    expect(
+        test_transcript_search_controller_tail_refresh_avoids_full_layout(),
+        "an open 1,000-item transcript search over a roomy 180x20 idle-sidebar layout keeps the captured 141-column transcript geometry while its modal "
+        "uses the 120-column canvas, then a shift-zero tail refresh directly renders and updates exactly one authoritative item/projection/match/modal row "
+        "without rebuilding the renderer layout or synchronizing its deferred viewport; a forced full scheduled render still freezes that underlying layout, "
+        "retains the +1 direct work, and leaves the deferred viewport pending; a later explicit full synchronization projects only the search modal, "
+        "rebuilds the same 141-column underlying layout once, restores the modal, and consumes the deferred viewport");
+  }
+  else if (test_case == "changed_session")
+  {
+    expect(test_changed_session_snapshot_resets_presentation(),
+           "an authoritative changed-session snapshot clears old transcript/tool rows, advances generation, resets "
+           "queued/sidebar/draft/selection/search/scroll and "
+           "frozen presentation state through their owners, applies the new session/model/reasoning/todos, preserves application-scoped jobs, and leaves an "
+           "unchanged-session transcript intact");
+  }
+  else if (test_case == "session_transition")
+  {
+    expect(test_active_run_session_transition_discards_prior_session_events(),
+           "an active-run authoritative session transition discards old submitted/event/tool/queue/finish/sidebar/todo state, resets event receipt suppression "
+           "and "
+           "history, and presents only the new-session receipt and hydrated state");
+  }
+  else if (test_case == "atomic_search")
+  {
+    expect(
+        test_atomic_search_input_prompt_precedence(),
+        "actual prompt-coordinator locking linearizes retained search input before provider enqueue, then lets the queued prompt discard stale input and run "
+        "before-prompt ahead of nested resolution across 50 synchronized repetitions");
+  }
+  else if (test_case == "message_navigation")
+  {
+    expect(test_transcript_message_boundary_navigation_and_live_tail_reset(),
+           "transcript user-turn navigation clamps at the oldest retained user turn, skips assistant turns, advances/retreats across retained user turns, "
+           "resets to "
+           "live tail, applies the shared three-row transcript wheel step with reverse reattach and hard clamp, and leaves the composer draft untouched while "
+           "defaults keep MessagePrev/Next/JumpToBottom on Alt+K/Alt+J/Ctrl+End");
+  }
+  else if (test_case == "detached_completion")
+  {
+    expect(
+        test_detached_completion_publish_preserves_numbered_window(),
+        "detached completion publishes N-new chrome authority before sync so the numbered transcript window and draft stay put while the deferred viewport is "
+        "consumed");
+  }
+  else if (test_case == "message_navigation_empty")
+  {
+    expect(test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless(),
+           "message-prev/message-next on empty or fitting transcripts stay at offset 0 with truthful retained-user/live-tail status and leave the composer "
+           "draft untouched");
+  }
+  else if (test_case == "display_reload_poll")
+  {
+    expect(test_display_settings_reload_poll_outcome_and_preview_staging(),
+           "display reload poll uses optional snapshot as applied/unchanged signal, hydrates without final render, restages overlay before paint, and Esc "
+           "restores new authority even when overlay values equal the hydrated baseline");
+  }
+  else if (test_case == "display_reload_overview")
+  {
+    expect(test_display_settings_reload_rebuilds_open_startup_overview(),
+           "applied periodic display reload rebuilds an open startup overview from the refreshed DTO while preserving query/selection and skipping the idle "
+           "transcript receipt");
+  }
+  else
+  {
+    expect(false, "unknown TUI composer rendering terminal test case: " + std::string(test_case));
+  }
+}
+
 void run_tui_composer_rendering_tests_part_1()
 {
   expect(test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload(),
          "TUI /reload keeps theme and keybinding (including bare /reload) on the local hot-reload path while supported backend targets and malformed "
          "targets reach ordinary backend submission");
-#if 0
-  expect(test_display_settings_reload_poll_outcome_and_preview_staging(),
-         "display reload poll uses optional snapshot as applied/unchanged signal, hydrates without final render, restages overlay before paint, and Esc "
-         "restores new authority even when overlay values equal the hydrated baseline");
-  expect(test_display_settings_reload_rebuilds_open_startup_overview(),
-         "applied periodic display reload rebuilds an open startup overview from the refreshed DTO while preserving query/selection and skipping the idle "
-         "transcript receipt");
-  expect(
-      test_transcript_message_boundary_navigation_and_live_tail_reset(),
-      "transcript user-turn navigation clamps at the oldest retained user turn, skips assistant turns, advances/retreats across retained user turns, resets to "
-      "live tail, applies the shared three-row transcript wheel step with reverse reattach and hard clamp, and leaves the composer draft untouched while "
-      "defaults keep MessagePrev/Next/JumpToBottom on Alt+K/Alt+J/Ctrl+End");
-  expect(test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless(),
-         "message-prev/message-next on empty or fitting transcripts stay at offset 0 with truthful retained-user/live-tail status and leave the composer "
-         "draft untouched");
-#endif
   {
     auto const started_at = std::chrono::steady_clock::time_point{};
     ava::tui::detail::ActiveRunCadence cadence(started_at);
@@ -1340,10 +1224,14 @@ void run_tui_composer_rendering_tests_part_1()
     auto const started_at = Clock::time_point{};
     ava::tui::WheelBurstGovernor governor;
     auto const first_up = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at);
-    auto const same_direction_at_16 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(16));
-    auto const same_direction_at_39 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(39));
-    auto const same_direction_at_40 = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(40));
-    auto const reverse_immediate = ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(40));
+    auto const same_direction_at_16 =
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(16));
+    auto const same_direction_at_39 =
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(39));
+    auto const same_direction_at_40 =
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelUp, started_at + std::chrono::milliseconds(40));
+    auto const reverse_immediate =
+        ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(40));
     auto const same_reverse_within_window =
         ava::tui::runtime_wheel_input_accepted(governor, ava::tui::terminal::Key::MouseWheelDown, started_at + std::chrono::milliseconds(56));
     auto const same_reverse_at_interval =

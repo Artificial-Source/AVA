@@ -7,7 +7,6 @@ void run_tui_permission_tests_part_1();
 void run_tui_modal_tests_part_1();
 void run_tui_terminal_input_tests_part_2();
 void run_tui_composer_rendering_tests_part_1();
-void run_tui_prompt_search_race_tests();
 void run_tui_markdown_tests();
 void run_tui_mermaid_tests();
 void run_tui_composer_rendering_tests_part_2();

@@ -41,5 +41,4 @@ void run_tui_composer_tests()
   run_tui_transcript_hierarchy_tests();
   run_tui_runtime_dispatch_tests();
   run_tui_transcript_cache_tests();
-  //  run_tui_prompt_search_race_tests();
 }

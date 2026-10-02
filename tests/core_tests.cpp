@@ -101,6 +101,7 @@ void prepare_terminal_color_test_case(std::string_view, FILE*, FILE*);
 void run_terminal_color_test_case(std::string_view);
 void prepare_tui_terminal_virtual_smoke_test_case(std::string_view, FILE*, FILE*);
 void run_tui_terminal_virtual_smoke_test_case(std::string_view);
+void run_tui_composer_rendering_terminal_test_case(std::string_view);
 void run_run_observer_tests();
 void run_runtime_diagnostics_tests();
 void run_containment_tests();
@@ -208,6 +209,19 @@ constexpr std::array<std::string_view, 12> kKeyboardCases{
 constexpr std::array<std::string_view, 2> kMouseCases{"context_lifecycle", "handoff_lifecycle"};
 constexpr std::array<std::string_view, 5> kColorCases{"srgb_round_trip", "osc4_protocol", "mutable_palette", "xterm_indexed", "portable_pairs"};
 constexpr std::array<std::string_view, 6> kVirtualTerminalCases{"baseline", "no_color", "screen", "tmux", "kitty", "wezterm"};
+constexpr std::array<std::string_view, 9> kComposerRenderingCases{
+    "search_tail",         "changed_session",          "session_transition",  "atomic_search",          "message_navigation",
+    "detached_completion", "message_navigation_empty", "display_reload_poll", "display_reload_overview"};
+
+// Prepare the same xterm and display defaults as the composer suite before the isolated case initializes ncurses.
+void prepare_tui_composer_rendering_terminal_test_case(std::string_view, FILE*, FILE*)
+{
+  static_cast<void>(setenv("TERM", "xterm-256color", 1));
+  static_cast<void>(setenv("NO_COLOR", "", 1));
+  static_cast<void>(setenv("AVA_TUI_THEME", "", 1));
+  static_cast<void>(setenv("COLORFGBG", "", 1));
+  static_cast<void>(setenv("AVA_TUI_TMUX_HYPERLINKS", "", 1));
+}
 
 constexpr std::array kIsolatedTerminalSuites{
     IsolatedTerminalSuite{"terminal_keyboard_input_mode", kKeyboardCases, prepare_terminal_keyboard_input_mode_test_case,
@@ -217,6 +231,8 @@ constexpr std::array kIsolatedTerminalSuites{
     IsolatedTerminalSuite{"terminal_color", kColorCases, prepare_terminal_color_test_case, run_terminal_color_test_case, nullptr},
     IsolatedTerminalSuite{"tui_terminal_virtual_smoke", kVirtualTerminalCases, prepare_tui_terminal_virtual_smoke_test_case,
                           run_tui_terminal_virtual_smoke_test_case, nullptr},
+    IsolatedTerminalSuite{"tui_composer_rendering", kComposerRenderingCases, prepare_tui_composer_rendering_terminal_test_case,
+                          run_tui_composer_rendering_terminal_test_case, nullptr},
 };
 
 // Own the test executable's Application lifecycle and install its per-suite

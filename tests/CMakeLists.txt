@@ -437,6 +437,9 @@ set(AVA_TERMINAL_KEYBOARD_CASES
 set(AVA_TERMINAL_MOUSE_CASES context_lifecycle handoff_lifecycle)
 set(AVA_TERMINAL_COLOR_CASES srgb_round_trip osc4_protocol mutable_palette xterm_indexed portable_pairs)
 set(AVA_TUI_TERMINAL_VIRTUAL_SMOKE_CASES baseline no_color screen tmux kitty wezterm)
+set(AVA_TUI_COMPOSER_RENDERING_CASES
+  search_tail changed_session session_transition atomic_search message_navigation detached_completion
+  message_navigation_empty display_reload_poll display_reload_overview)
 foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_KEYBOARD_CASES)
   add_test(NAME ava_tests.terminal_keyboard_input_mode.${AVA_TERMINAL_CASE}
     COMMAND ava_tests terminal_keyboard_input_mode ${AVA_TERMINAL_CASE})
@@ -453,15 +456,21 @@ foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_TERMINAL_VIRTUAL_SMOKE_CASES)
   add_test(NAME ava_tests.tui_terminal_virtual_smoke.${AVA_TERMINAL_CASE}
     COMMAND ava_tests tui_terminal_virtual_smoke ${AVA_TERMINAL_CASE})
 endforeach()
-foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color tui_terminal_virtual_smoke)
+foreach(AVA_TERMINAL_CASE IN LISTS AVA_TUI_COMPOSER_RENDERING_CASES)
+  add_test(NAME ava_tests.tui_composer_rendering.${AVA_TERMINAL_CASE}
+    COMMAND ava_tests tui_composer_rendering ${AVA_TERMINAL_CASE})
+endforeach()
+foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_input_mode terminal_color tui_terminal_virtual_smoke tui_composer_rendering)
   if (AVA_TERMINAL_SUITE STREQUAL "terminal_keyboard_input_mode")
     set(AVA_TERMINAL_CASES ${AVA_TERMINAL_KEYBOARD_CASES})
   elseif(AVA_TERMINAL_SUITE STREQUAL "terminal_mouse_input_mode")
     set(AVA_TERMINAL_CASES ${AVA_TERMINAL_MOUSE_CASES})
   elseif(AVA_TERMINAL_SUITE STREQUAL "terminal_color")
     set(AVA_TERMINAL_CASES ${AVA_TERMINAL_COLOR_CASES})
-  else()
+  elseif(AVA_TERMINAL_SUITE STREQUAL "tui_terminal_virtual_smoke")
     set(AVA_TERMINAL_CASES ${AVA_TUI_TERMINAL_VIRTUAL_SMOKE_CASES})
+  else()
+    set(AVA_TERMINAL_CASES ${AVA_TUI_COMPOSER_RENDERING_CASES})
   endif()
   foreach(AVA_TERMINAL_CASE IN LISTS AVA_TERMINAL_CASES)
     set_tests_properties(ava_tests.${AVA_TERMINAL_SUITE}.${AVA_TERMINAL_CASE} PROPERTIES
