@@ -9,6 +9,8 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 namespace ava::tui {
 namespace {
@@ -1397,6 +1399,18 @@ InputEvent terminal_ncurses_mouse_event(terminal::MouseEvent const& mouse_event)
   return normalized_left_mouse_event(shift, mouse_event.button() == 4 && pressed, mouse_event.button() == 5 && pressed, left && pressed,
                                      left && mouse_event.event() == MouseButtonEvent::released, mouse_event.event() == MouseButtonEvent::moved,
                                      left && mouse_event.event() == MouseButtonEvent::clicked, column, row);
+}
+
+// Leave native resize calls inside Context while frontend glue owns querying the invoking terminal's kernel geometry.
+void refresh_geometry_from_kernel() noexcept
+{
+  winsize size{};
+  if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0 || size.ws_col == 0)
+    return;
+  int const rows = static_cast<int>(size.ws_row);
+  int const cols = static_cast<int>(size.ws_col);
+  if (terminal::Context::is_term_resized(rows, cols))
+    static_cast<void>(terminal::Context::resizeterm(rows, cols));
 }
 
 void terminal_reset_mouse_tracking() noexcept

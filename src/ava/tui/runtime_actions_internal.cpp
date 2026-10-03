@@ -191,6 +191,7 @@ bool RuntimeActionController::open_external_editor()
   // and $VISUAL/$EDITOR inherit a clean Kitty stack, paste, and mouse state.
   terminal_context.leave_terminal_for_handoff();
   auto edited = options_.on_external_editor(draft_state_.draft.text);
+  refresh_geometry_from_kernel();
   terminal_context.restore_terminal_after_handoff();
 
   if (!edited)
@@ -235,12 +236,14 @@ bool RuntimeActionController::suspend_to_background()
     if (kill(0, SIGTSTP) != 0)
     {
       auto const saved_errno = errno;
+      refresh_geometry_from_kernel();
       terminal_context.restore_terminal_after_handoff();
       snapshot.status = std::string("failed to suspend: ") + std::strerror(saved_errno);
       static_cast<void>(terminal_context.beep());
       return renderer_.render();
     }
     // Continues after fg/SIGCONT. Geometry may have changed while stopped.
+    refresh_geometry_from_kernel();
     terminal_context.restore_terminal_after_handoff();
   }
 

@@ -57,6 +57,10 @@ void disarm_terminal_background_response_handler();
 // before/after protocol disable/rearm and after Shift-modified reports so a later
 // unmodified hover/release cannot extend a cancelled interaction.
 void terminal_reset_mouse_tracking() noexcept;
+// Synchronize the active ncurses screen's dimensions with the kernel without queuing redundant resize events.
+//
+// Call after terminal initialization. Missing terminal geometry is ignored; ncurses resize failures are best-effort.
+void refresh_geometry_from_kernel() noexcept;
 [[nodiscard]] terminal::Key terminal_escape_sequence_key(std::string_view sequence);
 [[nodiscard]] bool terminal_escape_sequence_complete(std::string_view sequence);
 [[nodiscard]] bool terminal_escape_sequence_should_discard(std::string_view sequence);

@@ -229,9 +229,16 @@ class Context final
   // Synchronize the virtual screen with the physical screen.
   static void doupdate();                                               // doupdate
 
-  // Synchronize ncurses' cached dimensions with the kernel without injecting redundant resize events.
-  // Missing terminal geometry and uninitialized screens are ignored during partial startup and tests.
-  static void refresh_geometry_from_kernel() noexcept;
+  // Resize the active ncurses screen to the given rows and cols.
+  //
+  // Returns true on success, false for invalid dimensions or an ncurses failure.
+  // Updates screen/window geometry and queues KEY_RESIZE; does not resize the physical terminal or repaint it.
+  static bool resizeterm(int rows, int cols);                            // resizeterm
+
+  // Return whether the given rows and cols differ from the active ncurses screen's dimensions.
+  //
+  // Does not resize the screen or queue an input event. Invalid dimensions or an uninitialized screen return false.
+  static bool is_term_resized(int rows, int cols);                       // is_term_resized
 
   // Sound the terminal's audible alarm.
   int beep();                                                           // beep

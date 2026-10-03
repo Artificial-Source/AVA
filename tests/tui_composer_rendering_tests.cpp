@@ -43,7 +43,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-#include <curses.h>
 
 namespace {
 
@@ -115,7 +114,7 @@ bool test_composer_draw_preserves_context_color_pair_allocations()
 bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(20, 180));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(20, 180));
 
   ava::tui::TuiRuntimeOptions options;
   options.session_id = "search_tail_direct_refresh";
@@ -185,7 +184,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 bool test_changed_session_snapshot_resets_presentation()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(18, 96));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
   std::size_t job_list_calls = 0;
   ava::tui::TuiRuntimeOptions options;
@@ -317,7 +316,7 @@ bool test_changed_session_snapshot_resets_presentation()
 bool test_active_run_session_transition_discards_prior_session_events()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(18, 96));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
   bool finish_called = false;
   bool initial_identity_forwarded = false;
@@ -433,7 +432,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
 bool test_atomic_search_input_prompt_precedence()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(12, 80));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(12, 80));
 
   ava::tui::TuiRuntimeOptions options;
   options.session_id = "search_prompt_race";
@@ -542,7 +541,7 @@ bool test_atomic_search_input_prompt_precedence()
 bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(24, 80));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 80));
 
   ava::tui::TuiRuntimeOptions options;
   options.session_id = "message-boundary-nav";
@@ -643,7 +642,7 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 
   // Half-page navigation uses the actual transcript body after a wrapped composer
   // consumes terminal rows, while ordinary three-row scrolling remains draft-sovereign.
-  static_cast<void>(resizeterm(12, 40));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(12, 40));
   draft_state.draft.text = std::string(180, 'x');
   draft_state.draft.cursor = 73;
   presentation.snapshot.input = draft_state.draft.text;
@@ -664,7 +663,7 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   auto const clamped_oldest = renderer.transcript_scroll_offset;
   navigation.scroll_down(100000);
   auto const clamped_live_tail = renderer.transcript_scroll_offset;
-  static_cast<void>(resizeterm(4, 40));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(4, 40));
   auto const tiny_page = navigation.transcript_page_size();
   bool const body_page_and_plain_arrow_sovereignty =
       body.valid && page == std::max<std::size_t>(1, body.transcript_height / 2) && page != std::size_t{6} && page_offset == page &&
@@ -691,7 +690,7 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 bool test_detached_completion_publish_preserves_numbered_window()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(32, 120));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(32, 120));
 
   auto numbered_window = [](std::vector<std::string> const& surfaces) {
     std::vector<int> numbers;
@@ -796,7 +795,7 @@ bool test_detached_completion_publish_preserves_numbered_window()
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(24, 80));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 80));
 
   auto exercise = [](std::vector<ava::tui::TranscriptItem> transcript, std::string_view session_id) {
     ava::tui::TuiRuntimeOptions options;
@@ -856,7 +855,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ScopedEnvVar no_color_guard("NO_COLOR", "");
   ScopedEnvVar theme_env_guard("AVA_TUI_THEME", "");
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(24, 100));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 100));
 
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme("dark");
@@ -962,7 +961,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
 bool test_display_settings_reload_rebuilds_open_startup_overview()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(24, 100));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 100));
 
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme("dark");
@@ -1045,7 +1044,7 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
 bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
 {
   ScopedEnvVar term_guard("TERM", "xterm-256color");
-  static_cast<void>(resizeterm(18, 96));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
   std::vector<std::string> backend_submissions;
   int display_reload_calls = 0;

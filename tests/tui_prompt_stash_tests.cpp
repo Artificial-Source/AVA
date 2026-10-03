@@ -18,7 +18,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <curses.h>
 
 namespace {
 
@@ -128,7 +127,7 @@ void test_prompt_stash_store_semantics()
 void test_prompt_stash_runtime_controller()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
-  static_cast<void>(resizeterm(20, 80));
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(20, 80));
 
   ava::tui::TuiRuntimeOptions options;
   options.key_bindings = ava::tui::default_key_bindings();

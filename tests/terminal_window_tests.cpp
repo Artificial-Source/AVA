@@ -125,6 +125,25 @@ void test_margin_aware_window_geometry_and_lifetime()
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Default});
 }
 
+// Resize the active screen through Context, checking geometry and rejection of invalid dimensions before restoring its original size.
+void test_context_resizeterm()
+{
+  auto& context = ava::core::Application::instance().terminal_context();
+  auto const original = context.size();
+  expect(!terminal::Context::is_term_resized(static_cast<int>(original.height()), static_cast<int>(original.width())),
+         "Context resize query must recognize the current screen size");
+  expect(terminal::Context::resizeterm(18, 72), "Context resize must accept positive screen dimensions");
+  expect(context.rows() == 18 && context.cols() == 72 && context.stdscr().getmaxyx().height() == 18 && context.stdscr().getmaxyx().width() == 72,
+         "Context resize must update both screen geometry and stdscr dimensions");
+  expect(!terminal::Context::is_term_resized(18, 72) && terminal::Context::is_term_resized(19, 72) && terminal::Context::is_term_resized(18, 73) &&
+             !terminal::Context::is_term_resized(0, 72) && context.rows() == 18 && context.cols() == 72,
+         "Context resize query must detect either dimension changing without modifying the screen");
+  expect(!terminal::Context::resizeterm(0, 72) && !terminal::Context::resizeterm(18, -1) && context.rows() == 18 && context.cols() == 72,
+         "Context resize must reject non-positive dimensions without changing screen geometry");
+  expect(terminal::Context::resizeterm(static_cast<int>(original.height()), static_cast<int>(original.width())),
+         "Context resize test must restore the original screen dimensions");
+}
+
 } // namespace
 
 // Configure the terminal before the Application initializes the Context used by window tests.
@@ -138,4 +157,5 @@ void run_terminal_window_tests()
   test_context_cursor_settings();
   test_rendition_italic_reverse_round_trip();
   test_margin_aware_window_geometry_and_lifetime();
+  test_context_resizeterm();
 }

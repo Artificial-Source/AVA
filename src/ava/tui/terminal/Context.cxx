@@ -14,7 +14,6 @@
 #include <cstdlib>
 #include <limits>
 #include <poll.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
 
 // This header must be included last.
@@ -154,7 +153,6 @@ void Context::leave_terminal_for_handoff()
 // Resume through doupdate so ncurses repaints its retained virtual screen before AVA-owned protocols become active again.
 void Context::restore_terminal_after_handoff()
 {
-  refresh_geometry_from_kernel();
   static_cast<void>(::clearok(::curscr, TRUE));
   static_cast<void>(::doupdate());
   mouse_input_.start(*this);
@@ -343,18 +341,22 @@ void Context::doupdate()
   ::doupdate();
 }
 
-// Synchronize ncurses geometry only when the kernel reports a real size change, avoiding synthetic KEY_RESIZE events on no-op refreshes.
+// Keep native resize status inside the terminal boundary and reject non-positive dimensions without changing screen state.
 //static
-void Context::refresh_geometry_from_kernel() noexcept
+bool Context::resizeterm(int rows, int cols)
 {
-  winsize size{};
-  if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) != 0 || size.ws_row == 0 || size.ws_col == 0 || ::stdscr == nullptr)
-    return;
-  auto const rows = static_cast<int>(size.ws_row);
-  auto const cols = static_cast<int>(size.ws_col);
-  if (::is_term_resized(rows, cols) == FALSE)
-    return;
-  static_cast<void>(::resizeterm(rows, cols));
+  if (rows <= 0 || cols <= 0)
+    return false;
+  return ::resizeterm(rows, cols) == OK;
+}
+
+// Query native screen geometry without changing it; reject dimensions outside ncurses' supported positive range.
+//static
+bool Context::is_term_resized(int rows, int cols)
+{
+  if (rows <= 0 || cols <= 0 || ::stdscr == nullptr)
+    return false;
+  return ::is_term_resized(rows, cols) != FALSE;
 }
 
 int Context::beep()
@@ -383,7 +385,7 @@ bool Context::flush_raw()
   // Initialize the terminal or bind an external test screen's output before writing.
   ASSERT(output_file_);
   bool success = std::fflush(output_file_) == 0;
-  Dout(dc::warning(!success)|error_cf, "std::fflush");
+  Dout(dc::warning(!success) | error_cf, "std::fflush");
   return success;
 }
 
@@ -392,7 +394,7 @@ bool Context::write_raw_sequence(std::string_view sequence, bool flush)
   // Initialize the terminal or bind an external test screen's output before writing.
   ASSERT(output_file_);
   size_t count = std::fwrite(sequence.data(), 1, sequence.size(), output_file_);
-  Dout(dc::warning(count != sequence.size())|error_cf, "std::fwrite(..., 1, " << sequence.size() << ", output_file_) = " << count);
+  Dout(dc::warning(count != sequence.size()) | error_cf, "std::fwrite(..., 1, " << sequence.size() << ", output_file_) = " << count);
   return count == sequence.size() && (!flush || flush_raw());
 }
 
@@ -495,37 +497,41 @@ Key Context::read_curses_key(wint_t& value)
     };
 
     static constexpr std::array<Entry, 35> table = {{
-      {}, {}, {},
-      {"kri", Key::ShiftArrowUp},
-      {"kind", Key::ShiftArrowDown},
-      {"kEND6", Key::ShiftCtrlEnd},
-      {}, {},
-      {"kEND5", Key::CtrlEnd},
-      {"kHOM6", Key::ShiftCtrlHome},
-      {"kRIT6", Key::ShiftCtrlArrowRight},
-      {"kRIT4", Key::ShiftAltArrowRight},
-      {"kHOM5", Key::CtrlHome},
-      {"kRIT5", Key::CtrlArrowRight},
-      {},
-      {"kLFT6", Key::ShiftCtrlArrowLeft},
-      {"kLFT4", Key::ShiftAltArrowLeft},
-      {"kDN3", Key::AltArrowDown},
-      {"kLFT5", Key::CtrlArrowLeft},
-      {"kDN2", Key::ShiftArrowDown},
-      {"kEND2", Key::ShiftEnd},
-      {}, {},
-      {"kRIT3", Key::AltArrowRight},
-      {"kHOM2", Key::ShiftHome},
-      {"kRIT2", Key::ShiftArrowRight},
-      {},
-      {"kUP3", Key::AltArrowUp},
-      {"kLFT3", Key::AltArrowLeft},
-      {"kUP2", Key::ShiftArrowUp},
-      {"kLFT2", Key::ShiftArrowLeft},
-      {},
-      {"kDC3", Key::AltDelete},
-      {},
-      {"kDC2", Key::ShiftDelete},
+        {},
+        {},
+        {},
+        {"kri", Key::ShiftArrowUp},
+        {"kind", Key::ShiftArrowDown},
+        {"kEND6", Key::ShiftCtrlEnd},
+        {},
+        {},
+        {"kEND5", Key::CtrlEnd},
+        {"kHOM6", Key::ShiftCtrlHome},
+        {"kRIT6", Key::ShiftCtrlArrowRight},
+        {"kRIT4", Key::ShiftAltArrowRight},
+        {"kHOM5", Key::CtrlHome},
+        {"kRIT5", Key::CtrlArrowRight},
+        {},
+        {"kLFT6", Key::ShiftCtrlArrowLeft},
+        {"kLFT4", Key::ShiftAltArrowLeft},
+        {"kDN3", Key::AltArrowDown},
+        {"kLFT5", Key::CtrlArrowLeft},
+        {"kDN2", Key::ShiftArrowDown},
+        {"kEND2", Key::ShiftEnd},
+        {},
+        {},
+        {"kRIT3", Key::AltArrowRight},
+        {"kHOM2", Key::ShiftHome},
+        {"kRIT2", Key::ShiftArrowRight},
+        {},
+        {"kUP3", Key::AltArrowUp},
+        {"kLFT3", Key::AltArrowLeft},
+        {"kUP2", Key::ShiftArrowUp},
+        {"kLFT2", Key::ShiftArrowLeft},
+        {},
+        {"kDC3", Key::AltDelete},
+        {},
+        {"kDC2", Key::ShiftDelete},
     }};
 
     std::string_view const key_name = keyname(value);
@@ -533,36 +539,16 @@ Key Context::read_curses_key(wint_t& value)
     if (3 <= key_name.size() && key_name.size() <= 5)
     {
       static std::array<unsigned char, 256> asso_values = {
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        15, 13,  1,  3,  0, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 15, 35, 35,
-        10, 35, 35,  5, 35, 35, 35, 35,  0,  4,
-        10, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-         0, 35, 35, 35, 35,  0, 35, 35, 35, 35,
-         0, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
-        35, 35, 35, 35, 35, 35
-      };
+          35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+          35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 15, 13, 1,  3,  0,  35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 15, 35, 35, 10, 35, 35, 5,
+          35, 35, 35, 35, 0,  4,  10, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 0,  35, 35, 35, 35, 0,  35, 35, 35, 35, 0,
+          35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+          35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+          35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35,
+          35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35};
 
       unsigned int const key =
-        key_name.size() + asso_values[static_cast<unsigned char>(key_name[2])] + asso_values[static_cast<unsigned char>(key_name.back())];
+          key_name.size() + asso_values[static_cast<unsigned char>(key_name[2])] + asso_values[static_cast<unsigned char>(key_name.back())];
 
       if (key < table.size())
       {

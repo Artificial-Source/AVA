@@ -78,6 +78,16 @@ IncludeCategories:
   - Regex: '^"ava/'
     Priority: 1
     SortPriority: 2
+  # Header from submodules that are included using double quotes must go after the ava headers.
+  - Regex: '^"threadsafe/'
+    Priority: 1
+    SortPriority: 16
+  - Regex: '^"memory/'
+    Priority: 1
+    SortPriority: 17
+  - Regex: '^"utils/'
+    Priority: 1
+    SortPriority: 18
 
   # Separated with an empty line comes the group that includes <> headers, with "debug.h" as last below that.
   # This is because "debug.h" defines quite some macros that *might* give problems with arbitrary other headers.
