@@ -8,10 +8,6 @@ if(AVA_REQUIRE_ACP_SDK_INTEROP AND NOT AVA_NODE_EXECUTABLE)
   message(FATAL_ERROR "AVA_REQUIRE_ACP_SDK_INTEROP requires Node.js and installed tests/acp-sdk packages")
 endif()
 
-set(CURSES_NEED_NCURSES TRUE)
-set(CURSES_NEED_WIDE TRUE)
-find_package(Curses REQUIRED)
-
 add_library(ava_test_support
   "support/acp_test_support.cpp"
   "support/agent_loop_test_support.cpp"
@@ -309,13 +305,11 @@ if (OptionEnableLibcwd)
   # Same mutually-referencing static archive rescan as the ava executable.
   target_link_libraries(ava_tests PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
 endif()
-target_include_directories(ava_tests PRIVATE ${CURSES_INCLUDE_DIRS})
 add_executable(ava_core_application_lifecycle_test "core_application_lifecycle_test.cpp")
 target_link_libraries(ava_core_application_lifecycle_test PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ${AICXX_OBJECTS_LIST})
 if (OptionEnableLibcwd)
   target_link_libraries(ava_core_application_lifecycle_test PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
 endif()
-target_include_directories(ava_core_application_lifecycle_test PRIVATE ${CURSES_INCLUDE_DIRS})
 ava_apply_warnings(ava_core_application_lifecycle_test)
 ava_apply_sanitizers(ava_core_application_lifecycle_test)
 

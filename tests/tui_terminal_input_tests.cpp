@@ -5,6 +5,7 @@
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
+#include "ava/tui/encode_wide_character.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_internal.h"
@@ -29,7 +30,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-#include <curses.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -1330,20 +1330,56 @@ std::optional<VirtualTerminalProfile> virtual_terminal_profile(std::string_view 
   return std::nullopt;
 }
 
-std::optional<std::string> ncurses_screen_row(std::size_t row)
+// Read a screen row as UTF-8 in the test fixture's UTF-8 locale, preserving combining characters and skipping wide-character continuation cells.
+// Returns nullopt for an invalid row, failed cell read, or an unencodable character; full clusters need not be NUL-terminated.
+std::optional<std::string> ncurses_screen_row(uint32_t row)
 {
-  if (row >= static_cast<std::size_t>(LINES > 0 ? LINES : 0))
+  using namespace ava::tui::terminal;
+  Context& terminal_context = ava::core::Application::instance().terminal_context();
+  uint32_t const lines = terminal_context.rows();
+  uint32_t const cols = terminal_context.cols();
+
+  if (row >= lines)
     return std::nullopt;
   std::string text;
-  text.reserve(static_cast<std::size_t>(COLS > 0 ? COLS : 0));
-  for (int column = 0; column < COLS; ++column)
+  text.reserve(cols);
+  ComplexChar complex_character;
+  for (columns_t column = 0; column < cols;)
   {
-    auto const cell = mvwinch(stdscr, static_cast<int>(row), column);
-    if (cell == static_cast<chtype>(ERR))
+    if (!(terminal_context.stdscr().in_wch)({row, column}, complex_character))
       return std::nullopt;
-    text.push_back(static_cast<char>(cell & A_CHARTEXT));
+    GraphemeCluster const& cell_character = complex_character.cell_character();
+    for (std::size_t index = 0; index < cell_character.length(); ++index)
+    {
+      auto const encoded = ava::tui::runtime_input::encode_wide_character(cell_character.data()[index]);
+      if (!encoded)
+        return std::nullopt;
+      text += *encoded;
+    }
+    column += static_cast<columns_t>(std::max(1, ::wcwidth(cell_character.data()[0])));
   }
   return text;
+}
+
+// Read stdscr's background through the terminal facade and report whether its color pair retains the terminal-default background.
+bool stdscr_background_uses_default_color(ava::tui::terminal::Context const& terminal_context)
+{
+  auto const color_pair = terminal_context.stdscr().get_background().rendition().color_pair();
+  auto const content = terminal_context.color_pair_content(color_pair);
+  return content && content->background_index == -1;
+}
+
+// Check screen readback of a double-width base character and a full five-character combining cluster without duplicated continuation cells.
+void test_screen_row_unicode_readback()
+{
+  auto& window = ava::core::Application::instance().terminal_context().stdscr();
+  std::string const expected =
+      "a\xe7\x95\x8c"
+      "e\xcc\x81\xcc\xa7\xcc\x88\xcc\x84Z";
+  window.move({0, 0});
+  (window.addstr)(expected.c_str());
+  auto const row = ncurses_screen_row(0);
+  expect(row && row->starts_with(expected), "screen row readback preserves UTF-8, wide characters, and all five characters in a full cluster");
 }
 
 // Exercise rendering on the one ncurses screen initialized by the test runner for `profile`.
@@ -1353,15 +1389,14 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
   VirtualTerminalResult result;
   ava::tui::terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
   FILE* output = terminal_context.output_stream();
-  result.screen_created = stdscr != nullptr;
+  result.screen_created = terminal_context.stdscr().is_initialized();
   if (result.screen_created)
   {
-    int rows = 0;
-    int columns = 0;
-    getmaxyx(stdscr, rows, columns);
-    result.size_reported = rows > 0 && columns > 0;
+    auto const screen_size = terminal_context.size();
+    result.size_reported = screen_size.height() > 0 && screen_size.width() > 0;
     expect(result.size_reported, "ncurses smoke test reports a usable virtual screen size for " + profile.name);
-    static_cast<void>(resizeterm(14, 160));
+    static_cast<void>(ava::tui::terminal::Context::resizeterm(14, 160));
+    test_screen_row_unicode_readback();
     auto const ime_sensitive_input = std::string("a") + "\xE7\x95\x8C" + "e" + "\xCC\x81";
     auto const snapshot =
         ava::tui::ComposerSnapshot{.mode = "build",
@@ -1378,14 +1413,10 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     auto const expected_column = canvas.left + ava::tui::detail::input_cursor_column(snapshot, canvas.content_width);
     result.base_drawn = ava::tui::draw_screen(snapshot);
     // Check the terminal-default background on the isolated dark baseline screen.
-    if (!profile.no_color && profile.name == "xterm baseline" && has_colors())
+    if (!profile.no_color && profile.name == "xterm baseline" && terminal_context.has_colors())
     {
       result.checked_builtin_dark_default_screen_bg = true;
-      short foreground = 0;
-      short background = 0;
-      auto const bkgd_cell = getbkgd(stdscr);
-      auto const pair = static_cast<short>(PAIR_NUMBER(bkgd_cell));
-      result.builtin_dark_stdscr_background_is_default = pair_content(pair, &foreground, &background) == OK && background == -1;
+      result.builtin_dark_stdscr_background_is_default = stdscr_background_uses_default_color(terminal_context);
     }
 
     auto modal_snapshot = snapshot;
@@ -1408,13 +1439,11 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     result.modal_drawn = ava::tui::draw_screen(modal_snapshot);
 
     auto const restored_drawn = ava::tui::draw_screen(snapshot);
-    int cursor_y = 0;
-    int cursor_x = 0;
-    getyx(stdscr, cursor_y, cursor_x);
-    result.cursor_restored_after_modal = restored_drawn && cursor_x == static_cast<int>(expected_column - 1) && cursor_y >= 0 && cursor_y < LINES;
+    auto const cursor = terminal_context.stdscr().getyx();
+    result.cursor_restored_after_modal = restored_drawn && cursor.col() == expected_column - 1 && cursor.row() < terminal_context.rows();
 
     auto exercise_cached_row_draw = [&]() {
-      static_cast<void>(resizeterm(14, 80));
+      static_cast<void>(ava::tui::terminal::Context::resizeterm(14, 80));
       auto cached_snapshot = snapshot;
       cached_snapshot.width = 80;
       cached_snapshot.height = 14;
@@ -1457,7 +1486,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     auto exercise_graphic_overlay_cache = [&]() {
       if (profile.no_color)
         return true;
-      static_cast<void>(resizeterm(14, 80));
+      static_cast<void>(ava::tui::terminal::Context::resizeterm(14, 80));
       auto graphic_snapshot = snapshot;
       graphic_snapshot.width = 80;
       graphic_snapshot.height = 14;
@@ -1509,7 +1538,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     result.graphic_overlay_cache_stable = exercise_graphic_overlay_cache();
 
     auto exercise_processing_footer = [&](ava::tui::ComposerSnapshot footer_snapshot) {
-      static_cast<void>(resizeterm(static_cast<int>(footer_snapshot.height), static_cast<int>(footer_snapshot.width)));
+      static_cast<void>(ava::tui::terminal::Context::resizeterm(static_cast<int>(footer_snapshot.height), static_cast<int>(footer_snapshot.width)));
       footer_snapshot.processing = true;
       footer_snapshot.input = "cursor";
       footer_snapshot.input_cursor = footer_snapshot.input.size();
@@ -1537,10 +1566,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
         {
           return false;
         }
-        int footer_cursor_y = 0;
-        int footer_cursor_x = 0;
-        getyx(stdscr, footer_cursor_y, footer_cursor_x);
-        if (footer_cursor_x != static_cast<int>(expected_footer_column - 1) || footer_cursor_y < 0 || footer_cursor_y >= LINES)
+        auto const footer_cursor = terminal_context.stdscr().getyx();
+        if (footer_cursor.col() != expected_footer_column - 1 || footer_cursor.row() >= terminal_context.rows())
         {
           return false;
         }
@@ -1655,12 +1682,13 @@ bool color_eq(std::optional<ava::tui::TerminalBackgroundColor> const& color, int
   return color && color->red == red && color->green == green && color->blue == blue;
 }
 
+// Push bytes through BasicWindow's checked void API in reverse order so ncurses reads the original sequence.
 void push_bytes_to_curses(std::string_view bytes)
 {
   for (auto it = bytes.rbegin(); it != bytes.rend(); ++it)
   {
     auto const value = static_cast<unsigned char>(*it);
-    expect(unget_wch(static_cast<wchar_t>(value)) != ERR, "osc11 tests can unget terminal bytes into ncurses");
+    ava::tui::terminal::BasicWindow::unget_wch(static_cast<wchar_t>(value));
   }
 }
 
@@ -1873,7 +1901,7 @@ void test_osc11_handler_arming_and_virtual_probe()
 
   // The test runner already initialized the Application-owned ncurses screen and its input modes.
   // Discard a pending resize from earlier composer cases before injecting this probe's input.
-  static_cast<void>(flushinp());
+  static_cast<void>(ava::tui::terminal::Context::flushinp());
   // OSC 11 light reply (chunk-assembled by the ordinary escape reader), a Kitty
   // keyboard flags reply, then a plain typed key. Bytes are ungot in reverse so
   // the probe observes them in this order.
@@ -1914,14 +1942,10 @@ void test_osc11_handler_arming_and_virtual_probe()
                                                      .height = 14,
                                                      .input_cursor = queued->text.size()};
     expect(ava::tui::draw_screen(snapshot), "first rendered frame after OSC 11 detection draws successfully");
-    if (has_colors())
+    auto& terminal_context = ava::core::Application::instance().terminal_context();
+    if (terminal_context.has_colors())
     {
-      short foreground = 0;
-      short background = 0;
-      auto const bkgd_cell = getbkgd(stdscr);
-      auto const pair = static_cast<short>(PAIR_NUMBER(bkgd_cell));
-      expect(pair_content(pair, &foreground, &background) == OK && background == -1,
-             "OSC 11 light selection keeps the ordinary screen canvas on terminal-default background");
+      expect(stdscr_background_uses_default_color(terminal_context), "OSC 11 light selection keeps the ordinary screen canvas on terminal-default background");
     }
   }
 
@@ -2013,7 +2037,7 @@ void test_osc11_reply_inside_startup_bracketed_paste(bool use_st)
 
   static_cast<void>(ava::core::Application::instance().terminal_context());
   // Earlier composer tests can leave a pending resize in ncurses' shared input queue; this case starts with no input.
-  static_cast<void>(flushinp());
+  static_cast<void>(ava::tui::terminal::Context::flushinp());
 
   auto const light_reply = osc11_response("rgb:ffff/ffff/ffff", use_st);
   std::string feed;
@@ -2233,8 +2257,8 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   size.ws_row = 24;
   size.ws_col = 80;
   // Align ncurses geometry with the controlled PTY size once (real resize path).
-  static_cast<void>(resizeterm(static_cast<int>(size.ws_row), static_cast<int>(size.ws_col)));
-  flushinp();
+  static_cast<void>(ava::tui::terminal::Context::resizeterm(static_cast<int>(size.ws_row), static_cast<int>(size.ws_col)));
+  static_cast<void>(ava::tui::terminal::Context::flushinp());
 
   auto drain_resize_events = []() -> int {
     int resize_count = 0;
@@ -2250,14 +2274,16 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   };
   static_cast<void>(drain_resize_events());
 
-  expect(LINES == static_cast<int>(size.ws_row) && COLS == static_cast<int>(size.ws_col), "same-size geometry baseline matches the controlled PTY winsize");
+  auto screen_size = terminal_context.size();
+  expect(screen_size.height() == size.ws_row && screen_size.width() == size.ws_col, "same-size geometry baseline matches the controlled PTY winsize");
 
   for (int i = 0; i < 8; ++i)
     ava::tui::refresh_geometry_from_kernel();
 
   auto const same_size_resizes = drain_resize_events();
   expect(same_size_resizes == 0, "same-size repeated geometry refresh must not inject KEY_RESIZE (got " + std::to_string(same_size_resizes) + ")");
-  expect(LINES == static_cast<int>(size.ws_row) && COLS == static_cast<int>(size.ws_col), "same-size geometry refresh leaves LINES/COLS unchanged");
+  screen_size = terminal_context.size();
+  expect(screen_size.height() == size.ws_row && screen_size.width() == size.ws_col, "same-size geometry refresh leaves terminal dimensions unchanged");
 
   // Real resize still applies: kernel size change must update ncurses geometry.
   winsize grown = size;
@@ -2265,7 +2291,9 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
   grown.ws_col = 100;
   static_cast<void>(::ioctl(STDOUT_FILENO, TIOCSWINSZ, &grown));
   ava::tui::refresh_geometry_from_kernel();
-  expect(LINES == static_cast<int>(grown.ws_row) && COLS == static_cast<int>(grown.ws_col), "real kernel resize still updates ncurses geometry via resizeterm");
+  screen_size = terminal_context.size();
+  expect(screen_size.height() == grown.ws_row && screen_size.width() == grown.ws_col,
+         "real kernel resize still updates ncurses geometry via Context::resizeterm");
   // Consuming any KEY_RESIZE from the real path is fine; just drain so teardown is clean.
   static_cast<void>(drain_resize_events());
 
@@ -2276,7 +2304,6 @@ void test_same_size_geometry_refresh_does_not_inject_key_resize()
 // cannot reproduce ncurses KEY_MOUSE matching + getmouse.
 void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak(int master_fd)
 {
-#ifdef NCURSES_MOUSE_VERSION
   ava::tui::terminal_reset_mouse_tracking();
   ava::tui::runtime_input::clear_startup_input_queue();
 
@@ -2288,13 +2315,12 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak(int master_fd)
     ava::tui::terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
     [[maybe_unused]] auto scoped_timeout = (terminal_context.timeout)(std::chrono::milliseconds(100));
 
-    char const* kmous = tigetstr("kmous");
-    bool const kmous_is_sgr_prefix = kmous != nullptr && kmous != reinterpret_cast<char*>(-1) && std::string_view(kmous) == "\x1b[<";
     char const* term_name = std::getenv("TERM");
-    expect(kmous_is_sgr_prefix,
+    auto const kmous = ava::tui::terminal::Context::terminfo_string("kmous");
+    expect(kmous && *kmous == "\x1b[<",
            std::string("direct-terminal mouse regression requires kmous=ESC[< under TERM=") + (term_name == nullptr ? "<unset>" : term_name));
 
-    expect(has_mouse(), "terminal Context mouse mode initializes the ncurses mouse driver");
+    expect(ava::tui::terminal::Context::has_mouse(), "terminal Context mouse mode initializes the ncurses mouse driver");
 
     auto feed = [&](std::string_view label, std::string_view sequence) {
       expect(write_all_fd(master_fd, sequence), std::string("direct-terminal mouse PTY can write ") + std::string(label));
@@ -2356,10 +2382,6 @@ void test_direct_terminal_ncurses_mouse_sgr_no_composer_leak(int master_fd)
 
   ava::tui::runtime_input::clear_startup_input_queue();
   ava::tui::terminal_reset_mouse_tracking();
-#else
-  static_cast<void>(master_fd);
-  expect(true, "ncurses mouse support unavailable; direct-terminal mouse PTY regression skipped");
-#endif
 }
 
 }  // namespace

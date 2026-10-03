@@ -223,6 +223,22 @@ class Context final
   // Convenience accessor that tests if COLORS equals 0x1000000.
   static bool have_direct_color();                                      // COLORS
 
+  // Return whether the active ncurses screen's mouse driver has initialized successfully.
+  //
+  // Returns false when ncurses lacks mouse support or no mouse driver is available.
+  static bool has_mouse();                                              // has_mouse
+
+  // Discard pending native terminal input for the active screen.
+  //
+  // Returns true on success; does not clear AVA-owned startup input or keyboard-negotiation buffers.
+  static bool flushinp();                                               // flushinp
+
+  // Return the active screen's terminfo string for capability, or nullopt for a missing or non-string capability.
+  //
+  // The name must be NUL-terminated. The returned view is borrowed from ncurses and must not outlive its terminal description.
+  // A null name returns nullopt without querying ncurses.
+  static std::optional<std::string_view> terminfo_string(char const* capability);    // tigetstr
+
   // Return the next input value; blocks if there is no input.
   int get_wch() const;                                                  // get_wch
 

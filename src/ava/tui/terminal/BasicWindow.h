@@ -65,10 +65,7 @@ class BasicWindow
   // Call initialize(size, pos) to finish construction of a default constructed BasicWindow.
   void initialize(Dimension size, Position pos);        // newwin
 
-  bool is_initialized() const
-  {
-    return impl_.get();
-  }
+  bool is_initialized() const { return impl_.get(); }
 
   // Construct a new off-screen pad with dimension `size`; pads require explicit pad refresh rectangles.
   static BasicWindow newpad(Dimension size); // newpad
@@ -299,9 +296,10 @@ class BasicWindow
   // https://invisible-island.net/ncurses/man/curs_in_wch.3x.html
 
   // Read the complex character under the cursor into `complex_char` without changing the BasicWindow.
-  void in_wch(ComplexChar& complex_char) const;                         // win_wch
+  void  in_wch(ComplexChar& complex_char) const;                        // win_wch
   // Move to `pos` and read that complex character into `complex_char`.
-  void in_wch(Position pos, ComplexChar& complex_char) const;           // mvwin_wch
+  // Returns false when pos is out of bounds or reading fails, leaving complex_char unchanged.
+  bool in_wch(Position pos, ComplexChar& complex_char) const;           // mvwin_wch
 
   // https://invisible-island.net/ncurses/man/curs_in_wchstr.3x.html
 

@@ -341,6 +341,36 @@ void Context::doupdate()
   ::doupdate();
 }
 
+// Query the native mouse capability without exposing ncurses feature macros to callers.
+//static
+bool Context::has_mouse()
+{
+#ifdef NCURSES_MOUSE_VERSION
+  return ::has_mouse() != FALSE;
+#else
+  return false;
+#endif
+}
+
+// Preserve native input-flush semantics without dispatching or decoding queued events through the frontend.
+//static
+bool Context::flushinp()
+{
+  return ::flushinp() == OK;
+}
+
+// Translate both native tigetstr failure sentinels to an empty optional while preserving the borrowed capability value.
+//static
+std::optional<std::string_view> Context::terminfo_string(char const* capability)
+{
+  if (capability == nullptr)
+    return std::nullopt;
+  char const* value = ::tigetstr(capability);
+  if (value == nullptr || value == reinterpret_cast<char const*>(-1))
+    return std::nullopt;
+  return std::string_view{value};
+}
+
 // Keep native resize status inside the terminal boundary and reject non-positive dimensions without changing screen state.
 //static
 bool Context::resizeterm(int rows, int cols)

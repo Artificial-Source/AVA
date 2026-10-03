@@ -78,7 +78,7 @@ struct BasicWindow::Handle
     // notimeout returns ERR when the WINDOW handle is invalid; this initializer requires a live ncurses window.
     ASSERT(res == OK);
     // By default no window has a cursor.
-    res  = ::leaveok(handle_, TRUE);
+    res = ::leaveok(handle_, TRUE);
     // leaveok returns ERR only when the window handle is invalid; call leaveok on a live Window.
     ASSERT(res != ERR);
   }
@@ -612,26 +612,28 @@ struct BasicWindow::Handle
     return ::unget_wch(key);
   }
 
-  int in_wch(ComplexChar& complex_char) const
+  void in_wch(ComplexChar& complex_char) const
   {
     // https://invisible-island.net/ncurses/man/curs_in_wch.3x.html
     //
     // win_wch extracts the complex character and rendition at the cursor without altering the window.
     cchar_t wch;
-    int res = ::win_wch(handle_, &wch);
+    [[maybe_unused]] int res = ::win_wch(handle_, &wch);
+    // wget_wch returns ERR for an invalid window; keep the Window alive.
+    ASSERT(res == OK);
     complex_char = convert_to_ComplexChar(wch);
-    return res;
   }
 
-  int in_wch(Position pos, ComplexChar& complex_char) const
+  bool in_wch(Position pos, ComplexChar& complex_char) const
   {
     // https://invisible-island.net/ncurses/man/curs_in_wch.3x.html
     //
     // mvwin_wch moves to the requested position and extracts the complex character and rendition at that cell.
     cchar_t wch;
-    int res = ::mvwin_wch(handle_, pos.row(), pos.col(), &wch);
+    if (::mvwin_wch(handle_, pos.row(), pos.col(), &wch) == ERR)
+      return false;
     complex_char = convert_to_ComplexChar(wch);
-    return res;
+    return true;
   }
 
   int instr(ComplexChar* str) const
@@ -1139,10 +1141,7 @@ struct BasicWindow::Handle
     os << '}';
   }
 
-  void print_members(std::ostream& os, char const* prefix) const
-  {
-    os << prefix << "handle_:" << handle_;
-  }
+  void print_members(std::ostream& os, char const* prefix) const { os << prefix << "handle_:" << handle_; }
 #endif
 };
 
@@ -1609,18 +1608,16 @@ void BasicWindow::unget_wch(wchar_t key)
   ASSERT(res != ERR);
 }
 
+// Forward native read success without converting uninitialized data on failure.
 void BasicWindow::in_wch(ComplexChar& complex_char) const
 {
-  [[maybe_unused]] int res = impl_->in_wch(complex_char);
-  // win_wch returns ERR only when the window handle is invalid; call in_wch on a live Window.
-  ASSERT(res != ERR);
+  impl_->in_wch(complex_char);
 }
 
-void BasicWindow::in_wch(Position pos, ComplexChar& complex_char) const
+// Preserve the caller's output when moving to the requested cell or reading its character fails.
+bool BasicWindow::in_wch(Position pos, ComplexChar& complex_char) const
 {
-  [[maybe_unused]] int res = impl_->in_wch(pos, complex_char);
-  // mvwin_wch returns ERR when pos is outside the window; pass a Position inside the window.
-  ASSERT(res != ERR);
+  return impl_->in_wch(pos, complex_char);
 }
 
 void BasicWindow::instr(ComplexChar* str) const
