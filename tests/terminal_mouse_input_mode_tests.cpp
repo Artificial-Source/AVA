@@ -68,33 +68,41 @@ void test_context_balances_handoff_modes()
 }
 
 // Decode real SGR mouse bytes through ncurses, checking coordinates, wheels, modifiers, motion, and empty-queue failure.
+// Space reports by consuming each exchange before supplying the next; batched native mouse queue ordering is intentionally out of scope.
 void test_mouse_event_decoding()
 {
   terminal::Context& context = ava::core::Application::instance().terminal_context();
   FILE* input = process_terminal_test_input();
-  constexpr std::string_view reports = "\x1b[<28;13;7M\x1b[<0;13;7m\x1b[<64;3;2M\x1b[<65;3;2M\x1b[<35;3;2M";
-  reset_output_file(input);
-  expect(std::fwrite(reports.data(), 1, reports.size(), input) == reports.size(), "mouse reports must be written completely");
-  std::rewind(input);
+  constexpr std::array<std::string_view, 5> reports{"\x1b[<28;13;7Mx", "\x1b[<0;13;7mx", "\x1b[<64;3;2Mx", "\x1b[<65;3;2Mx", "\x1b[<35;3;2Mx"};
   constexpr std::array<uint16_t, 5> buttons{1, 1, 4, 5, 0};
   constexpr std::array actions{terminal::MouseButtonEvent::pressed, terminal::MouseButtonEvent::released, terminal::MouseButtonEvent::pressed,
                                terminal::MouseButtonEvent::pressed, terminal::MouseButtonEvent::moved};
   for (std::size_t index = 0; index < buttons.size(); ++index)
   {
-    // Ncurses can batch reports; later reads may reach EOF while decoded mouse data remains queued.
+    reset_terminal_input_file(input);
+    expect(std::fwrite(reports[index].data(), 1, reports[index].size(), input) == reports[index].size(), "mouse reports must be written completely");
+    std::rewind(input);
+    auto const report_label = " (report " + std::to_string(index) + ")";
     wint_t value = 0;
     auto const key = context.read_curses_key(value);
-    if (index == 0)
-      expect(key == terminal::Key::Mouse, "ncurses must recognize SGR mouse input");
+    expect(key == terminal::Key::Mouse, "ncurses must recognize each SGR mouse report" + report_label);
+    if (key != terminal::Key::Mouse)
+      return;
     auto event = terminal::get_mouse_event();
-    expect(event.has_value(), "get_mouse_event must decode the queued report");
+    expect(event.has_value(), "get_mouse_event must decode the queued report" + report_label);
     if (!event)
       return;
-    expect(event->button() == buttons[index], "mouse button numbers must preserve wheel direction");
+    expect(event->button() == buttons[index], "mouse button numbers must preserve wheel direction" + report_label);
     expect(event->position().row() == (index < 2 ? 6U : 1U) && event->position().col() == (index < 2 ? 12U : 2U),
-           "mouse coordinates must be zero-based in row, column order");
-    expect(event->event() == actions[index], "mouse action must distinguish press, release, and motion");
-    expect(static_cast<uint8_t>(event->modifiers()) == (index == 0 ? 7 : 0), "Shift, Alt, and Ctrl modifiers must combine independently");
+           "mouse coordinates must be zero-based in row, column order" + report_label);
+    expect(event->event() == actions[index], "mouse action must distinguish press, release, and motion" + report_label);
+    expect(static_cast<uint8_t>(event->modifiers()) == (index == 0 ? 7 : 0), "Shift, Alt, and Ctrl modifiers must combine independently" + report_label);
+    // A text marker terminates native mouse look-ahead without relying on the fixture's EOF behavior.
+    auto const fence_key = context.read_curses_key(value);
+    expect(fence_key == terminal::Key::WideCharacter && value == L'x', "mouse decoding must leave the text fence intact" + report_label);
+    if (fence_key != terminal::Key::WideCharacter || value != L'x')
+      return;
+    expect(!terminal::get_mouse_event(), "each exchange must consume its only mouse report" + report_label);
   }
   expect(!terminal::get_mouse_event(), "an empty mouse queue must return nullopt rather than an invented event");
 }
