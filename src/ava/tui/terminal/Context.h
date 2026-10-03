@@ -320,8 +320,10 @@ class Context final
   std::optional<wchar_t> read_plain_wide_character();
 
   // Read one character of an escape/control sequence after ESC was already consumed.
-  // Returns true if another character could be appended.
-  bool append_escape_sequence_character(std::string& consumed_out);
+  //
+  // Returns a plain wide character, maps the native Backspace key to DEL, and returns nullopt on timeout, read failure, or another special key.
+  // Reads with the current screen timeout; encoding and sequence accumulation belong to the caller.
+  std::optional<wchar_t> read_escape_sequence_character();
 
   // Set a temporary timeout on stdsrc.
   ScopedTimeout timeout(std::chrono::milliseconds delay_ms) { return {delay_ms}; }

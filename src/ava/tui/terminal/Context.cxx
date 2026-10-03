@@ -2,7 +2,6 @@
 #include "ColorPalette.h"
 #include "Context.h"
 #include "ava/tui/config.h"
-#include "ava/tui/encode_wide_character.h"
 #include "utils/to_string.h"
 
 #include <algorithm>
@@ -788,22 +787,20 @@ std::optional<wchar_t> Context::read_plain_wide_character()
   return static_cast<wchar_t>(value);
 }
 
-bool Context::append_escape_sequence_character(std::string& consumed_out)
+// Translate only native read status and Backspace; return immediately without encoding or modifying frontend text buffers.
+std::optional<wchar_t> Context::read_escape_sequence_character()
 {
   wint_t value = 0;
   auto const result = read_wch(&value);
   if (result == ERR)
-    return false;
+    return std::nullopt;
   if (result == KEY_CODE_YES)
   {
     if (static_cast<int>(value) == KEY_BACKSPACE)
-      consumed_out.push_back('\x7f');
-    else
-      return false;
+      return L'\x7f';
+    return std::nullopt;
   }
-  else if (auto encoded = runtime_input::encode_wide_character(static_cast<wchar_t>(value)))
-    consumed_out += *encoded;
-  return true;
+  return static_cast<wchar_t>(value);
 }
 
 } // namespace ava::tui::terminal

@@ -6,6 +6,7 @@
 #include "terminal/Window.h"
 #include "ava/core/Application.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
@@ -144,6 +145,28 @@ void test_context_resizeterm()
          "Context resize test must restore the original screen dimensions");
 }
 
+// Verify escape reads return decoded characters, including NUL and Unicode, without encoding them or accepting unrelated special keys.
+void test_escape_sequence_character_reads()
+{
+  auto& context = ava::core::Application::instance().terminal_context();
+  auto const original = context.size();
+  auto timeout = context.timeout(std::chrono::milliseconds(0));
+  static_cast<void>(terminal::Context::flushinp());
+  for (wchar_t character : {L'[', L'\x7f', L'\u00e9', L'\0'})
+  {
+    terminal::BasicWindow::unget_wch(character);
+    auto const decoded = context.read_escape_sequence_character();
+    expect(decoded && *decoded == character, "escape reads must preserve decoded wide characters without converting them to bytes");
+  }
+  expect(!context.read_escape_sequence_character(), "escape reads must return nullopt when no input is available");
+  expect(terminal::Context::resizeterm(static_cast<int>(original.height()) + 1, static_cast<int>(original.width())),
+         "escape read regression must enqueue a native resize key");
+  expect(!context.read_escape_sequence_character(), "escape reads must reject native resize keys rather than returning their numeric key code");
+  expect(terminal::Context::resizeterm(static_cast<int>(original.height()), static_cast<int>(original.width())),
+         "escape read regression must restore the original screen dimensions");
+  static_cast<void>(terminal::Context::flushinp());
+}
+
 } // namespace
 
 // Configure the terminal before the Application initializes the Context used by window tests.
@@ -158,4 +181,5 @@ void run_terminal_window_tests()
   test_rendition_italic_reverse_round_trip();
   test_margin_aware_window_geometry_and_lifetime();
   test_context_resizeterm();
+  test_escape_sequence_character_reads();
 }

@@ -66,16 +66,22 @@ RuntimeInput space_input()
 }
 
 // Read the body of an escape/control sequence after ESC was already consumed.
-// Bounded by kMaxEscapeSequenceBytes; stops on complete sequence, timeout, or
-// non-backspace KEY_CODE. Caller owns the surrounding wtimeout budget.
+// Encode decoded wide characters and accumulate at most kMaxEscapeSequenceBytes.
+// Stops on a complete sequence, timeout, unencodable character, or a special key other than Backspace.
+// Caller owns the surrounding screen timeout budget.
 std::string read_escape_sequence_body(terminal::Context& terminal_context)
 {
   std::string consumed;
   consumed.reserve(32);
   while (consumed.size() < kMaxEscapeSequenceBytes)
   {
-    if (!terminal_context.append_escape_sequence_character(consumed))
+    auto const character = terminal_context.read_escape_sequence_character();
+    if (!character)
       break;
+    auto const encoded = encode_wide_character(*character);
+    if (!encoded || encoded->size() > kMaxEscapeSequenceBytes - consumed.size())
+      break;
+    consumed += *encoded;
     if (terminal_escape_sequence_complete(consumed))
       break;
   }
