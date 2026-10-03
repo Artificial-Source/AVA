@@ -38,7 +38,7 @@ recorded commands have passed.
 | M0.4 | Add lightweight CI performance/reliability smoke | Performance Engineer + coordinator | completed | `tests/CMakeLists.txt`; harness smoke checks | Default CTest registration; Release and BetaTest smoke pass; helper omission has a negative test | `8fab13fe`, `971327fb` | Coarse catastrophic ceilings intentionally do not gate microbenchmark deltas |
 | M1.1 | Define process ownership identifiers and supervisor API | Process Lifecycle Architect + coordinator | completed | [`docs/engineering/process-supervisor-adr.md`](process-supervisor-adr.md) | Accepted ADR; source Markdown links, documentation structure, and textual diff checks passed | `44f28d1a` | Implementation evidence remains in M1.2–M1.5 |
 | M1.2 | Implement managed Linux/POSIX process groups and tree cleanup; retain the future Windows contract without a support claim | Process Lifecycle Engineer | active | `src/ava/process/`; [`docs/engineering/process-supervisor-adr.md`](process-supervisor-adr.md) | Reservation-before-fork, gated exec/adoption, exact environments, readiness, pidfd/adaptive monitor, immutable deadlines, exact reap, scopes, shutdown, and opaque anchored executable/cwd capabilities are implemented; process suites, repeated runs, ASan/UBSan, TSan, and process benchmark smoke pass | `09312277`–`dcf9a569`, `eb3f2690` | LSP provenance mapping and Bash's async-signal-safe containment refactor are the next production prerequisites; `setsid` escape, unkillable-process limits, conservative POSIX runtime evidence, and unsupported Windows execution remain explicit |
-| M1.3 | Migrate every process-spawning subsystem | Process Lifecycle Engineer + subsystem owners | active | Curl transport, Plugin runner, and clipboard helpers; migration matrix in [`docs/engineering/process-supervisor-adr.md`](process-supervisor-adr.md#api-and-authority-contract) | Curl, Plugin, and clipboard now use explicit application/session/run/operation Supervisor scopes as applicable, exact role environments, bounded output/deadlines, managed-group cleanup, and static no-legacy-authority contracts; focused/repeated/full/sanitizer tests, process smoke, and a qualified paired Release Plugin baseline pass | `d33c1be5`, `a6e6465c`, `f135c476`, `ffda314f`, `93d991c7`, `46deea54`, `7f8dcdc4`, `25ed6a21`, `2a30f40e` | MCP, LSP, Bash, Mermaid, browser opener, and external editor remain legacy-local; no mixed ownership or runtime fallback is permitted |
+| M1.3 | Migrate every process-spawning subsystem | Process Lifecycle Engineer + subsystem owners | active | Curl transport, Plugin runner, clipboard helpers, and MCP stdio client; migration matrix in [`docs/engineering/process-supervisor-adr.md`](process-supervisor-adr.md#api-and-authority-contract) | Curl, Plugin, clipboard, and MCP now use explicit application/session/run/operation Supervisor scopes as applicable, exact role environments, bounded output/deadlines, managed-group cleanup, and static no-legacy-authority contracts. MCP launches mint `ava-mcp-explicit-v1` only (trusted PATH, synthetic PWD, explicit config `env`; no ambient inheritance) and settle through Supervisor rather than leader `waitpid`. MCP family benchmark authority is supervised. No MCP speedup is claimed. | prior Curl/Plugin/clipboard commits; MCP integration `6f4a8dd1`–`cd27fa9e` | LSP, Bash, Mermaid, browser opener, and external editor remain legacy-local; no mixed ownership or runtime fallback is permitted |
 | M1.4 | Add bounded, secret-safe process diagnostics | Process Lifecycle Engineer | active | Process snapshots, launch framing, readiness, benchmark redaction | Closed content-free process reasons/snapshots and benchmark redaction are implemented and tested | M1 foundation commits | Application trace/support-export adaptation remains incomplete; no raw PID/PGID/fd/path/argv/environment content may be added |
 | M1.5 | Add leak, cancellation, timeout, descendant, and shutdown tests | Process Test Engineer | active | Process, capability, Curl, Plugin, clipboard, static-contract, and schema-v3 benchmark suites | Exact settlement/reap, leader-first descendants, refusal escalation, race gates, environment canaries, descriptor replacement/FD hygiene, deadline-vs-cancel ordering, bounded Plugin protocol queues, pidfd/fallback, repeated races, ASan/UBSan, TSan, and full 168-test BetaTest pass | M1 foundation and migration commits | Real PTY gates remain for editor migration; separate conservative-POSIX CI and future Windows tests remain required |
 | M2.1 | Document and compatibility-test existing plugin protocol | Plugin Runtime Engineer | not started | pending | pending | Legacy protocol ambiguity |
@@ -117,6 +117,10 @@ IDs and one of: `open`, `fixed`, `rejected`, or `deferred`.
 | M1-PLUG-003 | M1 | fixed | Bare PATH, absolute, `./`, nested-relative, and parent-relative executable spellings retain compatibility: spawn resolves only slash-relative executables against the absolute plugin cwd while preserving manifest `argv[0]`. |
 | M1-PLUG-004 | M1 | fixed | One absolute startup budget spans supervised exec and initialization. Parent cancellation is observed without a helper thread, while already-due execution/startup deadlines win in protocol, terminal snapshot, and returned error; gated children never exec after cancellation. |
 | M1-PLUG-005 | M1 | fixed | Static scanners forbid raw fork/exec/pipe/dup/signal/wait authority and have negative self-tests; live-destructor, late-settlement, Linux descendant, authority isolation, and source-owned benchmark claim tests close migration-gate false negatives. |
+| MCP-IO-01 | M1 | fixed | `d62fb825` maps only `EPIPE`/`ECONNRESET` to neutral pipe EOF, preserving MCP peer-close context and bounded stderr-byte metadata; closed-reader and initialized-notification regressions pass. |
+| MCP-TEST-02 | M1 | fixed | `d62fb825` denial fixtures observe no new process records after permitted registry discovery and zero live records, rather than treating permitted discovery as forbidden dispatch. |
+| MCP-IO-03 | M1 | fixed | `1e982024` adds owned-handle read-only committed-stop observation before MCP requests, I/O, waits, and buffered response acceptance. Gated owner-stop tests prove no later `tools/list`; complete natural-exit responses remain readable. |
+| BENCH-MCP-01 | M1 | fixed | `b666309b` admits the already-adapted MCP benchmark driver to the supervised-family guard. Existing thresholds, provenance, managed-group cleanup, finished-record and single-settlement requirements remain unchanged. |
 | BENCH-001 | M1 | fixed | Comparison now requalifies live recorded worktrees, commits/trees/cleanliness, exact runtime references, regenerated non-overlapping family/shared ownership scopes, authority source, harness script, AVA/helper build roots, and common fixtures. Malformed, missing, hostile-path, or stale provenance returns bounded structured unsupported evidence rather than throwing or measuring. |
 | BENCH-002 | M1 | fixed | Plugin uses immediate reviewed before `13fb0cef` and after `2a30f40e`; Curl is supervised in both, so exactly one Plugin authority/scope transition is measured. Multiple or reverse transitions are rejected. |
 | BENCH-003 | M1 | fixed | Source attribution uses complete recursive Plugin/MCP/LSP scopes, deterministic Curl/Bash pathspec scopes, and a separate complete shared process-plumbing scope. Independent AVA/helper CMake provenance must bind both binaries to the measured root and source-owned authority map. |
@@ -149,6 +153,75 @@ IDs and one of: `open`, `fixed`, `rejected`, or `deferred`.
 - Forward raw evidence: [before](process-plugin-forward-before-2026-09-02.json), [after](process-plugin-forward-after-2026-09-02.json), and [comparison](process-plugin-forward-comparison-2026-09-02.json). Plugin median changed from 11.291063 ms to 24.247045 ms: +12.955982 ms (+114.745%).
 - Reversed-order raw evidence: [before](process-plugin-reverse-before-2026-09-02.json), [after](process-plugin-reverse-after-2026-09-02.json), and [comparison](process-plugin-reverse-comparison-2026-09-02.json). Plugin median changed from 11.355040 ms to 24.320772 ms: +12.965732 ms (+114.185%).
 - Both orderings therefore reproduce the non-gating latency investigation trigger. Investigation traced the changed lifecycle boundary to Supervisor gate/exec confirmation and two quiet-group proofs before exact reap; Linux `verified_group_has_live_member` scans procfs for same-group survivors. Tracing perturbs timings, so no percentage is assigned to an individual mechanism. The safety-preserving one-shot cost is recorded rather than optimized speculatively; M2 persistent workers are expected to amortize process lifecycle work but have no measured claim yet.
+
+## MCP and headless integration evidence — 2026-09-30
+
+- Validated implementation snapshot: `cd27fa9e474287cc6b72f84b5805f9ee8ecce0ff`,
+  after 18 local backend commits above reviewed incoming `102a99da`. Carlo's
+  incoming 11 commits and 23 changed paths, including executable build/test code
+  and the exact utils gitlink, were audited before the local fast-forward. No
+  malware indicators were identified; this is not proof of malware absence.
+- This increment implements MCP Supervisor migration and follow-up environment,
+  consent, EOF, deadline, and committed-stop fixes; issue #79 single submission
+  resolution with passive recognition and typed cancellation; issue #82 private
+  owned fixture isolation; and explicit default-off print/RPC read/search
+  scheduling with worker bounds and no child-loop inheritance. It does not
+  complete M1 or the broader backend backlog.
+- The single integrated Sol-high security gate reviewed committed
+  `102a99da..cd27fa9e` under the agreed operator/project trust model and found no
+  material security issue. It was a source-level gate, not an independent runtime
+  test run. Trusted MCP grants authorize evolving unsandboxed server/script
+  paths, not immutable script bytes; unkeyed composition hashes are not encryption.
+- Rebuilt developer (`BetaTest`, debug enabled), Release, and ASan/UBSan trees.
+  Full CTest results were respectively **154 passed / 29 skipped / 0 failed**,
+  **152 passed / 29 skipped / 0 failed**, and **156 passed / 29 skipped / 0 failed**.
+  Skips were the opt-in live-provider, real-clangd, and terminal/tmux smokes; they
+  are not passes. The Release SDK interop test initially could not start because
+  of a removed cached Node executable. Updating only `AVA_NODE_EXECUTABLE` to the
+  installed Node path made the focused test and full suite pass.
+- Reproduction commands, after configuring the documented build trees:
+
+  ```sh
+  export GITACHE_ROOT="${GITACHE_ROOT:-$HOME/.cache/ava/gitache}"
+  scripts/build.sh --build-dir build --jobs 4 --target generate-print-members
+  scripts/build.sh --build-dir build --jobs 4
+  scripts/run-tests.sh --build-dir build --jobs 4
+  scripts/build.sh --build-dir build-release --jobs 4
+  scripts/run-tests.sh --build-dir build-release --jobs 4
+  scripts/build.sh --build-dir build-sanitize --jobs 2 --target generate-print-members
+  scripts/build.sh --build-dir build-sanitize --jobs 2
+  scripts/run-tests.sh --build-dir build-sanitize --jobs 2
+  scripts/run-tests.sh --build-dir build --jobs 4 --repeat until-fail:3 \
+    -R '^ava_tests\.(mcp|app_command_registry|app_interactive|process_supervisor_posix|agent_loop|acp|app_rpc)$|^ava_cli\.(headless_e2e_model_smoke|headless_parallel_read_search_tools)$'
+  ```
+
+- All nine critical tests above passed three consecutive executions (27 passes).
+  The #82 headless smoke additionally passed ten consecutive executions while an
+  owned concurrent harness created/removed 99,551 unpredictable empty directories
+  directly beneath the former build-tree fixture ancestor. No churn errors or
+  owned directories remained. This is ancestor-churn evidence, not a claim that
+  the original intermittent failure was reproduced before the fix.
+- All 21 process benchmark smoke checks passed in all three trees. MCP was
+  measured as `supervised`, with `managed_group` cleanup, a finished Supervisor
+  record, and one settlement. LSP and Bash remain `legacy_local`. Binary source
+  commit embedding is explicitly unverified; artifact/source/cache identity is
+  best-effort provenance, not clean-release qualification. No MCP speedup is claimed.
+- Local command logs are `build/ava-backend-final-dev.log`,
+  `build/ava-backend-final-repeat.log`, `build/ava-backend-final-churn.log`,
+  `build-release/ava-backend-final-release.log`, and
+  `build-sanitize/ava-backend-final-sanitize.log`; these build artifacts are not
+  committed evidence fixtures. Process smoke JSON/Markdown remain in each tree.
+- Changed ranges in 45 C++ files pass clang-format 22.1.3. Whole-file checks found
+  only preexisting untouched violations in `tests/app_rpc_commands_tests.cpp` and
+  `tests/command_tests.cpp`; unrelated formatting was preserved. Whitespace gates
+  pass. Clang-tidy is unavailable on PATH and was not run; no TSan rerun or new
+  platform qualification is claimed.
+- Remaining in-scope tracks are LSP/Bash supervision prerequisites, bounded
+  session reads/catalog pagination, selective tool advertising/discovery, and
+  typed settings/reload research and approval. No storage migration, persistent
+  plugin worker, broader scheduler, SDK, or native-plugin completion is implied.
+  All integration commits are local; nothing was pushed and unrelated desktop/docs
+  working-tree changes were left untouched.
 
 ## M0 validation evidence
 

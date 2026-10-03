@@ -113,6 +113,8 @@ ava::core::Result<PipeIoResultV1> PipeEndpoint::write(std::span<std::byte const>
     return PipeIoResultV1{.bytes = static_cast<std::size_t>(result), .state = PipeIoStateV1::Progress};
   if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK)
     return PipeIoResultV1{.bytes = 0, .state = PipeIoStateV1::WouldBlock};
+  if (saved_errno == EPIPE || saved_errno == ECONNRESET)
+    return PipeIoResultV1{.bytes = 0, .state = PipeIoStateV1::EndOfStream};
   return std::unexpected(detail::io_error("failed to write a process pipe endpoint", saved_errno));
 #endif
 }
@@ -417,6 +419,18 @@ ava::core::Result<StopResultV1> Supervisor::request_stop(OwnerPathV1 const& owne
   }
   detail::notify_monitor_state(state);
   return result;
+}
+
+ava::core::Result<std::optional<TerminationReasonV1>> Supervisor::committed_stop_reason(ProcessHandle const& handle) const
+{
+  auto const state = implementation_->state;
+  if (!handle.valid() || handle.state_->supervisor.lock().get() != state.get())
+    return std::unexpected(detail::invalid_error("process handle does not belong to this supervisor"));
+  std::lock_guard lock(state->mutex);
+  auto const found = state->records.find(handle.state_->record);
+  if (found == state->records.end())
+    return std::unexpected(detail::invalid_error("process handle has no retained supervisor record"));
+  return found->second->reason;
 }
 
 ava::core::Result<ExitStatusV1> Supervisor::wait(ProcessHandle const& handle, ProcessDeadline deadline) const

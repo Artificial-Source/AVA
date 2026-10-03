@@ -19,6 +19,7 @@
 #include "ava/app/runtime_retry.h"
 #include "ava/app/subagent_delivery_manager.h"
 #include "ava/agent/mode.h"
+#include "ava/tools/tool_io.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/plugin/enablement.h"
 #include "ava/plugin/tool_broker.h"
@@ -32,6 +33,7 @@
 #include "ava/provider/openai_provider.h"
 #include "ava/provider/provider.h"
 #include "ava/core/error.h"
+#include "ava/core/json.h"
 #include "ava/core/path.h"
 #include "ava/core/result.h"
 #include "ava/core/thread.h"
@@ -45,6 +47,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1862,6 +1865,234 @@ void test_app_run_prompt_event_sink_failure_cancels_before_next_provider_call()
   expect(!result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "event sink failed",
          "runtime returns the event sink write failure");
   expect(transport.requests().size() == 1, "event sink failure cancels before the next provider request");
+}
+
+void test_app_run_prompt_rejects_invalid_parallel_read_search_options()
+{
+  auto const root = create_empty_root("app-runtime-parallel-invalid-options");
+  auto const workspace = root / "workspace";
+  auto const paths = app_test_paths(root);
+  std::filesystem::create_directories(workspace);
+
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.mode = ava::agent::Mode::Build;
+  open_context.paths = paths;
+  auto unlocked_session_result = ava::app::runtime::Session::open(open_context);
+  expect(unlocked_session_result.has_value(), "invalid parallel option test opens session");
+  if (!unlocked_session_result)
+    return;
+
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport({sse_response(final_text_sse("should not run"))});
+  ava::app::runtime::RunOptions run_options;
+  run_options.access_token = "token";
+  run_options.offline = true;
+  run_options.parallel_read_search_tools = true;
+  run_options.parallel_read_search_max_workers = 0;
+  auto zero = ava::app::run_prompt(*unlocked_session_result, "invalid workers", provider, transport, run_options);
+  expect(!zero && zero.error().category() == ava::core::ErrorCategory::InvalidArgument &&
+             zero.error().message().find("parallel-read-search-max-workers must be an integer from 1 to 4") != std::string::npos &&
+             transport.requests().empty(),
+         "run_prompt rejects zero max workers before offline or provider activity");
+
+  run_options.offline = false;
+  run_options.parallel_read_search_max_workers = 5;
+  auto over = ava::app::run_prompt(*unlocked_session_result, "invalid workers", provider, transport, run_options);
+  expect(!over && over.error().category() == ava::core::ErrorCategory::InvalidArgument && transport.requests().empty(),
+         "run_prompt rejects max workers above 4 before provider activity");
+
+  ava::app::runtime::RunOptions defaults;
+  auto valid = ava::app::validate_run_options(defaults);
+  expect(valid && !defaults.parallel_read_search_tools && defaults.parallel_read_search_max_workers == 4,
+         "RunOptions defaults stay disabled with max workers 4");
+}
+
+void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_barrier()
+{
+  auto const root = create_empty_root("app-runtime-parallel-read-search-bridge");
+  auto const workspace = root / "workspace";
+  auto const paths = app_test_paths(root);
+  std::filesystem::create_directories(workspace);
+  {
+    std::ofstream notes(workspace / "notes.txt", std::ios::binary | std::ios::trunc);
+    notes << "alpha original\n";
+    std::ofstream extra(workspace / "extra.txt", std::ios::binary | std::ios::trunc);
+    extra << "alpha extra\n";
+  }
+  auto const outside = root / "outside.txt";
+  {
+    std::ofstream file(outside, std::ios::binary | std::ios::trunc);
+    file << "secret\n";
+  }
+
+  class LoggingExactFileAccess final : public ava::tools::ExactFileAccess
+  {
+   public:
+    explicit LoggingExactFileAccess(std::shared_ptr<std::vector<std::string>> log, std::shared_ptr<std::mutex> mutex,
+                                    std::map<std::filesystem::path, std::string> files)
+        : log_(std::move(log)), mutex_(std::move(mutex)), files_(std::move(files))
+    {
+    }
+
+    [[nodiscard]] ava::core::Result<std::string> read_text_file(std::filesystem::path const& path, ava::tools::ToolIoCancelCallback) const override
+    {
+      std::lock_guard lock(*mutex_);
+      log_->push_back("read:" + path.filename().string());
+      auto found = files_.find(path);
+      if (found == files_.end())
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "injected exact file is missing"));
+      return found->second;
+    }
+
+    [[nodiscard]] ava::core::VoidResult write_text_file(std::filesystem::path const& path, std::string_view content,
+                                                        ava::tools::ToolIoCancelCallback) const override
+    {
+      std::lock_guard lock(*mutex_);
+      log_->push_back("write:" + path.filename().string());
+      files_[path] = std::string(content);
+      return {};
+    }
+
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+   private:
+    std::shared_ptr<std::vector<std::string>> log_;
+    std::shared_ptr<std::mutex> mutex_;
+    mutable std::map<std::filesystem::path, std::string> files_;
+  };
+
+  auto function_call_sse = [](std::string_view id, std::string_view name, std::string_view arguments_json) {
+    return "data: {\"type\":\"response.function_call.added\",\"call_id\":\"" + ava::core::json::escape(id) + "\",\"name\":\"" + ava::core::json::escape(name) +
+           "\"}\n\n" + "data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"" + ava::core::json::escape(id) + "\",\"delta\":\"" +
+           ava::core::json::escape(arguments_json) + "\"}\n\n";
+  };
+
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.mode = ava::agent::Mode::Build;
+  open_context.paths = paths;
+  auto unlocked_session_result = ava::app::runtime::Session::open(open_context);
+  expect(unlocked_session_result.has_value(), "parallel read/search bridge test opens session");
+  if (!unlocked_session_result)
+    return;
+
+  auto log = std::make_shared<std::vector<std::string>>();
+  auto log_mutex = std::make_shared<std::mutex>();
+  auto files = std::map<std::filesystem::path, std::string>{{workspace / "notes.txt", "alpha original\n"}, {workspace / "extra.txt", "alpha extra\n"}};
+  auto exact = std::make_shared<LoggingExactFileAccess>(log, log_mutex, std::move(files));
+  std::vector<ava::event::RuntimeEvent> events;
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport(
+      {sse_response(function_call_sse("call_read", "read_file", R"({"path":"notes.txt"})") +
+                    function_call_sse("call_list", "list_directory", R"({"path":".","max_entries":20})") +
+                    function_call_sse("call_glob", "glob", R"({"pattern":"*.txt"})") +
+                    function_call_sse("call_grep", "grep", R"({"pattern":"alpha","include":"*.txt","literal":true})") + "data: [DONE]\n\n"),
+       sse_response(function_call_sse("call_write", "write_file", R"({"path":"notes.txt","content":"mutated-visible\n"})") + "data: [DONE]\n\n"),
+       sse_response(function_call_sse("call_post_read", "read_file", R"({"path":"notes.txt"})") + "data: [DONE]\n\n"),
+       sse_response(final_text_sse("parallel bridge done"))});
+  ava::app::runtime::RunOptions run_options;
+  run_options.access_token = "token";
+  run_options.parallel_read_search_tools = true;
+  run_options.parallel_read_search_max_workers = 4;
+  run_options.exact_file_access = exact;
+  run_options.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    return ava::permissions::PermissionResolution::Allow;
+  };
+  run_options.event_sink = [&events, log, log_mutex](ava::event::RuntimeEvent const& event) {
+    {
+      std::lock_guard lock(*log_mutex);
+      if (auto const* start = ava::tests::runtime_event_as<ava::event::ToolStartEvent>(event))
+        log->push_back("start:" + start->payload.call_id);
+      else if (auto const* result = ava::tests::runtime_event_as<ava::event::ToolResultEvent>(event))
+        log->push_back("result:" + result->payload.call_id);
+    }
+    events.push_back(event);
+    return ava::core::VoidResult{};
+  };
+
+  auto result = ava::app::run_prompt(*unlocked_session_result, "parallel read search", provider, transport, run_options);
+  expect(result && result->final_text == "parallel bridge done" && result->tool_calls == 6,
+         "parallel read/search RunOptions bridge completes the eligible batch, mutation barrier, and post-read");
+
+  std::vector<std::string> call_ids;
+  std::vector<std::string> result_ids;
+  for (auto const& event : events)
+  {
+    if (auto const* start = ava::tests::runtime_event_as<ava::event::ToolStartEvent>(event))
+      call_ids.push_back(start->payload.call_id);
+    else if (auto const* tool_result = ava::tests::runtime_event_as<ava::event::ToolResultEvent>(event))
+      result_ids.push_back(tool_result->payload.call_id);
+  }
+  expect(call_ids == std::vector<std::string>({"call_read", "call_list", "call_glob", "call_grep", "call_write", "call_post_read"}) && result_ids == call_ids,
+         "runtime ToolStart/ToolResult keep original provider-call order and exact tool-result IDs");
+
+  auto snapshot = [&] {
+    std::lock_guard lock(*log_mutex);
+    return *log;
+  }();
+  auto const first_start = std::ranges::find_if(snapshot, [](std::string const& item) { return item.starts_with("start:"); });
+  auto const first_read = std::ranges::find(snapshot, std::string("read:notes.txt"));
+  expect(first_read != snapshot.end() && first_start != snapshot.end() && first_read < first_start,
+         "opt-in grouped scheduling reads eligible files before publishing ToolStart, unlike sequential start-then-read order");
+
+  bool saw_write = false;
+  bool post_read_after_write = false;
+  for (auto const& item : snapshot)
+  {
+    if (item == "start:call_write" || item == "write:notes.txt")
+      saw_write = true;
+    if (item == "start:call_post_read" && saw_write)
+      post_read_after_write = true;
+  }
+  expect(post_read_after_write, "post-mutation read is scheduled after the write barrier");
+
+  bool mutated_visible = false;
+  for (auto const& event : events)
+  {
+    auto const* tool_result = ava::tests::runtime_event_as<ava::event::ToolResultEvent>(event);
+    if (!tool_result || tool_result->payload.call_id != "call_post_read")
+      continue;
+    mutated_visible =
+        tool_result->payload.result_json.find("mutated-visible") != std::string::npos || tool_result->payload.text.find("mutated-visible") != std::string::npos;
+  }
+  expect(mutated_visible, "post-mutation read observes barrier-visible written content");
+
+  ava::app::runtime::OpenContext deny_context = open_context;
+  auto deny_session = ava::app::runtime::Session::open(deny_context);
+  expect(deny_session.has_value(), "parallel denial test opens a separate session");
+  if (!deny_session)
+    return;
+  ava::tests::FakeTransport deny_transport(
+      {sse_response(function_call_sse("outside_read", "read_file", std::string("{\"path\":\"") + ava::core::json::escape(outside.generic_string()) + "\"}") +
+                    function_call_sse("inside_read", "read_file", R"({"path":"notes.txt"})") + "data: [DONE]\n\n"),
+       sse_response(final_text_sse("denial handled"))});
+  std::vector<ava::event::RuntimeEvent> deny_events;
+  ava::app::runtime::RunOptions deny_options;
+  deny_options.access_token = "token";
+  deny_options.parallel_read_search_tools = true;
+  deny_options.parallel_read_search_max_workers = 2;
+  deny_options.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    return ava::permissions::PermissionResolution::Deny;
+  };
+  deny_options.event_sink = [&deny_events](ava::event::RuntimeEvent const& event) {
+    deny_events.push_back(event);
+    return ava::core::VoidResult{};
+  };
+  auto denied = ava::app::run_prompt(*deny_session, "deny outside", provider, deny_transport, deny_options);
+  expect(denied && denied->final_text == "denial handled", "parallel opt-in still completes a permission-denied tool batch");
+  bool denied_outside = false;
+  for (auto const& event : deny_events)
+  {
+    auto const* tool_result = ava::tests::runtime_event_as<ava::event::ToolResultEvent>(event);
+    if (tool_result && tool_result->payload.call_id == "outside_read" &&
+        (tool_result->payload.status == "error" || tool_result->payload.error_code == "permission_denied" ||
+         tool_result->payload.error_category == "permission_denied" || tool_result->payload.text.find("permission") != std::string::npos))
+      denied_outside = true;
+  }
+  expect(denied_outside, "parallel opt-in preserves the permission denial path");
 }
 
 }  // namespace ava::tests::app_runtime_tests

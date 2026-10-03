@@ -163,6 +163,10 @@ void emit_family(std::string_view benchmark_case, double elapsed, bool protocol_
   if (options.benchmark_case == "family-plugin-lifecycle")
     return false;
 #endif
+#if defined(AVA_BENCHMARK_MCP_AUTHORITY_SUPERVISED)
+  if (options.benchmark_case == "family-mcp-lifecycle")
+    return false;
+#endif
   emit_helper_unsupported(options.benchmark_case, "lifecycle_ns", "ns", "caller_not_migrated", kCallerNotMigratedReason, family_case_metrics(authority));
   return true;
 }
@@ -319,10 +323,15 @@ void benchmark_plugin(BackendBenchmarkOptions const& options)
 
 void benchmark_mcp(BackendBenchmarkOptions const& options)
 {
+#if !defined(AVA_BENCHMARK_MCP_AUTHORITY_SUPERVISED)
+  emit_helper_unsupported(options.benchmark_case, "lifecycle_ns", "ns", "caller_not_migrated", kCallerNotMigratedReason,
+                          family_case_metrics(authority_for(options.benchmark_case)));
+  return;
+#else
   if (!executable_file(options.fake_mcp_server))
   {
     emit_helper_unsupported(options.benchmark_case, "lifecycle_ns", "ns", "fixture_unavailable", kFixtureUnavailableReason,
-                            family_case_metrics("legacy_local"));
+                            family_case_metrics(authority_for(options.benchmark_case)));
     return;
   }
   TemporaryDirectory temporary("mcp-family");
@@ -336,23 +345,59 @@ void benchmark_mcp(BackendBenchmarkOptions const& options)
                                    .enabled = true,
                                    .scope = ava::mcp::McpServerScope::Project,
                                    .source_path = temporary.path() / "mcp.json"};
+  bool const clean_before = no_waitable_children();
+  auto supervisor = std::make_shared<ava::process::Supervisor>();
+  auto application_scope = ava::process::ProcessScopeV1::application(supervisor);
+  if (!application_scope)
+    fail(application_scope.error().format());
   ava::mcp::McpStdioClientOptions client_options;
   client_options.workspace_dir = workspace;
-  client_options.clean_environment = true;
+  client_options.process_scope = *application_scope;
   client_options.startup_timeout = 5s;
   client_options.request_timeout = 5s;
-  bool const clean_before = no_waitable_children();
   auto const started = Clock::now();
   auto client = ava::mcp::McpStdioClient::start(std::move(server), client_options);
   bool initialized = client && (*client)->initialization().server_name == "fake-mcp";
   auto tools = client ? (*client)->list_tools() : ava::core::Result<std::vector<ava::mcp::McpToolDescription>>(std::unexpected(client.error()));
-  auto shutdown = client ? (*client)->shutdown(500ms) : ava::core::VoidResult(std::unexpected(client.error()));
+  auto mcp_shutdown = client ? (*client)->shutdown(500ms) : ava::core::VoidResult(std::unexpected(client.error()));
   if (client)
     client->reset();
   auto const elapsed = elapsed_nanoseconds(started);
-  bool const expected = tools && tools->size() == 1 && tools->front().name == "echo";
+
+  supervisor->stop_accepting();
+  auto const supervisor_shutdown = supervisor->shutdown(Clock::now() + 2s);
+  auto const snapshot = supervisor->snapshot();
+  std::size_t mcp_record_count = 0;
+  bool record_finished = false;
+  bool settlement_once = false;
+  for (auto const& record : snapshot.records)
+  {
+    if (record.role != ava::process::ProcessRoleV1::Mcp)
+      continue;
+    ++mcp_record_count;
+    record_finished = record.state == ava::process::ProcessStateV1::Finished && record.cleanup == ava::process::CleanupStateV1::Complete;
+    settlement_once = record.settlement_count == 1;
+  }
+  bool const supervisor_verified = supervisor_shutdown.complete && snapshot.live_records == 0 && mcp_record_count == 1 && record_finished && settlement_once;
+  if (!supervisor_verified)
+    fail("supervised MCP benchmark did not produce one completely settled managed-group record");
   bool const clean_after = no_waitable_children();
-  emit_family(options.benchmark_case, elapsed, initialized, expected, static_cast<bool>(shutdown), clean_before && clean_after);
+  bool const expected = tools && tools->size() == 1 && tools->front().name == "echo";
+  emit_helper_measurement(options.benchmark_case, "lifecycle_ns", "ns",
+                          {{.ordinal = 1,
+                            .value = elapsed,
+                            .metrics = {},
+                            .checks = {{"protocol_compatible", initialized},
+                                       {"expected_response", expected},
+                                       {"shutdown_complete", static_cast<bool>(mcp_shutdown) && supervisor_shutdown.complete},
+                                       {"immediate_child_guard", clean_before && clean_after},
+                                       {"supervisor_record_finished", true},
+                                       {"supervisor_settlement_once", true}}}},
+                          {{"authority", std::string("supervised")},
+                           {"supervisor_record_finished", true},
+                           {"supervisor_settlement_once", true},
+                           {"cleanup_scope", std::string("managed_group")}});
+#endif
 }
 
 void benchmark_lsp(BackendBenchmarkOptions const& options)

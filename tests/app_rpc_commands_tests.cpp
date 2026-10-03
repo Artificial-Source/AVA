@@ -4,6 +4,8 @@
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
+#include "ava/process/scope.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/rpc/runtime_navigation.h"
 #include "ava/app/rpc/serialization.h"
@@ -584,6 +586,11 @@ void test_app_rpc_mcp_command_responses()
   open_context.workspace_dir = workspace;
   open_context.current_dir = workspace;
   open_context.paths = paths;
+  auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  expect(application_scope.has_value(), "RPC MCP fixture admits test-owned application process authority");
+  if (!application_scope)
+    return;
+  open_context.application_process_scope = *application_scope;
   auto session = ava::app::runtime::Session::open(open_context);
   expect(session.has_value(), "RPC MCP command test opens runtime session");
   if (!session)

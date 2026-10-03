@@ -13,6 +13,7 @@
 #include "ava/plugin/static_resources.h"
 #include "ava/context/markdown_resource.h"
 #include "ava/context/skill_loader.h"
+#include "ava/core/error.h"
 #include "ava/core/fingerprint.h"
 #include "ava/core/string_utils.h"
 
@@ -20,6 +21,7 @@
 #include <array>
 #include <cctype>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -238,25 +240,98 @@ CommandRegistryEntry const* find_command_registry_entry(CommandRegistry const& r
   return nullptr;
 }
 
+namespace {
+
+bool is_namespaced_extension_token(std::string_view token) noexcept
+{
+  return token.starts_with("/skill:") || token.starts_with("/mcp:") || token.starts_with("/plugin:");
+}
+
+bool is_skill_or_plugin_token(std::string_view token) noexcept
+{
+  return token.starts_with("/skill:") || token.starts_with("/plugin:");
+}
+
+ava::core::Error command_discovery_error(CommandRegistryDiagnostic const& diagnostic)
+{
+  return ava::core::Error(ava::core::ErrorCategory::Unknown, diagnostic.message, diagnostic.error_code);
+}
+
+bool command_was_canceled(std::function<bool()> const& cancel_requested)
+{
+  return cancel_requested && cancel_requested();
+}
+
+}  // namespace
+
 bool command_registry_contains(runtime::session_ts& unlocked_session, std::string_view line)
 {
   if (!line.starts_with('/'))
     return false;
   auto const token = command_token(line);
-  if (token.starts_with("/skill:") || token.starts_with("/mcp:") || token.starts_with("/plugin:"))
+  if (is_namespaced_extension_token(token))
     return true;
 
   auto registry = load_command_registry(
       unlocked_session,
       CommandRegistryOptions{
           .include_builtins = true, .include_prompt_commands = true, .include_skills = true, .include_plugin_commands = true, .include_mcp_prompts = false});
-  if (find_command_registry_entry(registry, line) != nullptr)
-    return true;
-  registry = load_command_registry(
-      unlocked_session,
-      CommandRegistryOptions{
-          .include_builtins = false, .include_prompt_commands = false, .include_skills = false, .include_plugin_commands = false, .include_mcp_prompts = true});
   return find_command_registry_entry(registry, line) != nullptr;
+}
+
+ava::core::Result<std::optional<CommandRegistryEntry>> resolve_command_registry_entry(runtime::session_ts& unlocked_session, std::string_view line,
+                                                                                      ava::permissions::PermissionResolver permission_resolver,
+                                                                                      std::function<bool()> cancel_requested)
+{
+  if (!line.starts_with('/'))
+    return std::optional<CommandRegistryEntry>{};
+
+  auto const token = command_token(line);
+  bool const mcp_namespaced = token.starts_with("/mcp:");
+  auto registry = load_command_registry(unlocked_session, CommandRegistryOptions{.include_builtins = true,
+                                                                                 .include_prompt_commands = true,
+                                                                                 .include_skills = true,
+                                                                                 .include_plugin_commands = true,
+                                                                                 .include_mcp_prompts = mcp_namespaced,
+                                                                                 .permission_resolver = permission_resolver,
+                                                                                 .cancel_requested = cancel_requested});
+  if (auto const* entry = find_command_registry_entry(registry, line))
+    return *entry;
+
+  if (is_skill_or_plugin_token(token))
+  {
+    if (!registry.diagnostics.empty())
+      return std::unexpected(command_discovery_error(registry.diagnostics.front()));
+    return std::optional<CommandRegistryEntry>{};
+  }
+
+  if (!mcp_namespaced)
+  {
+    if (command_was_canceled(cancel_requested))
+    {
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "MCP prompt listing canceled", ava::core::ErrorCode::Canceled));
+    }
+    registry = load_command_registry(unlocked_session, CommandRegistryOptions{.include_builtins = false,
+                                                                              .include_prompt_commands = false,
+                                                                              .include_skills = false,
+                                                                              .include_plugin_commands = false,
+                                                                              .include_mcp_prompts = true,
+                                                                              .permission_resolver = permission_resolver,
+                                                                              .cancel_requested = cancel_requested});
+    if (auto const* entry = find_command_registry_entry(registry, line))
+      return *entry;
+  }
+
+  if (command_was_canceled(cancel_requested))
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "MCP prompt listing canceled", ava::core::ErrorCode::Canceled));
+  }
+  for (auto const& diagnostic : registry.diagnostics)
+  {
+    if (mcp_namespaced || diagnostic.source == to_string(UnifiedCommandSource::McpPrompt))
+      return std::unexpected(command_discovery_error(diagnostic));
+  }
+  return std::optional<CommandRegistryEntry>{};
 }
 
 ava::core::Result<std::string> expand_prompt_command_template(std::string_view template_text, std::string_view argument_text)
@@ -440,7 +515,8 @@ void load_prompt_commands(RegistryBuilder& builder, runtime::session_ts const& u
 
 void load_plugin_commands(RegistryBuilder& builder, runtime::session_ts const& unlocked_session, runtime::ExtensionResourcePolicy const& policy)
 {
-  auto diagnostics = ava::plugin::collect_plugin_diagnostics(policy.plugin_discovery, policy.plugin_enablement_file, runtime::session_ts::crat(unlocked_session)->workspace_dir());
+  auto diagnostics = ava::plugin::collect_plugin_diagnostics(policy.plugin_discovery, policy.plugin_enablement_file,
+                                                             runtime::session_ts::crat(unlocked_session)->workspace_dir());
   for (auto const& failure : diagnostics.failures)
   {
     add_diagnostic(builder, CommandRegistryDiagnostic{.source = to_string(UnifiedCommandSource::PluginCommand),
@@ -527,7 +603,8 @@ bool add_entry(RegistryBuilder& builder, CommandRegistryEntry entry)
 {
   std::vector<std::string> tokens;
   tokens.push_back(entry.command);
-  for (auto const& alias : entry.aliases) tokens.push_back(alias);
+  for (auto const& alias : entry.aliases)
+    tokens.push_back(alias);
   for (auto const& token : tokens)
   {
     if (!valid_command_token(token))
@@ -556,7 +633,8 @@ bool add_entry(RegistryBuilder& builder, CommandRegistryEntry entry)
 
   auto const index = builder.registry.entries.size();
   builder.registry.entries.push_back(std::move(entry));
-  for (auto& token : tokens) builder.occupied.emplace(std::move(token), index);
+  for (auto& token : tokens)
+    builder.occupied.emplace(std::move(token), index);
   return true;
 }
 

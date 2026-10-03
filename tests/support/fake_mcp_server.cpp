@@ -66,6 +66,15 @@ void write_environment_marker(std::string const& path)
   file << "PATH=" << value("PATH") << '\n';
 }
 
+void append_event_log(std::string_view event)
+{
+  char const* path = std::getenv("AVA_FAKE_MCP_EVENT_LOG");
+  if (path == nullptr || path[0] == '\0')
+    return;
+  std::ofstream file(path, std::ios::binary | std::ios::app);
+  file << event << '\n';
+}
+
 void write_cwd_marker(std::string const& path)
 {
   if (path.empty())
@@ -94,6 +103,7 @@ int main(int argc, char** argv)
   if (argc > 1)
     mode = argv[1];
   std::string const marker_path = argc > 2 ? argv[2] : "";
+  append_event_log("launch");
   if (mode == "env-marker")
     write_environment_marker(marker_path);
   if (mode == "stderr-noise")
@@ -108,6 +118,7 @@ int main(int argc, char** argv)
     auto const id = ava::core::json::string_field(*message, "id");
     if (!method || !id)
       continue;
+    append_event_log(*method);
 
     if ((mode == "timeout-initialize" || mode == "timeout-initialize-marker") && *method == "initialize")
     {
@@ -147,7 +158,8 @@ int main(int argc, char** argv)
       {
         close(STDIN_FILENO);
         write_message(response(*id, "{" + protocol_version + capabilities + "\"serverInfo\":{\"name\":\"fake-mcp\",\"version\":\"1.0.0\"}}"));
-        for (;;) pause();
+        for (;;)
+          pause();
       }
       write_message(response(*id, "{" + protocol_version + capabilities + "\"serverInfo\":{\"name\":\"fake-mcp\",\"version\":\"1.0.0\"}}"));
     }
@@ -237,6 +249,11 @@ int main(int argc, char** argv)
     }
     else if (*method == "prompts/list")
     {
+      if (mode == "slow-prompts-list" || mode == "slow-prompts-list-marker")
+      {
+        write_process_group_marker(marker_path);
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+      }
       auto const params = ava::core::json::object_field(*message, "params").value_or("{}");
       auto const cursor = ava::core::json::string_field(params, "cursor").value_or("");
       if (mode == "missing-prompts")

@@ -26,6 +26,7 @@
 #include "ava/permissions/permission.h"
 #include "ava/context/skill_loader.h"
 #include "ava/core/atomic_file.h"
+#include "ava/core/error.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -64,15 +65,18 @@ bool is_json_whitespace(char ch) noexcept
 
 void skip_json_whitespace(std::string_view text, std::size_t& offset) noexcept
 {
-  while (offset < text.size() && is_json_whitespace(text[offset])) ++offset;
+  while (offset < text.size() && is_json_whitespace(text[offset]))
+    ++offset;
 }
 
 std::string trim_copy(std::string_view text)
 {
   std::size_t begin = 0;
-  while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0) ++begin;
+  while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin])) != 0)
+    ++begin;
   std::size_t end = text.size();
-  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) --end;
+  while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0)
+    --end;
   return std::string(text.substr(begin, end - begin));
 }
 
@@ -168,8 +172,10 @@ std::optional<std::size_t> json_value_end(std::string_view text, std::size_t sta
     return json_balanced_value_end(text, start);
 
   auto end = start;
-  while (end < text.size() && text[end] != ',' && text[end] != '}') ++end;
-  while (end > start && is_json_whitespace(text[end - 1])) --end;
+  while (end < text.size() && text[end] != ',' && text[end] != '}')
+    ++end;
+  while (end > start && is_json_whitespace(text[end - 1]))
+    --end;
   return end > start ? std::optional<std::size_t>(end) : std::nullopt;
 }
 
@@ -392,7 +398,8 @@ std::string shell_helper_argument(std::string_view line)
   if (!is_shell_helper_command(line))
     return {};
   line.remove_prefix(line.starts_with("!!") ? 2 : 1);
-  while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
+  while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+    line.remove_prefix(1);
   return std::string(line);
 }
 
@@ -765,9 +772,7 @@ ava::core::Result<CommandResult> run_theme_command(runtime::session_ts& unlocked
   if (args.size() > 1)
     return handled_text("unsupported theme options: " + std::string(argument) + "\n" + tui_theme_setting_usage());
 
-  auto&& session_r = [&unlocked_session]() -> runtime::session_ts::crat {
-    return unlocked_session;
-  };
+  auto&& session_r = [&unlocked_session]() -> runtime::session_ts::crat { return unlocked_session; };
 
   auto settings = load_tui_display_settings(session_r()->paths());
   if (!settings)
@@ -844,8 +849,7 @@ ava::core::Result<CommandResult> run_images_command(runtime::session_ts& unlocke
   auto stored = store_tui_show_images_setting(paths, *normalized);
   if (!stored)
     return std::unexpected(std::move(stored.error()));
-  return handled_text(std::string("Stored TUI image visibility ") + (*normalized ? "on" : "off") +
-                      ".\n  config: " + tui_display_settings_file(paths).string());
+  return handled_text(std::string("Stored TUI image visibility ") + (*normalized ? "on" : "off") + ".\n  config: " + tui_display_settings_file(paths).string());
 }
 
 ava::core::Result<CommandResult> run_cursor_command(runtime::session_ts& unlocked_session, std::string_view argument)
@@ -920,7 +924,8 @@ std::string dynamic_command_argument(std::string_view line)
   if (line.size() <= token.size())
     return {};
   auto rest = line.substr(token.size());
-  while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t')) rest.remove_prefix(1);
+  while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t'))
+    rest.remove_prefix(1);
   return std::string(rest);
 }
 
@@ -960,7 +965,7 @@ ava::core::Result<std::string> skill_prompt_message(runtime::session_ts& unlocke
   return ava::context::format_loaded_skill_for_tool(*match, sampled_files);
 }
 
-ava::core::Result<CommandResult> run_registry_command(runtime::session_ts& unlocked_session, CommandRequest request, CommandRegistryEntry const& entry)
+ava::core::Result<CommandResult> dispatch_registry_command(runtime::session_ts& unlocked_session, CommandRequest request, CommandRegistryEntry const& entry)
 {
   if (!entry.enabled)
     return handled_text(entry.command + " is disabled: " + entry.disabled_reason);
@@ -999,6 +1004,11 @@ ava::core::Result<CommandResult> run_registry_command(runtime::session_ts& unloc
 
 }  // namespace
 
+ava::core::Result<CommandResult> run_registry_command(runtime::session_ts& unlocked_session, CommandRequest request, CommandRegistryEntry const& entry)
+{
+  return dispatch_registry_command(unlocked_session, std::move(request), entry);
+}
+
 bool is_backend_command(std::string_view line) noexcept
 {
   if (is_shell_helper_command(line))
@@ -1035,34 +1045,17 @@ ava::core::Result<CommandResult> run_command(runtime::session_ts& unlocked_sessi
   if (!entry)
   {
     auto const token = command_token(request.command);
-    auto registry = load_command_registry(unlocked_session, CommandRegistryOptions{.include_builtins = false,
-                                                                             .include_prompt_commands = true,
-                                                                             .include_skills = true,
-                                                                             .include_plugin_commands = true,
-                                                                             .include_mcp_prompts = token.starts_with("/mcp:"),
-                                                                             .permission_resolver = request.permission_resolver,
-                                                                             .cancel_requested = request.cancel_requested});
-    if (auto const* registry_entry = find_command_registry_entry(registry, request.command))
-      return run_registry_command(unlocked_session, std::move(request), *registry_entry);
-    if (!token.starts_with("/skill:") && !token.starts_with("/mcp:") && !token.starts_with("/plugin:"))
+    auto resolved = resolve_command_registry_entry(unlocked_session, request.command, request.permission_resolver, request.cancel_requested);
+    if (!resolved)
     {
-      registry = load_command_registry(unlocked_session, CommandRegistryOptions{.include_builtins = false,
-                                                                         .include_prompt_commands = false,
-                                                                         .include_skills = false,
-                                                                         .include_plugin_commands = false,
-                                                                         .include_mcp_prompts = true,
-                                                                         .permission_resolver = request.permission_resolver,
-                                                                         .cancel_requested = request.cancel_requested});
-      if (auto const* registry_entry = find_command_registry_entry(registry, request.command))
-        return run_registry_command(unlocked_session, std::move(request), *registry_entry);
+      if (resolved.error().code() == ava::core::ErrorCode::Canceled)
+        return std::unexpected(std::move(resolved.error()));
+      return handled_text(resolved.error().message());
     }
-
+    if (*resolved)
+      return run_registry_command(unlocked_session, std::move(request), **resolved);
     if (token.starts_with("/skill:") || token.starts_with("/mcp:") || token.starts_with("/plugin:"))
-    {
-      if (!registry.diagnostics.empty())
-        return handled_text(registry.diagnostics.front().message);
       return handled_text("command not found: " + std::string(token));
-    }
     return result;
   }
   request.command = normalize_command_line(request.command, *entry);

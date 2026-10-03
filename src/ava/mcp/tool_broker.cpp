@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/command/environment.h"
 #include "ava/diagnostics/safe_failure.h"
 #include "ava/tools/tool_permission.h"
 #include "ava/mcp/config.h"
@@ -120,7 +121,8 @@ ava::core::Error mcp_resource_canceled_error(McpResourceBinding const& binding)
 std::string command_text(McpServerConfig const& server)
 {
   std::string text = server.command;
-  for (auto const& arg : server.args) text += " " + arg;
+  for (auto const& arg : server.args)
+    text += " " + arg;
   return text;
 }
 
@@ -128,7 +130,7 @@ McpStdioClientOptions client_options_for_context(ava::tools::ToolContext const& 
 
 std::string launch_permission_command(ava::tools::ToolContext const& context, McpServerConfig const& server)
 {
-  if (!context.session_mcp_config)
+  if (!context.session_mcp_config && server.env.empty())
     return command_text(server);
   auto const options = client_options_for_context(context);
   return session_mcp_launch_identity(server, child_working_dir(server, options));
@@ -155,9 +157,9 @@ McpStdioClientOptions client_options_for_context(ava::tools::ToolContext const& 
 {
   McpStdioClientOptions options;
   // Adapter-supplied MCP is session scoped and follows the persisted cwd.
-  // Legacy global/project configuration retains its established workspace/config cwd and environment rules.
+  // Legacy global/project configuration retains its established workspace/config cwd.
   options.workspace_dir = context.session_mcp_config && !context.current_dir.empty() ? context.current_dir : context.workspace_dir;
-  options.clean_environment = context.session_mcp_config != nullptr;
+  options.process_scope = context.process_scope;
   return options;
 }
 
@@ -197,11 +199,13 @@ ava::tools::ToolResultPayload resource_result_payload(std::string const& text)
 bool json_object_has_no_fields(std::string_view json)
 {
   std::size_t index = 0;
-  while (index < json.size() && std::isspace(static_cast<unsigned char>(json[index])) != 0) ++index;
+  while (index < json.size() && std::isspace(static_cast<unsigned char>(json[index])) != 0)
+    ++index;
   if (index >= json.size() || json[index] != '{')
     return false;
   ++index;
-  while (index < json.size() && std::isspace(static_cast<unsigned char>(json[index])) != 0) ++index;
+  while (index < json.size() && std::isspace(static_cast<unsigned char>(json[index])) != 0)
+    ++index;
   return index < json.size() && json[index] == '}';
 }
 
@@ -216,7 +220,8 @@ std::string fnv1a64_hex(std::string_view value)
   constexpr char kHex[] = "0123456789abcdef";
   std::string suffix;
   suffix.reserve(16);
-  for (int shift = 60; shift >= 0; shift -= 4) suffix.push_back(kHex[(hash >> shift) & 0x0F]);
+  for (int shift = 60; shift >= 0; shift -= 4)
+    suffix.push_back(kHex[(hash >> shift) & 0x0F]);
   return suffix;
 }
 
@@ -468,7 +473,8 @@ ava::core::Result<std::vector<McpResourceDescription>> discover_server_resources
 std::string session_mcp_launch_identity(McpServerConfig const& server, std::filesystem::path const& canonical_child_cwd)
 {
   std::string identity = "{\"argv\":[\"" + ava::core::json::escape(server.command) + "\"";
-  for (auto const& arg : server.args) identity += ",\"" + ava::core::json::escape(arg) + "\"";
+  for (auto const& arg : server.args)
+    identity += ",\"" + ava::core::json::escape(arg) + "\"";
   identity += "],\"env\":[";
 
   auto environment = server.env;
@@ -485,6 +491,17 @@ std::string session_mcp_launch_identity(McpServerConfig const& server, std::file
         "{\"name\":\"" + ava::core::json::escape(environment[index].first) + "\",\"value\":\"" + ava::core::json::escape(environment[index].second) + "\"}";
   }
   identity += "],\"cwd\":\"" + ava::core::json::escape(canonical_child_cwd.string()) + "\",\"clean_environment\":true}";
+  // Preserve existing no-env session grants. Explicit env must never reach
+  // permission prompts/audits as plaintext. Nonempty env uses a domain-separated
+  // SHA-256 composition binding so trusted-project exact grants cannot cheaply
+  // collide; this is not encryption of env values.
+  if (!environment.empty())
+  {
+    ava::command::detail::Sha256Builder hash;
+    hash.append_field("ava-mcp-launch-composition-v2");
+    hash.append_field(identity);
+    return "mcp-composition-v2:" + hash.hex();
+  }
   return identity;
 }
 
@@ -508,7 +525,8 @@ std::string mcp_model_tool_name(std::string_view server_id, std::string_view too
         last_was_separator = true;
       }
     }
-    while (!sanitized.empty() && sanitized.back() == '_') sanitized.pop_back();
+    while (!sanitized.empty() && sanitized.back() == '_')
+      sanitized.pop_back();
     if (sanitized.empty())
       return std::string("tool");
     return sanitized;

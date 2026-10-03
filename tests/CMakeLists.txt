@@ -754,7 +754,6 @@ add_test(
           -DAVA_PYTHON=${Python3_EXECUTABLE}
           -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
           -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-e2e-model-smoke
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_e2e_model_smoke.cmake)
 set_tests_properties(ava_cli.headless_e2e_model_smoke PROPERTIES TIMEOUT 60)
 
@@ -856,6 +855,15 @@ if(Python3_Interpreter_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_test.py
             --provider $<TARGET_FILE:ava_fake_provider_server>)
   set_tests_properties(ava_tests.fake_provider_owner PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
+    NAME ava_cli.headless_parallel_read_search_tools
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_parallel_read_search_tools_test.py
+            --ava $<TARGET_FILE:ava>
+            --fake-provider $<TARGET_FILE:ava_fake_provider_server>
+            --source ${CMAKE_SOURCE_DIR})
+  set_tests_properties(ava_cli.headless_parallel_read_search_tools PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
     NAME ava_tests.startup_overview_close_wait
@@ -1084,6 +1092,22 @@ if(Python3_Interpreter_FOUND)
             -DAVA_PLUGIN_RUNNER_NEGATIVE_ROOT=${CMAKE_BINARY_DIR}/plugin-runner-scanner-negative
             -P ${CMAKE_CURRENT_SOURCE_DIR}/plugin_runner_static_contract_negative.cmake)
   set_tests_properties(ava_tests.plugin_runner_static_contract_negative PROPERTIES TIMEOUT 15)
+
+  add_test(
+    NAME ava_tests.mcp_stdio_static_contract
+    COMMAND ${CMAKE_COMMAND}
+            -DAVA_MCP_STDIO_DIR=${CMAKE_SOURCE_DIR}/src/ava/mcp
+            -DAVA_MCP_CMAKE=${CMAKE_SOURCE_DIR}/src/ava/mcp/CMakeLists.txt
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract.cmake)
+  set_tests_properties(ava_tests.mcp_stdio_static_contract PROPERTIES TIMEOUT 15)
+
+  add_test(
+    NAME ava_tests.mcp_stdio_static_contract_negative
+    COMMAND ${CMAKE_COMMAND}
+            -DAVA_MCP_STDIO_SCANNER=${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract.cmake
+            -DAVA_MCP_STDIO_NEGATIVE_ROOT=${CMAKE_BINARY_DIR}/mcp-stdio-scanner-negative
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract_negative.cmake)
+  set_tests_properties(ava_tests.mcp_stdio_static_contract_negative PROPERTIES TIMEOUT 15)
 
   add_test(
     NAME ava_cli.doctor_support

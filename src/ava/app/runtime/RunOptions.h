@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-#include "ava/observability/run_observer.h"
 #include "ava/event/RuntimeEvent.h"
+#include "ava/observability/run_observer.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/agent/question.h"
 #include "ava/agent/run_phase.h"
@@ -11,6 +11,7 @@
 #include "ava/permissions/permission.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -66,6 +67,10 @@ struct RunOptions
   std::function<ava::core::VoidResult(ava::agent::RunPhase)> on_phase = nullptr;
   bool offline = false;
   bool expand_prompt_file_references = true;
+  // Public headless opt-in for the existing builtin read/search scheduler.
+  // Disabled by default. max_workers must stay in 1..4; invalid values are rejected.
+  bool parallel_read_search_tools = false;
+  std::size_t parallel_read_search_max_workers = 4;
   // Internal application marker: automatic parent delivery must not refresh
   // or recursively retain its own detached capsule.
   bool synthetic_subagent_delivery = false;

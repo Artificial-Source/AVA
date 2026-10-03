@@ -65,6 +65,17 @@ ava::core::Result<runtime::PromptState> select_runtime_prompt_state(runtime::ses
                                             selected_primary_agent);
 }
 
+ava::core::VoidResult validate_run_options(runtime::RunOptions const& options)
+{
+  if (options.parallel_read_search_max_workers < 1 || options.parallel_read_search_max_workers > 4)
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "parallel-read-search-max-workers must be an integer from 1 to 4");
+    error.with_context("value", std::to_string(options.parallel_read_search_max_workers));
+    return std::unexpected(std::move(error));
+  }
+  return {};
+}
+
 ava::core::Error offline_provider_error(std::string_view action)
 {
   auto error = ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "offline mode is enabled; provider model calls are disabled");
@@ -83,6 +94,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_prompt(runtime::session_ts& u
   auto&& f = at_scope_end([] { Dout(dc::runtime, "Leaving run_prompt()"); });
 #endif
   AVA_ASSERT_SESSION_UNLOCKED(unlocked_session, "calling run_prompt");
+  if (auto valid = validate_run_options(options); !valid)
+    return std::unexpected(std::move(valid.error()));
 
   CRITICAL_AREA_BEGIN_R(session);
 
@@ -201,6 +214,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
     return std::unexpected(std::move(error));
   };
 
+  if (auto valid = validate_run_options(options); !valid)
+    return fail_run(std::move(valid.error()));
   if (run_process_scope_error)
     return fail_run(std::move(*run_process_scope_error));
 
@@ -580,6 +595,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
             return runtime_options.on_phase(phase);
           return {};
         },
+        .parallel_read_search_tools = runtime_options.parallel_read_search_tools,
+        .parallel_read_search_max_workers = runtime_options.parallel_read_search_max_workers,
         .observation = runtime_options.observation,
         .trace_context = runtime_options.trace_context});
   }

@@ -413,6 +413,28 @@ std::string mcp_tool_body()
          json_escape(arguments) + "\"}}]},\"finish_reason\":\"tool_calls\"}]}";
 }
 
+std::string parallel_read_search_body(int request_index)
+{
+  if (request_index == 0)
+  {
+    auto const read_args = std::string("{\"path\":\"notes.txt\"}");
+    auto const list_args = std::string("{\"path\":\".\",\"max_entries\":20}");
+    auto const glob_args = std::string("{\"pattern\":\"*.txt\"}");
+    auto const grep_args = std::string("{\"pattern\":\"alpha\",\"include\":\"*.txt\",\"max_matches\":10,\"literal\":true}");
+    return std::string("{\"choices\":[{\"message\":{\"tool_calls\":[") +
+           "{\"id\":\"call_read\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"" + json_escape(read_args) + "\"}}," +
+           "{\"id\":\"call_list\",\"type\":\"function\",\"function\":{\"name\":\"list_directory\",\"arguments\":\"" + json_escape(list_args) + "\"}}," +
+           "{\"id\":\"call_glob\",\"type\":\"function\",\"function\":{\"name\":\"glob\",\"arguments\":\"" + json_escape(glob_args) + "\"}}," +
+           "{\"id\":\"call_grep\",\"type\":\"function\",\"function\":{\"name\":\"grep\",\"arguments\":\"" + json_escape(grep_args) + "\"}}" +
+           "]},\"finish_reason\":\"tool_calls\"}]}";
+  }
+  if (request_index == 1)
+    return tool_body("call_write", "write_file", "{\"path\":\"notes.txt\",\"content\":\"mutated-visible\\n\"}");
+  if (request_index == 2)
+    return read_tool_body("notes.txt", "call_post_read");
+  return text_body("parallel-read-search complete");
+}
+
 std::string e2e_tool_body(int request_index, std::string_view target_path)
 {
   std::string const workspace_path = "src/todo.txt";
@@ -663,6 +685,10 @@ ProviderResponse response_for(std::string_view scenario, int request_index, std:
   {
     return ProviderResponse{.body = e2e_tool_body(request_index, target_path)};
   }
+  if (scenario == "parallel-read-search")
+  {
+    return ProviderResponse{.body = parallel_read_search_body(request_index)};
+  }
   if (scenario == "compact" || scenario == "compact-delayed" || scenario == "compact-follow-up")
   {
     if (request_index == 0)
@@ -722,6 +748,7 @@ int main(int argc, char** argv)
       : scenario == "compact-follow-up"        ? 6
       : scenario == "streaming-scroll"         ? 2
       : scenario == "end-to-end-workflow"      ? 6
+      : scenario == "parallel-read-search"     ? 4
       : scenario == "read-tool-twice"          ? 4
       : scenario == "read-tool-thrice"         ? 6
       : scenario == "subagent-workspace"       ? 4

@@ -349,6 +349,47 @@ std::optional<ava::process::ExitStatusV1> wait_for(ava::process::Supervisor& sup
   return *status;
 }
 
+void test_committed_stop_observation()
+{
+  auto application = application_owner();
+  ava::process::Supervisor supervisor;
+  SupervisorFallback cleanup(supervisor);
+  ava::process::Supervisor foreign;
+  ava::process::ProcessHandle invalid;
+  expect(!supervisor.committed_stop_reason(invalid), "committed-stop observation rejects an invalid handle");
+
+  auto child =
+      spawn_fake(supervisor, operation_owner(application), ava::process::ProcessRoleV1::Mcp, fake_spec("ready-gate", ava::process::StreamModeV1::Capture));
+  expect(child.has_value(), "committed-stop observation fixture launches");
+  if (!child)
+    return;
+  std::string ready;
+  expect(child->standard_output && read_until(*child->standard_output, ready, "READY\n", std::chrono::steady_clock::now() + 2s),
+         "committed-stop fixture is active behind its input gate");
+  auto active = supervisor.committed_stop_reason(child->handle);
+  expect(active && !*active, "an active owned handle has no committed reason");
+  expect(!foreign.committed_stop_reason(child->handle), "committed-stop observation rejects a foreign handle");
+
+  // Shared ownership lets the monitor keep the test gate alive until released.
+  auto latch = std::make_shared<AfterForkReleaseLatch>();
+  ava::process::testing::SupervisorTestAccess::set_after_poll_snapshot_hook(supervisor, [latch] { latch->arrive_and_wait(); });
+  bool const reached = latch->wait_until(std::chrono::steady_clock::now() + 2s);
+  auto first = supervisor.request_stop(application, ava::process::TerminationReasonV1::OwnerShutdown, std::chrono::steady_clock::now() + 2s);
+  auto committed = supervisor.committed_stop_reason(child->handle);
+  auto pending = supervisor.try_wait(child->handle);
+  auto second = supervisor.request_stop(child->handle, ava::process::TerminationReasonV1::Canceled, std::chrono::steady_clock::now() + 2s);
+  auto preserved = supervisor.committed_stop_reason(child->handle);
+  expect(reached && first && first->newly_requested == 1 && pending && !*pending && committed && *committed == ava::process::TerminationReasonV1::OwnerShutdown,
+         "owner stop is observable before monitor signaling or final settlement");
+  expect(second && second->newly_requested == 0 && preserved && *preserved == ava::process::TerminationReasonV1::OwnerShutdown,
+         "committed-stop observation preserves the first authoritative reason");
+  ava::process::testing::SupervisorTestAccess::clear_after_poll_snapshot_hook(supervisor);
+  latch->release();
+  auto status = wait_for(supervisor, child->handle);
+  auto settled = supervisor.committed_stop_reason(child->handle);
+  expect(status && settled && *settled == ava::process::TerminationReasonV1::OwnerShutdown, "the committed first reason remains observable after settlement");
+}
+
 void test_exec_gate_normal_nonzero_and_exec_failure()
 {
   auto application = application_owner();
@@ -366,6 +407,9 @@ void test_exec_gate_normal_nonzero_and_exec_failure()
     bool const released = write_text(*gated->standard_input, "G", deadline) && read_until(*gated->standard_output, status_text, "RELEASED\n", deadline);
     gated->standard_input->close();
     auto status = wait_for(supervisor, gated->handle);
+    auto completed = supervisor.committed_stop_reason(gated->handle);
+    expect(completed && *completed == ava::process::TerminationReasonV1::NaturalExit,
+           "committed-stop observation exposes natural completion distinctly from interruption");
     expect(ready && released && status && status->reason == ava::process::TerminationReasonV1::NaturalExit &&
                status->kind == ava::process::ExitKindV1::Exited && status->exit_code == 0 && status->cleanup == ava::process::CleanupStateV1::Complete,
            "the child cannot execute before registry commit and a gated normal exit is exactly observed and cleaned");
@@ -524,6 +568,32 @@ void test_exact_environment_signal_reset_and_descriptor_closure()
     static_cast<void>(::close(leaked));
   expect(descriptor_closed && descriptor_exit && descriptor_exit->exit_code == 0,
          "exec closes an undeclared non-CLOEXEC parent descriptor rather than leaking ambient authority");
+}
+
+void test_write_to_closed_reader()
+{
+  auto application = application_owner();
+  ava::process::Supervisor supervisor;
+  SupervisorFallback fallback(supervisor);
+  auto child =
+      spawn_fake(supervisor, operation_owner(application), ava::process::ProcessRoleV1::Mcp, fake_spec("ready-gate", ava::process::StreamModeV1::Capture));
+  if (!child || !child->standard_input || !child->standard_output)
+  {
+    expect(false, "closed-reader fixture returns capture endpoints");
+    return;
+  }
+
+  auto const deadline = std::chrono::steady_clock::now() + 3s;
+  std::string marker;
+  bool const ready = read_until(*child->standard_output, marker, "READY\n", deadline);
+  bool const released = ready && write_text(*child->standard_input, "G", deadline);
+  auto status = released ? wait_for(supervisor, child->handle) : std::nullopt;
+  // Settlement proves the fake has closed its reader; the parent's writer
+  // remains valid so this exercises peer closure rather than local closure.
+  std::string_view const text = "after-exit";
+  auto written = child->standard_input->write(std::span(reinterpret_cast<std::byte const*>(text.data()), text.size()));
+  expect(status && status->exit_code == 0 && child->standard_input->valid() && written && written->bytes == 0 && written->state == PipeIoStateV1::EndOfStream,
+         "neutral pipe writes to a closed peer reader report EndOfStream without a native IO error");
 }
 
 void test_closed_pipes_and_flood_draining()
@@ -998,10 +1068,12 @@ void run_process_supervisor_posix_tests()
 #if defined(_WIN32)
   ava::tests::request_skip("process supervisor POSIX lifecycle backend is compile-time unsupported");
 #else
+  test_committed_stop_observation();
   test_exec_gate_normal_nonzero_and_exec_failure();
   test_matching_common_logical_cwd_executes();
   test_natural_exit_does_not_pay_termination_grace();
   test_exact_environment_signal_reset_and_descriptor_closure();
+  test_write_to_closed_reader();
   test_closed_pipes_and_flood_draining();
   test_term_kill_first_reason_and_leader_first_cleanup();
   test_cancel_deadline_owner_isolation_and_unrelated_child();

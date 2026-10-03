@@ -1,5 +1,8 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
+#include "ava/process/scope.h"
+#include "ava/process/supervisor.h"
 #include "ava/mcp/config.h"
 #include "ava/core/result.h"
 
@@ -20,13 +23,16 @@ using CancelCallback = std::function<bool()>;
 struct McpStdioClientOptions
 {
   std::filesystem::path workspace_dir;
-  bool clean_environment = false;
+  // Required at start(). The client derives exactly one operation owner before
+  // reserving an Mcp record and retains only that derived authority.
+  std::optional<ava::process::ProcessScopeV1> process_scope = std::nullopt;
   std::chrono::milliseconds startup_timeout{3000};
   std::chrono::milliseconds request_timeout{5000};
   std::size_t max_message_bytes = 64 * 1024;
   std::size_t max_stderr_bytes = 64 * 1024;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // Includes process-launch authority and must not enter generated output.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct McpInitialization
@@ -106,8 +112,9 @@ struct McpResourceReadResult
 class McpStdioClient final
 {
  public:
-  McpStdioClient(McpServerConfig server, McpStdioClientOptions options);
-  ~McpStdioClient();
+  McpStdioClient(McpServerConfig server, McpStdioClientOptions options, ava::process::ProcessScopeV1 operation_scope,
+                 std::chrono::steady_clock::time_point startup_deadline = {});
+  ~McpStdioClient() noexcept;
 
   McpStdioClient(McpStdioClient const&) = delete;
   McpStdioClient& operator=(McpStdioClient const&) = delete;
@@ -132,7 +139,8 @@ class McpStdioClient final
   [[nodiscard]] ava::core::Result<McpResourceReadResult> read_resource(std::string_view uri, CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::VoidResult shutdown(std::chrono::milliseconds grace = std::chrono::milliseconds(250));
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // Protocol buffers and process authority must never enter debug output.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   struct JsonRpcResponse
@@ -143,10 +151,14 @@ class McpStdioClient final
     AVA_DEBUG_PRINT_MEMBERS_ON
   };
 
-  [[nodiscard]] ava::core::VoidResult launch();
+  [[nodiscard]] ava::core::VoidResult check_committed_stop();
+  [[nodiscard]] ava::core::VoidResult check_interruption(std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
+                                                         std::string_view timeout_message, CancelCallback const& cancel_requested);
+  [[nodiscard]] ava::core::VoidResult launch(CancelCallback const& cancel_requested);
   [[nodiscard]] ava::core::VoidResult initialize(CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::Result<JsonRpcResponse> request(std::string_view method, std::string_view params_json, std::chrono::milliseconds timeout,
-                                                           std::string_view timeout_message, CancelCallback cancel_requested = nullptr);
+                                                           std::string_view timeout_message, CancelCallback cancel_requested = nullptr,
+                                                           std::chrono::steady_clock::time_point deadline = {});
   [[nodiscard]] ava::core::VoidResult write_message(std::string_view message, std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
                                                     std::string_view timeout_message, std::string_view closed_message,
                                                     CancelCallback cancel_requested = nullptr);
@@ -158,24 +170,32 @@ class McpStdioClient final
                                                         std::string_view timeout_message, std::string_view closed_message,
                                                         CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::Error peer_closed_error(std::string_view closed_message, std::optional<std::size_t> response_bytes = std::nullopt) const;
-  [[nodiscard]] ava::core::VoidResult drain_stdout();
-  [[nodiscard]] ava::core::VoidResult drain_stderr();
-  [[nodiscard]] ava::core::VoidResult reap_child();
-  [[nodiscard]] ava::core::VoidResult set_pipe_nonblocking(int fd);
+  [[nodiscard]] ava::core::VoidResult drain_stdout(bool enforce_message_limit);
+  [[nodiscard]] ava::core::VoidResult drain_stderr(bool observe_stop = true);
+  [[nodiscard]] ava::core::VoidResult drain_for_cleanup(std::chrono::steady_clock::time_point deadline) noexcept;
+  [[nodiscard]] ava::core::VoidResult settle_failure(ava::process::TerminationReasonV1 reason);
+  [[nodiscard]] ava::core::Error fail_process(ava::process::TerminationReasonV1 reason, ava::core::Error error);
+  [[nodiscard]] ava::core::VoidResult settle_until(ava::process::TerminationReasonV1 reason, std::chrono::steady_clock::time_point cleanup_deadline,
+                                                   std::chrono::steady_clock::time_point observation_deadline);
+  [[nodiscard]] ava::core::VoidResult settled_cleanup_result() const;
+  [[nodiscard]] std::optional<ava::process::ExitStatusV1> observe_settlement() const;
   void append_stderr(std::string_view chunk);
-  void close_fds() noexcept;
-  void terminate_child() noexcept;
+  void close_endpoints() noexcept;
 
   McpServerConfig server_;
   McpStdioClientOptions options_;
   McpInitialization initialization_;
-  int stdin_fd_ = -1;
-  int stdout_fd_ = -1;
-  int stderr_fd_ = -1;
-  int pid_ = -1;
-  int child_status_ = 0;
-  bool child_exited_ = false;
-  bool can_signal_group_ = false;
+  std::chrono::steady_clock::time_point startup_deadline_{};
+  ava::process::ProcessScopeV1 operation_scope_;
+  ava::process::ProcessHandle process_handle_;
+  ava::process::PipeEndpoint standard_input_;
+  ava::process::PipeEndpoint standard_output_;
+  ava::process::PipeEndpoint standard_error_;
+  std::optional<ava::process::ExitStatusV1> settlement_ = std::nullopt;
+  std::optional<ava::core::Error> settlement_error_ = std::nullopt;
+  std::optional<std::chrono::steady_clock::time_point> cleanup_deadline_ = std::nullopt;
+  std::optional<std::chrono::steady_clock::time_point> observation_deadline_ = std::nullopt;
+  bool stop_requested_ = false;
   bool stderr_truncated_ = false;
   std::size_t next_request_id_ = 1;
   std::string stdout_buffer_;

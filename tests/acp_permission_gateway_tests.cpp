@@ -6,6 +6,8 @@
 #include "tests/support/test_harness.h"
 #include "ava/command/command.h"
 #include "ava/http/transport.h"
+#include "ava/process/scope.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/acp/peer.h"
 #include "ava/app/acp/service.h"
 #include "ava/app/runtime_credentials.h"
@@ -423,6 +425,11 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
+  auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  expect(application_scope.has_value(), "ACP MCP fixture admits test-owned application process authority");
+  if (!application_scope)
+    return;
+  options.open_context.application_process_scope = *application_scope;
   options.provider_bundle_factory = sequence_bundle_factory(transport_state, std::move(responses));
   AgentService service(options);
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
@@ -534,7 +541,8 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   auto run_error_case = [&](std::string mcp_servers, std::string_view expected,
                             std::vector<std::pair<ava::permissions::Operation, std::string>> const& authorizations) {
     bool rules_installed = true;
-    for (auto const& [operation, command] : authorizations) rules_installed = install_mcp_allow(operation, command, "mcp_discovery") && rules_installed;
+    for (auto const& [operation, command] : authorizations)
+      rules_installed = install_mcp_allow(operation, command, "mcp_discovery") && rules_installed;
     expect(rules_installed, "ACP strict MCP error fixture has exact protected launch/connect operator Allows");
 
     auto error_state = std::make_shared<CapturingSequenceState>();
@@ -542,6 +550,7 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
     error_options.agent_version = "1";
     error_options.launch_root = ava::core::normalized_absolute_path(workspace);
     error_options.paths = paths;
+    error_options.open_context.application_process_scope = options.open_context.application_process_scope;
     error_options.provider_bundle_factory = sequence_bundle_factory(error_state, {acp_text_response()});
     AgentService error_service(error_options);
     error_service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
@@ -593,7 +602,7 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   missing_server.command = missing_command;
   auto const missing_launch_identity = ava::mcp::session_mcp_launch_identity(missing_server, ava::core::normalized_absolute_path(nested));
   run_error_case("[{\"name\":\"missing\",\"command\":\"" + ava::core::json::escape(missing_command) + "\",\"args\":[],\"env\":[]}]",
-                 "MCP server closed before response",
+                 "process executable is unavailable or not executable",
                  {{ava::permissions::Operation::McpServerLaunch, missing_launch_identity}, {ava::permissions::Operation::McpServerConnect, "missing"}});
 
   std::error_code cleanup;
