@@ -9,6 +9,7 @@
 
 namespace terminal = ava::tui::terminal;
 
+// Translate public rendition attribute bits to native flags, omitting italic when ncurses lacks it.
 attr_t convert_to_attr(Attributes attributes)
 {
   auto const mask = attributes.mask();
@@ -21,6 +22,12 @@ attr_t convert_to_attr(Attributes attributes)
     result |= A_STANDOUT;
   if ((mask & static_cast<attr_t>(Attribute::blink)))
     result |= A_BLINK;
+#ifdef A_ITALIC
+  if ((mask & static_cast<attr_t>(Attribute::italic)))
+    result |= A_ITALIC;
+#endif
+  if ((mask & static_cast<attr_t>(Attribute::reverse)))
+    result |= A_REVERSE;
   return result;
 }
 
@@ -38,6 +45,12 @@ Attributes convert_to_Attributes(attr_t attributes)
     result |= Attribute::standout;
   if ((attributes & A_BLINK))
     result |= Attribute::blink;
+#ifdef A_ITALIC
+  if ((attributes & A_ITALIC))
+    result |= Attribute::italic;
+#endif
+  if ((attributes & A_REVERSE))
+    result |= Attribute::reverse;
   return result;
 }
 

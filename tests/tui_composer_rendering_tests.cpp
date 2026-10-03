@@ -47,6 +47,71 @@
 
 namespace {
 
+// Draw a custom theme after allocating extended pairs, then inspect a rendered cell and the previously reserved pair.
+// This catches fixed-index collisions and truncation through legacy packed color attributes without requiring a real TTY.
+bool test_composer_draw_preserves_context_color_pair_allocations()
+{
+  auto& terminal_context = ava::core::Application::instance().terminal_context();
+  for (int index = 0; index < 256; ++index)
+    static_cast<void>(terminal_context.create_color_pair(ava::tui::terminal::ColorIndex::white, ava::tui::terminal::ColorIndex::black));
+  auto const reserved_pair = terminal_context.create_color_pair(ava::tui::terminal::ColorIndex::green, ava::tui::terminal::ColorIndex::magenta);
+  auto const reserved_before = terminal_context.color_pair_content(reserved_pair);
+
+  ava::tui::TuiCustomTheme custom{
+      .name = "rendition-allocation",
+      .path = "rendition-allocation.json",
+      .palette =
+          ava::tui::TuiThemePalette{
+              .text = 1, .muted = 6, .success = 2, .warning = 3, .error = 1, .accent = 4, .screen_bg = -1, .composer_bg = 0, .tool_bg = 5, .question_bg = 6},
+      .revision = "rendition-allocation-v1"};
+  ava::tui::set_tui_config_theme(custom.name, custom);
+
+  constexpr std::string_view marker = "RENDITION-PAIR-MARKER";
+  ava::tui::ComposerSnapshot snapshot{.mode = "build",
+                                      .provider = "openai",
+                                      .model = "gpt-5.5",
+                                      .session_id = "rendition_pair_allocation",
+                                      .input = {},
+                                      .status = "ready",
+                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = std::string(marker)}},
+                                      .width = 80,
+                                      .height = 10};
+  auto const rendered = ava::tui::render_composer(snapshot);
+  auto marker_row = rendered.size();
+  std::size_t marker_column = 0;
+  for (std::size_t row = 0; row < rendered.size(); ++row)
+  {
+    auto const visible = strip_sgr(rendered[row]);
+    auto const marker_offset = visible.find(marker);
+    if (marker_offset != std::string::npos)
+    {
+      marker_row = row;
+      marker_column = visible_columns(std::string_view(visible).substr(0, marker_offset));
+      break;
+    }
+  }
+
+  bool const drawn = ava::tui::draw_screen(snapshot);
+  ava::tui::terminal::ComplexChar marker_cell;
+  bool const marker_position_valid = marker_row < rendered.size() && marker_column < snapshot.width;
+  if (marker_position_valid)
+    (terminal_context.stdscr().in_wch)({static_cast<std::uint32_t>(marker_row), static_cast<std::uint32_t>(marker_column)}, marker_cell);
+
+  auto const reserved_after = terminal_context.color_pair_content(reserved_pair);
+  auto const marker_pair = marker_position_valid ? terminal_context.color_pair_content(marker_cell.rendition().color_pair()) : std::nullopt;
+  auto const pair_after_theme_table = terminal_context.create_color_pair(ava::tui::terminal::ColorIndex::white, ava::tui::terminal::ColorIndex::black);
+
+  bool const passed = drawn && reserved_pair.index() > 255 && reserved_before && reserved_after && reserved_before->foreground_index == 2 &&
+                      reserved_before->background_index == 5 && reserved_after->foreground_index == reserved_before->foreground_index &&
+                      reserved_after->background_index == reserved_before->background_index && marker_position_valid &&
+                      marker_cell.cell_character().data()[0] == L'R' && marker_cell.rendition().color_pair().index() == reserved_pair.index() + 1 &&
+                      marker_pair && marker_pair->foreground_index == 1 && marker_pair->background_index == -1 &&
+                      pair_after_theme_table.index() == reserved_pair.index() + 1 + 4 * 6;
+
+  ava::tui::set_tui_config_theme(std::nullopt);
+  return passed;
+}
+
 bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 {
   static_cast<void>(ava::core::Application::instance().terminal_context());
@@ -1111,6 +1176,9 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
   else if (test_case == "display_reload_poll")
   {
+    expect(test_composer_draw_preserves_context_color_pair_allocations(),
+           "composer draw allocates its 4x6 semantic rendition table through Context after existing pairs, preserves a preallocated pair, and stores the "
+           "custom text/default-background pair in the rendered cell");
     expect(test_display_settings_reload_poll_outcome_and_preview_staging(),
            "display reload poll uses optional snapshot as applied/unchanged signal, hydrates without final render, restages overlay before paint, and Esc "
            "restores new authority even when overlay values equal the hydrated baseline");

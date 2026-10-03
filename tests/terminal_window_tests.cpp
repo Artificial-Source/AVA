@@ -45,6 +45,31 @@ void test_context_cursor_settings()
          "Context maps cursor styles and blink settings, suppresses duplicates, and retains the applied default");
 }
 
+// Verify that the typed attributes added beyond the original ncurses subset survive both window and cell conversion paths.
+void test_rendition_italic_reverse_round_trip()
+{
+  terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
+  terminal::ColorPair const pair = terminal_context.create_color_pair(terminal::ColorIndex::red, terminal::Color{});
+  terminal::Attributes attributes = terminal::Attribute::italic;
+  attributes |= terminal::Attribute::reverse;
+  terminal::Rendition const expected{pair, attributes};
+
+  terminal::BasicWindow window({1, 2}, {0, 0});
+  window.attr_set(expected);
+  terminal::Rendition const current = window.get_rendition();
+  window.addstr("X");
+
+  terminal::ComplexChar cell;
+  window.in_wch({0, 0}, cell);
+  auto const pair_content = terminal_context.color_pair_content(cell.rendition().color_pair());
+  constexpr terminal::Attributes::attr_t expected_attributes = 16 | 32;
+  expect(static_cast<terminal::Attributes::attr_t>(terminal::Attribute::italic) == 16 &&
+             static_cast<terminal::Attributes::attr_t>(terminal::Attribute::reverse) == 32 && current == expected && cell.rendition() == expected &&
+             cell.rendition().attributes().mask() == expected_attributes && pair_content && pair_content->foreground_index == 1 &&
+             pair_content->background_index == -1,
+         "BasicWindow and ComplexChar rendition conversion must round-trip italic plus reverse with the context-owned red/default color pair");
+}
+
 // Verify that Window exposes writable-area geometry for a non-empty margin and avoids creating a subwindow for an empty one.
 //
 // Runs ncurses against temporary files and repeatedly destroys margin-aware windows so parent/child handle ordering is exercised
@@ -111,5 +136,6 @@ void prepare_terminal_window_tests(FILE*, FILE*)
 void run_terminal_window_tests()
 {
   test_context_cursor_settings();
+  test_rendition_italic_reverse_round_trip();
   test_margin_aware_window_geometry_and_lifetime();
 }

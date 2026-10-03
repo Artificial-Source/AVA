@@ -216,9 +216,47 @@ int Context::terminal_color_index(Color color)
   bool const direct_color = COLORS == 0x1000000;
   if (color.is_default())
     return -1;
-  // Paranoia check: on a non-direct-color terminal we should always have a color_palette_.
-  ASSERT(direct_color || color_palette_);
-  return direct_color ? color.as_int() : color_palette_->nearest_indexed_color(color);
+  if (direct_color)
+    return color.as_int();
+  if (color_palette_)
+    return color_palette_->nearest_indexed_color(color);
+
+  // Some indexed terminals do not answer OSC 4. In that case use ncurses' read-only palette description as a best-effort approximation;
+  // this fallback deliberately never reprograms the terminal palette.
+  CIEDE2000::LAB const lab_color = ColorPalette::rgb_to_lab(color);
+  double nearest_distance = std::numeric_limits<double>::max();
+  int nearest_index = -1;
+  constexpr int max_indexed_colors_to_inspect = 32768;
+  int const color_count = std::clamp(COLORS, 0, max_indexed_colors_to_inspect);
+  for (int index = 0; index < color_count; ++index)
+  {
+    auto const content = color_content(index);
+    if (!content)
+      continue;
+
+    auto const component = [](int value) {
+      int const scaled = (std::clamp(value, 0, 1000) * 255 + 500) / 1000;
+      return static_cast<std::uint32_t>(scaled);
+    };
+    Color const palette_color{(component(content->red) << 16U) | (component(content->green) << 8U) | component(content->blue)};
+    double const distance = CIEDE2000::CIEDE2000(ColorPalette::rgb_to_lab(palette_color), lab_color);
+    if (distance < nearest_distance)
+    {
+      nearest_distance = distance;
+      nearest_index = index;
+    }
+  }
+  if (nearest_index >= 0)
+    return nearest_index;
+
+  // If ncurses exposes no readable entries, retain portable behavior by choosing the closer of ANSI black and white when both exist.
+  int const packed_rgb = color.as_int();
+  int const red = (packed_rgb >> 16) & 0xff;
+  int const green = (packed_rgb >> 8) & 0xff;
+  int const blue = packed_rgb & 0xff;
+  int const distance_to_black = red * red + green * green + blue * blue;
+  int const distance_to_white = (255 - red) * (255 - red) + (255 - green) * (255 - green) + (255 - blue) * (255 - blue);
+  return COLORS > COLOR_WHITE && distance_to_white < distance_to_black ? COLOR_WHITE : COLOR_BLACK;
 }
 
 ColorPair Context::create_color_pair(Color foreground, Color background)

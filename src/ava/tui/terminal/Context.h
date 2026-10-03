@@ -190,7 +190,8 @@ class Context final
   Rendition const& default_rendition() const { return default_rendition_; }
 
   // Return a ColorPair for `foreground` and `background`, using exact RGB on direct-color terminals and exact or nearest palette
-  // colors otherwise. Mutable indexed palettes are programmed on demand when no exact entry exists.
+  // colors otherwise. A live mutable indexed palette may be programmed on demand when no exact entry exists; when live palette probing
+  // is unavailable, concrete RGB colors are approximated from ncurses-readable entries without reprogramming the terminal palette.
   //
   // The terminal must support colors and have room for another color pair. The default terminal color is preserved on both paths.
   ColorPair create_color_pair(Color foreground, Color background);              // init_extended_pair

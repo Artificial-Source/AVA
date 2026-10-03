@@ -1,3 +1,10 @@
+set(CURSES_NEED_NCURSES TRUE)
+set(CURSES_NEED_WIDE TRUE)
+find_package(Curses QUIET)
+if(NOT CURSES_FOUND)
+  message(FATAL_ERROR "AVA requires ncursesw (wide-character ncurses) for ava_tui")
+endif()
+
 # Create the `terminal` object library.
 add_library(ava_terminal)
 

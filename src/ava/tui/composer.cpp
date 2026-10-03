@@ -4,21 +4,23 @@
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime_transcript_selection_internal.h"
+#include "ava/tui/terminal/ComplexChar.h"
+#include "ava/tui/terminal/Context.h"
 #include "ava/tui/theme.h"
 #include "ava/core/Application.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <climits>
 #include <cstdio>
 #include <iterator>
 #include <limits>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
-#include <curses.h>
 
 namespace ava::tui {
 namespace {
@@ -31,39 +33,6 @@ using detail::kSgrReset;
 using detail::kSgrSuccess;
 using detail::kSgrWarning;
 using detail::NcursesColorRole;
-
-constexpr short kPairText = 1;
-constexpr short kPairMuted = 2;
-constexpr short kPairSuccess = 3;
-constexpr short kPairWarning = 4;
-constexpr short kPairError = 5;
-constexpr short kPairAccent = 6;
-constexpr short kPairScreen = 7;
-constexpr short kPairComposer = 8;
-constexpr short kPairComposerText = 9;
-constexpr short kPairComposerMuted = 10;
-constexpr short kPairComposerSuccess = 11;
-constexpr short kPairComposerWarning = 12;
-constexpr short kPairComposerError = 13;
-constexpr short kPairComposerAccent = 14;
-constexpr short kPairToolText = 15;
-constexpr short kPairToolMuted = 16;
-constexpr short kPairToolSuccess = 17;
-constexpr short kPairToolWarning = 18;
-constexpr short kPairToolError = 19;
-constexpr short kPairToolAccent = 20;
-constexpr short kPairQuestionText = 21;
-constexpr short kPairQuestionMuted = 22;
-constexpr short kPairQuestionSuccess = 23;
-constexpr short kPairQuestionWarning = 24;
-constexpr short kPairQuestionError = 25;
-constexpr short kPairQuestionAccent = 26;
-
-constexpr short kColorComposerBg = 17;
-constexpr short kColorMuted = 18;
-constexpr short kColorAccent = 19;
-constexpr short kColorToolBg = 20;
-constexpr short kColorQuestionBg = 21;
 
 std::vector<std::size_t>& active_kitty_image_ids()
 {
@@ -96,17 +65,22 @@ enum class BackgroundRole
   Question,
 };
 
-struct CursesStyle
+// Semantic styling retained while SGR sequences are translated at the terminal boundary.
+struct TerminalStyle
 {
-  attr_t attributes = {};
+  terminal::Attributes attributes = {};
   NcursesColorRole color = NcursesColorRole::Text;
   BackgroundRole background = BackgroundRole::Screen;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct CursorPlacement
 {
   std::size_t row = 0;
   std::size_t column = 0;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 std::string strip_sgr_sequences(std::string_view text)
@@ -170,225 +144,110 @@ bool line_contains_osc_sequence(std::string_view line)
   return false;
 }
 
-void initialize_color_pairs()
+using ThemeColor = std::variant<terminal::Color, terminal::ColorIndex>;
+
+constexpr std::size_t kBackgroundRoleCount = 4;
+constexpr std::size_t kColorRoleCount = 6;
+
+// All semantic foreground/background combinations allocated for one active theme.
+struct ThemeColorPairs
 {
-  auto& terminal_context = core::Application::instance().terminal_context();
-  static std::optional<std::string> initialized_theme;
+  std::array<std::array<terminal::ColorPair, kColorRoleCount>, kBackgroundRoleCount> values{};
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+// Convert ncurses' 0..1000 component scale to the RGB scale consumed by terminal::Color.
+terminal::Color rgb_from_ncurses(int red, int green, int blue)
+{
+  auto const component = [](int value) { return static_cast<std::uint32_t>((value * 255 + 500) / 1000); };
+  return terminal::Color{(component(red) << 16U) | (component(green) << 8U) | component(blue)};
+}
+
+// Resolve a custom palette index while retaining the legacy invalid-index fallback.
+ThemeColor custom_color(int value, ThemeColor fallback, int color_count)
+{
+  if (value < 0)
+    return terminal::Color{};
+  if (value < color_count)
+    return static_cast<terminal::ColorIndex>(value);
+  return fallback;
+}
+
+// Allocate the 4 x 6 semantic table once per theme key; plain and monochrome modes use pair zero.
+ThemeColorPairs const* active_theme_color_pairs()
+{
+  auto& context = core::Application::instance().terminal_context();
   auto const theme = active_tui_theme();
+  if (tui_plain_output() || theme.kind == TuiThemeKind::Plain || !context.has_colors())
+    return nullptr;
+
+  static std::unordered_map<std::string, ThemeColorPairs> cache;
   auto const theme_key = theme.name + "|" + theme.badge + "|" + theme.revision;
-  if (theme.kind == TuiThemeKind::Plain || !terminal_context.has_colors())
-  {
-    initialized_theme = theme_key;
-    return;
-  }
-  if (initialized_theme && *initialized_theme == theme_key)
-    return;
-  initialized_theme = theme_key;
-  auto screen_bg = COLOR_BLACK;
-  auto composer_bg = COLOR_BLACK;
-  auto tool_bg = COLOR_BLACK;
-  auto question_bg = COLOR_BLACK;
-  auto text_fg = COLOR_WHITE;
-  auto muted_fg = COLOR_WHITE;
-  auto success_fg = COLOR_GREEN;
-  auto warning_fg = COLOR_YELLOW;
-  auto error_fg = COLOR_RED;
-  auto accent_fg = COLOR_BLUE;
-  auto color_or_default = [](int value, short fallback) -> short {
-    if (value < 0)
-      return -1;
-    if (value <= SHRT_MAX && value < COLORS)
-      return static_cast<short>(value);
-    return fallback;
-  };
+  if (auto const cached = cache.find(theme_key); cached != cache.end())
+    return &cached->second;
+
+  std::array<ThemeColor, kColorRoleCount> foregrounds = {terminal::ColorIndex::white,  terminal::ColorIndex::white, terminal::ColorIndex::green,
+                                                         terminal::ColorIndex::yellow, terminal::ColorIndex::red,   terminal::ColorIndex::blue};
+  std::array<ThemeColor, kBackgroundRoleCount> backgrounds = {terminal::Color{}, terminal::ColorIndex::black, terminal::ColorIndex::black,
+                                                              terminal::ColorIndex::black};
+
   if (theme.kind == TuiThemeKind::Custom && theme.palette)
   {
-    screen_bg = color_or_default(theme.palette->screen_bg, COLOR_BLACK);
-    composer_bg = color_or_default(theme.palette->composer_bg, screen_bg);
-    tool_bg = color_or_default(theme.palette->tool_bg, composer_bg);
-    question_bg = color_or_default(theme.palette->question_bg, composer_bg);
-    text_fg = color_or_default(theme.palette->text, COLOR_WHITE);
-    muted_fg = color_or_default(theme.palette->muted, COLOR_CYAN);
-    success_fg = color_or_default(theme.palette->success, COLOR_GREEN);
-    warning_fg = color_or_default(theme.palette->warning, COLOR_YELLOW);
-    error_fg = color_or_default(theme.palette->error, COLOR_RED);
-    accent_fg = color_or_default(theme.palette->accent, COLOR_CYAN);
+    auto const& palette = *theme.palette;
+    backgrounds[0] = custom_color(palette.screen_bg, terminal::ColorIndex::black, context.colors());
+    backgrounds[1] = custom_color(palette.composer_bg, backgrounds[0], context.colors());
+    backgrounds[2] = custom_color(palette.tool_bg, backgrounds[1], context.colors());
+    backgrounds[3] = custom_color(palette.question_bg, backgrounds[1], context.colors());
+    foregrounds[0] = custom_color(palette.text, terminal::ColorIndex::white, context.colors());
+    foregrounds[1] = custom_color(palette.muted, terminal::ColorIndex::cyan, context.colors());
+    foregrounds[2] = custom_color(palette.success, terminal::ColorIndex::green, context.colors());
+    foregrounds[3] = custom_color(palette.warning, terminal::ColorIndex::yellow, context.colors());
+    foregrounds[4] = custom_color(palette.error, terminal::ColorIndex::red, context.colors());
+    foregrounds[5] = custom_color(palette.accent, terminal::ColorIndex::cyan, context.colors());
   }
   else if (theme.kind == TuiThemeKind::Light)
   {
-    // Built-in screen canvas inherits the terminal default background (-1).
-    screen_bg = -1;
-    composer_bg = COLOR_WHITE;
-    text_fg = COLOR_BLACK;
-    muted_fg = COLOR_BLACK;
-    accent_fg = COLOR_BLUE;
-    if (can_change_color() && COLORS > kColorAccent)
-    {
-      static_cast<void>(init_color(kColorComposerBg, 914, 933, 961));
-      static_cast<void>(init_color(kColorMuted, 430, 430, 430));
-      static_cast<void>(init_color(kColorAccent, 120, 360, 780));
-      composer_bg = kColorComposerBg;
-      muted_fg = kColorMuted;
-      accent_fg = kColorAccent;
-    }
-    tool_bg = composer_bg;
-    question_bg = composer_bg;
-    if (can_change_color() && COLORS > kColorQuestionBg)
-    {
-      static_cast<void>(init_color(kColorQuestionBg, 875, 902, 953));
-      question_bg = kColorQuestionBg;
-    }
-    if (can_change_color() && COLORS > kColorToolBg)
-    {
-      static_cast<void>(init_color(kColorToolBg, 902, 918, 949));
-      tool_bg = kColorToolBg;
-    }
+    // Built-in screen canvas inherits the terminal default background.
+    foregrounds[0] = terminal::ColorIndex::black;
+    foregrounds[1] = rgb_from_ncurses(430, 430, 430);
+    foregrounds[5] = rgb_from_ncurses(120, 360, 780);
+    backgrounds[1] = rgb_from_ncurses(914, 933, 961);
+    backgrounds[2] = rgb_from_ncurses(902, 918, 949);
+    backgrounds[3] = rgb_from_ncurses(875, 902, 953);
   }
   else
   {
-    // Built-in screen canvas inherits the terminal default background (-1).
-    screen_bg = -1;
-    if (can_change_color() && COLORS > kColorComposerBg)
-    {
-      static_cast<void>(init_color(kColorComposerBg, 102, 122, 180));
-      composer_bg = kColorComposerBg;
-    }
-    tool_bg = composer_bg;
-    question_bg = composer_bg;
-    if (can_change_color() && COLORS > kColorQuestionBg)
-    {
-      static_cast<void>(init_color(kColorQuestionBg, 125, 153, 224));
-      question_bg = kColorQuestionBg;
-    }
-    if (can_change_color() && COLORS > kColorToolBg)
-    {
-      static_cast<void>(init_color(kColorToolBg, 71, 90, 133));
-      tool_bg = kColorToolBg;
-    }
-    if (can_change_color() && COLORS > kColorAccent)
-    {
-      static_cast<void>(init_color(kColorMuted, 510, 510, 510));
-      static_cast<void>(init_color(kColorAccent, 280, 480, 720));
-      muted_fg = kColorMuted;
-      accent_fg = kColorAccent;
-    }
+    // Context resolves these built-in RGB shades directly or through its indexed palette.
+    foregrounds[1] = rgb_from_ncurses(510, 510, 510);
+    foregrounds[5] = rgb_from_ncurses(280, 480, 720);
+    backgrounds[1] = rgb_from_ncurses(102, 122, 180);
+    backgrounds[2] = rgb_from_ncurses(71, 90, 133);
+    backgrounds[3] = rgb_from_ncurses(125, 153, 224);
   }
-  static_cast<void>(init_pair(kPairText, text_fg, screen_bg));
-  static_cast<void>(init_pair(kPairMuted, muted_fg, screen_bg));
-  static_cast<void>(init_pair(kPairSuccess, success_fg, screen_bg));
-  static_cast<void>(init_pair(kPairWarning, warning_fg, screen_bg));
-  static_cast<void>(init_pair(kPairError, error_fg, screen_bg));
-  static_cast<void>(init_pair(kPairAccent, accent_fg, screen_bg));
-  static_cast<void>(init_pair(kPairScreen, text_fg, screen_bg));
-  static_cast<void>(init_pair(kPairComposer, text_fg, composer_bg));
-  static_cast<void>(init_pair(kPairComposerText, text_fg, composer_bg));
-  static_cast<void>(init_pair(kPairComposerMuted, muted_fg, composer_bg));
-  static_cast<void>(init_pair(kPairComposerSuccess, success_fg, composer_bg));
-  static_cast<void>(init_pair(kPairComposerWarning, warning_fg, composer_bg));
-  static_cast<void>(init_pair(kPairComposerError, error_fg, composer_bg));
-  static_cast<void>(init_pair(kPairComposerAccent, accent_fg, composer_bg));
-  if (COLOR_PAIRS > kPairToolAccent)
+
+  ThemeColorPairs pairs;
+  for (std::size_t background = 0; background < backgrounds.size(); ++background)
   {
-    static_cast<void>(init_pair(kPairToolText, text_fg, tool_bg));
-    static_cast<void>(init_pair(kPairToolMuted, muted_fg, tool_bg));
-    static_cast<void>(init_pair(kPairToolSuccess, success_fg, tool_bg));
-    static_cast<void>(init_pair(kPairToolWarning, warning_fg, tool_bg));
-    static_cast<void>(init_pair(kPairToolError, error_fg, tool_bg));
-    static_cast<void>(init_pair(kPairToolAccent, accent_fg, tool_bg));
+    for (std::size_t foreground = 0; foreground < foregrounds.size(); ++foreground)
+    {
+      pairs.values[background][foreground] =
+          std::visit([&context](auto foreground_color, auto background_color) { return context.create_color_pair(foreground_color, background_color); },
+                     foregrounds[foreground], backgrounds[background]);
+    }
   }
-  if (COLOR_PAIRS > kPairQuestionAccent)
-  {
-    static_cast<void>(init_pair(kPairQuestionText, text_fg, question_bg));
-    static_cast<void>(init_pair(kPairQuestionMuted, muted_fg, question_bg));
-    static_cast<void>(init_pair(kPairQuestionSuccess, success_fg, question_bg));
-    static_cast<void>(init_pair(kPairQuestionWarning, warning_fg, question_bg));
-    static_cast<void>(init_pair(kPairQuestionError, error_fg, question_bg));
-    static_cast<void>(init_pair(kPairQuestionAccent, accent_fg, question_bg));
-  }
+  return &cache.emplace(theme_key, std::move(pairs)).first->second;
 }
 
-short color_pair_for(CursesStyle const& style)
+// Combine semantic colors with SGR attributes into the terminal window's native rendition.
+terminal::Rendition rendition_for(TerminalStyle const& style)
 {
-  if (style.background == BackgroundRole::Composer)
+  terminal::ColorPair color_pair;
+  if (auto const* pairs = active_theme_color_pairs())
   {
-    switch (style.color)
-    {
-      case NcursesColorRole::Muted:
-        return kPairComposerMuted;
-      case NcursesColorRole::Success:
-        return kPairComposerSuccess;
-      case NcursesColorRole::Warning:
-        return kPairComposerWarning;
-      case NcursesColorRole::Error:
-        return kPairComposerError;
-      case NcursesColorRole::Accent:
-        return kPairComposerAccent;
-      case NcursesColorRole::Text:
-        return kPairComposerText;
-    }
+    color_pair = pairs->values[static_cast<std::size_t>(style.background)][static_cast<std::size_t>(style.color)];
   }
-  if (style.background == BackgroundRole::Tool && COLOR_PAIRS > kPairToolAccent)
-  {
-    switch (style.color)
-    {
-      case NcursesColorRole::Muted:
-        return kPairToolMuted;
-      case NcursesColorRole::Success:
-        return kPairToolSuccess;
-      case NcursesColorRole::Warning:
-        return kPairToolWarning;
-      case NcursesColorRole::Error:
-        return kPairToolError;
-      case NcursesColorRole::Accent:
-        return kPairToolAccent;
-      case NcursesColorRole::Text:
-        return kPairToolText;
-    }
-  }
-  if (style.background == BackgroundRole::Question && COLOR_PAIRS > kPairQuestionAccent)
-  {
-    switch (style.color)
-    {
-      case NcursesColorRole::Muted:
-        return kPairQuestionMuted;
-      case NcursesColorRole::Success:
-        return kPairQuestionSuccess;
-      case NcursesColorRole::Warning:
-        return kPairQuestionWarning;
-      case NcursesColorRole::Error:
-        return kPairQuestionError;
-      case NcursesColorRole::Accent:
-        return kPairQuestionAccent;
-      case NcursesColorRole::Text:
-        return kPairQuestionText;
-    }
-  }
-
-  switch (style.color)
-  {
-    case NcursesColorRole::Muted:
-      return kPairMuted;
-    case NcursesColorRole::Success:
-      return kPairSuccess;
-    case NcursesColorRole::Warning:
-      return kPairWarning;
-    case NcursesColorRole::Error:
-      return kPairError;
-    case NcursesColorRole::Accent:
-      return kPairAccent;
-    case NcursesColorRole::Text:
-      return kPairText;
-  }
-  return kPairText;
-}
-
-attr_t curses_attributes(CursesStyle const& style)
-{
-  if (tui_plain_output())
-    return style.attributes;
-  if (!core::Application::instance().terminal_context().has_colors())
-    return style.attributes;
-  return style.attributes | COLOR_PAIR(color_pair_for(style));
+  return terminal::Rendition{color_pair, style.attributes};
 }
 
 bool parse_sgr_codes(std::string_view sequence, std::vector<int>& codes)
@@ -421,11 +280,11 @@ bool parse_sgr_codes(std::string_view sequence, std::vector<int>& codes)
   return true;
 }
 
-void apply_sgr_codes(std::vector<int> const& codes, CursesStyle& style)
+void apply_sgr_codes(std::vector<int> const& codes, TerminalStyle& style)
 {
   if (codes.empty())
   {
-    style = CursesStyle{};
+    style = TerminalStyle{};
     return;
   }
   for (std::size_t index = 0; index < codes.size(); ++index)
@@ -433,24 +292,22 @@ void apply_sgr_codes(std::vector<int> const& codes, CursesStyle& style)
     switch (codes[index])
     {
       case 0:
-        style = CursesStyle{};
+        style = TerminalStyle{};
         break;
       case 1:
-        style.attributes |= A_BOLD;
+        style.attributes |= terminal::Attribute::bold;
         break;
       case 3:
-#ifdef A_ITALIC
-        style.attributes |= A_ITALIC;
-#endif
+        style.attributes |= terminal::Attribute::italic;
         break;
       case 4:
-        style.attributes |= A_UNDERLINE;
+        style.attributes |= terminal::Attribute::underline;
         break;
       case 7:
-        style.attributes |= A_REVERSE;
+        style.attributes |= terminal::Attribute::reverse;
         break;
       case 27:
-        style.attributes &= ~A_REVERSE;
+        style.attributes.mask() &= ~static_cast<std::uint32_t>(terminal::Attribute::reverse);
         break;
       case 9:
         // ncurses has no portable strike-through attribute. The snapshot renderer
@@ -520,17 +377,18 @@ void apply_sgr_codes(std::vector<int> const& codes, CursesStyle& style)
   }
 }
 
-void add_text_chunk(std::string_view text, CursesStyle style)
+void add_text_chunk(std::string_view text, TerminalStyle style)
 {
   if (text.empty())
     return;
-  attrset(curses_attributes(style));
-  static_cast<void>(addnstr(text.data(), static_cast<int>(std::min<std::size_t>(text.size(), INT_MAX))));
+  auto& window = core::Application::instance().terminal_context().stdscr();
+  window.attr_set(rendition_for(style));
+  window.addstr(text.data(), static_cast<int>(std::min<std::size_t>(text.size(), std::numeric_limits<int>::max())));
 }
 
 void draw_styled_line(std::string_view line, bool clear_to_end = true)
 {
-  CursesStyle style{.attributes = {}, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen};
+  TerminalStyle style{.attributes = {}, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen};
   std::vector<int> codes;
   std::size_t chunk_start = 0;
   for (std::size_t index = 0; index < line.size();)
@@ -572,9 +430,10 @@ void draw_styled_line(std::string_view line, bool clear_to_end = true)
     chunk_start = index;
   }
   add_text_chunk(line.substr(chunk_start), style);
-  attrset(curses_attributes(CursesStyle{.attributes = {}, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen}));
+  auto& window = core::Application::instance().terminal_context().stdscr();
+  window.attr_set(rendition_for(TerminalStyle{}));
   if (clear_to_end)
-    clrtoeol();
+    window.clrtoeol();
 }
 
 CursorPlacement input_cursor_placement(ComposerSnapshot const& snapshot, std::size_t rendered_line_count, std::size_t width)
@@ -2562,14 +2421,7 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
   auto& window = terminal_context.stdscr();
   auto const terminal_rows = terminal_context.rows();
   auto const terminal_cols = terminal_context.cols();
-  auto move_window = [&window](terminal::Position position) {
-    if (window.is_initialized())
-      window.move(position);
-    else
-      static_cast<void>(move(static_cast<int>(position.row()), static_cast<int>(position.col())));
-  };
   auto& active_image_ids = active_kitty_image_ids();
-  initialize_color_pairs();
   auto const width = std::max<std::size_t>(detail::kMinWidth, snapshot.width);
   auto const height = std::max<std::size_t>(detail::kMinHeight, snapshot.height);
   auto const theme = active_tui_theme();
@@ -2578,14 +2430,8 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
   auto const invalidate = !screen_cache.valid || screen_cache.width != width || screen_cache.height != height || screen_cache.style_key != style_key;
   if (invalidate)
   {
-    if (!tui_plain_output() && terminal_context.has_colors())
-    {
-      static_cast<void>(bkgd(curses_attributes(CursesStyle{.attributes = {}, .color = NcursesColorRole::Text, .background = BackgroundRole::Screen}) | ' '));
-    }
-    else
-    {
-      static_cast<void>(bkgd(attr_t{} | ' '));
-    }
+    auto const rendition = rendition_for(TerminalStyle{});
+    window.set_background(terminal::ComplexChar{terminal::GraphemeCluster{L" "}, rendition});
   }
   auto const canvas = composer_canvas_layout(snapshot);
   auto frame = detail::render_composer_frame_cached(snapshot, completion_cache, source_revision, &transcript_cache, transcript_generation, true, true,
@@ -2601,17 +2447,14 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
                               !snapshot.select_list && !snapshot.subagent_workspace && !sidebar_drawer_active(snapshot);
   if (!cursor_visible)
     terminal_context.set_cursor_visible(false);
-  if (window.is_initialized())
-    window.leaveok(!cursor_visible);
-  else
-    static_cast<void>(leaveok(stdscr, cursor_visible ? FALSE : TRUE));
+  window.leaveok(!cursor_visible);
 
   std::vector<std::pair<std::size_t, std::string>> osc_overlay_lines;
   for (auto const index : changed_rows)
   {
     if (index > static_cast<std::size_t>(terminal_rows > 0 ? terminal_rows - 1 : 0))
       break;
-    move_window({static_cast<uint32_t>(index), 0});
+    window.move({static_cast<uint32_t>(index), 0});
     auto const surface_line = index < surfaces.size() ? surfaces[index] : detail::screen_surface_line("", width);
     if (line_contains_osc_sequence(surface_line))
       osc_overlay_lines.emplace_back(index, surface_line);
@@ -2622,7 +2465,7 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
   cursor.column += canvas.left;
   if (cursor_visible)
   {
-    move_window({static_cast<uint32_t>(std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0)),
+    window.move({static_cast<uint32_t>(std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0)),
                  static_cast<uint32_t>(std::min<std::size_t>(cursor.column, terminal_cols > 0 ? terminal_cols - 1 : 0))});
     terminal_context.set_cursor_visible(true);
   }
@@ -2631,15 +2474,8 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
     screen_cache.valid = false;
     return false;
   };
-  if (window.is_initialized())
-  {
-    window.wnoutrefresh();
-    terminal_context.doupdate();
-  }
-  else if (wnoutrefresh(stdscr) == ERR || doupdate() == ERR)
-  {
-    return fail_screen_draw();
-  }
+  window.wnoutrefresh();
+  terminal_context.doupdate();
   bool wrote_direct_sequences = false;
   for (auto const& [row, line] : osc_overlay_lines)
   {
@@ -2720,37 +2556,23 @@ bool detail::draw_processing_footer_cached(ComposerSnapshot const& snapshot, Com
   auto& window = terminal_context.stdscr();
   auto const terminal_rows = terminal_context.rows();
   auto const terminal_cols = terminal_context.cols();
-  auto move_window = [&window](terminal::Position position) {
-    if (window.is_initialized())
-      window.move(position);
-    else
-      static_cast<void>(move(static_cast<int>(position.row()), static_cast<int>(position.col())));
-  };
   auto const height = std::max<std::size_t>(detail::kMinHeight, snapshot.height);
   auto const canvas = composer_canvas_layout(snapshot);
   auto footer = detail::render_composer_footer_line(snapshot, canvas.content_width);
   if (tui_plain_output())
     footer = strip_sgr_sequences(footer);
   auto const row = std::min<std::size_t>(height - 1, terminal_rows > 0 ? terminal_rows - 1 : 0);
-  move_window({static_cast<uint32_t>(row), static_cast<uint32_t>(canvas.left)});
+  window.move({static_cast<uint32_t>(row), static_cast<uint32_t>(canvas.left)});
   // Do not clear past the main canvas: that would erase a visible sidebar on every tick.
   draw_styled_line(footer, false);
 
   auto cursor = input_cursor_placement(snapshot, height, canvas.content_width);
   cursor.column += canvas.left;
-  move_window({static_cast<uint32_t>(std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0)),
+  window.move({static_cast<uint32_t>(std::min<std::size_t>(cursor.row, terminal_rows > 0 ? terminal_rows - 1 : 0)),
                static_cast<uint32_t>(std::min<std::size_t>(cursor.column, terminal_cols > 0 ? terminal_cols - 1 : 0))});
-  if (window.is_initialized())
-  {
-    window.leaveok(false);
-    window.wnoutrefresh();
-    terminal_context.doupdate();
-  }
-  else if (leaveok(stdscr, FALSE) == ERR || wnoutrefresh(stdscr) == ERR || doupdate() == ERR)
-  {
-    screen_cache.valid = false;
-    return false;
-  }
+  window.leaveok(false);
+  window.wnoutrefresh();
+  terminal_context.doupdate();
   mark_screen_row_dirty(screen_cache, row);
   return true;
 }

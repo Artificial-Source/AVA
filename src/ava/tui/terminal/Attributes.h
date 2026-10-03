@@ -14,7 +14,9 @@ enum class Attribute
   bold = 1,             // Extra bright or bold.
   underline = 2,        // Underlining.
   standout = 4,         // Best highlighting mode of the terminal.
-  blink = 8             // Blinking.
+  blink = 8,            // Blinking.
+  italic = 16,          // Italic when supported by the terminal.
+  reverse = 32          // Reverse foreground and background.
 };
 
 class Attributes
@@ -46,10 +48,7 @@ class Attributes
     return *this;
   }
 
-  bool operator==(Attribute attr) const
-  {
-    return mask_ == static_cast<attr_t>(attr);
-  }
+  bool operator==(Attribute attr) const { return mask_ == static_cast<attr_t>(attr); }
 
   // Accessor.
   attr_t mask() const { return mask_; }
