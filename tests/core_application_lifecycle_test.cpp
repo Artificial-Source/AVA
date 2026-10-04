@@ -167,7 +167,7 @@ void scenario_signal_construction()
   check(!ava::core::Signals::received(ava::core::Signals::to_mask(SIGINT) | ava::core::Signals::to_mask(SIGTERM) | ava::core::Signals::to_mask(SIGHUP)),
         "signals raised under the ignored startup disposition do not set shared bits");
 
-  application.signals_manager().activate_handlers({SIGTERM, SIGINT, SIGHUP});
+  application.signals_manager().activate_handlers({SIGHUP, SIGINT, SIGTERM});
   auto const active_mask = current_thread_signal_mask();
   check(!signal_is_blocked(active_mask, SIGINT) && !signal_is_blocked(active_mask, SIGTERM) && !signal_is_blocked(active_mask, SIGHUP) &&
             signal_is_blocked(active_mask, SIGUSR1) && !signal_is_blocked(active_mask, SIGUSR2),
@@ -212,7 +212,7 @@ void scenario_signal_teardown()
           "Application construction replaces prior foreground dispositions with its ignored startup policy");
     check(!ava::core::Signals::received(ava::core::Signals::to_mask(SIGINT) | ava::core::Signals::to_mask(SIGTERM)),
           "Application construction starts without recorded signal bits");
-    application.signals_manager().activate_handlers({SIGTERM, SIGINT});
+    application.signals_manager().activate_handlers({SIGINT, SIGTERM});
     check(::raise(SIGINT) == 0 && ::raise(SIGTERM) == 0, "the Application handler receives both foreground signals");
     check(ava::core::Signals::received(ava::core::Signals::to_mask(SIGINT) | ava::core::Signals::to_mask(SIGTERM)),
           "the Application handler records both foreground signals");
@@ -246,7 +246,7 @@ void scenario_joined_worker()
     release.wait();
   });
   auto const worker_startup_mask = startup_mask_future.get();
-  application.signals_manager().activate_handlers({SIGTERM, SIGINT});
+  application.signals_manager().activate_handlers({SIGINT, SIGTERM});
   main_activated_promise.set_value();
   auto const worker_active_mask = active_mask_future.get();
   auto const main_active_mask = current_thread_signal_mask();

@@ -218,7 +218,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   terminal::Context& terminal_context = application.terminal_context();
 
   // Activate signal handlers for the TUI.
-  signals_manager.activate_handlers({SIGTERM, SIGINT});
+  signals_manager.activate_handlers({SIGINT, SIGTERM});
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);

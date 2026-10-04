@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/process/supervisor_internal.h"
+#include "utils/Signals.h"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +24,7 @@
 #include <dirent.h>
 #endif
 #endif
+#include "debug.h"
 
 namespace ava::process::detail {
 
@@ -867,6 +869,8 @@ void begin_stop_locked(Record& record, Clock::time_point now)
 
 void monitor_main(std::shared_ptr<SupervisorState> state) noexcept
 {
+  Debug(NAMESPACE_DEBUG::init_thread("monitor"));
+
   auto const current_threads = state->monitor_telemetry->current_monitor_threads.fetch_add(1, std::memory_order_relaxed) + 1;
   update_peak(state->monitor_telemetry->peak_monitor_threads, current_threads);
   struct ThreadCounter final
@@ -940,6 +944,8 @@ ava::core::VoidResult ensure_monitor_started(std::shared_ptr<SupervisorState> co
     if (state->monitor.joinable())
       return {};
     state->monitor_wake = *wake;
+    utils::Signal::BlockGuard scoped_signal_blocks{SIGINT, SIGTERM, SIGHUP};
+    Dout(dc::notice, "Creating supervisor monitor thread.");
     state->monitor = std::thread(monitor_main, state);
     state->monitor_started = true;
   }
