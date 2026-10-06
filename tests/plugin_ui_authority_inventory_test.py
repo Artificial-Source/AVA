@@ -87,10 +87,12 @@ def main() -> int:
         raise AssertionError("every queued TUI follow-up must call handle_interactive_submission with explicit null UI authority")
 
     tui_files = source_files(root / "tui")
-    tui_app_includes = matches(tui_files, root, re.compile(r'^\s*#\s*include\s*[<\"]ava/app/'))
+    # Shared frontend contracts are intentionally consumed by concrete UIs.
+    # Other app headers remain forbidden here so the TUI cannot acquire app-owned plugin UI authority.
+    tui_app_includes = matches(tui_files, root, re.compile(r'^\s*#\s*include\s*[<\"]ava/app/(?!frontend/)'))
     if tui_app_includes:
         details = ", ".join(f"{path}:{line}" for path, line in tui_app_includes)
-        raise AssertionError(f"TUI-local plugin UI bridge must not depend on app headers: {details}")
+        raise AssertionError(f"TUI must not depend on app headers outside the shared frontend contracts: {details}")
 
     print("plugin UI authority inventory passed: one foreground TUI mint; direct command is the only claim/handler consumer")
     return 0
