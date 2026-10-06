@@ -19,7 +19,7 @@ enum class SubagentToolPreset
   ReadOnly,
 };
 
-enum class SubagentDefinitionProvenance
+enum class AgentDefinitionProvenance
 {
   Unknown,
   Builtin,
@@ -27,9 +27,9 @@ enum class SubagentDefinitionProvenance
   Project,
 };
 
-[[nodiscard]] std::string_view to_string(SubagentDefinitionProvenance provenance) noexcept;
+[[nodiscard]] std::string_view to_string(AgentDefinitionProvenance provenance) noexcept;
 
-struct SubagentDefinition
+struct AgentDefinition
 {
   std::string name;
   std::string description;
@@ -37,7 +37,7 @@ struct SubagentDefinition
   SubagentToolPreset tool_preset = SubagentToolPreset::Inherit;
   std::optional<std::size_t> max_tool_iterations = std::nullopt;
   bool hidden = false;
-  SubagentDefinitionProvenance provenance = SubagentDefinitionProvenance::Unknown;
+  AgentDefinitionProvenance provenance = AgentDefinitionProvenance::Unknown;
   std::filesystem::path path = {};
 
   // Primary definitions retain prompt text and a source path. Keep generated diagnostics from printing either; expose only bounded selection metadata.
@@ -73,8 +73,8 @@ struct SubagentLoadOptions
 
 struct SubagentLoadResult
 {
-  std::vector<SubagentDefinition> subagents;
-  std::vector<SubagentDefinition> primary_agents;
+  std::vector<AgentDefinition> subagents;
+  std::vector<AgentDefinition> primary_agents;
   std::vector<std::string> invalid_primary_agents;
   std::vector<SubagentDiagnostic> diagnostics;
 
@@ -82,15 +82,15 @@ struct SubagentLoadResult
 };
 
 [[nodiscard]] bool valid_subagent_name(std::string_view name);
-[[nodiscard]] std::vector<SubagentDefinition> builtin_subagents();
+[[nodiscard]] std::vector<AgentDefinition> builtin_subagents();
 [[nodiscard]] std::vector<std::filesystem::path> default_global_subagent_dirs();
 [[nodiscard]] std::vector<std::filesystem::path> default_project_subagent_dirs(std::filesystem::path const& workspace_root);
 [[nodiscard]] SubagentLoadResult load_subagents(SubagentLoadOptions options = {});
-[[nodiscard]] SubagentDefinition const* find_subagent(std::vector<SubagentDefinition> const& subagents, std::string_view name);
-[[nodiscard]] ava::core::Result<SubagentDefinition> resolve_primary_agent(SubagentLoadResult const& loaded, std::string_view name);
-[[nodiscard]] std::string subagent_names_csv(std::vector<SubagentDefinition> const& subagents);
-[[nodiscard]] std::string primary_agent_names_csv(std::vector<SubagentDefinition> const& primary_agents);
-[[nodiscard]] std::string format_available_subagents_for_prompt(std::vector<SubagentDefinition> const& subagents);
+[[nodiscard]] AgentDefinition const* find_subagent(std::vector<AgentDefinition> const& subagents, std::string_view name);
+[[nodiscard]] ava::core::Result<AgentDefinition> resolve_primary_agent(SubagentLoadResult const& loaded, std::string_view name);
+[[nodiscard]] std::string subagent_names_csv(std::vector<AgentDefinition> const& subagents);
+[[nodiscard]] std::string primary_agent_names_csv(std::vector<AgentDefinition> const& primary_agents);
+[[nodiscard]] std::string format_available_subagents_for_prompt(std::vector<AgentDefinition> const& subagents);
 [[nodiscard]] ToolVisibilityOptions narrow_tool_visibility_to_read_only(ToolVisibilityOptions visibility);
 
 }  // namespace ava::agent

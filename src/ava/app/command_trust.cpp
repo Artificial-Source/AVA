@@ -152,7 +152,7 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
       current.run_controller != snapshot.run_controller || current.append_target != snapshot.append_target || current.session_id != snapshot.session_id)
     return std::unexpected(transaction_error("session_changed_before_persistence"));
 
-  std::optional<ava::agent::SubagentDefinition> selected_primary_agent;
+  std::optional<ava::agent::AgentDefinition> selected_primary_agent;
   runtime::PromptState prompt_state;
   std::optional<ava::core::Error> prompt_warning;
   auto resolved_primary = runtime::resolve_runtime_primary_agent(current.paths, current.workspace_dir, false, current.requested_primary_agent,
@@ -214,8 +214,8 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
     if (!publication_mismatch)
     {
       bool const selected_primary_is_permitted =
-          selected_primary_agent && (selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Builtin ||
-                                     selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Global);
+          selected_primary_agent && (selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Builtin ||
+                                     selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Global);
       if (selected_primary_agent && !selected_primary_is_permitted)
         selected_primary_agent.reset();
       auto effective_tool_visibility = session_w->tool_visibility();

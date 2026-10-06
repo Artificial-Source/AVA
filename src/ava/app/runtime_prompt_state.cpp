@@ -386,14 +386,14 @@ BasePromptMetadata base_prompt_metadata(ava::config::PromptSelection const& prom
 
 }  // namespace
 
-ava::core::Result<std::optional<ava::agent::SubagentDefinition>> resolve_runtime_primary_agent(ava::config::XdgPaths const& paths,
+ava::core::Result<std::optional<ava::agent::AgentDefinition>> resolve_runtime_primary_agent(ava::config::XdgPaths const& paths,
                                                                                                std::filesystem::path const& workspace_dir,
                                                                                                bool include_project_resources,
                                                                                                std::optional<std::string> const& requested_primary_agent,
                                                                                                PrimaryAgentResolutionPolicy policy)
 {
   if (!requested_primary_agent)
-    return std::optional<ava::agent::SubagentDefinition>{};
+    return std::optional<ava::agent::AgentDefinition>{};
 
   auto global_agent_dirs = ava::agent::default_global_subagent_dirs();
   if (global_agent_dirs.size() >= 2)
@@ -406,19 +406,19 @@ ava::core::Result<std::optional<ava::agent::SubagentDefinition>> resolve_runtime
   if (policy == PrimaryAgentResolutionPolicy::AllowUnavailable)
   {
     auto const* definition = ava::agent::find_subagent(loaded_agents.primary_agents, *requested_primary_agent);
-    return definition ? std::optional<ava::agent::SubagentDefinition>(*definition) : std::optional<ava::agent::SubagentDefinition>{};
+    return definition ? std::optional<ava::agent::AgentDefinition>(*definition) : std::optional<ava::agent::AgentDefinition>{};
   }
 
   auto resolved = ava::agent::resolve_primary_agent(loaded_agents, *requested_primary_agent);
   if (!resolved)
     return std::unexpected(std::move(resolved.error()));
-  return std::optional<ava::agent::SubagentDefinition>(std::move(*resolved));
+  return std::optional<ava::agent::AgentDefinition>(std::move(*resolved));
 }
 
 ava::core::Result<PromptState> load_runtime_prompt_state(ava::config::XdgPaths const& paths, ava::config::ModelInfo const& model, ava::agent::Mode mode,
                                                          std::filesystem::path const& workspace_dir, std::filesystem::path const& current_dir,
                                                          bool include_project_resources, PromptOverrides const& prompt_overrides,
-                                                         std::optional<ava::agent::SubagentDefinition> const& selected_primary_agent)
+                                                         std::optional<ava::agent::AgentDefinition> const& selected_primary_agent)
 {
   auto const resource_policy = make_extension_resource_policy(paths, workspace_dir, include_project_resources);
   auto prompt = ava::config::select_prompt(paths, model, mode);
@@ -511,8 +511,8 @@ ava::core::Result<PromptState> load_runtime_prompt_state(ava::config::XdgPaths c
   }
 
   bool const selected_primary_agent_is_permitted =
-      selected_primary_agent && (include_project_resources || selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Builtin ||
-                                 selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Global);
+      selected_primary_agent && (include_project_resources || selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Builtin ||
+                                 selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Global);
   if (selected_primary_agent_is_permitted)
   {
     system_prompt += "\n\n# Selected Primary Agent Instructions\nAgent: " + selected_primary_agent->name;

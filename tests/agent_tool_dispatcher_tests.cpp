@@ -1411,7 +1411,7 @@ void test_task_mode_and_job_tool_controls()
                                                   .tool_calls = 0,
                                                   .tool_iterations = 0};
           },
-      .subagents = {ava::agent::SubagentDefinition{.name = "general", .description = "general", .system_prompt = "general", .max_tool_iterations = 7}}};
+      .subagents = {ava::agent::AgentDefinition{.name = "general", .description = "general", .system_prompt = "general", .max_tool_iterations = 7}}};
   ava::agent::ToolDispatcher task_dispatcher(task_context, task_services);
   auto preferred = task_dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "task_mode", .name = "task", .arguments_json = R"({"description":"mode","prompt":"run","subagent_type":"general","mode":"background"})"});
@@ -1466,7 +1466,7 @@ void test_task_mode_and_job_tool_controls()
         return ava::agent::TaskSubagentResult{};
       },
       .subagent_launch = {.sink = [&unknown_launches](ava::agent::SubagentLaunchNotification const&) { ++unknown_launches; }},
-      .subagents = {ava::agent::SubagentDefinition{.name = "general", .description = "general", .system_prompt = "general"}}};
+      .subagents = {ava::agent::AgentDefinition{.name = "general", .description = "general", .system_prompt = "general"}}};
   ava::agent::ToolDispatcher unknown_dispatcher(unknown_context, unknown_services);
   auto typo_iterations = unknown_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "task_typo_iterations",

@@ -1173,9 +1173,9 @@ void test_subagent_config_loads_project_definitions()
   auto const* general = ava::agent::find_subagent(loaded.subagents, "general");
   expect(reviewer && reviewer->description == "Review implementation details." && reviewer->tool_preset == ava::agent::SubagentToolPreset::ReadOnly &&
              reviewer->max_tool_iterations == 14 && reviewer->system_prompt.find("Inspect files") != std::string::npos &&
-             reviewer->provenance == ava::agent::SubagentDefinitionProvenance::Project,
+             reviewer->provenance == ava::agent::AgentDefinitionProvenance::Project,
          "subagent config loads project-defined read-only subagents with explicit project provenance");
-  expect(general && general->provenance == ava::agent::SubagentDefinitionProvenance::Builtin,
+  expect(general && general->provenance == ava::agent::AgentDefinitionProvenance::Builtin,
          "subagent config keeps builtin subagents from project override with explicit builtin provenance");
   auto ordered_primary = ava::agent::resolve_primary_agent(loaded, "ordered");
   expect(ordered_primary && ordered_primary->system_prompt.find("LEXICALLY LATER") != std::string::npos,
@@ -1183,7 +1183,7 @@ void test_subagent_config_loads_project_definitions()
   auto coder_primary = ava::agent::resolve_primary_agent(loaded, "coder");
   expect(coder_primary && coder_primary->system_prompt.find("PROJECT PRIMARY") != std::string::npos &&
              coder_primary->tool_preset == ava::agent::SubagentToolPreset::ReadOnly &&
-             coder_primary->provenance == ava::agent::SubagentDefinitionProvenance::Project,
+             coder_primary->provenance == ava::agent::AgentDefinitionProvenance::Project,
          "project mode-all definitions override global primary definitions with explicit project provenance");
   if (coder_primary)
   {
@@ -1214,7 +1214,7 @@ void test_subagent_config_loads_project_definitions()
   expect(ava::agent::find_subagent(untrusted.subagents, "reviewer") == nullptr, "project subagents are gated by project resource trust");
   auto global_coder = ava::agent::resolve_primary_agent(untrusted, "coder");
   expect(global_coder && global_coder->system_prompt.find("GLOBAL PRIMARY") != std::string::npos &&
-             global_coder->provenance == ava::agent::SubagentDefinitionProvenance::Global,
+             global_coder->provenance == ava::agent::AgentDefinitionProvenance::Global,
          "global primary definitions load without project trust with explicit global provenance");
   expect(!ava::agent::resolve_primary_agent(untrusted, "primary-only"), "project-only primary definitions fail closed without trust");
 
@@ -1260,7 +1260,7 @@ void test_agent_loop_custom_subagent_definition_controls_prompt_and_tools()
       .mode = ava::agent::Mode::Build,
       .model = agent_loop_test::model_invocation_options(),
       .access_token = "token",
-      .subagents = {ava::agent::SubagentDefinition{.name = "reviewer",
+      .subagents = {ava::agent::AgentDefinition{.name = "reviewer",
                                                    .description = "Read-only reviewer",
                                                    .system_prompt = "CUSTOM REVIEWER ROLE",
                                                    .tool_preset = ava::agent::SubagentToolPreset::ReadOnly}},

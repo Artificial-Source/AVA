@@ -166,7 +166,7 @@ class AgentTurnExecutor final
   bool pre_turn_compacted_ = false;
   std::unordered_set<std::string> finalized_provider_tool_call_ids_;
   AgentLoopResult result_;
-  std::vector<SubagentDefinition> subagents_;
+  std::vector<AgentDefinition> subagents_;
   std::optional<ava::tools::ToolContext> tool_context_storage_;
   std::optional<ToolDispatcher> dispatcher_storage_;
   std::size_t tool_iterations_ = 0;

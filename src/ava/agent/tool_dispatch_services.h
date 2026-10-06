@@ -62,7 +62,7 @@ struct ToolDispatchServices
   // Exact coordinator/owner pair for public job controls. Child loops clear
   // both this coordinator and the task runner, then hide both schemas.
   std::shared_ptr<SubagentCoordinator> subagent_coordinator = nullptr;
-  std::vector<SubagentDefinition> subagents = {};
+  std::vector<AgentDefinition> subagents = {};
 
 #ifdef CWDEBUG
   // OPT_OUT keeps callbacks/launch metadata out of generated printing; this

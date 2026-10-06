@@ -50,7 +50,7 @@ ava::core::Result<runtime::PromptState> select_runtime_prompt_state(runtime::ses
   std::filesystem::path current_dir;
   bool include_project_resources;
   runtime::PromptOverrides prompt_overrides;
-  std::optional<ava::agent::SubagentDefinition> selected_primary_agent;
+  std::optional<ava::agent::AgentDefinition> selected_primary_agent;
   {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
     paths = session_r->paths();
@@ -376,7 +376,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
   bool const include_project_resources = include_ambient && resource_policy.include_project_resources;
 
   std::shared_ptr<ava::lsp::DiagnosticsProvider> configured_lsp_provider;
-  std::vector<ava::agent::SubagentDefinition> subagents;
+  std::vector<ava::agent::AgentDefinition> subagents;
   if (include_ambient)
   {
     std::filesystem::path workspace_dir_copy;

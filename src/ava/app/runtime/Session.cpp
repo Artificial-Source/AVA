@@ -1009,13 +1009,13 @@ ava::core::VoidResult Session::apply_prompt_state_and_refresh(session_ts& unlock
 
 //static
 ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& unlocked_session, ProjectTrustState project_trust,
-                                                                    std::optional<ava::agent::SubagentDefinition> selected_primary_agent,
+                                                                    std::optional<ava::agent::AgentDefinition> selected_primary_agent,
                                                                     PromptState prompt_state)
 {
   AVA_ASSERT_NO_SESSION_LOCK_HELD("calling Session::apply_trust_prompt_state_and_refresh");
   bool const selected_primary_agent_is_non_project =
-      selected_primary_agent && (selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Builtin ||
-                                 selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Global);
+      selected_primary_agent && (selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Builtin ||
+                                 selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Global);
   if (selected_primary_agent && !project_resources_trusted(project_trust) && !selected_primary_agent_is_non_project)
     selected_primary_agent.reset();
 

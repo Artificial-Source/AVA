@@ -417,7 +417,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   auto expect_project_selection = [&](std::string_view canary, ava::agent::SubagentToolPreset preset, std::string_view label) {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const& selected = session_r->selected_primary_agent();
-    expect(selected && selected->provenance == ava::agent::SubagentDefinitionProvenance::Project && selected->tool_preset == preset &&
+    expect(selected && selected->provenance == ava::agent::AgentDefinitionProvenance::Project && selected->tool_preset == preset &&
                selected->system_prompt.find(canary) != std::string::npos && session_r->requested_primary_agent() == std::optional<std::string>(kAgentName) &&
                session_r->system_prompt().find(canary) != std::string::npos &&
                session_r->ambient_extension_free_system_prompt().find(canary) != std::string::npos &&
@@ -427,7 +427,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   auto expect_project_authority_absent = [&](bool expect_global_fallback, std::string_view label) {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const& selected = session_r->selected_primary_agent();
-    bool const selection_safe = expect_global_fallback ? selected && selected->provenance == ava::agent::SubagentDefinitionProvenance::Global &&
+    bool const selection_safe = expect_global_fallback ? selected && selected->provenance == ava::agent::AgentDefinitionProvenance::Global &&
                                                              selected->system_prompt.find(kGlobalCanary) != std::string::npos
                                                        : !selected;
     auto const prompts_safe = [&](std::string const& prompt) {
@@ -537,7 +537,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   {
     SCOPED_CRITICAL_AREA_R(session_r, *inverse_opened);
     inverse_starts_broad = session_r->selected_primary_agent() &&
-                           session_r->selected_primary_agent()->provenance == ava::agent::SubagentDefinitionProvenance::Project &&
+                           session_r->selected_primary_agent()->provenance == ava::agent::AgentDefinitionProvenance::Project &&
                            session_r->tool_visibility().included_tools.empty();
   }
   auto inverse_denied = inverse_opened ? ava::app::run_command(*inverse_opened, ava::app::CommandRequest{.command = "/trust deny"})
@@ -547,7 +547,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   {
     SCOPED_CRITICAL_AREA_R(session_r, *inverse_opened);
     inverse_narrowed = session_r->selected_primary_agent() &&
-                       session_r->selected_primary_agent()->provenance == ava::agent::SubagentDefinitionProvenance::Global &&
+                       session_r->selected_primary_agent()->provenance == ava::agent::AgentDefinitionProvenance::Global &&
                        restricted_tools_are_retained(session_r->tool_visibility());
   }
   expect(inverse_opened && inverse_starts_broad && inverse_denied && inverse_narrowed,

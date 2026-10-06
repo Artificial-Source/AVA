@@ -153,10 +153,10 @@ std::optional<std::optional<std::size_t>> parse_max_tool_iterations(std::map<std
   return std::optional<std::size_t>{parsed};
 }
 
-void add_or_replace_definition(std::vector<SubagentDefinition>& definitions, std::vector<SubagentDiagnostic>& diagnostics, SubagentDefinition definition,
+void add_or_replace_definition(std::vector<AgentDefinition>& definitions, std::vector<SubagentDiagnostic>& diagnostics, AgentDefinition definition,
                                bool protect_builtins)
 {
-  auto const existing = std::ranges::find_if(definitions, [&](SubagentDefinition const& item) { return item.name == definition.name; });
+  auto const existing = std::ranges::find_if(definitions, [&](AgentDefinition const& item) { return item.name == definition.name; });
   if (existing == definitions.end())
   {
     if (definitions.size() < kMaxSubagents)
@@ -165,7 +165,7 @@ void add_or_replace_definition(std::vector<SubagentDefinition>& definitions, std
       add_diagnostic(diagnostics, definition.path, "too many agent definitions; entry ignored");
     return;
   }
-  if (protect_builtins && existing->provenance == SubagentDefinitionProvenance::Builtin)
+  if (protect_builtins && existing->provenance == AgentDefinitionProvenance::Builtin)
   {
     add_diagnostic(diagnostics, definition.path, "subagent name collides with a builtin: " + definition.name);
     return;
@@ -173,19 +173,19 @@ void add_or_replace_definition(std::vector<SubagentDefinition>& definitions, std
   *existing = std::move(definition);
 }
 
-void invalidate_primary(std::vector<SubagentDefinition>& primary_agents, std::vector<std::string>& invalid_primary_agents,
+void invalidate_primary(std::vector<AgentDefinition>& primary_agents, std::vector<std::string>& invalid_primary_agents,
                         std::optional<std::string> const& name)
 {
   if (!name)
     return;
-  std::erase_if(primary_agents, [&](SubagentDefinition const& definition) { return definition.name == *name; });
+  std::erase_if(primary_agents, [&](AgentDefinition const& definition) { return definition.name == *name; });
   if (std::ranges::find(invalid_primary_agents, *name) == invalid_primary_agents.end())
     invalid_primary_agents.push_back(*name);
 }
 
-void load_subagent_file(std::vector<SubagentDefinition>& subagents, std::vector<SubagentDefinition>& primary_agents,
+void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<AgentDefinition>& primary_agents,
                         std::vector<std::string>& invalid_primary_agents, std::vector<SubagentDiagnostic>& diagnostics, std::filesystem::path const& path,
-                        SubagentDefinitionProvenance provenance, std::size_t max_file_bytes)
+                        AgentDefinitionProvenance provenance, std::size_t max_file_bytes)
 {
   auto content = context::read_resource_file(path, {.max_bytes = max_file_bytes, .resource_description = "subagent file"});
   if (!content)
@@ -253,7 +253,7 @@ void load_subagent_file(std::vector<SubagentDefinition>& subagents, std::vector<
       invalidate_primary(primary_agents, invalid_primary_agents, candidate_name);
     return;
   }
-  SubagentDefinition definition{.name = std::move(name),
+  AgentDefinition definition{.name = std::move(name),
                                 .description = std::move(description),
                                 .system_prompt = std::move(parsed.body),
                                 .tool_preset = *tools,
@@ -272,9 +272,9 @@ void load_subagent_file(std::vector<SubagentDefinition>& subagents, std::vector<
   }
 }
 
-void discover_from_root(std::vector<SubagentDefinition>& subagents, std::vector<SubagentDefinition>& primary_agents,
+void discover_from_root(std::vector<AgentDefinition>& subagents, std::vector<AgentDefinition>& primary_agents,
                         std::vector<std::string>& invalid_primary_agents, std::vector<SubagentDiagnostic>& diagnostics, std::filesystem::path const& root,
-                        SubagentDefinitionProvenance provenance, std::size_t max_file_bytes)
+                        AgentDefinitionProvenance provenance, std::size_t max_file_bytes)
 {
   if (root.empty())
     return;
@@ -309,17 +309,17 @@ void discover_from_root(std::vector<SubagentDefinition>& subagents, std::vector<
 
 }  // namespace
 
-std::string_view to_string(SubagentDefinitionProvenance provenance) noexcept
+std::string_view to_string(AgentDefinitionProvenance provenance) noexcept
 {
   switch (provenance)
   {
-    case SubagentDefinitionProvenance::Unknown:
+    case AgentDefinitionProvenance::Unknown:
       return "unknown";
-    case SubagentDefinitionProvenance::Builtin:
+    case AgentDefinitionProvenance::Builtin:
       return "builtin";
-    case SubagentDefinitionProvenance::Global:
+    case AgentDefinitionProvenance::Global:
       return "global";
-    case SubagentDefinitionProvenance::Project:
+    case AgentDefinitionProvenance::Project:
       return "project";
   }
   return "unknown";
@@ -344,19 +344,19 @@ bool valid_subagent_name(std::string_view name)
   return !last_was_separator;
 }
 
-std::vector<SubagentDefinition> builtin_subagents()
+std::vector<AgentDefinition> builtin_subagents()
 {
   return {
-      SubagentDefinition{.name = "general",
+      AgentDefinition{.name = "general",
                          .description = "General-purpose subagent for delegated coding, analysis, and verification tasks.",
                          .system_prompt = "You are AVA's general subagent. Complete the delegated task and return only the result needed by the parent agent.",
                          .tool_preset = SubagentToolPreset::Inherit,
-                         .provenance = SubagentDefinitionProvenance::Builtin},
-      SubagentDefinition{.name = "explore",
+                         .provenance = AgentDefinitionProvenance::Builtin},
+      AgentDefinition{.name = "explore",
                          .description = "Read-only subagent for fast codebase exploration and concise findings.",
                          .system_prompt = "You are AVA's explore subagent. Read, list, and search files only. Return concise findings to the parent agent.",
                          .tool_preset = SubagentToolPreset::ReadOnly,
-                         .provenance = SubagentDefinitionProvenance::Builtin}};
+                         .provenance = AgentDefinitionProvenance::Builtin}};
 }
 
 std::vector<std::filesystem::path> default_global_subagent_dirs()
@@ -393,27 +393,27 @@ SubagentLoadResult load_subagents(SubagentLoadOptions options)
   SubagentLoadResult result;
   result.subagents = builtin_subagents();
   for (auto const& dir : options.global_agent_dirs)
-    discover_from_root(result.subagents, result.primary_agents, result.invalid_primary_agents, result.diagnostics, dir, SubagentDefinitionProvenance::Global,
+    discover_from_root(result.subagents, result.primary_agents, result.invalid_primary_agents, result.diagnostics, dir, AgentDefinitionProvenance::Global,
                        options.max_file_bytes);
   if (options.include_project_agents)
   {
     for (auto const& dir : options.project_agent_dirs)
-      discover_from_root(result.subagents, result.primary_agents, result.invalid_primary_agents, result.diagnostics, dir, SubagentDefinitionProvenance::Project,
+      discover_from_root(result.subagents, result.primary_agents, result.invalid_primary_agents, result.diagnostics, dir, AgentDefinitionProvenance::Project,
                          options.max_file_bytes);
   }
-  auto by_name = [](SubagentDefinition const& left, SubagentDefinition const& right) { return left.name < right.name; };
+  auto by_name = [](AgentDefinition const& left, AgentDefinition const& right) { return left.name < right.name; };
   std::ranges::sort(result.subagents, by_name);
   std::ranges::sort(result.primary_agents, by_name);
   return result;
 }
 
-SubagentDefinition const* find_subagent(std::vector<SubagentDefinition> const& subagents, std::string_view name)
+AgentDefinition const* find_subagent(std::vector<AgentDefinition> const& subagents, std::string_view name)
 {
-  auto const it = std::ranges::find_if(subagents, [name](SubagentDefinition const& subagent) { return subagent.name == name; });
+  auto const it = std::ranges::find_if(subagents, [name](AgentDefinition const& subagent) { return subagent.name == name; });
   return it == subagents.end() ? nullptr : &*it;
 }
 
-ava::core::Result<SubagentDefinition> resolve_primary_agent(SubagentLoadResult const& loaded, std::string_view name)
+ava::core::Result<AgentDefinition> resolve_primary_agent(SubagentLoadResult const& loaded, std::string_view name)
 {
   if (!valid_subagent_name(name))
   {
@@ -438,7 +438,7 @@ ava::core::Result<SubagentDefinition> resolve_primary_agent(SubagentLoadResult c
   return std::unexpected(std::move(error));
 }
 
-std::string subagent_names_csv(std::vector<SubagentDefinition> const& subagents)
+std::string subagent_names_csv(std::vector<AgentDefinition> const& subagents)
 {
   std::string names;
   for (auto const& subagent : subagents)
@@ -452,7 +452,7 @@ std::string subagent_names_csv(std::vector<SubagentDefinition> const& subagents)
   return names.empty() ? "none" : names;
 }
 
-std::string primary_agent_names_csv(std::vector<SubagentDefinition> const& primary_agents)
+std::string primary_agent_names_csv(std::vector<AgentDefinition> const& primary_agents)
 {
   return subagent_names_csv(primary_agents);
 }
@@ -475,7 +475,7 @@ ToolVisibilityOptions narrow_tool_visibility_to_read_only(ToolVisibilityOptions 
   return visibility;
 }
 
-std::string format_available_subagents_for_prompt(std::vector<SubagentDefinition> const& subagents)
+std::string format_available_subagents_for_prompt(std::vector<AgentDefinition> const& subagents)
 {
   std::string output;
   for (auto const& subagent : subagents)
