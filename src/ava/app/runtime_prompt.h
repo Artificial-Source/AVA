@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ava/app/runtime.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/core/result.h"
 
 #include <filesystem>

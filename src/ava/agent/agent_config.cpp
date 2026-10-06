@@ -1,5 +1,5 @@
 #include "sys.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/context/markdown_resource.h"
 #include "ava/core/error.h"
@@ -25,18 +25,18 @@ constexpr std::size_t kMaxSubagents = 128;
 constexpr std::size_t kMaxDiagnostics = 128;
 constexpr std::size_t kMaxSubagentToolIterations = 1000;
 
-void add_diagnostic(std::vector<SubagentDiagnostic>& diagnostics, std::filesystem::path path, std::string message,
+void add_diagnostic(std::vector<AgentDiagnostic>& diagnostics, std::filesystem::path path, std::string message,
                     std::optional<std::string> agent_name = std::nullopt, bool blocks_primary_selection = false)
 {
   if (diagnostics.size() < kMaxDiagnostics)
-    diagnostics.push_back(SubagentDiagnostic{
+    diagnostics.push_back(AgentDiagnostic{
         .path = std::move(path), .message = std::move(message), .agent_name = std::move(agent_name), .blocks_primary_selection = blocks_primary_selection});
 }
 
 std::optional<std::string> diagnostic_agent_name(std::filesystem::path const& path, std::optional<std::string> configured_name = std::nullopt)
 {
   auto name = core::trim(configured_name.value_or(path.stem().string()));
-  return valid_subagent_name(name) ? std::optional<std::string>(std::move(name)) : std::nullopt;
+  return valid_agent_name(name) ? std::optional<std::string>(std::move(name)) : std::nullopt;
 }
 
 std::optional<std::filesystem::path> home_dir()
@@ -93,14 +93,14 @@ std::optional<std::string> field(std::map<std::string, std::string> const& front
   return it->second;
 }
 
-std::optional<SubagentToolPreset> parse_tool_preset(std::string value)
+std::optional<AgentToolPreset> parse_tool_preset(std::string value)
 {
   value = core::trim(value);
   std::ranges::transform(value, value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   if (value == "read-only" || value == "read_only" || value == "readonly" || value == "explore")
-    return SubagentToolPreset::ReadOnly;
+    return AgentToolPreset::ReadOnly;
   if (value.empty() || value == "inherit" || value == "inherited" || value == "default")
-    return SubagentToolPreset::Inherit;
+    return AgentToolPreset::Inherit;
   return std::nullopt;
 }
 
@@ -153,7 +153,7 @@ std::optional<std::optional<std::size_t>> parse_max_tool_iterations(std::map<std
   return std::optional<std::size_t>{parsed};
 }
 
-void add_or_replace_definition(std::vector<AgentDefinition>& definitions, std::vector<SubagentDiagnostic>& diagnostics, AgentDefinition definition,
+void add_or_replace_definition(std::vector<AgentDefinition>& definitions, std::vector<AgentDiagnostic>& diagnostics, AgentDefinition definition,
                                bool protect_builtins)
 {
   auto const existing = std::ranges::find_if(definitions, [&](AgentDefinition const& item) { return item.name == definition.name; });
@@ -173,8 +173,7 @@ void add_or_replace_definition(std::vector<AgentDefinition>& definitions, std::v
   *existing = std::move(definition);
 }
 
-void invalidate_primary(std::vector<AgentDefinition>& primary_agents, std::vector<std::string>& invalid_primary_agents,
-                        std::optional<std::string> const& name)
+void invalidate_primary(std::vector<AgentDefinition>& primary_agents, std::vector<std::string>& invalid_primary_agents, std::optional<std::string> const& name)
 {
   if (!name)
     return;
@@ -183,9 +182,9 @@ void invalidate_primary(std::vector<AgentDefinition>& primary_agents, std::vecto
     invalid_primary_agents.push_back(*name);
 }
 
-void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<AgentDefinition>& primary_agents,
-                        std::vector<std::string>& invalid_primary_agents, std::vector<SubagentDiagnostic>& diagnostics, std::filesystem::path const& path,
-                        AgentDefinitionProvenance provenance, std::size_t max_file_bytes)
+void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<AgentDefinition>& primary_agents, std::vector<std::string>& invalid_primary_agents,
+                        std::vector<AgentDiagnostic>& diagnostics, std::filesystem::path const& path, AgentDefinitionProvenance provenance,
+                        std::size_t max_file_bytes)
 {
   auto content = context::read_resource_file(path, {.max_bytes = max_file_bytes, .resource_description = "subagent file"});
   if (!content)
@@ -211,7 +210,7 @@ void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<Age
 
   auto description = field(parsed.frontmatter, "description").value_or("");
   description = core::trim(description);
-  if (!valid_subagent_name(name))
+  if (!valid_agent_name(name))
   {
     auto const stem_name = diagnostic_agent_name(path);
     add_diagnostic(diagnostics, path, "agent name is invalid", stem_name, true);
@@ -242,7 +241,7 @@ void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<Age
     add_diagnostic(diagnostics, path, "agent tools preset is invalid", candidate_name, primary_mode);
     if (primary_mode)
       invalidate_primary(primary_agents, invalid_primary_agents, candidate_name);
-    tools = SubagentToolPreset::Inherit;
+    tools = AgentToolPreset::Inherit;
   }
   auto max_tool_iterations = parse_max_tool_iterations(parsed.frontmatter);
   if (!max_tool_iterations || frontmatter_field_count(*content, "max_tool_iterations") > 1)
@@ -254,13 +253,13 @@ void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<Age
     return;
   }
   AgentDefinition definition{.name = std::move(name),
-                                .description = std::move(description),
-                                .system_prompt = std::move(parsed.body),
-                                .tool_preset = *tools,
-                                .max_tool_iterations = *max_tool_iterations,
-                                .hidden = hidden_field(parsed.frontmatter),
-                                .provenance = provenance,
-                                .path = path};
+                             .description = std::move(description),
+                             .system_prompt = std::move(parsed.body),
+                             .tool_preset = *tools,
+                             .max_tool_iterations = *max_tool_iterations,
+                             .hidden = hidden_field(parsed.frontmatter),
+                             .provenance = provenance,
+                             .path = path};
   if (mode == "subagent" || mode == "all")
     add_or_replace_definition(subagents, diagnostics, definition, true);
   if ((mode == "primary" || mode == "all") && valid_primary_tools)
@@ -272,9 +271,9 @@ void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<Age
   }
 }
 
-void discover_from_root(std::vector<AgentDefinition>& subagents, std::vector<AgentDefinition>& primary_agents,
-                        std::vector<std::string>& invalid_primary_agents, std::vector<SubagentDiagnostic>& diagnostics, std::filesystem::path const& root,
-                        AgentDefinitionProvenance provenance, std::size_t max_file_bytes)
+void discover_from_root(std::vector<AgentDefinition>& subagents, std::vector<AgentDefinition>& primary_agents, std::vector<std::string>& invalid_primary_agents,
+                        std::vector<AgentDiagnostic>& diagnostics, std::filesystem::path const& root, AgentDefinitionProvenance provenance,
+                        std::size_t max_file_bytes)
 {
   if (root.empty())
     return;
@@ -325,7 +324,7 @@ std::string_view to_string(AgentDefinitionProvenance provenance) noexcept
   return "unknown";
 }
 
-bool valid_subagent_name(std::string_view name)
+bool valid_agent_name(std::string_view name)
 {
   if (name.empty() || name.size() > kMaxSubagentNameBytes)
     return false;
@@ -346,20 +345,19 @@ bool valid_subagent_name(std::string_view name)
 
 std::vector<AgentDefinition> builtin_subagents()
 {
-  return {
-      AgentDefinition{.name = "general",
-                         .description = "General-purpose subagent for delegated coding, analysis, and verification tasks.",
-                         .system_prompt = "You are AVA's general subagent. Complete the delegated task and return only the result needed by the parent agent.",
-                         .tool_preset = SubagentToolPreset::Inherit,
-                         .provenance = AgentDefinitionProvenance::Builtin},
-      AgentDefinition{.name = "explore",
-                         .description = "Read-only subagent for fast codebase exploration and concise findings.",
-                         .system_prompt = "You are AVA's explore subagent. Read, list, and search files only. Return concise findings to the parent agent.",
-                         .tool_preset = SubagentToolPreset::ReadOnly,
-                         .provenance = AgentDefinitionProvenance::Builtin}};
+  return {AgentDefinition{.name = "general",
+                          .description = "General-purpose subagent for delegated coding, analysis, and verification tasks.",
+                          .system_prompt = "You are AVA's general subagent. Complete the delegated task and return only the result needed by the parent agent.",
+                          .tool_preset = AgentToolPreset::Inherit,
+                          .provenance = AgentDefinitionProvenance::Builtin},
+          AgentDefinition{.name = "explore",
+                          .description = "Read-only subagent for fast codebase exploration and concise findings.",
+                          .system_prompt = "You are AVA's explore subagent. Read, list, and search files only. Return concise findings to the parent agent.",
+                          .tool_preset = AgentToolPreset::ReadOnly,
+                          .provenance = AgentDefinitionProvenance::Builtin}};
 }
 
-std::vector<std::filesystem::path> default_global_subagent_dirs()
+std::vector<std::filesystem::path> default_global_agent_dirs()
 {
   auto const paths = ava::config::xdg_paths();
   std::vector<std::filesystem::path> dirs{paths.ava_config_dir / "agents", paths.ava_config_dir / "agent"};
@@ -373,7 +371,7 @@ std::vector<std::filesystem::path> default_global_subagent_dirs()
   return dirs;
 }
 
-std::vector<std::filesystem::path> default_project_subagent_dirs(std::filesystem::path const& workspace_root)
+std::vector<std::filesystem::path> default_project_agent_dirs(std::filesystem::path const& workspace_root)
 {
   if (workspace_root.empty())
     return {};
@@ -381,16 +379,16 @@ std::vector<std::filesystem::path> default_project_subagent_dirs(std::filesystem
           workspace_root / ".agents" / "agent", workspace_root / ".claude" / "agents", workspace_root / ".claude" / "agent"};
 }
 
-SubagentLoadResult load_subagents(SubagentLoadOptions options)
+AgentLoadResult load_agents(AgentLoadOptions options)
 {
   if (options.global_agent_dirs.empty())
-    options.global_agent_dirs = default_global_subagent_dirs();
+    options.global_agent_dirs = default_global_agent_dirs();
   if (options.include_project_agents && options.project_agent_dirs.empty())
-    options.project_agent_dirs = default_project_subagent_dirs(options.workspace_root);
+    options.project_agent_dirs = default_project_agent_dirs(options.workspace_root);
   if (options.max_file_bytes == 0)
     options.max_file_bytes = 64 * 1024;
 
-  SubagentLoadResult result;
+  AgentLoadResult result;
   result.subagents = builtin_subagents();
   for (auto const& dir : options.global_agent_dirs)
     discover_from_root(result.subagents, result.primary_agents, result.invalid_primary_agents, result.diagnostics, dir, AgentDefinitionProvenance::Global,
@@ -413,9 +411,9 @@ AgentDefinition const* find_subagent(std::vector<AgentDefinition> const& subagen
   return it == subagents.end() ? nullptr : &*it;
 }
 
-ava::core::Result<AgentDefinition> resolve_primary_agent(SubagentLoadResult const& loaded, std::string_view name)
+ava::core::Result<AgentDefinition> resolve_primary_agent(AgentLoadResult const& loaded, std::string_view name)
 {
-  if (!valid_subagent_name(name))
+  if (!valid_agent_name(name))
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "selected primary agent name is invalid");
     error.with_context("hint", "use a name containing only letters, digits, '.', '_', or '-'");
@@ -492,7 +490,7 @@ std::string format_available_subagents_for_prompt(std::vector<AgentDefinition> c
     output += "  <subagent>\n";
     output += "    <name>" + xml_escape(subagent.name) + "</name>\n";
     output += "    <description>" + xml_escape(subagent.description) + "</description>\n";
-    output += "    <tools>" + std::string(subagent.tool_preset == SubagentToolPreset::ReadOnly ? "read-only" : "inherited") + "</tools>\n";
+    output += "    <tools>" + std::string(subagent.tool_preset == AgentToolPreset::ReadOnly ? "read-only" : "inherited") + "</tools>\n";
     output += "  </subagent>\n";
   }
   if (!output.empty())

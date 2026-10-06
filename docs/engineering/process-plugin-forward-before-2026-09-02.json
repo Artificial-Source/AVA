@@ -3511,13 +3511,13 @@
         {
           "mode": "100644",
           "object": "faeb8dc6b94a675a0fd9140baccfa8887e49f2fd",
-          "path": "src/ava/agent/subagent_config.cpp",
+          "path": "src/ava/agent/agent_config.cpp",
           "type": "blob"
         },
         {
           "mode": "100644",
           "object": "26af5eeb2e62c20a7cba0171e202c9b382882f1a",
-          "path": "src/ava/agent/subagent_config.h",
+          "path": "src/ava/agent/agent_config.h",
           "type": "blob"
         },
         {

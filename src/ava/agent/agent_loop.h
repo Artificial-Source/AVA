@@ -8,7 +8,7 @@
 #include "ava/agent/model_invocation_options.h"
 #include "ava/agent/question.h"
 #include "ava/agent/run_phase.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/subagent_coordinator.h"
 #include "ava/agent/subagent_launch.h"
 #include "ava/agent/tool_execution_options.h"

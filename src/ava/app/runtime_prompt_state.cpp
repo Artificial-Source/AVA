@@ -4,7 +4,7 @@
 #include "runtime/command_names.h"
 #include "runtime/markdown_files.h"
 #include "runtime_prompt.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/plugin/static_resources.h"
 #include "ava/config/prompt_config.h"
@@ -395,13 +395,13 @@ ava::core::Result<std::optional<ava::agent::AgentDefinition>> resolve_runtime_pr
   if (!requested_primary_agent)
     return std::optional<ava::agent::AgentDefinition>{};
 
-  auto global_agent_dirs = ava::agent::default_global_subagent_dirs();
+  auto global_agent_dirs = ava::agent::default_global_agent_dirs();
   if (global_agent_dirs.size() >= 2)
   {
     global_agent_dirs[0] = paths.ava_config_dir / "agents";
     global_agent_dirs[1] = paths.ava_config_dir / "agent";
   }
-  auto loaded_agents = ava::agent::load_subagents(ava::agent::SubagentLoadOptions{
+  auto loaded_agents = ava::agent::load_agents(ava::agent::AgentLoadOptions{
       .workspace_root = workspace_dir, .global_agent_dirs = std::move(global_agent_dirs), .include_project_agents = include_project_resources});
   if (policy == PrimaryAgentResolutionPolicy::AllowUnavailable)
   {
@@ -454,8 +454,8 @@ ava::core::Result<PromptState> load_runtime_prompt_state(ava::config::XdgPaths c
       .include_project_skills = resource_policy.include_project_resources,
   });
   add_plugin_skills(loaded_skills.skills, plugin_resources.skills);
-  auto loaded_subagents = ava::agent::load_subagents(
-      ava::agent::SubagentLoadOptions{.workspace_root = workspace_dir, .include_project_agents = resource_policy.include_project_resources});
+  auto loaded_subagents = ava::agent::load_agents(
+      ava::agent::AgentLoadOptions{.workspace_root = workspace_dir, .include_project_agents = resource_policy.include_project_resources});
   std::vector<FreshnessSourceMetadata> freshness_sources;
   auto selected_prompt = std::move(*prompt);
   auto system_prompt = selected_prompt.text;

@@ -18,7 +18,7 @@
 #include "ava/event/events.h"
 #include "ava/http/curl_transport.h"
 #include "ava/agent/agent_loop_session.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/provider/catalog.h"
@@ -397,8 +397,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
         .permission_resolver = runtime_options.permission_resolver,
     });
     configured_lsp_provider = lsp_provider ? *lsp_provider : nullptr;
-    subagents = ava::agent::load_subagents(ava::agent::SubagentLoadOptions{.workspace_root = std::move(workspace_dir_copy),
-                                                                           .include_project_agents = resource_policy.include_project_resources})
+    subagents = ava::agent::load_agents(ava::agent::AgentLoadOptions{.workspace_root = std::move(workspace_dir_copy),
+                                                                     .include_project_agents = resource_policy.include_project_resources})
                     .subagents;
   }
 

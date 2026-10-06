@@ -599,7 +599,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   }
 
   auto effective_tool_visibility = context.tool_visibility;
-  if (*selected_primary_agent && (*selected_primary_agent)->tool_preset == ava::agent::SubagentToolPreset::ReadOnly)
+  if (*selected_primary_agent && (*selected_primary_agent)->tool_preset == ava::agent::AgentToolPreset::ReadOnly)
     effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
 
   InvocationInputs invocation_inputs{.workspace_dir = workspace_dir,
@@ -1021,7 +1021,7 @@ ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& 
 
   CRITICAL_AREA_BEGIN_W(session);
   auto effective_tool_visibility = session_w->tool_visibility();
-  if (selected_primary_agent && selected_primary_agent->tool_preset == ava::agent::SubagentToolPreset::ReadOnly)
+  if (selected_primary_agent && selected_primary_agent->tool_preset == ava::agent::AgentToolPreset::ReadOnly)
     effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
   session_w->trust_state().project_trust = std::move(project_trust);
   session_w->invocation_inputs().tool_visibility = std::move(effective_tool_visibility);

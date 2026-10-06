@@ -16,7 +16,7 @@ add_library(ava_agent
   "provider_output_validation.cpp"
   "question.cpp"
   "stream_bridge.cpp"
-  "subagent_config.cpp"
+  "agent_config.cpp"
   "subagent_coordinator.cpp"
   "subagent_inspector.cpp"
   "subagent_job.cpp"

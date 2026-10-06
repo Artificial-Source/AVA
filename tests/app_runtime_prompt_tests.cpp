@@ -414,7 +414,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
     return visibility.mode == ava::agent::ToolVisibilityMode::Default &&
            visibility.included_tools == std::vector<std::string>({"read_file", "list_directory", "glob", "grep"}) && visibility.excluded_tools.empty();
   };
-  auto expect_project_selection = [&](std::string_view canary, ava::agent::SubagentToolPreset preset, std::string_view label) {
+  auto expect_project_selection = [&](std::string_view canary, ava::agent::AgentToolPreset preset, std::string_view label) {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const& selected = session_r->selected_primary_agent();
     expect(selected && selected->provenance == ava::agent::AgentDefinitionProvenance::Project && selected->tool_preset == preset &&
@@ -445,7 +445,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
     return result;
   };
 
-  expect_project_selection(kInitialProjectCanary, ava::agent::SubagentToolPreset::ReadOnly,
+  expect_project_selection(kInitialProjectCanary, ava::agent::AgentToolPreset::ReadOnly,
                            "trusted startup records project provenance and applies its closed read-only visibility");
 
   auto denied = run_trust("/trust deny", "/trust deny succeeds when replacing a project primary with the permitted global definition");
@@ -455,7 +455,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   write_project_primary(kReselectedProjectCanary, "inherit");
   auto reenabled = run_trust("/trust project", "/trust project re-enables and re-resolves the requested primary");
   expect(reenabled && reenabled->output[0].find("decision=trusted") != std::string::npos, "/trust project reports the re-enabled trust decision");
-  expect_project_selection(kReselectedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReselectedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "trust re-enable uses the current permitted project definition without broadening the previous read-only visibility");
 
   std::error_code remove_global_error;
@@ -482,7 +482,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
 
   write_global_primary();
   (void)run_trust("/trust project", "/trust project re-enables the project primary after clear");
-  expect_project_selection(kReselectedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReselectedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "project primary is reselected after clear when trust is explicitly enabled again");
   (void)run_trust("/trust untrust", "/trust untrust revokes a reselected project primary");
   expect_project_authority_absent(true, "/trust untrust removes project authority and preserves the valid global primary");
@@ -490,12 +490,12 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   auto externally_trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(externally_trusted.has_value(), "project-primary fixture externally re-enables trust for reload coverage");
   (void)run_trust("/reload trust", "/reload trust applies external trust enablement");
-  expect_project_selection(kReselectedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReselectedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "/reload trust re-resolves the requested primary from the newly permitted project catalog");
 
   write_project_primary(kReloadedProjectCanary, "inherit");
   (void)run_trust("/reload trust", "/reload trust refreshes a trusted primary definition");
-  expect_project_selection(kReloadedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReloadedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "/reload trust never accepts the cached project definition across a trust reload");
 
   auto externally_denied = ava::app::set_project_trust_decision(paths, workspace, false);

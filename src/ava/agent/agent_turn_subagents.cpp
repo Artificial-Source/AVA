@@ -44,12 +44,12 @@ void add_excluded_tool(ToolVisibilityOptions& visibility, std::string_view name)
     visibility.excluded_tools.emplace_back(name);
 }
 
-ToolVisibilityOptions subagent_tool_visibility(ToolVisibilityOptions parent, SubagentToolPreset tool_preset)
+ToolVisibilityOptions subagent_tool_visibility(ToolVisibilityOptions parent, AgentToolPreset tool_preset)
 {
   add_excluded_tool(parent, "task");
   add_excluded_tool(parent, "job");
   add_excluded_tool(parent, "todowrite");
-  if (tool_preset != SubagentToolPreset::ReadOnly)
+  if (tool_preset != AgentToolPreset::ReadOnly)
     return parent;
 
   std::vector<std::string> const read_only_tools{"read_file", "list_directory", "glob", "grep"};

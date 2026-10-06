@@ -12,7 +12,7 @@
 #include "ava/app/runtime/session_ts.h"
 #include "ava/app/session_run_controller.h"
 #include "ava/agent/agent_loop.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"

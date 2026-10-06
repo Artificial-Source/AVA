@@ -1,5 +1,5 @@
 #include "sys.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_task.h"
 #include "ava/tools/tool_permission.h"
