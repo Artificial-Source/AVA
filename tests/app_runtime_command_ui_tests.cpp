@@ -4,9 +4,9 @@
 #include "tests/support/test_harness.h"
 #include "ava/command/command.h"
 #include "ava/app/commands.h"
-#include "ava/app/display_settings.h"
 #include "ava/app/runtime/Session.h"
-#include "ava/app/startup_overview.h"
+#include "ava/app/tui/startup_overview.h"
+#include "ava/app/tui/tui_display_settings.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
@@ -48,6 +48,12 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
              hotkeys->output[0].find("$XDG_CONFIG_HOME/ava/keybinds.json") != std::string::npos &&
              hotkeys->output[0].find("/reload keybindings") != std::string::npos,
          "command dispatcher /hotkeys reports effective keybind metadata");
+  auto default_hotkeys = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/hotkeys"});
+  auto default_help = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/help"});
+  expect(default_hotkeys && default_help && !default_hotkeys->output.empty() && !default_help->output.empty() &&
+             default_hotkeys->output[0].find("Jump to live tail") != std::string::npos && default_hotkeys->output[0].find("Ctrl+End") != std::string::npos &&
+             default_help->output[0].find("Jump to live tail") != std::string::npos && default_help->output[0].find("Ctrl+End") != std::string::npos,
+         "/help and /hotkeys retain default keybinding rows when no effective hotkey list is supplied");
   auto const default_hotkeys_text = ava::app::command_hotkeys_text({});
   auto const jump_line_pos = default_hotkeys_text.find("Jump to live tail");
   auto const jump_id_pos = default_hotkeys_text.find("jump_to_bottom");
@@ -59,6 +65,11 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
              default_hotkeys_text.find("Submit input or select the highlighted slash command") == std::string::npos &&
              default_hotkeys_text.find("Return the transcript to the live tail") == std::string::npos,
          "command help/hotkeys dense text leads with human labels, keeps machine ids secondary, and drops long action descriptions");
+  auto const custom_hotkeys_text = ava::app::command_hotkeys_text(
+      {{.action = "mode_toggle", .description = {}, .keys = "Alt+M"}, {.action = "custom_action", .description = "Custom action label", .keys = "Alt+C"}});
+  expect(custom_hotkeys_text.find("Toggle build/plan mode") != std::string::npos && custom_hotkeys_text.find("Alt+M") != std::string::npos &&
+             custom_hotkeys_text.find("Custom action label") != std::string::npos && custom_hotkeys_text.find("Alt+C") != std::string::npos,
+         "explicit hotkeys retain canonical known-action labels and frontend-supplied custom labels");
   auto packages_disabled = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/packages list"});
   expect(packages_disabled && packages_disabled->handled && !packages_disabled->output.empty() &&
              packages_disabled->output[0].find("/packages is disabled") != std::string::npos &&
@@ -597,7 +608,8 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
                  late_dup_load.error().format().find("candidate_cap") != std::string::npos &&
                  late_dup_load.error().format().find(std::to_string(ava::app::kMaxTuiCustomThemeCandidates)) != std::string::npos,
              "candidate cap keeps a bounded listing prefix but fail-closes named load when a late duplicate may exist beyond the boundary");
-      for (auto const& file : cap_files) std::filesystem::remove(file, remove_error);
+      for (auto const& file : cap_files)
+        std::filesystem::remove(file, remove_error);
 
       // Aggregate read budget: observable bytes_read never exceeds the cap, and named load fails closed when incomplete.
       auto const chunk = ava::app::kMaxTuiCustomThemeFileBytes - 256;
@@ -628,7 +640,8 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
                  aggregate_named.error().format().find("aggregate_budget") != std::string::npos &&
                  aggregate_named.error().format().find(std::to_string(ava::app::kMaxTuiCustomThemeCatalogAggregateBytes)) != std::string::npos,
              "aggregate discovery reports incomplete budget, never reads past the aggregate cap, and fail-closes named lookup for an early match");
-      for (auto const& file : agg_files) std::filesystem::remove(file, remove_error);
+      for (auto const& file : agg_files)
+        std::filesystem::remove(file, remove_error);
 
       // Watch path: configured custom resolution and catalog fingerprint share one discovery snapshot.
       write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\": \"sunrise\"\n}\n");

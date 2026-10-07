@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/runtime_plugin_ui_internal.h"
 #include "ava/core/json.h"
@@ -12,6 +13,8 @@
 #include <utility>
 
 namespace ava::tui {
+using ava::app::sanitize_terminal_text;
+
 namespace {
 
 struct PendingPluginUiModal
@@ -131,7 +134,8 @@ std::size_t dock_text_bytes(TuiPluginUiDockView const& dock)
   for (auto const& widget : dock.widgets)
   {
     bytes += widget.title.size();
-    for (auto const& line : widget.lines) bytes += line.size();
+    for (auto const& line : widget.lines)
+      bytes += line.size();
   }
   return bytes;
 }
@@ -139,7 +143,8 @@ std::size_t dock_text_bytes(TuiPluginUiDockView const& dock)
 std::size_t dock_line_count(TuiPluginUiDockView const& dock)
 {
   std::size_t lines = 0;
-  for (auto const& widget : dock.widgets) lines += widget.lines.size();
+  for (auto const& widget : dock.widgets)
+    lines += widget.lines.size();
   return lines;
 }
 
@@ -238,7 +243,8 @@ void cancel_locked(RuntimePluginUiCoordinatorState& state)
     return;
   state.active = false;
   state.accepting = false;
-  for (auto const& record : state.queue) complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+  for (auto const& record : state.queue)
+    complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
   state.queue.clear();
   queue_clear_locked(state);
   complete_modal(state.outstanding_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
@@ -359,7 +365,8 @@ std::optional<TuiPluginUiEndpoint> RuntimePluginUiCoordinator::begin_submission(
       return std::nullopt;
     complete_modal(state_->outstanding_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
     complete_modal(state_->visible_modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
-    for (auto const& record : state_->queue) complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
+    for (auto const& record : state_->queue)
+      complete_modal(record.modal, {.action = TuiPluginUiReplyKind::Cancel, .option_id = {}});
     state_->queue.clear();
     state_->owner = TuiPluginUiBinding{.plugin_id = binding->first, .command = binding->second, .invocation_id = invocation_id};
     state_->outstanding_modal.reset();

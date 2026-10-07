@@ -3,11 +3,11 @@
 #include "ava/app/command_reload.h"
 #include "ava/app/command_trust.h"
 #include "ava/app/commands.h"
-#include "ava/app/display_settings.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_prompt.h"
+#include "ava/app/tui/display_reload.h"
 #include "ava/config/model_config.h"
 #include "ava/session/compaction.h"
 
@@ -54,7 +54,8 @@ std::string format_reload_report(std::vector<ReloadReportRow> const& rows)
   for (auto const& row : rows)
   {
     output += "\n  " + row.name + ": " + row.status;
-    for (auto const& detail : row.details) output += "\n    " + detail.first + ": " + detail.second;
+    for (auto const& detail : row.details)
+      output += "\n    " + detail.first + ": " + detail.second;
   }
   return output;
 }
@@ -93,13 +94,12 @@ std::string normalize_reload_target(std::string_view target)
 ReloadReportRow reload_display_settings(runtime::session_ts& unlocked_session)
 {
   auto const paths = runtime::session_ts::rat(unlocked_session)->paths();
-  auto settings = apply_tui_display_settings(paths);
-  if (!settings)
-    return reload_error_row("display", settings.error());
+  auto details = reload_tui_display_settings(paths);
+  if (!details)
+    return reload_error_row("display", details.error());
   ReloadReportRow row{.name = "display", .status = "loaded", .details = {}};
-  append_reload_detail(row, "config", settings->path.string());
-  append_reload_detail(row, "configured", settings->theme ? *settings->theme : std::string("built-in default"));
-  append_reload_detail(row, "active", active_tui_theme_summary());
+  for (auto& [key, value] : *details)
+    append_reload_detail(row, std::move(key), std::move(value));
   return row;
 }
 
@@ -151,9 +151,9 @@ ReloadReportRow reload_prompt_settings(runtime::session_ts& unlocked_session)
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     details = {project_resources_trusted(session_r->project_trust()), session_r->context_sources().size(), session_r->freshness_sources().size(),
-               session_r->base_prompt().from_override   ? std::string("override")
-                : session_r->base_prompt().source_path ? session_r->base_prompt().source_path->string()
-                                                        : std::string("built-in")};
+               session_r->base_prompt().from_override ? std::string("override")
+               : session_r->base_prompt().source_path ? session_r->base_prompt().source_path->string()
+                                                      : std::string("built-in")};
   }
   auto& [resources_enabled, context_source_count, freshness_source_count, base_prompt] = details;
   ReloadReportRow row{.name = "prompts", .status = "loaded", .details = {}};
@@ -215,9 +215,9 @@ ReloadReportRow reload_compaction_settings(runtime::session_ts& unlocked_session
   append_reload_detail(row, "model", config->model_id);
   append_reload_detail(row, "auto_threshold_tokens", std::to_string(config->auto_threshold_tokens));
   append_reload_detail(row, "auto_threshold_percent", std::to_string(config->auto_threshold_percent));
-  append_reload_detail(row, "effective_threshold_tokens",
-                       std::to_string(ava::session::effective_auto_threshold_tokens(
-                           *config, runtime::session_ts::rat(unlocked_session)->model().context_window_tokens)));
+  append_reload_detail(
+      row, "effective_threshold_tokens",
+      std::to_string(ava::session::effective_auto_threshold_tokens(*config, runtime::session_ts::rat(unlocked_session)->model().context_window_tokens)));
   append_reload_detail(row, "keep_recent_tokens", std::to_string(config->keep_recent_tokens));
   append_reload_detail(row, "keep_recent_turns", std::to_string(config->keep_recent_turns));
   append_reload_detail(row, "keep_recent_messages", std::to_string(config->keep_recent_messages));
@@ -238,7 +238,8 @@ ReloadReportRow restart_required_reload_row(std::string name, std::string reason
 {
   ReloadReportRow row{.name = std::move(name), .status = "restart-required", .details = {}};
   append_reload_detail(row, "reason", std::move(reason));
-  for (auto const& path : paths) append_reload_detail(row, path.first, path.second.string());
+  for (auto const& path : paths)
+    append_reload_detail(row, path.first, path.second.string());
   return row;
 }
 
@@ -280,12 +281,12 @@ std::vector<ReloadReportRow> reload_report_rows_for_target(runtime::session_ts& 
     if (normalized == "lsp")
     {
       return restart_required_reload_row("lsp", "language-server clients are created for tool calls and should restart with config changes",
-                                          {{"global", paths.ava_config_dir / "lsp.json"}, {"project", workspace_dir / ".ava" / "lsp.json"}});
+                                         {{"global", paths.ava_config_dir / "lsp.json"}, {"project", workspace_dir / ".ava" / "lsp.json"}});
     }
     if (normalized == "mcp")
     {
       return restart_required_reload_row("mcp", "running MCP server processes are not restarted by /reload",
-                                          {{"global", paths.ava_config_dir / "mcp.json"}, {"project", workspace_dir / ".ava" / "mcp.json"}});
+                                         {{"global", paths.ava_config_dir / "mcp.json"}, {"project", workspace_dir / ".ava" / "mcp.json"}});
     }
     return restart_required_reload_row("plugins", "plugin discovery and process state are not hot-reloaded",
                                        {{"global", paths.ava_config_dir / "plugins"},

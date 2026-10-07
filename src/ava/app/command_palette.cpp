@@ -2,15 +2,15 @@
 #include "ava/app/command_format.h"
 #include "ava/app/command_models.h"
 #include "ava/app/command_palette.h"
+#include "ava/app/command_palette_projection_internal.h"
 #include "ava/app/command_permissions.h"
-#include "ava/app/display_settings.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/session_title_coordinator.h"
-#include "ava/app/session_user_turns.h"
-#include "ava/tui/keybindings.h"
+#include "ava/app/tui/command_hotkeys.h"
+#include "ava/app/tui/tui_display_settings.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
@@ -24,16 +24,27 @@
 #include "ava/core/error.h"
 
 #include <algorithm>
-#include <cctype>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace ava::app {
+
+std::string command_palette_detail::format_session_labels(std::vector<std::string> const& labels)
+{
+  std::string text;
+  for (std::size_t index = 0; index < labels.size(); ++index)
+  {
+    if (index > 0)
+      text += ", ";
+    text += labels[index];
+  }
+  return text;
+}
+
 namespace {
 
 constexpr std::size_t kMaxPathCompletionVisited = 20000;
@@ -48,20 +59,6 @@ std::string hotkeys_for_action(std::vector<CommandHotkey> const& hotkeys, std::s
       return hotkey.keys;
   }
   return "";
-}
-
-// CommandHotkey.description carries the concise human action label for palette rows.
-std::string keybinding_action_display_label(CommandHotkey const& hotkey)
-{
-  if (!hotkey.description.empty())
-    return hotkey.description;
-  if (auto const action = ava::tui::key_binding_action_from_name(hotkey.action))
-  {
-    auto label = ava::tui::action_label(*action);
-    if (!label.empty())
-      return label;
-  }
-  return hotkey.action;
 }
 
 // Completion secondary text prioritizes effective keys, then the canonical machine id.
@@ -136,7 +133,7 @@ std::string job_completion_description(ava::agent::SubagentJobSnapshot const& jo
   return description;
 }
 
-bool completion_exists(std::vector<tui::SlashCommandArgumentCompletion> const& completions, std::size_t argument_index,
+bool completion_exists(std::vector<SlashCommandArgumentCompletionRecord> const& completions, std::size_t argument_index,
                        std::vector<std::string> const& previous_args, std::string_view value)
 {
   return std::ranges::any_of(completions, [&](auto const& completion) {
@@ -144,24 +141,24 @@ bool completion_exists(std::vector<tui::SlashCommandArgumentCompletion> const& c
   });
 }
 
-void add_completion(tui::SlashCommandItem& item, std::size_t argument_index, std::string value, std::string description = {}, std::string category = {},
+void add_completion(SlashCommandCatalogItem& item, std::size_t argument_index, std::string value, std::string description = {}, std::string category = {},
                     std::vector<std::string> previous_args = {}, bool append_space = true, bool enabled = true, std::string disabled_reason = {},
                     std::string display_label = {})
 {
   if (value.empty() || completion_exists(item.argument_completions, argument_index, previous_args, value))
     return;
-  item.argument_completions.push_back(tui::SlashCommandArgumentCompletion{.value = std::move(value),
-                                                                          .display_label = std::move(display_label),
-                                                                          .description = std::move(description),
-                                                                          .category = std::move(category),
-                                                                          .required_previous_args = std::move(previous_args),
-                                                                          .argument_index = argument_index,
-                                                                          .append_space = append_space,
-                                                                          .enabled = enabled,
-                                                                          .disabled_reason = std::move(disabled_reason)});
+  item.argument_completions.push_back(SlashCommandArgumentCompletionRecord{.value = std::move(value),
+                                                                           .display_label = std::move(display_label),
+                                                                           .description = std::move(description),
+                                                                           .category = std::move(category),
+                                                                           .required_previous_args = std::move(previous_args),
+                                                                           .argument_index = argument_index,
+                                                                           .append_space = append_space,
+                                                                           .enabled = enabled,
+                                                                           .disabled_reason = std::move(disabled_reason)});
 }
 
-std::optional<std::size_t> find_item_index(std::vector<tui::SlashCommandItem> const& items, std::string_view command)
+std::optional<std::size_t> find_item_index(std::vector<SlashCommandCatalogItem> const& items, std::string_view command)
 {
   for (std::size_t index = 0; index < items.size(); ++index)
   {
@@ -295,19 +292,19 @@ std::vector<WorkspacePathCandidate> prepare_workspace_path_candidates(std::vecto
   return candidates;
 }
 
-std::vector<tui::FileReferenceItem> file_reference_items_from_candidates(std::vector<WorkspacePathCandidate> candidates)
+std::vector<FileReferenceCatalogItem> file_reference_items_from_candidates(std::vector<WorkspacePathCandidate> candidates)
 {
   candidates = prepare_workspace_path_candidates(std::move(candidates), true);
-  std::vector<tui::FileReferenceItem> items;
+  std::vector<FileReferenceCatalogItem> items;
   items.reserve(candidates.size());
   for (auto const& candidate : candidates)
   {
-    items.push_back(tui::FileReferenceItem{.value = candidate.value,
-                                           .description = candidate.description,
-                                           .category = "Files",
-                                           .directory = candidate.directory,
-                                           .enabled = true,
-                                           .disabled_reason = {}});
+    items.push_back(FileReferenceCatalogItem{.value = candidate.value,
+                                             .description = candidate.description,
+                                             .category = "Files",
+                                             .directory = candidate.directory,
+                                             .enabled = true,
+                                             .disabled_reason = {}});
   }
   return items;
 }
@@ -323,7 +320,7 @@ std::string glob_completion_value(WorkspacePathCandidate const& candidate)
   return value;
 }
 
-void add_path_completions(tui::SlashCommandItem& item, std::vector<WorkspacePathCandidate> const& candidates, std::size_t argument_index,
+void add_path_completions(SlashCommandCatalogItem& item, std::vector<WorkspacePathCandidate> const& candidates, std::size_t argument_index,
                           bool file_append_space)
 {
   for (auto const& candidate : candidates)
@@ -332,7 +329,7 @@ void add_path_completions(tui::SlashCommandItem& item, std::vector<WorkspacePath
   }
 }
 
-void add_glob_completions(tui::SlashCommandItem& item, std::vector<WorkspacePathCandidate> const& candidates, std::size_t argument_index)
+void add_glob_completions(SlashCommandCatalogItem& item, std::vector<WorkspacePathCandidate> const& candidates, std::size_t argument_index)
 {
   for (auto const& candidate : candidates)
   {
@@ -368,106 +365,6 @@ std::string model_completion_description(ava::config::ModelInfo const& model, bo
   return description;
 }
 
-std::string provider_display_name(std::string_view provider_id)
-{
-  if (provider_id == "openai")
-    return "OpenAI";
-  if (provider_id == "anthropic")
-    return "Anthropic";
-  if (provider_id == "google")
-    return "Google";
-  if (provider_id == "azure")
-    return "Azure";
-  auto display = std::string(provider_id);
-  if (!display.empty())
-    display.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(display.front())));
-  return display;
-}
-
-tui::SelectListItemView model_selector_item(ava::config::ModelInfo const& model, ava::config::ModelInfo const& current_model, bool registered)
-{
-  auto const current = model.provider_id == current_model.provider_id && model.model_id == current_model.model_id;
-  auto label = model.display_name.empty() ? model.model_id : model.display_name;
-  return tui::SelectListItemView{.value = model.provider_id + "/" + model.model_id,
-                                 .label = std::move(label),
-                                 .description = {},
-                                 .group = provider_display_name(model.provider_id),
-                                 .detail = {},
-                                 .badge = {},
-                                 .current = current,
-                                 .enabled = registered,
-                                 .disabled_reason = registered ? std::string{} : std::string("provider unavailable")};
-}
-
-std::string model_selector_value(ava::config::ModelInfo const& model)
-{
-  return model.provider_id + "/" + model.model_id;
-}
-
-bool scoped_model_enabled(std::optional<std::vector<std::string>> const& scoped_model_cycle, std::string_view value)
-{
-  if (!scoped_model_cycle)
-    return true;
-  return std::ranges::find_if(*scoped_model_cycle, [&](auto const& existing) { return existing == value; }) != scoped_model_cycle->end();
-}
-
-std::vector<ava::config::ModelInfo> scoped_model_selector_models(std::vector<ava::config::ModelInfo> models,
-                                                                 std::optional<std::vector<std::string>> const& scoped_model_cycle)
-{
-  if (!scoped_model_cycle)
-    return models;
-
-  std::vector<ava::config::ModelInfo> sorted;
-  sorted.reserve(models.size());
-  for (auto const& id : *scoped_model_cycle)
-  {
-    auto const found = std::ranges::find_if(models, [&](auto const& model) { return model_selector_value(model) == id; });
-    if (found != models.end())
-      sorted.push_back(*found);
-  }
-  for (auto const& model : models)
-  {
-    auto const value = model_selector_value(model);
-    auto const already_added =
-        std::ranges::find_if(sorted, [&](auto const& existing) { return existing.provider_id == model.provider_id && existing.model_id == model.model_id; });
-    if (already_added == sorted.end())
-      sorted.push_back(model);
-  }
-  return sorted;
-}
-
-tui::SelectListItemView scoped_model_selector_item(ava::config::ModelInfo const& model, ava::config::ModelInfo const& current_model,
-                                                   std::optional<std::vector<std::string>> const& scoped_model_cycle, bool registered)
-{
-  auto item = model_selector_item(model, current_model, registered);
-  auto const value = model_selector_value(model);
-  bool const enabled_for_cycle = scoped_model_enabled(scoped_model_cycle, value);
-  item.value = value;
-  item.description.clear();
-  item.badge = enabled_for_cycle ? std::string("enabled") : std::string("disabled");
-  item.detail.clear();
-  item.enabled = registered;
-  item.disabled_reason = registered ? std::string{} : std::string("provider unavailable");
-  return item;
-}
-
-std::string session_sort_label(SessionSelectorSort sort)
-{
-  return session_selector_sort_label(sort);
-}
-
-std::string labels_text(std::vector<std::string> const& labels)
-{
-  std::string text;
-  for (std::size_t index = 0; index < labels.size(); ++index)
-  {
-    if (index > 0)
-      text += ", ";
-    text += labels[index];
-  }
-  return text;
-}
-
 std::string session_completion_description(ava::session::SessionTreeNode const& node)
 {
   std::string description = node.summary.session_id + " · entries=" + std::to_string(node.summary.entry_count);
@@ -478,56 +375,8 @@ std::string session_completion_description(ava::session::SessionTreeNode const& 
   if (node.metadata.archived)
     description += " archived";
   if (!node.metadata.labels.empty())
-    description += " labels=" + labels_text(node.metadata.labels);
+    description += " labels=" + command_palette_detail::format_session_labels(node.metadata.labels);
   return description;
-}
-
-std::string session_node_label(ava::session::SessionTreeNode const& node, std::size_t depth)
-{
-  auto label = node.metadata.effective_title().empty() ? std::string("Untitled session") : node.metadata.effective_title();
-  if (depth == 0)
-    return label;
-  return std::string(depth * 2, ' ') + "↳ " + label;
-}
-
-std::string session_node_description(ava::session::SessionTreeNode const& node, bool show_paths, bool show_label_time)
-{
-  std::vector<std::string> parts;
-  if (!node.metadata.labels.empty())
-    parts.push_back(labels_text(node.metadata.labels));
-  if (show_label_time && !node.metadata.labels_updated.empty())
-    parts.push_back("labels updated " + node.metadata.labels_updated);
-  if (show_paths)
-    parts.push_back(node.summary.path.empty() ? std::string("path unavailable") : node.summary.path.generic_string());
-
-  std::string description;
-  for (auto const& part : parts)
-  {
-    if (!description.empty())
-      description += " · ";
-    description += part;
-  }
-  return description;
-}
-
-std::string session_node_badge(ava::session::SessionTreeNode const& node)
-{
-  return node.metadata.archived ? std::string("archived") : std::string{};
-}
-
-tui::SelectListItemView session_selector_item(ava::session::SessionSummary const& summary, std::string_view current_session_id, bool show_paths)
-{
-  auto const current = !current_session_id.empty() && summary.session_id == current_session_id;
-  auto path = summary.path.empty() ? std::string("path unavailable") : summary.path.generic_string();
-  return tui::SelectListItemView{.value = summary.session_id,
-                                 .label = summary.title.empty() ? std::string("Untitled session") : summary.title,
-                                 .description = show_paths ? std::move(path) : std::string{},
-                                 .group = {},
-                                 .detail = {},
-                                 .badge = {},
-                                 .current = current,
-                                 .enabled = true,
-                                 .disabled_reason = {}};
 }
 
 bool node_less(ava::session::SessionTreeNode const& left, ava::session::SessionTreeNode const& right, SessionSelectorSort sort)
@@ -555,101 +404,7 @@ bool node_less(ava::session::SessionTreeNode const& left, ava::session::SessionT
   return left.summary.session_id < right.summary.session_id;
 }
 
-void sort_session_summaries(std::vector<ava::session::SessionSummary>& summaries, SessionSelectorSort sort)
-{
-  std::ranges::sort(summaries, [&](ava::session::SessionSummary const& left, ava::session::SessionSummary const& right) {
-    switch (sort)
-    {
-      case SessionSelectorSort::Recent:
-        if (left.last_updated != right.last_updated)
-          return left.last_updated > right.last_updated;
-        return left.session_id > right.session_id;
-      case SessionSelectorSort::Name: {
-        auto const& left_title = left.title.empty() ? left.session_id : left.title;
-        auto const& right_title = right.title.empty() ? right.session_id : right.title;
-        if (left_title != right_title)
-          return left_title < right_title;
-        return left.session_id < right.session_id;
-      }
-      case SessionSelectorSort::Path:
-        if (left.path.generic_string() != right.path.generic_string())
-        {
-          return left.path.generic_string() < right.path.generic_string();
-        }
-        return left.session_id < right.session_id;
-    }
-    return left.session_id < right.session_id;
-  });
-}
-
-std::unordered_map<std::string, std::size_t> session_tree_index_by_id(std::vector<ava::session::SessionTreeNode> const& nodes)
-{
-  std::unordered_map<std::string, std::size_t> index;
-  for (std::size_t node_index = 0; node_index < nodes.size(); ++node_index)
-  {
-    index.emplace(nodes[node_index].summary.session_id, node_index);
-  }
-  return index;
-}
-
-std::vector<std::string> sorted_tree_ids(std::vector<std::string> ids, std::vector<ava::session::SessionTreeNode> const& nodes,
-                                         std::unordered_map<std::string, std::size_t> const& index_by_id, SessionSelectorSort sort)
-{
-  std::erase_if(ids, [&](std::string const& id) { return index_by_id.find(id) == index_by_id.end(); });
-  std::ranges::sort(
-      ids, [&](std::string const& left, std::string const& right) { return node_less(nodes[index_by_id.at(left)], nodes[index_by_id.at(right)], sort); });
-  return ids;
-}
-
-void append_session_tree_items(tui::SelectListView& view, std::vector<ava::session::SessionTreeNode> const& nodes,
-                               std::unordered_map<std::string, std::size_t> const& index_by_id, std::vector<std::string> ids, SessionSelectorSort sort,
-                               std::size_t depth, bool named_only, bool show_paths, bool show_archived, bool show_label_time)
-{
-  ids = sorted_tree_ids(std::move(ids), nodes, index_by_id, sort);
-  for (auto const& id : ids)
-  {
-    auto const found = index_by_id.find(id);
-    if (found == index_by_id.end())
-      continue;
-    auto const& node = nodes[found->second];
-    auto const visible = show_archived || !node.metadata.archived;
-    if (visible && (!named_only || !node.metadata.effective_title().empty()))
-    {
-      if (node.current)
-        view.selected_item_index = view.items.size();
-      view.items.push_back(tui::SelectListItemView{.value = node.summary.session_id,
-                                                   .label = session_node_label(node, depth),
-                                                   .description = session_node_description(node, show_paths, show_label_time),
-                                                   .group = {},
-                                                   .detail = {},
-                                                   .badge = session_node_badge(node),
-                                                   .current = node.current,
-                                                   .enabled = true,
-                                                   .disabled_reason = {}});
-    }
-    append_session_tree_items(view, nodes, index_by_id, node.children, sort, depth + (visible ? 1 : 0), named_only, show_paths, show_archived, show_label_time);
-  }
-}
-
-void add_parent_summary_hint(tui::SelectListView& view, ava::session::SessionTreeIndex const& tree, std::string summarize_parent_keys)
-{
-  auto const current =
-      std::ranges::find_if(tree.sessions, [&](ava::session::SessionTreeNode const& node) { return node.summary.session_id == tree.current_session_id; });
-  if (current == tree.sessions.end() || current->metadata.parent_session_id.empty())
-    return;
-  auto const parent = std::ranges::find_if(view.items, [&](tui::SelectListItemView const& item) { return item.value == current->metadata.parent_session_id; });
-  if (parent == view.items.end())
-    return;
-  if (summarize_parent_keys.size() > 64)
-    summarize_parent_keys.resize(64);
-  auto hint = summarize_parent_keys.empty() ? std::string("bind app.sessions.summarizeParent") : summarize_parent_keys + " summarize abandoned parent";
-  if (parent->detail.empty())
-    parent->detail = std::move(hint);
-  else
-    parent->detail += " · " + hint;
-}
-
-void add_backend_argument_completions(std::vector<tui::SlashCommandItem>& items, runtime::session_ts const& unlocked_session,
+void add_backend_argument_completions(std::vector<SlashCommandCatalogItem>& items, runtime::session_ts const& unlocked_session,
                                       std::vector<CommandHotkey> const& hotkeys, std::vector<WorkspacePathCandidate> const& path_completions,
                                       ava::session::SessionTreeIndex const* session_tree)
 {
@@ -710,7 +465,7 @@ void add_backend_argument_completions(std::vector<tui::SlashCommandItem>& items,
     add_completion(item, 0, "validate", "Validate $XDG_CONFIG_HOME/ava/keybinds.json without reloading", "General", {}, false);
     for (auto const& hotkey : hotkeys)
     {
-      auto const label = keybinding_action_display_label(hotkey);
+      auto const label = command_hotkey_primary_label(hotkey);
       auto const description = keybinding_action_completion_description(hotkey);
       add_completion(item, 1, hotkey.action, description, "Keybindings", {"set"}, true, true, {}, label);
       add_completion(item, 1, hotkey.action, description, "Keybindings", {"reset"}, true, true, {}, label);
@@ -1006,9 +761,9 @@ std::string session_selector_sort_label(SessionSelectorSort sort)
   return "recent";
 }
 
-std::vector<tui::SlashCommandItem> command_catalog_slash_items(std::vector<CommandHotkey> const& hotkeys)
+std::vector<SlashCommandCatalogItem> command_catalog_records(std::vector<CommandHotkey> const& hotkeys)
 {
-  std::vector<tui::SlashCommandItem> items;
+  std::vector<SlashCommandCatalogItem> items;
   items.reserve(command_catalog().size());
   for (auto const& entry : command_catalog())
   {
@@ -1019,14 +774,14 @@ std::vector<tui::SlashCommandItem> command_catalog_slash_items(std::vector<Comma
       key_display = hotkeys_for_action(hotkeys, "details_toggle");
     if (entry.command == "/quit")
       key_display = hotkeys_for_action(hotkeys, "exit");
-    items.push_back(tui::SlashCommandItem{.command = entry.command,
-                                          .description = entry.description,
-                                          .hint = entry.hint,
-                                          .category = entry.category,
-                                          .aliases = entry.aliases,
-                                          .key_display = std::move(key_display),
-                                          .enabled = entry.enabled,
-                                          .disabled_reason = entry.disabled_reason});
+    items.push_back(SlashCommandCatalogItem{.command = entry.command,
+                                            .description = entry.description,
+                                            .hint = entry.hint,
+                                            .category = entry.category,
+                                            .aliases = entry.aliases,
+                                            .key_display = std::move(key_display),
+                                            .enabled = entry.enabled,
+                                            .disabled_reason = entry.disabled_reason});
   }
   return items;
 }
@@ -1052,7 +807,7 @@ ava::core::Result<ava::session::SessionTreeIndex> build_current_session_tree(run
 
 void refresh_application_catalog_values(ApplicationCatalogCache& cache, runtime::session_ts const& unlocked_session, std::vector<CommandHotkey> const& hotkeys)
 {
-  auto items = command_catalog_slash_items(hotkeys);
+  auto items = command_catalog_records(hotkeys);
   add_backend_argument_completions(items, unlocked_session, hotkeys, cache.workspace_path_candidates, cache.session_tree ? &*cache.session_tree : nullptr);
   cache.slash_commands = std::move(items);
   ++cache.slash_catalog_generation;
@@ -1289,16 +1044,6 @@ std::size_t ApplicationCatalogCoordinator::title_catalog_cursor() const
   return title_catalog_cursor_;
 }
 
-tui::SelectListView ApplicationCatalogCoordinator::session_view(SessionSelectorSort sort, std::string footer_hint, bool named_only, bool show_paths,
-                                                                bool show_archived, bool show_label_time, std::string summarize_parent_keys) const
-{
-  std::lock_guard lock(mutex_);
-  auto view = ava::app::session_selector_view(cache_, sort, std::move(footer_hint), named_only, show_paths, show_archived, show_label_time);
-  if (cache_.session_tree)
-    add_parent_summary_hint(view, *cache_.session_tree, std::move(summarize_parent_keys));
-  return view;
-}
-
 ava::core::Result<std::optional<ava::session::SessionSummary>> ApplicationCatalogCoordinator::session_summary(std::string_view session_id) const
 {
   std::lock_guard lock(mutex_);
@@ -1331,321 +1076,39 @@ ava::core::Result<std::optional<std::string>> ApplicationCatalogCoordinator::chi
   return session_selector_child_target(*cache_.session_tree, session_id, sort, include_archived);
 }
 
-std::vector<tui::SlashCommandItem> command_catalog_slash_items_1(runtime::session_ts const& unlocked_session, std::vector<CommandHotkey> const& hotkeys)
+std::vector<SlashCommandCatalogItem> command_catalog_records_1(runtime::session_ts const& unlocked_session, std::vector<CommandHotkey> const& hotkeys)
 {
   auto cache = build_application_catalog_cache(unlocked_session, hotkeys);
   return std::move(cache.slash_commands);
 }
 
-std::vector<tui::FileReferenceItem> file_reference_items(runtime::session_ts const& unlocked_session)
+std::vector<FileReferenceCatalogItem> file_reference_records(runtime::session_ts const& unlocked_session)
 {
   return file_reference_items_from_candidates(walk_workspace_path_candidates(unlocked_session));
 }
 
-tui::SelectListView model_selector_view(ava::config::ModelRegistry const& registry, ava::config::ModelInfo const& current_model,
-                                        std::shared_ptr<ava::provider::ProviderCatalog const> ensured_provider_catalog, std::string footer_hint)
+std::vector<ava::session::SessionTreeNode const*> command_palette_detail::sorted_session_tree_nodes(std::vector<ava::session::SessionTreeNode> const& nodes,
+                                                                                                    std::vector<std::string> ids, SessionSelectorSort sort)
 {
-  // The caller passed a null provider catalog; pass Session::ensure_provider_catalog() or
-  // ava::provider::ProviderCatalog::build_builtins_only() so the palette always has a catalog.
-  ASSERT(ensured_provider_catalog);
-
-  auto models = ava::config::effective_models(registry);
-  auto const current_in_catalog = std::ranges::any_of(
-      models, [&](auto const& model) { return model.provider_id == current_model.provider_id && model.model_id == current_model.model_id; });
-  if (!current_in_catalog && !current_model.provider_id.empty() && !current_model.model_id.empty())
-    models.push_back(current_model);
-  std::ranges::stable_sort(models, [](auto const& left, auto const& right) {
-    auto const left_provider = provider_display_name(left.provider_id);
-    auto const right_provider = provider_display_name(right.provider_id);
-    if (left_provider != right_provider)
-      return left_provider < right_provider;
-    return left.provider_id < right.provider_id;
-  });
-
-  tui::SelectListView view{.title = "Select model",
-                           .subtitle = {},
-                           .items = {},
-                           .selected_item_index = 0,
-                           .query = {},
-                           .placeholder = "Search models",
-                           .empty_text = "No configured models match",
-                           .footer_hint = std::move(footer_hint)};
-  view.items.reserve(models.size() + 1);
-
-  for (auto const& model : models)
+  std::vector<ava::session::SessionTreeNode const*> sorted;
+  sorted.reserve(ids.size());
+  for (auto const& id : ids)
   {
-    auto const current = model.provider_id == current_model.provider_id && model.model_id == current_model.model_id;
-    if (current)
-      view.selected_item_index = view.items.size();
-    view.items.push_back(model_selector_item(model, current_model, ensured_provider_catalog->contains(model.provider_id)));
+    auto const found = std::ranges::find_if(nodes, [&](auto const& node) { return node.summary.session_id == id; });
+    if (found != nodes.end())
+      sorted.push_back(&*found);
   }
-
-  return view;
+  std::ranges::sort(sorted, [&](auto const* left, auto const* right) { return node_less(*left, *right, sort); });
+  return sorted;
 }
-
-tui::SelectListView model_selector_view_1(runtime::session_ts const& unlocked_session, std::string footer_hint)
-{
-  auto [paths, model, ensured_provider_catalog] = [&] {
-    SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->paths(), session_r->model(), session_r->ensure_provider_catalog()};
-  }();
-  auto registry = ava::config::load_model_registry(paths);
-  if (registry)
-    return model_selector_view(*registry, model, ensured_provider_catalog, std::move(footer_hint));
-
-  return tui::SelectListView{.title = "Select model",
-                             .subtitle = {},
-                             .items = {tui::SelectListItemView{.value = {},
-                                                               .label = "Model registry unavailable",
-                                                               .description = {},
-                                                               .group = "Models",
-                                                               .detail = {},
-                                                               .badge = {},
-                                                               .current = false,
-                                                               .enabled = false,
-                                                               .disabled_reason = "model registry failed to load"}},
-                             .selected_item_index = 0,
-                             .query = {},
-                             .placeholder = "Search models",
-                             .empty_text = "No configured models match",
-                             .footer_hint = std::move(footer_hint)};
-}
-
-tui::SelectListView scoped_model_selector_view(ava::config::ModelRegistry const& registry, ava::config::ModelInfo const& current_model,
-                                               std::optional<std::vector<std::string>> const& scoped_model_cycle,
-                                               std::shared_ptr<ava::provider::ProviderCatalog const> ensured_provider_catalog, std::string footer_hint)
-{
-  // The caller passed a null provider catalog; pass Session::ensure_provider_catalog() or
-  // ava::provider::ProviderCatalog::build_builtins_only() so the palette always has a catalog.
-  ASSERT(ensured_provider_catalog);
-
-  auto models = scoped_model_selector_models(ava::config::effective_models(registry), scoped_model_cycle);
-  auto const enabled_count = scoped_model_cycle ? scoped_model_cycle->size() : models.size();
-
-  tui::SelectListView view{.title = "Scoped model cycle",
-                           .subtitle = scoped_model_cycle ? std::to_string(enabled_count) + " of " + std::to_string(models.size()) + " enabled"
-                                                          : std::string("All registered models enabled"),
-                           .items = {},
-                           .selected_item_index = 0,
-                           .query = {},
-                           .placeholder = "Search models",
-                           .empty_text = "No configured models match",
-                           .footer_hint = std::move(footer_hint)};
-  view.items.reserve(models.size());
-
-  bool current_in_catalog = false;
-  for (auto const& model : models)
-  {
-    auto const current = model.provider_id == current_model.provider_id && model.model_id == current_model.model_id;
-    current_in_catalog = current_in_catalog || current;
-    if (current)
-      view.selected_item_index = view.items.size();
-    view.items.push_back(scoped_model_selector_item(model, current_model, scoped_model_cycle, ensured_provider_catalog->contains(model.provider_id)));
-  }
-
-  if (!current_in_catalog && !current_model.provider_id.empty() && !current_model.model_id.empty())
-  {
-    view.selected_item_index = view.items.size();
-    view.items.push_back(
-        scoped_model_selector_item(current_model, current_model, scoped_model_cycle, ensured_provider_catalog->contains(current_model.provider_id)));
-  }
-
-  return view;
-}
-
-tui::SelectListView scoped_model_selector_view_1(runtime::session_ts const& unlocked_session, std::string footer_hint)
-{
-  auto [paths, model, scoped_model_cycle, ensured_provider_catalog] = [&] {
-    SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->paths(), session_r->model(), session_r->scoped_model_cycle(), session_r->ensure_provider_catalog()};
-  }();
-  auto registry = ava::config::load_model_registry(paths);
-  if (registry)
-    return scoped_model_selector_view(*registry, model, scoped_model_cycle, ensured_provider_catalog, std::move(footer_hint));
-
-  return tui::SelectListView{.title = "Scoped model cycle",
-                             .subtitle = {},
-                             .items = {tui::SelectListItemView{.value = {},
-                                                               .label = "Model registry unavailable",
-                                                               .description = {},
-                                                               .group = "Models",
-                                                               .detail = {},
-                                                               .badge = {},
-                                                               .current = false,
-                                                               .enabled = false,
-                                                               .disabled_reason = "model registry failed to load"}},
-                             .selected_item_index = 0,
-                             .query = {},
-                             .placeholder = "Search models",
-                             .empty_text = "No configured models match",
-                             .footer_hint = std::move(footer_hint)};
-}
-
-tui::SelectListView session_selector_view(std::vector<ava::session::SessionSummary> summaries, std::string current_session_id, SessionSelectorSort sort,
-                                          std::string footer_hint, bool show_paths)
-{
-  sort_session_summaries(summaries, sort);
-
-  tui::SelectListView view{
-      .title = "Select session",
-      .subtitle = "sort " + session_sort_label(sort) + (show_paths ? std::string(" · paths") : std::string{}),
-      .items = {},
-      .selected_item_index = 0,
-      .query = {},
-      .placeholder = "Search sessions",
-      .empty_text = "No sessions match",
-      .footer_hint = footer_hint.empty() ? std::string("Enter choose · PgUp/PgDn page · type to filter · Esc cancel") : std::move(footer_hint)};
-  view.items.reserve(summaries.size() + 1);
-
-  bool current_found = false;
-  for (auto const& summary : summaries)
-  {
-    if (!current_session_id.empty() && summary.session_id == current_session_id)
-    {
-      view.selected_item_index = view.items.size();
-      current_found = true;
-    }
-    view.items.push_back(session_selector_item(summary, current_session_id, show_paths));
-  }
-
-  if (!current_found && !current_session_id.empty())
-  {
-    view.selected_item_index = view.items.size();
-    view.items.push_back(tui::SelectListItemView{.value = current_session_id,
-                                                 .label = "Current session",
-                                                 .description = {},
-                                                 .group = {},
-                                                 .detail = {},
-                                                 .badge = {},
-                                                 .current = true,
-                                                 .enabled = true,
-                                                 .disabled_reason = {}});
-  }
-
-  if (view.items.empty())
-  {
-    view.items.push_back(tui::SelectListItemView{.value = {},
-                                                 .label = "No sessions found",
-                                                 .description = "Start a conversation to create a session",
-                                                 .group = "Sessions",
-                                                 .detail = {},
-                                                 .badge = {},
-                                                 .current = false,
-                                                 .enabled = false,
-                                                 .disabled_reason = "session list is empty"});
-  }
-
-  return view;
-}
-
-tui::SelectListView session_selector_view(ava::session::SessionTreeIndex const& tree, SessionSelectorSort sort, std::string footer_hint, bool named_only,
-                                          bool show_paths, bool show_archived, bool show_label_time)
-{
-  auto const index_by_id = session_tree_index_by_id(tree.sessions);
-  tui::SelectListView view{
-      .title = "Select session",
-      .subtitle = "sort " + session_sort_label(sort) + (named_only ? std::string(" · named") : std::string{}) +
-                  (show_paths ? std::string(" · paths") : std::string{}) + (show_archived ? std::string(" · archived") : std::string{}) +
-                  (show_label_time ? std::string(" · label times") : std::string{}),
-      .items = {},
-      .selected_item_index = 0,
-      .query = {},
-      .placeholder = "Search sessions, labels, branches",
-      .empty_text = named_only ? std::string("No named sessions match") : std::string("No sessions match"),
-      .footer_hint = footer_hint.empty() ? std::string("Enter choose · PgUp/PgDn page · type to filter · Esc cancel") : std::move(footer_hint)};
-  view.items.reserve(tree.sessions.size() + 1);
-
-  append_session_tree_items(view, tree.sessions, index_by_id, tree.roots, sort, 0, named_only, show_paths, show_archived, show_label_time);
-
-  if (!named_only && view.items.empty() && !tree.current_session_id.empty())
-  {
-    view.items.push_back(tui::SelectListItemView{.value = tree.current_session_id,
-                                                 .label = "Current session",
-                                                 .description = {},
-                                                 .group = {},
-                                                 .detail = {},
-                                                 .badge = {},
-                                                 .current = true,
-                                                 .enabled = true,
-                                                 .disabled_reason = {}});
-  }
-
-  if (view.items.empty())
-  {
-    view.items.push_back(tui::SelectListItemView{.value = {},
-                                                 .label = named_only ? std::string("No named sessions found") : std::string("No sessions found"),
-                                                 .description = named_only ? std::string("Use /name <name> to make a session appear in this filter")
-                                                                           : std::string("Start a conversation to create a session"),
-                                                 .group = "Sessions",
-                                                 .detail = {},
-                                                 .badge = {},
-                                                 .current = false,
-                                                 .enabled = false,
-                                                 .disabled_reason = named_only ? std::string("no sessions have names") : std::string("session tree is empty")});
-  }
-
-  return view;
-}
-
-tui::SelectListView session_selector_view(ApplicationCatalogCache const& cache, SessionSelectorSort sort, std::string footer_hint, bool named_only,
-                                          bool show_paths, bool show_archived, bool show_label_time)
-{
-  if (cache.session_tree)
-    return session_selector_view(*cache.session_tree, sort, std::move(footer_hint), named_only, show_paths, show_archived, show_label_time);
-
-  return tui::SelectListView{.title = "Select session",
-                             .subtitle = "Unable to load session list",
-                             .items = {tui::SelectListItemView{.value = {},
-                                                               .label = "Session list unavailable",
-                                                               .description = cache.session_tree_error,
-                                                               .group = "Sessions",
-                                                               .detail = {},
-                                                               .badge = {},
-                                                               .current = false,
-                                                               .enabled = false,
-                                                               .disabled_reason = "session list failed to load"}},
-                             .selected_item_index = 0,
-                             .query = {},
-                             .placeholder = "Search sessions",
-                             .empty_text = "No sessions match",
-                             .footer_hint = std::move(footer_hint)};
-}
-
-#if 0 // Nothing is calling this function.
-tui::SelectListView session_selector_view(runtime::session_ts const& unlocked_session, SessionSelectorSort sort, std::string footer_hint, bool named_only, bool show_paths,
-                                           bool show_archived, bool show_label_time)
-{
-  auto tree = build_current_session_tree(unlocked_session, {});
-  if (tree)
-    return session_selector_view(*tree, sort, std::move(footer_hint), named_only, show_paths, show_archived, show_label_time);
-
-  return tui::SelectListView{.title = "Select session",
-                             .subtitle = "Unable to load session list",
-                             .items = {tui::SelectListItemView{.value = {},
-                                                               .label = "Session list unavailable",
-                                                               .description = tree.error().format(),
-                                                               .group = "Sessions",
-                                                               .detail = {},
-                                                               .badge = {},
-                                                               .current = false,
-                                                               .enabled = false,
-                                                               .disabled_reason = "session list failed to load"}},
-                             .selected_item_index = 0,
-                             .query = {},
-                             .placeholder = "Search sessions",
-                             .empty_text = "No sessions match",
-                             .footer_hint = std::move(footer_hint)};
-}
-#endif
 
 std::optional<std::string> session_selector_parent_target(ava::session::SessionTreeIndex const& tree, std::string_view session_id)
 {
-  auto const index_by_id = session_tree_index_by_id(tree.sessions);
-  auto const found = index_by_id.find(std::string(session_id));
-  if (found == index_by_id.end())
+  auto const found = std::ranges::find_if(tree.sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
+  if (found == tree.sessions.end())
     return std::nullopt;
-  auto const& parent_id = tree.sessions[found->second].metadata.parent_session_id;
-  if (parent_id.empty() || index_by_id.find(parent_id) == index_by_id.end())
+  auto const& parent_id = found->metadata.parent_session_id;
+  if (parent_id.empty() || std::ranges::none_of(tree.sessions, [&](auto const& node) { return node.summary.session_id == parent_id; }))
     return std::nullopt;
   return parent_id;
 }
@@ -1653,73 +1116,16 @@ std::optional<std::string> session_selector_parent_target(ava::session::SessionT
 std::optional<std::string> session_selector_child_target(ava::session::SessionTreeIndex const& tree, std::string_view session_id, SessionSelectorSort sort,
                                                          bool include_archived)
 {
-  auto const index_by_id = session_tree_index_by_id(tree.sessions);
-  auto const found = index_by_id.find(std::string(session_id));
-  if (found == index_by_id.end())
+  auto const found = std::ranges::find_if(tree.sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
+  if (found == tree.sessions.end())
     return std::nullopt;
 
-  auto children = sorted_tree_ids(tree.sessions[found->second].children, tree.sessions, index_by_id, sort);
-  for (auto const& child_id : children)
+  for (auto const* child : command_palette_detail::sorted_session_tree_nodes(tree.sessions, found->children, sort))
   {
-    auto const child = index_by_id.find(child_id);
-    if (child == index_by_id.end())
-      continue;
-    if (include_archived || !tree.sessions[child->second].metadata.archived)
-      return child_id;
+    if (include_archived || !child->metadata.archived)
+      return child->summary.session_id;
   }
   return std::nullopt;
-}
-
-tui::SelectListView user_turn_selector_view(std::vector<SessionUserTurn> turns, std::string title, std::string footer_hint, std::string initial_query,
-                                            bool truncated_before)
-{
-  // Newest first so Enter on the initial selection forks/copies the latest public user turn.
-  std::ranges::reverse(turns);
-
-  tui::SelectListView view{
-      .title = std::move(title),
-      .subtitle = truncated_before ? std::string("newest retained turns · older history omitted") : std::string{},
-      .items = {},
-      .selected_item_index = 0,
-      .query = std::move(initial_query),
-      .placeholder = "Search user turns",
-      .empty_text = "No user turns match",
-      .footer_hint = std::move(footer_hint),
-  };
-  view.items.reserve(turns.size());
-  for (auto& turn : turns)
-  {
-    auto label = turn.preview.empty() ? std::string("(empty user turn)") : std::move(turn.preview);
-    view.items.push_back(tui::SelectListItemView{
-        .value = std::move(turn.entry_id),
-        .label = std::move(label),
-        .description = {},
-        .group = {},
-        .detail = std::move(turn.timestamp),
-        .badge = {},
-        .current = false,
-        .enabled = true,
-        .disabled_reason = {},
-    });
-  }
-  if (!view.query.empty())
-    view.selected_item_index = tui::clamp_select_list_selection(view, 0);
-  return view;
-}
-
-ava::core::Result<tui::SelectListView> user_turn_selector_view(runtime::session_ts const& unlocked_session, std::string title, std::string footer_hint,
-                                                               std::string initial_query)
-{
-  auto listed = list_session_user_turns(unlocked_session);
-  if (!listed)
-    return std::unexpected(std::move(listed.error()));
-  if (listed->turns.empty())
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::NotFound, "no public user turns available");
-    error.with_context("operation", "user_turn_selector_view");
-    return std::unexpected(std::move(error));
-  }
-  return user_turn_selector_view(std::move(listed->turns), std::move(title), std::move(footer_hint), std::move(initial_query), listed->truncated_before);
 }
 
 }  // namespace ava::app

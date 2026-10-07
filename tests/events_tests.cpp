@@ -3,6 +3,7 @@
 #include "ava/event/events.h"
 #include "ava/app/interactive_internal.h"
 #include "ava/app/interactive_run_queue.h"
+#include "ava/app/tui/interactive_tui_internal.h"
 #include "ava/core/json.h"
 
 #include <string>

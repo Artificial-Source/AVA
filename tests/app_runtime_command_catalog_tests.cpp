@@ -11,6 +11,7 @@
 #include "ava/app/commands.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_model.h"
+#include "ava/app/tui/command_palette_views.h"
 #include "ava/agent/agent_loop_session.h"
 #include "ava/agent/mode.h"
 #include "ava/agent/subagent_coordinator.h"
@@ -414,7 +415,8 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
     if (start == std::string::npos)
       return std::string{};
     auto end = start;
-    while (end < text.size() && !std::isspace(static_cast<unsigned char>(text[end]))) ++end;
+    while (end < text.size() && !std::isspace(static_cast<unsigned char>(text[end])))
+      ++end;
     return text.substr(start, end - start);
   };
   auto const permission_rule_id = add_permission_rule ? extract_rule_id(add_permission_rule->output[0]) : std::string{};
@@ -595,7 +597,8 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
   {
     std::string long_unicode_display;
     long_unicode_display.reserve(80 * 3);
-    for (int index = 0; index < 80; ++index) long_unicode_display += "你";
+    for (int index = 0; index < 80; ++index)
+      long_unicode_display += "你";
     ava::permissions::PersistentPermissionRule long_recipe_rule{
         .rule_id = "permrule_display_only",
         .scope = ava::permissions::PermissionRuleScope::Workspace,

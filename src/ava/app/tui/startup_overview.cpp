@@ -2,7 +2,8 @@
 #include "ava/app/command_format.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/Session.h"
-#include "ava/app/startup_overview.h"
+#include "ava/app/terminal_text.h"
+#include "ava/app/tui/startup_overview.h"
 #include "ava/agent/mode.h"
 #include "ava/tui/composer.h"
 #include "ava/context/context_loader.h"
@@ -26,7 +27,8 @@ namespace {
   if (text.starts_with("~") || text.starts_with("file:"))
     return true;
   auto lower = std::string(text);
-  for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  for (auto& ch : lower)
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
   static constexpr std::string_view kSecretMarkers[] = {"api_key", "apikey", "token", "secret", "password", "passwd", "authorization", "bearer "};
   for (auto const marker : kSecretMarkers)
   {
@@ -101,7 +103,7 @@ namespace {
 
   auto const raw_truncated = raw.size() > max_bytes;
   auto const bounded_raw = utf8_prefix_within(raw, max_bytes);
-  auto text = ava::tui::sanitize_terminal_text(bounded_raw);
+  auto text = ava::app::sanitize_terminal_text(bounded_raw);
   // Drop path-like or secret-looking labels rather than leak private data.
   if (looks_like_path_or_secret(text))
     return {};

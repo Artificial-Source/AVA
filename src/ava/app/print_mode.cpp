@@ -8,7 +8,7 @@
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_credentials.h"
 #include "ava/app/signal_policy.h"
-#include "ava/tui/composer.h"
+#include "ava/app/terminal_text.h"
 #include "ava/config/auth.h"
 #include "ava/config/openai_oauth.h"
 #include "ava/permissions/permission_rules.h"
@@ -95,11 +95,11 @@ std::string sanitize_terminal_output_text(std::string_view text)
   {
     if (text[index] != '\n')
       continue;
-    output += ava::tui::sanitize_terminal_text(text.substr(start, index - start));
+    output += sanitize_terminal_text(text.substr(start, index - start));
     output.push_back('\n');
     start = index + 1;
   }
-  output += ava::tui::sanitize_terminal_text(text.substr(start));
+  output += sanitize_terminal_text(text.substr(start));
   return output;
 }
 

@@ -3,7 +3,9 @@
 #include "tests/support/tui_test_support.h"
 #include "ava/app/command_palette.h"
 #include "ava/app/reasoning_controls.h"
-#include "ava/app/subagent_workspace.h"
+#include "ava/app/tui/command_palette_views.h"
+#include "ava/app/tui/reasoning_selector.h"
+#include "ava/app/tui/subagent_workspace.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
@@ -50,9 +52,10 @@ void run_tui_selector_tests()
   ava::tui::SelectListView branch_dispatch_view;
   branch_dispatch_view.items.push_back(branch_item("opaque-parent", "Parent"));
   auto const branch_dispatch_bindings = ava::tui::parse_key_bindings_json("{\"app.sessions.summarizeParent\":\"F8\"}");
-  auto const branch_dispatch = branch_dispatch_bindings ? ava::tui::handle_select_list_input(
-                                                              branch_dispatch_view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::F8}, *branch_dispatch_bindings)
-                                                        : ava::tui::SelectListInputResult{};
+  auto const branch_dispatch =
+      branch_dispatch_bindings
+          ? ava::tui::handle_select_list_input(branch_dispatch_view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::F8}, *branch_dispatch_bindings)
+          : ava::tui::SelectListInputResult{};
   auto const default_branch_dispatch =
       ava::tui::handle_select_list_input(branch_dispatch_view, ava::tui::InputEvent{.key = ava::tui::terminal::Key::F8}, ava::tui::default_key_bindings());
   expect(branch_dispatch.action == ava::tui::SelectListInputAction::SummarizeParent && branch_dispatch.selected_item_index == std::size_t{0} &&
@@ -60,23 +63,25 @@ void run_tui_selector_tests()
          "session parent-summary key dispatch is semantic, configurable, and default-unbound");
 
   auto const branch_input_bindings = ava::tui::default_key_bindings();
-  expect(
-      ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
-                                                           ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
-                                                           branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Confirm &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Generating, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
-                                                               branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Preparing, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape},
-                                                               branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Cancel &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Appending, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlD},
-                                                               branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Exit &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
-                                                               ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlL},
-                                                               branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block &&
-          ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
-                                                               ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown},
-                                                               branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block,
-      "nonterminal parent-summary state gates submission, model selection, and navigation while preserving only confirm, cancel, and exit intents");
+  expect(ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
+                                                              ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
+                                                              branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Confirm &&
+             ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Generating,
+                                                                  ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
+                                                                  branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block &&
+             ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Preparing,
+                                                                  ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape},
+                                                                  branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Cancel &&
+             ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::Appending,
+                                                                  ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlD},
+                                                                  branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Exit &&
+             ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
+                                                                  ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlL},
+                                                                  branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block &&
+             ava::tui::runtime_views::branch_summary_input_intent(ava::tui::TuiBranchSummaryPhase::AwaitingConfirmation,
+                                                                  ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown},
+                                                                  branch_input_bindings) == ava::tui::runtime_views::BranchSummaryInputIntent::Block,
+         "nonterminal parent-summary state gates submission, model selection, and navigation while preserving only confirm, cancel, and exit intents");
 
   ava::tui::SelectListView prior_branch_selector;
   prior_branch_selector.title = "Sessions";
@@ -198,8 +203,8 @@ void run_tui_selector_tests()
           ava::config::ModelInfo{
               .provider_id = "openai", .model_id = "diagnostic-local", .display_name = "Diagnostic Local", .family = "custom", .supports_reasoning = true},
           make_model("unregistered", "remote-model", "Remote Model", "remote", std::nullopt)}};
-  auto const model_picker = ava::app::model_selector_view(model_registry, model_registry.models.front(),
-                                                          ava::provider::ProviderCatalog::build_builtins_only(), "Enter choose · Esc cancel");
+  auto const model_picker = ava::app::model_selector_view(model_registry, model_registry.models.front(), ava::provider::ProviderCatalog::build_builtins_only(),
+                                                          "Enter choose · Esc cancel");
   expect(model_picker.title == "Select model" && model_picker.selected_item_index == 1 && model_picker.items.size() == 4 && model_picker.items[1].current &&
              model_picker.items[0].enabled && model_picker.items[0].group == "Anthropic" && model_picker.items[1].group == "OpenAI" &&
              model_picker.items[2].group == "OpenAI" && model_picker.items[2].enabled && model_picker.items[3].group == "Unregistered" &&
@@ -394,13 +399,12 @@ void run_tui_selector_tests()
     }
   }
 
-  auto const scoped_all_models =
-      ava::app::scoped_model_selector_view(model_registry, model_registry.models.front(), std::nullopt,
-          ava::provider::ProviderCatalog::build_builtins_only(), "Enter toggle · Ctrl+X clear");
-  auto const scoped_ordered_models = ava::app::scoped_model_selector_view(
-      model_registry, model_registry.models.front(),
-      std::optional<std::vector<std::string>>{std::vector<std::string>{"anthropic/claude-sonnet-4-5", "openai/gpt-5.5"}},
-      ava::provider::ProviderCatalog::build_builtins_only(), "Enter toggle · Ctrl+X clear");
+  auto const scoped_all_models = ava::app::scoped_model_selector_view(model_registry, model_registry.models.front(), std::nullopt,
+                                                                      ava::provider::ProviderCatalog::build_builtins_only(), "Enter toggle · Ctrl+X clear");
+  auto const scoped_ordered_models =
+      ava::app::scoped_model_selector_view(model_registry, model_registry.models.front(),
+                                           std::optional<std::vector<std::string>>{std::vector<std::string>{"anthropic/claude-sonnet-4-5", "openai/gpt-5.5"}},
+                                           ava::provider::ProviderCatalog::build_builtins_only(), "Enter toggle · Ctrl+X clear");
   expect(scoped_all_models.title == "Scoped model cycle" && scoped_all_models.subtitle.find("All registered models enabled") != std::string::npos &&
              scoped_all_models.items.size() == 4 && scoped_all_models.items[0].badge == "enabled" && scoped_all_models.items[0].description.empty() &&
              !scoped_all_models.items[3].enabled && scoped_all_models.items[3].disabled_reason.find("provider unavailable") != std::string::npos &&
@@ -734,7 +738,8 @@ void run_tui_selector_tests()
       ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::ToolsAndExtensions, settings_snapshot, settings_key_bindings);
   auto labels = [](ava::tui::SelectListView const& view) {
     std::vector<std::string> result;
-    for (auto const& item : view.items) result.push_back(item.label);
+    for (auto const& item : view.items)
+      result.push_back(item.label);
     return result;
   };
   auto const settings_root_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
@@ -1504,7 +1509,8 @@ void run_tui_selector_tests()
          "88-column duplicate title/status subagent rows remain visually distinct by short refs while each launch configuration remains visible");
 
   std::string long_duplicate_title;
-  for (std::size_t index = 0; index < 30; ++index) long_duplicate_title += "界";
+  for (std::size_t index = 0; index < 30; ++index)
+    long_duplicate_title += "界";
   long_duplicate_title += " delegated duplicate audit";
   auto long_duplicate_snapshots =
       std::vector<ava::agent::SubagentCoordinatorJobSnapshot>{make_subagent_snapshot("job_long_duplicate_alpha_0123456789", "owner-a", long_duplicate_title,
@@ -1700,7 +1706,8 @@ void run_tui_selector_tests()
     {
       frame->generation = 2;
       std::string long_result;
-      for (int line = 0; line < 30; ++line) long_result += "Committed live line " + std::to_string(line) + "\n";
+      for (int line = 0; line < 30; ++line)
+        long_result += "Committed live line " + std::to_string(line) + "\n";
       frame->messages = {{.role = ava::agent::SubagentLiveMessageRole::User, .text = "Committed first"},
                          {.role = ava::agent::SubagentLiveMessageRole::Assistant, .text = std::move(long_result)}};
     }

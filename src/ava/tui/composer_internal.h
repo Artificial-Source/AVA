@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 
 #include <array>
@@ -11,7 +12,11 @@
 #include <string_view>
 #include <vector>
 
-namespace ava::tui::detail {
+namespace ava::tui {
+
+using ava::app::sanitize_terminal_text;
+
+namespace detail {
 
 inline constexpr std::size_t kMinWidth = 20;
 inline constexpr std::size_t kMinHeight = 8;
@@ -543,4 +548,5 @@ void clear_composer_terminal_graphics(terminal::Context& terminal_context) noexc
 [[nodiscard]] std::size_t input_cursor_column(ComposerSnapshot const& snapshot, std::size_t width);
 [[nodiscard]] std::size_t input_cursor_line(ComposerSnapshot const& snapshot, std::size_t width);
 
-}  // namespace ava::tui::detail
+}  // namespace detail
+}  // namespace ava::tui

@@ -1,3 +1,18 @@
+add_library(ava_app_common
+  "terminal_text.cpp"
+)
+
+target_include_directories(ava_app_common
+  PUBLIC
+    "${CMAKE_SOURCE_DIR}/src"
+    "${AVA_GENERATED_INCLUDE_DIR}"
+)
+target_link_libraries(ava_app_common PUBLIC AVA::core)
+ava_apply_debugging(ava_app_common)
+ava_apply_warnings(ava_app_common)
+ava_apply_sanitizers(ava_app_common)
+add_library(AVA::app_common ALIAS ava_app_common)
+
 add_library(ava_app)
 
 target_sources(ava_app
@@ -29,6 +44,10 @@ target_sources(ava_app
     "command_models.cpp"
     "command_permissions.cpp"
     "command_palette.cpp"
+    "tui/command_hotkeys.cpp"
+    "tui/command_palette_views.cpp"
+    "tui/configuration_commands.cpp"
+    "tui/display_reload.cpp"
     "command_registry.cpp"
     "command_plugins.cpp"
     "command_compaction.cpp"
@@ -43,22 +62,24 @@ target_sources(ava_app
     "commands.cpp"
     "connect_oauth_callback.cpp"
     "connect_openai.cpp"
-    "display_settings.cpp"
+    "tui/tui_display_settings.cpp"
     "doctor_support.cpp"
     "external_editor.cpp"
     "headless_policy.cpp"
     "interactive_run_queue.cpp"
     "interactive.cpp"
-    "interactive_tui.cpp"
-    "interactive_tui_support.cpp"
+    "interactive_support.cpp"
+    "tui/interactive_tui.cpp"
+    "tui/interactive_tui_support.cpp"
     "mermaid_render_coordinator.cpp"
-    "mermaid_tui_bridge.cpp"
+    "tui/mermaid_tui_bridge.cpp"
     "onboarding.cpp"
     "plugin_event_hooks.cpp"
     "plugin_ui_capability.cpp"
     "project_trust.cpp"
     "print_mode.cpp"
     "reasoning_controls.cpp"
+    "tui/reasoning_selector.cpp"
     "rpc/catalog.cpp"
     "rpc/handlers.cpp"
     "rpc/input.cpp"
@@ -75,7 +96,7 @@ target_sources(ava_app
     "signal_policy.cpp"
     "runtime.cpp"
     "runtime_catalog.cpp"
-    "subagent_workspace.cpp"
+    "tui/subagent_workspace.cpp"
     "runtime_compaction.cpp"
     "runtime_credentials.cpp"
     "runtime_json.cpp"
@@ -87,10 +108,11 @@ target_sources(ava_app
     "runtime_event_adapters.cpp"
     "runtime_reasoning.cpp"
     "runtime_retry.cpp"
+    "settings_json.cpp"
     "session_run_controller.cpp"
     "session_title_coordinator.cpp"
     "session_user_turns.cpp"
-    "startup_overview.cpp"
+    "tui/startup_overview.cpp"
     "subagent_delivery_manager.cpp"
     "runtime/Session.cpp"
     "runtime/ExtensionResourcePolicy.cpp"
@@ -107,6 +129,7 @@ target_include_directories(ava_app
 
 target_link_libraries(ava_app
   PUBLIC
+    AVA::app_common
     AVA::event
     AVA::http
   PRIVATE

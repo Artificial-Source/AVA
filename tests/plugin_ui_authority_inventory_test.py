@@ -26,7 +26,7 @@ CLAIM_ALLOWLIST = MODULE_FILES | {Path("app/command_plugins.cpp")}
 FIELD_ALLOWLIST = MODULE_FILES | {
     Path("app/commands.h"),
     Path("app/command_plugins.cpp"),
-    Path("app/interactive_tui.cpp"),
+    Path("app/tui/interactive_tui.cpp"),
     Path("app/interactive.cpp"),
     Path("app/interactive_internal.h"),
 }
@@ -63,10 +63,10 @@ def main() -> int:
 
     factory = matches(files, root, FACTORY)
     production_factory_calls = [(path, line) for path, line in factory if path not in MODULE_FILES]
-    expected_mint = Path("app/interactive_tui.cpp")
+    expected_mint = Path("app/tui/interactive_tui.cpp")
     if len(production_factory_calls) != 1 or production_factory_calls[0][0] != expected_mint:
         details = ", ".join(f"{path}:{line}" for path, line in production_factory_calls) or "none"
-        raise AssertionError(f"Phase B must have exactly one production TUI factory call in app/interactive_tui.cpp: {details}")
+        raise AssertionError(f"Phase B must have exactly one production TUI factory call in app/tui/interactive_tui.cpp: {details}")
 
     require_allowlist("plugin UI claim", matches(files, root, CLAIM), CLAIM_ALLOWLIST)
     require_allowlist("plugin UI handler", matches(files, root, HANDLER), HANDLER_ALLOWLIST)
@@ -80,19 +80,19 @@ def main() -> int:
     if re.search(r"\b(get|serialize|to_json|json)\w*\s*\([^;]*PluginUiInvocationCapability", capability_header, re.IGNORECASE):
         raise AssertionError("opaque plugin UI capability must not expose an internals getter or serialization API")
 
-    interactive = (root / "app" / "interactive_tui.cpp").read_text(encoding="utf-8")
+    interactive = (root / "app" / "tui" / "interactive_tui.cpp").read_text(encoding="utf-8")
     if interactive.count("std::move(plugin_ui_capability)") != 1:
         raise AssertionError("the TUI capability must attach to exactly the first canonical handle_interactive_submission call")
     if not re.search(r"follow_up\.message[\s\S]{0,700}?context\.on_subagent_launch,\s*nullptr\)", interactive):
         raise AssertionError("every queued TUI follow-up must call handle_interactive_submission with explicit null UI authority")
 
     tui_files = source_files(root / "tui")
-    # Shared frontend contracts are intentionally consumed by concrete UIs.
+    # Shared frontend contracts and the app-common terminal text sanitizer are intentionally consumed by concrete UIs.
     # Other app headers remain forbidden here so the TUI cannot acquire app-owned plugin UI authority.
-    tui_app_includes = matches(tui_files, root, re.compile(r'^\s*#\s*include\s*[<\"]ava/app/(?!frontend/)'))
+    tui_app_includes = matches(tui_files, root, re.compile(r'^\s*#\s*include\s*[<\"]ava/app/(?!frontend/|terminal_text\.h[>\"])'))
     if tui_app_includes:
         details = ", ".join(f"{path}:{line}" for path, line in tui_app_includes)
-        raise AssertionError(f"TUI must not depend on app headers outside the shared frontend contracts: {details}")
+        raise AssertionError(f"TUI must not depend on app headers outside the shared frontend and terminal-text contracts: {details}")
 
     print("plugin UI authority inventory passed: one foreground TUI mint; direct command is the only claim/handler consumer")
     return 0

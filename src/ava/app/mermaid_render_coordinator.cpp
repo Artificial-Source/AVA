@@ -1,6 +1,6 @@
 #include "sys.h"
-#include "ava/app/display_settings.h"
 #include "ava/app/mermaid_render_coordinator.h"
+#include "ava/app/tui/tui_display_settings.h"
 #include "ava/core/Signals.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
@@ -363,12 +363,14 @@ RenderResult render_one(std::vector<std::string> argv_values, std::string const&
 
   std::vector<char*> arguments;
   arguments.reserve(argv_values.size() + 1);
-  for (auto& argument : argv_values) arguments.push_back(argument.data());
+  for (auto& argument : argv_values)
+    arguments.push_back(argument.data());
   arguments.push_back(nullptr);
   std::array<std::string, 7> environment_values{
       "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TERM=dumb", "NO_COLOR=1", "PWD=/", "AVA_MERMAID_PROTOCOL=1"};
   std::array<char*, 8> environment{};
-  for (std::size_t index = 0; index < environment_values.size(); ++index) environment[index] = environment_values[index].data();
+  for (std::size_t index = 0; index < environment_values.size(); ++index)
+    environment[index] = environment_values[index].data();
   environment.back() = nullptr;
 
   ChildState child;
@@ -384,8 +386,7 @@ RenderResult render_one(std::vector<std::string> argv_values, std::string const&
     if (::setpgid(0, 0) != 0)
       _exit(127);
     static_cast<void>(::raise(SIGSTOP));
-    if (!core::Signals::reset_child_signal_state() ||
-        ::dup2(stdin_pipe->read_end.get(), STDIN_FILENO) < 0 ||
+    if (!core::Signals::reset_child_signal_state() || ::dup2(stdin_pipe->read_end.get(), STDIN_FILENO) < 0 ||
         ::dup2(stdout_pipe->write_end.get(), STDOUT_FILENO) < 0)
       child_launch_failed(exec_pipe->write_end.get());
     int const dev_null = ::open("/dev/null", O_WRONLY | O_CLOEXEC);
@@ -670,7 +671,8 @@ struct MermaidRenderCoordinator::Impl
   [[nodiscard]] std::size_t pending_identities_locked() const noexcept
   {
     std::size_t count = active ? active->identities.size() : 0;
-    for (auto const& work : queue) count += work.identities.size();
+    for (auto const& work : queue)
+      count += work.identities.size();
     return count;
   }
 
@@ -745,7 +747,8 @@ struct MermaidRenderCoordinator::Impl
           if (!shutting_down && configuration.epoch == epoch && !active->identities.empty())
           {
             cache_result_locked(source, result);
-            for (auto const identity : active->identities) add_completion_locked(identity, result.outcome, result.text);
+            for (auto const identity : active->identities)
+              add_completion_locked(identity, result.outcome, result.text);
           }
           active.reset();
         }

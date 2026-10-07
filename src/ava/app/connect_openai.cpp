@@ -4,7 +4,7 @@
 #include "ava/app/connect_oauth_callback.h"
 #include "ava/app/connect_openai.h"
 #include "ava/app/signal_policy.h"
-#include "ava/tui/composer.h"
+#include "ava/app/terminal_text.h"
 #include "ava/config/auth.h"
 #include "ava/config/openai_oauth.h"
 #include "ava/config/provider_profiles.h"
@@ -106,7 +106,7 @@ bool tcsetattr_with_restart(struct termios const* termios_p)
   do
     success = ::tcsetattr(STDIN_FILENO, TCSAFLUSH, termios_p) == 0;
   while (!success && errno == EINTR);
-  Dout(dc::warning(!success)|error_cf, "::tcsetattr(STDIN_FILENO, TCSAFLUSH, " << print_pointer(termios_p) << ") == -1");
+  Dout(dc::warning(!success) | error_cf, "::tcsetattr(STDIN_FILENO, TCSAFLUSH, " << print_pointer(termios_p) << ") == -1");
   return success;
 }
 
@@ -302,7 +302,7 @@ void render_provider_menu(std::ostream& out, std::string_view query, std::size_t
   out << "\x1b[2J\x1b[H";
   out << "Add credential\n\n";
   out << "Select provider\n\n";
-  out << "Search: " << ava::tui::sanitize_terminal_text(std::string(query)) << "\n\n";
+  out << "Search: " << sanitize_terminal_text(std::string(query)) << "\n\n";
   out << "Popular\n";
   if (filtered.empty())
   {
@@ -313,8 +313,7 @@ void render_provider_menu(std::ostream& out, std::string_view query, std::size_t
     for (std::size_t index = 0; index < filtered.size(); ++index)
     {
       auto const& item = filtered[index];
-      out << (index == selected_index ? "> " : "  ") << ava::tui::sanitize_terminal_text(item.label) << "  " << ava::tui::sanitize_terminal_text(item.detail)
-          << "\n";
+      out << (index == selected_index ? "> " : "  ") << sanitize_terminal_text(item.label) << "  " << sanitize_terminal_text(item.detail) << "\n";
     }
   }
   out << "\n↑/↓ to select • Enter: confirm • Type: search • Esc: cancel\n" << std::flush;
@@ -686,7 +685,7 @@ int run_connect_openai_browser(ava::config::XdgPaths const& paths, std::ostream&
   auto session = ava::config::make_openai_oauth_session();
   if (!session)
   {
-    err << ava::tui::sanitize_terminal_text(session.error().format()) << '\n';
+    err << sanitize_terminal_text(session.error().format()) << '\n';
     return 1;
   }
   out << "Open this URL to connect AVA to OpenAI:\n\n" << session->authorization_url << "\n\n";
@@ -706,7 +705,7 @@ int run_connect_openai_browser(ava::config::XdgPaths const& paths, std::ostream&
   {
     if (terminal_mode_cancelled_by_signal())
       return 130;
-    err << ava::tui::sanitize_terminal_text(credential.error().format()) << '\n';
+    err << sanitize_terminal_text(credential.error().format()) << '\n';
     return 1;
   }
   if (terminal_mode_cancelled_by_signal())
@@ -714,10 +713,10 @@ int run_connect_openai_browser(ava::config::XdgPaths const& paths, std::ostream&
   auto stored = ava::config::store_openai_credential(paths, *credential);
   if (!stored)
   {
-    err << ava::tui::sanitize_terminal_text(stored.error().format()) << '\n';
+    err << sanitize_terminal_text(stored.error().format()) << '\n';
     return 1;
   }
-  out << "OpenAI OAuth credential stored at " << ava::tui::sanitize_terminal_text(paths.auth_file.string()) << '\n';
+  out << "OpenAI OAuth credential stored at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
   return 0;
 }
 
@@ -734,11 +733,11 @@ int run_connect_openai_headless(ava::config::XdgPaths const& paths, std::ostream
   auto authorization = ava::config::start_openai_oauth_device_authorization(transport);
   if (!authorization)
   {
-    err << ava::tui::sanitize_terminal_text(authorization.error().format()) << '\n';
+    err << sanitize_terminal_text(authorization.error().format()) << '\n';
     return 1;
   }
   out << "Open this URL on any device:\n\n" << authorization->verification_url << "\n\n";
-  out << "Enter this code: " << ava::tui::sanitize_terminal_text(authorization->user_code) << "\n\n";
+  out << "Enter this code: " << sanitize_terminal_text(authorization->user_code) << "\n\n";
   out << "Waiting for OpenAI authorization ...\n";
 
   auto credential = wait_for_openai_device_oauth(*authorization, transport, unix_time_seconds(), [] { return terminal_mode_cancelled_by_signal(); });
@@ -746,7 +745,7 @@ int run_connect_openai_headless(ava::config::XdgPaths const& paths, std::ostream
   {
     if (terminal_mode_cancelled_by_signal())
       return 130;
-    err << ava::tui::sanitize_terminal_text(credential.error().format()) << '\n';
+    err << sanitize_terminal_text(credential.error().format()) << '\n';
     return 1;
   }
   if (terminal_mode_cancelled_by_signal())
@@ -754,10 +753,10 @@ int run_connect_openai_headless(ava::config::XdgPaths const& paths, std::ostream
   auto stored = ava::config::store_openai_credential(paths, *credential);
   if (!stored)
   {
-    err << ava::tui::sanitize_terminal_text(stored.error().format()) << '\n';
+    err << sanitize_terminal_text(stored.error().format()) << '\n';
     return 1;
   }
-  out << "OpenAI OAuth credential stored at " << ava::tui::sanitize_terminal_text(paths.auth_file.string()) << '\n';
+  out << "OpenAI OAuth credential stored at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
   return 0;
 }
 
@@ -795,7 +794,7 @@ int run_connect_openai_wizard(ava::config::XdgPaths const& paths, ConnectProvide
   {
     if (terminal_mode_cancelled_by_signal())
       return 130;
-    err << ava::tui::sanitize_terminal_text(method_text.error().format()) << '\n';
+    err << sanitize_terminal_text(method_text.error().format()) << '\n';
     return 1;
   }
   auto method = parse_openai_connect_method(*method_text);
@@ -842,7 +841,7 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
     {
       if (terminal_mode_cancelled_by_signal())
         return 130;
-      err << ava::tui::sanitize_terminal_text(provider.error().format()) << '\n';
+      err << sanitize_terminal_text(provider.error().format()) << '\n';
       return 1;
     }
     provider_id = *provider;
@@ -857,12 +856,12 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
     auto catalog = ava::provider::ProviderCatalog::build(paths);
     if (!catalog)
     {
-      err << ava::tui::sanitize_terminal_text(catalog.error().format()) << '\n';
+      err << sanitize_terminal_text(catalog.error().format()) << '\n';
       return 1;
     }
     if ((*catalog)->provider_auth_is_none(provider_id))
     {
-      out << ava::tui::sanitize_terminal_text((*catalog)->display_name(provider_id)) << " requires no credential (auth:none). auth.json was not modified.\n";
+      out << sanitize_terminal_text((*catalog)->display_name(provider_id)) << " requires no credential (auth:none). auth.json was not modified.\n";
       return 0;
     }
     if ((*catalog)->provider_is_user_defined(provider_id) && options.credential_type && *options.credential_type != ConnectCredentialType::ApiKey)
@@ -888,7 +887,7 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
   {
     if (terminal_mode_cancelled_by_signal())
       return 130;
-    err << ava::tui::sanitize_terminal_text(secret.error().format()) << '\n';
+    err << sanitize_terminal_text(secret.error().format()) << '\n';
     return 1;
   }
   if (terminal_mode_cancelled_by_signal())
@@ -896,11 +895,11 @@ int run_connect_provider_wizard(ava::config::XdgPaths const& paths, ConnectProvi
   auto stored = store_connect_secret(paths, provider_id, credential_type, *secret);
   if (!stored)
   {
-    err << ava::tui::sanitize_terminal_text(stored.error().format()) << '\n';
+    err << sanitize_terminal_text(stored.error().format()) << '\n';
     return 1;
   }
-  out << "Stored " << ava::tui::sanitize_terminal_text(provider_id) << ' ' << credential_type_label(credential_type) << " credential at "
-      << ava::tui::sanitize_terminal_text(paths.auth_file.string()) << '\n';
+  out << "Stored " << sanitize_terminal_text(provider_id) << ' ' << credential_type_label(credential_type) << " credential at "
+      << sanitize_terminal_text(paths.auth_file.string()) << '\n';
   if (provider_id == "openai")
   {
     out << "Tip: `ava connect openai` opens the OpenAI login method picker.\n";
@@ -916,13 +915,12 @@ int run_connect_provider_credential(ava::config::XdgPaths const& paths, ConnectP
     auto catalog = ava::provider::ProviderCatalog::build(paths);
     if (!catalog)
     {
-      err << ava::tui::sanitize_terminal_text(catalog.error().format()) << '\n';
+      err << sanitize_terminal_text(catalog.error().format()) << '\n';
       return 1;
     }
     if ((*catalog)->provider_auth_is_none(options.provider_id))
     {
-      out << ava::tui::sanitize_terminal_text((*catalog)->display_name(options.provider_id))
-          << " requires no credential (auth:none). auth.json was not modified.\n";
+      out << sanitize_terminal_text((*catalog)->display_name(options.provider_id)) << " requires no credential (auth:none). auth.json was not modified.\n";
       return 0;
     }
     if ((*catalog)->provider_is_user_defined(options.provider_id) && options.credential_type != ConnectCredentialType::ApiKey)
@@ -936,7 +934,7 @@ int run_connect_provider_credential(ava::config::XdgPaths const& paths, ConnectP
   {
     if (terminal_mode_cancelled_by_signal())
       return 130;
-    err << ava::tui::sanitize_terminal_text(secret.error().format()) << '\n';
+    err << sanitize_terminal_text(secret.error().format()) << '\n';
     return 1;
   }
   if (terminal_mode_cancelled_by_signal())
@@ -945,10 +943,10 @@ int run_connect_provider_credential(ava::config::XdgPaths const& paths, ConnectP
   auto stored = store_connect_secret(paths, options.provider_id, options.credential_type, *secret);
   if (!stored)
   {
-    err << ava::tui::sanitize_terminal_text(stored.error().format()) << '\n';
+    err << sanitize_terminal_text(stored.error().format()) << '\n';
     return 1;
   }
-  out << "Stored " << credential_type_label(options.credential_type) << " credential at " << ava::tui::sanitize_terminal_text(paths.auth_file.string()) << '\n';
+  out << "Stored " << credential_type_label(options.credential_type) << " credential at " << sanitize_terminal_text(paths.auth_file.string()) << '\n';
   return 0;
 }
 

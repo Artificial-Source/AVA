@@ -1065,7 +1065,7 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${CMAKE_COMMAND}
             -DAVA_CLIPBOARD_IMAGE_SOURCE=${CMAKE_SOURCE_DIR}/src/ava/app/clipboard_image.cpp
             -DAVA_CLIPBOARD_IMAGE_HEADER=${CMAKE_SOURCE_DIR}/src/ava/app/clipboard_image.h
-            -DAVA_INTERACTIVE_TUI_SOURCE=${CMAKE_SOURCE_DIR}/src/ava/app/interactive_tui.cpp
+            -DAVA_INTERACTIVE_TUI_SOURCE=${CMAKE_SOURCE_DIR}/src/ava/app/tui/interactive_tui.cpp
             -P ${CMAKE_CURRENT_SOURCE_DIR}/clipboard_image_static_contract.cmake)
   set_tests_properties(ava_tests.clipboard_image_static_contract PROPERTIES TIMEOUT 15)
 

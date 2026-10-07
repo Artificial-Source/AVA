@@ -5,10 +5,7 @@
 #include "ava/app/command_palette.h"
 #include "ava/app/command_sessions.h"
 #include "ava/app/commands.h"
-#include "ava/app/display_settings.h"
-#include "ava/app/interactive_internal.h"
 #include "ava/app/interactive_run_queue.h"
-#include "ava/app/mermaid_tui_bridge.h"
 #include "ava/app/onboarding.h"
 #include "ava/app/plugin_ui_capability.h"
 #include "ava/app/reasoning_controls.h"
@@ -16,8 +13,13 @@
 #include "ava/app/runtime.h"
 #include "ava/app/session_title_coordinator.h"
 #include "ava/app/session_user_turns.h"
-#include "ava/app/startup_overview.h"
-#include "ava/app/subagent_workspace.h"
+#include "ava/app/tui/command_palette_views.h"
+#include "ava/app/tui/interactive_tui_internal.h"
+#include "ava/app/tui/mermaid_tui_bridge.h"
+#include "ava/app/tui/reasoning_selector.h"
+#include "ava/app/tui/startup_overview.h"
+#include "ava/app/tui/subagent_workspace.h"
+#include "ava/app/tui/tui_display_settings.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
@@ -283,9 +285,9 @@ int run_tui(InteractiveState state)
                                              .git_branch = git_branch_for_sidebar(presentation.workspace_dir),
                                              .context_source_count = presentation.context_source_count,
                                              .status = std::move(status),
-                                             .slash_commands = std::move(delivery.slash_commands),
+                                             .slash_commands = project_slash_command_items(std::move(delivery.slash_commands)),
                                              .slash_catalog_generation = delivery.slash_catalog_generation,
-                                             .file_references = std::move(delivery.file_references),
+                                             .file_references = project_file_reference_items(std::move(delivery.file_references)),
                                              .workspace_catalog_generation = delivery.workspace_catalog_generation,
                                              .custom_themes = custom_theme_options(),
                                              .project_trust = presentation.project_trust,
@@ -303,7 +305,7 @@ int run_tui(InteractiveState state)
   bool session_selector_show_archived = false;
   bool session_selector_show_label_time = false;
   auto session_selector_view_from_catalog = [&]() {
-    return application_catalog.session_view(session_selector_sort,
+    return application_catalog_session_view(application_catalog, session_selector_sort,
                                             session_selector_footer_hint(session_selector_sort, session_selector_named_only, session_selector_show_paths,
                                                                          session_selector_show_archived, session_selector_show_label_time),
                                             session_selector_named_only, session_selector_show_paths, session_selector_show_archived,
@@ -402,9 +404,9 @@ int run_tui(InteractiveState state)
       .context_source_count = initial_presentation.context_source_count,
       .initial_status = keybind_status,
       .initial_transcript = std::move(initial_transcript),
-      .slash_commands = initial_catalog_snapshot.slash_commands,
+      .slash_commands = project_slash_command_items(std::move(initial_catalog_snapshot.slash_commands)),
       .slash_catalog_generation = initial_catalog_snapshot.slash_catalog_generation,
-      .file_references = initial_catalog_snapshot.file_references,
+      .file_references = project_file_reference_items(std::move(initial_catalog_snapshot.file_references)),
       .workspace_catalog_generation = initial_catalog_snapshot.workspace_catalog_generation,
       .custom_themes = custom_theme_options(),
       .project_trust = initial_presentation.project_trust,

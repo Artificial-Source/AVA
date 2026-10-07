@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check internal-module dependency direction and temporary exceptions.
 
-Only the production modules named by the policy are scanned. Target roots are
-recognized separately so the neutral event boundary can be strict without
-changing the established policy for historically scanned modules.
+Production paths are classified into logical modules before their include edges
+are checked. This lets the app-owned common target remain in src/ava/app while
+still enforcing its narrower dependency rules.
 """
 
 from __future__ import annotations
@@ -16,12 +16,30 @@ import sys
 import tempfile
 import unittest
 
-SCANNED_MODULES = ("process", "config", "http", "provider", "session", "agent", "tools", "permissions", "mcp", "plugin", "lsp", "event", "app")
+SCANNED_MODULES = (
+    "process",
+    "config",
+    "http",
+    "provider",
+    "session",
+    "agent",
+    "tools",
+    "permissions",
+    "mcp",
+    "plugin",
+    "lsp",
+    "event",
+    "app",
+    "app_common",
+    "tui",
+)
 SCANNED_MODULE_SET = frozenset(SCANNED_MODULES)
+SOURCE_ROOT_MODULES = tuple(module for module in SCANNED_MODULES if module != "app_common")
 RECOGNIZED_FIRST_PARTY_ROOTS = frozenset(
     {
         "agent",
         "app",
+        "app_common",
         "command",
         "config",
         "containment",
@@ -45,7 +63,7 @@ RECOGNIZED_FIRST_PARTY_ROOTS = frozenset(
     }
 )
 ALLOWED = {
-    "app": SCANNED_MODULE_SET - {"app"},
+    "app": (SCANNED_MODULE_SET | {"app_common"}) - {"app"},
     "agent": frozenset({"config", "http", "provider", "session", "tools", "permissions", "mcp", "plugin", "process"}),
     "provider": frozenset({"config", "http"}),
     "session": frozenset({"config"}),
@@ -58,7 +76,13 @@ ALLOWED = {
     "lsp": frozenset({"permissions", "process"}),
     "event": frozenset({"core", "debug"}),
     "process": frozenset({"core", "debug"}),
+    "app_common": frozenset({"core", "debug"}),
+    "tui": frozenset({"agent", "app_common", "config", "core", "debug", "event", "permissions", "session"}),
 }
+APP_COMMON_PATHS = frozenset({"app/terminal_text.cpp", "app/terminal_text.h"})
+# The historical frontend base remains app-owned; do not classify its relative
+# Data.h dependency as part of AVA::app_common.
+APP_FRONTEND_CONTRACT_INCLUDES = frozenset({"ava/app/frontend/FrontEnd.h"})
 SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".cpp"})
 IGNORED_TREE_NAMES = frozenset({"build", "generated", "reference", "tests", "vendor"})
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:<([^>]+)>|"([^"]+)")')
@@ -72,12 +96,23 @@ def source_kind(path: Path) -> str:
     return "implementation" if path.suffix == ".cpp" else "public"
 
 
+def logical_module(relative_to_ava: PurePosixPath) -> str:
+    if relative_to_ava.as_posix() in APP_COMMON_PATHS:
+        return "app_common"
+    return relative_to_ava.parts[0] if len(relative_to_ava.parts) >= 2 else "<noncanonical>"
+
+
 def include_target(source: Path, including_path: Path, literal: str) -> str | None:
     if literal.startswith("ava/"):
         parts = PurePosixPath(literal).parts
         if PurePosixPath(literal).as_posix() != literal or "." in parts or ".." in parts or len(parts) < 3:
             return "<noncanonical>"
-        return parts[1]
+        return logical_module(PurePosixPath(*parts[1:]))
+
+    # Bare generated/project-root/system headers do not express a relative
+    # module edge. Relative module includes necessarily contain a path separator.
+    if "/" not in literal:
+        return None
 
     # A relative include can otherwise bypass the canonical ava/<module>/ form.
     # Resolve it lexically against the including file and classify it whenever it
@@ -88,21 +123,21 @@ def include_target(source: Path, including_path: Path, literal: str) -> str | No
         relative = normalized.relative_to((source / "src" / "ava").resolve())
     except ValueError:
         return None
-    return relative.parts[0] if len(relative.parts) >= 2 else "<noncanonical>"
+    return logical_module(PurePosixPath(relative.as_posix()))
 
 
 def is_policy_target(module: str, target: str) -> bool:
     if target == "<noncanonical>":
         return True
-    if module in {"event", "process"}:
+    if module in {"app_common", "event", "process"}:
         return target in RECOGNIZED_FIRST_PARTY_ROOTS
     return target in SCANNED_MODULE_SET
 
 
 def collect_edges(source: Path) -> list[tuple[str, int, str, str, str, str]]:
     edges = []
-    for module in SCANNED_MODULES:
-        directory = source / "src" / "ava" / module
+    for source_root_module in SOURCE_ROOT_MODULES:
+        directory = source / "src" / "ava" / source_root_module
         if not directory.is_dir():
             continue
         for path in sorted(
@@ -111,6 +146,7 @@ def collect_edges(source: Path) -> list[tuple[str, int, str, str, str, str]]:
             if candidate.is_file() and candidate.suffix in SOURCE_SUFFIXES and not any(part in IGNORED_TREE_NAMES for part in candidate.relative_to(directory).parts)
         ):
             relative = path.relative_to(source).as_posix()
+            module = logical_module(PurePosixPath(path.relative_to(source / "src" / "ava").as_posix()))
             for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 matched = INCLUDE.match(line)
                 if not matched:
@@ -119,7 +155,10 @@ def collect_edges(source: Path) -> list[tuple[str, int, str, str, str, str]]:
                 target = include_target(source, path, literal)
                 if target is None or target == module or not is_policy_target(module, target):
                     continue
-                if target == "<noncanonical>" or target not in ALLOWED[module]:
+                app_tui_seam = module == "app" and target == "tui" and relative.startswith("src/ava/app/tui/")
+                tui_frontend_contract = module == "tui" and target == "app" and literal in APP_FRONTEND_CONTRACT_INCLUDES
+                forbidden_app_tui = module == "app" and target == "tui" and not app_tui_seam
+                if target == "<noncanonical>" or forbidden_app_tui or (target not in ALLOWED[module] and not app_tui_seam and not tui_frontend_contract):
                     edges.append((relative, line_number, source_kind(path), module, target, literal))
     return sorted(edges)
 
@@ -204,10 +243,10 @@ def check(source: Path, policy: Path) -> list[str]:
 
 
 class ModuleDependencyRulesSelfTest(unittest.TestCase):
-    def run_check(self, source_text: str, exceptions: list[dict], module: str = "config") -> list[str]:
+    def run_check(self, source_text: str, exceptions: list[dict], module: str = "config", source_name: str = "fixture.cpp") -> list[str]:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            source = root / "src" / "ava" / module / "fixture.cpp"
+            source = root / "src" / "ava" / module / source_name
             source.parent.mkdir(parents=True)
             source.write_text(source_text, encoding="utf-8")
             policy = root / "policy.json"
@@ -244,6 +283,48 @@ class ModuleDependencyRulesSelfTest(unittest.TestCase):
 
     def test_app_may_depend_on_event(self) -> None:
         self.assertEqual(self.run_check('#include "ava/event/events.h"\n', [], module="app"), [])
+
+    def test_tui_app_contracts_are_exactly_governed(self) -> None:
+        self.assertEqual(self.run_check('#include "ava/app/terminal_text.h"\n', [], module="tui"), [])
+        self.assertEqual(self.run_check('#include "ava/app/frontend/FrontEnd.h"\n', [], module="tui"), [])
+        self.assertEqual(
+            self.run_check('#include "ava/app/command_palette.h"\n', [], module="tui"),
+            ["src/ava/tui/fixture.cpp:1: implementation tui -> app (ava/app/command_palette.h)"],
+        )
+
+    def test_backend_cannot_depend_on_app_common(self) -> None:
+        self.assertEqual(
+            self.run_check('#include "ava/app/terminal_text.h"\n', [], module="agent"),
+            ["src/ava/agent/fixture.cpp:1: implementation agent -> app_common (ava/app/terminal_text.h)"],
+        )
+
+    def test_app_common_implementation_may_only_depend_on_neutral_layers(self) -> None:
+        self.assertEqual(self.run_check('#include "ava/core/utf8.h"\n', [], module="app", source_name="terminal_text.cpp"), [])
+        self.assertEqual(
+            self.run_check('#include "ava/tui/composer.h"\n', [], module="app", source_name="terminal_text.cpp"),
+            ["src/ava/app/terminal_text.cpp:1: implementation app_common -> tui (ava/tui/composer.h)"],
+        )
+        self.assertEqual(
+            self.run_check('#include "ava/diagnostics/runtime_diagnostics.h"\n', [], module="app", source_name="terminal_text.cpp"),
+            ["src/ava/app/terminal_text.cpp:1: implementation app_common -> diagnostics (ava/diagnostics/runtime_diagnostics.h)"],
+        )
+
+    def test_relative_includes_cannot_escape_app_common_rules(self) -> None:
+        self.assertEqual(
+            self.run_check('#include "../app/terminal_text.h"\n', [], module="agent"),
+            ["src/ava/agent/fixture.cpp:1: implementation agent -> app_common (../app/terminal_text.h)"],
+        )
+        self.assertEqual(
+            self.run_check('#include "../tui/composer.h"\n', [], module="app", source_name="terminal_text.cpp"),
+            ["src/ava/app/terminal_text.cpp:1: implementation app_common -> tui (../tui/composer.h)"],
+        )
+
+    def test_only_app_tui_seam_may_include_tui(self) -> None:
+        self.assertEqual(self.run_check('#include "ava/tui/composer.h"\n', [], module="app", source_name="tui/fixture.cpp"), [])
+        self.assertEqual(
+            self.run_check('#include "ava/tui/composer.h"\n', [], module="app"),
+            ["src/ava/app/fixture.cpp:1: implementation app -> tui (ava/tui/composer.h)"],
+        )
 
     def test_event_may_depend_on_core_and_debug(self) -> None:
         self.assertEqual(self.run_check('#include "ava/core/result.h"\n#include "ava/debug/print_members_on.h"\n', [], module="event"), [])

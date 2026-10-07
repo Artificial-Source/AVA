@@ -2,6 +2,7 @@
 #include "support/test_harness.h"
 #include "support/test_timeout.h"
 #include "support/tui_test_support.h"
+#include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
@@ -2259,23 +2260,23 @@ void run_tui_composer_rendering_tests_part_3()
                                                                                     .height = 8});
   expect(std::ranges::any_of(sanitized_input, [](std::string const& line) { return strip_sgr(line).find("│  bad?[31mred") != std::string::npos; }),
          "tui render sanitizes composer input escape bytes");
-  expect(ava::tui::sanitize_terminal_text(std::string("osc") + static_cast<char>(0x9D) + "payload") == "osc?payload",
+  expect(ava::app::sanitize_terminal_text(std::string("osc") + static_cast<char>(0x9D) + "payload") == "osc?payload",
          "tui sanitizes raw c1 terminal control bytes");
-  expect(ava::tui::sanitize_terminal_text("a\tb") == "a  b", "tui expands tabs before width accounting");
-  expect(ava::tui::sanitize_terminal_text(std::string("ok ") + "\xC3\xA9") == std::string("ok ") + "\xC3\xA9", "tui sanitizer preserves valid utf-8 text");
-  expect(ava::tui::sanitize_terminal_text(std::string("x") + std::string("\xC0\x80", 2) + "y") == "x??y",
+  expect(ava::app::sanitize_terminal_text("a\tb") == "a  b", "terminal sanitizer expands tabs before width accounting");
+  expect(ava::app::sanitize_terminal_text(std::string("ok ") + "\xC3\xA9") == std::string("ok ") + "\xC3\xA9", "terminal sanitizer preserves valid utf-8 text");
+  expect(ava::app::sanitize_terminal_text(std::string("x") + std::string("\xC0\x80", 2) + "y") == "x??y",
          "tui sanitizer rejects overlong two-byte utf-8 controls");
-  expect(ava::tui::sanitize_terminal_text(std::string("x") + std::string("\xE0\x80\x80", 3) + "y") == "x???y",
+  expect(ava::app::sanitize_terminal_text(std::string("x") + std::string("\xE0\x80\x80", 3) + "y") == "x???y",
          "tui sanitizer rejects overlong three-byte utf-8 forms");
-  expect(ava::tui::sanitize_terminal_text(std::string("x") + std::string("\xF0\x80\x80\x80", 4) + "y") == "x????y",
+  expect(ava::app::sanitize_terminal_text(std::string("x") + std::string("\xF0\x80\x80\x80", 4) + "y") == "x????y",
          "tui sanitizer rejects overlong four-byte utf-8 forms");
-  expect(ava::tui::sanitize_terminal_text(std::string("x") + std::string("\xE2\x82", 2)) == "x??",
+  expect(ava::app::sanitize_terminal_text(std::string("x") + std::string("\xE2\x82", 2)) == "x??",
          "tui sanitizer replaces truncated utf-8 at the string boundary");
-  expect(ava::tui::sanitize_terminal_text(std::string("x") + std::string("\xED\xA0\x80", 3) + "y") == "x???y",
+  expect(ava::app::sanitize_terminal_text(std::string("x") + std::string("\xED\xA0\x80", 3) + "y") == "x???y",
          "tui sanitizer rejects utf-8 surrogate codepoints");
-  expect(ava::tui::sanitize_terminal_text(std::string("x") + std::string("\xF4\x90\x80\x80", 4) + "y") == "x????y",
+  expect(ava::app::sanitize_terminal_text(std::string("x") + std::string("\xF4\x90\x80\x80", 4) + "y") == "x????y",
          "tui sanitizer rejects utf-8 codepoints above the unicode maximum");
-  expect(ava::tui::sanitize_terminal_text(std::string("nul") + std::string(1, '\0') + "byte") == "nul?byte",
+  expect(ava::app::sanitize_terminal_text(std::string("nul") + std::string(1, '\0') + "byte") == "nul?byte",
          "tui sanitizer replaces binary-like NUL bytes with a visible marker");
   expect(ava::tui::detail::terminal_text_columns("\xE7\x95\x8C") == 2 && ava::tui::detail::terminal_text_columns(std::string("e") + "\xCC\x81") == 1 &&
              ava::tui::detail::terminal_text_columns(std::string("a") + "\xE2\x80\x8D" + "b") == 2 &&

@@ -52,6 +52,7 @@ add_library(ava_tui
 
 target_link_libraries(ava_tui
   PUBLIC
+    AVA::app_common
     AVA::terminal
     AVA::core
     AVA::event

@@ -810,7 +810,6 @@ struct PluginUiSurfaceGeometry
 [[nodiscard]] std::size_t composer_max_transcript_scroll_offset(ComposerSnapshot const& snapshot, std::size_t width, std::size_t height);
 [[nodiscard]] std::size_t sidebar_drawer_max_scroll_offset(ComposerSnapshot const& snapshot);
 [[nodiscard]] bool draw_screen(ComposerSnapshot const& snapshot);
-[[nodiscard]] std::string sanitize_terminal_text(std::string_view text);
 [[nodiscard]] std::vector<std::string> split_lines(std::string_view text);
 [[nodiscard]] PermissionPromptRememberAvailability permission_prompt_remember_availability(ava::permissions::PermissionPrompt const& prompt,
                                                                                            bool rule_storage_available) noexcept;

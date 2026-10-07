@@ -273,9 +273,9 @@ The renderer does not write config. Add application/backend commands or callback
 
 ### Likely Files
 
-- `src/ava/app/display_settings.{h,cpp}`
+- `src/ava/app/tui/tui_display_settings.{h,cpp}`
 - `src/ava/app/display_reload.{h,cpp}` if still present
-- `src/ava/app/interactive_tui.cpp`
+- `src/ava/app/tui/interactive_tui.cpp`
 - `src/ava/tui/runtime.h`
 - `src/ava/tui/composer.h`
 - `src/ava/tui/runtime_actions_internal.cpp`
@@ -450,7 +450,7 @@ Other settings may remain confirm-only until they have equally safe reversible s
 - `src/ava/tui/runtime_state_internal.h`
 - `src/ava/tui/runtime_actions_internal.cpp`
 - `src/ava/tui/composer.{h,cpp}`
-- `src/ava/app/interactive_tui.cpp`
+- `src/ava/app/tui/interactive_tui.cpp`
 - `src/ava/app/command_palette.cpp`
 - `tests/tui_composer_tests.cpp`
 - `tests/app_runtime_tests.cpp`
@@ -499,7 +499,7 @@ Retain Wave 1 commands/settings and restore the flat settings list. No config mi
 
 ### Wave 3 evidence
 
-- App-owned `StartupOverviewSnapshot` builder in `src/ava/app/startup_overview.*` consumes only already-loaded in-memory resources (session context/freshness spans, effective keybindings by const pointer, active theme). No TUI FS reopen, session JSONL read/append, provider/plugin/MCP/LSP invocation, catalog/session-tree scan/copy, or prompt/secret/path leakage.
+- App-owned `StartupOverviewSnapshot` builder in `src/ava/app/tui/startup_overview.*` consumes only already-loaded in-memory resources (session context/freshness spans, effective keybindings by const pointer, active theme). No TUI FS reopen, session JSONL read/append, provider/plugin/MCP/LSP invocation, catalog/session-tree scan/copy, or prompt/secret/path leakage.
 - Collapsed chrome: 2 rows at height ≥12, 1 row at 8–11, hidden below 8; quiet footer unchanged. Expanded view is the host-owned read-only `overview_select_list_view` select-list.
 - `/overview` exact submit bypass + unbound `app.overview.toggle` + mouse hit region on the collapsed card. Process-local only; modal replacement/session-switch/prompt acquisition/exit clear expanded state. Shared snapshot sync rebuilds an open overview list in place for idle, active-run, and periodic display-reload paths.
 - Session titles, raw session ids, and free-form/prompt-derived session text are omitted entirely (W3-PRIV-001).
@@ -566,7 +566,7 @@ Add a native collapsed startup card/banner that consumes a small fixed number of
 
 ### Likely Files
 
-- `src/ava/app/interactive_tui.cpp`
+- `src/ava/app/tui/interactive_tui.cpp`
 - `src/ava/app/command_catalog.cpp`
 - `src/ava/app/command_registry.cpp`
 - `src/ava/tui/runtime.h`
@@ -667,7 +667,7 @@ The action does not create a normal user/assistant turn and does not inject summ
 - `src/ava/app/runtime/Session.h`
 - `src/ava/app/runtime.h`
 - `src/ava/app/commands.h`
-- `src/ava/app/interactive_tui.cpp`
+- `src/ava/app/tui/interactive_tui.cpp`
 - `src/ava/app/command_sessions.cpp`
 - `src/ava/tui/runtime.h`
 - `src/ava/tui/composer.h`
@@ -845,7 +845,7 @@ Plugin reader/worker threads never touch curses or TUI state directly.
 - `src/ava/event/` typed runtime event files
 - `src/ava/app/command_plugins.cpp`
 - `src/ava/app/commands.h` (`CommandRequest`) or a narrower new plugin-command context
-- `src/ava/app/interactive_tui.cpp`
+- `src/ava/app/tui/interactive_tui.cpp`
 - `src/ava/permissions/`
 - `src/ava/tui/runtime.h`
 - `src/ava/tui/composer.h`

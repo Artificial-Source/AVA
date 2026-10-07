@@ -6,6 +6,7 @@
 #include "ava/app/onboarding.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime_credentials.h"
+#include "ava/app/tui/interactive_tui_internal.h"
 #include "ava/session/compaction.h"
 #include "ava/provider/catalog.h"
 #include "ava/provider/registry.h"
