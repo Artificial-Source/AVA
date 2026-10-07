@@ -47,6 +47,7 @@ add_library(ava_tui
   "text_wrap.cpp"
   "tool_card_task_job.cpp"
   "tool_cards.cpp"
+  "TuiFrontEnd.cpp"
 )
 
 target_link_libraries(ava_tui

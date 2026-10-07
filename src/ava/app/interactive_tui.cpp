@@ -18,6 +18,7 @@
 #include "ava/app/session_user_turns.h"
 #include "ava/app/startup_overview.h"
 #include "ava/app/subagent_workspace.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/theme.h"
@@ -388,7 +389,8 @@ int run_tui(InteractiveState state)
   auto initial_presentation = session_presentation();
   auto const [initial_show_images, initial_image_width_cells, initial_cursor] = copy_effective_display_presentation();
   auto initial_startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
-  auto result = ava::tui::run_interactive_composer(ava::tui::TuiRuntimeOptions{
+  ava::tui::TuiFrontEnd frontend;
+  auto result = frontend.run(ava::tui::TuiRuntimeOptions{
       .mode = std::move(initial_presentation.mode),
       .provider = std::move(initial_presentation.provider),
       .model = std::move(initial_presentation.model),
