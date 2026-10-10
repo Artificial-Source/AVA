@@ -31,8 +31,8 @@ using DataList = utils::Vector<Data const*, DataListIndex, core::Application::Ve
 class Data
 {
  private:
-  FrontEnd* const frontend_;            // The frontend that this object was registered with, or nullptr if it wasn't registered (yet).
-  DataListIndex const index_;           // The handle returned upon registration with FrontEnd::register_data (or `undefined` if not registered).
+  FrontEnd* frontend_;          // The frontend that this object was registered with, or nullptr if it wasn't registered (yet).
+  DataListIndex index_;         // The handle returned upon registration with FrontEnd::register_data (or `undefined` if not registered).
 
  protected:
   // Construct a Data object that is not registered with any FrontEnd.
@@ -52,6 +52,9 @@ class Data
   void notify();
 
  public:
+  // Called from FrontEnd::register_frontend_data.
+  void register_with_front_end(utils::Badge<FrontEnd>, FrontEnd* frontend);
+
 #if CW_DEBUG
   // Returns true if this object is registered with a FrontEnd.
   bool is_registered() const { return frontend_; }

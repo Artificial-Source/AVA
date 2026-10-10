@@ -8,6 +8,14 @@ Data::Data(FrontEnd* frontend) : frontend_(frontend), index_(frontend->register_
 {
 }
 
+void Data::register_with_front_end(utils::Badge<FrontEnd>, FrontEnd* frontend)
+{
+  // Only call this on Data objects that were created using the default constructor and only call this function once.
+  ASSERT(!frontend_);
+  frontend_ = frontend;
+  index_ = frontend->register_data(this);
+}
+
 void Data::notify()
 {
   if (frontend_)

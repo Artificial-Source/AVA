@@ -14,11 +14,10 @@ int TuiFrontEnd::run(TuiRuntimeOptions options)
 }
 
 // Queue the notification and wake the frontend so it fetches the latest snapshot and updates the UI on the main thread.
-void TuiFrontEnd::data_changed(app::frontend::DataListIndex)
+void TuiFrontEnd::data_changed(app::frontend::DataListIndex index)
 {
   // FIXME: Data notification delivery is not implemented yet.
-  // Reject notifications explicitly rather than silently losing a backend update.
-  throw std::logic_error("TuiFrontEnd data notifications are not wired; do not register frontend Data objects yet");
+  DoutEntering(dc::warning, "TuiFrontEnd::data_changed(" << index << ")");
 }
 
 } // namespace ava::tui

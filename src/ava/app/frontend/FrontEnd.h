@@ -2,6 +2,7 @@
 
 #include "Data.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/app/runtime/session_ts.h"
 
 #include <string>
 
@@ -24,6 +25,9 @@ class FrontEnd
 
   // Register a Data (derived) object.
   DataListIndex register_data(Data* data);
+
+  // Register all Data (derived) objects.
+  void register_frontend_data(runtime::session_ts& unlocked_session);
 
   // One of the registered Data objects was changed. Called by the backend.
   virtual void data_changed(DataListIndex index) = 0;

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "FrontEnd.h"
+#include "ava/app/runtime/Session.h"
 
 namespace ava::app::frontend {
 
@@ -8,6 +9,14 @@ DataListIndex FrontEnd::register_data(Data* data)
   DataListIndex index = data_list_.iend();
   data_list_.push_back(data);
   return index;
+}
+
+void FrontEnd::register_frontend_data(runtime::session_ts& unlocked_session)
+{
+  DoutEntering(dc::notice, "FrontEnd::register_frontend_data()");
+
+  runtime::session_ts::wat session_w(unlocked_session);
+  session_w->model_selection().register_with_front_end({}, this);
 }
 
 void FrontEnd::on_submit(std::u8string const& UNUSED_ARG(input))
