@@ -113,7 +113,9 @@ ReloadReportRow reload_model_settings(runtime::session_ts& unlocked_session)
   std::string active_model;
   {
     SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-    session_w->model_selection().scoped_model_cycle = registry->scoped_model_cycle;
+    session_w->model_selection().change([registry](auto& model_selection){
+      model_selection.scoped_model_cycle = registry->scoped_model_cycle;
+    });
     scoped_cycle = session_w->scoped_model_cycle() ? "configured" : "not configured";
     active_model = session_w->model().provider_id + "/" + session_w->model().model_id + " (unchanged)";
   }

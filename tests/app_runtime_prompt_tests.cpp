@@ -1593,7 +1593,9 @@ void test_app_run_prompt_observation_shares_context_across_compaction_and_retry(
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 100;
+  session_w->model_selection().change([](auto& model_selection) {
+    model_selection.model.context_window_tokens = 100;
+  });
   auto seeded = session_w->append_owned({.id = "observed-old-context",
                                          .parent_id = "",
                                          .type = ava::session::EntryType::UserMessage,

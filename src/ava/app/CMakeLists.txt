@@ -119,6 +119,9 @@ target_sources(ava_app
     "runtime/FreshnessSourceMetadata.cpp"
     "runtime/markdown_files.cpp"
     "runtime/command_names.cpp"
+    "frontend/Data.cxx"
+    "frontend/FeedbackKey.cxx"
+    "frontend/FrontEnd.cxx"
 )
 
 target_include_directories(ava_app

@@ -532,11 +532,13 @@ void store_model_scope(ava::app::runtime::session_ts& unlocked_session, std::vec
   auto normalized = normalized_model_scope(candidate, all_values);
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
   if (reset_full_scope_to_all && normalized.size() == all_values.size())
-  {
-    session_w->model_selection().scoped_model_cycle = std::nullopt;
-    return;
-  }
-  session_w->model_selection().scoped_model_cycle = std::move(normalized);
+    session_w->model_selection().change([](auto& model_selection){
+      model_selection.scoped_model_cycle = std::nullopt;
+    });
+  else
+    session_w->model_selection().change([&normalized](auto& model_selection){
+      model_selection.scoped_model_cycle = std::move(normalized);
+    });
 }
 
 std::vector<std::string> active_model_scope_or_all(ava::app::runtime::session_ts const& unlocked_session, std::vector<std::string> const& all_values)
@@ -590,7 +592,10 @@ ava::core::Result<ava::tui::SelectListView> toggle_scoped_model(ava::app::runtim
   auto const scoped_cycle = runtime::session_ts::rat(unlocked_session)->scoped_model_cycle();
   if (!scoped_cycle)
   {
-    runtime::session_ts::wat(unlocked_session)->model_selection().scoped_model_cycle = std::vector<std::string>{std::string(value)};
+    std::vector<std::string> v{std::string(value)};
+    runtime::session_ts::wat(unlocked_session)->model_selection().change([&v](auto& model_selection){
+      model_selection.scoped_model_cycle = std::move(v);
+    });
     return refreshed_scoped_model_selector(unlocked_session, previous);
   }
   auto next = normalized_model_scope(*scoped_cycle, all_values);
@@ -687,7 +692,9 @@ ava::core::Result<std::string> save_scoped_model_cycle(ava::app::runtime::sessio
   {
     auto const all_values = registered_model_cycle_values(unlocked_session);
     scope_to_save = normalized_model_scope(*scope_to_save, all_values);
-    runtime::session_ts::wat(unlocked_session)->model_selection().scoped_model_cycle = scope_to_save;
+    runtime::session_ts::wat(unlocked_session)->model_selection().change([&scope_to_save](auto& model_selection){
+      model_selection.scoped_model_cycle = scope_to_save;
+    });
   }
 
   auto const paths = runtime::session_ts::rat(unlocked_session)->paths();

@@ -620,7 +620,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                                             .freshness_sources = std::move(prompt_state->freshness_sources),
                                             .system_prompt = std::move(prompt_state->system_prompt),
                                             .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
-  ModelSelection model_selection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle};
+  ModelSelection_ts model_selection(ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try
@@ -707,7 +707,8 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                      .provider_catalog = provider_catalog()};
   return Session_aggregate_base{.invocation_inputs_ = std::move(detached_inputs),
                                 .resolved_prompt_state_ = resolve_prompt_state(),
-                                .model_selection_ = model_selection(),
+                                // Copy the model selection without inheriting the source object's frontend registration.
+                                .model_selection_ = ModelSelection_ts(*ModelSelection_ts::crat(this->model_selection_)),
                                 .trust_state_ = trust_state(),
                                 .resources_ = std::move(session_resources),
                                 .store = store,
@@ -1048,14 +1049,18 @@ ava::core::Result<bool> Session::switch_model(ava::config::ModelInfo model)
   if (!appended)
     return std::unexpected(std::move(appended.error()));
 
-  model_selection().model = std::move(model);
   resolve_prompt_state() = ResolvedPromptState{.mode = prompt_state->mode,
                                                .base_prompt = std::move(prompt_state->base_prompt),
                                                .context_sources = std::move(prompt_state->context_sources),
                                                .freshness_sources = std::move(prompt_state->freshness_sources),
                                                .system_prompt = std::move(prompt_state->system_prompt),
                                                .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
-  model_selection().reasoning = std::nullopt;
+
+  model_selection().change([&model](auto& model_selection){
+    model_selection.model = std::move(model);
+    model_selection.reasoning = std::nullopt;
+  });
+
   return true;
 }
 
@@ -1092,7 +1097,11 @@ ava::core::Result<bool> Session::set_reasoning(std::optional<ReasoningSelection>
   auto appended = append_owned(make_reasoning_change_entry(model(), selection));
   if (!appended)
     return std::unexpected(std::move(appended.error()));
-  model_selection().reasoning = std::move(selection);
+
+  model_selection().change([&selection](auto& model_selection){
+    model_selection.reasoning = std::move(selection);
+  });
+
   return true;
 }
 

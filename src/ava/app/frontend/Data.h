@@ -14,7 +14,7 @@ struct DataListCategory
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 using DataListIndex = utils::VectorIndex<DataListCategory>;
-using DataList = utils::Vector<Data*, DataListIndex, core::Application::Vec8Alloc::rebind<Data*>::other>;
+using DataList = utils::Vector<Data const*, DataListIndex, core::Application::Vec8Alloc::rebind<Data const*>::other>;
 
 // class Data
 //
@@ -31,11 +31,20 @@ using DataList = utils::Vector<Data*, DataListIndex, core::Application::Vec8Allo
 class Data
 {
  private:
-  FrontEnd* const frontend_;            // The frontend that this object was registered with.
-  DataListIndex const index_;           // The handle returned upon registration with FrontEnd::register_data.
+  FrontEnd* const frontend_;            // The frontend that this object was registered with, or nullptr if it wasn't registered (yet).
+  DataListIndex const index_;           // The handle returned upon registration with FrontEnd::register_data (or `undefined` if not registered).
 
  protected:
+  // Construct a Data object that is not registered with any FrontEnd.
+  Data() : frontend_(nullptr) { }
+
+  // Construct a Data object in its final place and register it with `frontend`.
+  // Use the default constructor for unregistered Data objects (including for application modes that don't have a frontend).
   Data(FrontEnd* frontend);
+
+  // A Data object is not moveable, see comment above class UnlockedData.
+  Data(Data&& orig) = delete;
+  Data& operator=(Data&& orig) = delete;
 
   virtual ~Data() = default;
 
@@ -43,7 +52,13 @@ class Data
   void notify();
 
  public:
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#if CW_DEBUG
+  // Returns true if this object is registered with a FrontEnd.
+  bool is_registered() const { return frontend_; }
+#endif
+
+  // This class uses a custom print_on.
+  AVA_PRINT_ON_MEMBERS
 };
 
 } // namespace ava::app::frontend

@@ -10,7 +10,19 @@ Data::Data(FrontEnd* frontend) : frontend_(frontend), index_(frontend->register_
 
 void Data::notify()
 {
-  frontend_->data_changed(index_);
+  if (frontend_)
+    frontend_->data_changed(index_);
 }
+
+#ifdef CWDEBUG
+void Data::print_members(std::ostream& os, char const* prefix) const
+{
+  os << prefix;
+  if (!frontend_)
+    os << "<unregistered>";
+  else
+    os << "frontend:" << frontend_ << ", index:" << index_;
+}
+#endif
 
 } // namespace ava::app::frontend

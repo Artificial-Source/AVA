@@ -872,8 +872,10 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
     expect(anthropic_proxy.has_value(), "runtime reasoning test finds custom Anthropic-compatible model");
     if (anthropic_proxy)
     {
-      session_w->model_selection().model = *anthropic_proxy;
-      session_w->model_selection().reasoning.reset();
+      session_w->model_selection().change([&anthropic_proxy](auto& model_selection){
+        model_selection.model = *anthropic_proxy;
+        model_selection.reasoning.reset();
+      });
       CRITICAL_AREA_END_W(session);
       auto cycled = ava::app::cycle_runtime_reasoning(unlocked_session);
       CRITICAL_AREA_CONTINUE_W(session);

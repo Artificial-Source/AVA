@@ -10,6 +10,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/session_ts.h"
+#include "ava/app/runtime/UnlockedData.h"
 #include "ava/app/session_run_controller.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/agent/agent_config.h"
@@ -115,6 +116,8 @@ struct ModelSelection
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+using ModelSelection_ts = UnlockedData<ModelSelection>;
+
 // Trust state.
 //
 // The project trust decision loaded for this session. Mutated when the user
@@ -180,7 +183,7 @@ struct Session_aggregate_base
 {
   InvocationInputs invocation_inputs_;          // Do NOT use this variable name outside of this file!
   ResolvedPromptState resolved_prompt_state_;   // Do NOT use this variable name outside of this file!
-  ModelSelection model_selection_;              // Do NOT use this variable name outside of this file!
+  ModelSelection_ts model_selection_;           // Do NOT use this variable name outside of this file!
   TrustState trust_state_;                      // Do NOT use this variable name outside of this file!
   SessionResources resources_;                  // Do NOT use this variable name outside of this file!
 
@@ -300,8 +303,8 @@ class Session : protected Session_aggregate_base
   ResolvedPromptState& resolve_prompt_state() { return resolved_prompt_state_; }
   ResolvedPromptState const& resolve_prompt_state() const { return resolved_prompt_state_; }
 
-  ModelSelection& model_selection() { return model_selection_; }
-  ModelSelection const& model_selection() const { return model_selection_; }
+  ModelSelection_ts& model_selection() { return model_selection_; }
+  ModelSelection_ts const& model_selection() const { return model_selection_; }
 
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
@@ -332,9 +335,9 @@ class Session : protected Session_aggregate_base
   PromptOverrides const& prompt_overrides() const { return invocation_inputs_.prompt_overrides; }
 
   // Model selection.
-  ava::config::ModelInfo const& model() const { return model_selection_.model; }
-  std::optional<ReasoningSelection> const& reasoning() const { return model_selection_.reasoning; }
-  std::optional<std::vector<std::string>> const& scoped_model_cycle() const { return model_selection_.scoped_model_cycle; }
+  ava::config::ModelInfo const& model() const { return ModelSelection_ts::crat(model_selection_)->model; }
+  std::optional<ReasoningSelection> const& reasoning() const { return ModelSelection_ts::crat(model_selection_)->reasoning; }
+  std::optional<std::vector<std::string>> const& scoped_model_cycle() const { return ModelSelection_ts::crat(model_selection_)->scoped_model_cycle; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }

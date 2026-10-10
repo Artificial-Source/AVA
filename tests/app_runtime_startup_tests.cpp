@@ -304,7 +304,9 @@ void test_app_active_context_status_tracks_compaction_projection()
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 272'000;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 272'000;
+  });
   auto expected_status = [&](std::size_t active_tokens) {
     auto const system_prompt_tokens = ava::session::estimate_tokens(session_w->system_prompt());
     auto const total = active_tokens + system_prompt_tokens;
@@ -324,7 +326,9 @@ void test_app_active_context_status_tracks_compaction_projection()
              initial_status->find('%') != std::string::npos && !initial_status->starts_with('~'),
          "active context status uses compact count plus percent when the model window is known");
 
-  session_w->model_selection().model.context_window_tokens = std::nullopt;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = std::nullopt;
+  });
   CRITICAL_AREA_END_W(session);
   auto const unknown_status = ava::app::interactive_internal::active_context_status_for_session(unlocked_session);
   CRITICAL_AREA_CONTINUE_W(session);
@@ -335,7 +339,9 @@ void test_app_active_context_status_tracks_compaction_projection()
   expect(unknown_status && unknown_expected && *unknown_status == *unknown_expected && unknown_status->starts_with('~') &&
              unknown_status->find('%') == std::string::npos,
          "active context status falls back to tilde compact count when the model window is unknown");
-  session_w->model_selection().model.context_window_tokens = 272'000;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 272'000;
+  });
 
   auto const appended_user = session_w->append_target()->append(ava::session::SessionEntry{.id = "active-context-user",
                                                                                            .parent_id = "",

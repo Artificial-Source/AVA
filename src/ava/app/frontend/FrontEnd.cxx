@@ -10,7 +10,7 @@ DataListIndex FrontEnd::register_data(Data* data)
   return index;
 }
 
-void FrontEnd::on_submit(std::u8string const& input)
+void FrontEnd::on_submit(std::u8string const& UNUSED_ARG(input))
 {
 }
 
