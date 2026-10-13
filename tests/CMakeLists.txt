@@ -896,6 +896,12 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.command_output_viewport_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
+    NAME ava_tests.context_report_wait
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/context_report_wait_test.py)
+  set_tests_properties(ava_tests.context_report_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
     NAME ava_tests.terminal_lifecycle_cursor
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tui_terminal_lifecycle_cursor_test.py)

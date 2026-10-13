@@ -88,6 +88,37 @@ def _normalize_context_section(screen: str) -> str:
     return "".join(line.strip() for line in section.splitlines())
 
 
+def _wait_for_context_report(tmux_exe: object, session: str, source_pattern: str, label: str) -> str:
+    """Wait for a complete trusted source report at the restored 120x32 size."""
+
+    def report_ready(screen: str) -> bool:
+        # The 28-row command modal has its title at 2 and footer at 29. Both
+        # filtered reports fit its 26-row body, so require the fitting footer,
+        # not an unrelated close hint or a scrollable, incomplete viewport.
+        lines = screen.splitlines()
+        if (
+            len(lines) <= 29
+            or lines[2].strip() != "Command /context"
+            or lines[3].strip() != "Context freshness:"
+            or lines[29].strip() != "Enter/Esc close"
+        ):
+            return False
+        body = "\n".join(lines[3:29])
+        if re.search(rf"(?m)^[ \t]*{source_pattern}[ \t]+", body) is None:
+            return False
+        section = _normalize_context_section(body)
+        # Joining wrapped rows must not borrow diagnostics from the composer
+        # or a different source. These queries each return one freshness row.
+        return (
+            "project_trust=trusted project_resources=enabled" in section
+            and "context_sources=2system_prompt_sources=" in section
+            and section.count("loaded_bytes=") == 1
+            and re.search(r"loaded_bytes=\d+\s*status=current\s*current_bytes=\d+$", section) is not None
+        )
+
+    return wait_for_screen_state(tmux_exe, session, report_ready, f"{label} complete /context modal with source diagnostics")
+
+
 def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
     # Preserve the original precedence assertion without depending on the
     # theme-persistence scenario: NO_COLOR must override a stored light theme.
@@ -605,10 +636,10 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
     send_literal(tmux_exe, session, "/context trust-smoke ")
     wait_for(tmux_exe, session, r"│  /context trust-smoke", "trusted context query draft")
     send_keys(tmux_exe, session, "Enter")
-    trusted_context = wait_for(
+    trusted_context = _wait_for_context_report(
         tmux_exe,
         session,
-        r"(?s)project_trust=trusted project_resources=enabled.*prompt_command\s+project\s+trust-smoke",
+        r"prompt_command\s+project\s+trust-smoke",
         "trusted project prompt command freshness",
     )
     trusted_context_compact = re.sub(r"\s+", "", trusted_context)
@@ -619,10 +650,10 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
     send_literal(tmux_exe, session, "/context APPEND_SYSTEM ")
     wait_for(tmux_exe, session, r"│  /context APPEND_SYSTEM", "trusted append-system context query draft")
     send_keys(tmux_exe, session, "Enter")
-    trusted_prompt_context = wait_for(
+    trusted_prompt_context = _wait_for_context_report(
         tmux_exe,
         session,
-        r"(?s)project_trust=trusted project_resources=enabled.*append_system_prompt\s+project\s+APPEND_SYSTEM\.md",
+        r"append_system_prompt\s+project\s+APPEND_SYSTEM\.md",
         "trusted project append-system freshness",
     )
     if "status=current" not in re.sub(r"\s+", "", trusted_prompt_context):
