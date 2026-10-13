@@ -19,7 +19,7 @@ namespace frontend {
 // A string as displayed on the UI.
 // This type is used to store (private) state in snapshot objects, in the form of a display string,
 // that are members of the final frontend class.
-struct State
+struct DisplayString
 {
   std::string display_;
   bool changed_{true};
@@ -37,7 +37,7 @@ struct State
 // Type returned by refresh_* functions.
 struct RefreshResult
 {
-  std::string const& display;           // Reference to corresponding `State::display_`.
+  std::string const& display;           // Reference to corresponding `DisplayString::display_`.
   bool const changed;                   // True if `display` was potentially changed since the last time.
 
   AVA_DEBUG_PRINT_MEMBERS_ON

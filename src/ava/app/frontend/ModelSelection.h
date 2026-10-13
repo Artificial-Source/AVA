@@ -12,19 +12,37 @@ namespace ava::app::frontend {
 class ModelSelection
 {
  private:
-  FrontEnd* frontend_;
-  config::ModelInfo model_snapshot_;
+  FrontEnd const* frontend_;
+  config::ModelInfo model_snapshot_;                                                    // Copy of the canonical ava::app::runtime::ModelSelection::model.
+  std::optional<runtime::ReasoningSelection> reasoning_snapshot_ = std::nullopt;        // Copy of the canonical ava::app::runtime::ModelSelection::reasoning.
   DataListIndex index_;
   std::atomic_bool dirty_;
 
   // Cached strings for immediate display.
-  State model_;
-  State provider_;
+  DisplayString model_;
+  DisplayString provider_;
+  DisplayString reasoning_;
 
  private:
   static std::string model_display_str(ava::config::ModelInfo const& model_info)
   {
     return model_info.display_name.empty() ? ava::config::model_display_label(model_info.model_id) : model_info.display_name;
+  }
+
+  // Project model capabilities and the optional reasoning selection to the level shown by frontends.
+  // Return no level when reasoning is unavailable or no non-empty level is selected.
+  // Callers reading shared state must keep both arguments protected by the same model-selection lock.
+  static std::string reasoning_display_str(std::optional<runtime::ReasoningSelection> const& reasoning)
+  {
+    if (reasoning)
+    {
+      // Don't set the optional to a runtime::ReasoningSelection with an empty `level`.
+      ASSERT(!reasoning->level.empty());
+      return reasoning->level;
+    }
+
+    static std::string const unknown_reasoning("unknown");
+    return unknown_reasoning;
   }
 
   void refresh()
@@ -36,15 +54,28 @@ class ModelSelection
     runtime::ModelSelection_ts const* unlocked_model_selection = static_cast<runtime::ModelSelection_ts const*>(data);
     runtime::ModelSelection_ts::crat model_selection_r{*unlocked_model_selection};
 
-    model_.changed_ = model_display_str(model_snapshot_) != model_display_str(model_selection_r->model);
-    provider_.changed_ = model_snapshot_.provider_id != model_selection_r->model.provider_id;
+    auto const old_model = model_display_str(model_snapshot_);
+    auto const new_model = model_display_str(model_selection_r->model);
+    model_.changed_ = model_.changed_ || old_model != new_model;
 
-    // Refresh the whole ModelInfo.
+    auto const& old_provider = model_snapshot_.provider_id;
+    auto const& new_provider = model_selection_r->model.provider_id;
+    provider_.changed_ = provider_.changed_ || old_provider != new_provider;
+
+    auto const& old_reasoning = reasoning_display_str(reasoning_snapshot_);
+    // Don't set the optional `reasoning` if the model doesn't support more than one reasoning level.
+    ASSERT(!model_selection_r->reasoning ||
+           (model_selection_r->model.supports_reasoning.value_or(false) && ava::config::supported_reasoning_levels(model_selection_r->model).size() > 1));
+    auto const& new_reasoning = reasoning_display_str(model_selection_r->reasoning);
+    reasoning_.changed_ = reasoning_.changed_ || old_reasoning != new_reasoning;
+
+    // Refresh all snapshots.
     model_snapshot_ = model_selection_r->model;
+    reasoning_snapshot_ = model_selection_r->reasoning;
   }
 
  public:
-  ModelSelection(FrontEnd* frontend) : frontend_(frontend) { }
+  ModelSelection(FrontEnd const* frontend) : frontend_(frontend) { }
 
   void initialize(runtime::ModelSelection_ts const* unlocked_model_selection)
   {
@@ -57,7 +88,7 @@ class ModelSelection
   void dirty() { dirty_ = true; }
 
   // Refresh our snapshot of `model_` if necessary. `changed` is set to true iff re-display is necessary.
-  RefreshResult refresh_model_display()
+  RefreshResult refresh_model()
   {
     // Call initialize first.
     ASSERT(!index_.undefined());
@@ -66,7 +97,7 @@ class ModelSelection
     // if dirty_ is set again inbetween the test and the clear.
     if (dirty_.exchange(false))
       refresh();
-    bool model_changed = model_changed = model_.clear_changed();
+    bool model_changed = model_.clear_changed();
     if (model_changed)
       model_.display_ = model_display_str(model_snapshot_);
     return {model_.display_, model_changed};
@@ -81,6 +112,20 @@ class ModelSelection
     if (provider_changed)
       provider_.display_ = model_snapshot_.provider_id;
     return {provider_.display_, provider_changed};
+  }
+
+  // Obtain the current reasoning display on the frontend thread after initialize has connected this object to registered data.
+  //
+  // Returns the cached display and whether it needs redisplay, consuming only reasoning's pending change flag.
+  // An empty display means no visible reasoning selection.
+  RefreshResult refresh_reasoning()
+  {
+    if (dirty_.exchange(false))
+      refresh();
+    bool reasoning_changed = reasoning_.clear_changed();
+    if (reasoning_changed)
+      reasoning_.display_ = reasoning_display_str(reasoning_snapshot_);
+    return {reasoning_.display_, reasoning_changed};
   }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

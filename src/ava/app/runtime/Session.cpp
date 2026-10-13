@@ -1087,12 +1087,23 @@ ava::core::Result<bool> Session::set_reasoning(std::optional<ReasoningSelection>
   {
     selection->level = core::trim(selection->level);
     selection->display = core::trim(selection->display);
-    auto resolved = resolve_runtime_reasoning_selection(model_selection_r()->model, std::move(*selection));
-    if (!resolved)
+    if (selection->level.empty())
     {
-      return std::unexpected(std::move(resolved.error()));
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "reasoning level is required"));
     }
-    selection = std::move(*resolved);
+    if (!has_reasoning_choice(model_selection_r()->model))
+    {
+      selection.reset();
+    }
+    else
+    {
+      auto resolved = resolve_runtime_reasoning_selection(model_selection_r()->model, std::move(*selection));
+      if (!resolved)
+      {
+        return std::unexpected(std::move(resolved.error()));
+      }
+      selection = std::move(*resolved);
+    }
   }
   if (same_reasoning_selection(model_selection_r()->reasoning, selection))
     return false;

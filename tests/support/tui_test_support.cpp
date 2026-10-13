@@ -3,9 +3,11 @@
 #include "tests/support/tui_test_support.h"
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime_reasoning.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/config/model_config.h"
 #include "ava/core/Application.h"
+#include "ava/core/string_utils.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -45,9 +47,20 @@ void select_frontend_test_model(ava::app::runtime::session_ts& session, TuiTestM
   model.model_id = requested_model.model_id;
   model.display_name = requested_model.display_name;
   model.display_name_is_configured = true;
+  if (requested_model.supports_reasoning)
+    model.supports_reasoning = requested_model.supports_reasoning;
+  if (requested_model.reasoning_levels)
+    model.reasoning_levels = *requested_model.reasoning_levels;
+  if (requested_model.reasoning_level_mappings)
+    model.reasoning_level_mappings = *requested_model.reasoning_level_mappings;
 
   ava::app::runtime::session_ts::wat session_w(session);
-  session_w->model_selection().change([&](ava::app::runtime::ModelSelection& selection) { selection.model = std::move(model); });
+  session_w->model_selection().change([&](ava::app::runtime::ModelSelection& selection) {
+    selection.model = std::move(model);
+    if (selection.reasoning && (!ava::app::runtime::has_reasoning_choice(selection.model) ||
+                                !ava::app::runtime::resolve_runtime_reasoning_selection(selection.model, *selection.reasoning)))
+      selection.reasoning.reset();
+  });
 }
 
 } // namespace
@@ -82,8 +95,52 @@ ava::tui::TuiFrontEnd* TuiFrontEndFixture::frontend() noexcept
 std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata()
 {
   auto provider = impl_->frontend.model_selection().refresh_provider();
-  auto model = impl_->frontend.model_selection().refresh_model_display();
+  auto model = impl_->frontend.model_selection().refresh_model();
   return {provider.display, model.display};
+}
+
+void TuiFrontEndFixture::set_model(TuiTestModel model)
+{
+  select_frontend_test_model(impl_->session, model);
+}
+
+void TuiFrontEndFixture::set_reasoning(std::optional<std::string> level)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->model_selection().change([level = std::move(level)](ava::app::runtime::ModelSelection& selection) mutable {
+    if (level)
+    {
+      *level = ava::core::trim(*level);
+      if (level->empty())
+        throw std::invalid_argument("reasoning level is required");
+      if (!ava::app::runtime::has_reasoning_choice(selection.model))
+      {
+        selection.reasoning.reset();
+        return;
+      }
+      auto resolved = ava::app::runtime::resolve_runtime_reasoning_selection(selection.model,
+                                                                             ava::app::runtime::ReasoningSelection{.level = std::move(*level), .display = {}});
+      if (!resolved)
+        throw std::invalid_argument(resolved.error().format());
+      selection.reasoning = std::move(*resolved);
+    }
+    else
+      selection.reasoning.reset();
+  });
+}
+
+void TuiFrontEndFixture::set_reasoning_capabilities(std::optional<bool> supports_reasoning, std::vector<std::string> reasoning_levels)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->model_selection().change(
+      [supports_reasoning, reasoning_levels = std::move(reasoning_levels)](ava::app::runtime::ModelSelection& selection) mutable {
+        selection.model.supports_reasoning = supports_reasoning;
+        selection.model.reasoning_levels = std::move(reasoning_levels);
+        selection.model.reasoning_level_mappings.clear();
+        if (selection.reasoning && (!ava::app::runtime::has_reasoning_choice(selection.model) ||
+                                    !ava::app::runtime::resolve_runtime_reasoning_selection(selection.model, *selection.reasoning)))
+          selection.reasoning.reset();
+      });
 }
 
 ScopedTerminalCapabilityProfile::ScopedTerminalCapabilityProfile(std::string term_program_value)

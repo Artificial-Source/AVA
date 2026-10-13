@@ -249,10 +249,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
 
   auto refresh_token_status = [&]() { presentation_state.refresh_token_status(options); };
   auto refresh_active_context_status = [&]() { presentation_state.refresh_active_context_status(options); };
-  auto refresh_reasoning_status = [&]() { presentation_state.refresh_reasoning_status(options); };
   refresh_token_status();
   refresh_active_context_status();
-  refresh_reasoning_status();
 
   bool terminal_write_failed = false;
   bool terminal_signal_received = false;

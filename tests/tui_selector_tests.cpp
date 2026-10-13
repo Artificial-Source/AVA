@@ -6,6 +6,7 @@
 #include "ava/app/tui/command_palette_views.h"
 #include "ava/app/tui/reasoning_selector.h"
 #include "ava/app/tui/subagent_workspace.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,6 +36,130 @@
 void run_tui_selector_tests()
 {
   tui_test_support::TuiFrontEndFixture frontend;
+  {
+    tui_test_support::TuiFrontEndFixture refresh_frontend({.provider_id = "openai",
+                                                           .model_id = "gpt-5.5",
+                                                           .display_name = "Initial",
+                                                           .supports_reasoning = true,
+                                                           .reasoning_levels = std::vector<std::string>{"low", "high"}});
+    refresh_frontend.set_reasoning("low");
+    auto initial_model = refresh_frontend.frontend()->model_selection().refresh_model();
+    auto initial_provider = refresh_frontend.frontend()->model_selection().refresh_provider();
+    auto initial_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(initial_model.changed && initial_provider.changed && initial_reasoning.changed && initial_reasoning.display == "low",
+           "frontend model-selection projections all report their initial state even when model refresh consumes the shared dirty flag first");
+
+    refresh_frontend.set_model({.provider_id = "anthropic",
+                                .model_id = "claude-sonnet-4-5",
+                                .display_name = "Next",
+                                .supports_reasoning = true,
+                                .reasoning_levels = std::vector<std::string>{"low", "high"}});
+    refresh_frontend.set_reasoning("high");
+    auto changed_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto changed_provider = refresh_frontend.frontend()->model_selection().refresh_provider();
+    auto changed_model = refresh_frontend.frontend()->model_selection().refresh_model();
+    expect(changed_reasoning.changed && changed_reasoning.display == "high" && changed_provider.changed && changed_provider.display == "anthropic" &&
+               changed_model.changed && changed_model.display == "Next",
+           "reasoning-first refresh preserves pending model and provider changes after one shared canonical refresh");
+    expect(!refresh_frontend.frontend()->model_selection().refresh_model().changed &&
+               !refresh_frontend.frontend()->model_selection().refresh_provider().changed &&
+               !refresh_frontend.frontend()->model_selection().refresh_reasoning().changed,
+           "each frontend model-selection pending flag clears independently after delivery");
+
+    refresh_frontend.set_reasoning("low");
+    auto unchanged_provider = refresh_frontend.frontend()->model_selection().refresh_provider();
+    auto unchanged_model = refresh_frontend.frontend()->model_selection().refresh_model();
+    auto reasoning_only = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(!unchanged_provider.changed && !unchanged_model.changed && reasoning_only.changed && reasoning_only.display == "low",
+           "reasoning-only dirty updates do not spuriously change model or provider and survive their earlier refresh order");
+
+    refresh_frontend.set_reasoning(std::nullopt);
+    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_model());
+    auto cleared_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto default_settings = ava::tui::settings_select_list_view_for_section(refresh_frontend.frontend(), ava::tui::SettingsSection::ModelsAndReasoning,
+                                                                            ava::tui::ComposerSnapshot{}, ava::tui::default_key_bindings());
+    expect(cleared_reasoning.changed && cleared_reasoning.display == "unknown" && default_settings.items[1].description == "default",
+           "clearing canonical reasoning publishes an state \"unknown\" rendered as the Settings default");
+
+    refresh_frontend.set_reasoning("high");
+    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_reasoning());
+    refresh_frontend.set_reasoning_capabilities(false, {"off"});
+    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_provider());
+    auto suppressed_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(suppressed_reasoning.changed && suppressed_reasoning.display == "unknown",
+           "capability changes atomically clear a selection that would violate the canonical reasoning invariant");
+
+    refresh_frontend.set_model({.provider_id = "synthetic",
+                                .model_id = "mapped-reasoning",
+                                .display_name = "Mapped",
+                                .supports_reasoning = true,
+                                .reasoning_levels = std::vector<std::string>{},
+                                .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "high"}}});
+    refresh_frontend.set_reasoning("high");
+    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_model());
+    auto mapped_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(mapped_reasoning.changed && mapped_reasoning.display == "high",
+           "explicit reasoning mappings remain selectable when the model is capable and offers multiple supported levels");
+
+    refresh_frontend.set_model(
+        {.provider_id = "synthetic",
+         .model_id = "mapped-reasoning",
+         .display_name = "Mapped",
+         .supports_reasoning = false,
+         .reasoning_levels = std::vector<std::string>{},
+         .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "provider-high"}}});
+    refresh_frontend.set_reasoning("high");
+    auto mapped_without_choice = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(mapped_without_choice.changed && mapped_without_choice.display == "unknown",
+           "valid provider mappings normalize to absent when capability metadata does not expose a user choice");
+
+    refresh_frontend.set_model(
+        {.provider_id = "synthetic",
+         .model_id = "mapped-reasoning",
+         .display_name = "Mapped",
+         .supports_reasoning = true,
+         .reasoning_levels = std::vector<std::string>{},
+         .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "provider-high"}}});
+    auto rebuilt_capability = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(!rebuilt_capability.changed && rebuilt_capability.display == "unknown",
+           "rebuilding capable metadata does not restore a reasoning selection discarded by canonical normalization");
+
+    refresh_frontend.set_model({.provider_id = "synthetic",
+                                .model_id = "off-only-reasoning",
+                                .display_name = "Off only",
+                                .supports_reasoning = true,
+                                .reasoning_levels = std::vector<std::string>{"off"},
+                                .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{}});
+    refresh_frontend.set_reasoning("off");
+    auto singleton_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(!singleton_reasoning.changed && singleton_reasoning.display == "unknown",
+           "singleton supported-level metadata accepts its provider level while keeping canonical reasoning absent");
+
+    refresh_frontend.set_model(
+        {.provider_id = "synthetic",
+         .model_id = "mapped-reasoning",
+         .display_name = "Mapped",
+         .supports_reasoning = true,
+         .reasoning_levels = std::vector<std::string>{},
+         .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "provider-high"}}});
+    refresh_frontend.set_reasoning("high");
+    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_reasoning());
+    refresh_frontend.set_reasoning(std::nullopt);
+    auto null_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    bool rejected_empty = false;
+    try
+    {
+      refresh_frontend.set_reasoning("  ");
+    }
+    catch (std::invalid_argument const&)
+    {
+      rejected_empty = true;
+    }
+    auto after_rejected_empty = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    expect(null_reasoning.changed && null_reasoning.display == "unknown" && rejected_empty && !after_rejected_empty.changed &&
+               after_rejected_empty.display == "unknown",
+           "the frontend fixture rejects trim-empty selections without publishing invalid canonical state");
+  }
   expect(ava::tui::runtime_commands::session_switching_command("/clear") && ava::tui::runtime_commands::session_switching_command("  /clear Fresh session  ") &&
              !ava::tui::runtime_commands::session_switching_command("/clearance") &&
              !ava::tui::runtime_commands::session_switching_command("/clearance Fresh session"),
@@ -692,6 +818,8 @@ void run_tui_selector_tests()
   if (parsed_settings_key_bindings)
     settings_key_bindings = *parsed_settings_key_bindings;
 
+  frontend.set_reasoning("low");
+
   auto make_settings_snapshot = [](std::vector<ava::tui::ThemeOptionItem> custom_themes = {}) {
     return ava::tui::ComposerSnapshot{.mode = "build",
                                       //.provider = "openai",
@@ -700,7 +828,6 @@ void run_tui_selector_tests()
                                       .input = "",
                                       .status = "ready",
                                       .token_status = "1.3k (0.7%)",
-                                      .reasoning_status = "low",
                                       .transcript = {},
                                       .custom_themes = std::move(custom_themes),
                                       .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
@@ -711,7 +838,6 @@ void run_tui_selector_tests()
                                                                            .git_branch = "develop",
                                                                            .version = "0.32",
                                                                            .token_status = "1.3k (0.7%)",
-                                                                           .reasoning_status = "low",
                                                                            .context_source_count = 2,
                                                                            .session_path = "/tmp/ava/session_test.jsonl",
                                                                            .session_entry_count = 42},
@@ -739,6 +865,7 @@ void run_tui_selector_tests()
                                                                                   settings_snapshot, settings_key_bindings);
   auto const settings_tools = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::ToolsAndExtensions,
                                                                               settings_snapshot, settings_key_bindings);
+  frontend.set_reasoning(std::nullopt);
   auto labels = [](ava::tui::SelectListView const& view) {
     std::vector<std::string> result;
     for (auto const& item : view.items)
@@ -781,8 +908,9 @@ void run_tui_selector_tests()
 
   expect(settings_models.title == "Settings › Model" && labels(settings_models) == std::vector<std::string>({"Model", "Reasoning", "Cycle scope"}) &&
              settings_models.items[0].value == "settings:models.open" && settings_models.items[0].description == "openai/gpt-5.5" &&
-             settings_models.items[1].value == "settings:reasoning.open" && settings_models.items[2].value == "settings:models.scoped" &&
-             settings_input.title == "Settings › Input" && labels(settings_input) == std::vector<std::string>({"Keybindings", "Edit config", "Reload"}) &&
+             settings_models.items[1].value == "settings:reasoning.open" && settings_models.items[1].description == "low" &&
+             settings_models.items[2].value == "settings:models.scoped" && settings_input.title == "Settings › Input" &&
+             labels(settings_input) == std::vector<std::string>({"Keybindings", "Edit config", "Reload"}) &&
              settings_input.items[0].value == "settings:keybindings.open" && settings_input.items[1].value == "settings:keybindings.edit" &&
              settings_input.items[2].value == "settings:keybindings.reload",
          "model and input sections lead with actionable selectors and use concise rows");

@@ -265,7 +265,6 @@ struct SidebarSnapshot
   std::string git_branch = {};
   std::string version = {};
   std::optional<std::string> token_status = std::nullopt;
-  std::optional<std::string> reasoning_status = std::nullopt;
   std::optional<std::size_t> context_source_count = std::nullopt;
   std::string session_path = {};
   std::optional<std::size_t> session_entry_count = std::nullopt;
@@ -626,7 +625,6 @@ struct ComposerSnapshot
   std::size_t spinner_frame = 0;
   std::optional<std::string> token_status = std::nullopt;
   std::optional<std::string> active_context_status = std::nullopt;
-  std::optional<std::string> reasoning_status = std::nullopt;
   std::optional<std::size_t> context_source_count = std::nullopt;
   std::vector<TranscriptItem> transcript;
   std::size_t transcript_generation = 0;

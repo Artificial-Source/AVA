@@ -171,7 +171,7 @@ void append_input_text(std::string& line, ComposerSnapshot const& snapshot, std:
 
 std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width)
 {
-  auto model = frontend->model_selection().refresh_model_display();
+  auto model = frontend->model_selection().refresh_model();
   auto const model_label = detail::model_label(model.display);
   auto const active_context_status = snapshot.active_context_status;
 

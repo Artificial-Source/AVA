@@ -412,7 +412,6 @@ int run_tui(InteractiveState state)
       .key_bindings = key_bindings,
       .token_status_provider = [&unlocked_session]() { return token_status_for_session(unlocked_session); },
       .active_context_status_provider = [&unlocked_session]() { return active_context_status_for_session(unlocked_session); },
-      .reasoning_status_provider = [&unlocked_session]() { return ava::app::reasoning_status_for_session(unlocked_session); },
       .create_active_run_queues =
           [&unlocked_session](ava::event::EventEnvelopeSink event_sink) {
             auto jobs_binding = ava::app::capture_jobs_command_binding(unlocked_session);
