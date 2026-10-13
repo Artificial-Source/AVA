@@ -502,9 +502,6 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
 RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_value)
 {
   RuntimeActiveRunOutcome active_run_outcome{.break_loop = true};
-  auto& options = options_;
-  auto& renderer = renderer_;
-  auto& prompt_coordinator = prompt_coordinator_;
   auto& snapshot = presentation_state_.snapshot;
   auto& sidebar = presentation_state_.sidebar;
   auto& pending_image_attachments = presentation_state_.pending_image_attachments;
@@ -536,11 +533,9 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   auto clear_draft_for_interrupt = [&]() { return action_controller_.clear_draft_for_interrupt(); };
   auto apply_runtime_state_snapshot = [&](TuiRuntimeStateSnapshot runtime_state) {
     // Same shared overview sync path as the idle runtime loop.
-    return apply_runtime_state_snapshot_with_presentation_transition(options, presentation_state_, draft_state_, renderer_, transcript_search_,
+    return apply_runtime_state_snapshot_with_presentation_transition(options_, presentation_state_, draft_state_, renderer_, transcript_search_,
                                                                      subagent_workspace_, action_controller_.active_select_list(), std::move(runtime_state));
   };
-  auto refresh_token_status = [&]() { presentation_state_.refresh_token_status(options); };
-  auto refresh_active_context_status = [&]() { presentation_state_.refresh_active_context_status(options); };
 
   auto const is_command_submission = submitted_value.starts_with('/') || shell_helper_submission(submitted_value);
   if (is_command_submission && runtime_commands::session_switching_command(submitted_value) && !pending_image_attachments.empty())
@@ -576,9 +571,9 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     current_event_context.correlation_id = std::move(request_id);
   };
   std::string submit_request_id;
-  if (supports_active_queue && options.create_active_run_queues)
+  if (supports_active_queue && options_.create_active_run_queues)
   {
-    active_queues = options.create_active_run_queues(control_sink);
+    active_queues = options_.create_active_run_queues(control_sink);
     if (!active_queues->active_request_id.empty())
     {
       submit_request_id = active_queues->active_request_id;
@@ -630,16 +625,16 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   }
   auto result = TuiSubmitResult{};
   bool session_changed = false;
-  if (options.on_submit)
+  if (options_.on_submit)
   {
-    permission_resolver = prompt_coordinator.permission_resolver();
-    question_resolver = prompt_coordinator.question_resolver();
+    permission_resolver = prompt_coordinator_.permission_resolver();
+    question_resolver = prompt_coordinator_.question_resolver();
     auto submit_future = ava::core::make_async("tui_submit", [&]() {
       auto take_steering_messages = active_queues ? active_queues->take_steering_messages : std::function<ava::core::Result<std::vector<std::string>>()>{};
       auto skip_active_steering = active_queues ? active_queues->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{};
       auto take_next_follow_up = active_queues ? active_queues->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{};
       auto mark_follow_up_started = active_queues ? active_queues->mark_follow_up_started : std::function<ava::core::VoidResult(TuiQueuedFollowUp const&)>{};
-      return options.on_submit(submitted, TuiSubmitContext{.request_id = submit_request_id,
+      return options_.on_submit(submitted, TuiSubmitContext{.request_id = submit_request_id,
                                                            .permission_resolver = permission_resolver,
                                                            .question_resolver = question_resolver,
                                                            .event_sink = event_sink,
@@ -658,10 +653,10 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       render_failed = true;
       run_cancel_requested.store(true);
       plugin_ui_.cancel_active();
-      prompt_coordinator.fail_pending_requests();
+      prompt_coordinator_.fail_pending_requests();
     };
     auto service_pending_prompt = [&]() {
-      if (!prompt_coordinator.service_pending_request(cancel_requested, request_stop, [&]() {
+      if (!prompt_coordinator_.service_pending_request(cancel_requested, request_stop, [&]() {
             transcript_search_.close_before_prompt();
             // Permission/question authority must explicitly close overview so it cannot hide and reappear.
             close_startup_overview_presentation(presentation_state_.snapshot, action_controller_.active_select_list());
@@ -683,7 +678,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       auto const polled = plugin_ui_.poll(snapshot, plugin_host_modal_conflict());
       if (polled.deadline_expired && !request_stop())
         return false;
-      return (!geometry_changed && !polled.changed) || renderer.request_render();
+      return (!geometry_changed && !polled.changed) || renderer_.request_render();
     };
     auto dispatch_retained_input = [&](runtime_input::RuntimeInput const& input) {
       if (snapshot.plugin_ui_modal)
@@ -693,20 +688,20 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
         // modal can navigate or resolve; KEY_RESIZE always repaints afterward.
         auto const geometry_changed = input.event.key != terminal::Key::CtrlC && refresh_plugin_surface_fit();
         if (input.resize)
-          return renderer.render();
+          return renderer_.render();
         if (geometry_changed)
-          return renderer.request_render();
+          return renderer_.request_render();
         auto const plugin_result = plugin_ui_.handle_input(snapshot, input.event);
         if (plugin_result == TuiPluginUiInputResult::RequestStop)
           return request_stop();
         if (plugin_result == TuiPluginUiInputResult::Redraw)
-          return renderer.request_render();
+          return renderer_.request_render();
         if (plugin_result == TuiPluginUiInputResult::Handled)
           return true;
       }
       if (transcript_search_.is_open())
       {
-        auto const result = prompt_coordinator.dispatch_search_input_with_prompt_precedence(
+        auto const result = prompt_coordinator_.dispatch_search_input_with_prompt_precedence(
             [&]() { return handle_transcript_search_input(input).value_or(false); }, cancel_requested, request_stop,
             [&]() {
               transcript_search_.close_before_prompt();
@@ -787,7 +782,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       }
       auto active_input = poll_curses_input();
       auto const input_checked_at = std::chrono::steady_clock::now();
-      auto const pending_frame_due = renderer.has_pending_render() && renderer.time_until_pending_render() <= std::chrono::steady_clock::duration::zero();
+      auto const pending_frame_due = renderer_.has_pending_render() && renderer_.time_until_pending_render() <= std::chrono::steady_clock::duration::zero();
       auto const input_decision = detail::active_run_input_read_decision(active_input.has_value(), cadence.frame_due(input_checked_at) || pending_frame_due);
       if (input_decision == detail::ActiveRunInputReadDecision::DrainBufferedInput)
       {
@@ -803,9 +798,9 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       if (input_decision == detail::ActiveRunInputReadDecision::WaitForNextFrame)
       {
         auto wait_duration = cadence.wait_duration(input_checked_at);
-        if (renderer.has_pending_render())
+        if (renderer_.has_pending_render())
         {
-          wait_duration = std::min(wait_duration, std::chrono::ceil<std::chrono::milliseconds>(renderer.time_until_pending_render()));
+          wait_duration = std::min(wait_duration, std::chrono::ceil<std::chrono::milliseconds>(renderer_.time_until_pending_render()));
         }
         if (auto workspace_wait = subagent_workspace_.time_until_poll(input_checked_at))
           wait_duration = std::min(wait_duration, std::chrono::ceil<std::chrono::milliseconds>(*workspace_wait));
@@ -816,7 +811,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       auto const frame_now = std::chrono::steady_clock::now();
       auto const cadence_tick = cadence.advance(frame_now);
       auto const spinner_advanced = cadence_tick.elapsed_spinner_frames > 0;
-      if (subagent_workspace_.poll(frame_now) && !renderer.request_render())
+      if (subagent_workspace_.poll(frame_now) && !renderer_.request_render())
       {
         fail_active_run();
         break;
@@ -839,7 +834,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
         fail_active_run();
         break;
       }
-      if (spinner_advanced && !subagent_workspace_.active() && !renderer.request_render(FrameRenderKind::Footer))
+      if (spinner_advanced && !subagent_workspace_.active() && !renderer_.request_render(FrameRenderKind::Footer))
       {
         fail_active_run();
         break;
@@ -854,14 +849,14 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
         if (close_after_submit)
           break;
       }
-      auto const frame_was_pending = renderer.has_pending_render();
+      auto const frame_was_pending = renderer_.has_pending_render();
       static_cast<void>(refresh_plugin_surface_fit());
-      if (!renderer.flush_pending_render_if_due())
+      if (!renderer_.flush_pending_render_if_due())
       {
         fail_active_run();
         break;
       }
-      if (frame_was_pending && !renderer.has_pending_render())
+      if (frame_was_pending && !renderer_.has_pending_render())
         cadence.frame_painted(std::chrono::steady_clock::now());
     }
     // Clear and unblock the TUI-local presentation before joining the submit
@@ -922,12 +917,12 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
           record_tui_tool(snapshot, tool, TuiToolIndexOrigin::LocalCommand);
       }
     }
-    prompt_coordinator.set_audit_sink(nullptr);
+    prompt_coordinator_.set_audit_sink(nullptr);
     if (render_failed)
       return active_run_outcome;
   }
   plugin_ui_.finish_submission(snapshot);
-  prompt_coordinator.set_audit_sink(nullptr);
+  prompt_coordinator_.set_audit_sink(nullptr);
   if (active_run_outcome.terminal_signal_received)
     return active_run_outcome;
   auto const events_received = is_command_submission ? authorized_command_events_received(state) : event_queue.received_any();
@@ -1039,8 +1034,8 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     snapshot.context_source_count = result.context_source_count;
     sidebar.context_source_count = result.context_source_count;
   }
-  refresh_token_status();
-  refresh_active_context_status();
+  presentation_state_.refresh_token_status(options_);
+  presentation_state_.refresh_active_context_status(options_);
   if (!service_mermaid_presentation_() || !render())
   {
     active_run_outcome.terminal_write_failed = true;
