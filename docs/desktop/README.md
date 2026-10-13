@@ -1,5 +1,12 @@
 # AVA Desktop
 
+**Current mock revision 19:** [chat display presets](chat-display-presets.md) add
+Compact, Auto and Expanded in parent chat and Conversation behavior Settings.
+Auto folds uninspected finished detail; manual reading/selection remains authoritative.
+745 tests, 132 Chrome checks and the sole actual-source/actual-PNG Sol MAX gate
+passed. This remains browser-only/visit-local, not live backend wiring. All earlier
+revision summaries and acceptance bodies below are preserved dated history.
+
 **Current mock revision 18:** premium compact tool rows and stable supplied run
 rendering. Explicit Run preview is separate from local-only Send; partial text,
 output/diffs, disclosure choices, reading/selection, Latest, Stop/retry and scope

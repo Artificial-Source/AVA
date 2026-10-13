@@ -1,15 +1,16 @@
 import type { ChatMode, InspectorModule } from '../state/types';
+import type { ToolDisplay } from '../chat/toolDisplay';
 import { contextUsage, type ContextUsageView } from '../chat/contextUsage';
 
 // Visit-local browser preferences, never AVA configuration or execution policy.
 export type GeneralPreferences = Readonly<{ mode: ChatMode; projectId: string; titleFromFirstMessage: boolean; inspector: 'remember' | 'closed' | InspectorModule }>;
-export type ConversationPreferences = Readonly<{ expandTools: boolean; showCompletedOutput: boolean; wrapCode: boolean; wrapDiff: boolean; scrollAfterSend: boolean }>;
+export type ConversationPreferences = Readonly<{ toolDisplay: ToolDisplay; showCompletedOutput: boolean; wrapCode: boolean; wrapDiff: boolean; scrollAfterSend: boolean }>;
 export type NotificationEvent = 'completion' | 'input' | 'failure';
 export type PreviewTone = 'none' | 'soft' | 'chime';
 export type NotificationPreferences = Readonly<{ muted: boolean; backgroundOnly: boolean; volume: number; channels: Readonly<Record<NotificationEvent, Readonly<{ enabled: boolean; tone: PreviewTone }>>> }>;
 export type ContextPolicy = Readonly<{ autoCompact: boolean; triggerPercent: number; recentTurns: number; recentTokens: number }>;
 export const defaultGeneral: GeneralPreferences = { mode: 'build', projectId: 'current', titleFromFirstMessage: false, inspector: 'remember' };
-export const defaultConversation: ConversationPreferences = { expandTools: false, showCompletedOutput: true, wrapCode: false, wrapDiff: true, scrollAfterSend: true };
+export const defaultConversation: ConversationPreferences = { toolDisplay: 'compact', showCompletedOutput: true, wrapCode: false, wrapDiff: true, scrollAfterSend: true };
 export const defaultNotifications: NotificationPreferences = { muted: false, backgroundOnly: true, volume: 30, channels: { completion: { enabled: true, tone: 'soft' }, input: { enabled: true, tone: 'chime' }, failure: { enabled: true, tone: 'chime' } } };
 export const defaultContextPolicy: ContextPolicy = { autoCompact: true, triggerPercent: 80, recentTurns: 2, recentTokens: 20000 };
 export const notificationEvents: readonly { id: NotificationEvent; label: string; description: string }[] = [

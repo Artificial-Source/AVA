@@ -1,5 +1,13 @@
 # Normal-app refinement and provider marks
 
+## Revision 19 — selectable chat detail (current)
+
+[Compact, Auto and Expanded](chat-display-presets.md) now work directly above the
+normal parent transcript and in Settings. Auto folds untouched completed work but
+retains native reading/focus/selection; supplied status, drafts and run authority
+are unchanged. Main passed 745 tests / 132 Chrome checks and the sole actual-source/
+actual-PNG Sol MAX gate is clear. Earlier revision sections below are dated history.
+
 ## Revision 18 — normal chat tool/run refinement (current)
 
 The normal app now offers an explicit supplied Run preview, separate from local

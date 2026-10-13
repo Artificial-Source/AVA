@@ -26,11 +26,11 @@ describe('stable supplied turn and tool presentation', () => {
     fireEvent.click(row); const output = await screen.findByLabelText('Output: Read'); geometry(output, () => 800); output.scrollTop = 60; fireEvent.scroll(output);
     row.focus();
     message = { ...message, markdown: 'Partial response with more text', activity: message.activity!.map((record) => record.id === 'read' ? { ...record, output: { text: 'First line\nSecond line', truncated: false } } : record) };
-    view.rerender(<StrictMode><Conversation chat={chat(message)} preferences={{ ...defaultConversation, expandTools: true }} /></StrictMode>);
+    view.rerender(<StrictMode><Conversation chat={chat(message)} preferences={{ ...defaultConversation, toolDisplay: 'expanded' as const }} /></StrictMode>);
     expect(screen.getByRole('article', { name: 'AVA supplied run response' })).toBe(turn); expect(screen.getByRole('article', { name: 'Your example message' })).toBe(historical);
     expect(screen.getByRole('button', { name: /^Tool details/ })).toBe(group); expect(screen.getByRole('button', { name: /Read example.ts Working/ })).toBe(row);
     expect(screen.getByLabelText('Output: Read')).toBe(output); expect(output.scrollTop).toBe(60); expect(row).toHaveFocus(); expect(row).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(row); view.rerender(<StrictMode><Conversation chat={chat({ ...message, markdown: 'More' })} preferences={{ ...defaultConversation, expandTools: true }} /></StrictMode>);
+    fireEvent.click(row); view.rerender(<StrictMode><Conversation chat={chat({ ...message, markdown: 'More' })} preferences={{ ...defaultConversation, toolDisplay: 'expanded' as const }} /></StrictMode>);
     expect(row).toHaveAttribute('aria-expanded', 'false'); // Row choice beats ambient expand preference.
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(row).toHaveAttribute('aria-expanded', 'false');
   });

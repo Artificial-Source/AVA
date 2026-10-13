@@ -1,9 +1,12 @@
-.transcriptFrame { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
+.transcriptFrame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .transcript { overflow-anchor: none; flex: 1; min-width: 0; min-height: 0; padding: 30px var(--conversation-padding) 32px; overflow-y: auto; background: var(--canvas); scroll-padding: 25px; }
 .transcript:focus-visible { outline-offset: -4px; }
 .transcript[data-empty='true'] { display: grid; place-items: center; padding-block: 0; }
 .messages { width: min(100%, var(--reading-width)); margin: 0 auto; color: var(--body); font-size: var(--prose-size, 15px); line-height: var(--prose-spacing, 1.7); }
-.toolActions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 16px; margin: -8px 0 14px; }
+.toolActions { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; flex-shrink: 0; gap: 8px 16px; width: min(calc(100% - 2 * var(--conversation-padding)), var(--reading-width)); margin: 22px auto 0; }
+.toolActions + .transcript { padding-top: 14px; }
+.displayLabel { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; margin-right: auto; color: var(--muted); font-size: 11px; }
+.displaySelect { max-width: 100%; min-width: 0; padding: 5px 8px; border: 1px solid var(--edge-bright); border-radius: 5px; background: var(--canvas); color: var(--body); font: inherit; }
 .toolsToggle { display: block; margin: 0; padding: 5px 0; background: transparent; color: var(--muted); font-size: 11px; }
 .toolsToggle:hover { color: var(--text); }
 .userMessage { max-width: 630px; margin: 0 0 24px auto; }
@@ -37,6 +40,7 @@
 
 @media (max-width: 800px) {
   .transcript { padding-top: 24px; }
+  .toolActions { margin-top: 16px; }
   .userBubble { padding: 12px 15px; }
 }
 

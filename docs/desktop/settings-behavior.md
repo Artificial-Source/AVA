@@ -1,5 +1,15 @@
 # Settings behavior and local previews
 
+## Current Conversation display follow-up — revision 19
+
+[Chat display presets](chat-display-presets.md) replace Initial tool details with
+Compact, Auto and Expanded, shared with the parent-chat selector. Completed-tool
+output Show/Hide remains independent and reports derived Custom; presets restore
+Show. Scoped reset, wraps and other Settings ownership remain separate. Main passed
+745 tests / 132 Chrome checks; the sole actual-source/actual-PNG Sol MAX gate is
+clear. Earlier acceptance bodies below are preserved dated history; their original
+control labels are not the current revision 19 interface.
+
 ## Current browser-only scope — revision 15
 
 The normal app at **`http://127.0.0.1:5182/`** has five working Settings bodies:

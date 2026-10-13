@@ -1,5 +1,15 @@
 # AVA desktop UI preview
 
+## Revision 19: chat display presets (current)
+
+**Compact**, **Auto** and **Expanded** are available above the parent transcript
+and in Settings → Conversation behavior. Auto folds untouched finished tool detail
+while preserving inspection; Expanded keeps supplied details open by default.
+[Acceptance and reviewed captures](../../docs/desktop/chat-display-presets.md):
+745 tests, 132 Chrome checks, sole actual-source/actual-PNG Sol MAX gate clear.
+Preferences remain browser-only and visit-local. Earlier revision sections below
+are dated acceptance history, retained in full.
+
 ## Revision 18: stable chat tools and supplied runs (current)
 
 Compact tool rows now have individual disclosures, stable live output and supplied

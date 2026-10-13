@@ -1,5 +1,13 @@
 # Provider, resource and chat-component refinement
 
+## Current chat display follow-up — revision 19
+
+[Chat display presets](chat-display-presets.md) add Compact, Auto and Expanded
+without provider/resource/backend or asset changes. The shared parent/Settings
+control preserves supplied facts and manual inspection through incremental delivery.
+745 tests, 132 Chrome checks and one actual-source/actual-PNG Sol MAX gate passed.
+Earlier revision bodies and provenance below remain complete dated history.
+
 ## Current chat-component follow-up — revision 18
 
 [Supplied streaming acceptance](chat-run-refinement.md) refines normal-chat tools

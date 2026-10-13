@@ -1,5 +1,13 @@
 # Chat and run rendering refinement
 
+## Current display follow-up — revision 19
+
+[Chat display presets](chat-display-presets.md) add Compact, Auto and Expanded to
+the accepted supplied-run presentation. Auto folds untouched finished details,
+without overriding inspected output or altering supplied status. Main passed
+745 tests / 132 Chrome checks; the sole source/actual-PNG Sol MAX gate is clear.
+The full revision 18 acceptance below remains dated history with unchanged captures.
+
 ## Revision 18 — browser-only supplied streaming
 
 Accepted on **2026-10-12** after Astra MAX implementation, Main's independent

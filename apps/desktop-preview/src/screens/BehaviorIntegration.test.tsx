@@ -11,7 +11,7 @@ async function settings(section = 'General') {
   fireEvent.click(within(nav).getByRole('button', { name: section }));
 }
 function back() { fireEvent.click(screen.getByRole('button', { name: 'Back to chat' })); }
-function change(label: string, value: string) { fireEvent.change(screen.getByLabelText(label), { target: { value } }); }
+function change(label: string, value: string) { fireEvent.change(within(screen.queryByRole('region', { name: 'Settings page' }) ?? document.body).getByLabelText(label), { target: { value } }); }
 async function key(key: string, digit = false, target = screen.getByRole('region', { name: /^Conversation:/ })) {
   target.focus(); await act(async () => { fireEvent.keyDown(target, { key, code: digit ? `Digit${key}` : key === ',' ? 'Comma' : key === '.' ? 'Period' : '', ctrlKey: true, shiftKey: true }); });
 }
@@ -47,7 +47,7 @@ describe('Settings controls reaching actual normal app owners', () => {
   });
   it('applies tool/output and wrap preferences to the mounted transcript, preserves failures/diffs, and reaches independent Changes and child surfaces', async () => {
     render(<AppShell />); const transcript = screen.getByRole('region', { name: /^Conversation:/ });
-    await settings('Conversation behavior'); change('Initial tool details', 'expanded'); change('Completed-tool output', 'hide'); fireEvent.click(screen.getByLabelText('Wrap code lines')); fireEvent.click(screen.getByLabelText('Wrap diff lines')); back();
+    await settings('Conversation behavior'); change('Chat display', 'expanded'); change('Completed-tool output', 'hide'); fireEvent.click(screen.getByLabelText('Wrap code lines')); fireEvent.click(screen.getByLabelText('Wrap diff lines')); back();
     expect(screen.getByRole('region', { name: /^Conversation:/ })).toBe(transcript); expect(screen.getByRole('button', { name: /^Tool details/ })).toHaveAttribute('aria-expanded', 'true');
     expect(await screen.findAllByLabelText(/^Supplied diff:/)).toHaveLength(2); expect(screen.queryAllByLabelText(/^Output:/)).toHaveLength(0); expect(transcript).toHaveTextContent('Failed'); expect(transcript).toHaveTextContent('No failure cause supplied.');
     expect(screen.getByRole('main')).toHaveAttribute('data-code-wrap', 'true'); expect(screen.getByRole('main')).toHaveAttribute('data-diff-wrap', 'false');
@@ -74,9 +74,12 @@ describe('Settings controls reaching actual normal app owners', () => {
     await chooseMainModel(user, 'orion'); await settings('Context management'); expect(screen.getByRole('region', { name: 'Context policy projection' })).toHaveTextContent('Unknown eligibility'); expect(screen.getByLabelText('Recent token budget')).toHaveValue(0); back(); expect(meter).toHaveTextContent('Context unknown');
   });
   it('owns separate normal-app and ScreenReview behavior preferences and resets', async () => {
-    const app = render(<AppShell />); await settings(); change('New-chat mode', 'plan'); back(); const review = render(<ScreenReview />); const reviewRoot = screen.getByRole('main', { name: 'Screen review workspace' });
+    const app = render(<AppShell />); await settings(); change('New-chat mode', 'plan'); back(); change('Chat display', 'expanded'); const review = render(<ScreenReview />); const reviewRoot = screen.getByRole('main', { name: 'Screen review workspace' });
     expect(within(reviewRoot).getByLabelText('New-chat mode')).toHaveValue('build'); fireEvent.change(within(reviewRoot).getByLabelText('New-chat mode'), { target: { value: 'plan' } });
-    fireEvent.click(within(reviewRoot).getByRole('button', { name: 'Reset General' })); expect(within(reviewRoot).getByLabelText('New-chat mode')).toHaveValue('build'); review.unmount();
+    fireEvent.click(within(reviewRoot).getByRole('button', { name: 'Reset General' })); expect(within(reviewRoot).getByLabelText('New-chat mode')).toHaveValue('build');
+    fireEvent.click(within(reviewRoot).getByRole('button', { name: 'Conversation behavior' })); const reviewDisplay = within(reviewRoot).getByRole('combobox', { name: 'Chat display' }); expect(reviewDisplay).toHaveValue('compact');
+    fireEvent.change(reviewDisplay, { target: { value: 'auto' } }); fireEvent.click(within(reviewRoot).getByRole('button', { name: 'Reset Conversation' })); expect(reviewDisplay).toHaveValue('compact'); review.unmount();
+    expect(screen.getByRole('combobox', { name: 'Chat display' })).toHaveValue('expanded');
     fireEvent.click(screen.getByRole('button', { name: 'New chat' })); expect(screen.getByRole('combobox', { name: 'Mode for this chat' })).toHaveValue('plan'); app.unmount();
   });
 });

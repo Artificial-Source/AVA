@@ -1,5 +1,14 @@
 # Frontend component system and readiness comparison
 
+## Current chat display components — revision 19
+
+[Chat display acceptance](chat-display-presets.md) adds a pure lifecycle-aware detail
+policy and one shared native selector: Compact, Auto and Expanded. Guarded current
+parent preference ownership stays separate from tool/run authority; Auto protects
+only inspected rows, not passive scrolling. Main passed 745 tests / 132 Chrome checks;
+the sole source/actual-PNG Sol MAX gate is clear. Complete earlier bodies remain
+preserved below, not a claim of live integration or universal readiness.
+
 ## Current chat/run components — revision 18
 
 [Chat/run acceptance](chat-run-refinement.md) adds exact bounded supplied-event

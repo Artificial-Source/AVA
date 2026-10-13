@@ -1,5 +1,14 @@
 # React UI prototype
 
+## Revision 19 — chat display presets (current)
+
+[Chat display acceptance](chat-display-presets.md) adds Compact, Auto and Expanded
+with a shared native selector in parent chat and Conversation behavior Settings.
+Auto preserves inspected detail; fresh preset intent and manual row/group/all choices
+remain stable across supplied snapshots. Main passed 745 tests and 132 Chrome checks;
+the sole Sol MAX source/32-actual-PNG gate found no material findings. Earlier bodies
+below remain complete dated history; live backend/provider integration is separate.
+
 ## Revision 18 — stable chat tools and supplied runs (current)
 
 Quiet per-tool disclosures, retained output/diff nodes and independent reading-aware

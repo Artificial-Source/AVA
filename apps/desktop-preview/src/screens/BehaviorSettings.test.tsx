@@ -33,6 +33,43 @@ describe('five independent Settings bodies', () => {
     leaf('Shortcuts'); fireEvent.click(screen.getByLabelText('Enable app shortcuts')); leaf('Context management'); change('Compaction trigger percentage', '90');
     leaf('General'); fireEvent.click(screen.getByRole('button', { name: 'Reset all preferences…' })); expect(prefs()).toEqual(defaultPreferences);
   });
+  it('shows accurate display defaults and derived Custom, restores output on presets, and keeps no-op/reset/wrap ownership separate', () => {
+    const onPreferencesChange = vi.fn(); render(<Host initial="conversation" onPreferencesChange={onPreferencesChange} />);
+    const display = screen.getByRole('combobox', { name: 'Chat display' });
+    const sample = screen.getByRole('figure', { name: 'Live conversation preview' });
+    const openSamples = () => [...sample.querySelectorAll('details')].map((node) => node.open);
+    expect(display).toHaveValue('compact'); expect(openSamples()).toEqual([false, false, false]);
+    change('Chat display', 'compact'); expect(onPreferencesChange).not.toHaveBeenCalled();
+    change('Chat display', 'auto'); expect(openSamples()).toEqual([true, false, true]);
+    change('Chat display', 'expanded'); expect(openSamples()).toEqual([true, true, true]);
+    fireEvent.click(within(sample).getByText('Running tool · sample details')); expect(openSamples()).toEqual([false, true, true]);
+    change('Chat display', 'auto'); expect(openSamples()).toEqual([true, false, true]);
+    change('Chat display', 'expanded');
+    fireEvent.click(screen.getByLabelText('Wrap code lines')); fireEvent.click(screen.getByLabelText('Wrap diff lines')); change('Scroll after local send', 'keep');
+    change('Completed-tool output', 'hide'); expect(display).toHaveValue('custom'); expect(within(display).getByRole('option', { name: 'Custom · output hidden' })).toBeDisabled();
+    expect(prefs().conversation!.toolDisplay).toBe('expanded');
+    const count = onPreferencesChange.mock.calls.length; change('Chat display', 'custom'); expect(onPreferencesChange).toHaveBeenCalledTimes(count);
+    change('Chat display', 'expanded'); expect(display).toHaveValue('expanded'); expect(prefs().conversation).toEqual({ toolDisplay: 'expanded', showCompletedOutput: true, wrapCode: true, wrapDiff: false, scrollAfterSend: false });
+    change('Chat display', 'expanded'); expect(onPreferencesChange).toHaveBeenCalledTimes(count + 1);
+    change('Chat display', 'compact'); expect(openSamples()).toEqual([false, false, false]);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Conversation' })); expect(prefs().conversation).toEqual(defaultPreferences.conversation);
+    expect(screen.getByRole('button', { name: 'Reset Conversation' })).toBeDisabled();
+    change('Chat display', 'auto'); expect(display).toHaveValue('auto'); // No-op/reset never consumes the section gate.
+    expect(prefs().general).toEqual(defaultPreferences.general);
+  });
+  it.each(['hidden', 'inert', 'inactive', 'stale', 'departed'] as const)('rejects %s display controls without forwarding preferences', (invalid) => {
+    const onPreferencesChange = vi.fn(); const view = render(<Host initial="conversation" onPreferencesChange={onPreferencesChange} />);
+    const control = screen.getByRole('combobox', { name: 'Chat display' }) as HTMLSelectElement;
+    const propsKey = Object.keys(control).find((key) => key.startsWith('__reactProps'))!;
+    const callback = (control as unknown as Record<string, { onChange: (event: unknown) => void }>)[propsKey].onChange;
+    if (invalid === 'hidden') control.hidden = true;
+    else if (invalid === 'inert') control.setAttribute('inert', '');
+    else if (invalid === 'inactive') view.rerender(<Host initial="conversation" active={false} onPreferencesChange={onPreferencesChange} />);
+    else if (invalid === 'stale') fireEvent.click(screen.getByLabelText('Wrap code lines'));
+    else leaf('General');
+    const count = onPreferencesChange.mock.calls.length; control.value = 'expanded'; act(() => callback({ currentTarget: control }));
+    expect(onPreferencesChange).toHaveBeenCalledTimes(count);
+  });
   it('records real keys, cancels with focus, validates conflicts/reservations and resets/unassigns per row or all', async () => {
     const user = userEvent.setup(); render(<Host initial="shortcuts" />);
     let capture = record(); expect(capture).toHaveFocus();

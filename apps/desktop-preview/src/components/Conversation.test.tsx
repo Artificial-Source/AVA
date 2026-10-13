@@ -109,13 +109,14 @@ describe('conversation-wide tool expansion', () => {
 
 
 describe('conversation preferences and explicit overrides', () => {
-  it('changes only unoverridden groups, retains same-ID overrides and prunes before reintroduction', async () => {
+  it('reapplies a different preset, retains same-mode same-ID overrides and prunes before reintroduction', async () => {
     const chat = conversation(); const view = render(<Conversation chat={chat} preferences={defaultConversation} />);
     fireEvent.click(groupButtons()[0]); await screen.findByText('Output for first');
-    const expanded = { ...defaultConversation, expandTools: true };
+    const expanded = { ...defaultConversation, toolDisplay: 'expanded' as const };
     view.rerender(<Conversation chat={chat} preferences={expanded} />); expect(groupButtons().map((button) => button.getAttribute('aria-expanded'))).toEqual(['true', 'true']);
-    fireEvent.click(groupButtons()[1]); view.rerender(<Conversation chat={chat} preferences={defaultConversation} />); expect(groupButtons().map((button) => button.getAttribute('aria-expanded'))).toEqual(['true', 'false']);
-    chat.messages = [assistant('first', 'Same ID replacement'), assistant('second'), assistant('third')]; view.rerender(<Conversation chat={chat} preferences={expanded} />);
+    fireEvent.click(groupButtons()[1]); view.rerender(<Conversation chat={chat} preferences={defaultConversation} />); expect(groupButtons().map((button) => button.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+    view.rerender(<Conversation chat={chat} preferences={expanded} />); fireEvent.click(groupButtons()[1]);
+    chat.messages = [assistant('first', 'Same ID replacement'), assistant('second'), assistant('third')]; view.rerender(<Conversation chat={chat} preferences={{ ...expanded }} />);
     expect(groupButtons().map((button) => button.getAttribute('aria-expanded'))).toEqual(['true', 'false', 'true']);
     chat.messages = [assistant('first')]; view.rerender(<Conversation chat={chat} preferences={expanded} />);
     chat.messages = [assistant('first'), assistant('second')]; view.rerender(<Conversation chat={chat} preferences={expanded} />); expect(groupButtons()[1]).toHaveAttribute('aria-expanded', 'true');
@@ -133,7 +134,7 @@ describe('conversation preferences and explicit overrides', () => {
     const chat = createInitialState().chats[0];
     for (const message of chat.messages) if (message.role === 'assistant') message.activity = message.activity?.map((record) => ({ ...record, output: { text: record.state === 'failed' ? 'Supplied failure output' : 'Supplied completed output', truncated: false } }));
     const before = JSON.stringify(chat);
-    render(<Conversation chat={chat} preferences={{ ...defaultConversation, expandTools: true, showCompletedOutput: false }} />);
+    render(<Conversation chat={chat} preferences={{ ...defaultConversation, toolDisplay: 'expanded' as const, showCompletedOutput: false }} />);
     expect(await screen.findAllByLabelText(/^Supplied diff:/)).toHaveLength(2);
     expect(screen.getAllByLabelText(/^Output:/)).toHaveLength(1); expect(screen.getByRole('list', { name: 'Supplied tool activity' })).toHaveTextContent('Failed');
     expect(screen.getAllByRole('listitem')).toHaveLength(3); expect(JSON.stringify(chat)).toBe(before); expect(screen.getByLabelText('Thinking: High')).toBeVisible();

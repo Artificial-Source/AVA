@@ -7,7 +7,7 @@ const usage = previewContextUsage(createInitialState().chats[0]);
 describe('visit-local behavior defaults and pure policy projections', () => {
   it('preserves old chat behavior with explicit future-chat and notification defaults', () => {
     expect(defaultGeneral).toEqual({ mode: 'build', projectId: 'current', titleFromFirstMessage: false, inspector: 'remember' });
-    expect(defaultConversation).toEqual({ expandTools: false, showCompletedOutput: true, wrapCode: false, wrapDiff: true, scrollAfterSend: true });
+    expect(defaultConversation).toEqual({ toolDisplay: 'compact', showCompletedOutput: true, wrapCode: false, wrapDiff: true, scrollAfterSend: true });
     expect(defaultNotifications.muted).toBe(false);
   });
   it('separates eligibility and proposed retention from supplied accounting', () => {

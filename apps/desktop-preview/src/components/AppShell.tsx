@@ -17,6 +17,8 @@ import appearance from '../styles/appearance.module.css';
 import { AgentList } from './AgentList';
 import { Composer } from './Composer';
 import { Conversation } from './Conversation';
+import { defaultConversation } from '../screens/behaviorPreferences';
+import { isToolDisplay, type ToolDisplay } from '../chat/toolDisplay';
 import { ConversationIdentity } from './ConversationIdentity';
 import { Inspector } from './Inspector';
 import { InspectorRail } from './InspectorRail';
@@ -64,6 +66,7 @@ export function AppShell() {
   const changesButtonRef = useRef<HTMLButtonElement>(null);
   const contextButtonRef = useRef<HTMLButtonElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const parentChatRef = useRef<HTMLElement>(null);
   const focusTitleAfterCommit = useRef(false);
   const chat = state.chats.find((entry) => entry.id === state.activeChatId)!;
   const children = selectedParentChildren(state);
@@ -72,6 +75,7 @@ export function AppShell() {
   const inspectorModule = state.inspector ?? state.lastInspectorModule;
   const settingsOpen = screenRequest?.kind === 'settings';
   const runningPreview = state.suppliedRun?.chatId === chat.id && state.suppliedRun.state === 'streaming';
+  const displayOwner = latest.current;
 
   useLayoutEffect(() => {
     // Only explicit page/Inspect/Back intents request focus, after visibility commits.
@@ -171,6 +175,16 @@ export function AppShell() {
     }
   }
 
+  function changeDisplay(toolDisplay: ToolDisplay, control: HTMLSelectElement) {
+    const current = latest.current;
+    if (!mounted.current || current !== displayOwner || current.request || current.state !== state || current.preferences !== preferences || current.state.inspectedChildId || current.state.activeChatId !== chat.id || control !== parentChatRef.current?.querySelector('select[data-tool-display]') || !canFocus(control) || document.hidden || document.querySelector('dialog[open]') || !isToolDisplay(toolDisplay)) return;
+    const conversation = preferences.conversation ?? defaultConversation;
+    if (conversation.toolDisplay === toolDisplay && conversation.showCompletedOutput) return;
+    const next = { ...preferences, conversation: { ...conversation, toolDisplay, showCompletedOutput: true } };
+    latest.current.preferences = next;
+    setPreferences(next);
+  }
+
   function newChat() {
     sidebarDispatch({ type: 'newChat', model: defaultModel, ...latest.current.preferences.general });
   }
@@ -199,7 +213,7 @@ export function AppShell() {
       <p id="app-description" className="srOnly">Browser-only UI preview with invented chats, child conversations, models, context, activity, and changes. Nothing is saved. No backend or model is connected. Fixed examples are not live activity. Run preview explicitly plays supplied incremental text and tool snapshots in this browser; pausing affects only preview delivery.</p>
       <ProjectSidebar state={state} dispatch={sidebarDispatch} settingsActive={settingsOpen} settingsRef={settingsButtonRef} onOpenSettings={() => openScreen('settings')} onNewChat={newChat} />
       <div className={styles.workspace} hidden={settingsOpen} inert={settingsOpen} data-inspector={state.inspector ? 'open' : 'closed'}>
-        <section id="conversation-canvas" className={styles.chat} aria-labelledby="conversation-title">
+        <section ref={parentChatRef} id="conversation-canvas" className={styles.chat} aria-labelledby="conversation-title">
           <ConversationIdentity
             title={child ? child.title : chat.title}
             titleRef={titleRef}
@@ -212,7 +226,7 @@ export function AppShell() {
           />
           {child ? <ChildContentBoundary key={child.id}><Suspense fallback={<p className={styles.childNotice} role="status">Loading read-only child conversation…</p>}><ChildConversation child={child} /></Suspense></ChildContentBoundary> : (
             <>
-              <Conversation key={chat.id} chat={chat} preferences={preferences.conversation} active={!screenRequest} />
+              <Conversation key={chat.id} chat={chat} preferences={preferences.conversation} active={!screenRequest} onDisplayChange={changeDisplay} />
               <div className={previewStyles.controls}>
                 <button type="button" disabled={chat.status === 'working' || previewLoading} onClick={(event) => { if (canFocus(event.currentTarget)) void startPreview(); }}>{previewLoading ? 'Loading preview…' : state.suppliedRun?.chatId === chat.id && ['failed', 'canceled'].includes(state.suppliedRun.state) ? 'Retry preview' : 'Run preview'}</button>
                 {previewFeature ? <previewFeature.PreviewControls example={previewExample} running={runningPreview} paused={previewPaused}
