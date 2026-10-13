@@ -144,7 +144,8 @@ ava::core::Result<RuntimeProviderRunBundle> create_runtime_provider_run_bundle(r
       return std::unexpected(std::move(built.error()));
     catalog = std::move(*built);
   }
-  auto prepared = prepare_runtime_credentials(session_r->paths(), session_r->model().provider_id, std::move(options), *auth_transport, purpose, catalog);
+  auto prepared =
+      prepare_runtime_credentials(session_r->paths(), session_r->model_selection_r()->model.provider_id, std::move(options), *auth_transport, purpose, catalog);
   ScopeCleanup wipe_prepared([&]() noexcept {
     if (prepared)
       clear_runtime_credential_fields(*prepared);
@@ -152,7 +153,7 @@ ava::core::Result<RuntimeProviderRunBundle> create_runtime_provider_run_bundle(r
   if (!prepared)
     return std::unexpected(std::move(prepared.error()));
 
-  auto provider = catalog->create(session_r->model().provider_id);
+  auto provider = catalog->create(session_r->model_selection_r()->model.provider_id);
   if (!provider)
     return std::unexpected(std::move(provider.error()));
   CRITICAL_AREA_END_R(session);

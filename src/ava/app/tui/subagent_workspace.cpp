@@ -1,6 +1,6 @@
 #include "sys.h"
 #include "ava/app/command_format.h"
-#include "ava/app/subagent_workspace.h"
+#include "ava/app/tui/subagent_workspace.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -86,7 +86,8 @@ std::string short_hidden_ref(std::string_view id)
   }
   static constexpr char kHex[] = "0123456789abcdef";
   std::string ref = "@";
-  for (int shift = 28; shift >= 0; shift -= 4) ref.push_back(kHex[(hash >> shift) & 0xfU]);
+  for (int shift = 28; shift >= 0; shift -= 4)
+    ref.push_back(kHex[(hash >> shift) & 0xfU]);
   return ref;
 }
 
@@ -94,7 +95,8 @@ std::vector<std::string> short_hidden_refs(std::vector<std::string> const& ids)
 {
   std::vector<std::string> refs;
   refs.reserve(ids.size());
-  for (auto const& id : ids) refs.push_back(short_hidden_ref(id));
+  for (auto const& id : ids)
+    refs.push_back(short_hidden_ref(id));
   for (std::size_t index = 0; index < refs.size(); ++index)
   {
     std::size_t duplicate = 0;
@@ -156,7 +158,8 @@ ava::tui::SelectListView subagent_selector_view(std::vector<ava::agent::Subagent
 
   std::vector<std::string> ids;
   ids.reserve(snapshots.size());
-  for (auto const& snapshot : snapshots) ids.push_back(snapshot.job.identity.job_id);
+  for (auto const& snapshot : snapshots)
+    ids.push_back(snapshot.job.identity.job_id);
   auto const refs = short_hidden_refs(ids);
 
   view.items.reserve(snapshots.size());

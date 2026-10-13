@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/theme.h"
 #include "ava/config/xdg_paths.h"

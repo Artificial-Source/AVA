@@ -1,11 +1,92 @@
 #include "sys.h"
+#include "tests/support/app_runtime_support.h"
 #include "tests/support/tui_test_support.h"
+#include "ava/app/runtime/OpenContext.h"
+#include "ava/app/runtime/Session.h"
+#include "ava/tui/TuiFrontEnd.h"
+#include "ava/config/model_config.h"
 #include "ava/core/Application.h"
 
 #include <algorithm>
+#include <filesystem>
+#include <stdexcept>
 #include <utility>
 
 namespace tui_test_support {
+
+namespace {
+
+// Open an isolated offline, sessionless backend session beneath root for frontend rendering tests.
+// Throw on setup failure rather than allowing a fixture with missing canonical data to reach a renderer.
+ava::app::runtime::session_ts open_frontend_test_session(std::filesystem::path const& root)
+{
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = ava::tests::app_test_paths(root);
+  context.offline = true;
+  auto session = ava::app::runtime::Session::open(context, {.sessionless = true});
+  if (!session)
+    throw std::runtime_error("could not open TUI frontend test session: " + session.error().format());
+  return std::move(*session);
+}
+
+// Set the canonical model metadata in session to requested_model before registering the frontend.
+// Keep built-in capabilities where available; synthetic test model names inherit the fallback model's capabilities.
+void select_frontend_test_model(ava::app::runtime::session_ts& session, TuiTestModel const& requested_model)
+{
+  auto const registry = ava::config::builtin_model_registry();
+  auto model = ava::config::find_model(registry, requested_model.provider_id, requested_model.model_id)
+                   .value_or(ava::config::find_model(registry, "openai", "gpt-5.5").value_or(ava::config::ModelInfo{}));
+  model.provider_id = requested_model.provider_id;
+  model.model_id = requested_model.model_id;
+  model.display_name = requested_model.display_name;
+  model.display_name_is_configured = true;
+
+  ava::app::runtime::session_ts::wat session_w(session);
+  session_w->model_selection().change([&](ava::app::runtime::ModelSelection& selection) { selection.model = std::move(model); });
+}
+
+} // namespace
+
+// Own the frontend and its registered session data at stable addresses until the rendering fixture is destroyed.
+// The temporary configuration root outlives both objects and no provider requests are made.
+struct TuiFrontEndFixture::Impl
+{
+  explicit Impl(TuiTestModel model)
+      : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")), frontend(), session(open_frontend_test_session(root.path()))
+  {
+    select_frontend_test_model(session, model);
+    frontend.register_frontend_data(session);
+  }
+
+  ScopedTestDirectory root;
+  ava::tui::TuiFrontEnd frontend;
+  ava::app::runtime::session_ts session;
+};
+
+TuiFrontEndFixture::TuiFrontEndFixture(TuiTestModel model) : impl_(std::make_unique<Impl>(std::move(model)))
+{
+}
+
+TuiFrontEndFixture::~TuiFrontEndFixture() = default;
+
+ava::tui::TuiFrontEnd* TuiFrontEndFixture::frontend() noexcept
+{
+  return &impl_->frontend;
+}
+
+std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata()
+{
+  std::string provider;
+  std::string model_display;
+  static_cast<void>(impl_->frontend.model_selection().refresh_provider(&impl_->frontend, provider));
+  static_cast<void>(impl_->frontend.model_selection().refresh_model_display(&impl_->frontend, model_display));
+  return {std::move(provider), std::move(model_display)};
+}
 
 ScopedTerminalCapabilityProfile::ScopedTerminalCapabilityProfile(std::string term_program_value)
     : term("TERM", "xterm-256color"),
@@ -65,28 +146,32 @@ std::string_view tree_action_key_bindings_json() noexcept
 
 std::vector<std::string> plain_lines(std::vector<std::string> lines)
 {
-  for (auto& line : lines) line = strip_sgr(line);
+  for (auto& line : lines)
+    line = strip_sgr(line);
   return lines;
 }
 
 std::string join_plain_lines(std::vector<std::string> const& lines)
 {
   std::string text;
-  for (auto const& line : lines) text += line + '\n';
+  for (auto const& line : lines)
+    text += line + '\n';
   return text;
 }
 
 std::string join_visible_lines(std::vector<std::string> const& lines)
 {
   std::string text;
-  for (auto const& line : lines) text += strip_sgr(line) + '\n';
+  for (auto const& line : lines)
+    text += strip_sgr(line) + '\n';
   return text;
 }
 
 std::size_t count_occurrences(std::string_view text, std::string_view needle)
 {
   std::size_t count = 0;
-  for (auto offset = text.find(needle); offset != std::string_view::npos; offset = text.find(needle, offset + needle.size())) ++count;
+  for (auto offset = text.find(needle); offset != std::string_view::npos; offset = text.find(needle, offset + needle.size()))
+    ++count;
   return count;
 }
 

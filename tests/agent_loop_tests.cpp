@@ -33,7 +33,7 @@ void run_agent_loop_tests()
   test_agent_loop_task_subagent_does_not_inherit_parallel_read_search_scheduling();
   test_agent_loop_task_subagent_inherits_protected_permission_rule_store();
   test_agent_loop_task_subagent_recovers_torn_child_before_resume();
-  test_subagent_config_loads_project_definitions();
+  test_agent_config_loads_project_definitions();
   test_agent_loop_custom_subagent_definition_controls_prompt_and_tools();
   test_agent_loop_background_task_starts_child_session();
   test_agent_loop_background_resume_preserves_history_and_owner_authority();

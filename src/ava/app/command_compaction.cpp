@@ -70,7 +70,7 @@ ava::core::Result<CommandResult> run_compact_command(runtime::session_ts& unlock
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     read_authority = session_r->read_authority_1();
     run_controller = session_r->run_controller();
-    context_window_tokens = session_r->model().context_window_tokens;
+    context_window_tokens = session_r->model_selection_r()->model.context_window_tokens;
   }
   if (!read_authority)
     return fail_compaction(std::move(read_authority.error()));

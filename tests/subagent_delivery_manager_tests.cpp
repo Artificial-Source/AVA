@@ -245,9 +245,12 @@ ava::app::RuntimeProviderRunBundleFactory delivery_factory(std::shared_ptr<Deliv
       state->exact_builtin_tools_empty = options.exact_builtin_tool_names && options.exact_builtin_tool_names->empty();
       state->ambient_extensions_isolated = options.isolate_ambient_extensions;
       state->session_mcp_disabled = options.disable_session_mcp;
-      SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-      state->observed_model_id = session_r->model().model_id;
-      state->observed_reasoning_level = session_r->reasoning() ? session_r->reasoning()->level : std::string{};
+      {
+        SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
+        ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+        state->observed_model_id = model_selection_r->model.model_id;
+        state->observed_reasoning_level = model_selection_r->reasoning ? model_selection_r->reasoning->level : std::string{};
+      }
       state->delivery_run_request_id = options.request_id.value_or("");
       state->changed.notify_all();
     }
@@ -803,7 +806,7 @@ void test_runtime_mutations_refresh_retained_delivery_configuration()
 
   CRITICAL_AREA_BEGIN_W(fixture_session);
 
-  auto model = fixture_session_w->model();
+  auto model = fixture_session_w->model_selection_r()->model;
   model.model_id = "gpt-5.5-delivery-refresh-test";
   model.display_name = "Delivery refresh test model";
   CRITICAL_AREA_END_W(fixture_session);
@@ -817,14 +820,16 @@ void test_runtime_mutations_refresh_retained_delivery_configuration()
              "; " + (reasoned ? std::string("reasoning-ok") : reasoned.error().format()));
 
   bool retained_found = false;
+  auto const fixture_model_id = fixture_session_w->model_selection_r()->model.model_id;
   auto retained =
       fixture.manager->retained_session(fixture_session_w->store.session_id(), fixture_session_w->workspace_dir(), retained_found, {.exact_session_id = true});
   bool retained_matches = false;
   if (retained_found && retained)
   {
     SCOPED_CRITICAL_AREA_R(retained_r, *retained);
-    retained_matches = retained_r->model().model_id == fixture_session_w->model().model_id && retained_r->reasoning() &&
-                       retained_r->reasoning()->level == "low" && retained_r->mode() == fixture_session_w->mode() &&
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = retained_r->model_selection_r();
+    retained_matches = model_selection_r->model.model_id == fixture_model_id && model_selection_r->reasoning &&
+                       model_selection_r->reasoning->level == "low" && retained_r->mode() == fixture_session_w->mode() &&
                        retained_r->system_prompt() == fixture_session_w->system_prompt() && retained_r->workspace_dir() == fixture_session_w->workspace_dir() &&
                        retained_r->anchor_set() == fixture_session_w->anchor_set();
   }
@@ -838,7 +843,7 @@ void test_runtime_mutations_refresh_retained_delivery_configuration()
   expect(state->wait_completed(), "automatic delivery runs after central runtime mutations");
   {
     std::lock_guard lock(state->mutex);
-    expect(state->observed_model_id == fixture.session_r()->model().model_id && state->observed_reasoning_level == "low" &&
+    expect(state->observed_model_id == fixture.session_r()->model_selection_r()->model.model_id && state->observed_reasoning_level == "low" &&
                state->retained_credential_at_factory.empty(),
            "delivery selects the latest configuration generation and forces fresh credential resolution");
   }
@@ -1117,8 +1122,11 @@ void test_forged_text_marker_cannot_ack_delivery()
   forged_turn.text = "user-forged marker response";
   forged_turn.finish_reason = ava::provider::ProviderFinishReason::Completed;
   forged_turn.ordered_items.push_back(ava::agent::OrderedAssistantItem{.item = ava::agent::AssistantTextItem{.text = forged_turn.text}});
-  auto forged_commit = ava::agent::append_assistant_turn(fixture_session_w->owner_append_batch_route_1(), forged_turn, fixture_session_w->model().provider_id,
-                                                         fixture_session_w->model().model_id, {}, std::nullopt);
+  auto const [provider_id, model_id] = [&] {
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = fixture_session_w->model_selection_r();
+    return std::pair{model_selection_r->model.provider_id, model_selection_r->model.model_id};
+  }();
+  auto forged_commit = ava::agent::append_assistant_turn(fixture_session_w->owner_append_batch_route_1(), forged_turn, provider_id, model_id, {}, std::nullopt);
   expect(terminal && attempt && forged_user && forged_commit, "forged-marker fixture commits ordinary user text and a corresponding assistant turn");
 
   CRITICAL_AREA_END_W(fixture_session);
@@ -1278,8 +1286,11 @@ void test_same_process_reconciliation_acks_existing_commit_without_rerun()
   turn.text = "already integrated";
   turn.finish_reason = ava::provider::ProviderFinishReason::Completed;
   turn.ordered_items.push_back(ava::agent::OrderedAssistantItem{.item = ava::agent::AssistantTextItem{.text = "already integrated"}});
-  auto persisted = ava::agent::append_assistant_turn(fixture_session_w->owner_append_batch_route_1(), turn, fixture_session_w->model().provider_id,
-                                                     fixture_session_w->model().model_id, {}, std::nullopt);
+  auto const [provider_id, model_id] = [&] {
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = fixture_session_w->model_selection_r();
+    return std::pair{model_selection_r->model.provider_id, model_selection_r->model.model_id};
+  }();
+  auto persisted = ava::agent::append_assistant_turn(fixture_session_w->owner_append_batch_route_1(), turn, provider_id, model_id, {}, std::nullopt);
   expect(appended_user && persisted, "reconciliation fixture commits marker and assistant transaction before acknowledgement");
 
   CRITICAL_AREA_END_W(fixture_session);

@@ -2,7 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/agent/question.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/subagent_launch.h"
 #include "ava/core/result.h"
 
@@ -24,7 +24,7 @@ struct TaskSubagentRequest
   std::string prompt;
   std::string subagent_type;
   std::string subagent_system_prompt;
-  SubagentToolPreset tool_preset = SubagentToolPreset::Inherit;
+  AgentToolPreset tool_preset = AgentToolPreset::Inherit;
   std::optional<std::size_t> max_tool_iterations = std::nullopt;
   std::optional<std::string> task_id = std::nullopt;
   std::string command;
@@ -62,7 +62,7 @@ struct ToolDispatchServices
   // Exact coordinator/owner pair for public job controls. Child loops clear
   // both this coordinator and the task runner, then hide both schemas.
   std::shared_ptr<SubagentCoordinator> subagent_coordinator = nullptr;
-  std::vector<SubagentDefinition> subagents = {};
+  std::vector<AgentDefinition> subagents = {};
 
 #ifdef CWDEBUG
   // OPT_OUT keeps callbacks/launch metadata out of generated printing; this

@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
@@ -119,14 +120,16 @@ std::size_t truncate_transcript(std::vector<TranscriptItem>& transcript)
 
 }  // namespace
 
-std::string assistant_meta_for_snapshot(ComposerSnapshot const& snapshot, std::optional<std::chrono::steady_clock::duration> elapsed)
+std::string assistant_meta_for_snapshot(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::optional<std::chrono::steady_clock::duration> elapsed)
 {
-  if (snapshot.model.empty())
+  std::string model_display;
+  [[maybe_unused]] bool model_changed = frontend->model_selection().refresh_model_display(frontend, model_display);
+  if (model_display.empty())
     return {};
   auto mode = title_case_ascii(snapshot.mode);
   if (mode.empty())
     mode = "AVA";
-  auto meta = mode + " · " + snapshot.model;
+  auto meta = mode + " · " + model_display;
   if (elapsed)
     meta += " · " + turn_duration_label(*elapsed);
   return meta;
@@ -151,10 +154,12 @@ std::ptrdiff_t push_fallback_assistant_outputs(ComposerSnapshot& snapshot, std::
 {
   std::vector<TranscriptItem> items;
   items.reserve(outputs.size());
-  for (auto const& output : outputs) items.push_back(TranscriptItem{.label = "ava", .text = output});
+  for (auto const& output : outputs)
+    items.push_back(TranscriptItem{.label = "ava", .text = output});
   apply_assistant_turn_meta(items, meta, snapshot.thinking_visible);
   std::ptrdiff_t item_index_shift = 0;
-  for (auto& item : items) item_index_shift += push_transcript(snapshot, std::move(item));
+  for (auto& item : items)
+    item_index_shift += push_transcript(snapshot, std::move(item));
   return item_index_shift;
 }
 
@@ -345,7 +350,8 @@ void carry_thinking_expansion(std::vector<std::pair<std::size_t, bool>> const& o
   // Captured current-UI true flags are authoritative after apply_capped_transcript_snapshot.
   // Apply copies submitted_transcript, which can restore stale true flags from a prior turn;
   // clear destination expansion before remapping only the currently expanded indices.
-  for (auto& item : transcript) item.thinking_expanded = false;
+  for (auto& item : transcript)
+    item.thinking_expanded = false;
   for (auto const& [old_index, expanded] : overrides)
   {
     if (!expanded)

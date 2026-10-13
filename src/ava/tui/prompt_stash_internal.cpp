@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime_draft_internal.h"
@@ -14,6 +15,7 @@
 #include <utility>
 
 namespace ava::tui {
+using ava::app::sanitize_terminal_text;
 namespace {
 
 std::string stash_preview(ComposerDraftState const& draft)

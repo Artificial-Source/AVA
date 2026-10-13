@@ -6,6 +6,7 @@
 #include "ava/app/commands.h"
 #include "ava/app/interactive.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/tui/interactive_tui_support.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
@@ -35,9 +36,9 @@ void app_command_dispatcher_tool_part(ava::app::runtime::session_ts& unlocked_se
   std::vector<ava::event::RuntimeEvent> command_tool_events;
   auto glob = ava::app::run_command(
       unlocked_session, ava::app::CommandRequest{.command = "/glob **/*.cpp", .event_sink = [&command_tool_events](ava::event::RuntimeEvent const& event) {
-                                             command_tool_events.push_back(event);
-                                             return ava::core::VoidResult{};
-                                           }});
+                                                   command_tool_events.push_back(event);
+                                                   return ava::core::VoidResult{};
+                                                 }});
   expect(glob && glob->handled && !glob->output.empty() && glob->output[0].find("src/main.cpp") != std::string::npos,
          "command dispatcher /glob runs existing safe file search command");
   expect(glob && glob->tool_timeline.size() == 2 && glob->tool_timeline[0].status == ava::agent::ToolTimelineStatus::Running &&
@@ -111,10 +112,10 @@ void app_command_dispatcher_tool_part(ava::app::runtime::session_ts& unlocked_se
 
   std::vector<ava::event::RuntimeEvent> write_tool_events;
   auto write = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/write src/main.cpp int changed() { return 1; }",
-                                                                          .event_sink = [&write_tool_events](ava::event::RuntimeEvent const& event) {
-                                                                            write_tool_events.push_back(event);
-                                                                            return ava::core::VoidResult{};
-                                                                          }});
+                                                                                .event_sink = [&write_tool_events](ava::event::RuntimeEvent const& event) {
+                                                                                  write_tool_events.push_back(event);
+                                                                                  return ava::core::VoidResult{};
+                                                                                }});
   auto const* write_result = write_tool_events.size() == 2 ? ava::tests::runtime_event_as<ava::event::ToolResultEvent>(write_tool_events[1]) : nullptr;
   expect(write && write->handled && write->tool_timeline.size() == 2 && write->tool_timeline[1].status == ava::agent::ToolTimelineStatus::Success &&
              write->tool_timeline[1].diff.find("-int main()") != std::string::npos &&
@@ -126,7 +127,8 @@ void app_command_dispatcher_tool_part(ava::app::runtime::session_ts& unlocked_se
   {
     auto tui_timeline = ava::app::tool_timeline_for_tui(write->tool_timeline);
     ava::tui::TuiEventState event_state;
-    for (auto const& event : write_tool_events) ava::tui::apply_runtime_event(event_state, event);
+    for (auto const& event : write_tool_events)
+      ava::tui::apply_runtime_event(event_state, event);
     auto event_transcript = ava::tui::event_state_transcript_snapshot(event_state);
     std::vector<ava::tui::TranscriptItem> timeline_transcript;
     if (!tui_timeline.empty())
@@ -135,14 +137,16 @@ void app_command_dispatcher_tool_part(ava::app::runtime::session_ts& unlocked_se
     auto const event_lines = ava::tui::detail::render_transcript_lines(event_transcript, 100, false, true, false);
     auto join_lines = [](std::vector<std::string> const& lines) {
       std::string joined;
-      for (auto const& line : lines) joined += line + '\n';
+      for (auto const& line : lines)
+        joined += line + '\n';
       return joined;
     };
     auto const timeline_card = join_lines(timeline_lines);
     auto const event_card = join_lines(event_lines);
     auto count_text = [](std::string_view text, std::string_view needle) {
       std::size_t count = 0;
-      for (auto position = text.find(needle); position != std::string_view::npos; position = text.find(needle, position + needle.size())) ++count;
+      for (auto position = text.find(needle); position != std::string_view::npos; position = text.find(needle, position + needle.size()))
+        ++count;
       return count;
     };
     auto const absolute_target = (workspace / "src/main.cpp").generic_string();
@@ -171,11 +175,12 @@ void app_command_dispatcher_tool_part(ava::app::runtime::session_ts& unlocked_se
         "# Goal\nKeep key facts\n# Constraints / Preferences\nNone noted.\n# Decisions\nNone noted.\n"
         "# Files Read or Modified\nsrc/main.cpp\n# Unresolved Tasks\nNone noted.\n# Next Steps\nContinue.");
   };
-  auto compact =
-      ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/compact Keep key facts", .compaction_summary_generator = compact_generator});
+  auto compact = ava::app::run_command(unlocked_session,
+                                       ava::app::CommandRequest{.command = "/compact Keep key facts", .compaction_summary_generator = compact_generator});
   expect(compact && compact->handled && !compact->output.empty() && compact->output[0].find("compaction summary recorded") != std::string::npos,
          "command dispatcher /compact records generated compaction summary");
-  auto compact_empty = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/compact", .compaction_summary_generator = compact_generator});
+  auto compact_empty =
+      ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/compact", .compaction_summary_generator = compact_generator});
   expect(compact_empty && compact_empty->handled && !compact_empty->output.empty() &&
              compact_empty->output[0].find("compaction summary recorded") != std::string::npos,
          "command dispatcher /compact without instructions records generated compaction summary");
@@ -201,19 +206,20 @@ void app_command_dispatcher_tool_part(ava::app::runtime::session_ts& unlocked_se
   auto stale_compact = ava::app::run_command(
       unlocked_session,
       ava::app::CommandRequest{.command = "/compact stale snapshot",
-                                .compaction_summary_generator = [&unlocked_session, &manual_stale_generator_calls, &introduced_manual_stale_snapshot](
+                               .compaction_summary_generator = [&unlocked_session, &manual_stale_generator_calls, &introduced_manual_stale_snapshot](
                                                                    std::vector<ava::session::SessionEntry> const&, ava::session::CompactionConfig const&,
                                                                    std::string_view, std::size_t) -> ava::core::Result<std::string> {
                                  ++manual_stale_generator_calls;
                                  if (!introduced_manual_stale_snapshot)
                                  {
                                    introduced_manual_stale_snapshot = true;
-                                    static_cast<void>(ava::app::runtime::session_ts::wat(unlocked_session)->append_owned(
-                                        ava::session::SessionEntry{.id = "entry_manual_compact_concurrent_change",
-                                                                                          .parent_id = "",
-                                                                                          .type = ava::session::EntryType::UserMessage,
-                                                                                          .timestamp = ava::session::now_timestamp(),
-                                                                   .data_json = "{\"text\":\"manual compact concurrent change\"}"}));
+                                   static_cast<void>(
+                                       ava::app::runtime::session_ts::wat(unlocked_session)
+                                           ->append_owned(ava::session::SessionEntry{.id = "entry_manual_compact_concurrent_change",
+                                                                                     .parent_id = "",
+                                                                                     .type = ava::session::EntryType::UserMessage,
+                                                                                     .timestamp = ava::session::now_timestamp(),
+                                                                                     .data_json = "{\"text\":\"manual compact concurrent change\"}"}));
                                  }
                                  return std::string(
                                      "# Goal\nStale\n# Constraints / Preferences\nNone noted.\n# Decisions\nNone noted.\n"

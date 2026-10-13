@@ -1,5 +1,5 @@
 #include "sys.h"
-#include "ava/app/mermaid_tui_bridge.h"
+#include "ava/app/tui/mermaid_tui_bridge.h"
 
 #include <limits>
 #include <utility>

@@ -16,8 +16,6 @@ namespace {
 ComposerSnapshot initial_snapshot(TuiRuntimeOptions& options)
 {
   ComposerSnapshot snapshot{.mode = options.mode,
-                            .provider = options.provider,
-                            .model = options.model,
                             .session_id = options.session_id,
                             .input = "",
                             .status = options.initial_status,
@@ -100,8 +98,6 @@ RuntimePresentationState::RuntimePresentationState(TuiRuntimeOptions& options)
       sidebar{.todos = std::move(options.initial_todos),
               .session_id = options.session_id,
               .mode = options.mode,
-              .provider = options.provider,
-              .model = options.model,
               .workspace = options.workspace,
               .git_branch = options.git_branch,
               .version = options.app_version,
@@ -136,8 +132,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
     snapshot.pending_attachments.clear();
   }
   snapshot.mode = std::move(state.mode);
-  snapshot.provider = std::move(state.provider);
-  snapshot.model = std::move(state.model);
   snapshot.session_id = std::move(state.session_id);
   snapshot.status = std::move(state.status);
   bool completion_sources_changed = false;
@@ -177,8 +171,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
   }
 
   sidebar.mode = snapshot.mode;
-  sidebar.provider = snapshot.provider;
-  sidebar.model = snapshot.model;
   sidebar.session_id = snapshot.session_id;
   sidebar.session_path = std::move(state.session_path);
   sidebar.workspace = std::move(state.workspace);

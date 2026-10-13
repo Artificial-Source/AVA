@@ -10,6 +10,8 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/session_title_coordinator.h"
+#include "ava/app/tui/command_palette_views.h"
+#include "ava/app/tui/interactive_tui_internal.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime_views_internal.h"
 #include "ava/session/session_metadata.h"
@@ -77,27 +79,28 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
     tree.roots = {current_session_id};
     tree.leaves = tree.roots;
     tree.current_path = tree.roots;
-    tree.sessions.push_back(ava::session::SessionTreeNode{.summary = ava::session::SessionSummary{.session_id = current_session_id,
-                                                                                                   .path = current_session_path,
-                                                                                                  .last_updated = "2026-07-22T00:00:00Z",
-                                                                                                  .entry_count = 1},
-                                                          .metadata = {},
-                                                          .children = {},
-                                                          .current = true});
+    tree.sessions.push_back(ava::session::SessionTreeNode{
+        .summary =
+            ava::session::SessionSummary{
+                .session_id = current_session_id, .path = current_session_path, .last_updated = "2026-07-22T00:00:00Z", .entry_count = 1},
+        .metadata = {},
+        .children = {},
+        .current = true});
     return tree;
   };
 
   auto cache = ava::app::build_application_catalog_cache(unlocked_session, {}, workspace_walker, tree_builder);
   auto const session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
-  auto const* read_item = tui_test_support::find_slash_command_item(cache.slash_commands, "/read");
-  auto const* sessions_item = tui_test_support::find_slash_command_item(cache.slash_commands, "/sessions");
-  auto const* resume_item = tui_test_support::find_slash_command_item(cache.slash_commands, "/resume");
+  auto const projected_slash_commands = ava::app::project_slash_command_items(cache.slash_commands);
+  auto const* read_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/read");
+  auto const* sessions_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/sessions");
+  auto const* resume_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/resume");
   expect(workspace_walks == 1 && session_tree_builds == 1 && cache.operations.workspace_walks == 1 && cache.operations.session_tree_builds == 1 &&
              tui_test_support::has_slash_argument_completion(read_item, 0, "src/main.cpp") &&
              !tui_test_support::has_slash_argument_completion(read_item, 0, "my folder/space file.txt") &&
              std::ranges::any_of(cache.file_references, [](auto const& item) { return item.value == "my folder/space file.txt"; }) &&
-              tui_test_support::has_slash_argument_completion(sessions_item, 0, session_id) &&
-              tui_test_support::has_slash_argument_completion(resume_item, 0, session_id),
+             tui_test_support::has_slash_argument_completion(sessions_item, 0, session_id) &&
+             tui_test_support::has_slash_argument_completion(resume_item, 0, session_id),
          "one application catalog build walks the workspace and session tree once while feeding both completion surfaces");
 
   for (int pass = 0; pass < 100; ++pass)
@@ -147,8 +150,9 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
                                                                     .children = {current_node.summary.session_id},
                                                                     .current = false});
   ava::app::ApplicationCatalogCoordinator parent_hint_catalog(std::move(parent_hint_cache));
-  auto const bound_parent_view = parent_hint_catalog.session_view(ava::app::SessionSelectorSort::Recent, {}, false, false, false, false, "F8");
-  auto const unbound_parent_view = parent_hint_catalog.session_view();
+  auto const bound_parent_view =
+      ava::app::application_catalog_session_view(parent_hint_catalog, ava::app::SessionSelectorSort::Recent, {}, false, false, false, false, "F8");
+  auto const unbound_parent_view = ava::app::application_catalog_session_view(parent_hint_catalog);
   auto const bound_parent = std::ranges::find_if(bound_parent_view.items, [](auto const& item) { return item.value == "opaque-parent"; });
   auto const unbound_parent = std::ranges::find_if(unbound_parent_view.items, [](auto const& item) { return item.value == "opaque-parent"; });
   auto const source_summary = parent_hint_catalog.session_summary("opaque-parent");
@@ -315,8 +319,7 @@ void test_application_catalog_current_session_incremental_refresh()
   });
   ava::app::ApplicationCatalogCoordinator catalog(std::move(cache));
   auto const initial = catalog.snapshot();
-  auto const initial_current =
-      std::ranges::find_if(initial.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
+  auto const initial_current = std::ranges::find_if(initial.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
   auto const initial_current_entry_count = initial_current == initial.session_tree->sessions.end() ? std::size_t{0} : initial_current->summary.entry_count;
 
   ava::session::SessionMetadataUpdate fallback_update;
@@ -330,14 +333,14 @@ void test_application_catalog_current_session_incremental_refresh()
                                              .data_json = R"({"text":"ordinary turn"})"};
   auto fallback_appended = fallback ? append_target->append(*fallback) : ava::core::VoidResult(std::unexpected(fallback.error()));
   auto activity_appended = fallback_appended ? append_target->append(activity) : fallback_appended;
-  auto refreshed = activity_appended ? catalog.refresh_current_session(unlocked_session, {}) : ava::core::Result<bool>(std::unexpected(activity_appended.error()));
+  auto refreshed =
+      activity_appended ? catalog.refresh_current_session(unlocked_session, {}) : ava::core::Result<bool>(std::unexpected(activity_appended.error()));
   auto after_fallback = catalog.snapshot();
-  auto fallback_view = catalog.session_view(ava::app::SessionSelectorSort::Recent, {});
-  auto current =
-      std::ranges::find_if(after_fallback.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
+  auto fallback_view = ava::app::application_catalog_session_view(catalog, ava::app::SessionSelectorSort::Recent, {});
+  auto current = std::ranges::find_if(after_fallback.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
   expect(refreshed && *refreshed && current != after_fallback.session_tree->sessions.end() && current->summary.title == "Fallback catalog title" &&
              current->summary.entry_count == initial_current_entry_count + 2 && current->summary.last_updated == "2099-01-01T00:00:00Z" &&
-              !fallback_view.items.empty() && fallback_view.items.front().value == session_id && workspace_walks == 1 &&
+             !fallback_view.items.empty() && fallback_view.items.front().value == session_id && workspace_walks == 1 &&
              after_fallback.operations.workspace_walks == initial.operations.workspace_walks &&
              after_fallback.operations.session_tree_builds == initial.operations.session_tree_builds &&
              after_fallback.operations.session_node_refreshes == initial.operations.session_node_refreshes + 1,
@@ -353,8 +356,7 @@ void test_application_catalog_current_session_incremental_refresh()
       refined_appended ? catalog.refresh_title_changes(unlocked_session, title_changes) : ava::core::Result<bool>(std::unexpected(refined_appended.error()));
   auto duplicate_generation = generation_refresh ? catalog.refresh_title_changes(unlocked_session, title_changes) : generation_refresh;
   auto after_refinement = catalog.snapshot();
-  auto refined_current =
-      std::ranges::find_if(after_refinement.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
+  auto refined_current = std::ranges::find_if(after_refinement.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
   expect(generation_refresh && *generation_refresh && duplicate_generation && !*duplicate_generation &&
              refined_current != after_refinement.session_tree->sessions.end() && refined_current->summary.title == "Refined catalog title" &&
              after_refinement.operations.session_node_refreshes == after_fallback.operations.session_node_refreshes + 1 && workspace_walks == 1 &&
@@ -384,8 +386,8 @@ void test_application_catalog_current_session_incremental_refresh()
   auto const cursor_after_failure = catalog.title_catalog_cursor();
   auto retry_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_session, failed_capture, {}, successful_tree_builder);
   auto const after_topology_retry = catalog.snapshot();
-  auto retry_current = std::ranges::find_if(after_topology_retry.session_tree->sessions,
-                                             [&](auto const& node) { return node.summary.session_id == session_id; });
+  auto retry_current =
+      std::ranges::find_if(after_topology_retry.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
   expect(topology_refresh && *topology_refresh && duplicate_after_topology && !*duplicate_after_topology && catalog.title_catalog_cursor() == 10 &&
              late_refresh && *late_refresh && cursor_after_failure == 9 && !failed_refresh && retry_refresh && *retry_refresh && topology_build_calls == 3 &&
              workspace_walks == 1 && after_topology_retry.operations.session_tree_builds == initial.operations.session_tree_builds + 3 &&

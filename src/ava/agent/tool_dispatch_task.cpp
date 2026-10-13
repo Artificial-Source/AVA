@@ -1,5 +1,5 @@
 #include "sys.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_task.h"
 #include "ava/tools/tool_permission.h"
@@ -179,7 +179,7 @@ ava::core::Result<ParsedTaskRequest> parse_task_request(std::string_view argumen
                            .max_tool_iterations = max_tool_iterations};
 }
 
-ava::core::Result<SubagentDefinition> selected_subagent_definition(ToolDispatchServices const& services, std::string_view subagent_type,
+ava::core::Result<AgentDefinition> selected_subagent_definition(ToolDispatchServices const& services, std::string_view subagent_type,
                                                                    std::string_view tool_name)
 {
   auto subagents = services.subagents.empty() ? builtin_subagents() : services.subagents;

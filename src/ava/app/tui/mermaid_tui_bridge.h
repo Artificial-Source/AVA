@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ava/app/display_settings.h"
 #include "ava/app/mermaid_render_coordinator.h"
+#include "ava/app/tui/tui_display_settings.h"
 #include "ava/tui/runtime.h"
 #include "ava/core/result.h"
 

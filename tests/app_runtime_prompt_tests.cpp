@@ -248,7 +248,7 @@ void test_app_run_prompt_isolates_ambient_extensions()
          "runtime prompt reloads reuse the resolved selected primary in ordinary and ambient-free variants");
   {
     SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-    auto switched_model = session_w->model();
+    auto switched_model = session_w->model_selection_r()->model;
     switched_model.model_id += "-selected-primary-switch";
     auto switched = session_w->switch_model(std::move(switched_model));
     expect(switched && *switched && session_w->system_prompt().find("SELECTED_PRIMARY_PROMPT_CANARY_11f4") != std::string::npos &&
@@ -417,10 +417,10 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
     return visibility.mode == ava::agent::ToolVisibilityMode::Default &&
            visibility.included_tools == std::vector<std::string>({"read_file", "list_directory", "glob", "grep"}) && visibility.excluded_tools.empty();
   };
-  auto expect_project_selection = [&](std::string_view canary, ava::agent::SubagentToolPreset preset, std::string_view label) {
+  auto expect_project_selection = [&](std::string_view canary, ava::agent::AgentToolPreset preset, std::string_view label) {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const& selected = session_r->selected_primary_agent();
-    expect(selected && selected->provenance == ava::agent::SubagentDefinitionProvenance::Project && selected->tool_preset == preset &&
+    expect(selected && selected->provenance == ava::agent::AgentDefinitionProvenance::Project && selected->tool_preset == preset &&
                selected->system_prompt.find(canary) != std::string::npos && session_r->requested_primary_agent() == std::optional<std::string>(kAgentName) &&
                session_r->system_prompt().find(canary) != std::string::npos &&
                session_r->ambient_extension_free_system_prompt().find(canary) != std::string::npos &&
@@ -430,7 +430,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   auto expect_project_authority_absent = [&](bool expect_global_fallback, std::string_view label) {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const& selected = session_r->selected_primary_agent();
-    bool const selection_safe = expect_global_fallback ? selected && selected->provenance == ava::agent::SubagentDefinitionProvenance::Global &&
+    bool const selection_safe = expect_global_fallback ? selected && selected->provenance == ava::agent::AgentDefinitionProvenance::Global &&
                                                              selected->system_prompt.find(kGlobalCanary) != std::string::npos
                                                        : !selected;
     auto const prompts_safe = [&](std::string const& prompt) {
@@ -448,7 +448,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
     return result;
   };
 
-  expect_project_selection(kInitialProjectCanary, ava::agent::SubagentToolPreset::ReadOnly,
+  expect_project_selection(kInitialProjectCanary, ava::agent::AgentToolPreset::ReadOnly,
                            "trusted startup records project provenance and applies its closed read-only visibility");
 
   auto denied = run_trust("/trust deny", "/trust deny succeeds when replacing a project primary with the permitted global definition");
@@ -458,7 +458,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   write_project_primary(kReselectedProjectCanary, "inherit");
   auto reenabled = run_trust("/trust project", "/trust project re-enables and re-resolves the requested primary");
   expect(reenabled && reenabled->output[0].find("decision=trusted") != std::string::npos, "/trust project reports the re-enabled trust decision");
-  expect_project_selection(kReselectedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReselectedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "trust re-enable uses the current permitted project definition without broadening the previous read-only visibility");
 
   std::error_code remove_global_error;
@@ -485,7 +485,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
 
   write_global_primary();
   (void)run_trust("/trust project", "/trust project re-enables the project primary after clear");
-  expect_project_selection(kReselectedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReselectedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "project primary is reselected after clear when trust is explicitly enabled again");
   (void)run_trust("/trust untrust", "/trust untrust revokes a reselected project primary");
   expect_project_authority_absent(true, "/trust untrust removes project authority and preserves the valid global primary");
@@ -493,12 +493,12 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   auto externally_trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(externally_trusted.has_value(), "project-primary fixture externally re-enables trust for reload coverage");
   (void)run_trust("/reload trust", "/reload trust applies external trust enablement");
-  expect_project_selection(kReselectedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReselectedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "/reload trust re-resolves the requested primary from the newly permitted project catalog");
 
   write_project_primary(kReloadedProjectCanary, "inherit");
   (void)run_trust("/reload trust", "/reload trust refreshes a trusted primary definition");
-  expect_project_selection(kReloadedProjectCanary, ava::agent::SubagentToolPreset::Inherit,
+  expect_project_selection(kReloadedProjectCanary, ava::agent::AgentToolPreset::Inherit,
                            "/reload trust never accepts the cached project definition across a trust reload");
 
   auto externally_denied = ava::app::set_project_trust_decision(paths, workspace, false);
@@ -540,7 +540,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   {
     SCOPED_CRITICAL_AREA_R(session_r, *inverse_opened);
     inverse_starts_broad = session_r->selected_primary_agent() &&
-                           session_r->selected_primary_agent()->provenance == ava::agent::SubagentDefinitionProvenance::Project &&
+                           session_r->selected_primary_agent()->provenance == ava::agent::AgentDefinitionProvenance::Project &&
                            session_r->tool_visibility().included_tools.empty();
   }
   auto inverse_denied = inverse_opened ? ava::app::run_command(*inverse_opened, ava::app::CommandRequest{.command = "/trust deny"})
@@ -550,7 +550,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   {
     SCOPED_CRITICAL_AREA_R(session_r, *inverse_opened);
     inverse_narrowed = session_r->selected_primary_agent() &&
-                       session_r->selected_primary_agent()->provenance == ava::agent::SubagentDefinitionProvenance::Global &&
+                       session_r->selected_primary_agent()->provenance == ava::agent::AgentDefinitionProvenance::Global &&
                        restricted_tools_are_retained(session_r->tool_visibility());
   }
   expect(inverse_opened && inverse_starts_broad && inverse_denied && inverse_narrowed,
@@ -1270,8 +1270,9 @@ void test_app_run_prompt_sources_private_launch_display_from_runtime_invocation(
     ava::tests::FakeTransport unnamed_transport({task_response("runtime_task_unnamed"), text_response("parent unnamed")});
     auto unnamed_result = ava::app::run_prompt(*unlocked_unnamed_session, "launch unnamed", provider, unnamed_transport, unnamed_options);
     SCOPED_CRITICAL_AREA_R(unnamed_session_r, *unlocked_unnamed_session);
-    expect(unnamed_result && unnamed_launches.size() == 1 && unnamed_session_r->model().display_name == "unnamed-launch-model" &&
-               ava::config::proven_configured_model_display_name(unnamed_session_r->model()).empty() &&
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = unnamed_session_r->model_selection_r();
+    expect(unnamed_result && unnamed_launches.size() == 1 && model_selection_r->model.display_name == "unnamed-launch-model" &&
+               ava::config::proven_configured_model_display_name(model_selection_r->model).empty() &&
                unnamed_launches.front().display.model_display_name().empty() && !unnamed_launches.front().request_id.empty() &&
                unnamed_launches.front().request_id == unnamed_launches.front().correlation_id,
            "direct run_prompt generates and consistently uses one admitted request identity while unnamed custom launch display never falls back to ids");
@@ -1596,7 +1597,9 @@ void test_app_run_prompt_observation_shares_context_across_compaction_and_retry(
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 100;
+  session_w->model_selection().change([](auto& model_selection) {
+    model_selection.model.context_window_tokens = 100;
+  });
   auto seeded = session_w->append_owned({.id = "observed-old-context",
                                          .parent_id = "",
                                          .type = ava::session::EntryType::UserMessage,

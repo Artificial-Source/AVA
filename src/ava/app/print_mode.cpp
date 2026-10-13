@@ -8,7 +8,7 @@
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_credentials.h"
 #include "ava/app/signal_policy.h"
-#include "ava/tui/composer.h"
+#include "ava/app/terminal_text.h"
 #include "ava/config/auth.h"
 #include "ava/config/openai_oauth.h"
 #include "ava/permissions/permission_rules.h"
@@ -95,11 +95,11 @@ std::string sanitize_terminal_output_text(std::string_view text)
   {
     if (text[index] != '\n')
       continue;
-    output += ava::tui::sanitize_terminal_text(text.substr(start, index - start));
+    output += sanitize_terminal_text(text.substr(start, index - start));
     output.push_back('\n');
     start = index + 1;
   }
-  output += ava::tui::sanitize_terminal_text(text.substr(start));
+  output += sanitize_terminal_text(text.substr(start));
   return output;
 }
 
@@ -333,7 +333,8 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
   auto catalog = session_w->provider_catalog()           ? session_w->provider_catalog()
                  : options.open_context.provider_catalog ? options.open_context.provider_catalog
                                                          : ava::provider::ProviderCatalog::build_builtins_only();
-  auto default_provider = catalog->create(session_w->model().provider_id);
+  auto const provider_id = session_w->model_selection_r()->model.provider_id;
+  auto default_provider = catalog->create(provider_id);
   if (!default_provider)
   {
     err << terminal_output_text(default_provider.error().format(), sanitize_stderr) << '\n';
@@ -347,12 +348,12 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
   runtime_options.offline = session_w->is_offline() || options.open_context.offline;
   if (!runtime_options.offline)
   {
-    auto prepared = prepare_runtime_credentials(session_w->paths(), session_w->model().provider_id, runtime_options, auth_transport, "print mode", catalog);
+    auto prepared = prepare_runtime_credentials(session_w->paths(), provider_id, runtime_options, auth_transport, "print mode", catalog);
     if (!prepared)
     {
       if (prepared.error().message().find("requires auth for provider") != std::string::npos)
       {
-        err << "print mode requires auth for provider `" << terminal_output_text(session_w->model().provider_id, sanitize_stderr)
+        err << "print mode requires auth for provider `" << terminal_output_text(provider_id, sanitize_stderr)
             << "`. Configure a credential in " << terminal_output_text(session_w->paths().auth_file.string(), sanitize_stderr)
             << " or the provider API key environment variable\n";
       }

@@ -90,20 +90,26 @@ void test_app_rpc_model_commands()
   expect(jsonl.find("\"id\":\"cycle\"") != std::string::npos && jsonl.find("\"provider\":\"deepseek\"") != std::string::npos,
          "RPC cycle_model advances to the next configured provider model");
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-  expect(session_w->model().provider_id == "deepseek", "RPC cycle_model updates active session model");
+  expect(session_w->model_selection_r()->model.provider_id == "deepseek", "RPC cycle_model updates active session model");
   auto previous = ava::app::rpc::previous_runtime_model(session_w);
   expect(previous && previous->provider_id == "anthropic" && previous->model_id == "claude-sonnet-4-5",
          "runtime previous model helper returns the configured predecessor for TUI reverse cycling");
-  session_w->model_selection().scoped_model_cycle = std::vector<std::string>{"anthropic/claude-sonnet-4-5", "openai/gpt-5.5"};
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.scoped_model_cycle = std::vector<std::string>{"anthropic/claude-sonnet-4-5", "openai/gpt-5.5"};
+  });
   auto scoped_next = ava::app::rpc::next_runtime_model(session_w);
   expect(scoped_next && scoped_next->provider_id == "anthropic" && scoped_next->model_id == "claude-sonnet-4-5",
          "runtime next model helper starts at the first scoped model when current model is outside the scoped cycle");
   if (scoped_next)
-    session_w->model_selection().model = *scoped_next;
+    session_w->model_selection().change([&scoped_next](auto& model_selection){
+    model_selection.model = *scoped_next;
+  });
   auto scoped_previous = ava::app::rpc::previous_runtime_model(session_w);
   expect(scoped_previous && scoped_previous->provider_id == "openai" && scoped_previous->model_id == "gpt-5.5",
          "runtime previous model helper wraps within the session-scoped model cycle");
-  session_w->model_selection().scoped_model_cycle = std::vector<std::string>{};
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.scoped_model_cycle = std::vector<std::string>{};
+  });
   auto empty_scoped_next = ava::app::rpc::next_runtime_model(session_w);
   expect(!empty_scoped_next && empty_scoped_next.error().message().find("enabled for cycling") != std::string::npos,
          "runtime model cycling fails visibly when the session-scoped model cycle is empty");
@@ -154,7 +160,7 @@ void test_app_rpc_reasoning_commands()
          "RPC set_reasoning off clears reasoning state instead of storing an active off selection");
   expect(jsonl.find("\"id\":\"clear\"") != std::string::npos && jsonl.rfind("\"reasoning_enabled\":false") != std::string::npos,
          "RPC clear_reasoning disables reasoning state");
-  expect(!session_r->reasoning(), "RPC clear_reasoning updates active session state");
+  expect(!session_r->model_selection_r()->reasoning, "RPC clear_reasoning updates active session state");
 
   auto entries = session_r->store.load();
   expect(entries.has_value(), "RPC reasoning command test reloads entries");

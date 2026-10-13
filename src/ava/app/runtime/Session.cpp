@@ -599,7 +599,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   }
 
   auto effective_tool_visibility = context.tool_visibility;
-  if (*selected_primary_agent && (*selected_primary_agent)->tool_preset == ava::agent::SubagentToolPreset::ReadOnly)
+  if (*selected_primary_agent && (*selected_primary_agent)->tool_preset == ava::agent::AgentToolPreset::ReadOnly)
     effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
 
   InvocationInputs invocation_inputs{.workspace_dir = workspace_dir,
@@ -620,7 +620,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                                             .freshness_sources = std::move(prompt_state->freshness_sources),
                                             .system_prompt = std::move(prompt_state->system_prompt),
                                             .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
-  ModelSelection model_selection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle};
+  ModelSelection_ts model_selection(ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try
@@ -707,7 +707,8 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                      .provider_catalog = provider_catalog()};
   return Session_aggregate_base{.invocation_inputs_ = std::move(detached_inputs),
                                 .resolved_prompt_state_ = resolve_prompt_state(),
-                                .model_selection_ = model_selection(),
+                                // Copy the model selection without inheriting the source object's frontend registration.
+                                .model_selection_ = ModelSelection_ts{*model_selection_r()},
                                 .trust_state_ = trust_state(),
                                 .resources_ = std::move(session_resources),
                                 .store = store,
@@ -957,18 +958,18 @@ ava::core::VoidResult Session::apply_initial_reasoning_level(std::string_view re
   if (level.empty())
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "reasoning level is required");
-    add_cli_reasoning_context(error, model());
+    add_cli_reasoning_context(error, model_selection_r()->model);
     return std::unexpected(std::move(error));
   }
 
   std::optional<ReasoningSelection> selection = std::nullopt;
   if (level != "off")
   {
-    auto selected = reasoning_selection_for_level(model(), std::move(level));
+    auto selected = reasoning_selection_for_level(model_selection_r()->model, std::move(level));
     if (!selected)
     {
       auto error = std::move(selected.error());
-      add_cli_reasoning_context(error, model());
+      add_cli_reasoning_context(error, model_selection_r()->model);
       return std::unexpected(std::move(error));
     }
     selection = std::move(*selected);
@@ -978,7 +979,7 @@ ava::core::VoidResult Session::apply_initial_reasoning_level(std::string_view re
   if (!changed)
   {
     auto error = std::move(changed.error());
-    add_cli_reasoning_context(error, model());
+    add_cli_reasoning_context(error, model_selection_r()->model);
     return std::unexpected(std::move(error));
   }
   return {};
@@ -1009,19 +1010,19 @@ ava::core::VoidResult Session::apply_prompt_state_and_refresh(session_ts& unlock
 
 //static
 ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& unlocked_session, ProjectTrustState project_trust,
-                                                                    std::optional<ava::agent::SubagentDefinition> selected_primary_agent,
+                                                                    std::optional<ava::agent::AgentDefinition> selected_primary_agent,
                                                                     PromptState prompt_state)
 {
   AVA_ASSERT_NO_SESSION_LOCK_HELD("calling Session::apply_trust_prompt_state_and_refresh");
   bool const selected_primary_agent_is_non_project =
-      selected_primary_agent && (selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Builtin ||
-                                 selected_primary_agent->provenance == ava::agent::SubagentDefinitionProvenance::Global);
+      selected_primary_agent && (selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Builtin ||
+                                 selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Global);
   if (selected_primary_agent && !project_resources_trusted(project_trust) && !selected_primary_agent_is_non_project)
     selected_primary_agent.reset();
 
   CRITICAL_AREA_BEGIN_W(session);
   auto effective_tool_visibility = session_w->tool_visibility();
-  if (selected_primary_agent && selected_primary_agent->tool_preset == ava::agent::SubagentToolPreset::ReadOnly)
+  if (selected_primary_agent && selected_primary_agent->tool_preset == ava::agent::AgentToolPreset::ReadOnly)
     effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
   session_w->trust_state().project_trust = std::move(project_trust);
   session_w->invocation_inputs().tool_visibility = std::move(effective_tool_visibility);
@@ -1035,27 +1036,34 @@ ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& 
 
 ava::core::Result<bool> Session::switch_model(ava::config::ModelInfo model)
 {
-  if (this->model().provider_id == model.provider_id && this->model().model_id == model.model_id)
-    return false;
+  {
+    app::runtime::ModelSelection_ts::crat model_selection_r = this->model_selection_r();
+    if (model_selection_r->model.provider_id == model.provider_id && model_selection_r->model.model_id == model.model_id)
+      return false;
+  }
 
   auto prompt_state = load_runtime_prompt_state(paths(), model, mode(), workspace_dir(), current_dir(), project_resources_trusted(project_trust()),
                                                 prompt_overrides(), selected_primary_agent());
   if (!prompt_state)
     return std::unexpected(std::move(prompt_state.error()));
 
-  auto const previous = this->model();
+  ava::config::ModelInfo const previous = model_selection_r()->model;
   auto appended = append_owned(make_model_change_entry(previous, model));
   if (!appended)
     return std::unexpected(std::move(appended.error()));
 
-  model_selection().model = std::move(model);
   resolve_prompt_state() = ResolvedPromptState{.mode = prompt_state->mode,
                                                .base_prompt = std::move(prompt_state->base_prompt),
                                                .context_sources = std::move(prompt_state->context_sources),
                                                .freshness_sources = std::move(prompt_state->freshness_sources),
                                                .system_prompt = std::move(prompt_state->system_prompt),
                                                .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
-  model_selection().reasoning = std::nullopt;
+
+  model_selection().change([&model](auto& model_selection){
+    model_selection.model = std::move(model);
+    model_selection.reasoning = std::nullopt;
+  });
+
   return true;
 }
 
@@ -1079,20 +1087,24 @@ ava::core::Result<bool> Session::set_reasoning(std::optional<ReasoningSelection>
   {
     selection->level = core::trim(selection->level);
     selection->display = core::trim(selection->display);
-    auto resolved = resolve_runtime_reasoning_selection(model(), std::move(*selection));
+    auto resolved = resolve_runtime_reasoning_selection(model_selection_r()->model, std::move(*selection));
     if (!resolved)
     {
       return std::unexpected(std::move(resolved.error()));
     }
     selection = std::move(*resolved);
   }
-  if (same_reasoning_selection(reasoning(), selection))
+  if (same_reasoning_selection(model_selection_r()->reasoning, selection))
     return false;
 
-  auto appended = append_owned(make_reasoning_change_entry(model(), selection));
+  auto appended = append_owned(make_reasoning_change_entry(model_selection_r()->model, selection));
   if (!appended)
     return std::unexpected(std::move(appended.error()));
-  model_selection().reasoning = std::move(selection);
+
+  model_selection().change([&selection](auto& model_selection){
+    model_selection.reasoning = std::move(selection);
+  });
+
   return true;
 }
 

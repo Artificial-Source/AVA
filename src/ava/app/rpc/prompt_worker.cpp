@@ -81,7 +81,7 @@ ava::core::JoinThread make_rpc_prompt_worker(RpcPromptWorkerOptions options)
     };
 
     CRITICAL_AREA_BEGIN_R(session);
-    auto const prompt_provider_id = session_r->model().provider_id;
+    auto const prompt_provider_id = session_r->model_selection_r()->model.provider_id;
     auto prompt_catalog = session_r->provider_catalog();
     CRITICAL_AREA_END_R(session);
     auto prompt_options = ensure_prompt_runtime_options(options.paths, prompt_provider_id, std::move(options.runtime_options), options.auth_transport, "prompt",

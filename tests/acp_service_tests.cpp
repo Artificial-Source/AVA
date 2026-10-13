@@ -465,7 +465,7 @@ void test_acp_startup_model_is_pinned_across_config_mutation()
   options.paths = paths;
   options.provider_bundle_factory = [&observed_models, base_factory](ava::app::runtime::session_ts const& unlocked_session,
                                                                      ava::app::runtime::RunOptions run_options, std::string_view label) mutable {
-    observed_models.push_back(ava::app::runtime::session_ts::crat(unlocked_session)->model());
+    observed_models.push_back(ava::app::runtime::session_ts::crat(unlocked_session)->model_selection_r()->model);
     return base_factory(unlocked_session, std::move(run_options), label);
   };
   AgentService service(options);

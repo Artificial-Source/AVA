@@ -9,49 +9,6 @@
 
 namespace ava::tui {
 
-std::string sanitize_terminal_text(std::string_view text)
-{
-  std::string sanitized;
-  sanitized.reserve(text.size());
-  for (std::size_t index = 0; index < text.size();)
-  {
-    auto const byte = static_cast<unsigned char>(text[index]);
-    if (byte < 0x20 || byte == 0x7F)
-    {
-      if (byte == '\t')
-      {
-        sanitized += "  ";
-      }
-      else
-      {
-        sanitized.push_back('?');
-      }
-      ++index;
-      continue;
-    }
-
-    auto const length = detail::utf8_sequence_length(byte);
-    char32_t codepoint = 0;
-    if (!detail::decode_utf8_codepoint(text, index, length, codepoint))
-    {
-      sanitized.push_back('?');
-      ++index;
-      continue;
-    }
-
-    if (codepoint >= 0x80 && codepoint <= 0x9F)
-    {
-      sanitized.push_back('?');
-    }
-    else
-    {
-      sanitized.append(text.substr(index, length));
-    }
-    index += length;
-  }
-  return sanitized;
-}
-
 std::vector<std::string> split_lines(std::string_view text)
 {
   std::vector<std::string> lines;

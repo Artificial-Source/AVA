@@ -5,10 +5,7 @@
 #include "ava/app/command_palette.h"
 #include "ava/app/command_sessions.h"
 #include "ava/app/commands.h"
-#include "ava/app/display_settings.h"
-#include "ava/app/interactive_internal.h"
 #include "ava/app/interactive_run_queue.h"
-#include "ava/app/mermaid_tui_bridge.h"
 #include "ava/app/onboarding.h"
 #include "ava/app/plugin_ui_capability.h"
 #include "ava/app/reasoning_controls.h"
@@ -16,8 +13,14 @@
 #include "ava/app/runtime.h"
 #include "ava/app/session_title_coordinator.h"
 #include "ava/app/session_user_turns.h"
-#include "ava/app/startup_overview.h"
-#include "ava/app/subagent_workspace.h"
+#include "ava/app/tui/command_palette_views.h"
+#include "ava/app/tui/interactive_tui_internal.h"
+#include "ava/app/tui/mermaid_tui_bridge.h"
+#include "ava/app/tui/reasoning_selector.h"
+#include "ava/app/tui/startup_overview.h"
+#include "ava/app/tui/subagent_workspace.h"
+#include "ava/app/tui/tui_display_settings.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/theme.h"
@@ -204,9 +207,9 @@ int run_tui(InteractiveState state)
     std::shared_ptr<ava::app::BranchSummaryCoordinator> coordinator;
     ~BranchSummaryShutdownGuard() { coordinator->shutdown(); }
   } branch_summary_shutdown{branch_summary_coordinator};
-  auto model_display = [](ava::config::ModelInfo const& model) {
-    return model.display_name.empty() ? ava::config::model_display_label(model.model_id) : model.display_name;
-  };
+//  auto model_display = [](ava::config::ModelInfo const& model) {
+//    return model.display_name.empty() ? ava::config::model_display_label(model.model_id) : model.display_name;
+//  };
   auto custom_theme_options = [&invocation_paths]() {
     std::vector<ava::tui::ThemeOptionItem> themes;
     for (auto const& theme : ava::app::available_tui_custom_themes(invocation_paths))
@@ -240,8 +243,6 @@ int run_tui(InteractiveState state)
   struct SessionPresentation
   {
     std::string mode;
-    std::string provider;
-    std::string model;
     std::string session_id;
     std::string session_path;
     std::string workspace;
@@ -249,12 +250,10 @@ int run_tui(InteractiveState state)
     std::size_t context_source_count;
     ava::tui::ProjectTrustSnapshot project_trust;
   };
-  auto session_presentation = [&unlocked_session, &model_display]() {
+  auto session_presentation = [&unlocked_session]() {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const workspace = session_r->current_dir().empty() ? session_r->workspace_dir() : session_r->current_dir();
     return SessionPresentation{.mode = ava::agent::to_string(session_r->mode()),
-                               .provider = session_r->model().provider_id,
-                               .model = model_display(session_r->model()),
                                .session_id = session_r->store.session_id(),
                                .session_path = session_r->store.session_path().string(),
                                .workspace = workspace.string(),
@@ -274,17 +273,15 @@ int run_tui(InteractiveState state)
     auto const mermaid_configuration = mermaid_bridge->presentation_configuration();
     auto startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
     return ava::tui::TuiRuntimeStateSnapshot{.mode = std::move(presentation.mode),
-                                             .provider = std::move(presentation.provider),
-                                             .model = std::move(presentation.model),
                                              .session_id = std::move(presentation.session_id),
                                              .session_path = std::move(presentation.session_path),
                                              .workspace = std::move(presentation.workspace),
                                              .git_branch = git_branch_for_sidebar(presentation.workspace_dir),
                                              .context_source_count = presentation.context_source_count,
                                              .status = std::move(status),
-                                             .slash_commands = std::move(delivery.slash_commands),
+                                             .slash_commands = project_slash_command_items(std::move(delivery.slash_commands)),
                                              .slash_catalog_generation = delivery.slash_catalog_generation,
-                                             .file_references = std::move(delivery.file_references),
+                                             .file_references = project_file_reference_items(std::move(delivery.file_references)),
                                              .workspace_catalog_generation = delivery.workspace_catalog_generation,
                                              .custom_themes = custom_theme_options(),
                                              .project_trust = presentation.project_trust,
@@ -302,7 +299,7 @@ int run_tui(InteractiveState state)
   bool session_selector_show_archived = false;
   bool session_selector_show_label_time = false;
   auto session_selector_view_from_catalog = [&]() {
-    return application_catalog.session_view(session_selector_sort,
+    return application_catalog_session_view(application_catalog, session_selector_sort,
                                             session_selector_footer_hint(session_selector_sort, session_selector_named_only, session_selector_show_paths,
                                                                          session_selector_show_archived, session_selector_show_label_time),
                                             session_selector_named_only, session_selector_show_paths, session_selector_show_archived,
@@ -388,10 +385,10 @@ int run_tui(InteractiveState state)
   auto initial_presentation = session_presentation();
   auto const [initial_show_images, initial_image_width_cells, initial_cursor] = copy_effective_display_presentation();
   auto initial_startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
-  auto result = ava::tui::run_interactive_composer(ava::tui::TuiRuntimeOptions{
+  ava::tui::TuiFrontEnd frontend;
+  frontend.register_frontend_data(unlocked_session);
+  auto result = frontend.run(ava::tui::TuiRuntimeOptions{
       .mode = std::move(initial_presentation.mode),
-      .provider = std::move(initial_presentation.provider),
-      .model = std::move(initial_presentation.model),
       .session_id = std::move(initial_presentation.session_id),
       .session_path = std::move(initial_presentation.session_path),
       .workspace = std::move(initial_presentation.workspace),
@@ -400,9 +397,9 @@ int run_tui(InteractiveState state)
       .context_source_count = initial_presentation.context_source_count,
       .initial_status = keybind_status,
       .initial_transcript = std::move(initial_transcript),
-      .slash_commands = initial_catalog_snapshot.slash_commands,
+      .slash_commands = project_slash_command_items(std::move(initial_catalog_snapshot.slash_commands)),
       .slash_catalog_generation = initial_catalog_snapshot.slash_catalog_generation,
-      .file_references = initial_catalog_snapshot.file_references,
+      .file_references = project_file_reference_items(std::move(initial_catalog_snapshot.file_references)),
       .workspace_catalog_generation = initial_catalog_snapshot.workspace_catalog_generation,
       .custom_themes = custom_theme_options(),
       .project_trust = initial_presentation.project_trust,
@@ -908,7 +905,7 @@ int run_tui(InteractiveState state)
             return std::unexpected(std::move(changed.error()));
           return state_snapshot(*changed ? "thinking mode set to Default" : "thinking mode already Default");
         }
-        auto const model = ava::app::runtime::session_ts::rat(unlocked_session)->model();
+        ava::config::ModelInfo const model = ava::app::runtime::session_ts::rat(unlocked_session)->model_selection_r()->model;
         auto selection = ava::app::reasoning_selection_for_level(model, *level);
         if (!selection)
           return std::unexpected(std::move(selection.error()));

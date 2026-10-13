@@ -240,7 +240,7 @@ ava::core::JoinThread make_rpc_compaction_worker(RpcCompactionWorkerOptions opti
         else
         {
           provider_id = config->provider_id;
-          if (provider_id == runtime::session_ts::rat(unlocked_session)->model().provider_id)
+          if (provider_id == runtime::session_ts::rat(unlocked_session)->model_selection_r()->model.provider_id)
           {
             selected_provider = rpc::provider_for_session_model(unlocked_session, options.injected_provider_id, options.injected_provider);
           }
@@ -324,8 +324,10 @@ ava::core::VoidResult run_rpc_loop_impl(runtime::session_ts& unlocked_session, r
 #ifdef CWDEBUG
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    DoutEntering(dc::rpc, "run_rpc_loop(...) with session_id=" << session_r->store.session_id() << ", provider_id=" << session_r->model().provider_id
-                                                               << ", model_id=" << session_r->model().model_id);
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    DoutEntering(dc::rpc, "run_rpc_loop(...) with session_id=" << session_r->store.session_id()
+                                                               << ", provider_id=" << model_selection_r->model.provider_id
+                                                               << ", model_id=" << model_selection_r->model.model_id);
   }
   AVA_ASSERT_SESSION_UNLOCKED(unlocked_session, "calling run_rpc_loop");
 #endif
@@ -365,7 +367,7 @@ ava::core::VoidResult run_rpc_loop_impl(runtime::session_ts& unlocked_session, r
     runtime_options.permission_resolver = build_headless_permission_resolver(HeadlessPermissionPolicyOptions{});
   runtime_options.permission_resolver =
       ava::permissions::build_persistent_permission_rule_resolver(session_r->permission_rule_store(), std::move(runtime_options.permission_resolver));
-  auto const injected_provider_id = session_r->model().provider_id;
+  auto const injected_provider_id = session_r->model_selection_r()->model.provider_id;
 
   CRITICAL_AREA_END_R(session);
 
@@ -1113,7 +1115,7 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
     runtime_options.offline = session_r->is_offline() || options.open_context.offline;
 
     auto catalog = options.open_context.provider_catalog ? options.open_context.provider_catalog : ava::provider::ProviderCatalog::build_builtins_only();
-    auto provider_result = catalog->create(session_r->model().provider_id);
+    auto provider_result = catalog->create(session_r->model_selection_r()->model.provider_id);
     if (!provider_result)
     {
       err << provider_result.error().format() << '\n';

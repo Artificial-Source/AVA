@@ -1354,7 +1354,7 @@ void test_agent_loop_task_subagent_recovers_torn_child_before_resume()
          "foreground task_id resume owns and recovers a torn child before loading and running it");
 }
 
-void test_subagent_config_loads_project_definitions()
+void test_agent_config_loads_project_definitions()
 {
   auto const root = create_empty_root("subagent-config");
 
@@ -1446,23 +1446,22 @@ void test_subagent_config_loads_project_definitions()
             "PRIMARY ONLY";
   }
 
-  auto loaded = ava::agent::load_subagents(ava::agent::SubagentLoadOptions{
+  auto loaded = ava::agent::load_agents(ava::agent::AgentLoadOptions{
       .workspace_root = workspace, .global_agent_dirs = {global_agent_dir}, .project_agent_dirs = {agent_dir}, .include_project_agents = true});
   auto const* reviewer = ava::agent::find_subagent(loaded.subagents, "reviewer");
   auto const* general = ava::agent::find_subagent(loaded.subagents, "general");
-  expect(reviewer && reviewer->description == "Review implementation details." && reviewer->tool_preset == ava::agent::SubagentToolPreset::ReadOnly &&
+  expect(reviewer && reviewer->description == "Review implementation details." && reviewer->tool_preset == ava::agent::AgentToolPreset::ReadOnly &&
              reviewer->max_tool_iterations == 14 && reviewer->system_prompt.find("Inspect files") != std::string::npos &&
-             reviewer->provenance == ava::agent::SubagentDefinitionProvenance::Project,
+             reviewer->provenance == ava::agent::AgentDefinitionProvenance::Project,
          "subagent config loads project-defined read-only subagents with explicit project provenance");
-  expect(general && general->provenance == ava::agent::SubagentDefinitionProvenance::Builtin,
+  expect(general && general->provenance == ava::agent::AgentDefinitionProvenance::Builtin,
          "subagent config keeps builtin subagents from project override with explicit builtin provenance");
   auto ordered_primary = ava::agent::resolve_primary_agent(loaded, "ordered");
   expect(ordered_primary && ordered_primary->system_prompt.find("LEXICALLY LATER") != std::string::npos,
          "same-root duplicate definitions resolve in deterministic lexical path order");
   auto coder_primary = ava::agent::resolve_primary_agent(loaded, "coder");
   expect(coder_primary && coder_primary->system_prompt.find("PROJECT PRIMARY") != std::string::npos &&
-             coder_primary->tool_preset == ava::agent::SubagentToolPreset::ReadOnly &&
-             coder_primary->provenance == ava::agent::SubagentDefinitionProvenance::Project,
+             coder_primary->tool_preset == ava::agent::AgentToolPreset::ReadOnly && coder_primary->provenance == ava::agent::AgentDefinitionProvenance::Project,
          "project mode-all definitions override global primary definitions with explicit project provenance");
   if (coder_primary)
   {
@@ -1485,15 +1484,15 @@ void test_subagent_config_loads_project_definitions()
          "malformed selected primary definitions fail closed with a sanitized validation error");
   expect(std::ranges::any_of(
              loaded.diagnostics,
-             [](ava::agent::SubagentDiagnostic const& diagnostic) { return diagnostic.message.find("collides with a builtin") != std::string::npos; }),
+             [](ava::agent::AgentDiagnostic const& diagnostic) { return diagnostic.message.find("collides with a builtin") != std::string::npos; }),
          "subagent config reports builtin-name collisions");
 
-  auto untrusted = ava::agent::load_subagents(ava::agent::SubagentLoadOptions{
+  auto untrusted = ava::agent::load_agents(ava::agent::AgentLoadOptions{
       .workspace_root = workspace, .global_agent_dirs = {global_agent_dir}, .project_agent_dirs = {agent_dir}, .include_project_agents = false});
   expect(ava::agent::find_subagent(untrusted.subagents, "reviewer") == nullptr, "project subagents are gated by project resource trust");
   auto global_coder = ava::agent::resolve_primary_agent(untrusted, "coder");
   expect(global_coder && global_coder->system_prompt.find("GLOBAL PRIMARY") != std::string::npos &&
-             global_coder->provenance == ava::agent::SubagentDefinitionProvenance::Global,
+             global_coder->provenance == ava::agent::AgentDefinitionProvenance::Global,
          "global primary definitions load without project trust with explicit global provenance");
   expect(!ava::agent::resolve_primary_agent(untrusted, "primary-only"), "project-only primary definitions fail closed without trust");
 
@@ -1539,10 +1538,10 @@ void test_agent_loop_custom_subagent_definition_controls_prompt_and_tools()
       .mode = ava::agent::Mode::Build,
       .model = agent_loop_test::model_invocation_options(),
       .access_token = "token",
-      .subagents = {ava::agent::SubagentDefinition{.name = "reviewer",
-                                                   .description = "Read-only reviewer",
-                                                   .system_prompt = "CUSTOM REVIEWER ROLE",
-                                                   .tool_preset = ava::agent::SubagentToolPreset::ReadOnly}},
+      .subagents = {ava::agent::AgentDefinition{.name = "reviewer",
+                                                .description = "Read-only reviewer",
+                                                .system_prompt = "CUSTOM REVIEWER ROLE",
+                                                .tool_preset = ava::agent::AgentToolPreset::ReadOnly}},
       .permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
         return ava::permissions::PermissionResolution::Allow;
       },

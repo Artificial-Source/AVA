@@ -29,7 +29,7 @@ Suggested Codex command:
 | --- | --- |
 | Config paths | `src/ava/config/xdg_paths.cpp`, `src/ava/config/xdg_paths.h` |
 | Auth/model/prompt config | `src/ava/config/auth*.cpp`, `src/ava/config/model_config.cpp`, `src/ava/config/prompt_config.cpp` |
-| Display/keybindings | `src/ava/app/display_settings.cpp`, `src/ava/tui/keybindings.cpp` |
+| Display/keybindings | `src/ava/app/tui/tui_display_settings.cpp`, `src/ava/tui/keybindings.cpp` |
 | Project trust | `src/ava/app/project_trust.cpp`, command trust handlers |
 | Plugins/MCP/LSP config | `src/ava/plugin/discovery.cpp`, `src/ava/mcp/config.cpp`, `src/ava/lsp/configured_provider.cpp` |
 | Settings UI | `src/ava/tui/runtime.cpp`, `src/ava/app/command_palette.cpp`, `src/ava/app/commands.cpp` |

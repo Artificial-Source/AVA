@@ -32,7 +32,7 @@ namespace runtime_transcript {
 // unbounded paste payload through AVA's OSC 52 transport.
 inline constexpr std::size_t kMaxTerminalClipboardTextBytes = 65'536;  // 64 KiB
 
-[[nodiscard]] std::string assistant_meta_for_snapshot(ComposerSnapshot const& snapshot,
+[[nodiscard]] std::string assistant_meta_for_snapshot(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot,
                                                       std::optional<std::chrono::steady_clock::duration> elapsed = std::nullopt);
 void apply_assistant_turn_meta(std::vector<TranscriptItem>& transcript, std::string const& meta, bool thinking_visible = true);
 std::ptrdiff_t push_fallback_assistant_outputs(ComposerSnapshot& snapshot, std::vector<std::string> const& outputs, std::string const& meta);

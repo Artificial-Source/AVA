@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 
 #include <array>
@@ -11,7 +12,12 @@
 #include <string_view>
 #include <vector>
 
-namespace ava::tui::detail {
+namespace ava::tui {
+
+using ava::app::sanitize_terminal_text;
+class TuiFrontEnd;
+
+namespace detail {
 
 inline constexpr std::size_t kMinWidth = 20;
 inline constexpr std::size_t kMinHeight = 8;
@@ -507,7 +513,7 @@ inline void refresh_transcript_layout_cache(TranscriptLayoutCache& cache, std::v
   refresh_transcript_layout_cache(cache, transcript, generation, width, legacy_tool_presentation(expanded), thinking_visible, compact_spacing);
 }
 
-[[nodiscard]] ComposerFrame render_composer_frame_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
+[[nodiscard]] ComposerFrame render_composer_frame_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
                                                          TranscriptLayoutCache* transcript_cache, std::size_t transcript_generation, bool center_canvas = true,
                                                          bool allow_transcript_gap = true, bool freeze_transcript_layout = false,
                                                          bool allow_frozen_width_mismatch = false);
@@ -524,23 +530,24 @@ inline void refresh_transcript_layout_cache(TranscriptLayoutCache& cache, std::v
 [[nodiscard]] std::optional<std::size_t> path_completion_palette_selection_for_screen_position_cached(ComposerSnapshot const& snapshot, std::size_t row,
                                                                                                       std::size_t column, CompletionMatchCache& cache,
                                                                                                       std::size_t source_revision);
-[[nodiscard]] bool draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
+[[nodiscard]] bool draw_screen_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
                                       TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation, ScreenRowCache& screen_cache,
                                       bool freeze_transcript_layout = false, bool allow_frozen_width_mismatch = false);
-[[nodiscard]] bool draw_processing_footer_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
+[[nodiscard]] bool draw_processing_footer_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
                                                  TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation, ScreenRowCache& screen_cache);
 void clear_composer_terminal_graphics(terminal::Context& terminal_context) noexcept;
 
 [[nodiscard]] std::size_t composer_input_prefix_columns(bool first_line);
-[[nodiscard]] std::string render_composer_footer_line(ComposerSnapshot const& snapshot, std::size_t width);
+[[nodiscard]] std::string render_composer_footer_line(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width);
 [[nodiscard]] std::vector<std::string> input_render_lines(std::string_view input);
 [[nodiscard]] std::vector<ComposerInputRenderLine> input_render_line_spans(std::string_view input, std::size_t width);
 [[nodiscard]] std::size_t composer_block_line_count(ComposerSnapshot const& snapshot, std::size_t height);
 [[nodiscard]] std::size_t composer_block_line_count(ComposerSnapshot const& snapshot, std::size_t height, std::size_t width);
 [[nodiscard]] ComposerInputLayout composer_input_layout(std::size_t input_line_count, std::size_t max_lines, std::size_t draft_scroll_offset,
                                                         std::size_t requested_top_padding_lines);
-[[nodiscard]] std::vector<std::string> render_composer_block(ComposerSnapshot const& snapshot, std::size_t width, std::size_t max_lines);
+[[nodiscard]] std::vector<std::string> render_composer_block(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width, std::size_t max_lines);
 [[nodiscard]] std::size_t input_cursor_column(ComposerSnapshot const& snapshot, std::size_t width);
 [[nodiscard]] std::size_t input_cursor_line(ComposerSnapshot const& snapshot, std::size_t width);
 
-}  // namespace ava::tui::detail
+}  // namespace detail
+}  // namespace ava::tui

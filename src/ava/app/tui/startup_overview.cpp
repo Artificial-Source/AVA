@@ -2,7 +2,8 @@
 #include "ava/app/command_format.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/Session.h"
-#include "ava/app/startup_overview.h"
+#include "ava/app/terminal_text.h"
+#include "ava/app/tui/startup_overview.h"
 #include "ava/agent/mode.h"
 #include "ava/tui/composer.h"
 #include "ava/context/context_loader.h"
@@ -26,7 +27,8 @@ namespace {
   if (text.starts_with("~") || text.starts_with("file:"))
     return true;
   auto lower = std::string(text);
-  for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  for (auto& ch : lower)
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
   static constexpr std::string_view kSecretMarkers[] = {"api_key", "apikey", "token", "secret", "password", "passwd", "authorization", "bearer "};
   for (auto const marker : kSecretMarkers)
   {
@@ -101,7 +103,7 @@ namespace {
 
   auto const raw_truncated = raw.size() > max_bytes;
   auto const bounded_raw = utf8_prefix_within(raw, max_bytes);
-  auto text = ava::tui::sanitize_terminal_text(bounded_raw);
+  auto text = ava::app::sanitize_terminal_text(bounded_raw);
   // Drop path-like or secret-looking labels rather than leak private data.
   if (looks_like_path_or_secret(text))
     return {};
@@ -479,10 +481,11 @@ ava::tui::StartupOverviewSnapshot build_startup_overview_snapshot(runtime::sessi
   // Keep the non-owning spans guarded only for the builder's bounded, in-memory
   // projection; the returned snapshot owns everything it retains.
   SCOPED_CRITICAL_AREA_CR(session_r, session);
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
   auto const& trust = session_r->project_trust();
   auto const mode = ava::agent::to_string(session_r->mode());
-  auto const& provider = session_r->model().provider_id;
-  auto const& model = session_r->model().display_name.empty() ? session_r->model().model_id : session_r->model().display_name;
+  auto const& provider = model_selection_r->model.provider_id;
+  auto const& model = model_selection_r->model.display_name.empty() ? model_selection_r->model.model_id : model_selection_r->model.display_name;
   auto const trust_decision = std::string(to_string(trust.decision));
   auto const project_resources = project_resources_trusted(trust) ? std::string("enabled") : std::string("skipped");
   StartupOverviewBuildInput input{

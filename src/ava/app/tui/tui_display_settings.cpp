@@ -1,5 +1,6 @@
 #include "sys.h"
-#include "ava/app/display_settings.h"
+#include "ava/app/settings_json.h"
+#include "ava/app/tui/tui_display_settings.h"
 #include "ava/tui/theme.h"
 #include "ava/core/atomic_file.h"
 #include "ava/core/json.h"
@@ -32,25 +33,18 @@ std::string lower_ascii(std::string_view text)
 {
   std::string lowered;
   lowered.reserve(text.size());
-  for (char const ch : text) lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+  for (char const ch : text)
+    lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
   return lowered;
 }
 
 std::string trim_ascii(std::string_view text)
 {
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) text.remove_prefix(1);
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0) text.remove_suffix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
+    text.remove_prefix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+    text.remove_suffix(1);
   return std::string(text);
-}
-
-bool is_json_whitespace(char ch) noexcept
-{
-  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
-}
-
-void skip_json_whitespace(std::string_view text, std::size_t& offset) noexcept
-{
-  while (offset < text.size() && is_json_whitespace(text[offset])) ++offset;
 }
 
 ava::core::Error io_error(std::string message, std::filesystem::path const& path, std::error_code const& error)
@@ -283,161 +277,6 @@ ava::core::Result<ava::tui::TuiThemePalette> parse_custom_theme_palette(std::str
   return palette;
 }
 
-struct DisplayJsonEntry
-{
-  std::string key;
-  std::string raw_value;
-};
-
-std::optional<std::size_t> json_string_literal_end(std::string_view text, std::size_t start)
-{
-  if (start >= text.size() || text[start] != '"')
-    return std::nullopt;
-  bool escaped = false;
-  for (std::size_t index = start + 1; index < text.size(); ++index)
-  {
-    auto const ch = text[index];
-    if (escaped)
-    {
-      escaped = false;
-      continue;
-    }
-    if (ch == '\\')
-    {
-      escaped = true;
-      continue;
-    }
-    if (ch == '"')
-      return index;
-  }
-  return std::nullopt;
-}
-
-std::optional<std::size_t> json_balanced_value_end(std::string_view text, std::size_t start)
-{
-  if (start >= text.size() || (text[start] != '{' && text[start] != '['))
-    return std::nullopt;
-  std::vector<char> expected_closers;
-  bool in_string = false;
-  bool escaped = false;
-  for (std::size_t index = start; index < text.size(); ++index)
-  {
-    auto const ch = text[index];
-    if (in_string)
-    {
-      if (escaped)
-      {
-        escaped = false;
-        continue;
-      }
-      if (ch == '\\')
-      {
-        escaped = true;
-        continue;
-      }
-      if (ch == '"')
-        in_string = false;
-      continue;
-    }
-    if (ch == '"')
-    {
-      in_string = true;
-      continue;
-    }
-    if (ch == '{')
-    {
-      expected_closers.push_back('}');
-      continue;
-    }
-    if (ch == '[')
-    {
-      expected_closers.push_back(']');
-      continue;
-    }
-    if (ch == '}' || ch == ']')
-    {
-      if (expected_closers.empty() || expected_closers.back() != ch)
-        return std::nullopt;
-      expected_closers.pop_back();
-      if (expected_closers.empty())
-        return index + 1;
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::size_t> json_value_end(std::string_view text, std::size_t start)
-{
-  if (start >= text.size())
-    return std::nullopt;
-  if (text[start] == '"')
-  {
-    auto const end = json_string_literal_end(text, start);
-    if (!end)
-      return std::nullopt;
-    return *end + 1;
-  }
-  if (text[start] == '{' || text[start] == '[')
-    return json_balanced_value_end(text, start);
-
-  auto end = start;
-  while (end < text.size() && text[end] != ',' && text[end] != '}') ++end;
-  while (end > start && is_json_whitespace(text[end - 1])) --end;
-  return end > start ? std::optional<std::size_t>(end) : std::nullopt;
-}
-
-std::optional<std::vector<DisplayJsonEntry>> top_level_display_entries(std::string_view object)
-{
-  if (!ava::core::json::is_valid_object(object))
-    return std::nullopt;
-
-  std::vector<DisplayJsonEntry> entries;
-  std::size_t offset = 0;
-  skip_json_whitespace(object, offset);
-  if (offset >= object.size() || object[offset] != '{')
-    return std::nullopt;
-  ++offset;
-  skip_json_whitespace(object, offset);
-  if (offset < object.size() && object[offset] == '}')
-    return entries;
-
-  while (offset < object.size())
-  {
-    skip_json_whitespace(object, offset);
-    auto const key_start = offset;
-    auto const key_end = json_string_literal_end(object, key_start);
-    if (!key_end)
-      return std::nullopt;
-    auto raw_key = std::string(object.substr(key_start, *key_end - key_start + 1));
-    auto const decoded_key = ava::core::json::string_field("{\"value\":" + raw_key + "}", "value");
-    if (!decoded_key)
-      return std::nullopt;
-    offset = *key_end + 1;
-    skip_json_whitespace(object, offset);
-    if (offset >= object.size() || object[offset] != ':')
-      return std::nullopt;
-    ++offset;
-    skip_json_whitespace(object, offset);
-    auto const value_start = offset;
-    auto const value_end = json_value_end(object, value_start);
-    if (!value_end)
-      return std::nullopt;
-    auto raw_value = std::string(object.substr(value_start, *value_end - value_start));
-    entries.push_back(DisplayJsonEntry{.key = *decoded_key, .raw_value = std::move(raw_value)});
-    offset = *value_end;
-    skip_json_whitespace(object, offset);
-    if (offset < object.size() && object[offset] == ',')
-    {
-      ++offset;
-      continue;
-    }
-    if (offset < object.size() && object[offset] == '}')
-      return entries;
-    return std::nullopt;
-  }
-  return std::nullopt;
-}
-
 ava::core::Result<std::string> decode_json_string_value(std::string_view raw_value, std::filesystem::path const& path, std::string_view field)
 {
   if (raw_value.empty() || raw_value.front() != '"')
@@ -465,11 +304,11 @@ ava::core::Result<std::vector<std::string>> decode_mermaid_argv(std::string_view
   std::vector<std::string> argv;
   std::size_t total_bytes = 0;
   std::size_t offset = 1;
-  skip_json_whitespace(raw_value, offset);
+  skip_settings_json_whitespace(raw_value, offset);
   if (offset < raw_value.size() && raw_value[offset] == ']')
   {
     ++offset;
-    skip_json_whitespace(raw_value, offset);
+    skip_settings_json_whitespace(raw_value, offset);
     if (offset == raw_value.size())
       return argv;
   }
@@ -478,7 +317,7 @@ ava::core::Result<std::vector<std::string>> decode_mermaid_argv(std::string_view
   {
     if (argv.size() == kMaxMermaidArgCount || raw_value[offset] != '"')
       return std::unexpected(invalid_display_error("mermaid.argv must contain at most 32 strings", path, "mermaid.argv"));
-    auto const literal_end = json_string_literal_end(raw_value, offset);
+    auto const literal_end = settings_json_string_literal_end(raw_value, offset);
     if (!literal_end)
       return std::unexpected(invalid_display_error("mermaid.argv must be an array of strings", path, "mermaid.argv"));
     auto decoded = decode_json_string_value(raw_value.substr(offset, *literal_end - offset + 1), path, "mermaid.argv");
@@ -491,17 +330,17 @@ ava::core::Result<std::vector<std::string>> decode_mermaid_argv(std::string_view
     total_bytes += decoded->size();
     argv.push_back(std::move(*decoded));
     offset = *literal_end + 1;
-    skip_json_whitespace(raw_value, offset);
+    skip_settings_json_whitespace(raw_value, offset);
     if (offset < raw_value.size() && raw_value[offset] == ',')
     {
       ++offset;
-      skip_json_whitespace(raw_value, offset);
+      skip_settings_json_whitespace(raw_value, offset);
       continue;
     }
     if (offset < raw_value.size() && raw_value[offset] == ']')
     {
       ++offset;
-      skip_json_whitespace(raw_value, offset);
+      skip_settings_json_whitespace(raw_value, offset);
       if (offset == raw_value.size())
         break;
     }
@@ -515,7 +354,7 @@ ava::core::Result<std::vector<std::string>> decode_mermaid_argv(std::string_view
 
 ava::core::Result<MermaidDisplaySettings> decode_mermaid_settings(std::string_view raw_value, std::filesystem::path const& path)
 {
-  auto entries = top_level_display_entries(raw_value);
+  auto entries = parse_settings_json_object_entries(raw_value);
   if (!entries)
     return std::unexpected(invalid_display_error("mermaid must be a JSON object", path, "mermaid"));
 
@@ -601,7 +440,7 @@ ava::core::Result<DisplaySettingsDocument> parse_display_settings_document(std::
   if (!ava::core::json::is_valid_object(json))
     return std::unexpected(invalid_display_error("invalid TUI display settings JSON", path));
 
-  auto entries = top_level_display_entries(json);
+  auto entries = parse_settings_json_object_entries(json);
   if (!entries)
     return std::unexpected(invalid_display_error("invalid TUI display settings JSON object", path));
 
@@ -698,10 +537,10 @@ ava::core::Result<DisplaySettingsDocument> parse_display_settings_document(std::
 
 std::string serialize_mermaid_settings(MermaidDisplaySettings const& settings)
 {
-  std::vector<DisplayJsonEntry> entries;
+  std::vector<SettingsJsonEntry> entries;
   entries.reserve(2 + settings.unknown_fields.size());
   if (settings.enabled_configured)
-    entries.push_back(DisplayJsonEntry{.key = "enabled", .raw_value = settings.enabled ? "true" : "false"});
+    entries.push_back(SettingsJsonEntry{.key = "enabled", .raw_key = {}, .raw_value = settings.enabled ? "true" : "false"});
   if (settings.argv_configured)
   {
     std::string argv = "[";
@@ -714,9 +553,10 @@ std::string serialize_mermaid_settings(MermaidDisplaySettings const& settings)
       argv += '"';
     }
     argv += ']';
-    entries.push_back(DisplayJsonEntry{.key = "argv", .raw_value = std::move(argv)});
+    entries.push_back(SettingsJsonEntry{.key = "argv", .raw_key = {}, .raw_value = std::move(argv)});
   }
-  for (auto const& unknown : settings.unknown_fields) entries.push_back(DisplayJsonEntry{.key = unknown.first, .raw_value = unknown.second});
+  for (auto const& unknown : settings.unknown_fields)
+    entries.push_back(SettingsJsonEntry{.key = unknown.first, .raw_key = {}, .raw_value = unknown.second});
 
   std::string out = "{";
   for (std::size_t index = 0; index < entries.size(); ++index)
@@ -734,22 +574,23 @@ std::string serialize_mermaid_settings(MermaidDisplaySettings const& settings)
 
 std::string serialize_display_settings_document(DisplaySettingsDocument const& document)
 {
-  std::vector<DisplayJsonEntry> entries;
+  std::vector<SettingsJsonEntry> entries;
   entries.reserve(6 + document.unknown_fields.size());
   if (document.theme)
-    entries.push_back(DisplayJsonEntry{.key = "theme", .raw_value = std::string("\"") + ava::core::json::escape(*document.theme) + "\""});
+    entries.push_back(SettingsJsonEntry{.key = "theme", .raw_key = {}, .raw_value = std::string("\"") + ava::core::json::escape(*document.theme) + "\""});
   if (document.show_images)
-    entries.push_back(DisplayJsonEntry{.key = "show_images", .raw_value = *document.show_images ? "true" : "false"});
+    entries.push_back(SettingsJsonEntry{.key = "show_images", .raw_key = {}, .raw_value = *document.show_images ? "true" : "false"});
   if (document.image_width_cells)
-    entries.push_back(DisplayJsonEntry{.key = "image_width_cells", .raw_value = std::to_string(*document.image_width_cells)});
+    entries.push_back(SettingsJsonEntry{.key = "image_width_cells", .raw_key = {}, .raw_value = std::to_string(*document.image_width_cells)});
   if (document.cursor_style)
-    entries.push_back(
-        DisplayJsonEntry{.key = "cursor_style", .raw_value = std::string("\"") + std::string(tui_cursor_style_name(*document.cursor_style)) + "\""});
+    entries.push_back(SettingsJsonEntry{
+        .key = "cursor_style", .raw_key = {}, .raw_value = std::string("\"") + std::string(tui_cursor_style_name(*document.cursor_style)) + "\""});
   if (document.cursor_blink)
-    entries.push_back(DisplayJsonEntry{.key = "cursor_blink", .raw_value = *document.cursor_blink ? "true" : "false"});
+    entries.push_back(SettingsJsonEntry{.key = "cursor_blink", .raw_key = {}, .raw_value = *document.cursor_blink ? "true" : "false"});
   if (document.mermaid)
-    entries.push_back(DisplayJsonEntry{.key = "mermaid", .raw_value = serialize_mermaid_settings(*document.mermaid)});
-  for (auto const& unknown : document.unknown_fields) entries.push_back(DisplayJsonEntry{.key = unknown.first, .raw_value = unknown.second});
+    entries.push_back(SettingsJsonEntry{.key = "mermaid", .raw_key = {}, .raw_value = serialize_mermaid_settings(*document.mermaid)});
+  for (auto const& unknown : document.unknown_fields)
+    entries.push_back(SettingsJsonEntry{.key = unknown.first, .raw_key = {}, .raw_value = unknown.second});
 
   if (entries.empty())
     return "{\n}\n";
@@ -1586,7 +1427,8 @@ ava::core::Result<TuiDisplaySettingsWatchState> load_tui_display_settings_watch_
     state.custom_theme_path = settings->custom_theme->path;
     state.custom_theme_revision = settings->custom_theme->revision;
   }
-  for (auto const& theme : discovered.themes) state.custom_theme_catalog.push_back(TuiCustomThemeCatalogEntry{.name = theme.name, .revision = theme.revision});
+  for (auto const& theme : discovered.themes)
+    state.custom_theme_catalog.push_back(TuiCustomThemeCatalogEntry{.name = theme.name, .revision = theme.revision});
   return state;
 }
 

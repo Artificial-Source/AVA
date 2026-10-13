@@ -1,38 +1,11 @@
 #include "sys.h"
 #include "ava/app/command_help.h"
-#include "ava/tui/keybindings.h"
+#include "ava/app/tui/command_hotkeys.h"
 
 #include <algorithm>
 
 namespace ava::app {
 namespace {
-
-std::vector<CommandHotkey> default_command_hotkeys()
-{
-  std::vector<CommandHotkey> hotkeys;
-  for (auto const& item : ava::tui::key_binding_help_items(ava::tui::default_key_bindings()))
-  {
-    // description carries the concise human action label for help/palette surfaces.
-    hotkeys.push_back(CommandHotkey{.action = item.action, .description = item.label.empty() ? item.action : item.label, .keys = item.keys});
-  }
-  return hotkeys;
-}
-
-std::string hotkey_primary_label(CommandHotkey const& item)
-{
-  if (auto const action = ava::tui::key_binding_action_from_name(item.action))
-  {
-    auto label = ava::tui::action_label(*action);
-    if (!label.empty())
-      return label;
-  }
-  return item.action;
-}
-
-std::vector<CommandHotkey> effective_hotkeys(std::vector<CommandHotkey> const& hotkeys)
-{
-  return hotkeys.empty() ? default_command_hotkeys() : hotkeys;
-}
 
 std::string aliases_text(CommandCatalogEntry const& entry)
 {
@@ -88,14 +61,14 @@ std::string command_rows(bool enabled)
 
 std::string command_hotkeys_text(std::vector<CommandHotkey> const& hotkeys)
 {
-  auto const items = effective_hotkeys(hotkeys);
+  auto const items = effective_command_hotkeys(hotkeys);
   std::size_t label_width = 0;
   std::size_t keys_width = 0;
   std::vector<std::string> primaries;
   primaries.reserve(items.size());
   for (auto const& item : items)
   {
-    primaries.push_back(hotkey_primary_label(item));
+    primaries.push_back(command_hotkey_primary_label(item));
     label_width = std::max(label_width, primaries.back().size());
     keys_width = std::max(keys_width, item.keys.size());
   }

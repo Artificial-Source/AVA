@@ -15,6 +15,7 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/RunOptions.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/tui/command_palette_views.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/agent/tool_types.h"
@@ -168,10 +169,10 @@ void test_app_runtime_project_trust_malformed_diagnostics()
 
   auto project_trust = ava::app::runtime::session_ts::rat(unlocked_session)->project_trust();
   expect(project_trust.decision == ava::app::ProjectTrustDecision::Unknown && !ava::app::project_resources_trusted(project_trust),
-          "malformed project trust file leaves project resources skipped");
+         "malformed project trust file leaves project resources skipped");
   expect(project_trust.diagnostic.find("malformed project trust file") != std::string::npos &&
              project_trust.diagnostic.find(ava::app::project_trust_file(paths).string()) != std::string::npos,
-          "runtime records a path-specific project trust parse diagnostic");
+         "runtime records a path-specific project trust parse diagnostic");
 
   auto status = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/trust status"});
   expect(status && status->handled && !status->output.empty() && status->output[0].find("decision=unknown") != std::string::npos &&
@@ -183,7 +184,7 @@ void test_app_runtime_project_trust_malformed_diagnostics()
   project_trust = ava::app::runtime::session_ts::rat(unlocked_session)->project_trust();
   expect(trusted && trusted->handled && !trusted->output.empty() && trusted->output[0].find("project_resources=enabled") != std::string::npos &&
              trusted->output[0].find("diagnostic=") == std::string::npos && project_trust.decision == ava::app::ProjectTrustDecision::Trusted,
-          "/trust project repairs a malformed trust file without retaining stale diagnostics");
+         "/trust project repairs a malformed trust file without retaining stale diagnostics");
 
   write_app_test_file(ava::app::project_trust_file(paths), "{\"decisions\":\"not an array\"}\n");
   auto reloaded = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/reload trust"});
@@ -247,13 +248,13 @@ void test_app_runtime_enabled_plugin_resources_autoload()
   };
 
   expect(session_r->system_prompt().find("Enabled plugin prompt autoload marker") != std::string::npos &&
-              session_r->system_prompt().find("<name>plugin-triage</name>") != std::string::npos &&
-              session_r->system_prompt().find("Enabled plugin triage skill") != std::string::npos &&
-              session_r->system_prompt().find("<scope>plugin</scope>") != std::string::npos,
+             session_r->system_prompt().find("<name>plugin-triage</name>") != std::string::npos &&
+             session_r->system_prompt().find("Enabled plugin triage skill") != std::string::npos &&
+             session_r->system_prompt().find("<scope>plugin</scope>") != std::string::npos,
          "enabled plugin prompt and skill resources appear in the runtime system prompt");
   expect(session_r->system_prompt().find("Disabled plugin prompt must not load") == std::string::npos &&
-              session_r->system_prompt().find("disabled-triage") == std::string::npos &&
-              session_r->system_prompt().find("Disabled plugin triage skill") == std::string::npos,
+             session_r->system_prompt().find("disabled-triage") == std::string::npos &&
+             session_r->system_prompt().find("Disabled plugin triage skill") == std::string::npos,
          "disabled plugin prompt and skill resources are not added to runtime context");
   expect(has_context_source("com.example.autoload/prompts/review.md", ava::context::ContextSourceType::Plugin) &&
              !has_context_source("com.example.disabled/prompts/review.md", ava::context::ContextSourceType::Plugin),
@@ -262,7 +263,7 @@ void test_app_runtime_enabled_plugin_resources_autoload()
              has_freshness_source(ava::app::runtime::FreshnessSourceKind::PluginSkill, "com.example.autoload", "plugin-triage") &&
              !has_freshness_source(ava::app::runtime::FreshnessSourceKind::PluginPrompt, "com.example.disabled", "disabled-review") &&
              !has_freshness_source(ava::app::runtime::FreshnessSourceKind::PluginSkill, "com.example.disabled", "disabled-triage"),
-          "runtime freshness records enabled plugin resources without loading disabled resources");
+         "runtime freshness records enabled plugin resources without loading disabled resources");
 
   CRITICAL_AREA_END_R(session);
 
@@ -453,7 +454,7 @@ void test_app_runtime_enabled_plugin_resource_failures_are_context_visible()
          "failed enabled plugin skill resources remain visible in /context without re-reading the rejected final symlink");
   auto const system_prompt = ava::app::runtime::session_ts::rat(unlocked_session)->system_prompt();
   expect(system_prompt.find("Outside prompt target must not load") == std::string::npos &&
-              system_prompt.find("Outside skill target must not load") == std::string::npos && !std::filesystem::exists(marker),
+             system_prompt.find("Outside skill target must not load") == std::string::npos && !std::filesystem::exists(marker),
          "failed plugin static resources never consume outside content through intermediate or final symlinks and do not execute plugin entrypoints");
 }
 
@@ -604,8 +605,7 @@ void test_app_runtime_plugin_install_remove_commands()
   if (!symlink_error)
   {
     auto parent_symlink_install =
-        ava::app::run_command(unlocked_session,
-                              ava::app::CommandRequest{.command = "/plugins install " + (symlink_parent / "plugin.json").generic_string()});
+        ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/plugins install " + (symlink_parent / "plugin.json").generic_string()});
     expect(parent_symlink_install && parent_symlink_install->handled && !parent_symlink_install->output.empty() &&
                parent_symlink_install->output[0].find("invalid_argument: plugin install manifest parent must be a real directory") != std::string::npos &&
                !std::filesystem::exists(paths.ava_config_dir / "plugins" / "com.example.symlinkparent") &&

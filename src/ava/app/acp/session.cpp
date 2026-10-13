@@ -203,7 +203,8 @@ std::filesystem::path const& AcpSessionHost::current_dir(runtime::session_ts::cr
 bool AcpSessionHost::accepts_images() const noexcept
 {
   SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session_);
-  return std::ranges::find(session_r->model().input_modalities, "image") != session_r->model().input_modalities.end();
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+  return std::ranges::find(model_selection_r->model.input_modalities, "image") != model_selection_r->model.input_modalities.end();
 }
 
 ava::core::VoidResult AcpSessionHost::send_text_update(std::string_view kind, std::string_view text, std::string_view message_id) const

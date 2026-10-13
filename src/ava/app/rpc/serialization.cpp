@@ -836,6 +836,7 @@ SessionResultSerializer::SessionResultSerializer(utils::Badge<runtime::Session>,
 
 std::string SessionResultSerializer::state_result_json(bool cancel_requested) const
 {
+  runtime::ModelSelection_ts::crat model_selection_r = session_.model_selection_r();
   std::string json = "{";
   json += "\"protocol_version\":";
   json += std::to_string(kRpcProtocolVersion);
@@ -846,9 +847,9 @@ std::string SessionResultSerializer::state_result_json(bool cancel_requested) co
   json += ',';
   json += string_field_json("mode", ava::agent::to_string(session_.mode()));
   json += ',';
-  json += string_field_json("provider", session_.model().provider_id);
+  json += string_field_json("provider", model_selection_r->model.provider_id);
   json += ',';
-  json += string_field_json("model", session_.model().model_id);
+  json += string_field_json("model", model_selection_r->model.model_id);
   json += ',';
   json += string_field_json("workspace_dir", session_.workspace_dir().string());
   json += ',';
@@ -860,25 +861,25 @@ std::string SessionResultSerializer::state_result_json(bool cancel_requested) co
   json += ',';
   json += bool_field_json("cancel_requested", cancel_requested);
   json += ',';
-  json += bool_field_json("reasoning_enabled", session_.reasoning().has_value());
-  if (session_.reasoning())
+  json += bool_field_json("reasoning_enabled", model_selection_r->reasoning.has_value());
+  if (model_selection_r->reasoning)
   {
     json += ',';
-    json += string_field_json("reasoning_level", session_.reasoning()->level);
-    if (session_.reasoning()->provider_level && *session_.reasoning()->provider_level != session_.reasoning()->level)
+    json += string_field_json("reasoning_level", model_selection_r->reasoning->level);
+    if (model_selection_r->reasoning->provider_level && *model_selection_r->reasoning->provider_level != model_selection_r->reasoning->level)
     {
       json += ',';
-      json += string_field_json("reasoning_provider_level", *session_.reasoning()->provider_level);
+      json += string_field_json("reasoning_provider_level", *model_selection_r->reasoning->provider_level);
     }
-    if (session_.reasoning()->budget_tokens)
+    if (model_selection_r->reasoning->budget_tokens)
     {
       json += ',';
-      json += integer_field_json("reasoning_budget_tokens", *session_.reasoning()->budget_tokens);
+      json += integer_field_json("reasoning_budget_tokens", *model_selection_r->reasoning->budget_tokens);
     }
-    if (!session_.reasoning()->display.empty())
+    if (!model_selection_r->reasoning->display.empty())
     {
       json += ',';
-      json += string_field_json("reasoning_display", session_.reasoning()->display);
+      json += string_field_json("reasoning_display", model_selection_r->reasoning->display);
     }
   }
   json += ',';
@@ -980,20 +981,21 @@ ava::core::Result<std::string> SessionResultSerializer::list_models_result_json(
   if (!registry)
     return std::unexpected(std::move(registry.error()));
 
+  ava::config::ModelInfo const current_model = session_.model_selection_r()->model;
   auto models = ava::config::effective_models(*registry);
   bool current_in_catalog = false;
   for (auto const& model : models)
   {
-    current_in_catalog = current_in_catalog || (model.provider_id == session_.model().provider_id && model.model_id == session_.model().model_id);
+    current_in_catalog = current_in_catalog || (model.provider_id == current_model.provider_id && model.model_id == current_model.model_id);
   }
   std::string json = "{";
   json += string_field_json("default_provider", registry->default_provider_id);
   json += ',';
   json += string_field_json("default_model", registry->default_model_id);
   json += ',';
-  json += string_field_json("current_provider", session_.model().provider_id);
+  json += string_field_json("current_provider", current_model.provider_id);
   json += ',';
-  json += string_field_json("current_model", session_.model().model_id);
+  json += string_field_json("current_model", current_model.model_id);
   json += ",\"models\":[";
   for (std::size_t index = 0; index < models.size(); ++index)
   {
@@ -1005,7 +1007,7 @@ ava::core::Result<std::string> SessionResultSerializer::list_models_result_json(
   {
     if (!models.empty())
       json += ',';
-    json += model_info_json(session_.model(), false);
+    json += model_info_json(current_model, false);
   }
   json += "]}";
   return json;

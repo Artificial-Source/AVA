@@ -169,7 +169,7 @@ and `core/tools/renderers/edit.ts:171–236`; Zeron
 AVA hierarchy, not equivalence or adoption of their backend behavior.
 
 First-party constraints are
-[`SubagentDefinition`](../../src/ava/agent/subagent_config.h),
+[`AgentDefinition`](../../src/ava/agent/agent_config.h),
 [`inherited_child_options`](../../src/ava/agent/agent_turn_subagents.cpp),
 [MCP's stdio/one-shot contract](../extensions/mcp.md) and
 [public RPC](../rpc-protocol.md). There is no backend definition mutation or MCP

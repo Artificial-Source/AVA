@@ -11,6 +11,7 @@
 
 void run_tui_completion_tests()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto const& slash_commands = tui_test_support::standard_slash_commands();
   auto const grep_commands = ava::tui::filter_slash_commands("/gr", slash_commands);
   expect(grep_commands.size() == 1 && grep_commands.front().command == "/grep", "tui slash palette filters commands by typed prefix");
@@ -67,40 +68,40 @@ void run_tui_completion_tests()
                                                                                                    .append_space = false}}}};
   auto const labelled_matches = ava::tui::filter_slash_commands("/models sol", labelled_argument_commands);
   auto const labelled_selection = ava::tui::slash_command_selection_text("/models sol", labelled_argument_commands, 0);
-  auto const labelled_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                     .provider = "openai",
-                                                                                     .model = "gpt-5.5",
-                                                                                     .session_id = "session_test",
-                                                                                     .input = "/models sol",
-                                                                                     .status = "ready",
-                                                                                     .transcript = {},
-                                                                                     .slash_commands = labelled_argument_commands,
-                                                                                     .width = 80,
-                                                                                     .height = 12});
+  auto const labelled_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                          //.provider = "openai",
+                                                                                                          //.model = "gpt-5.5",
+                                                                                                          .session_id = "session_test",
+                                                                                                          .input = "/models sol",
+                                                                                                          .status = "ready",
+                                                                                                          .transcript = {},
+                                                                                                          .slash_commands = labelled_argument_commands,
+                                                                                                          .width = 80,
+                                                                                                          .height = 12});
   expect(labelled_matches.size() == 1 && labelled_matches.front().display_label == "GPT 5.5 Sol" && labelled_selection == "/models openai/gpt-5.5" &&
              std::ranges::any_of(labelled_palette, [](std::string const& line) { return strip_sgr(line).find("GPT 5.5 Sol") != std::string::npos; }),
          "F3 model completion labels are searchable and visible while canonical values are inserted");
 
-  auto const premium_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                    .provider = "openai",
-                                                                                    .model = "gpt-5.5",
-                                                                                    .session_id = "session_test",
-                                                                                    .input = "/models sol",
-                                                                                    .status = "ready",
-                                                                                    .transcript = {},
-                                                                                    .slash_commands = labelled_argument_commands,
-                                                                                    .width = 80,
-                                                                                    .height = 12});
-  auto const compact_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                    .provider = "openai",
-                                                                                    .model = "gpt-5.5",
-                                                                                    .session_id = "session_test",
-                                                                                    .input = "/models sol",
-                                                                                    .status = "ready",
-                                                                                    .transcript = {},
-                                                                                    .slash_commands = labelled_argument_commands,
-                                                                                    .width = 40,
-                                                                                    .height = 12});
+  auto const premium_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                         //.provider = "openai",
+                                                                                                         //.model = "gpt-5.5",
+                                                                                                         .session_id = "session_test",
+                                                                                                         .input = "/models sol",
+                                                                                                         .status = "ready",
+                                                                                                         .transcript = {},
+                                                                                                         .slash_commands = labelled_argument_commands,
+                                                                                                         .width = 80,
+                                                                                                         .height = 12});
+  auto const compact_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                         //.provider = "openai",
+                                                                                                         //.model = "gpt-5.5",
+                                                                                                         .session_id = "session_test",
+                                                                                                         .input = "/models sol",
+                                                                                                         .status = "ready",
+                                                                                                         .transcript = {},
+                                                                                                         .slash_commands = labelled_argument_commands,
+                                                                                                         .width = 40,
+                                                                                                         .height = 12});
   expect(std::ranges::any_of(premium_palette,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -112,16 +113,16 @@ void run_tui_completion_tests()
 
   std::vector<ava::tui::FileReferenceItem> const disabled_references = {
       ava::tui::FileReferenceItem{.value = "private.txt", .description = "\x1b[2Jblocked\x01", .enabled = false, .disabled_reason = "outside workspace"}};
-  auto const disabled_reference_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                               .provider = "openai",
-                                                                                               .model = "gpt-5.5",
-                                                                                               .session_id = "session_test",
-                                                                                               .input = "see @p",
-                                                                                               .status = "ready",
-                                                                                               .transcript = {},
-                                                                                               .file_references = disabled_references,
-                                                                                               .width = 80,
-                                                                                               .height = 12});
+  auto const disabled_reference_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                                    //.provider = "openai",
+                                                                                                                    //.model = "gpt-5.5",
+                                                                                                                    .session_id = "session_test",
+                                                                                                                    .input = "see @p",
+                                                                                                                    .status = "ready",
+                                                                                                                    .transcript = {},
+                                                                                                                    .file_references = disabled_references,
+                                                                                                                    .width = 80,
+                                                                                                                    .height = 12});
   expect(
       ava::tui::file_reference_selection_disabled_reason("see @p", std::string("see @p").size(), disabled_references, 0) == "outside workspace" &&
           ava::tui::path_completion_selection_disabled_reason("private", std::string("private").size(), disabled_references, 0, true) == "outside workspace" &&
@@ -192,8 +193,8 @@ void run_tui_completion_tests()
          "selections");
 
   auto dock_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                  .provider = "openai",
-                                                  .model = "gpt-5.5",
+                                                  //.provider = "openai",
+                                                  //.model = "gpt-5.5",
                                                   .session_id = "session_test",
                                                   .input = "/m",
                                                   .status = "invalid_argument: alert one\nalert two",
@@ -232,8 +233,8 @@ void run_tui_completion_tests()
 
   auto active_hint_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_test",
       .input = "follow up",
       .status = "invalid_argument: admitted",
@@ -242,9 +243,9 @@ void run_tui_completion_tests()
       .transcript = {},
       .width = 80,
       .height = 12};
-  auto const active_hint_lines = ava::tui::render_composer(active_hint_snapshot);
+  auto const active_hint_lines = ava::tui::render_composer(frontend.frontend(), active_hint_snapshot);
   active_hint_snapshot.processing = false;
-  auto const idle_hint_lines = ava::tui::render_composer(active_hint_snapshot);
+  auto const idle_hint_lines = ava::tui::render_composer(frontend.frontend(), active_hint_snapshot);
   expect(std::ranges::any_of(active_hint_lines,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -290,17 +291,17 @@ void run_tui_completion_tests()
              !ava::tui::slash_palette_visible("/connect openai", connect_slash_commands) &&
              ava::tui::filter_slash_commands("/connect openai ", connect_slash_commands).empty(),
          "tui slash palette lets /connect submit directly so provider and method choices stay in the centered modal");
-  auto const argument_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                     .provider = "openai",
-                                                                                     .model = "gpt-5.5",
-                                                                                     .session_id = "session_test",
-                                                                                     .input = "/model open",
-                                                                                     .status = "ready",
-                                                                                     .transcript = {},
-                                                                                     .slash_commands = argument_slash_commands,
-                                                                                     .selected_slash_command_index = 0,
-                                                                                     .width = 96,
-                                                                                     .height = 10});
+  auto const argument_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                          //.provider = "openai",
+                                                                                                          //.model = "gpt-5.5",
+                                                                                                          .session_id = "session_test",
+                                                                                                          .input = "/model open",
+                                                                                                          .status = "ready",
+                                                                                                          .transcript = {},
+                                                                                                          .slash_commands = argument_slash_commands,
+                                                                                                          .selected_slash_command_index = 0,
+                                                                                                          .width = 96,
+                                                                                                          .height = 10});
   expect(std::ranges::any_of(argument_palette,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -321,18 +322,19 @@ void run_tui_completion_tests()
           .command = "/thinking", .description = "Toggle thinking visibility; /thinking details inspects the latest block", .category = "Session"}};
   expect(!ava::tui::slash_palette_visible("/copy", bare_exact_commands) && !ava::tui::slash_palette_visible("/thinking", bare_exact_commands),
          "bare /copy and /thinking remain exact one-Enter submissions without a completion palette");
-  auto const cursor_scoped_argument_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                                   .provider = "openai",
-                                                                                                   .model = "gpt-5.5",
-                                                                                                   .session_id = "session_test",
-                                                                                                   .input = command_cursor_input,
-                                                                                                   .status = "ready",
-                                                                                                   .transcript = {},
-                                                                                                   .slash_commands = argument_slash_commands,
-                                                                                                   .selected_slash_command_index = 0,
-                                                                                                   .width = 96,
-                                                                                                   .height = 10,
-                                                                                                   .input_cursor = command_cursor});
+  auto const cursor_scoped_argument_palette =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = command_cursor_input,
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .slash_commands = argument_slash_commands,
+                                                                                .selected_slash_command_index = 0,
+                                                                                .width = 96,
+                                                                                .height = 10,
+                                                                                .input_cursor = command_cursor});
   expect(std::ranges::any_of(cursor_scoped_argument_palette, [](std::string const& line) { return strip_sgr(line).find("/models") != std::string::npos; }) &&
              std::ranges::none_of(cursor_scoped_argument_palette,
                                   [](std::string const& line) { return strip_sgr(line).find("openai/gpt-5.5") != std::string::npos; }),
@@ -352,17 +354,17 @@ void run_tui_completion_tests()
          "tui slash path completion keeps directory prefixes open for nested file completions");
   expect(!ava::tui::slash_palette_visible("/read /", path_slash_commands) && ava::tui::filter_slash_commands("/read /", path_slash_commands).empty(),
          "tui slash argument palette yields when the current prefix has no backend completion match");
-  auto const path_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                 .provider = "openai",
-                                                                                 .model = "gpt-5.5",
-                                                                                 .session_id = "session_test",
-                                                                                 .input = "/read src/",
-                                                                                 .status = "ready",
-                                                                                 .transcript = {},
-                                                                                 .slash_commands = path_slash_commands,
-                                                                                 .selected_slash_command_index = 1,
-                                                                                 .width = 96,
-                                                                                 .height = 10});
+  auto const path_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                      //.provider = "openai",
+                                                                                                      //.model = "gpt-5.5",
+                                                                                                      .session_id = "session_test",
+                                                                                                      .input = "/read src/",
+                                                                                                      .status = "ready",
+                                                                                                      .transcript = {},
+                                                                                                      .slash_commands = path_slash_commands,
+                                                                                                      .selected_slash_command_index = 1,
+                                                                                                      .width = 96,
+                                                                                                      .height = 10});
   expect(std::ranges::any_of(path_palette,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -427,21 +429,21 @@ void run_tui_completion_tests()
   expect(parenthesized_reference_selection.text == "compare (@src/main.cpp)" &&
              parenthesized_reference_selection.cursor == std::string("compare (@src/main.cpp").size(),
          "tui file reference selection preserves closing punctuation without inserting an extra space");
-  auto const reference_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                      .provider = "openai",
-                                                                                      .model = "gpt-5.5",
-                                                                                      .session_id = "session_test",
-                                                                                      .input = "review @sr",
-                                                                                      .status = "ready",
-                                                                                      .transcript = {},
-                                                                                      .file_references = file_references,
-                                                                                      .selected_slash_command_index = 1,
-                                                                                      .width = 96,
-                                                                                      .height = 10,
-                                                                                      .input_cursor = std::string("review @sr").size()});
+  auto const reference_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                           //.provider = "openai",
+                                                                                                           //.model = "gpt-5.5",
+                                                                                                           .session_id = "session_test",
+                                                                                                           .input = "review @sr",
+                                                                                                           .status = "ready",
+                                                                                                           .transcript = {},
+                                                                                                           .file_references = file_references,
+                                                                                                           .selected_slash_command_index = 1,
+                                                                                                           .width = 96,
+                                                                                                           .height = 10,
+                                                                                                           .input_cursor = std::string("review @sr").size()});
   auto const reference_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                             .provider = "openai",
-                                                             .model = "gpt-5.5",
+                                                             //.provider = "openai",
+                                                             //.model = "gpt-5.5",
                                                              .session_id = "session_test",
                                                              .input = "review @sr",
                                                              .status = "ready",
@@ -491,18 +493,19 @@ void run_tui_completion_tests()
              !ava::tui::file_reference_palette_selection_for_screen_position(centered_reference_snapshot, centered_reference_layout->first_item_row, 20) &&
              !ava::tui::file_reference_palette_selection_for_screen_position(centered_reference_snapshot, centered_reference_layout->first_item_row, 141),
          "F3 centered @ palette accepts both canvas edges and rejects the exact left and right gutters");
-  auto const spaced_reference_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                             .provider = "openai",
-                                                                                             .model = "gpt-5.5",
-                                                                                             .session_id = "session_test",
-                                                                                             .input = "review @my",
-                                                                                             .status = "ready",
-                                                                                             .transcript = {},
-                                                                                             .file_references = file_references,
-                                                                                             .selected_slash_command_index = 0,
-                                                                                             .width = 96,
-                                                                                             .height = 10,
-                                                                                             .input_cursor = std::string("review @my").size()});
+  auto const spaced_reference_palette =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "review @my",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .file_references = file_references,
+                                                                                .selected_slash_command_index = 0,
+                                                                                .width = 96,
+                                                                                .height = 10,
+                                                                                .input_cursor = std::string("review @my").size()});
   expect(std::ranges::any_of(spaced_reference_palette,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -577,21 +580,22 @@ void run_tui_completion_tests()
       ava::tui::path_completion_selection_text("/read main", std::string("/read main").size(), file_references, 0, true);
   expect(forced_slash_argument_selection.text == "/read src/main.cpp" && forced_slash_argument_selection.cursor == forced_slash_argument_selection.text.size(),
          "tui forced path completion replaces only the active slash-command argument token");
-  auto const normal_path_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                        .provider = "openai",
-                                                                                        .model = "gpt-5.5",
-                                                                                        .session_id = "session_test",
-                                                                                        .input = "inspect src/",
-                                                                                        .status = "ready",
-                                                                                        .transcript = {},
-                                                                                        .file_references = file_references,
-                                                                                        .selected_slash_command_index = 1,
-                                                                                        .width = 96,
-                                                                                        .height = 10,
-                                                                                        .input_cursor = std::string("inspect src/").size()});
+  auto const normal_path_palette =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "inspect src/",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .file_references = file_references,
+                                                                                .selected_slash_command_index = 1,
+                                                                                .width = 96,
+                                                                                .height = 10,
+                                                                                .input_cursor = std::string("inspect src/").size()});
   auto const normal_path_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                               .provider = "openai",
-                                                               .model = "gpt-5.5",
+                                                               //.provider = "openai",
+                                                               //.model = "gpt-5.5",
                                                                .session_id = "session_test",
                                                                .input = "inspect src/",
                                                                .status = "ready",
@@ -641,19 +645,20 @@ void run_tui_completion_tests()
              !ava::tui::path_completion_palette_selection_for_screen_position(centered_path_snapshot, centered_path_layout->first_item_row, 20) &&
              !ava::tui::path_completion_palette_selection_for_screen_position(centered_path_snapshot, centered_path_layout->first_item_row, 141),
          "F3 centered path palette accepts both canvas edges and rejects the exact left and right gutters");
-  auto const forced_path_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                        .provider = "openai",
-                                                                                        .model = "gpt-5.5",
-                                                                                        .session_id = "session_test",
-                                                                                        .input = "inspect src",
-                                                                                        .status = "ready",
-                                                                                        .transcript = {},
-                                                                                        .file_references = file_references,
-                                                                                        .selected_slash_command_index = 0,
-                                                                                        .path_completion_force_active = true,
-                                                                                        .width = 96,
-                                                                                        .height = 10,
-                                                                                        .input_cursor = std::string("inspect src").size()});
+  auto const forced_path_palette =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "inspect src",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .file_references = file_references,
+                                                                                .selected_slash_command_index = 0,
+                                                                                .path_completion_force_active = true,
+                                                                                .width = 96,
+                                                                                .height = 10,
+                                                                                .input_cursor = std::string("inspect src").size()});
   expect(std::ranges::any_of(forced_path_palette,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);

@@ -296,7 +296,7 @@ class BasicWindow
   // https://invisible-island.net/ncurses/man/curs_in_wch.3x.html
 
   // Read the complex character under the cursor into `complex_char` without changing the BasicWindow.
-  void  in_wch(ComplexChar& complex_char) const;                        // win_wch
+  void in_wch(ComplexChar& complex_char) const;                         // win_wch
   // Move to `pos` and read that complex character into `complex_char`.
   // Returns false when pos is out of bounds or reading fails, leaving complex_char unchanged.
   bool in_wch(Position pos, ComplexChar& complex_char) const;           // mvwin_wch

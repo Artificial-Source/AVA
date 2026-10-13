@@ -1386,6 +1386,7 @@ void test_screen_row_unicode_readback()
 // Reads the runner's output stream to check that cached frame updates do not emit unexpected controls.
 VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile const& profile)
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   VirtualTerminalResult result;
   ava::tui::terminal::Context& terminal_context = ava::core::Application::instance().terminal_context();
   FILE* output = terminal_context.output_stream();
@@ -1400,8 +1401,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
     auto const ime_sensitive_input = std::string("a") + "\xE7\x95\x8C" + "e" + "\xCC\x81";
     auto const snapshot =
         ava::tui::ComposerSnapshot{.mode = "build",
-                                   .provider = "openai",
-                                   .model = "gpt-5.5",
+                                   //.provider = "openai",
+                                   //.model = "gpt-5.5",
                                    .session_id = "session_term",
                                    .input = ime_sensitive_input,
                                    .status = "ready",
@@ -1411,7 +1412,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
                                    .input_cursor = ime_sensitive_input.size()};
     auto const canvas = ava::tui::composer_canvas_layout(snapshot);
     auto const expected_column = canvas.left + ava::tui::detail::input_cursor_column(snapshot, canvas.content_width);
-    result.base_drawn = ava::tui::draw_screen(snapshot);
+    result.base_drawn = ava::tui::draw_screen(frontend.frontend(), snapshot);
     // Check the terminal-default background on the isolated dark baseline screen.
     if (!profile.no_color && profile.name == "xterm baseline" && terminal_context.has_colors())
     {
@@ -1436,9 +1437,9 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
                                                           .placeholder = "Search profiles",
                                                           .empty_text = "No profiles",
                                                           .footer_hint = "Esc closes"};
-    result.modal_drawn = ava::tui::draw_screen(modal_snapshot);
+    result.modal_drawn = ava::tui::draw_screen(frontend.frontend(), modal_snapshot);
 
-    auto const restored_drawn = ava::tui::draw_screen(snapshot);
+    auto const restored_drawn = ava::tui::draw_screen(frontend.frontend(), snapshot);
     auto const cursor = terminal_context.stdscr().getyx();
     result.cursor_restored_after_modal = restored_drawn && cursor.col() == expected_column - 1 && cursor.row() < terminal_context.rows();
 
@@ -1453,8 +1454,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
       ava::tui::detail::CompletionMatchCache completion_cache;
       ava::tui::detail::TranscriptLayoutCache transcript_cache;
       ava::tui::detail::ScreenRowCache screen_cache;
-      if (!ava::tui::detail::draw_screen_cached(cached_snapshot, completion_cache, cached_snapshot.file_references_generation, transcript_cache,
-                                                cached_snapshot.transcript_generation, screen_cache))
+      if (!ava::tui::detail::draw_screen_cached(frontend.frontend(), cached_snapshot, completion_cache, cached_snapshot.file_references_generation,
+                                                transcript_cache, cached_snapshot.transcript_generation, screen_cache))
       {
         return false;
       }
@@ -1471,8 +1472,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
         return false;
 
       cached_snapshot.input.replace(0, std::string_view("UPPER-CACHE-ROW").size(), "EDITD-CACHE-ROW");
-      if (!ava::tui::detail::draw_screen_cached(cached_snapshot, completion_cache, cached_snapshot.file_references_generation, transcript_cache,
-                                                cached_snapshot.transcript_generation, screen_cache))
+      if (!ava::tui::detail::draw_screen_cached(frontend.frontend(), cached_snapshot, completion_cache, cached_snapshot.file_references_generation,
+                                                transcript_cache, cached_snapshot.transcript_generation, screen_cache))
       {
         return false;
       }
@@ -1505,8 +1506,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
           return std::nullopt;
         auto const before = std::ftell(output);
         if (before < 0 ||
-            !ava::tui::detail::draw_screen_cached(graphic_snapshot, completion_cache, graphic_snapshot.file_references_generation, transcript_cache,
-                                                  graphic_snapshot.transcript_generation, screen_cache) ||
+            !ava::tui::detail::draw_screen_cached(frontend.frontend(), graphic_snapshot, completion_cache, graphic_snapshot.file_references_generation,
+                                                  transcript_cache, graphic_snapshot.transcript_generation, screen_cache) ||
             std::fflush(output) != 0)
         {
           return std::nullopt;
@@ -1549,7 +1550,7 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
                                                               .base64_data = std::make_shared<std::string const>("FOOTER_ONLY_KITTY_MARKER"),
                                                               .dimensions = ava::tui::ImageDimensions{.width_px = 20, .height_px = 20},
                                                               .image_id = 31337}}};
-      if (!ava::tui::draw_screen(footer_snapshot))
+      if (!ava::tui::draw_screen(frontend.frontend(), footer_snapshot))
         return false;
       static_cast<void>(std::fflush(output));
       auto const output_before_footer = std::ftell(output);
@@ -1561,8 +1562,8 @@ VirtualTerminalResult exercise_virtual_terminal_profile(VirtualTerminalProfile c
       for (std::size_t frame = 0; frame != 4; ++frame)
       {
         footer_snapshot.spinner_frame = frame;
-        if (!ava::tui::detail::draw_processing_footer_cached(footer_snapshot, completion_cache, footer_snapshot.file_references_generation, transcript_cache,
-                                                             footer_snapshot.transcript_generation, screen_cache))
+        if (!ava::tui::detail::draw_processing_footer_cached(frontend.frontend(), footer_snapshot, completion_cache, footer_snapshot.file_references_generation,
+                                                             transcript_cache, footer_snapshot.transcript_generation, screen_cache))
         {
           return false;
         }
@@ -1873,6 +1874,7 @@ void test_startup_input_fifo_order_and_cap()
 
 void test_osc11_handler_arming_and_virtual_probe()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   ScopedEnvVar no_color_guard("NO_COLOR", "");
   ScopedEnvVar theme_env_guard("AVA_TUI_THEME", "");
   ScopedEnvVar colorfgbg_guard("COLORFGBG", "15;0");
@@ -1932,8 +1934,8 @@ void test_osc11_handler_arming_and_virtual_probe()
   if (queued)
   {
     auto const snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                     .provider = "openai",
-                                                     .model = "gpt-5.5",
+                                                     //.provider = "openai",
+                                                     //.model = "gpt-5.5",
                                                      .session_id = "session_osc11",
                                                      .input = queued->text,
                                                      .status = "ready",
@@ -1941,7 +1943,7 @@ void test_osc11_handler_arming_and_virtual_probe()
                                                      .width = 80,
                                                      .height = 14,
                                                      .input_cursor = queued->text.size()};
-    expect(ava::tui::draw_screen(snapshot), "first rendered frame after OSC 11 detection draws successfully");
+    expect(ava::tui::draw_screen(frontend.frontend(), snapshot), "first rendered frame after OSC 11 detection draws successfully");
     auto& terminal_context = ava::core::Application::instance().terminal_context();
     if (terminal_context.has_colors())
     {

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/agent/question.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
@@ -203,9 +204,13 @@ void populate_display_section(SelectListView& view, ComposerSnapshot const& snap
   add_settings_action_row(view, std::string(kSettingsDraftThinking), "Thinking blocks", snapshot.thinking_visible ? "visible" : "hidden");
 }
 
-void populate_models_section(SelectListView& view, ComposerSnapshot const& snapshot)
+void populate_models_section(TuiFrontEnd* frontend, SelectListView& view, ComposerSnapshot const& snapshot)
 {
-  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(snapshot.provider) + "/" + value_or_unknown(snapshot.model));
+  std::string provider;
+  std::string model_display;
+  [[maybe_unused]] bool provider_changed = frontend->model_selection().refresh_provider(frontend, provider);
+  [[maybe_unused]] bool model_changed = frontend->model_selection().refresh_model_display(frontend, model_display);
+  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(provider) + "/" + value_or_unknown(model_display));
   add_settings_action_row(view, std::string(kSettingsOpenReasoning), "Reasoning", snapshot.reasoning_status.value_or("default"));
   add_settings_action_row(view, std::string(kSettingsOpenScopedModels), "Cycle scope", "Ctrl+P");
 }
@@ -602,22 +607,26 @@ QuestionPromptView question_prompt_view(ava::agent::QuestionPrompt const& prompt
   return view;
 }
 
-SelectListView build_settings_select_list_view_for_section(SettingsSection section, ComposerSnapshot const& snapshot, TuiKeyBindings const& bindings,
-                                                           std::string footer_hint)
+SelectListView build_settings_root_select_list_view(std::string footer_hint)
+{
+  auto view = make_settings_shell("Settings", "No settings match", footer_hint.empty() ? std::string("Enter open · Esc close") : std::move(footer_hint));
+  view.items.reserve(6);
+  add_section_row(view, kSettingsSectionTheme, "Theme");
+  add_section_row(view, kSettingsSectionDisplay, "Display");
+  add_section_row(view, kSettingsSectionModels, "Model");
+  add_section_row(view, kSettingsSectionInput, "Input");
+  add_section_row(view, kSettingsSectionSessions, "Workspace");
+  add_section_row(view, kSettingsSectionTools, "Tools");
+  return view;
+}
+
+SelectListView build_settings_select_list_view_for_section(TuiFrontEnd* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
+                                                           TuiKeyBindings const& bindings, std::string footer_hint)
 {
   switch (section)
   {
-    case SettingsSection::Root: {
-      auto view = make_settings_shell("Settings", "No settings match", footer_hint.empty() ? std::string("Enter open · Esc close") : std::move(footer_hint));
-      view.items.reserve(6);
-      add_section_row(view, kSettingsSectionTheme, "Theme");
-      add_section_row(view, kSettingsSectionDisplay, "Display");
-      add_section_row(view, kSettingsSectionModels, "Model");
-      add_section_row(view, kSettingsSectionInput, "Input");
-      add_section_row(view, kSettingsSectionSessions, "Workspace");
-      add_section_row(view, kSettingsSectionTools, "Tools");
-      return view;
-    }
+    case SettingsSection::Root:
+      return build_settings_root_select_list_view(std::move(footer_hint));
     case SettingsSection::Theme: {
       auto view = make_settings_shell("Settings › Theme", "No theme settings match",
                                       footer_hint.empty() ? std::string("Enter select · Esc back") : std::move(footer_hint));
@@ -636,7 +645,7 @@ SelectListView build_settings_select_list_view_for_section(SettingsSection secti
       auto view = make_settings_shell("Settings › Model", "No model settings match",
                                       footer_hint.empty() ? std::string("Enter select · Esc back") : std::move(footer_hint));
       view.items.reserve(3);
-      populate_models_section(view, snapshot);
+      populate_models_section(frontend, view, snapshot);
       return view;
     }
     case SettingsSection::InputAndKeybindings: {
@@ -663,7 +672,7 @@ SelectListView build_settings_select_list_view_for_section(SettingsSection secti
       return view;
     }
   }
-  return build_settings_select_list_view_for_section(SettingsSection::Root, snapshot, bindings, std::move(footer_hint));
+  return build_settings_select_list_view_for_section(frontend, SettingsSection::Root, snapshot, bindings, std::move(footer_hint));
 }
 
 SelectListView build_hotkeys_select_list_view(TuiKeyBindings const& bindings, std::string footer_hint)
@@ -1127,13 +1136,15 @@ SelectListView settings_select_list_view(ComposerSnapshot const& snapshot, std::
 
 SelectListView settings_select_list_view(ComposerSnapshot const& snapshot, TuiKeyBindings const& bindings, std::string footer_hint)
 {
-  return settings_select_list_view_for_section(SettingsSection::Root, snapshot, bindings, std::move(footer_hint));
+  static_cast<void>(snapshot);
+  static_cast<void>(bindings);
+  return runtime_views::build_settings_root_select_list_view(std::move(footer_hint));
 }
 
-SelectListView settings_select_list_view_for_section(SettingsSection section, ComposerSnapshot const& snapshot, TuiKeyBindings const& bindings,
-                                                     std::string footer_hint)
+SelectListView settings_select_list_view_for_section(TuiFrontEnd* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
+                                                     TuiKeyBindings const& bindings, std::string footer_hint)
 {
-  return runtime_views::build_settings_select_list_view_for_section(section, snapshot, bindings, std::move(footer_hint));
+  return runtime_views::build_settings_select_list_view_for_section(frontend, section, snapshot, bindings, std::move(footer_hint));
 }
 
 }  // namespace ava::tui

@@ -81,7 +81,8 @@ std::string SessionResultSerializer::model_info_json(ava::config::ModelInfo cons
   json += ",\"compatibility_quirks\":";
   json += string_array_json(model.compatibility_quirks);
   json += ',';
-  json += bool_field_json("selected", session_.model().provider_id == model.provider_id && session_.model().model_id == model.model_id);
+  runtime::ModelSelection_ts::crat model_selection_r = session_.model_selection_r();
+  json += bool_field_json("selected", model_selection_r->model.provider_id == model.provider_id && model_selection_r->model.model_id == model.model_id);
   json += '}';
   return json;
 }

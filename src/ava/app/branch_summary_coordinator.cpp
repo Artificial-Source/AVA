@@ -1890,7 +1890,7 @@ ava::core::Result<BranchSummaryOperationRequest> make_branch_summary_operation_r
                              .lease = std::move(lease),
                              .bound_read_authority = std::move(bound_read_authority),
                              .controller = session_r->run_controller(),
-                             .selected_model = session_r->model(),
+                             .selected_model = session_r->model_selection_r()->model,
                              .provider_catalog = session_r->provider_catalog(),
                              .anchor_set = session_r->anchor_set(),
                              .process_scope = session_r->session_process_scope(),

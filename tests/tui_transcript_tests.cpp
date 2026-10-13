@@ -21,40 +21,44 @@
 
 void run_tui_transcript_tests_part_1()
 {
-  auto const multiline_input = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                    .provider = "openai",
-                                                                                    .model = "gpt-5.5",
-                                                                                    .session_id = "session_test",
-                                                                                    .input = "first\nsecond",
-                                                                                    .status = "ready",
-                                                                                    .transcript = {},
-                                                                                    .width = 50,
-                                                                                    .height = 8,
-                                                                                    .tool_presentation = ava::tui::ToolPresentation::Compact});
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto const multiline_input =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "first\nsecond",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .width = 50,
+                                                                                .height = 8,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(multiline_input.size() == 8 && strip_sgr(multiline_input[5]).starts_with("│  first") && strip_sgr(multiline_input[6]).starts_with("│  second") &&
              strip_sgr(multiline_input[7]).starts_with("│  GPT-5.5") && multiline_input[4].find("\x1b[48;2;26;31;46m") == std::string::npos &&
              std::ranges::none_of(multiline_input, [](std::string const& line) { return strip_sgr(line).find("❯") != std::string::npos; }),
          "tui renders multiline input plus one footer with the same three-column prefix and no surface padding");
-  auto const empty_composer_height = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                          .provider = "openai",
-                                                                                          .model = "gpt-5.5",
-                                                                                          .session_id = "session_test",
-                                                                                          .input = "",
-                                                                                          .status = "ready",
-                                                                                          .transcript = {},
-                                                                                          .width = 50,
-                                                                                          .height = 12,
-                                                                                          .tool_presentation = ava::tui::ToolPresentation::Compact});
-  auto const grown_composer_height = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                          .provider = "openai",
-                                                                                          .model = "gpt-5.5",
-                                                                                          .session_id = "session_test",
-                                                                                          .input = "one\ntwo\nthree\nfour\nfive",
-                                                                                          .status = "ready",
-                                                                                          .transcript = {},
-                                                                                          .width = 50,
-                                                                                          .height = 12,
-                                                                                          .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const empty_composer_height =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .width = 50,
+                                                                                .height = 12,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const grown_composer_height =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "one\ntwo\nthree\nfour\nfive",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .width = 50,
+                                                                                .height = 12,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   auto const dock_gutter_rows = [](std::vector<std::string> const& rendered) {
     return static_cast<std::size_t>(std::ranges::count_if(rendered, [](std::string const& line) {
       return strip_sgr(line).starts_with("│  ") && line.find("\x1b[49m") != std::string::npos && line.find("\x1b[48;2;26;31;46m") == std::string::npos;
@@ -64,32 +68,34 @@ void run_tui_transcript_tests_part_1()
              std::ranges::any_of(grown_composer_height, [](std::string const& line) { return strip_sgr(line).find("│  five") != std::string::npos; }) &&
              std::ranges::none_of(grown_composer_height, [](std::string const& line) { return line.find("\x1b[48;2;26;31;46m") != std::string::npos; }),
          "tui composer grows with multiline input on the screen background and keeps the latest line visible");
-  auto const tall_draft = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                               .provider = "openai",
-                                                                               .model = "gpt-5.5",
-                                                                               .session_id = "session_test",
-                                                                               .input = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine",
-                                                                               .status = "ready",
-                                                                               .transcript = {},
-                                                                               .width = 70,
-                                                                               .height = 12,
-                                                                               .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const tall_draft =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .width = 70,
+                                                                                .height = 12,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::none_of(tall_draft, [](std::string const& line) { return strip_sgr(line).find("draft +") != std::string::npos; }) &&
              std::ranges::any_of(tall_draft, [](std::string const& line) { return strip_sgr(line).find("│  nine") != std::string::npos; }) &&
              std::ranges::none_of(tall_draft, [](std::string const& line) { return strip_sgr(line).find("│  one") != std::string::npos; }),
          "tui composer hides draft overflow text while keeping the latest draft line visible");
-  auto const scrolled_draft = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                   .provider = "openai",
-                                                                                   .model = "gpt-5.5",
-                                                                                   .session_id = "session_test",
-                                                                                   .input = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine",
-                                                                                   .status = "ready",
-                                                                                   .transcript = {},
-                                                                                   .width = 70,
-                                                                                   .height = 12,
-                                                                                   .input_cursor = std::string::npos,
-                                                                                   .sidebar = std::nullopt,
-                                                                                   .draft_scroll_offset = 2});
+  auto const scrolled_draft =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .width = 70,
+                                                                                .height = 12,
+                                                                                .input_cursor = std::string::npos,
+                                                                                .sidebar = std::nullopt,
+                                                                                .draft_scroll_offset = 2});
   expect(std::ranges::any_of(scrolled_draft, [](std::string const& line) { return strip_sgr(line).find("│  one") != std::string::npos; }) &&
              std::ranges::none_of(scrolled_draft, [](std::string const& line) { return strip_sgr(line).find("│  nine") != std::string::npos; }) &&
              std::ranges::none_of(scrolled_draft, [](std::string const& line) { return strip_sgr(line).find("draft +") != std::string::npos; }),
@@ -100,24 +106,24 @@ void run_tui_transcript_tests_part_1()
   {
     many_items.push_back(ava::tui::TranscriptItem{.label = "line", .text = "item " + std::to_string(index)});
   }
-  auto const scrolled = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                             .provider = "openai",
-                                                                             .model = "gpt-5.5",
-                                                                             .session_id = "session_test",
-                                                                             .input = "",
-                                                                             .status = "ready",
-                                                                             .transcript = many_items,
-                                                                             .width = 40,
-                                                                             .height = 12,
-                                                                             .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const scrolled = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                  //.provider = "openai",
+                                                                                                  //.model = "gpt-5.5",
+                                                                                                  .session_id = "session_test",
+                                                                                                  .input = "",
+                                                                                                  .status = "ready",
+                                                                                                  .transcript = many_items,
+                                                                                                  .width = 40,
+                                                                                                  .height = 12,
+                                                                                                  .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(scrolled, [](std::string const& line) { return line.find("item 19") != std::string::npos; }) &&
              std::ranges::none_of(scrolled, [](std::string const& line) { return line.find("lines hidden") != std::string::npos; }) &&
              std::ranges::none_of(scrolled, [](std::string const& line) { return line.find("item 0") != std::string::npos; }),
          "tui transcript viewport keeps newest lines without hidden-line banners");
 
   auto parity_120_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                        .provider = "openai",
-                                                        .model = "gpt-5.5",
+                                                        //.provider = "openai",
+                                                        //.model = "gpt-5.5",
                                                         .session_id = "session_canvas_scroll_parity",
                                                         .input = "",
                                                         .status = "ready",
@@ -129,8 +135,8 @@ void run_tui_transcript_tests_part_1()
   parity_160_snapshot.width = 160;
   auto const parity_120_max = ava::tui::composer_max_transcript_scroll_offset(parity_120_snapshot, parity_120_snapshot.width, parity_120_snapshot.height);
   auto const parity_160_max = ava::tui::composer_max_transcript_scroll_offset(parity_160_snapshot, parity_160_snapshot.width, parity_160_snapshot.height);
-  auto const parity_120_frame = ava::tui::render_composer(parity_120_snapshot);
-  auto const parity_160_frame = ava::tui::render_composer(parity_160_snapshot);
+  auto const parity_120_frame = ava::tui::render_composer(frontend.frontend(), parity_120_snapshot);
+  auto const parity_160_frame = ava::tui::render_composer(frontend.frontend(), parity_160_snapshot);
   auto centered_frame_matches = parity_120_frame.size() == parity_160_frame.size();
   for (std::size_t index = 0; centered_frame_matches && index < parity_120_frame.size(); ++index)
   {
@@ -142,35 +148,36 @@ void run_tui_transcript_tests_part_1()
   expect(parity_160_max == parity_120_max && centered_frame_matches,
          "tui 160-column centered transcript preserves exact 120-column wrapping, viewport, and max-scroll geometry");
 
-  auto const scrolled_up = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                .provider = "openai",
-                                                                                .model = "gpt-5.5",
-                                                                                .session_id = "session_test",
-                                                                                .input = "",
-                                                                                .status = "ready",
-                                                                                .transcript = many_items,
-                                                                                .selected_slash_command_index = 0,
-                                                                                .transcript_scroll_offset = 4,
-                                                                                .width = 80,
-                                                                                .height = 12,
-                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const scrolled_up = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                     //.provider = "openai",
+                                                                                                     //.model = "gpt-5.5",
+                                                                                                     .session_id = "session_test",
+                                                                                                     .input = "",
+                                                                                                     .status = "ready",
+                                                                                                     .transcript = many_items,
+                                                                                                     .selected_slash_command_index = 0,
+                                                                                                     .transcript_scroll_offset = 4,
+                                                                                                     .width = 80,
+                                                                                                     .height = 12,
+                                                                                                     .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::none_of(scrolled_up, [](std::string const& line) { return line.find("lines hidden") != std::string::npos; }) &&
              std::ranges::any_of(scrolled_up, [](std::string const& line) { return line.find("item 15") != std::string::npos; }) &&
              std::ranges::none_of(scrolled_up, [](std::string const& line) { return line.find("item 19") != std::string::npos; }),
          "tui transcript viewport supports an explicit scroll offset");
 
-  auto const detached_scroll = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                    .provider = "openai",
-                                                                                    .model = "gpt-5.5",
-                                                                                    .session_id = "session_test",
-                                                                                    .input = "",
-                                                                                    .status = "ready",
-                                                                                    .transcript = many_items,
-                                                                                    .transcript_scroll_offset = 4,
-                                                                                    .transcript_new_output_count = 3,
-                                                                                    .width = 80,
-                                                                                    .height = 12,
-                                                                                    .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const detached_scroll =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = many_items,
+                                                                                .transcript_scroll_offset = 4,
+                                                                                .transcript_new_output_count = 3,
+                                                                                .width = 80,
+                                                                                .height = 12,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::none_of(detached_scroll,
                               [](std::string const& line) {
                                 auto const visible = strip_sgr(line);
@@ -183,8 +190,8 @@ void run_tui_transcript_tests_part_1()
 
   auto docked_scrollback_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_docked_scrollback",
       .input = "",
       .status = "invalid_argument: first alert row\nsecond alert row\nthird alert row\nfourth alert row",
@@ -212,7 +219,7 @@ void run_tui_transcript_tests_part_1()
   auto const shared_docked_max =
       ava::tui::composer_max_transcript_scroll_offset(docked_scrollback_snapshot, docked_scrollback_snapshot.width, docked_scrollback_snapshot.height);
   docked_scrollback_snapshot.transcript_scroll_offset = shared_docked_max;
-  auto const maximally_scrolled_docked_frame = ava::tui::render_composer(docked_scrollback_snapshot);
+  auto const maximally_scrolled_docked_frame = ava::tui::render_composer(frontend.frontend(), docked_scrollback_snapshot);
   expect(shared_docked_max == docked_scrollback_full.size() - 2 && shared_docked_max > old_local_max &&
              std::ranges::any_of(maximally_scrolled_docked_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("OLDEST-ROW-REACHABLE") != std::string::npos; }) &&
@@ -241,7 +248,7 @@ void run_tui_transcript_tests_part_1()
   auto const diff_prompt_max = ava::tui::composer_max_transcript_scroll_offset(diff_prompt_scrollback_snapshot, diff_prompt_scrollback_snapshot.width,
                                                                                diff_prompt_scrollback_snapshot.height);
   diff_prompt_scrollback_snapshot.transcript_scroll_offset = diff_prompt_max;
-  auto const maximally_scrolled_diff_prompt_frame = ava::tui::render_composer(diff_prompt_scrollback_snapshot);
+  auto const maximally_scrolled_diff_prompt_frame = ava::tui::render_composer(frontend.frontend(), diff_prompt_scrollback_snapshot);
   expect(diff_prompt_max == docked_scrollback_full.size() - 4 &&
              std::ranges::any_of(maximally_scrolled_diff_prompt_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("OLDEST-ROW-REACHABLE") != std::string::npos; }) &&
@@ -252,41 +259,41 @@ void run_tui_transcript_tests_part_1()
          "tui shared transcript scroll limit includes the twelve-row diff permission dock and reduced composer reservation");
 
   auto const wrapped_transcript = ava::tui::render_composer(
-      ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
-                                 .session_id = "session_test",
-                                 .input = "",
-                                 .status = "ready",
-                                 .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                                                         .text = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"}},
-                                 .selected_slash_command_index = 0,
-                                 .transcript_scroll_offset = 1,
-                                 .width = 60,
-                                 .height = 8,
-                                 .tool_presentation = ava::tui::ToolPresentation::Compact});
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                                                              .text = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"}},
+                                                      .selected_slash_command_index = 0,
+                                                      .transcript_scroll_offset = 1,
+                                                      .width = 60,
+                                                      .height = 8,
+                                                      .tool_presentation = ava::tui::ToolPresentation::Compact});
   auto const wrapped_latest = ava::tui::render_composer(
-      ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
-                                 .session_id = "session_test",
-                                 .input = "",
-                                 .status = "ready",
-                                 .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                                                         .text = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-                                                                                 "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"}},
-                                 .selected_slash_command_index = 0,
-                                 .transcript_scroll_offset = 0,
-                                 .width = 60,
-                                 .height = 8,
-                                 .tool_presentation = ava::tui::ToolPresentation::Compact});
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                                                              .text = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                                                                                                      "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"}},
+                                                      .selected_slash_command_index = 0,
+                                                      .transcript_scroll_offset = 0,
+                                                      .width = 60,
+                                                      .height = 8,
+                                                      .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::none_of(wrapped_transcript, [](std::string const& line) { return strip_sgr(line).find("lines hidden") != std::string::npos; }) &&
              std::ranges::none_of(wrapped_latest, [](std::string const& line) { return strip_sgr(line).find("scrollback detached") != std::string::npos; }),
          "tui transcript viewport wraps long transcript text without synthetic hidden-line or detached banners");
@@ -300,32 +307,34 @@ void run_tui_transcript_tests_part_1()
       .tool = ava::tui::ToolTimelineItem{
           .status = ava::tui::ToolTimelineStatus::Success, .name = "grep", .argument_summary = "needle", .result_summary = "2 matches"}});
   mixed_items.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "done"});
-  auto const mixed_scrolled = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                   .provider = "openai",
-                                                                                   .model = "gpt-5.5",
-                                                                                   .session_id = "session_test",
-                                                                                   .input = "",
-                                                                                   .status = "ready",
-                                                                                   .transcript = mixed_items,
-                                                                                   .width = 60,
-                                                                                   .height = 12,
-                                                                                   .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const mixed_scrolled =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = mixed_items,
+                                                                                .width = 60,
+                                                                                .height = 12,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   auto const mixed_visible = tui_test_support::join_visible_lines(mixed_scrolled);
   expect(mixed_visible.find("lines hidden") == std::string::npos && mixed_visible.find("+ grep") != std::string::npos &&
              mixed_visible.find("2 matches") != std::string::npos && mixed_visible.find("done") != std::string::npos &&
              mixed_visible.find("AVA") == std::string::npos && mixed_visible.find("old 0") == std::string::npos,
          "tui transcript viewport scrolls mixed text and tool-card lines together without hidden-line banners");
 
-  auto const multiline = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                              .provider = "openai",
-                                                                              .model = "gpt-5.5",
-                                                                              .session_id = "session_test",
-                                                                              .input = "",
-                                                                              .status = "ready",
-                                                                              .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "one\ntwo"}},
-                                                                              .width = 80,
-                                                                              .height = 14,
-                                                                              .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const multiline =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "one\ntwo"}},
+                                                                                .width = 80,
+                                                                                .height = 14,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(multiline,
                              [](std::string const& line) {
                                auto visible = strip_sgr(line);
@@ -341,6 +350,7 @@ void run_tui_transcript_tests_part_1()
 namespace {
 void test_tui_large_render_performance_budget()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   std::vector<ava::tui::TranscriptItem> transcript;
   transcript.reserve(900);
   for (int index = 0; index < 300; ++index)
@@ -365,20 +375,20 @@ void test_tui_large_render_performance_budget()
   std::vector<std::string> frame;
   for (int pass = 0; pass < 4; ++pass)
   {
-    frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                 .provider = "openai",
-                                                                 .model = "gpt-5.5",
-                                                                 .session_id = "session_perf",
-                                                                 .input = "draft \xE7\x95\x8C",
-                                                                 .status = "ready",
-                                                                 .processing = true,
-                                                                 .transcript = transcript,
-                                                                 .transcript_scroll_offset = static_cast<std::size_t>(pass * 20),
-                                                                 .width = 120,
-                                                                 .height = 36,
-                                                                 .input_cursor = std::string::npos,
-                                                                 .tool_presentation = ava::tui::ToolPresentation::Expanded,
-                                                                 .thinking_visible = true});
+    frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                      //.provider = "openai",
+                                                                                      //.model = "gpt-5.5",
+                                                                                      .session_id = "session_perf",
+                                                                                      .input = "draft \xE7\x95\x8C",
+                                                                                      .status = "ready",
+                                                                                      .processing = true,
+                                                                                      .transcript = transcript,
+                                                                                      .transcript_scroll_offset = static_cast<std::size_t>(pass * 20),
+                                                                                      .width = 120,
+                                                                                      .height = 36,
+                                                                                      .input_cursor = std::string::npos,
+                                                                                      .tool_presentation = ava::tui::ToolPresentation::Expanded,
+                                                                                      .thinking_visible = true});
   }
   auto const elapsed = std::chrono::steady_clock::now() - start;
   std::size_t max_columns = 0;
@@ -843,15 +853,20 @@ void test_tui_streaming_tail_cache_is_bounded_and_matches_full_renderer()
   };
 
   std::string markdown;
-  for (int index = 0; index < 800; ++index) markdown += index % 9 == 0 ? "## Cached heading\n" : "paragraph with **bold** and `inline code` content\n";
+  for (int index = 0; index < 800; ++index)
+    markdown += index % 9 == 0 ? "## Cached heading\n" : "paragraph with **bold** and `inline code` content\n";
   std::string code = "```cpp\n";
-  for (int index = 0; index < 900; ++index) code += "auto cached_value_" + std::to_string(index) + " = value + 1;\n";
+  for (int index = 0; index < 900; ++index)
+    code += "auto cached_value_" + std::to_string(index) + " = value + 1;\n";
   std::string bullets;
-  for (int index = 0; index < 900; ++index) bullets += "- bounded bullet item " + std::to_string(index) + " with wrapping words\n";
+  for (int index = 0; index < 900; ++index)
+    bullets += "- bounded bullet item " + std::to_string(index) + " with wrapping words\n";
   std::string numbered;
-  for (int index = 0; index < 900; ++index) numbered += "1. normalized bounded numbered item with wrapping words\n";
+  for (int index = 0; index < 900; ++index)
+    numbered += "1. normalized bounded numbered item with wrapping words\n";
   std::string blockquote = "> bounded quote begins\n";
-  for (int index = 0; index < 900; ++index) blockquote += "lazy quoted continuation with wrapping words " + std::to_string(index) + "\n";
+  for (int index = 0; index < 900; ++index)
+    blockquote += "lazy quoted continuation with wrapping words " + std::to_string(index) + "\n";
   std::string long_token(18000, 'x');
 
   run_case("markdown-roomy", std::move(markdown), "paragraph appended with **new markup**\n", 73, 11, false);
@@ -1021,6 +1036,7 @@ void test_tui_transcript_tail_renderer_matches_full_visible_window()
 }
 void test_tui_completion_and_transcript_layout_caches()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   std::vector<ava::tui::FileReferenceItem> references;
   references.reserve(2000);
   for (std::size_t index = 0; index < 2000; ++index)
@@ -1033,8 +1049,8 @@ void test_tui_completion_and_transcript_layout_caches()
   }
 
   auto completion_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                        .provider = "openai",
-                                                        .model = "gpt-5.5",
+                                                        //.provider = "openai",
+                                                        //.model = "gpt-5.5",
                                                         .session_id = "session_cache",
                                                         .input = "inspect @path-",
                                                         .status = "ready",
@@ -1056,7 +1072,7 @@ void test_tui_completion_and_transcript_layout_caches()
     ava::tui::detail::refresh_completion_match_cache(completion_cache, completion_snapshot, 1);
     auto const reason = ava::tui::detail::completion_selection_disabled_reason(completion_cache, completion_snapshot.file_references, selected);
     auto const selection = ava::tui::detail::completion_selection_text(completion_cache, completion_snapshot, selected);
-    auto const frame = ava::tui::detail::render_composer_frame_cached(completion_snapshot, completion_cache, 1, nullptr, 0);
+    auto const frame = ava::tui::detail::render_composer_frame_cached(frontend.frontend(), completion_snapshot, completion_cache, 1, nullptr, 0);
     expect(!selection.text.empty() && !reason && frame.lines.size() == completion_snapshot.height,
            "completion cache keeps enabled acceptance semantics while selection and rendering share one ranking");
   }
@@ -1143,6 +1159,7 @@ void test_tui_completion_and_transcript_layout_caches()
 
 void test_tui_very_long_transcript_performance_budget()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   std::vector<ava::tui::TranscriptItem> transcript;
   transcript.reserve(1400);
   for (int index = 0; index < 600; ++index)
@@ -1176,20 +1193,20 @@ void test_tui_very_long_transcript_performance_budget()
   std::vector<std::string> visible_frames;
   for (int pass = 0; pass < 3; ++pass)
   {
-    frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                 .provider = "openai",
-                                                                 .model = "gpt-5.5",
-                                                                 .session_id = "session_long_perf",
-                                                                 .input = "draft stays responsive while scrolling a very long transcript",
-                                                                 .status = "ready",
-                                                                 .processing = true,
-                                                                 .transcript = transcript,
-                                                                 .transcript_scroll_offset = static_cast<std::size_t>(pass * 240),
-                                                                 .width = 96,
-                                                                 .height = 30,
-                                                                 .input_cursor = std::string::npos,
-                                                                 .tool_presentation = ava::tui::ToolPresentation::Expanded,
-                                                                 .thinking_visible = true});
+    frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                      //.provider = "openai",
+                                                                                      //.model = "gpt-5.5",
+                                                                                      .session_id = "session_long_perf",
+                                                                                      .input = "draft stays responsive while scrolling a very long transcript",
+                                                                                      .status = "ready",
+                                                                                      .processing = true,
+                                                                                      .transcript = transcript,
+                                                                                      .transcript_scroll_offset = static_cast<std::size_t>(pass * 240),
+                                                                                      .width = 96,
+                                                                                      .height = 30,
+                                                                                      .input_cursor = std::string::npos,
+                                                                                      .tool_presentation = ava::tui::ToolPresentation::Expanded,
+                                                                                      .thinking_visible = true});
     visible_frames.push_back(tui_test_support::join_visible_lines(frame));
   }
   auto const elapsed = std::chrono::steady_clock::now() - start;
@@ -1282,6 +1299,7 @@ std::string long_thinking_body(std::size_t lines)
 
 void test_tui_bounded_thinking_disclosure_render_and_toggle()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   using tui_test_support::plain_lines;
   auto const long_body = long_thinking_body(20);
   auto const short_body = long_thinking_body(3);
@@ -1359,8 +1377,8 @@ void test_tui_bounded_thinking_disclosure_render_and_toggle()
     ScopedEnvVar no_color("NO_COLOR", "1");
     auto plain_snapshot = ava::tui::ComposerSnapshot{
         .mode = "build",
-        .provider = "openai",
-        .model = "gpt-5.5",
+        //.provider = "openai",
+        //.model = "gpt-5.5",
         .session_id = "session_thinking_plain",
         .input = "",
         .status = "ready",
@@ -1369,7 +1387,7 @@ void test_tui_bounded_thinking_disclosure_render_and_toggle()
         .height = 24,
         .thinking_visible = true,
     };
-    auto const plain_frame = ava::tui::render_composer(plain_snapshot);
+    auto const plain_frame = ava::tui::render_composer(frontend.frontend(), plain_snapshot);
     auto const has_footer = std::ranges::any_of(plain_frame, [](std::string const& line) { return line.find("lines hidden") != std::string::npos; });
     auto const has_sgr = std::ranges::any_of(plain_frame, [](std::string const& line) { return line.find("\x1b[") != std::string::npos; });
     expect(has_footer && !has_sgr, "NO_COLOR keeps a plain truthful thinking hidden footer without SGR styling");
@@ -1399,7 +1417,8 @@ void test_tui_bounded_thinking_disclosure_render_and_toggle()
   // Carry across active-run rebuild with shift-zero and positive-cap eviction.
   {
     std::vector<ava::tui::TranscriptItem> submitted;
-    for (std::size_t index = 0; index < 5; ++index) submitted.push_back(ava::tui::TranscriptItem{.label = "you", .text = "seed " + std::to_string(index)});
+    for (std::size_t index = 0; index < 5; ++index)
+      submitted.push_back(ava::tui::TranscriptItem{.label = "you", .text = "seed " + std::to_string(index)});
     std::vector<ava::tui::TranscriptItem> turn{
         ava::tui::TranscriptItem{.label = "thinking", .text = long_body, .thinking_expanded = true},
         ava::tui::TranscriptItem{.label = "ava", .text = "after reasoning"},
@@ -1536,8 +1555,8 @@ void test_tui_bounded_thinking_disclosure_render_and_toggle()
   {
     ava::tui::ComposerSnapshot idle_snapshot;
     idle_snapshot.mode = "build";
-    idle_snapshot.provider = "openai";
-    idle_snapshot.model = "gpt-5.5";
+    //    idle_snapshot.provider = "openai";
+    //    idle_snapshot.model = "gpt-5.5";
     idle_snapshot.session_id = "session_thinking_details_cap";
     idle_snapshot.status = "ready";
     idle_snapshot.width = 100;
@@ -1567,8 +1586,8 @@ void test_tui_bounded_thinking_disclosure_render_and_toggle()
   {
     auto hit_snapshot = ava::tui::ComposerSnapshot{
         .mode = "build",
-        .provider = "openai",
-        .model = "gpt-5.5",
+        //.provider = "openai",
+        //.model = "gpt-5.5",
         .session_id = "session_thinking_hit",
         .input = "draft",
         .status = "ready",
@@ -1582,7 +1601,7 @@ void test_tui_bounded_thinking_disclosure_render_and_toggle()
         .width = 100,
         .height = 40,
     };
-    auto const frame = plain_lines(ava::tui::render_composer(hit_snapshot));
+    auto const frame = plain_lines(ava::tui::render_composer(frontend.frontend(), hit_snapshot));
     auto const thinking_line = std::ranges::find_if(frame, [](std::string const& line) { return line.find("Thinking:") != std::string::npos; });
     auto const tool_line = std::ranges::find_if(frame, [](std::string const& line) { return line.find("+ glob") != std::string::npos; });
     expect(thinking_line != frame.end() && tool_line != frame.end(), "thinking hit-test fixture renders Thinking header and tool card");

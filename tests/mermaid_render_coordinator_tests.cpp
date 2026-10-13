@@ -1,8 +1,8 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
-#include "ava/app/display_settings.h"
 #include "ava/app/mermaid_render_coordinator.h"
-#include "ava/app/mermaid_tui_bridge.h"
+#include "ava/app/tui/mermaid_tui_bridge.h"
+#include "ava/app/tui/tui_display_settings.h"
 
 #include <algorithm>
 #include <cerrno>

@@ -115,18 +115,19 @@ void apply_session_start(ava::tui::TuiEventState& state, ava::core::Mode mode, s
 
 [[nodiscard]] std::vector<std::string> render_processing_with_event_activity(ava::tui::TuiEventState const& state)
 {
-  return ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                              .provider = "openai",
-                                                              .model = "gpt-5.5",
-                                                              .session_id = "session_test",
-                                                              .input = "",
-                                                              .status = "thinking...",
-                                                              .processing = true,
-                                                              .active_run_hint = ava::tui::ActiveRunHint{.interrupt = "Esc"},
-                                                              .transcript = {},
-                                                              .width = 88,
-                                                              .height = 12,
-                                                              .sidebar = ava::tui::SidebarSnapshot{.activity = state.activity}});
+  tui_test_support::TuiFrontEndFixture frontend;
+  return ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                   //.provider = "openai",
+                                                                                   //.model = "gpt-5.5",
+                                                                                   .session_id = "session_test",
+                                                                                   .input = "",
+                                                                                   .status = "thinking...",
+                                                                                   .processing = true,
+                                                                                   .active_run_hint = ava::tui::ActiveRunHint{.interrupt = "Esc"},
+                                                                                   .transcript = {},
+                                                                                   .width = 88,
+                                                                                   .height = 12,
+                                                                                   .sidebar = ava::tui::SidebarSnapshot{.activity = state.activity}});
 }
 
 [[nodiscard]] ava::event::RetryPayload sample_retry_payload(std::size_t remaining_ms = 0)
@@ -196,16 +197,17 @@ void apply_session_start(ava::tui::TuiEventState& state, ava::core::Mode mode, s
 
 void test_tui_event_state_reduces_runtime_events()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto active_context_status = std::optional<std::string>{"300 (1.1%)"};
   ava::tui::TuiRuntimeOptions presentation_options;
-  presentation_options.model = "GPT-5.5";
+  //  presentation_options.model = "GPT-5.5";
   presentation_options.context_source_count = 2;
   presentation_options.active_context_status_provider = [&active_context_status] { return active_context_status; };
   ava::tui::RuntimePresentationState presentation(presentation_options);
   presentation.refresh_active_context_status(presentation_options);
   active_context_status = "600 (2.2%)";
   ava::tui::TuiRuntimeStateSnapshot runtime_state;
-  runtime_state.model = "GPT-5.6";
+  //  runtime_state.model = "GPT-5.6";
   runtime_state.context_source_count = 3;
   presentation.apply_runtime_state_snapshot(presentation_options, std::move(runtime_state));
   expect(presentation.snapshot.active_context_status == std::optional<std::string>{"600 (2.2%)"} &&
@@ -342,15 +344,15 @@ void test_tui_event_state_reduces_runtime_events()
              ava::tui::to_plain_text(reasoning_state.transcript[0].thinking_model) == "checking options",
          "tui event state commits reasoning and answer as one assistant transcript item");
 
-  auto const thinking_render = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                    .provider = "openai",
-                                                                                    .model = "gpt-5.5",
-                                                                                    .session_id = "session_test",
-                                                                                    .input = "",
-                                                                                    .status = "ready",
-                                                                                    .transcript = reasoning_state.transcript,
-                                                                                    .width = 60,
-                                                                                    .height = 10});
+  auto const thinking_render = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                         //.provider = "openai",
+                                                                                                         //.model = "gpt-5.5",
+                                                                                                         .session_id = "session_test",
+                                                                                                         .input = "",
+                                                                                                         .status = "ready",
+                                                                                                         .transcript = reasoning_state.transcript,
+                                                                                                         .width = 60,
+                                                                                                         .height = 10});
   expect(std::ranges::any_of(thinking_render, [](std::string const& line) { return strip_sgr(line).find("Thinking: checking options") != std::string::npos; }),
          "tui renders reasoning content as an inline thinking transcript block with a stable prefix");
   expect(std::ranges::any_of(thinking_render,
@@ -368,16 +370,16 @@ void test_tui_event_state_reduces_runtime_events()
          "tui transcript role headers stay hidden for compact chat rendering");
   expect(std::ranges::none_of(thinking_render, [](std::string const& line) { return strip_sgr(line).find("╭─ Thinking") != std::string::npos; }),
          "tui thinking transcript block avoids the normal boxed message header");
-  auto const hidden_thinking_render = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                           .provider = "openai",
-                                                                                           .model = "gpt-5.5",
-                                                                                           .session_id = "session_test",
-                                                                                           .input = "",
-                                                                                           .status = "ready",
-                                                                                           .transcript = reasoning_state.transcript,
-                                                                                           .width = 60,
-                                                                                           .height = 10,
-                                                                                           .thinking_visible = false});
+  auto const hidden_thinking_render = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                                //.provider = "openai",
+                                                                                                                //.model = "gpt-5.5",
+                                                                                                                .session_id = "session_test",
+                                                                                                                .input = "",
+                                                                                                                .status = "ready",
+                                                                                                                .transcript = reasoning_state.transcript,
+                                                                                                                .width = 60,
+                                                                                                                .height = 10,
+                                                                                                                .thinking_visible = false});
   expect(std::ranges::none_of(hidden_thinking_render,
                               [](std::string const& line) { return strip_sgr(line).find("Thinking: checking options") != std::string::npos; }) &&
              std::ranges::any_of(hidden_thinking_render, [](std::string const& line) { return strip_sgr(line).find("answer") != std::string::npos; }),
@@ -389,15 +391,15 @@ void test_tui_event_state_reduces_runtime_events()
   redacted_reasoning_payload.reasoning_redacted = true;
   ava::tui::apply_runtime_event(redacted_reasoning_state, reasoning_delta_event(redacted_reasoning_payload));
   auto redacted_snapshot = ava::tui::event_state_transcript_snapshot(redacted_reasoning_state);
-  auto const redacted_render = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                    .provider = "openai",
-                                                                                    .model = "gpt-5.5",
-                                                                                    .session_id = "session_test",
-                                                                                    .input = "",
-                                                                                    .status = "ready",
-                                                                                    .transcript = redacted_snapshot,
-                                                                                    .width = 60,
-                                                                                    .height = 10});
+  auto const redacted_render = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                         //.provider = "openai",
+                                                                                                         //.model = "gpt-5.5",
+                                                                                                         .session_id = "session_test",
+                                                                                                         .input = "",
+                                                                                                         .status = "ready",
+                                                                                                         .transcript = redacted_snapshot,
+                                                                                                         .width = 60,
+                                                                                                         .height = 10});
   expect(
       redacted_snapshot.size() == 1 && redacted_snapshot[0].thinking == "[reasoning redacted]" &&
           std::ranges::none_of(redacted_render, [](std::string const& line) { return strip_sgr(line).find("provider-private-secret") != std::string::npos; }),
@@ -797,15 +799,15 @@ void test_tui_event_state_reduces_runtime_events()
   permission_tool_context.correlation_id = "call_permission_tool";
   ava::tui::apply_runtime_event(permission_tool_state, permission_tool_result, permission_tool_context);
   auto permission_tool_snapshot = ava::tui::event_state_transcript_snapshot(permission_tool_state);
-  auto const permission_tool_render = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                           .provider = "openai",
-                                                                                           .model = "gpt-5.5",
-                                                                                           .session_id = "session_test",
-                                                                                           .input = "",
-                                                                                           .status = "ready",
-                                                                                           .transcript = permission_tool_snapshot,
-                                                                                           .width = 90,
-                                                                                           .height = 18});
+  auto const permission_tool_render = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                                //.provider = "openai",
+                                                                                                                //.model = "gpt-5.5",
+                                                                                                                .session_id = "session_test",
+                                                                                                                .input = "",
+                                                                                                                .status = "ready",
+                                                                                                                .transcript = permission_tool_snapshot,
+                                                                                                                .width = 90,
+                                                                                                                .height = 18});
   expect(permission_tool_snapshot.size() == 1 && permission_tool_snapshot.back().tool && permission_tool_snapshot.back().tool->permissions.size() == 1 &&
              permission_tool_snapshot.back().tool->permissions[0].permission_request_id == "permreq_push" &&
              permission_tool_snapshot.back().tool->permissions[0].decision == "deny" && permission_tool_snapshot.back().tool->permissions[0].risk == "high" &&
@@ -1087,27 +1089,27 @@ void test_tui_event_state_reduces_runtime_events()
              streaming_error_state.transcript[1].text.find("output: event:") == std::string::npos,
          "tui event state commits partial assistant text before compact provider error messages");
   auto const collapsed_streaming_error =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = ava::tui::event_state_transcript_snapshot(streaming_error_state),
-                                                           .width = 88,
-                                                           .height = 12,
-                                                           .tool_presentation = ava::tui::ToolPresentation::Compact});
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = ava::tui::event_state_transcript_snapshot(streaming_error_state),
+                                                                                .width = 88,
+                                                                                .height = 12,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   auto const expanded_streaming_error =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = ava::tui::event_state_transcript_snapshot(streaming_error_state),
-                                                           .width = 88,
-                                                           .height = 16,
-                                                           .tool_presentation = ava::tui::ToolPresentation::Expanded});
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = ava::tui::event_state_transcript_snapshot(streaming_error_state),
+                                                                                .width = 88,
+                                                                                .height = 16,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Expanded});
   expect(std::ranges::any_of(collapsed_streaming_error, [](std::string const& line) { return strip_sgr(line).find("partial answer") != std::string::npos; }) &&
              std::ranges::any_of(collapsed_streaming_error,
                                  [](std::string const& line) { return strip_sgr(line).find("! provider: curl transport failed") != std::string::npos; }) &&
@@ -1207,15 +1209,16 @@ void test_tui_event_state_reduces_runtime_events()
                                           activity.detail == "retry completed";
                                  }),
          "tui event state renders backend retry, retry countdown, and compaction markers with backend-provided detail");
-  auto const compaction_render = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                      .provider = "openai",
-                                                                                      .model = "gpt-5.5",
-                                                                                      .session_id = "session_test",
-                                                                                      .input = "",
-                                                                                      .status = "ready",
-                                                                                      .transcript = ava::tui::event_state_transcript_snapshot(lifecycle_state),
-                                                                                      .width = 88,
-                                                                                      .height = 12});
+  auto const compaction_render =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = ava::tui::event_state_transcript_snapshot(lifecycle_state),
+                                                                                .width = 88,
+                                                                                .height = 12});
   expect(std::ranges::any_of(compaction_render,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -1344,26 +1347,26 @@ void test_tui_event_state_reduces_runtime_events()
     ava::tui::apply_runtime_event(live_state, event);
     ava::tui::apply_runtime_event(context_state, event, parity_context);
   }
-  auto const live_render =
-      tui_test_support::plain_lines(ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                         .provider = "openai",
-                                                                                         .model = "gpt-5.5",
-                                                                                         .session_id = "session_test",
-                                                                                         .input = "",
-                                                                                         .status = "ready",
-                                                                                         .transcript = ava::tui::event_state_transcript_snapshot(live_state),
-                                                                                         .width = 72,
-                                                                                         .height = 20}));
-  auto const context_render =
-      tui_test_support::plain_lines(ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                         .provider = "openai",
-                                                                                         .model = "gpt-5.5",
-                                                                                         .session_id = "session_test",
-                                                                                         .input = "",
-                                                                                         .status = "ready",
-                                                                                         .transcript = ava::tui::event_state_transcript_snapshot(context_state),
-                                                                                         .width = 72,
-                                                                                         .height = 20}));
+  auto const live_render = tui_test_support::plain_lines(
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = ava::tui::event_state_transcript_snapshot(live_state),
+                                                                                .width = 72,
+                                                                                .height = 20}));
+  auto const context_render = tui_test_support::plain_lines(
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = ava::tui::event_state_transcript_snapshot(context_state),
+                                                                                .width = 72,
+                                                                                .height = 20}));
   expect(live_render == context_render && context_state.active_run_id == "run_1" && context_state.active_turn_id == "turn_1" &&
              context_state.active_message_id == "message_1" && context_state.active_request_id == "request_1" &&
              context_state.active_correlation_id == "correlation_1" && context_state.current_mode == ava::core::Mode::Plan &&
@@ -1605,7 +1608,8 @@ void test_tui_transcript_projection_and_cap_parity()
 
   std::vector<ava::tui::TranscriptItem> submitted;
   submitted.reserve(999);
-  for (std::size_t index = 0; index < 999; ++index) submitted.push_back(ava::tui::TranscriptItem{.label = "you", .text = "submitted " + std::to_string(index)});
+  for (std::size_t index = 0; index < 999; ++index)
+    submitted.push_back(ava::tui::TranscriptItem{.label = "you", .text = "submitted " + std::to_string(index)});
   std::vector<ava::tui::TranscriptItem> destination;
   auto const update = ava::tui::apply_capped_transcript_snapshot(destination, submitted, std::move(projected), 0);
   expect(update.leading_evictions == 3 && update.item_index_shift == -3 && destination.size() == ava::tui::kMaxTranscriptItems &&
@@ -1666,8 +1670,8 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
 {
   ava::tui::ComposerSnapshot snapshot;
   snapshot.mode = "build";
-  snapshot.provider = "openai";
-  snapshot.model = "gpt-5.5";
+  //  snapshot.provider = "openai";
+  //  snapshot.model = "gpt-5.5";
   snapshot.session_id = "session_current";
   snapshot.input = "draft survives";
   snapshot.status = "selecting";
@@ -1712,7 +1716,7 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
           ready.notify_one();
           release.wait(lock, [&]() { return callback_released; });
           ava::tui::TuiRuntimeStateSnapshot state;
-          state.model = "GPT-5.5";
+          //          state.model = "GPT-5.5";
           state.status = "model already selected";
           return state;
         });
@@ -2201,8 +2205,8 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
   expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "runtime options hydrate sidebar todos at startup");
   ava::tui::TuiRuntimeStateSnapshot switched;
   switched.mode = "build";
-  switched.provider = "openai";
-  switched.model = "gpt-5.5";
+  //  switched.provider = "openai";
+  //  switched.model = "gpt-5.5";
   switched.session_id = "session_b";
   switched.todos = {ava::tui::TodoItem{.id = "switched", .content = "After switch", .status = ava::tui::TodoStatus::InProgress}};
   presentation.apply_runtime_state_snapshot(options, std::move(switched));

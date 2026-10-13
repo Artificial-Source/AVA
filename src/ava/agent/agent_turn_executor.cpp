@@ -2,7 +2,7 @@
 #include "ava/http/transport.h"
 #include "ava/agent/agent_turn_executor_internal.h"
 #include "ava/agent/stream_bridge.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/tool_timeline.h"
 
 #include <expected>

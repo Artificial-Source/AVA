@@ -8,6 +8,7 @@
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/OpenContext.h"
+#include "ava/app/tui/interactive_tui_internal.h"
 #include "ava/agent/mode.h"
 
 #include <filesystem>

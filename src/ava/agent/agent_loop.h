@@ -8,7 +8,7 @@
 #include "ava/agent/model_invocation_options.h"
 #include "ava/agent/question.h"
 #include "ava/agent/run_phase.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/subagent_coordinator.h"
 #include "ava/agent/subagent_launch.h"
 #include "ava/agent/tool_execution_options.h"
@@ -119,7 +119,7 @@ struct AgentLoopOptions
   std::size_t max_tool_result_context_bytes = 8 * 1024;
   ToolResourceOptions tool_resources = {};
   ToolExecutionOptions tool_execution = {};
-  std::vector<SubagentDefinition> subagents = {};
+  std::vector<AgentDefinition> subagents = {};
   ToolVisibilityOptions tool_visibility = {};
   std::function<void(ToolTimelineEntry const&)> on_tool_event = nullptr;
   std::function<ava::core::VoidResult(ToolProgressEntry const&)> on_tool_progress = nullptr;

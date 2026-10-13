@@ -468,7 +468,9 @@ void test_app_auto_compaction_provider_cancellation_leaves_session_untouched()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 100;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 100;
+  });
   static_cast<void>(session_w->append_owned(ava::session::SessionEntry{.id = "entry_canceled_auto_compact",
                                                                        .parent_id = "",
                                                                        .type = ava::session::EntryType::UserMessage,
@@ -633,7 +635,7 @@ void test_app_compaction_model_selection_uses_runtime_catalog()
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
 
-  auto const active_model = session_w->model();
+  auto const active_model = session_w->model_selection_r()->model;
   CRITICAL_AREA_END_W(session);
   auto active = ava::app::resolve_compaction_config(unlocked_session, ava::session::default_compaction_config());
   auto same_config = ava::session::parse_compaction_config(R"({"model":"gpt-5.5"})");
@@ -961,7 +963,9 @@ void test_app_auto_compaction_appends_summary_and_rebuilds_context()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 100;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 100;
+  });
 
   std::string const old_context = "old context marker " + std::string(420, 'x');
   static_cast<void>(session_w->append_owned(ava::session::SessionEntry{.id = "entry_old_user",
@@ -1034,7 +1038,9 @@ void test_app_auto_compaction_recent_context_respects_token_budget()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 1000;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 1000;
+  });
   for (int index = 0; index < 4; ++index)
   {
     static_cast<void>(session_w->append_owned(
@@ -1090,7 +1096,9 @@ void test_app_auto_compaction_recent_context_truncates_utf8_safely()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 1000;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 1000;
+  });
 
   std::string emoji_tail;
   for (int index = 0; index < 80; ++index) emoji_tail += "\xF0\x9F\x98\x80";
@@ -1148,7 +1156,9 @@ void test_app_auto_compaction_explicit_zero_disables()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 10;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 10;
+  });
   static_cast<void>(session_w->append_owned(ava::session::SessionEntry{.id = "entry_big_user",
                                                                        .parent_id = "",
                                                                        .type = ava::session::EntryType::UserMessage,
@@ -1192,7 +1202,9 @@ void test_app_auto_compaction_uses_default_threshold_without_context_window_meta
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = std::nullopt;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = std::nullopt;
+  });
 
   auto const config = ava::session::default_compaction_config();
   auto const threshold = ava::session::effective_auto_threshold_tokens(config, std::nullopt);
@@ -1242,7 +1254,9 @@ void test_app_auto_compaction_retries_stale_snapshot_before_append()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 100;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 100;
+  });
 
   static_cast<void>(session_w->append_owned(ava::session::SessionEntry{.id = "entry_revalidate_big",
                                                                        .parent_id = "",
@@ -1309,7 +1323,9 @@ void test_app_auto_compaction_repeated_stale_snapshot_fails_without_append()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().model.context_window_tokens = 100;
+  session_w->model_selection().change([](auto& model_selection){
+    model_selection.model.context_window_tokens = 100;
+  });
 
   static_cast<void>(session_w->append_owned(ava::session::SessionEntry{.id = "entry_repeated_stale_big",
                                                                        .parent_id = "",

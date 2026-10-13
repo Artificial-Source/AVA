@@ -58,11 +58,12 @@ ava::core::Result<std::vector<ava::config::ModelInfo>> runtime_model_catalog(run
     if ((*catalog)->contains(model.provider_id))
       registered.push_back(model);
 
-  if (!session_r->scoped_model_cycle())
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+  if (!model_selection_r->scoped_model_cycle)
     return registered;
   std::vector<ava::config::ModelInfo> scoped;
-  scoped.reserve(session_r->scoped_model_cycle()->size());
-  for (auto const& id : *session_r->scoped_model_cycle())
+  scoped.reserve(model_selection_r->scoped_model_cycle->size());
+  for (auto const& id : *model_selection_r->scoped_model_cycle)
   {
     auto found = std::ranges::find_if(registered, [&](auto const& model) { return id == model_key(model.provider_id, model.model_id); });
     if (found != registered.end())
@@ -78,7 +79,9 @@ ava::core::Result<ava::config::ModelInfo> select_runtime_model(runtime::session_
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "model is required"));
   if (provider_id && !provider_id->empty())
     return resolve_runtime_model(session_r->paths(), session_r->provider_catalog(), *provider_id, model_id);
-  if (auto current = resolve_runtime_model(session_r->paths(), session_r->provider_catalog(), session_r->model().provider_id, model_id); current)
+  if (auto current =
+          resolve_runtime_model(session_r->paths(), session_r->provider_catalog(), session_r->model_selection_r()->model.provider_id, model_id);
+      current)
     return current;
 
   auto models = runtime_model_catalog(session_r);
@@ -112,9 +115,10 @@ ava::core::Result<ava::config::ModelInfo> cycle_runtime_model(runtime::session_t
   if (models->empty())
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "no registered provider models are enabled for cycling"));
   std::size_t selected = direction < 0 ? models->size() - 1 : 0;
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
   for (std::size_t index = 0; index < models->size(); ++index)
   {
-    if ((*models)[index].provider_id == session_r->model().provider_id && (*models)[index].model_id == session_r->model().model_id)
+    if ((*models)[index].provider_id == model_selection_r->model.provider_id && (*models)[index].model_id == model_selection_r->model.model_id)
     {
       selected = direction < 0 ? (index == 0 ? models->size() - 1 : index - 1) : (index + 1) % models->size();
       break;

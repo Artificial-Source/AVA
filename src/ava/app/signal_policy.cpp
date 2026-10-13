@@ -36,10 +36,10 @@ void apply_invocation_signal_policy(InvocationMode mode)
   switch (signal_policy_for(mode))
   {
     case InvocationSignalPolicy::SharedBits:
-      signals.activate_handlers({SIGTERM, SIGINT, SIGHUP});
+      signals.activate_handlers({SIGHUP, SIGINT, SIGTERM});
       return;
     case InvocationSignalPolicy::Default:
-      signals.default_handlers({SIGTERM, SIGINT, SIGHUP});
+      signals.default_handlers({SIGHUP, SIGINT, SIGTERM});
       return;
     case InvocationSignalPolicy::Deferred:
       return;
@@ -55,7 +55,7 @@ bool ModeSignalLatch::poll() noexcept
   if (!ava::core::Signals::received(mask))
     return false;
 
-  for (int const candidate : {SIGTERM, SIGINT, SIGHUP})
+  for (int const candidate : {SIGHUP, SIGINT, SIGTERM})
   {
     if (ava::core::Signals::try_obtain(candidate))
     {

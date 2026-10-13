@@ -170,7 +170,7 @@ std::string connect_provider_display_name(runtime::session_ts const& unlocked_se
 
 std::vector<ava::agent::QuestionOption> provider_options(runtime::session_ts const& unlocked_session)
 {
-  auto const configured_provider_id = runtime::session_ts::crat(unlocked_session)->model().provider_id;
+  auto const configured_provider_id = runtime::session_ts::crat(unlocked_session)->model_selection_r()->model.provider_id;
   std::vector<ava::agent::QuestionOption> options;
   std::vector<std::string> groups;
   auto add = [&](std::string value, std::string label, std::string group) {

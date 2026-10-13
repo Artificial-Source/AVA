@@ -10,6 +10,7 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/session_user_turns.h"
+#include "ava/app/tui/command_palette_views.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/session/assistant_output.h"
@@ -225,10 +226,10 @@ void test_app_session_branch_commands()
 
   auto const source_session_id = session_w->store.session_id();
   auto seed = session_w->append_owned(ava::session::SessionEntry{.id = "entry_branch_seed",
-                                                               .parent_id = "",
-                                                               .type = ava::session::EntryType::UserMessage,
-                                                               .timestamp = "2026-05-07T00:00:00Z",
-                                                               .data_json = "{\"text\":\"seed\"}"});
+                                                                 .parent_id = "",
+                                                                 .type = ava::session::EntryType::UserMessage,
+                                                                 .timestamp = "2026-05-07T00:00:00Z",
+                                                                 .data_json = "{\"text\":\"seed\"}"});
   expect(seed.has_value(), "slash branch command test seeds source entry");
   auto const source_path = session_w->store.session_path();
   auto const valid_source_bytes = app_read_binary_file(source_path);
@@ -368,7 +369,7 @@ void test_app_session_fork_from_entry_and_user_turns()
   CRITICAL_AREA_CONTINUE_W(session);
   auto listed_after_invalid = ava::session::SessionStore::list_sessions(workspace, paths.sessions_dir);
   expect(!invalid && invalid.error().category() == ava::core::ErrorCategory::NotFound &&
-              invalid.error().message().find("branch source entry not found") != std::string::npos && session_w->store.session_id() == source_session_id &&
+             invalid.error().message().find("branch source entry not found") != std::string::npos && session_w->store.session_id() == source_session_id &&
              listed_before && listed_after_invalid && listed_after_invalid->size() == listed_before->size(),
          "invalid branch_from_entry_id fails closed without replacing the current session or leaking a created session");
 
@@ -417,15 +418,15 @@ void test_app_session_fork_from_entry_and_user_turns()
   CRITICAL_AREA_BEGIN_W(ephemeral);
   expect(ephemeral_w->sessionless() && ephemeral_w->store.is_ephemeral(), "user-turn test opens an ephemeral runtime session");
   expect(ephemeral_w->append_owned(ava::session::SessionEntry{.id = "ephemeral_user",
-                                                            .parent_id = "",
-                                                            .type = ava::session::EntryType::UserMessage,
-                                                            .timestamp = "2026-05-08T01:00:00Z",
-                                                            .data_json = "{\"text\":\"ephemeral body\"}"}) &&
-              ephemeral_w->append_owned(ava::session::SessionEntry{.id = "ephemeral_assistant",
-                                                                .parent_id = "",
-                                                                .type = ava::session::EntryType::AssistantMessage,
-                                                                .timestamp = "2026-05-08T01:00:01Z",
-                                                                .data_json = "{\"text\":\"ephemeral assistant\"}"}),
+                                                              .parent_id = "",
+                                                              .type = ava::session::EntryType::UserMessage,
+                                                              .timestamp = "2026-05-08T01:00:00Z",
+                                                              .data_json = "{\"text\":\"ephemeral body\"}"}) &&
+             ephemeral_w->append_owned(ava::session::SessionEntry{.id = "ephemeral_assistant",
+                                                                  .parent_id = "",
+                                                                  .type = ava::session::EntryType::AssistantMessage,
+                                                                  .timestamp = "2026-05-08T01:00:01Z",
+                                                                  .data_json = "{\"text\":\"ephemeral assistant\"}"}),
          "user-turn test seeds ephemeral history through the runtime owner");
   CRITICAL_AREA_END_W(ephemeral);
   auto ephemeral_listed = ava::app::list_session_user_turns(unlocked_ephemeral);
@@ -560,8 +561,7 @@ void test_app_session_new_resume_commands()
   CRITICAL_AREA_END_W(session);
   auto fresh_sessions = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/sessions Fresh"});
   CRITICAL_AREA_CONTINUE_W(session);
-  expect(fresh_sessions && fresh_sessions->handled && !fresh_sessions->output.empty() &&
-             fresh_sessions->output[0].find("Fresh session") != std::string::npos &&
+  expect(fresh_sessions && fresh_sessions->handled && !fresh_sessions->output.empty() && fresh_sessions->output[0].find("Fresh session") != std::string::npos &&
              fresh_sessions->output[0].find(fresh_session_id) != std::string::npos,
          "slash /sessions shows named sessions created through /clear");
 
@@ -587,12 +587,12 @@ void test_app_session_new_resume_commands()
 
   auto sessionless_options = open_context;
   auto unlocked_sessionless_result = ava::app::runtime::Session::open(sessionless_options, {.sessionless = true,
-                                                                           .requested_session_id = std::nullopt,
-                                                                           .fork_session_id = std::nullopt,
-                                                                           .initial_session_name = std::nullopt,
-                                                                           .continue_last_session = false,
-                                                                           .initial_reasoning_level = std::nullopt,
-                                                                           .expected_original_cwd = std::nullopt});
+                                                                                            .requested_session_id = std::nullopt,
+                                                                                            .fork_session_id = std::nullopt,
+                                                                                            .initial_session_name = std::nullopt,
+                                                                                            .continue_last_session = false,
+                                                                                            .initial_reasoning_level = std::nullopt,
+                                                                                            .expected_original_cwd = std::nullopt});
   expect(unlocked_sessionless_result.has_value(), "slash new/resume test opens an ephemeral current session");
   if (!unlocked_sessionless_result)
     return;

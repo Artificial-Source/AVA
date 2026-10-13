@@ -18,7 +18,7 @@
 #include "ava/event/events.h"
 #include "ava/http/curl_transport.h"
 #include "ava/agent/agent_loop_session.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/provider/catalog.h"
@@ -50,11 +50,11 @@ ava::core::Result<runtime::PromptState> select_runtime_prompt_state(runtime::ses
   std::filesystem::path current_dir;
   bool include_project_resources;
   runtime::PromptOverrides prompt_overrides;
-  std::optional<ava::agent::SubagentDefinition> selected_primary_agent;
+  std::optional<ava::agent::AgentDefinition> selected_primary_agent;
   {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
     paths = session_r->paths();
-    model = session_r->model();
+    model = session_r->model_selection_r()->model;
     workspace_dir = session_r->workspace_dir();
     current_dir = session_r->current_dir();
     include_project_resources = project_resources_trusted(session_r->project_trust());
@@ -226,18 +226,22 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
 
   CRITICAL_AREA_BEGIN_R(session);
 
-  std::optional<std::string_view> launch_reasoning_level = std::nullopt;
-  if (session_r->reasoning())
-    launch_reasoning_level = session_r->reasoning()->level;
-  // Normalize immutable private presentation before parent/coordinator locks.
-  // Model/provider ids and provider-specific reasoning fields never enter it.
-  auto const subagent_launch_display =
-      ava::agent::SubagentLaunchDisplay::normalized(ava::config::proven_configured_model_display_name(session_r->model()), launch_reasoning_level);
+  // Keep both correlated model-selection views under one guard; normalized owns everything it retains.
+  auto const subagent_launch_display = [&] {
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    std::optional<std::string_view> launch_reasoning_level = std::nullopt;
+    if (model_selection_r->reasoning)
+      launch_reasoning_level = model_selection_r->reasoning->level;
+    // Normalize immutable private presentation before parent/coordinator locks.
+    // Model/provider ids and provider-specific reasoning fields never enter it.
+    return ava::agent::SubagentLaunchDisplay::normalized(ava::config::proven_configured_model_display_name(model_selection_r->model),
+                                                         launch_reasoning_level);
+  }();
 
   auto const run_controller_copy = session_r->run_controller();
 
   std::string const session_id_copy = session_r->store.session_id();
-  std::string const provider_id_copy = session_r->model().provider_id;
+  std::string const provider_id_copy = session_r->model_selection_r()->model.provider_id;
   bool const offline_copy = session_r->is_offline() || options.offline;
 
   refresh.manager = options.synthetic_subagent_delivery ? nullptr : session_r->subagent_delivery_manager();
@@ -369,7 +373,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
     return ava::event::RuntimeEvent{
         ava::event::RuntimeEventMetadata{.timestamp = ava::session::now_timestamp(), .session_id = session_id_copy},
         ava::event::SessionStartEvent{
-            .payload = ava::event::SessionPayload{.mode = session_r->mode(), .provider = provider_id_copy, .model = session_r->model().model_id}}};
+            .payload = ava::event::SessionPayload{
+                .mode = session_r->mode(), .provider = provider_id_copy, .model = session_r->model_selection_r()->model.model_id}}};
   }();
 
   if (auto emitted = ava::event::emit_event(event_sink, start_event); !emitted)
@@ -391,7 +396,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
   bool const include_project_resources = include_ambient && resource_policy.include_project_resources;
 
   std::shared_ptr<ava::lsp::DiagnosticsProvider> configured_lsp_provider;
-  std::vector<ava::agent::SubagentDefinition> subagents;
+  std::vector<ava::agent::AgentDefinition> subagents;
   if (include_ambient)
   {
     std::filesystem::path workspace_dir_copy;
@@ -412,8 +417,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
         .permission_resolver = runtime_options.permission_resolver,
     });
     configured_lsp_provider = lsp_provider ? *lsp_provider : nullptr;
-    subagents = ava::agent::load_subagents(ava::agent::SubagentLoadOptions{.workspace_root = std::move(workspace_dir_copy),
-                                                                           .include_project_agents = resource_policy.include_project_resources})
+    subagents = ava::agent::load_agents(ava::agent::AgentLoadOptions{.workspace_root = std::move(workspace_dir_copy),
+                                                                     .include_project_agents = resource_policy.include_project_resources})
                     .subagents;
   }
 
@@ -446,7 +451,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
   child_compaction_config->provider_id = provider_id_copy;
   child_compaction_config->model_id = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return session_r->model().model_id;
+    return session_r->model_selection_r()->model.model_id;
   }();
   child_compaction_config->provider_explicit = false;
   child_compaction_config->model_explicit = false;
@@ -454,6 +459,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
   std::optional<ava::agent::AgentLoop> loop;
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
     loop.emplace(ava::agent::AgentLoopOptions{
         .workspace_dir = session_r->workspace_dir(),
         .current_dir = session_r->current_dir(),
@@ -463,18 +469,18 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
         .model =
             ava::agent::ModelInvocationOptions{
                 .provider_id = provider_id_copy,
-                .model_id = session_r->model().model_id,
+                .model_id = model_selection_r->model.model_id,
                 .system_prompt = runtime_options.isolate_ambient_extensions ? session_r->ambient_extension_free_system_prompt() : session_r->system_prompt(),
                 .stream = runtime_options.stream,
-                .supports_tools = session_r->model().supports_tools.value_or(true),
-                .supports_streaming = session_r->model().supports_streaming.value_or(true),
-                .input_modalities = session_r->model().input_modalities,
-                .max_output_tokens = session_r->model().max_output_tokens,
-                .reasoning = session_r->reasoning() ? std::optional(runtime::provider_reasoning_options(*session_r->reasoning())) : std::nullopt,
-                .pricing = session_r->model().pricing,
-                .api_family = session_r->model().api_family,
-                .reasoning_format = session_r->model().reasoning_format,
-                .compatibility_quirks = session_r->model().compatibility_quirks,
+                .supports_tools = model_selection_r->model.supports_tools.value_or(true),
+                .supports_streaming = model_selection_r->model.supports_streaming.value_or(true),
+                .input_modalities = model_selection_r->model.input_modalities,
+                .max_output_tokens = model_selection_r->model.max_output_tokens,
+                .reasoning = model_selection_r->reasoning ? std::optional(runtime::provider_reasoning_options(*model_selection_r->reasoning)) : std::nullopt,
+                .pricing = model_selection_r->model.pricing,
+                .api_family = model_selection_r->model.api_family,
+                .reasoning_format = model_selection_r->model.reasoning_format,
+                .compatibility_quirks = model_selection_r->model.compatibility_quirks,
             },
         .access_token = options.access_token,
         .credential_type = options.openai_oauth && options.credential_type == "bearer" ? "oauth" : options.credential_type,
@@ -566,7 +572,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
                                                   replayed_user_messages);
         },
         .child_compaction_blueprint =
-            ava::agent::ChildContextCompactionBlueprint{.config = *child_compaction_config, .context_window_tokens = session_r->model().context_window_tokens},
+            ava::agent::ChildContextCompactionBlueprint{
+                .config = *child_compaction_config, .context_window_tokens = model_selection_r->model.context_window_tokens},
         .background_provider_factory = [&provider_catalog = provider_catalog_copy, &paths = paths_copy,
                                         &provider_id = provider_id_copy]() -> ava::core::Result<std::unique_ptr<ava::provider::Provider>> {
           auto ensured = ava::provider::ensure_provider_catalog(provider_catalog, paths);

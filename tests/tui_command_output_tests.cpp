@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/tui_test_support.h"
 #include "ava/app/command_catalog.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -97,10 +98,11 @@ void test_command_output_rendering_and_input()
 
 void test_command_output_modal_precedence_and_hits()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::ComposerSnapshot snapshot;
   snapshot.mode = "build";
-  snapshot.provider = "openai";
-  snapshot.model = "gpt-5.5";
+  //  snapshot.provider = "openai";
+  //  snapshot.model = "gpt-5.5";
   snapshot.session_id = "session_test";
   snapshot.input = "/help";
   snapshot.input_cursor = snapshot.input.size();
@@ -110,7 +112,7 @@ void test_command_output_modal_precedence_and_hits()
   snapshot.select_list->title = "Must stay behind command output";
   snapshot.width = 80;
   snapshot.height = 16;
-  auto const command_frame = ava::tui::render_composer(snapshot);
+  auto const command_frame = ava::tui::render_composer(frontend.frontend(), snapshot);
   expect(frame_contains(command_frame, "Command /help") && frame_contains(command_frame, "local help output") &&
              !frame_contains(command_frame, "Must stay behind command output"),
          "command output takes precedence over ordinary selector and transcript presentation");
@@ -123,7 +125,7 @@ void test_command_output_modal_precedence_and_hits()
   snapshot.question_prompt->question = "Choose";
   snapshot.question_prompt->options = {ava::tui::QuestionPromptOptionView{.value = "yes", .label = "Yes"}};
   snapshot.question_prompt->modal = true;
-  auto const question_frame = ava::tui::render_composer(snapshot);
+  auto const question_frame = ava::tui::render_composer(frontend.frontend(), snapshot);
   expect(frame_contains(question_frame, "Authoritative question") && !frame_contains(question_frame, "local help output"),
          "permission/question modal authority takes precedence over retained command output");
 }

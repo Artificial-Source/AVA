@@ -302,7 +302,9 @@ std::string format_session_stats_text(runtime::session_ts const& unlocked_sessio
   std::ostringstream output;
   output << "Session stats\n";
   output << "  session: " << shorten_middle(session_r->store.session_id(), 32) << "   entries: " << stats.entry_count << '\n';
-  output << "  model: " << session_r->model().provider_id << '/' << session_r->model().model_id << "   mode: " << ava::agent::to_string(session_r->mode())
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+  output << "  model: " << model_selection_r->model.provider_id << '/' << model_selection_r->model.model_id
+         << "   mode: " << ava::agent::to_string(session_r->mode())
          << '\n';
   output << "  workspace: " << compact_workspace_label(session_r->workspace_dir()) << "   cwd: "
          << compact_cwd_label(session_r->current_dir(), session_r->workspace_dir()) << '\n';
@@ -338,7 +340,8 @@ ava::core::Result<CommandResult> run_context_command(runtime::session_ts& unlock
   auto const resource_policy = runtime::make_extension_resource_policy_1(unlocked_session);
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::tuple{session_r->workspace_dir(), session_r->anchor_set(), session_r->mode(), session_r->model(), session_r->project_trust().decision,
+    return std::tuple{session_r->workspace_dir(), session_r->anchor_set(), session_r->mode(), session_r->model_selection_r()->model,
+                      session_r->project_trust().decision,
                       session_r->base_prompt(), session_r->context_sources(), session_r->freshness_sources()};
   }();
   auto const& [workspace_dir, anchor_set, mode, model, project_trust, base_prompt, context_sources, freshness_sources] = snapshot;

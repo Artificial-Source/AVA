@@ -1,8 +1,9 @@
 #include "sys.h"
 #include "ava/app/command_palette.h"
-#include "ava/app/interactive.h"
-#include "ava/app/interactive_internal.h"
 #include "ava/app/project_trust.h"
+#include "ava/app/tui/command_palette_views.h"
+#include "ava/app/tui/interactive_tui_internal.h"
+#include "ava/app/tui/interactive_tui_support.h"
 #include "ava/agent/todo.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/keybindings.h"
@@ -289,7 +290,7 @@ std::optional<std::string> token_status_for_session(ava::app::runtime::session_t
 {
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::pair{session_r->read_authority_1(), session_r->model().context_window_tokens};
+    return std::pair{session_r->read_authority_1(), session_r->model_selection_r()->model.context_window_tokens};
   }();
   auto& [read_authority, context_window_tokens] = snapshot;
   if (!read_authority)
@@ -341,7 +342,7 @@ ava::core::Result<std::string> formatted_active_context_status(ava::app::runtime
 {
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->read_authority_1(), session_r->system_prompt(), session_r->model().context_window_tokens};
+    return std::tuple{session_r->read_authority_1(), session_r->system_prompt(), session_r->model_selection_r()->model.context_window_tokens};
   }();
   auto& [read_authority, system_prompt, context_window_tokens] = snapshot;
   if (!read_authority)
@@ -531,16 +532,18 @@ void store_model_scope(ava::app::runtime::session_ts& unlocked_session, std::vec
   auto normalized = normalized_model_scope(candidate, all_values);
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
   if (reset_full_scope_to_all && normalized.size() == all_values.size())
-  {
-    session_w->model_selection().scoped_model_cycle = std::nullopt;
-    return;
-  }
-  session_w->model_selection().scoped_model_cycle = std::move(normalized);
+    session_w->model_selection().change([](auto& model_selection){
+      model_selection.scoped_model_cycle = std::nullopt;
+    });
+  else
+    session_w->model_selection().change([&normalized](auto& model_selection){
+      model_selection.scoped_model_cycle = std::move(normalized);
+    });
 }
 
 std::vector<std::string> active_model_scope_or_all(ava::app::runtime::session_ts const& unlocked_session, std::vector<std::string> const& all_values)
 {
-  auto const scoped_cycle = runtime::session_ts::crat(unlocked_session)->scoped_model_cycle();
+  auto const scoped_cycle = runtime::session_ts::crat(unlocked_session)->model_selection_r()->scoped_model_cycle;
   if (scoped_cycle)
     return normalized_model_scope(*scoped_cycle, all_values);
   return all_values;
@@ -586,10 +589,13 @@ ava::core::Result<ava::tui::SelectListView> toggle_scoped_model(ava::app::runtim
   auto const all_values = registered_model_cycle_values(unlocked_session);
   if (!contains_value(all_values, value))
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "model is not available for scoped cycling"));
-  auto const scoped_cycle = runtime::session_ts::rat(unlocked_session)->scoped_model_cycle();
+  auto const scoped_cycle = runtime::session_ts::rat(unlocked_session)->model_selection_r()->scoped_model_cycle;
   if (!scoped_cycle)
   {
-    runtime::session_ts::wat(unlocked_session)->model_selection().scoped_model_cycle = std::vector<std::string>{std::string(value)};
+    std::vector<std::string> v{std::string(value)};
+    runtime::session_ts::wat(unlocked_session)->model_selection().change([&v](auto& model_selection){
+      model_selection.scoped_model_cycle = std::move(v);
+    });
     return refreshed_scoped_model_selector(unlocked_session, previous);
   }
   auto next = normalized_model_scope(*scoped_cycle, all_values);
@@ -681,12 +687,14 @@ ava::core::Result<ava::tui::SelectListView> reorder_scoped_model(ava::app::runti
 
 ava::core::Result<std::string> save_scoped_model_cycle(ava::app::runtime::session_ts& unlocked_session)
 {
-  auto scope_to_save = runtime::session_ts::rat(unlocked_session)->scoped_model_cycle();
+  auto scope_to_save = runtime::session_ts::rat(unlocked_session)->model_selection_r()->scoped_model_cycle;
   if (scope_to_save)
   {
     auto const all_values = registered_model_cycle_values(unlocked_session);
     scope_to_save = normalized_model_scope(*scope_to_save, all_values);
-    runtime::session_ts::wat(unlocked_session)->model_selection().scoped_model_cycle = scope_to_save;
+    runtime::session_ts::wat(unlocked_session)->model_selection().change([&scope_to_save](auto& model_selection){
+      model_selection.scoped_model_cycle = scope_to_save;
+    });
   }
 
   auto const paths = runtime::session_ts::rat(unlocked_session)->paths();
@@ -701,56 +709,14 @@ ava::core::Result<std::string> save_scoped_model_cycle(ava::app::runtime::sessio
   return std::string("scoped model cycle saved: ") + std::to_string(scope_to_save->size()) + " models enabled";
 }
 
-ava::permissions::PermissionRuleMode permission_rule_mode_for_agent_mode(ava::core::Mode mode)
-{
-  switch (mode)
-  {
-    case ava::core::Mode::Build:
-      return ava::permissions::PermissionRuleMode::Build;
-    case ava::core::Mode::Plan:
-      return ava::permissions::PermissionRuleMode::Plan;
-  }
-  return ava::permissions::PermissionRuleMode::Any;
-}
-
 ava::core::Result<ava::tui::TuiRememberedPermissionRule> remember_permission_rule_for_prompt(ava::app::runtime::session_ts const& unlocked_session,
                                                                                              ava::permissions::PermissionPrompt const& prompt,
                                                                                              ava::permissions::PermissionAction action, std::string actor)
 {
-  auto reason = prompt.reason.empty() ? std::string("remembered from TUI permission prompt") : prompt.reason;
-  std::string recipe_key;
-  std::string recipe_display;
-  if (prompt.operation == ava::permissions::Operation::RunCommand)
-  {
-    auto const reusable = prompt.command_metadata && ava::permissions::command_permission_allows_reusable_grant(*prompt.command_metadata);
-    if (action == ava::permissions::PermissionAction::Allow && !ava::permissions::command_prompt_allows_persistent_allow(prompt))
-    {
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied,
-                                              "this command cannot be remembered because no reusable sealed workspace recipe is available"));
-    }
-    if (reusable)
-    {
-      recipe_key = prompt.command_metadata->workspace_recipe_key;
-      recipe_display = prompt.command_metadata->recipe_display;
-    }
-  }
-  auto const rule_store = runtime::session_ts::crat(unlocked_session)->permission_rule_store();
-  auto added = ava::permissions::add_persistent_permission_rule(
-      rule_store, ava::permissions::PermissionRuleDraft{
-                      .scope = ava::permissions::PermissionRuleScope::Workspace,
-                      .action = action,
-                      .operation = prompt.operation,
-                      .mode = permission_rule_mode_for_agent_mode(prompt.mode),
-                      .tool_name = prompt.tool_name,
-                      .target_path = prompt.target_path,
-                      .command = prompt.operation == ava::permissions::Operation::RunCommand && !recipe_key.empty() ? std::string{} : prompt.command,
-                      .command_recipe_key = std::move(recipe_key),
-                      .recipe_display = std::move(recipe_display),
-                      .reason = std::move(reason),
-                      .actor = std::move(actor)});
+  auto added = remember_permission_rule(unlocked_session, prompt, action, std::move(actor));
   if (!added)
     return std::unexpected(std::move(added.error()));
-  return ava::tui::TuiRememberedPermissionRule{.rule_id = added->rule_id};
+  return ava::tui::TuiRememberedPermissionRule{.rule_id = std::move(*added)};
 }
 
 bool workspace_catalog_changed(InteractiveResult const& result)

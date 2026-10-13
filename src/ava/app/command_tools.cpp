@@ -155,6 +155,7 @@ ava::tools::ToolContext make_tool_context(runtime::session_ts& unlocked_session,
   auto const resource_policy = runtime::make_extension_resource_policy_1(unlocked_session);
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
     return std::tuple{session_r->workspace_dir(),
                       session_r->store.session_path().parent_path() / "spill",
                       session_r->mode(),
@@ -163,8 +164,8 @@ ava::tools::ToolContext make_tool_context(runtime::session_ts& unlocked_session,
                       session_r->ava_authority_roots_1(),
                       session_r->session_process_scope(),
                       session_r->store.session_id(),
-                      session_r->model().provider_id,
-                      session_r->model().model_id,
+                      model_selection_r->model.provider_id,
+                      model_selection_r->model.model_id,
                       session_r->current_dir()};
   }();
   auto& [workspace_dir, spill_dir, mode, permission_rule_store, anchor_set, ava_authority_roots, process_scope, session_id, provider_id, model_id, current_dir] =

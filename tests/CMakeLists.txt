@@ -51,6 +51,12 @@ ava_apply_debugging(ava_fake_process_child)
 ava_apply_warnings(ava_fake_process_child)
 ava_apply_sanitizers(ava_fake_process_child)
 
+add_executable(ava_threadsafe_custom_access_lock_test "threadsafe_custom_access_lock_test.cpp")
+ava_apply_debugging(ava_threadsafe_custom_access_lock_test)
+ava_apply_warnings(ava_threadsafe_custom_access_lock_test)
+ava_apply_sanitizers(ava_threadsafe_custom_access_lock_test)
+add_test(NAME ava_tests.threadsafe_custom_access_lock COMMAND ava_threadsafe_custom_access_lock_test)
+
 add_executable(ava_fake_curl_child "support/fake_curl_child.cpp")
 ava_apply_debugging(ava_fake_curl_child)
 ava_apply_warnings(ava_fake_curl_child)
@@ -1073,7 +1079,7 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${CMAKE_COMMAND}
             -DAVA_CLIPBOARD_IMAGE_SOURCE=${CMAKE_SOURCE_DIR}/src/ava/app/clipboard_image.cpp
             -DAVA_CLIPBOARD_IMAGE_HEADER=${CMAKE_SOURCE_DIR}/src/ava/app/clipboard_image.h
-            -DAVA_INTERACTIVE_TUI_SOURCE=${CMAKE_SOURCE_DIR}/src/ava/app/interactive_tui.cpp
+            -DAVA_INTERACTIVE_TUI_SOURCE=${CMAKE_SOURCE_DIR}/src/ava/app/tui/interactive_tui.cpp
             -P ${CMAKE_CURRENT_SOURCE_DIR}/clipboard_image_static_contract.cmake)
   set_tests_properties(ava_tests.clipboard_image_static_contract PROPERTIES TIMEOUT 15)
 

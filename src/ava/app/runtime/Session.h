@@ -10,9 +10,10 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/session_ts.h"
+#include "ava/app/runtime/UnlockedData.h"
 #include "ava/app/session_run_controller.h"
 #include "ava/agent/agent_loop.h"
-#include "ava/agent/subagent_config.h"
+#include "ava/agent/agent_config.h"
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"
@@ -60,7 +61,7 @@ struct InvocationInputs
   ava::agent::ToolVisibilityOptions tool_visibility = {};
   // Keep bounded selection intent separately from the currently permitted, provenance-carrying definition.
   std::optional<std::string> requested_primary_agent = std::nullopt;
-  std::optional<ava::agent::SubagentDefinition> selected_primary_agent = std::nullopt;
+  std::optional<ava::agent::AgentDefinition> selected_primary_agent = std::nullopt;
   ava::config::XdgPaths paths;
   bool sessionless;
   bool is_offline_ = false;
@@ -114,6 +115,8 @@ struct ModelSelection
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
+
+using ModelSelection_ts = UnlockedData<ModelSelection>;
 
 // Trust state.
 //
@@ -180,7 +183,7 @@ struct Session_aggregate_base
 {
   InvocationInputs invocation_inputs_;          // Do NOT use this variable name outside of this file!
   ResolvedPromptState resolved_prompt_state_;   // Do NOT use this variable name outside of this file!
-  ModelSelection model_selection_;              // Do NOT use this variable name outside of this file!
+  ModelSelection_ts model_selection_;           // Do NOT use this variable name outside of this file!
   TrustState trust_state_;                      // Do NOT use this variable name outside of this file!
   SessionResources resources_;                  // Do NOT use this variable name outside of this file!
 
@@ -300,8 +303,8 @@ class Session : protected Session_aggregate_base
   ResolvedPromptState& resolve_prompt_state() { return resolved_prompt_state_; }
   ResolvedPromptState const& resolve_prompt_state() const { return resolved_prompt_state_; }
 
-  ModelSelection& model_selection() { return model_selection_; }
-  ModelSelection const& model_selection() const { return model_selection_; }
+  ModelSelection_ts& model_selection() { return model_selection_; }
+  ModelSelection_ts const& model_selection() const { return model_selection_; }
 
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
@@ -314,7 +317,7 @@ class Session : protected Session_aggregate_base
   std::filesystem::path const& current_dir() const noexcept { return invocation_inputs_.current_dir; }
   ava::agent::ToolVisibilityOptions const& tool_visibility() const { return invocation_inputs_.tool_visibility; }
   std::optional<std::string> const& requested_primary_agent() const { return invocation_inputs_.requested_primary_agent; }
-  std::optional<ava::agent::SubagentDefinition> const& selected_primary_agent() const { return invocation_inputs_.selected_primary_agent; }
+  std::optional<ava::agent::AgentDefinition> const& selected_primary_agent() const { return invocation_inputs_.selected_primary_agent; }
   ava::config::XdgPaths const& paths() const { return invocation_inputs_.paths; }
   bool sessionless() const { return invocation_inputs_.sessionless; }
 
@@ -331,10 +334,8 @@ class Session : protected Session_aggregate_base
   ava::session::SessionReadLimits const& session_read_limits() const { return invocation_inputs_.session_read_limits; }
   PromptOverrides const& prompt_overrides() const { return invocation_inputs_.prompt_overrides; }
 
-  // Model selection.
-  ava::config::ModelInfo const& model() const { return model_selection_.model; }
-  std::optional<ReasoningSelection> const& reasoning() const { return model_selection_.reasoning; }
-  std::optional<std::vector<std::string>> const& scoped_model_cycle() const { return model_selection_.scoped_model_cycle; }
+  // Return read-access type for the ModelSelection object.
+  ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }
@@ -467,7 +468,7 @@ class Session : protected Session_aggregate_base
   // Atomically publish a trust transition with its permitted primary definition, sticky effective tool visibility, and reconstructed prompt state, then
   // refresh retained parent configuration after releasing the session lock.
   [[nodiscard]] static ava::core::VoidResult apply_trust_prompt_state_and_refresh(session_ts& unlocked_session, ProjectTrustState project_trust,
-                                                                                  std::optional<ava::agent::SubagentDefinition> selected_primary_agent,
+                                                                                  std::optional<ava::agent::AgentDefinition> selected_primary_agent,
                                                                                   PromptState prompt_state);
 
   // Switch the active model to `model`, re-deriving the prompt state for the

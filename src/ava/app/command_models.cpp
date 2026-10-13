@@ -163,8 +163,9 @@ std::string format_models_text(runtime::session_ts const& unlocked_session, ava:
   std::shared_ptr<ava::provider::ProviderCatalog const> catalog;
   {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    current_model = session_r->model();
-    current_reasoning = session_r->reasoning();
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    current_model = model_selection_r->model;
+    current_reasoning = model_selection_r->reasoning;
     catalog = catalog_for(session_r);
   }
   auto models = ava::config::effective_models(registry);

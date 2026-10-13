@@ -38,7 +38,7 @@ Suggested Codex command:
 | Tool cards/diffs | `src/ava/tui/tool_cards.cpp`, `src/ava/tui/composer_diff.cpp` |
 | Permission/question UI | `src/ava/tui/composer_permission.cpp` |
 | Terminal | `src/ava/tui/terminal.cpp`, `terminal.h`, `terminal_image.cpp` |
-| Theme/keybindings | `src/ava/tui/theme.cpp`, `keybindings.cpp`, `src/ava/app/display_settings.cpp` |
+| Theme/keybindings | `src/ava/tui/theme.cpp`, `keybindings.cpp`, `src/ava/app/tui/tui_display_settings.cpp` |
 | Tests | `tests/tui_composer_tests.cpp`, `tests/tui_tmux_smoke.py`, `tests/tui_kitty_image_smoke.py`, `tests/tui_osc8_smoke.py` |
 
 ## Current Gap Summary
