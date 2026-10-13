@@ -22,10 +22,9 @@ External actors are:
 - the workspace and XDG-owned configuration/state trees; and
 - approved command, plugin, MCP, and LSP child processes.
 
-AVA is not a network daemon. RPC and ACP are stdio protocols. The optional Qt
-Quick desktop target is an experimental, separately built prototype and does
-not currently embed the production agent runtime. See
-[`desktop-qml.md`](../interfaces/desktop-qml.md).
+AVA is not a network daemon. RPC and ACP are stdio protocols. Optional desktop
+planning is outside this C++ runtime map; see
+[`desktop/README.md`](../desktop/README.md).
 
 ## Processes and frontends
 
@@ -39,9 +38,8 @@ adapters:
 | Print | `app/print_mode.cpp` | one prompt; text or versioned event output; noninteractive permission policy |
 | RPC | `app/rpc_mode.cpp`, `app/rpc/` | proprietary JSONL protocol, worker/resolver and session commands |
 | ACP | `app/acp_mode.cpp`, `app/acp/` | ACP v1 JSON-RPC 2.0 peer, sessions, permissions, and client capabilities |
-| Desktop prototype | `desktop/main.cpp`, `desktop/qml/` | optional `ava-desktop` Qt process; prototype controller only |
 
-The first four adapters converge on `app/runtime.*`, an open
+The four adapters converge on `app/runtime.*`, an open
 `app::runtime::Session`, and `run_prompt`. Frontends own presentation,
 protocol framing, and how an `Ask` permission or question reaches the user.
 They must not reimplement provider requests, tool policy, or session mutation.
@@ -133,7 +131,6 @@ links in each module's `CMakeLists.txt` and the enforced include policy in
 | `agent` | provider/tool iteration, message projection, tool registry/dispatch, scheduling, subagents/jobs | CLI/protocol/TUI policy or direct session-path reacquisition |
 | `app` | composition root, runtime session, commands, run lifecycle, frontend adapters, RPC/ACP services | low-level reusable primitives |
 | `tui`, `tui/terminal` | semantic terminal state, composer/input/rendering; ncurses terminal lifecycle and cells | provider/session/tool implementations |
-| `desktop` | experimental Qt/QML shell | production runtime behavior until explicitly integrated |
 | `debug` | libcwd-only formatting/debug support | product behavior or required release functionality |
 
 Important dependency rules:

@@ -1,0 +1,48 @@
+AVA visual concept checks
+Static token contrast only. Not a WCAG certification or runtime a11y test.
+
+[light]
+  PASS  15.13:1  need 4.5  body primary on canvas  #1C1B17 on #F3F0E8
+  PASS   8.80:1  need 4.5  body secondary on canvas  #45423B on #F3F0E8
+  PASS   6.41:1  need 4.5  muted labels on canvas  #5A564E on #F3F0E8
+  PASS   5.76:1  need 4.5  muted labels on sidebar  #5A564E on #E9E4D8
+  PASS   6.90:1  need 4.5  accent text on canvas  #2C5A4B on #F3F0E8
+  PASS   6.90:1  need 4.5  on-accent on fill  #F3F0E8 on #2C5A4B
+  PASS   6.33:1  need 4.5  warning text on warning wash  #6F4708 on #F0E2BE
+  PASS   7.15:1  need 4.5  warning text on canvas  #6F4708 on #F3F0E8
+  PASS   7.90:1  need 4.5  secondary on sidebar  #45423B on #E9E4D8
+  PASS  13.93:1  need 4.5  text on selected row  #1C1B17 on #E1E9E4
+  PASS  13.85:1  need 4.5  text on composer  #1C1B17 on #EBE6DB
+  PASS   8.05:1  need 4.5  secondary on composer  #45423B on #EBE6DB
+  PASS   5.87:1  need 4.5  muted on composer  #5A564E on #EBE6DB
+  PASS   7.75:1  need 4.5  secondary on user wash  #45423B on #E7E2D6
+  PASS  13.33:1  need 4.5  text on code wash  #1C1B17 on #E7E2D6
+  PASS   6.41:1  need 3.0  window controls on chrome  #5A564E on #F3F0E8
+  PASS   7.90:1  need 3.0  icon on sidebar  #45423B on #E9E4D8
+  PASS   6.90:1  need 3.0  selected tab marker  #2C5A4B on #F3F0E8
+  PASS   6.36:1  need 3.0  selected sidebar marker  #2C5A4B on #E1E9E4
+  PASS   6.01:1  need 4.5  mode label on chip  #2C5A4B on #D8E4DC
+
+[dark]
+  PASS  14.00:1  need 4.5  body primary on canvas  #EEECE5 on #1E1F1D
+  PASS   9.11:1  need 4.5  body secondary on canvas  #C4C0B6 on #1E1F1D
+  PASS   6.60:1  need 4.5  muted labels on canvas  #A8A39A on #1E1F1D
+  PASS   7.10:1  need 4.5  muted labels on sidebar  #A8A39A on #171816
+  PASS   7.64:1  need 4.5  accent text on canvas  #8FBA9F on #1E1F1D
+  PASS   6.59:1  need 4.5  on-accent on fill  #F3F0E8 on #2F5D4E
+  PASS   7.71:1  need 4.5  warning text on warning wash  #E6C37A on #3A3018
+  PASS   9.81:1  need 4.5  warning text on canvas  #E6C37A on #1E1F1D
+  PASS   9.81:1  need 4.5  secondary on sidebar  #C4C0B6 on #171816
+  PASS  12.85:1  need 4.5  text on selected row  #EEECE5 on #1E2823
+  PASS  13.19:1  need 4.5  text on composer  #EEECE5 on #232422
+  PASS   8.58:1  need 4.5  secondary on composer  #C4C0B6 on #232422
+  PASS   6.21:1  need 4.5  muted on composer  #A8A39A on #232422
+  PASS   8.26:1  need 4.5  secondary on user wash  #C4C0B6 on #262725
+  PASS  12.70:1  need 4.5  text on code wash  #EEECE5 on #262725
+  PASS   6.60:1  need 3.0  window controls on chrome  #A8A39A on #1E1F1D
+  PASS   9.81:1  need 3.0  icon on sidebar  #C4C0B6 on #171816
+  PASS   7.64:1  need 3.0  selected tab marker  #8FBA9F on #1E1F1D
+  PASS   7.01:1  need 3.0  selected sidebar marker  #8FBA9F on #1E2823
+  PASS   5.98:1  need 4.5  mode label on chip  #8FBA9F on #24352C
+
+All finite checks passed.

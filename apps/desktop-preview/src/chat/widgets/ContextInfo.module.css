@@ -1,0 +1,18 @@
+.context { position: relative; min-width: 0; color: var(--body); overflow-wrap: anywhere; }
+.qualifier { margin: 0 0 20px; color: var(--quiet); font-size: 11px; line-height: 1.6; }
+.facts { display: grid; gap: 9px; margin: 0; font-size: 11px; line-height: 1.6; }
+.facts > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 12px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.provider { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.provider > span { width: 16px; height: 16px; }
+.provider > span::after { inset: 4px; }
+.section { margin: 22px 0 12px; padding-top: 16px; border-top: 1px solid var(--edge); color: var(--text); font-size: 12px; font-weight: 550; }
+.views { margin-top: 22px; }
+.disclosure { min-width: 0; border-top: 1px solid var(--edge); }
+.trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 40px; padding: 10px 0; color: var(--body); background: transparent; font-size: 12px; text-align: left; }
+.trigger:hover, .trigger[aria-expanded='true'] { color: var(--text); }
+.trigger svg { flex-shrink: 0; transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.trigger[aria-expanded='true'] svg { transform: rotate(180deg); }
+.raw { max-width: 100%; margin: 0; padding: 4px 0 16px; overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-family: var(--mono); font-size: 11px; line-height: 1.7; }
+.raw:focus-visible { outline-offset: -2px; }

@@ -186,22 +186,6 @@ behavior required by release builds.
 **Nearest tests:** `debug_tests.cpp`, `libcwd_debug_output_test.py`, and
 `print_members_coverage_test.py`.
 
-### `desktop/`
-
-**Owns:** the optional experimental Qt Quick/QML desktop prototype.
-
-**Key entry points:** `main.cpp`, `desktop_controller.h`, and `qml/Main.qml`.
-It is enabled with `AVA_BUILD_DESKTOP_QML` and builds `ava-desktop` separately.
-
-**Belongs here:** prototype Qt application/controller and QML presentation.
-
-**Does not belong here:** assumptions that the production runtime is integrated,
-or duplicated provider/tool/session behavior.
-
-**Nearest tests:** no dedicated automated desktop suite currently exists; the
-nearest gate is configuration/build with the option enabled, followed by the
-manual checks in [`../desktop-qml.md`](../interfaces/desktop-qml.md).
-
 ### `diagnostics/`
 
 **Owns:** bounded private runtime traces, artifact storage, safe typed failures,

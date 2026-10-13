@@ -1,0 +1,15 @@
+.scope { margin: 0 2px 18px; color: var(--body); font-size: 12px; line-height: 1.6; }
+.scope > span { display: block; margin-top: 3px; color: var(--quiet); font-size: 11px; }
+.list { margin: 0; padding: 0; list-style: none; }
+.list > li + li { border-top: 1px solid var(--separator); }
+.child { display: block; width: 100%; min-width: 0; padding: 15px 8px; border-radius: 5px; background: transparent; text-align: left; }
+.child:hover { background: var(--hover); }
+.child[aria-current='true'] { background: #ffffff08; box-shadow: inset 2px 0 0 #d4d4d4; }
+.task { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; }
+.title { min-width: 0; color: var(--text); font-size: 12px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.meta { display: block; margin-top: 8px; color: var(--quiet); font-size: 10px; line-height: 1.8; }
+.open { display: flex; align-items: center; gap: 5px; margin-top: 9px; color: var(--muted); font-size: 11px; }
+.notice { margin: 22px 2px 0; color: var(--quiet); font-size: 11px; line-height: 1.7; }
+.empty { padding: 12px 2px; }
+.empty h3 { margin: 0 0 7px; color: var(--text); font-size: 13px; font-weight: 500; }
+.empty p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }

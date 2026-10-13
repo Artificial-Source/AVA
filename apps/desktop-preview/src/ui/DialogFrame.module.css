@@ -1,0 +1,10 @@
+.dialog { width: min(660px, calc(100vw - 32px)); max-width: 100%; max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow: hidden; color: var(--text); background: var(--surface-panel); border: 1px solid var(--edge-bright); border-radius: 10px; box-shadow: 0 20px 70px #0006; }
+.dialog[open] { display: flex; flex-direction: column; animation: arrive var(--motion-panel-duration) var(--motion-ease-out); }
+.dialog[data-wide='true'] { width: min(960px, calc(100vw - 32px)); }
+.dialog::backdrop { background: #0009; }
+.header { display: flex; flex-shrink: 0; justify-content: flex-end; padding: 8px 10px 0; }
+.body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 24px 24px; }
+.toolbar { padding-bottom: 16px; margin-bottom: 20px; border-bottom: 1px solid var(--edge); }
+@keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 520px) { .body { padding: 0 16px 16px; } .dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); } }
+@media (prefers-reduced-motion: reduce) { .dialog[open] { animation: none; } }

@@ -1,0 +1,3 @@
+.track { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows var(--motion-panel-duration) var(--motion-ease-out), opacity var(--motion-panel-duration) var(--motion-ease-out); }
+.track[data-open='true'] { grid-template-rows: 1fr; opacity: 1; }
+.content { min-height: 0; overflow: hidden; }

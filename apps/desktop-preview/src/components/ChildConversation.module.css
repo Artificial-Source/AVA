@@ -1,0 +1,4 @@
+.snapshot { margin: 0 0 28px; padding-bottom: 18px; border-bottom: 1px solid var(--separator); }
+.snapshot p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 14px; color: var(--muted); font-size: 11px; }
+.unavailable { color: var(--body); }

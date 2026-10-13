@@ -5,7 +5,8 @@ These instructions apply to first-party documentation under `docs/` and suppleme
 ## Folder ownership
 
 - `core/`: current user setup, configuration, providers, resources, tools, reasoning, and delegation.
-- `interfaces/`: human-facing terminal and optional desktop interfaces.
+- `interfaces/`: human-facing terminal interface.
+- `desktop/`: greenfield Electron planning and research; not a shipped UI or existing-prototype baseline.
 - `extensions/`: current LSP, MCP, and plugin setup/authoring guides.
 - `operations/`: build, test, Docker, terminal, diagnosis, and release operations.
 - `development/`: current maintainer architecture and engineering policy; narrow implementation notes belong in `development/internals/`.

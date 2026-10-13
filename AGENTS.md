@@ -31,7 +31,7 @@ AVA is a native C++23 terminal coding agent. Treat the codebase as a small syste
 - `src/ava/observability/`: run observers, trace accounting, and deterministic trace validation/scoring.
 - `src/ava/debug/`: optional libcwd-backed debug channels and generated print-member support.
 - `src/ava/tui/`: custom terminal UI rendering, input handling, runtime glue, and terminal abstraction. Its live subagent workspace consumes only path-free coordinator snapshots and inspector frames; backend session/source authority remains outside TUI code.
-- `src/ava/desktop/`: optional Qt/QML desktop prototype.
+- `apps/desktop/`: optional Electron + React desktop client. Independent of the C++ build and TUI; it talks to a local Linux AVA binary over RPC v1. Nested `apps/desktop/AGENTS.md` owns that tree.
 - `tests/`: focused `ava_tests` sources and support fakes, plus CMake/Python CLI, RPC, ACP, package/release, PTY, and TUI integration tests. The split tmux harness is `tests/tui_tmux_smoke.py` plus `tests/tui_tmux_scenarios/`.
 
 ## Internal Ownership Boundaries

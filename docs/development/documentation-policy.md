@@ -13,6 +13,7 @@ Use one primary home for each kind of information:
 | Repository entry | root [`README.md`](../../README.md) | concise product summary, install/build start, links into current docs |
 | Documentation navigation | [`docs/README.md`](../README.md) and root [`llms.txt`](../../llms.txt) | single human spine in task order and concise robot entry point |
 | Users/operators | `docs/core/`, `docs/interfaces/`, `docs/operations/` | current commands, configuration, interfaces, behavior, limits, and recovery |
+| Desktop planning | `docs/desktop/` | greenfield Electron planning and research; not shipped UI or first-release scope |
 | Client/extension authors | `docs/extensions/` plus fixed contracts in `docs/` | current setup/authoring guides and versioned normative wire/file contracts |
 | Maintainers | `docs/development/` and [`docs/AGENTS.md`](../AGENTS.md) | current architecture, source map, invariants, and engineering/documentation policy |
 | Active engineering programs | `docs/engineering/` | evidence-backed programs, reproducible ledgers, baselines, ADRs, and report sets |
@@ -23,7 +24,7 @@ Use one primary home for each kind of information:
 | History/evidence | `docs/history/`, `docs/versions/`, `docs/interop/` | what was claimed or observed at a particular point in time; `docs/interop/evidence/` holds the dated reports |
 | Schemas/machine status | `docs/schema/`, JSON manifests | machine-readable contracts or status checked by tests |
 
-The mechanically allowed top-level taxonomy is `core`, `interfaces`, `extensions`, `operations`, `development`, `engineering`, `security`, `product`, `plans`, `roadmap`, `goals`, `history`, `versions`, `interop`, and `schema`, plus optional excluded `reference-code`. `engineering/` is narrowly reserved for active, evidence-backed engineering programs and the reproducible ledgers, baselines, ADRs, and report sets that support them. Current general architecture and policy remain under `development/`; historical completed ledgers remain under `history/`. Only `README.md`, `AGENTS.md`, `acp.md`, `acp-support.json`, `rpc-protocol.md`, `headless-protocol.md`, `session-format.md`, and `plugin-compatibility-policy.md` remain as fixed `docs/`-root files. Every owned category has its required `README.md`; nested implementation inputs such as `operations/docker/Dockerfile` are not document graph nodes.
+The mechanically allowed top-level taxonomy is `core`, `interfaces`, `desktop`, `extensions`, `operations`, `development`, `engineering`, `security`, `product`, `plans`, `roadmap`, `goals`, `history`, `versions`, `interop`, and `schema`, plus optional excluded `reference-code`. `engineering/` is narrowly reserved for active, evidence-backed engineering programs and the reproducible ledgers, baselines, ADRs, and report sets that support them. Current general architecture and policy remain under `development/`; historical completed ledgers remain under `history/`. Only `README.md`, `AGENTS.md`, `acp.md`, `acp-support.json`, `rpc-protocol.md`, `headless-protocol.md`, `session-format.md`, and `plugin-compatibility-policy.md` remain as fixed `docs/`-root files. Every owned category has its required `README.md`; nested implementation inputs such as `operations/docker/Dockerfile` are not document graph nodes.
 
 Do not make a historical ledger, roadmap, or reference checkout the only place
 that current user or maintainer behavior is explained. `docs/reference-code/`
@@ -204,7 +205,7 @@ contains a broken link or is explicitly labeled as current.
 | Context/trust/resource discovery | `docs/core/configuration.md`, `docs/core/context-resources.md`, security trust section |
 | Module/entry-point/dependency/ownership change | `docs/development/architecture.md`, development codebase guide |
 | Build dependency, option, prerequisite, or test runner | `docs/development/contributing.md`, `docs/operations/testing.md`, release/provenance docs where applicable |
-| Desktop prototype capability | `docs/interfaces/desktop-qml.md`, codebase guide; keep experimental/integration status explicit |
+| Planned desktop client | `docs/desktop/` index and architecture; keep optional/future status explicit; do not treat `apps/desktop/` as the greenfield design baseline |
 | Roadmap/capability status | owning plan/roadmap plus current product baseline/evidence ledger; user docs if shipped |
 | Release packaging/install contract | release checklist, artifact README, testing commands, notices/provenance as applicable |
 

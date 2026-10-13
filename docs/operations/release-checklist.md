@@ -59,7 +59,7 @@ share/doc/ava/docs/schema/theme.schema.json
 
 The installed `README.md` comes from the artifact-specific source template at `docs/operations/release-artifact-readme.md`, not the repository README. The curated documentation payload is exactly 32 source files (30 Markdown and 2 JSON) mirrored under their source categories; category indexes and historical/planning documents remain source-only. `THIRD_PARTY_NOTICES.md` is the distribution notice; `PROVENANCE.json` is a deterministic, privacy-safe description of this binary, its source/dependency state, architecture, and ELF dynamic dependencies. The staged documentation layout must follow the categorized source layout so included local links resolve. `scripts/verify-markdown-links.py` verifies every staged Markdown relative path before archive creation.
 
-The allowlist excludes reference repositories, source and test trees, build trees, examples, credentials, auth/config/session state, provider output, raw interoperability evidence, and the optional desktop prototype. CMake component `ava` must remain exact; always pass `--component ava` for a manual stage:
+The allowlist excludes reference repositories, source and test trees, build trees, examples, credentials, auth/config/session state, provider output, raw interoperability evidence, and optional desktop source and planning docs. CMake component `ava` must remain exact; always pass `--component ava` for a manual stage:
 
 ```sh
 cmake --install build-release \

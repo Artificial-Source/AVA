@@ -23,6 +23,7 @@ FIXED_ROOT_DOCS = (
 REQUIRED_INDEXES = (
     "core/README.md",
     "interfaces/README.md",
+    "desktop/README.md",
     "extensions/README.md",
     "operations/README.md",
     "development/README.md",
@@ -43,6 +44,7 @@ REQUIRED_LLMS = (
     "docs/README.md",
     "docs/core/README.md",
     "docs/interfaces/README.md",
+    "docs/desktop/README.md",
     "docs/extensions/README.md",
     "docs/operations/README.md",
     "docs/security/README.md",
@@ -129,7 +131,7 @@ class DocumentationStructureTests(unittest.TestCase):
         result = self.run_checker()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("documentation structure: verified (", result.stdout)
-        self.assertIn("17 required indexes, 21 llms links", result.stdout)
+        self.assertIn("18 required indexes, 22 llms links", result.stdout)
 
     def test_missing_required_index(self) -> None:
         (self.root / "docs/core/README.md").unlink()
@@ -174,6 +176,28 @@ class DocumentationStructureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(
             "unreachable first-party document: docs/engineering/README.md",
+            result.stderr,
+        )
+
+    def test_desktop_index_must_link_immediate_document(self) -> None:
+        self.write("docs/desktop/architecture.md")
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "docs/desktop/README.md: category index omits immediate document: docs/desktop/architecture.md",
+            result.stderr,
+        )
+
+    def test_desktop_category_is_unreachable_without_human_spine_link(self) -> None:
+        spine = self.root / "docs/README.md"
+        spine.write_text(
+            spine.read_text(encoding="utf-8").replace("desktop/README.md", "missing-desktop-index.md"),
+            encoding="utf-8",
+        )
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "unreachable first-party document: docs/desktop/README.md",
             result.stderr,
         )
 

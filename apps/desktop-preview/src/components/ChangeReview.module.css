@@ -1,0 +1,12 @@
+.notice { margin: 0 0 24px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.change { padding: 0 0 23px; margin-bottom: 22px; border-bottom: 1px solid var(--separator); }
+.change:last-child { margin-bottom: 0; border-bottom: none; }
+.change h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 9px; color: var(--body); font-size: 12px; font-weight: 500; }
+.change > p { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.before, .after { background: var(--code); border-left: 2px solid #ababab4d; }
+.after { margin-top: 4px; border-color: #d6d6d689; }
+.change h4 { margin: 0; padding: 9px 10px 0; color: var(--quiet); font-size: 9px; font-weight: 400; }
+.change pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 8px 10px 11px; overflow-x: auto; color: var(--body); font-size: 10px; line-height: 1.9; }
+.empty { color: var(--body); font-size: 13px; }
+
+:global([data-diff-wrap='false']) .change pre { white-space: pre; overflow-wrap: normal; }

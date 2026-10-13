@@ -1,0 +1,141 @@
+{
+  "source": "@lobehub/icons-static-svg@1.95.1",
+  "gitHead": "49a2130df7bfa5eb1b088261bff20a37e2967789",
+  "publishedTarball": "https://registry.npmjs.org/@lobehub/icons-static-svg/-/icons-static-svg-1.95.1.tgz",
+  "verifiedIntegrity": "sha512-Hw7EPPgVnC4NZLXBfTNJG6hyQgqECfUPC11VVXodPSr1aebKcFxDZlSpxhWwYNdCc6bhxps/x5TtXoPmfKH2ag==",
+  "licenseSource": "https://raw.githubusercontent.com/lobehub/lobe-icons/49a2130df7bfa5eb1b088261bff20a37e2967789/LICENSE",
+  "licenseSha256": "add9d7531d1b21646317a8958e38fc727506fa39d24bdecb44154d943c82753a",
+  "tarballSha256": "fc2a063f9c5db18f6b3f27a62670c95a9e767cc45ba7bbe5d949f9f9af090fc3",
+  "license": "MIT",
+  "assetForm": "Original upstream bytes; no modifications. Local CSS masks use currentColor.",
+  "scope": "Browser preview identity marks only. Collection-source license, not trademark endorsement or a distribution/SBOM audit.",
+  "runtimeProviders": [
+    {
+      "providerId": "openai",
+      "file": "openai.svg",
+      "bytes": 1687,
+      "sha256": "a595df6b423920c67a7f8f73c063e4bfb72d415948097b6cac063a2366bb5186",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/openai.svg"
+    },
+    {
+      "providerId": "anthropic",
+      "file": "anthropic.svg",
+      "bytes": 368,
+      "sha256": "e833fdfa7e7187a86a05b870925067556a506dcd4239089aed73e1e58c9366a3",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/anthropic.svg"
+    },
+    {
+      "providerId": "deepseek",
+      "file": "deepseek.svg",
+      "bytes": 2189,
+      "sha256": "8f9443e351b6dacce71871790201b799d92e8bf96a45ef79aeb5e9bf4db423e2",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/deepseek.svg"
+    },
+    {
+      "providerId": "gemini",
+      "file": "gemini.svg",
+      "bytes": 651,
+      "sha256": "87d5b3c4be75a66f54c1936482a263df68185545b741129badd1b7c2449c18d3",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/gemini.svg"
+    },
+    {
+      "providerId": "kimi",
+      "file": "kimi.svg",
+      "bytes": 786,
+      "sha256": "ed08131b46acf70e6e2144eceb775e74098b58ea65fa21eaee04be7b05cfe63b",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/kimi.svg"
+    },
+    {
+      "providerId": "moonshot",
+      "file": "moonshot.svg",
+      "bytes": 4028,
+      "sha256": "435f41b74e6a87639b6bf860e9628f20cbe7d6229bece412d548f4cea3081852",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/moonshot.svg"
+    },
+    {
+      "providerId": "openrouter",
+      "file": "openrouter.svg",
+      "bytes": 382,
+      "sha256": "ae671cc83de9bd45db97a47ed5e38a4e1bd9f93a12be495ba4b4f8b284026bca",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/openrouter.svg"
+    },
+    {
+      "providerId": "zai",
+      "file": "zai.svg",
+      "bytes": 319,
+      "sha256": "e748cb5108ce37b116d7a5ba97d37e0ae97eadf6849b0de11afb248e244a01e1",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/zai.svg"
+    },
+    {
+      "providerId": "zai-coding-cn",
+      "file": "zai.svg",
+      "bytes": 319,
+      "sha256": "e748cb5108ce37b116d7a5ba97d37e0ae97eadf6849b0de11afb248e244a01e1",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/zai.svg"
+    },
+    {
+      "providerId": "xai",
+      "file": "xai.svg",
+      "bytes": 372,
+      "sha256": "89eb7de9f0d02a41cfecd9109e253d7fd3529e27467dee4254faa67f3ac21451",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/xai.svg"
+    },
+    {
+      "providerId": "groq",
+      "file": "groq.svg",
+      "bytes": 568,
+      "sha256": "078d5cf6e7a54905040c15ddacf5ea33c13042fe7739e820cedc2096e4406651",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/groq.svg"
+    },
+    {
+      "providerId": "cerebras",
+      "file": "cerebras.svg",
+      "bytes": 1235,
+      "sha256": "05af9593eca3fefdb30c5ad042040f008beea2b27e0a6b7315c319492f7a44ff",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/cerebras.svg"
+    },
+    {
+      "providerId": "together",
+      "file": "together.svg",
+      "bytes": 577,
+      "sha256": "b3ec218e7e0b0432a2ce07f5ec98a1dcd24f808c74d5fee624ab31e4947feef3",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/together.svg"
+    },
+    {
+      "providerId": "fireworks",
+      "file": "fireworks.svg",
+      "bytes": 597,
+      "sha256": "9991ab2a8331096d3f408e07a5f2e1cb54c369143dd9fc7a97f6458478b33fe3",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/fireworks.svg"
+    },
+    {
+      "providerId": "mistral",
+      "file": "mistral.svg",
+      "bytes": 418,
+      "sha256": "a06cfa54e7deff7f7544175b006b7f8a03fbc5624c44f7d553a44d07ea96e629",
+      "scope": "runtime-provider",
+      "archivePath": "package/icons/mistral.svg"
+    }
+  ],
+  "uniqueSvgFiles": 14,
+  "uniqueSvgBytes": 14177,
+  "mappingNotes": [
+    "zai-coding-cn shares only the Z.ai mark; provider and authentication scopes are not merged.",
+    "xai uses the company mark, not the Grok product mark.",
+    "Unrecognized, custom, compatible and fictional IDs use a neutral AVA fallback."
+  ]
+}

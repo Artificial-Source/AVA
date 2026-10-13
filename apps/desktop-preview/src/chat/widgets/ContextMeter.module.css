@@ -1,0 +1,2 @@
+.meter { flex-shrink: 0; max-width: 100%; min-height: 32px; padding: 6px 7px; border-radius: 5px; color: var(--muted); background: transparent; font-size: 11px; line-height: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.meter:hover, .meter[aria-expanded='true'] { color: var(--text); background: var(--hover); }

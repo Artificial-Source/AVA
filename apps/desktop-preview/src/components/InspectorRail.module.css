@@ -1,0 +1,10 @@
+.rail { grid-column: 3; grid-row: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 0; padding: 18px 0; border-left: 1px solid var(--edge); background: var(--surface-panel); }
+.module, .visibility { position: relative; display: grid; flex-shrink: 0; place-items: center; width: 34px; height: 36px; padding: 0; border-radius: 5px; color: var(--quiet); background: transparent; }
+.visibility { margin-bottom: 6px; }
+.module:hover, .module[aria-expanded='true'], .visibility:hover { color: var(--text); background: var(--hover); }
+.module[aria-expanded='true']::before { content: ''; position: absolute; top: 11px; bottom: 11px; left: -5px; width: 2px; border-radius: 1px; background: var(--text); }
+.count { position: absolute; top: -3px; right: 0; display: grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; border: 1px solid var(--edge-bright); border-radius: 4px; background: #292929; color: var(--text); font-family: var(--mono); font-size: 9px; line-height: 1; }
+
+@media (max-width: 1100px) {
+  .rail { grid-column: 2; grid-row: 1 / -1; }
+}

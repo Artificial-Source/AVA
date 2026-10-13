@@ -1,0 +1,53 @@
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { installDialogTestSupport } from '../screens/dialogTestSupport';
+import { AppShell } from './AppShell';
+
+const pending = vi.hoisted(() => {
+  let resolve!: () => void;
+  const ready = new Promise<void>((done) => { resolve = done; });
+  return { resolve, ready, loads: 0 };
+});
+vi.mock('./ChildConversation', async (original) => { pending.loads++; await pending.ready; return original<typeof import('./ChildConversation')>(); });
+beforeEach(installDialogTestSupport);
+
+it('keeps title, Back and readonly model authority immediate while loading; late resolution cannot revive a departed child', async () => {
+  render(<AppShell />); expect(pending.loads).toBe(0);
+  const title = screen.getByRole('heading', { level: 1 }); const draft = screen.getByRole('textbox') as HTMLTextAreaElement;
+  fireEvent.change(draft, { target: { value: 'Keep this parent draft' } });
+  fireEvent.change(screen.getByRole('combobox', { name: 'Mode for this chat' }), { target: { value: 'plan' } });
+  const recent = screen.getByRole('navigation', { name: 'Recent chats' }).textContent;
+  fireEvent.click(screen.getByRole('button', { name: /^Working Review back navigation/ }));
+  expect(title).toHaveTextContent('Review back navigation'); expect(title).toHaveFocus();
+  expect(screen.getByText('Loading read-only child conversation…')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Back to parent' })).toBeEnabled();
+  expect(screen.queryByRole('form', { name: 'Message composer' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Model for this chat' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+  const nav = await screen.findByRole('navigation', { name: 'Settings sections' });
+  expect(pending.loads).toBe(1);
+  fireEvent.click(within(nav).getByRole('button', { name: 'Models' }));
+  expect(screen.getByRole('button', { name: 'Choose current model' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose default model' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
+  fireEvent.click(within(dialog).getByRole('radio', { name: /Aster Mini.*128,000/ }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Use Aster Mini' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to chat' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to parent' }));
+  expect(title).toHaveFocus(); expect(title).toHaveTextContent('Remember search filters');
+  expect(screen.getByRole('textbox')).toHaveValue('Keep this parent draft');
+  expect(screen.getByRole('combobox', { name: 'Mode for this chat' })).toHaveValue('plan');
+  const focus = vi.spyOn(title, 'focus');
+  await act(async () => { pending.resolve(); await pending.ready; });
+  expect(focus).not.toHaveBeenCalled(); expect(screen.queryByRole('region', { name: /Child conversation:/ })).not.toBeInTheDocument();
+  expect(title).toHaveTextContent('Remember search filters'); expect(screen.getByRole('button', { name: 'Model for this chat' })).toHaveTextContent(/^Aster$/);
+  expect(screen.getByRole('navigation', { name: 'Recent chats' })).toHaveTextContent(recent!);
+  fireEvent.click(screen.getByRole('button', { name: /^Completed Map return paths/ }));
+  const child = await screen.findByRole('region', { name: 'Child conversation: Map return paths' });
+  expect(child).toHaveTextContent('Read-only child'); expect(title).toHaveTextContent('Map return paths');
+  expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument(); expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Back to parent' }));
+  expect(screen.getByRole('textbox')).toHaveValue('Keep this parent draft');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  expect(screen.getByRole('button', { name: 'Model for this chat' })).toHaveTextContent('Aster Mini');
+});

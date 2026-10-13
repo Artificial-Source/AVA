@@ -109,3 +109,45 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Optional Electron desktop client (not in the Linux C++ artifact)
+
+The following apply only when building or running `apps/desktop/`. They are
+**not** compiled into, bundled with, or required by the AVA Linux host archive
+described above. This source tree does not ship a desktop installer.
+
+Exact direct pins used by `apps/desktop/package.json`:
+
+| Package | Version | License | Provenance |
+| --- | --- | --- | --- |
+| react, react-dom | 19.3.0 | MIT | github.com/facebook/react |
+| @radix-ui/react-dialog | 1.1.23 | MIT | github.com/radix-ui/primitives |
+| motion | 13.4.6 | MIT | github.com/motiondivision/motion |
+| electron | 44.5.0 | MIT | github.com/electron/electron |
+| electron-vite | 5.0.0 | MIT | github.com/alex8088/electron-vite |
+| vite | 7.3.6 | MIT | github.com/vitejs/vite |
+| @vitejs/plugin-react | 5.2.0 | MIT | github.com/vitejs/vite-plugin-react |
+| tailwindcss, @tailwindcss/vite | 4.3.3 | MIT | github.com/tailwindlabs/tailwindcss |
+| @types/node, @types/react, @types/react-dom | 24.13.1 / 19.3.0 | MIT | github.com/DefinitelyTyped/DefinitelyTyped |
+| typescript | 7.0.2 | Apache-2.0 | github.com/microsoft/TypeScript |
+
+Electron additionally redistributes Chromium and Node.js, which carry their own
+license notices (BSD, LGPL, and other third-party terms). Those transitive
+licenses must be collected and included before any desktop distribution. They
+are not part of the current Linux C++ artifact.
+
+## Browser preview provider marks (not in the Linux C++ artifact)
+
+Only `apps/desktop-preview/public/provider-marks/` adopts 14 original SVGs
+for 15 runtime provider identities from `@lobehub/icons-static-svg@1.95.1`
+(MIT), pinned to git `49a2130df7bfa5eb1b088261bff20a37e2967789`.
+Archive SHA-256: `fc2a063f9c5db18f6b3f27a62670c95a9e767cc45ba7bbe5d949f9f9af090fc3`.
+The local manifest records adopted IDs, original byte counts, hashes, source
+and archive integrity. The exact copyright and MIT notice is preserved in
+`LICENSE.upstream.txt` there and in the preview's
+`public/third-party-runtime-licenses.txt`. No icon package or React icon
+library from this source is installed.
+
+These are collection-source license notices, not trademark permission or
+endorsement, authentication support claims, or a complete distribution/SBOM
+qualification. These assets are outside the native Linux C++ artifact.
