@@ -206,11 +206,9 @@ void populate_display_section(SelectListView& view, ComposerSnapshot const& snap
 
 void populate_models_section(TuiFrontEnd* frontend, SelectListView& view, ComposerSnapshot const& snapshot)
 {
-  std::string provider;
-  std::string model_display;
-  [[maybe_unused]] bool provider_changed = frontend->model_selection().refresh_provider(frontend, provider);
-  [[maybe_unused]] bool model_changed = frontend->model_selection().refresh_model_display(frontend, model_display);
-  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(provider) + "/" + value_or_unknown(model_display));
+  auto provider = frontend->model_selection().refresh_provider();
+  auto model = frontend->model_selection().refresh_model_display();
+  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(provider.display) + "/" + value_or_unknown(model.display));
   add_settings_action_row(view, std::string(kSettingsOpenReasoning), "Reasoning", snapshot.reasoning_status.value_or("default"));
   add_settings_action_row(view, std::string(kSettingsOpenScopedModels), "Cycle scope", "Ctrl+P");
 }

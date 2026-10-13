@@ -16,6 +16,8 @@ class TuiFrontEnd : public app::frontend::FrontEnd
   app::frontend::ModelSelection model_selection_;
 
  public:
+  TuiFrontEnd() : model_selection_(this) { }
+
   // Implement virtual function of FrontEnd.
   void initialize_frontend_state(app::runtime::session_ts::crat const& session_r) override
   {

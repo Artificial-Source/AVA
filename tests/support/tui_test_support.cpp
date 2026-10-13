@@ -81,11 +81,9 @@ ava::tui::TuiFrontEnd* TuiFrontEndFixture::frontend() noexcept
 
 std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata()
 {
-  std::string provider;
-  std::string model_display;
-  static_cast<void>(impl_->frontend.model_selection().refresh_provider(&impl_->frontend, provider));
-  static_cast<void>(impl_->frontend.model_selection().refresh_model_display(&impl_->frontend, model_display));
-  return {std::move(provider), std::move(model_display)};
+  auto provider = impl_->frontend.model_selection().refresh_provider();
+  auto model = impl_->frontend.model_selection().refresh_model_display();
+  return {provider.display, model.display};
 }
 
 ScopedTerminalCapabilityProfile::ScopedTerminalCapabilityProfile(std::string term_program_value)
