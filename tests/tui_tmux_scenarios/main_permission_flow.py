@@ -20,6 +20,44 @@ from tui_smoke_helpers import (
 from .common import _finish_main, _main_session
 
 
+def _bash_modal_viewport(screen: str) -> tuple[int, int, int] | None:
+    """Read the spill modal's range at the wheel probe's restored 120x32 size."""
+
+    # command_output_geometry gives a 28-row modal: title at 2, footer at 29.
+    # Ranges in output text or the composer are not modal viewport evidence.
+    lines = screen.splitlines()
+    if len(lines) <= 29 or lines[2].strip() != "Command /bash":
+        return None
+    footer = re.fullmatch(r"[ \t]*(\d+)-(\d+)/(\d+) · ↑↓/PgUp/PgDn scroll · Enter close[ \t]*", lines[29])
+    if footer is None:
+        return None
+    first, last, total = map(int, footer.groups())
+    if not (1 <= first <= last <= total and last - first + 1 == 26):
+        return None
+    return first, last, total
+
+
+def _wait_for_bash_modal_viewport(
+    tmux_exe: object,
+    session: str,
+    label: str,
+    *,
+    after: tuple[int, int, int] | None = None,
+    timeout: float = 8.0,
+) -> str:
+    def viewport_ready(screen: str) -> bool:
+        viewport = _bash_modal_viewport(screen)
+        if viewport is None:
+            return False
+        if after is None:
+            return re.search(r"(?s)Command /bash.*exit: 0", screen) is not None
+        return viewport[2] == after[2] and viewport[0] > after[0]
+
+    if after is not None:
+        label += f" past {after[0]}-{after[1]}/{after[2]}"
+    return wait_for_screen_state(tmux_exe, session, viewport_ready, label, timeout=timeout)
+
+
 def scenario_main_permission_flow(ctx: SmokeContext) -> None:
     tmux_exe, root, workspace, ava_config, env_prefix, session = _main_session(ctx)
 
@@ -430,10 +468,9 @@ def scenario_main_permission_flow(ctx: SmokeContext) -> None:
         timeout=12.0,
     )
     send_literal(tmux_exe, session, "a")
-    seq_result = wait_for(
+    seq_result = _wait_for_bash_modal_viewport(
         tmux_exe,
         session,
-        r"(?s)Command /bash.*exit: 0",
         "allowed bounded local bash spill modal",
         timeout=30.0,
     )
@@ -441,12 +478,15 @@ def scenario_main_permission_flow(ctx: SmokeContext) -> None:
     if re.search(r"(?m)^\s*(?:1|10000)\s*$", seq_result) or "output truncated to last 200/20000 lines" not in seq_result:
         raise RuntimeError(f"bounded local spill modal did not expose only its retained tail with truthful summary\nscreen:\n{seq_result}")
 
-    initial_footer = re.search(r"(\d+)-(\d+)/(\d+)", seq_result)
+    initial_footer = _bash_modal_viewport(seq_result)
     send_literal(tmux_exe, session, "\x1b[<65;4;6M" * 8)
-    wait_for_screen_change(tmux_exe, session, seq_result, "bounded local bash modal wheel scroll redraw")
-    wheel_scrolled = capture(tmux_exe, session)
-    wheel_footer = re.search(r"(\d+)-(\d+)/(\d+)", wheel_scrolled)
-    if not initial_footer or not wheel_footer or int(wheel_footer.group(1)) <= int(initial_footer.group(1)):
+    # Unrelated footer updates or partial repaints do not prove wheel delivery.
+    # Keep the accepted viewport frame rather than racing another capture.
+    wheel_scrolled = _wait_for_bash_modal_viewport(
+        tmux_exe, session, "bounded local bash modal wheel scroll redraw", after=initial_footer
+    )
+    wheel_footer = _bash_modal_viewport(wheel_scrolled)
+    if not initial_footer or not wheel_footer or wheel_footer[0] <= initial_footer[0]:
         raise RuntimeError(f"command-output mouse wheel did not advance the bounded viewport\nscreen:\n{wheel_scrolled}")
     send_keys(tmux_exe, session, "End")
     seq_expanded = wait_for(
