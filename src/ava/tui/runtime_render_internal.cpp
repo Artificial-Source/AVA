@@ -144,8 +144,8 @@ bool FrameScheduler::failed() const
   return failed_;
 }
 
-RuntimeRenderer::RuntimeRenderer(ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context)
-    : snapshot_(snapshot), sidebar_(sidebar), draft_state_(draft_state), terminal_context_(terminal_context)
+RuntimeRenderer::RuntimeRenderer(TuiFrontEnd* tui_frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context)
+    : frontend(tui_frontend), snapshot_(snapshot), sidebar_(sidebar), draft_state_(draft_state), terminal_context_(terminal_context)
 {
 }
 
@@ -441,7 +441,7 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
     auto const synchronized_detached_viewport = deferred_detached_viewport_.has_value() && !freeze_detached_viewport;
     if (synchronized_detached_viewport)
       synchronize_detached_transcript_layout();
-    snapshot.sidebar_drawer_scroll_offset = std::min(snapshot.sidebar_drawer_scroll_offset, sidebar_drawer_max_scroll_offset(snapshot));
+    snapshot.sidebar_drawer_scroll_offset = std::min(snapshot.sidebar_drawer_scroll_offset, sidebar_drawer_max_scroll_offset(frontend, snapshot));
     if (snapshot.command_output)
     {
       auto const geometry = command_output_geometry(width, height);
@@ -493,8 +493,8 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
       static_cast<void>(transcript_selection_.ensure_authority(transcript_layout_cache, &snapshot));
     }
     transcript_selection_.publish(snapshot);
-    wrote = detail::draw_screen_cached(snapshot, completion_cache, snapshot.file_references_generation, transcript_layout_cache, snapshot.transcript_generation,
-                                       screen_row_cache, freeze_detached_viewport, freeze_modal_transcript_layout);
+    wrote = detail::draw_screen_cached(frontend, snapshot, completion_cache, snapshot.file_references_generation, transcript_layout_cache,
+                                       snapshot.transcript_generation, screen_row_cache, freeze_detached_viewport, freeze_modal_transcript_layout);
   }
   return wrote;
 }
@@ -575,7 +575,7 @@ bool RuntimeRenderer::paint(FrameRenderKind kind, bool freeze_transcript_layout)
     if (snapshot.permission_prompt || snapshot.question_prompt || snapshot.command_output || snapshot.select_list || snapshot.subagent_workspace ||
         snapshot.sidebar_drawer_visible || !snapshot.processing)
       return true;
-    wrote = detail::draw_processing_footer_cached(snapshot, completion_cache, snapshot.file_references_generation, transcript_layout_cache,
+    wrote = detail::draw_processing_footer_cached(frontend, snapshot, completion_cache, snapshot.file_references_generation, transcript_layout_cache,
                                                   snapshot.transcript_generation, screen_row_cache);
   }
   return wrote;

@@ -17,39 +17,45 @@
 
 void run_tui_permission_tests_part_1()
 {
-  auto prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab});
+  auto prompt_input =
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt tab toggles focus to allow");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Deny,
          "permission prompt tab toggles focus back to deny");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowLeft});
+  prompt_input =
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowLeft});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Deny,
          "permission prompt left arrow selects deny");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowRight});
+  prompt_input =
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowRight});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt right arrow selects allow");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowUp});
+  prompt_input =
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowUp});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Deny,
          "permission prompt up arrow selects the previous action consistently with list modals");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown});
+  prompt_input =
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt down arrow selects the next action consistently with list modals");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllow, "permission prompt enter confirms selected allow");
-  prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = ' '});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny,
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = ' '});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt space confirms selected deny");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Space});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllow, "permission prompt semantic Space confirms the selected choice");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
+  prompt_input =
+      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt escape resolves deny");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlC});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt ctrl-c resolves deny");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlD});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDeny, "permission prompt ctrl-d resolves deny");
-  prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'A'});
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny,
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'A'});
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllow, "permission prompt A resolves allow");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
                                                           ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'D'});
@@ -62,31 +68,31 @@ void run_tui_permission_tests_part_1()
                                                           ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'S'}, false);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::None && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt ignores session shortcut when session grant is unavailable");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, false);
+  prompt_input = ava::tui::handle_permission_prompt_input(
+      ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, false);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::None && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt ignores remembered-rule shortcut when rule storage is unavailable");
-  prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab}, false, true, true);
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab},
+                                                          false, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::DenyRemember,
          "permission prompt cycles to remembered deny when rule storage is available");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::DenyRemember, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
-                                                          false, true, true);
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::DenyRemember,
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter}, false, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveDenyRemember, "permission prompt enter confirms remembered deny");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
                                                           ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, true, true);
   expect(
       prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::AllowRemember,
       "permission prompt R toggles the selected allow choice into a remembered allow");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowRemember, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter},
-                                                          false, true, true);
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowRemember,
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter}, false, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllowRemember, "permission prompt enter confirms remembered allow");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Deny,
-                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, true);
+  prompt_input = ava::tui::handle_permission_prompt_input(
+      ava::tui::PermissionPromptChoice::Deny, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::DenyRemember,
          "permission prompt keeps remembered deny available when a Critical command cannot be remembered as allow");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
-                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, true);
+  prompt_input = ava::tui::handle_permission_prompt_input(
+      ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'R'}, false, false, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::None && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::Allow,
          "permission prompt does not expose remembered allow when the backend only permits one-shot approval");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow,
@@ -94,12 +100,12 @@ void run_tui_permission_tests_part_1()
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::ResolveAllowSession &&
              prompt_input.selected_choice == ava::tui::PermissionPromptChoice::AllowSession,
          "permission prompt S resolves allow session when session grant is available");
-  prompt_input =
-      ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab}, true, true, true);
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::Allow, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab},
+                                                          true, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::AllowSession,
          "permission prompt tab advances from allow to allow session when available");
-  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowSession, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab}, true,
-                                                          true, true);
+  prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowSession,
+                                                          ava::tui::InputEvent{.key = ava::tui::terminal::Key::Tab}, true, true, true);
   expect(prompt_input.action == ava::tui::PermissionPromptInputAction::Redraw && prompt_input.selected_choice == ava::tui::PermissionPromptChoice::DenyRemember,
          "permission prompt tab advances from allow session to remembered deny when available");
   prompt_input = ava::tui::handle_permission_prompt_input(ava::tui::PermissionPromptChoice::AllowSession,
@@ -121,7 +127,8 @@ void run_tui_permission_tests_part_1()
 
   ava::tui::PermissionPromptView guidance_prompt{
       .tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = "ask", .selected_choice = ava::tui::PermissionPromptChoice::Allow};
-  auto guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'G'});
+  auto guidance_input =
+      ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'G'});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_mode &&
              guidance_input.selected_choice == ava::tui::PermissionPromptChoice::Deny && guidance_input.guidance_text.empty(),
          "permission prompt G enters guidance mode as one-shot reject without resolving");
@@ -136,8 +143,8 @@ void run_tui_permission_tests_part_1()
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_text == "A ",
          "permission guidance mode Space appends a space instead of resolving");
   guidance_prompt.guidance_text = "A ";
-  guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt,
-                                                            ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'x', .text = "safe\nline\x01"});
+  guidance_input = ava::tui::handle_permission_prompt_input(
+      guidance_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'x', .text = "safe\nline\x01"});
   expect(guidance_input.action == ava::tui::PermissionPromptInputAction::Redraw && guidance_input.guidance_text == "A safeline",
          "permission guidance mode strips controls and newlines from pasted text");
   guidance_prompt.guidance_text = "base";
@@ -188,7 +195,8 @@ void run_tui_permission_tests_part_1()
          "permission guidance Ctrl-D resolves reject with no guidance");
 
   guidance_prompt.guidance_text = "locked";
-  for (auto const key : {ava::tui::terminal::Key::Tab, ava::tui::terminal::Key::ArrowLeft, ava::tui::terminal::Key::ArrowRight, ava::tui::terminal::Key::ArrowUp, ava::tui::terminal::Key::ArrowDown})
+  for (auto const key : {ava::tui::terminal::Key::Tab, ava::tui::terminal::Key::ArrowLeft, ava::tui::terminal::Key::ArrowRight,
+                         ava::tui::terminal::Key::ArrowUp, ava::tui::terminal::Key::ArrowDown})
   {
     guidance_input = ava::tui::handle_permission_prompt_input(guidance_prompt, ava::tui::InputEvent{.key = key});
     expect(guidance_input.action == ava::tui::PermissionPromptInputAction::None && guidance_input.guidance_mode &&
@@ -228,23 +236,24 @@ void run_tui_permission_tests_part_1()
 }
 void run_tui_permission_tests_part_2()
 {
-  auto const permission_modal =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "permission required",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "thinking"}},
-                                                           .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash\x1b[31m",
-                                                                                                               .operation = "bash",
-                                                                                                               .target = "/tmp/outside",
-                                                                                                               .command = "git push origin main",
-                                                                                                               .reason = "command can change external state",
-                                                                                                               .risk = "high",
-                                                                                                               .request_id = "permreq_push"},
-                                                           .width = 80,
-                                                           .height = 12});
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto const permission_modal = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "permission required",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "thinking"}},
+                                                      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash\x1b[31m",
+                                                                                                          .operation = "bash",
+                                                                                                          .target = "/tmp/outside",
+                                                                                                          .command = "git push origin main",
+                                                                                                          .reason = "command can change external state",
+                                                                                                          .risk = "high",
+                                                                                                          .request_id = "permreq_push"},
+                                                      .width = 80,
+                                                      .height = 12});
   expect(
       std::ranges::any_of(permission_modal, [](std::string const& line) { return strip_sgr(line).find("! Permission required") != std::string::npos; }) &&
           std::ranges::any_of(permission_modal, [](std::string const& line) { return strip_sgr(line).find("Shell command") != std::string::npos; }) &&
@@ -313,41 +322,42 @@ void run_tui_permission_tests_part_2()
            "tui permission renderer degrades safely at tiny row budget " + std::to_string(budget));
   }
 
-  auto const external_permission_modal = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "permission required",
-      .transcript = {},
-      .permission_prompt =
-          ava::tui::PermissionPromptView{
-              .tool_name = "read_file", .operation = "read", .target = "/tmp/outside.txt", .reason = "target is outside the workspace"},
-      .width = 80,
-      .height = 8});
+  auto const external_permission_modal = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "permission required",
+                                                      .transcript = {},
+                                                      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "read_file",
+                                                                                                          .operation = "read",
+                                                                                                          .target = "/tmp/outside.txt",
+                                                                                                          .reason = "target is outside the workspace"},
+                                                      .width = 80,
+                                                      .height = 8});
   expect(std::ranges::any_of(external_permission_modal,
                              [](std::string const& line) { return strip_sgr(line).find("Access external directory /tmp/outside.txt") != std::string::npos; }),
          "tui permission dock uses OpenCode-style external-directory wording for outside-workspace targets");
 
-  auto const remembered_permission_modal =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "permission required",
-                                                           .transcript = {},
-                                                           .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
-                                                                                                               .operation = "bash",
-                                                                                                               .target = "/workspace",
-                                                                                                               .command = "git push origin main",
-                                                                                                               .reason = "command can change external state",
-                                                                                                               .risk = "high",
-                                                                                                               .allow_remember_available = true,
-                                                                                                               .deny_remember_available = true},
-                                                           .width = 96,
-                                                           .height = 10});
+  auto const remembered_permission_modal = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "permission required",
+                                                      .transcript = {},
+                                                      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
+                                                                                                          .operation = "bash",
+                                                                                                          .target = "/workspace",
+                                                                                                          .command = "git push origin main",
+                                                                                                          .reason = "command can change external state",
+                                                                                                          .risk = "high",
+                                                                                                          .allow_remember_available = true,
+                                                                                                          .deny_remember_available = true},
+                                                      .width = 96,
+                                                      .height = 10});
   expect(
       std::ranges::any_of(remembered_permission_modal,
                           [](std::string const& line) {
@@ -358,25 +368,25 @@ void run_tui_permission_tests_part_2()
           std::ranges::all_of(remembered_permission_modal, [](std::string const& line) { return visible_columns(line) <= 96; }),
       "tui permission dock exposes remembered reject and always-allow choices when rule storage is available");
 
-  auto const session_permission_modal =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "permission required",
-                                                           .transcript = {},
-                                                           .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
-                                                                                                               .operation = "bash",
-                                                                                                               .target = "/workspace",
-                                                                                                               .command = "cmake --build build",
-                                                                                                               .reason = "sealed workspace recipe",
-                                                                                                               .risk = "medium",
-                                                                                                               .allow_session_available = true,
-                                                                                                               .allow_remember_available = true,
-                                                                                                               .deny_remember_available = true},
-                                                           .width = 120,
-                                                           .height = 10});
+  auto const session_permission_modal = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "permission required",
+                                                      .transcript = {},
+                                                      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
+                                                                                                          .operation = "bash",
+                                                                                                          .target = "/workspace",
+                                                                                                          .command = "cmake --build build",
+                                                                                                          .reason = "sealed workspace recipe",
+                                                                                                          .risk = "medium",
+                                                                                                          .allow_session_available = true,
+                                                                                                          .allow_remember_available = true,
+                                                                                                          .deny_remember_available = true},
+                                                      .width = 120,
+                                                      .height = 10});
   expect(std::ranges::any_of(session_permission_modal,
                              [](std::string const& line) {
                                auto visible = strip_sgr(line);
@@ -391,24 +401,24 @@ void run_tui_permission_tests_part_2()
              std::ranges::all_of(session_permission_modal, [](std::string const& line) { return visible_columns(line) <= 120; }),
          "tui permission dock exposes allow session between allow once and always-allow when session grant is available");
 
-  auto const deny_only_remember_permission_modal =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "permission required",
-                                                           .transcript = {},
-                                                           .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
-                                                                                                               .operation = "bash",
-                                                                                                               .target = "/workspace",
-                                                                                                               .command = "curl https://example.test",
-                                                                                                               .reason = "containment unavailable",
-                                                                                                               .risk = "critical",
-                                                                                                               .allow_remember_available = false,
-                                                                                                               .deny_remember_available = true},
-                                                           .width = 96,
-                                                           .height = 10});
+  auto const deny_only_remember_permission_modal = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "permission required",
+                                                      .transcript = {},
+                                                      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
+                                                                                                          .operation = "bash",
+                                                                                                          .target = "/workspace",
+                                                                                                          .command = "curl https://example.test",
+                                                                                                          .reason = "containment unavailable",
+                                                                                                          .risk = "critical",
+                                                                                                          .allow_remember_available = false,
+                                                                                                          .deny_remember_available = true},
+                                                      .width = 96,
+                                                      .height = 10});
   expect(std::ranges::any_of(deny_only_remember_permission_modal,
                              [](std::string const& line) {
                                auto visible = strip_sgr(line);
@@ -419,9 +429,10 @@ void run_tui_permission_tests_part_2()
          "tui permission dock renders a persistent deny without offering an unavailable persistent allow");
 
   auto const allow_focused_modal = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "permission required",
@@ -442,9 +453,10 @@ void run_tui_permission_tests_part_2()
          "tui permission dock highlights the selected allow choice without reverse video");
 
   auto const diff_permission_modal = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "permission required",
@@ -473,9 +485,10 @@ void run_tui_permission_tests_part_2()
       "tui permission dock renders backend-provided mutation diffs while preserving fail-closed controls");
 
   auto const narrow_diff_permission_modal = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "permission required",
@@ -498,22 +511,22 @@ void run_tui_permission_tests_part_2()
                                  }),
          "tui permission dock keeps diff previews bounded at narrow widths");
 
-  auto const long_permission_modal =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "permission required",
-                                                           .transcript = {},
-                                                           .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "",
-                                                                                                               .operation = "write_file",
-                                                                                                               .target = std::string(120, 't'),
-                                                                                                               .command = std::string(120, 'c'),
-                                                                                                               .reason = std::string(120, 'r'),
-                                                                                                               .risk = "critical"},
-                                                           .width = 80,
-                                                           .height = 10});
+  auto const long_permission_modal = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "permission required",
+                                                      .transcript = {},
+                                                      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "",
+                                                                                                          .operation = "write_file",
+                                                                                                          .target = std::string(120, 't'),
+                                                                                                          .command = std::string(120, 'c'),
+                                                                                                          .reason = std::string(120, 'r'),
+                                                                                                          .risk = "critical"},
+                                                      .width = 80,
+                                                      .height = 10});
   expect(
       std::ranges::all_of(long_permission_modal, [](std::string const& line) { return line.find('\n') == std::string::npos && visible_columns(line) <= 80; }) &&
           std::ranges::any_of(long_permission_modal,
@@ -528,17 +541,19 @@ void run_tui_permission_tests_part_2()
                               }),
       "tui permission dock keeps risk and reason visible when detail text is truncated");
 
-  auto const tight_permission_modal = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "permission required",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "thinking"}},
-      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
-      .width = 36,
-      .height = 8});
+  auto const tight_permission_modal = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "permission required",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "thinking"}},
+          .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
+          .width = 36,
+          .height = 8});
   expect(std::ranges::any_of(tight_permission_modal, [](std::string const& line) { return line.find("Permission required") != std::string::npos; }) &&
              tight_permission_modal.size() <= 8 &&
              std::ranges::all_of(tight_permission_modal,
@@ -549,17 +564,19 @@ void run_tui_permission_tests_part_2()
                                  }),
          "tui permission dock keeps header and controls visible in tight height");
 
-  auto const ultra_tight_permission_modal = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "permission required",
-      .transcript = {},
-      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
-      .width = 20,
-      .height = 8});
+  auto const ultra_tight_permission_modal = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "permission required",
+          .transcript = {},
+          .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
+          .width = 20,
+          .height = 8});
   expect(std::ranges::all_of(ultra_tight_permission_modal,
                              [](std::string const& line) { return line.find('\n') == std::string::npos && visible_columns(line) <= 20; }) &&
              ultra_tight_permission_modal.size() <= 8 &&
@@ -586,17 +603,19 @@ void run_tui_permission_tests_part_2()
   {
     permission_overflow_items.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "permission item " + std::to_string(index)});
   }
-  auto const permission_starved = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "hidden input",
-      .status = "permission required",
-      .transcript = permission_overflow_items,
-      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
-      .width = 40,
-      .height = 8});
+  auto const permission_starved = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "hidden input",
+          .status = "permission required",
+          .transcript = permission_overflow_items,
+          .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
+          .width = 40,
+          .height = 8});
   expect(permission_starved.size() <= 8 && std::ranges::all_of(permission_starved, [](std::string const& line) { return visible_columns(line) <= 40; }) &&
              std::ranges::none_of(permission_starved, [](std::string const& line) { return strip_sgr(line).find("lines hidden") != std::string::npos; }) &&
              std::ranges::any_of(permission_starved, [](std::string const& line) { return strip_sgr(line).find("│  hidden input") != std::string::npos; }),
@@ -604,17 +623,20 @@ void run_tui_permission_tests_part_2()
 }
 void run_tui_permission_tests_part_3()
 {
-  auto const permission_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "do not focus composer",
-      .status = "permission required",
-      .transcript = {},
-      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
-      .width = 60,
-      .height = 12});
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto const permission_frame = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "do not focus composer",
+          .status = "permission required",
+          .transcript = {},
+          .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""},
+          .width = 60,
+          .height = 12});
   expect(permission_frame.size() == 12 &&
              std::ranges::any_of(permission_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("│  do not focus composer") != std::string::npos; }) &&
@@ -624,8 +646,8 @@ void run_tui_permission_tests_part_3()
   {
     auto compact_permission = ava::tui::ComposerSnapshot{};
     compact_permission.mode = "build";
-    compact_permission.provider = "openai";
-    compact_permission.model = "gpt-5.5";
+    //    compact_permission.provider = "openai";
+    //    compact_permission.model = "gpt-5.5";
     compact_permission.session_id = "session_test";
     compact_permission.input = "draft one\ndraft two\ndraft three\ndraft four\ndraft five\ndraft six";
     compact_permission.status = "permission required";
@@ -633,7 +655,7 @@ void run_tui_permission_tests_part_3()
         ava::tui::PermissionPromptView{.tool_name = "bash", .operation = "bash", .target = "", .command = "true", .reason = ""};
     compact_permission.width = 64;
     compact_permission.height = height;
-    auto const frame = ava::tui::render_composer(compact_permission);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), compact_permission);
     expect(std::ranges::any_of(frame, [](std::string const& line) { return strip_sgr(line).find("Permission required") != std::string::npos; }) &&
                std::ranges::any_of(frame, [](std::string const& line) { return strip_sgr(line).find("Allow once") != std::string::npos; }),
            "minimum-height permission dock remains visible above a wrapped composer draft");
@@ -683,16 +705,16 @@ void run_tui_permission_tests_part_3()
     auto plain_guidance_view = guidance_view;
     plain_guidance_view.guidance_mode = true;
     plain_guidance_view.guidance_text = "do not escalate privileges";
-    auto const plain_guidance = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                     .provider = "openai",
-                                                                                     .model = "gpt-5.5",
-                                                                                     .session_id = "session_test",
-                                                                                     .input = "",
-                                                                                     .status = "permission guidance",
-                                                                                     .transcript = {},
-                                                                                     .permission_prompt = plain_guidance_view,
-                                                                                     .width = 80,
-                                                                                     .height = 12});
+    auto const plain_guidance = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                          //.provider = "openai",
+                                                                                                          //.model = "gpt-5.5",
+                                                                                                          .session_id = "session_test",
+                                                                                                          .input = "",
+                                                                                                          .status = "permission guidance",
+                                                                                                          .transcript = {},
+                                                                                                          .permission_prompt = plain_guidance_view,
+                                                                                                          .width = 80,
+                                                                                                          .height = 12});
     expect(std::ranges::any_of(plain_guidance,
                                [](std::string const& line) {
                                  return line.find("Guidance:") != std::string::npos && line.find("do not escalate privileges") != std::string::npos &&
@@ -703,9 +725,10 @@ void run_tui_permission_tests_part_3()
   }
 
   auto const guide_keys_modal = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "permission required",
@@ -780,6 +803,7 @@ void run_tui_permission_tests_part_3()
 namespace {
 void test_tui_session_grant_registry()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto make_prompt = [] {
     ava::permissions::CommandPermissionMetadata metadata;
     metadata.level = ava::command::CommandLevel::Standard;
@@ -872,23 +896,23 @@ void test_tui_session_grant_registry()
   expect(all_submit_transitions_clear,
          "post-submit runtime snapshots clear TUI session grants for /new, /resume, /fork, /clone, and confirmed import transitions");
 
-  auto const session_only_permission_modal =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_a",
-                                                           .input = "",
-                                                           .status = "permission required",
-                                                           .transcript = {},
-                                                           .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
-                                                                                                               .operation = "bash",
-                                                                                                               .target = "",
-                                                                                                               .command = "ctest --test-dir build",
-                                                                                                               .reason = "",
-                                                                                                               .risk = "medium",
-                                                                                                               .allow_session_available = true},
-                                                           .width = 120,
-                                                           .height = 10});
+  auto const session_only_permission_modal = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_a",
+                                                      .input = "",
+                                                      .status = "permission required",
+                                                      .transcript = {},
+                                                      .permission_prompt = ava::tui::PermissionPromptView{.tool_name = "bash",
+                                                                                                          .operation = "bash",
+                                                                                                          .target = "",
+                                                                                                          .command = "ctest --test-dir build",
+                                                                                                          .reason = "",
+                                                                                                          .risk = "medium",
+                                                                                                          .allow_session_available = true},
+                                                      .width = 120,
+                                                      .height = 10});
   expect(
       std::ranges::any_of(session_only_permission_modal,
                           [](std::string const& line) { return strip_sgr(line).find("A/S/D shortcuts") != std::string::npos; }) &&

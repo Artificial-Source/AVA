@@ -126,7 +126,7 @@ void test_app_runtime_open_session_and_context_prompt()
   {
     ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
     CRITICAL_AREA_BEGIN_R(session);
-    expect(session_r->created && session_r->mode() == ava::agent::Mode::Plan && session_r->model().model_id == "gpt-5.5",
+    expect(session_r->created && session_r->mode() == ava::agent::Mode::Plan && session_r->model_selection_r()->model.model_id == "gpt-5.5",
            "runtime session records created state, mode, and model");
     CRITICAL_AREA_END_R(session);
     auto const resource_policy = ava::app::runtime::make_extension_resource_policy_1(unlocked_session);
@@ -312,7 +312,8 @@ void test_app_active_context_status_tracks_compaction_projection()
     auto const total = active_tokens + system_prompt_tokens;
     auto const display =
         total > static_cast<std::size_t>(std::numeric_limits<long long>::max()) ? std::numeric_limits<long long>::max() : static_cast<long long>(total);
-    return ava::app::interactive_internal::format_active_context_status_value(display, session_w->model().context_window_tokens);
+    return ava::app::interactive_internal::format_active_context_status_value(display,
+                                                                               session_w->model_selection_r()->model.context_window_tokens);
   };
 
   CRITICAL_AREA_END_W(session);

@@ -51,6 +51,12 @@ ava_apply_debugging(ava_fake_process_child)
 ava_apply_warnings(ava_fake_process_child)
 ava_apply_sanitizers(ava_fake_process_child)
 
+add_executable(ava_threadsafe_custom_access_lock_test "threadsafe_custom_access_lock_test.cpp")
+ava_apply_debugging(ava_threadsafe_custom_access_lock_test)
+ava_apply_warnings(ava_threadsafe_custom_access_lock_test)
+ava_apply_sanitizers(ava_threadsafe_custom_access_lock_test)
+add_test(NAME ava_tests.threadsafe_custom_access_lock COMMAND ava_threadsafe_custom_access_lock_test)
+
 add_executable(ava_fake_curl_child "support/fake_curl_child.cpp")
 ava_apply_debugging(ava_fake_curl_child)
 ava_apply_warnings(ava_fake_curl_child)

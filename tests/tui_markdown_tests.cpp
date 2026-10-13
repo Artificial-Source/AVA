@@ -17,19 +17,22 @@ using tui_test_support::ScopedTerminalCapabilityProfile;
 
 void run_tui_markdown_tests()
 {
-  auto const markdown_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "First paragraph wraps cleanly across words.\n\nSecond paragraph stays separate.\n- bullet item\n* star "
-                                                      "item\n1. numbered item\n> quoted text\n```cpp\nint main() {}\n```\nUse `ava build` and "
-                                                      "**bold text**."}},
-      .width = 72,
-      .height = 24});
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto const markdown_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{.mode = "build",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
+                                 .session_id = "session_test",
+                                 .input = "",
+                                 .status = "ready",
+                                 .transcript = {ava::tui::TranscriptItem{
+                                     .label = "ava",
+                                     .text = "First paragraph wraps cleanly across words.\n\nSecond paragraph stays separate.\n- bullet item\n* star "
+                                             "item\n1. numbered item\n> quoted text\n```cpp\nint main() {}\n```\nUse `ava build` and "
+                                             "**bold text**."}},
+                                 .width = 72,
+                                 .height = 24});
   expect(std::ranges::any_of(markdown_transcript,
                              [](std::string const& line) { return strip_sgr(line).find("First paragraph wraps cleanly") != std::string::npos; }) &&
              std::ranges::any_of(markdown_transcript,
@@ -60,17 +63,17 @@ void run_tui_markdown_tests()
   constexpr auto kErrorSgr = std::string_view{"\x1b[38;2;248;113;113m"};
   constexpr auto kAccentSgr = std::string_view{"\x1b[38;2;77;158;246m"};
 
-  auto const role_markup_transcript =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "you", .text = "Use `x` and **y**."},
-                                                                          ava::tui::TranscriptItem{.label = "ava", .text = "Use `x` and **y**."}},
-                                                           .width = 28,
-                                                           .height = 16});
+  auto const role_markup_transcript = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "you", .text = "Use `x` and **y**."},
+                                                                     ava::tui::TranscriptItem{.label = "ava", .text = "Use `x` and **y**."}},
+                                                      .width = 28,
+                                                      .height = 16});
   auto const user_markup_line =
       std::ranges::find_if(role_markup_transcript, [](std::string const& line) { return strip_sgr(line).find("Use `x` and **y**.") != std::string::npos; });
   auto const assistant_markup_line =
@@ -84,9 +87,10 @@ void run_tui_markdown_tests()
   {
     ScopedTerminalCapabilityProfile no_hyperlink_terminal("");
     auto const inline_style_transcript = ava::tui::render_composer(
+        frontend.frontend(),
         ava::tui::ComposerSnapshot{.mode = "build",
-                                   .provider = "openai",
-                                   .model = "gpt-5.5",
+                                   //.provider = "openai",
+                                   //.model = "gpt-5.5",
                                    .session_id = "session_test",
                                    .input = "",
                                    .status = "ready",
@@ -101,9 +105,10 @@ void run_tui_markdown_tests()
            "tui assistant renderer emits visible italic and link underline SGR for parsed Markdown inline styling");
 
     auto const heading_inline_transcript = ava::tui::render_composer(
+        frontend.frontend(),
         ava::tui::ComposerSnapshot{.mode = "build",
-                                   .provider = "openai",
-                                   .model = "gpt-5.5",
+                                   //.provider = "openai",
+                                   //.model = "gpt-5.5",
                                    .session_id = "session_test",
                                    .input = "",
                                    .status = "ready",
@@ -119,16 +124,16 @@ void run_tui_markdown_tests()
                strip_sgr(*heading_inline_line).find("**visible**") == std::string::npos,
            "tui assistant renderer preserves heading styling around inline code and bold Markdown spans");
 
-    auto const strikethrough_transcript =
-        ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                             .provider = "openai",
-                                                             .model = "gpt-5.5",
-                                                             .session_id = "session_test",
-                                                             .input = "",
-                                                             .status = "ready",
-                                                             .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Use ~~strike~~ and ~literal~."}},
-                                                             .width = 56,
-                                                             .height = 12});
+    auto const strikethrough_transcript = ava::tui::render_composer(
+        frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                        //.provider = "openai",
+                                                        //.model = "gpt-5.5",
+                                                        .session_id = "session_test",
+                                                        .input = "",
+                                                        .status = "ready",
+                                                        .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Use ~~strike~~ and ~literal~."}},
+                                                        .width = 56,
+                                                        .height = 12});
     auto const strikethrough_line = std::ranges::find_if(
         strikethrough_transcript, [](std::string const& line) { return strip_sgr(line).find("Use strike and ~literal~.") != std::string::npos; });
     expect(strikethrough_line != strikethrough_transcript.end() && has_active_sgr_at_text(*strikethrough_line, "strike", kStrikethroughSgr) &&
@@ -136,18 +141,20 @@ void run_tui_markdown_tests()
                strip_sgr(*strikethrough_line).find("~~strike~~") == std::string::npos,
            "tui assistant renderer emits Pi-style strikethrough SGR for double-tilde Markdown while preserving single-tilde text");
 
-    auto const link_fallback_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-        .mode = "build",
-        .provider = "openai",
-        .model = "gpt-5.5",
-        .session_id = "session_test",
-        .input = "",
-        .status = "ready",
-        .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                                .text = "[https://example.test](https://example.test) [user@example.test](mailto:user@example.test) "
-                                                        "[docs](https://example.test/docs)"}},
-        .width = 120,
-        .height = 12});
+    auto const link_fallback_transcript = ava::tui::render_composer(
+        frontend.frontend(),
+        ava::tui::ComposerSnapshot{
+            .mode = "build",
+            //.provider = "openai",
+            //.model = "gpt-5.5",
+            .session_id = "session_test",
+            .input = "",
+            .status = "ready",
+            .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                    .text = "[https://example.test](https://example.test) [user@example.test](mailto:user@example.test) "
+                                                            "[docs](https://example.test/docs)"}},
+            .width = 120,
+            .height = 12});
     auto link_fallback_plain = std::string{};
     for (auto const& line : link_fallback_transcript)
     {
@@ -165,18 +172,20 @@ void run_tui_markdown_tests()
   {
     ScopedEnvVar no_color_hyperlink_guard("NO_COLOR", "");
     ScopedTerminalCapabilityProfile hyperlink_terminal("vscode");
-    auto const osc8_link_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-        .mode = "build",
-        .provider = "openai",
-        .model = "gpt-5.5",
-        .session_id = "session_test",
-        .input = "",
-        .status = "ready",
-        .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "[docs](https://example.test/docs) and https://example.test/bare"}},
-        .width = 120,
-        .height = 12});
+    auto const osc8_link_transcript = ava::tui::render_composer(
+        frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                        //.provider = "openai",
+                                                        //.model = "gpt-5.5",
+                                                        .session_id = "session_test",
+                                                        .input = "",
+                                                        .status = "ready",
+                                                        .transcript = {ava::tui::TranscriptItem{
+                                                            .label = "ava", .text = "[docs](https://example.test/docs) and https://example.test/bare"}},
+                                                        .width = 120,
+                                                        .height = 12});
     auto osc8_joined = std::string{};
-    for (auto const& line : osc8_link_transcript) osc8_joined += line;
+    for (auto const& line : osc8_link_transcript)
+      osc8_joined += line;
     expect(osc8_joined.find("\x1b]8;;https://example.test/docs\x1b\\") != std::string::npos &&
                osc8_joined.find("\x1b]8;;https://example.test/bare\x1b\\") != std::string::npos && osc8_joined.find("\x1b]8;;\x1b\\") != std::string::npos &&
                osc8_joined.find("(https://example.test/docs)") == std::string::npos,
@@ -187,17 +196,18 @@ void run_tui_markdown_tests()
     ScopedEnvVar no_color_hyperlink_guard("NO_COLOR", "1");
     ScopedTerminalCapabilityProfile hyperlink_terminal("vscode");
     auto const plain_link_transcript = ava::tui::render_composer(
-        ava::tui::ComposerSnapshot{.mode = "build",
-                                   .provider = "openai",
-                                   .model = "gpt-5.5",
-                                   .session_id = "session_test",
-                                   .input = "",
-                                   .status = "ready",
-                                   .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "[docs](https://example.test/docs)"}},
-                                   .width = 120,
-                                   .height = 12});
+        frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                        //.provider = "openai",
+                                                        //.model = "gpt-5.5",
+                                                        .session_id = "session_test",
+                                                        .input = "",
+                                                        .status = "ready",
+                                                        .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "[docs](https://example.test/docs)"}},
+                                                        .width = 120,
+                                                        .height = 12});
     auto plain_link_joined = std::string{};
-    for (auto const& line : plain_link_transcript) plain_link_joined += line;
+    for (auto const& line : plain_link_transcript)
+      plain_link_joined += line;
     expect(plain_link_joined.find("\x1b]8;;") == std::string::npos && plain_link_joined.find("docs (https://example.test/docs)") != std::string::npos,
            "plain TUI output suppresses OSC 8 hyperlinks and keeps visible link fallback text");
   }
@@ -205,15 +215,15 @@ void run_tui_markdown_tests()
   {
     ScopedTerminalCapabilityProfile no_hyperlink_terminal("");
     auto const bare_url_transcript = ava::tui::render_composer(
-        ava::tui::ComposerSnapshot{.mode = "build",
-                                   .provider = "openai",
-                                   .model = "gpt-5.5",
-                                   .session_id = "session_test",
-                                   .input = "",
-                                   .status = "ready",
-                                   .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Visit https://example.test/docs."}},
-                                   .width = 72,
-                                   .height = 12});
+        frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                        //.provider = "openai",
+                                                        //.model = "gpt-5.5",
+                                                        .session_id = "session_test",
+                                                        .input = "",
+                                                        .status = "ready",
+                                                        .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Visit https://example.test/docs."}},
+                                                        .width = 72,
+                                                        .height = 12});
     auto const bare_url_line = std::ranges::find_if(
         bare_url_transcript, [](std::string const& line) { return strip_sgr(line).find("Visit https://example.test/docs.") != std::string::npos; });
     expect(bare_url_line != bare_url_transcript.end() && has_active_sgr_at_text(*bare_url_line, "https://example.test/docs", kUnderlineSgr) &&
@@ -221,16 +231,16 @@ void run_tui_markdown_tests()
                strip_sgr(*bare_url_line).find("(https://example.test/docs)") == std::string::npos,
            "tui assistant renderer styles bare web URLs once and keeps trailing punctuation outside the link span");
 
-    auto const bare_email_transcript =
-        ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                             .provider = "openai",
-                                                             .model = "gpt-5.5",
-                                                             .session_id = "session_test",
-                                                             .input = "",
-                                                             .status = "ready",
-                                                             .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Contact user@example.test."}},
-                                                             .width = 72,
-                                                             .height = 12});
+    auto const bare_email_transcript = ava::tui::render_composer(
+        frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                        //.provider = "openai",
+                                                        //.model = "gpt-5.5",
+                                                        .session_id = "session_test",
+                                                        .input = "",
+                                                        .status = "ready",
+                                                        .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Contact user@example.test."}},
+                                                        .width = 72,
+                                                        .height = 12});
     auto const bare_email_line = std::ranges::find_if(
         bare_email_transcript, [](std::string const& line) { return strip_sgr(line).find("Contact user@example.test.") != std::string::npos; });
     expect(bare_email_line != bare_email_transcript.end() && has_active_sgr_at_text(*bare_email_line, "user@example.test", kUnderlineSgr) &&
@@ -239,18 +249,20 @@ void run_tui_markdown_tests()
            "tui assistant renderer styles bare email autolinks once without exposing a mailto fallback");
   }
 
-  auto const wrapped_markdown_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "- alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n> quoted alpha beta gamma "
-                                                      "delta epsilon zeta eta theta iota kappa"}},
-      .width = 48,
-      .height = 16});
+  auto const wrapped_markdown_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                  .text = "- alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n> quoted alpha beta gamma "
+                                                          "delta epsilon zeta eta theta iota kappa"}},
+          .width = 48,
+          .height = 16});
   auto const bullet_continuation =
       std::ranges::find_if(wrapped_markdown_transcript, [](std::string const& line) { return strip_sgr(line).find("  theta iota") != std::string::npos; });
   auto const quote_continuation =
@@ -261,16 +273,18 @@ void run_tui_markdown_tests()
       quote_continuation != wrapped_markdown_transcript.end() && !has_active_sgr_at_text(*quote_continuation, "eta theta", kMutedSgr);
   expect(bullet_continuation_is_plain && quote_continuation_is_plain, "tui assistant renderer keeps wrapped list and quote continuations out of code styling");
 
-  auto const list_quote_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "- > alpha beta gamma delta epsilon zeta eta theta iota kappa\n>no-space quote"}},
-      .width = 42,
-      .height = 16});
+  auto const list_quote_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "- > alpha beta gamma delta epsilon zeta eta theta iota kappa\n>no-space quote"}},
+          .width = 42,
+          .height = 16});
   auto const list_quote_first =
       std::ranges::find_if(list_quote_transcript, [](std::string const& line) { return strip_sgr(line).find("- │ alpha beta") != std::string::npos; });
   auto const list_quote_wrap =
@@ -282,9 +296,10 @@ void run_tui_markdown_tests()
          "tui assistant renderer uses Pi-style quote borders for plain and list-contained blockquotes");
 
   auto const lazy_blockquote_transcript = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -306,9 +321,10 @@ void run_tui_markdown_tests()
          "tui assistant renderer applies Pi-style lazy blockquote continuation until a blank line");
 
   auto const divider_transcript = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -325,9 +341,10 @@ void run_tui_markdown_tests()
          "tui assistant renderer renders Markdown horizontal rules without treating ordinary dashed text as a divider");
 
   auto const task_list_transcript = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -346,34 +363,36 @@ void run_tui_markdown_tests()
              std::ranges::all_of(task_list_transcript, [](std::string const& line) { return visible_columns(line) <= 48; }),
          "tui assistant renderer preserves task-list markers and aligns wrapped task continuations");
 
-  auto const ordered_list_transcript =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "1. alpha\n1. beta\n1. gamma"}},
-                                                           .width = 48,
-                                                           .height = 14});
+  auto const ordered_list_transcript = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "1. alpha\n1. beta\n1. gamma"}},
+                                                      .width = 48,
+                                                      .height = 14});
   auto const ordered_list_text = tui_test_support::join_visible_lines(ordered_list_transcript);
   expect(ordered_list_text.find("1. alpha") != std::string::npos && ordered_list_text.find("2. beta") != std::string::npos &&
              ordered_list_text.find("3. gamma") != std::string::npos && ordered_list_text.find("1. beta") == std::string::npos &&
              std::ranges::all_of(ordered_list_transcript, [](std::string const& line) { return visible_columns(line) <= 48; }),
          "tui assistant renderer normalizes repeated ordered-list markers Pi-style");
 
-  auto const ordered_code_list_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "1. First item\n\n```typescript\n// code block\n```\n\n1. Second item\n\n```typescript\n// another code "
-                                                      "block\n```\n\n1. Third item"}},
-      .width = 72,
-      .height = 24});
+  auto const ordered_code_list_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{.mode = "build",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
+                                 .session_id = "session_test",
+                                 .input = "",
+                                 .status = "ready",
+                                 .transcript = {ava::tui::TranscriptItem{
+                                     .label = "ava",
+                                     .text = "1. First item\n\n```typescript\n// code block\n```\n\n1. Second item\n\n```typescript\n// another code "
+                                             "block\n```\n\n1. Third item"}},
+                                 .width = 72,
+                                 .height = 24});
   auto const ordered_code_list_text = tui_test_support::join_visible_lines(ordered_code_list_transcript);
   expect(ordered_code_list_text.find("1. First item") != std::string::npos && ordered_code_list_text.find("2. Second item") != std::string::npos &&
              ordered_code_list_text.find("3. Third item") != std::string::npos && ordered_code_list_text.find("1. Second item") == std::string::npos &&
@@ -381,22 +400,24 @@ void run_tui_markdown_tests()
              std::ranges::all_of(ordered_code_list_transcript, [](std::string const& line) { return visible_columns(line) <= 72; }),
          "tui assistant renderer keeps ordered-list numbering across unindented fenced code blocks");
 
-  auto assert_code_block_spacing = [](std::string const& markdown) {
-    auto const transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                 .provider = "openai",
-                                                                                 .model = "gpt-5.5",
-                                                                                 .session_id = "session_test",
-                                                                                 .input = "",
-                                                                                 .status = "ready",
-                                                                                 .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = markdown}},
-                                                                                 .width = 72,
-                                                                                 .height = 18});
+  auto assert_code_block_spacing = [&](std::string const& markdown) {
+    auto const transcript =
+        ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                  //.provider = "openai",
+                                                                                  //.model = "gpt-5.5",
+                                                                                  .session_id = "session_test",
+                                                                                  .input = "",
+                                                                                  .status = "ready",
+                                                                                  .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = markdown}},
+                                                                                  .width = 72,
+                                                                                  .height = 18});
     std::vector<std::string> visible;
     visible.reserve(transcript.size());
     for (auto const& line : transcript)
     {
       auto stripped = strip_sgr(line);
-      while (!stripped.empty() && stripped.back() == ' ') stripped.pop_back();
+      while (!stripped.empty() && stripped.back() == ' ')
+        stripped.pop_back();
       visible.push_back(std::move(stripped));
     }
     auto const paragraph = std::ranges::find(visible, "  hello this is text");
@@ -408,22 +429,23 @@ void run_tui_markdown_tests()
   assert_code_block_spacing("hello this is text\n```\ncode block\n```\nmore text");
   assert_code_block_spacing("hello this is text\n\n```\ncode block\n```\n\nmore text");
 
-  auto const heading_spacing_transcript =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "# Hello\nThis is a paragraph"}},
-                                                           .width = 72,
-                                                           .height = 14});
+  auto const heading_spacing_transcript = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "# Hello\nThis is a paragraph"}},
+                                                      .width = 72,
+                                                      .height = 14});
   std::vector<std::string> heading_visible;
   heading_visible.reserve(heading_spacing_transcript.size());
   for (auto const& line : heading_spacing_transcript)
   {
     auto visible = strip_sgr(line);
-    while (!visible.empty() && visible.back() == ' ') visible.pop_back();
+    while (!visible.empty() && visible.back() == ' ')
+      visible.pop_back();
     heading_visible.push_back(std::move(visible));
   }
   auto const heading_line = std::ranges::find(heading_visible, "  Hello");
@@ -433,21 +455,22 @@ void run_tui_markdown_tests()
       "tui assistant renderer normalizes heading/paragraph spacing to one blank line");
 
   auto const divider_spacing_transcript = ava::tui::render_composer(
-      ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
-                                 .session_id = "session_test",
-                                 .input = "",
-                                 .status = "ready",
-                                 .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "hello world\n---\nagain, hello world"}},
-                                 .width = 72,
-                                 .height = 14});
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "hello world\n---\nagain, hello world"}},
+                                                      .width = 72,
+                                                      .height = 14});
   std::vector<std::string> divider_visible;
   divider_visible.reserve(divider_spacing_transcript.size());
   for (auto const& line : divider_spacing_transcript)
   {
     auto visible = strip_sgr(line);
-    while (!visible.empty() && visible.back() == ' ') visible.pop_back();
+    while (!visible.empty() && visible.back() == ' ')
+      visible.pop_back();
     divider_visible.push_back(std::move(visible));
   }
   auto const first_divider_line = std::ranges::find(divider_visible, "  hello world");
@@ -457,41 +480,46 @@ void run_tui_markdown_tests()
              divider_visible[divider_index + 2].empty() && divider_visible[divider_index + 3] == "  again, hello world",
          "tui assistant renderer normalizes divider/paragraph spacing to one blank line");
 
-  auto const html_literal_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "This is text with <thinking>hidden content</thinking> that should stay visible.\n```html\n<div>Some "
-                                                      "HTML</div>\n```"}},
-      .width = 88,
-      .height = 18});
+  auto const html_literal_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                  .text = "This is text with <thinking>hidden content</thinking> that should stay visible.\n```html\n<div>Some "
+                                                          "HTML</div>\n```"}},
+          .width = 88,
+          .height = 18});
   auto const html_literal_text = tui_test_support::join_visible_lines(html_literal_transcript);
   expect(
       html_literal_text.find("<thinking>hidden content</thinking>") != std::string::npos && html_literal_text.find("<div>Some HTML</div>") != std::string::npos,
       "tui assistant renderer keeps HTML-like tags visible in prose and fenced code");
 
-  auto const loose_list_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "1. Lorem ipsum dolor sit amet.\n\n   Ut enim ad minim veniam.\n\n1. Duis aute irure dolor.\n\n   "
-                                                      "Excepteur sint occaecat cupidatat.\n\n1. Beep boop"}},
-      .width = 88,
-      .height = 24});
+  auto const loose_list_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                  .text = "1. Lorem ipsum dolor sit amet.\n\n   Ut enim ad minim veniam.\n\n1. Duis aute irure dolor.\n\n   "
+                                                          "Excepteur sint occaecat cupidatat.\n\n1. Beep boop"}},
+          .width = 88,
+          .height = 24});
   std::vector<std::string> loose_list_visible;
   loose_list_visible.reserve(loose_list_transcript.size());
   for (auto const& line : loose_list_transcript)
   {
     auto visible = strip_sgr(line);
-    while (!visible.empty() && visible.back() == ' ') visible.pop_back();
+    while (!visible.empty() && visible.back() == ' ')
+      visible.pop_back();
     loose_list_visible.push_back(std::move(visible));
   }
   auto const first_loose_item = std::ranges::find(loose_list_visible, "  1. Lorem ipsum dolor sit amet.");
@@ -504,18 +532,20 @@ void run_tui_markdown_tests()
              loose_list_visible[loose_index + 8] == "  3. Beep boop",
          "tui assistant renderer preserves Pi-style loose ordered-list continuations and numbering");
 
-  auto const nested_list_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "- parent\n  - alpha beta gamma delta epsilon zeta eta theta iota\n    + grand child\n1. ordered\n   "
-                                                      "1) nested ordered"}},
-      .width = 48,
-      .height = 18});
+  auto const nested_list_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                  .text = "- parent\n  - alpha beta gamma delta epsilon zeta eta theta iota\n    + grand child\n1. ordered\n   "
+                                                          "1) nested ordered"}},
+          .width = 48,
+          .height = 18});
   auto const nested_unordered =
       std::ranges::find_if(nested_list_transcript, [](std::string const& line) { return strip_sgr(line).find("    - alpha beta") != std::string::npos; });
   auto const nested_continuation =
@@ -530,16 +560,17 @@ void run_tui_markdown_tests()
              std::ranges::all_of(nested_list_transcript, [](std::string const& line) { return visible_columns(line) <= 48; }),
          "tui assistant renderer preserves Pi-style nested list indentation and wrapped continuations");
 
-  auto const table_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "| Name | Age |\n| --- | ---: |\n| Alice | 30 |\n| Bob | 25 |"}},
-      .width = 64,
-      .height = 16});
+  auto const table_transcript = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{
+                               .mode = "build",
+                               //.provider = "openai",
+                               //.model = "gpt-5.5",
+                               .session_id = "session_test",
+                               .input = "",
+                               .status = "ready",
+                               .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "| Name | Age |\n| --- | ---: |\n| Alice | 30 |\n| Bob | 25 |"}},
+                               .width = 64,
+                               .height = 16});
   auto const table_header = std::ranges::find_if(table_transcript, [](std::string const& line) {
     auto const visible = strip_sgr(line);
     return visible.find("│ Name") != std::string::npos && visible.find("Age │") != std::string::npos;
@@ -563,16 +594,18 @@ void run_tui_markdown_tests()
              std::ranges::all_of(table_transcript, [](std::string const& line) { return visible_columns(line) <= 64; }),
          "tui assistant renderer renders simple Markdown tables with Pi-style outer borders, dividers, and right alignment");
 
-  auto const too_narrow_table_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "| A | B | C | D | E |\n| --- | --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 | 5 |"}},
-      .width = 20,
-      .height = 17});
+  auto const too_narrow_table_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "| A | B | C | D | E |\n| --- | --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 | 5 |"}},
+          .width = 20,
+          .height = 17});
   auto const too_narrow_text =
       std::accumulate(too_narrow_table_transcript.begin(), too_narrow_table_transcript.end(), std::string{}, [](std::string acc, std::string const& line) {
         acc += " ";
@@ -591,17 +624,19 @@ void run_tui_markdown_tests()
              std::ranges::all_of(too_narrow_table_transcript, [](std::string const& line) { return visible_columns(line) <= 20; }),
          "tui assistant renderer falls back to wrapped raw Markdown when a table is too narrow for stable borders");
 
-  auto const narrow_table_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{
-          .label = "ava", .text = "| Command | Description |\n| --- | --- |\n| npm install | Install all dependencies for the workspace |"}},
-      .width = 40,
-      .height = 18});
+  auto const narrow_table_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{
+              .label = "ava", .text = "| Command | Description |\n| --- | --- |\n| npm install | Install all dependencies for the workspace |"}},
+          .width = 40,
+          .height = 18});
   auto const narrow_table_text =
       std::accumulate(narrow_table_transcript.begin(), narrow_table_transcript.end(), std::string{}, [](std::string acc, std::string const& line) {
         acc += " ";
@@ -614,18 +649,19 @@ void run_tui_markdown_tests()
              std::ranges::all_of(narrow_table_transcript, [](std::string const& line) { return visible_columns(line) <= 40; }),
          "tui assistant renderer wraps Markdown table cells while preserving borders and content");
 
-  auto const one_column_table_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "| Header |\n| --- |\n| This is a very long cell content that should wrap |\n| "
-                                                      "prefix https://example.com/this/is/a/very/long/url/that/should/wrap |"}},
-      .width = 36,
-      .height = 25});
+  auto const one_column_table_transcript = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{
+                               .mode = "build",
+                               //.provider = "openai",
+                               //.model = "gpt-5.5",
+                               .session_id = "session_test",
+                               .input = "",
+                               .status = "ready",
+                               .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                                       .text = "| Header |\n| --- |\n| This is a very long cell content that should wrap |\n| "
+                                                                               "prefix https://example.com/this/is/a/very/long/url/that/should/wrap |"}},
+                               .width = 36,
+                               .height = 25});
   auto count_table_borders = [](std::string const& line) {
     auto const visible = strip_sgr(line);
     auto count = std::size_t{0};
@@ -667,9 +703,10 @@ void run_tui_markdown_tests()
          "tui assistant renderer supports one-column tables and wraps long unbroken table tokens without losing borders");
 
   auto const styled_table_transcript = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -707,9 +744,10 @@ void run_tui_markdown_tests()
          "tui assistant renderer wraps styled inline code inside table cells without breaking borders");
 
   auto const narrow_three_column_table = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -725,77 +763,77 @@ void run_tui_markdown_tests()
              std::ranges::all_of(narrow_three_column_table, [](std::string const& line) { return visible_columns(line) <= 22; }),
          "tui assistant renderer keeps narrow multi-column Markdown tables bounded and readable");
 
-  auto const highlighted_code_transcript =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "ava",
-                                                                                                   .text = "```cpp\n"
-                                                                                                           "int main() {\n"
-                                                                                                           "  std::string value = \"ok\";\n"
-                                                                                                           "  return 42;\n"
-                                                                                                           "}\n"
-                                                                                                           "```\n"
-                                                                                                           "```diff\n"
-                                                                                                           "@@ -1 +1 @@\n"
-                                                                                                           "-old\n"
-                                                                                                           "+new\n"
-                                                                                                           " context\n"
-                                                                                                           "```\n"
-                                                                                                           "```json\n"
-                                                                                                           "{\"ok\": true, \"n\": 12}\n"
-                                                                                                           "```\n"
-                                                                                                           "```sh\n"
-                                                                                                           "echo \"ok\" # comment\n"
-                                                                                                           "```\n"
-                                                                                                           "```typescript\n"
-                                                                                                           "interface User { name: string; }\n"
-                                                                                                           "const greet = (user: User): string => \"hi\";\n"
-                                                                                                           "```\n"
-                                                                                                           "```javascript\n"
-                                                                                                           "async function load() {\n"
-                                                                                                           "  return await fetch(\"/ok\");\n"
-                                                                                                           "}\n"
-                                                                                                           "```\n"
-                                                                                                           "```html\n"
-                                                                                                           "<div class=\"ok\">Hi</div>\n"
-                                                                                                           "<!-- note -->\n"
-                                                                                                           "```\n"
-                                                                                                           "```css\n"
-                                                                                                           ".card { color: #fff; margin: 12px; }\n"
-                                                                                                           "```\n"
-                                                                                                           "```yaml\n"
-                                                                                                           "enabled: true\n"
-                                                                                                           "name: \"ava\"\n"
-                                                                                                           "count: 42\n"
-                                                                                                           "# comment\n"
-                                                                                                           "```\n"
-                                                                                                           "```cmake\n"
-                                                                                                           "add_executable(ava main.cpp)\n"
-                                                                                                           "set(AVA_ENABLED ON)\n"
-                                                                                                           "# build comment\n"
-                                                                                                           "```\n"
-                                                                                                           "```toml\n"
-                                                                                                           "[tool.ava]\n"
-                                                                                                           "name = \"ava\"\n"
-                                                                                                           "enabled = true\n"
-                                                                                                           "count = 42\n"
-                                                                                                           "# note\n"
-                                                                                                           "```\n"
-                                                                                                           "```ini\n"
-                                                                                                           "[server]\n"
-                                                                                                           "port = 8080\n"
-                                                                                                           "enabled = yes\n"
-                                                                                                           "; note\n"
-                                                                                                           "```\n"
-                                                                                                           "```text\n"
-                                                                                                           "return \"plain\";\n"
-                                                                                                           "```"}},
-                                                           .width = 72,
-                                                           .height = 120});
+  auto const highlighted_code_transcript = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava",
+                                                                                              .text = "```cpp\n"
+                                                                                                      "int main() {\n"
+                                                                                                      "  std::string value = \"ok\";\n"
+                                                                                                      "  return 42;\n"
+                                                                                                      "}\n"
+                                                                                                      "```\n"
+                                                                                                      "```diff\n"
+                                                                                                      "@@ -1 +1 @@\n"
+                                                                                                      "-old\n"
+                                                                                                      "+new\n"
+                                                                                                      " context\n"
+                                                                                                      "```\n"
+                                                                                                      "```json\n"
+                                                                                                      "{\"ok\": true, \"n\": 12}\n"
+                                                                                                      "```\n"
+                                                                                                      "```sh\n"
+                                                                                                      "echo \"ok\" # comment\n"
+                                                                                                      "```\n"
+                                                                                                      "```typescript\n"
+                                                                                                      "interface User { name: string; }\n"
+                                                                                                      "const greet = (user: User): string => \"hi\";\n"
+                                                                                                      "```\n"
+                                                                                                      "```javascript\n"
+                                                                                                      "async function load() {\n"
+                                                                                                      "  return await fetch(\"/ok\");\n"
+                                                                                                      "}\n"
+                                                                                                      "```\n"
+                                                                                                      "```html\n"
+                                                                                                      "<div class=\"ok\">Hi</div>\n"
+                                                                                                      "<!-- note -->\n"
+                                                                                                      "```\n"
+                                                                                                      "```css\n"
+                                                                                                      ".card { color: #fff; margin: 12px; }\n"
+                                                                                                      "```\n"
+                                                                                                      "```yaml\n"
+                                                                                                      "enabled: true\n"
+                                                                                                      "name: \"ava\"\n"
+                                                                                                      "count: 42\n"
+                                                                                                      "# comment\n"
+                                                                                                      "```\n"
+                                                                                                      "```cmake\n"
+                                                                                                      "add_executable(ava main.cpp)\n"
+                                                                                                      "set(AVA_ENABLED ON)\n"
+                                                                                                      "# build comment\n"
+                                                                                                      "```\n"
+                                                                                                      "```toml\n"
+                                                                                                      "[tool.ava]\n"
+                                                                                                      "name = \"ava\"\n"
+                                                                                                      "enabled = true\n"
+                                                                                                      "count = 42\n"
+                                                                                                      "# note\n"
+                                                                                                      "```\n"
+                                                                                                      "```ini\n"
+                                                                                                      "[server]\n"
+                                                                                                      "port = 8080\n"
+                                                                                                      "enabled = yes\n"
+                                                                                                      "; note\n"
+                                                                                                      "```\n"
+                                                                                                      "```text\n"
+                                                                                                      "return \"plain\";\n"
+                                                                                                      "```"}},
+                                                      .width = 72,
+                                                      .height = 120});
   auto const cpp_signature =
       std::ranges::find_if(highlighted_code_transcript, [](std::string const& line) { return strip_sgr(line).find("int main() {") != std::string::npos; });
   auto const cpp_string = std::ranges::find_if(
@@ -930,9 +968,10 @@ void run_tui_markdown_tests()
          "tui assistant renderer keeps highlighted code lines width-safe");
 
   auto const wrapped_code_fence_transcript = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -950,9 +989,10 @@ void run_tui_markdown_tests()
          "tui assistant renderer keeps wrapped code content beginning with backticks inside the code block");
 
   auto const indented_fence_content_transcript = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -971,16 +1011,18 @@ void run_tui_markdown_tests()
              has_active_sgr_at_text(*text_after_indented_code, "bold", kBoldSgr),
          "tui assistant renderer keeps indented backtick content inside fenced code blocks");
 
-  auto const narrow_code_transcript = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Intro `ok` and **bold**.\n```text\nvalue `x` and **y**\n```\nDone **bold**."}},
-      .width = 30,
-      .height = 18});
+  auto const narrow_code_transcript = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "Intro `ok` and **bold**.\n```text\nvalue `x` and **y**\n```\nDone **bold**."}},
+          .width = 30,
+          .height = 18});
   auto const narrow_inline =
       std::ranges::find_if(narrow_code_transcript, [](std::string const& line) { return strip_sgr(line).find("Intro ok and bold.") != std::string::npos; });
   auto const narrow_code =
@@ -993,16 +1035,16 @@ void run_tui_markdown_tests()
              narrow_after_code != narrow_code_transcript.end() && has_active_sgr_at_text(*narrow_after_code, "bold", kBoldSgr),
          "tui narrow assistant renderer keeps code literal while formatting inline markdown outside code");
 
-  auto const narrow_transcript =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = std::string(64, 'x') + " done"}},
-                                                           .width = 20,
-                                                           .height = 14});
+  auto const narrow_transcript = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = std::string(64, 'x') + " done"}},
+                                                      .width = 20,
+                                                      .height = 14});
   expect(std::ranges::any_of(narrow_transcript, [](std::string const& line) { return strip_sgr(line).find("xxx") != std::string::npos; }) &&
              std::ranges::all_of(narrow_transcript, [](std::string const& line) { return visible_columns(line) <= 20; }),
          "tui assistant renderer keeps long words readable at narrow widths");
@@ -1010,6 +1052,7 @@ void run_tui_markdown_tests()
 namespace {
 void test_tui_text_model_conversions()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto const plain = ava::tui::text_from_plain("first\r\nsecond\nthird\rfour");
   expect(ava::tui::to_plain_text(plain) == "first\nsecond\nthird\nfour" && ava::tui::validate_text(plain).has_value(),
          "tui Text plain conversion normalizes CR/LF boundaries into explicit newline runs");
@@ -1053,22 +1096,23 @@ void test_tui_text_model_conversions()
              markdown_plain.find("~~old~~") == std::string::npos && markdown_plain.find("**open") != std::string::npos,
          "tui Markdown conversion supports basic heading/link/emphasis/code/fences and leaves unsupported Markdown readable");
 
-  auto const rendered_from_model = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_text_model",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.label = "you", .text = "raw-user-hidden", .text_model = ava::tui::text_from_plain("model user visible")},
-                     ava::tui::TranscriptItem{.label = "ava", .text = "", .text_model = ava::tui::text_from_plain("model assistant visible")},
-                     ava::tui::TranscriptItem{.label = "ava",
-                                              .text = "answer",
-                                              .thinking = "raw-thinking-hidden",
-                                              .thinking_model = ava::tui::text_from_plain("model thinking visible")},
-                     ava::tui::TranscriptItem{.label = "error", .text = "raw-error-hidden", .text_model = ava::tui::text_from_plain("model error visible")}},
-      .width = 80,
-      .height = 22});
+  auto const rendered_from_model = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_text_model",
+          .input = "",
+          .status = "ready",
+          .transcript =
+              {ava::tui::TranscriptItem{.label = "you", .text = "raw-user-hidden", .text_model = ava::tui::text_from_plain("model user visible")},
+               ava::tui::TranscriptItem{.label = "ava", .text = "", .text_model = ava::tui::text_from_plain("model assistant visible")},
+               ava::tui::TranscriptItem{
+                   .label = "ava", .text = "answer", .thinking = "raw-thinking-hidden", .thinking_model = ava::tui::text_from_plain("model thinking visible")},
+               ava::tui::TranscriptItem{.label = "error", .text = "raw-error-hidden", .text_model = ava::tui::text_from_plain("model error visible")}},
+          .width = 80,
+          .height = 22});
   auto const visible_model_text = tui_test_support::join_visible_lines(rendered_from_model);
   expect(visible_model_text.find("model user visible") != std::string::npos && visible_model_text.find("model assistant visible") != std::string::npos &&
              visible_model_text.find("model thinking visible") != std::string::npos && visible_model_text.find("model error visible") != std::string::npos &&

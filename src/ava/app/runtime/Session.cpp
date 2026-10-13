@@ -708,7 +708,7 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
   return Session_aggregate_base{.invocation_inputs_ = std::move(detached_inputs),
                                 .resolved_prompt_state_ = resolve_prompt_state(),
                                 // Copy the model selection without inheriting the source object's frontend registration.
-                                .model_selection_ = ModelSelection_ts(*ModelSelection_ts::crat(this->model_selection_)),
+                                .model_selection_ = ModelSelection_ts{*model_selection_r()},
                                 .trust_state_ = trust_state(),
                                 .resources_ = std::move(session_resources),
                                 .store = store,
@@ -958,18 +958,18 @@ ava::core::VoidResult Session::apply_initial_reasoning_level(std::string_view re
   if (level.empty())
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "reasoning level is required");
-    add_cli_reasoning_context(error, model());
+    add_cli_reasoning_context(error, model_selection_r()->model);
     return std::unexpected(std::move(error));
   }
 
   std::optional<ReasoningSelection> selection = std::nullopt;
   if (level != "off")
   {
-    auto selected = reasoning_selection_for_level(model(), std::move(level));
+    auto selected = reasoning_selection_for_level(model_selection_r()->model, std::move(level));
     if (!selected)
     {
       auto error = std::move(selected.error());
-      add_cli_reasoning_context(error, model());
+      add_cli_reasoning_context(error, model_selection_r()->model);
       return std::unexpected(std::move(error));
     }
     selection = std::move(*selected);
@@ -979,7 +979,7 @@ ava::core::VoidResult Session::apply_initial_reasoning_level(std::string_view re
   if (!changed)
   {
     auto error = std::move(changed.error());
-    add_cli_reasoning_context(error, model());
+    add_cli_reasoning_context(error, model_selection_r()->model);
     return std::unexpected(std::move(error));
   }
   return {};
@@ -1036,15 +1036,18 @@ ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& 
 
 ava::core::Result<bool> Session::switch_model(ava::config::ModelInfo model)
 {
-  if (this->model().provider_id == model.provider_id && this->model().model_id == model.model_id)
-    return false;
+  {
+    app::runtime::ModelSelection_ts::crat model_selection_r = this->model_selection_r();
+    if (model_selection_r->model.provider_id == model.provider_id && model_selection_r->model.model_id == model.model_id)
+      return false;
+  }
 
   auto prompt_state = load_runtime_prompt_state(paths(), model, mode(), workspace_dir(), current_dir(), project_resources_trusted(project_trust()),
                                                 prompt_overrides(), selected_primary_agent());
   if (!prompt_state)
     return std::unexpected(std::move(prompt_state.error()));
 
-  auto const previous = this->model();
+  ava::config::ModelInfo const previous = model_selection_r()->model;
   auto appended = append_owned(make_model_change_entry(previous, model));
   if (!appended)
     return std::unexpected(std::move(appended.error()));
@@ -1084,17 +1087,17 @@ ava::core::Result<bool> Session::set_reasoning(std::optional<ReasoningSelection>
   {
     selection->level = core::trim(selection->level);
     selection->display = core::trim(selection->display);
-    auto resolved = resolve_runtime_reasoning_selection(model(), std::move(*selection));
+    auto resolved = resolve_runtime_reasoning_selection(model_selection_r()->model, std::move(*selection));
     if (!resolved)
     {
       return std::unexpected(std::move(resolved.error()));
     }
     selection = std::move(*resolved);
   }
-  if (same_reasoning_selection(reasoning(), selection))
+  if (same_reasoning_selection(model_selection_r()->reasoning, selection))
     return false;
 
-  auto appended = append_owned(make_reasoning_change_entry(model(), selection));
+  auto appended = append_owned(make_reasoning_change_entry(model_selection_r()->model, selection));
   if (!appended)
     return std::unexpected(std::move(appended.error()));
 

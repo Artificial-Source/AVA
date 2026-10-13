@@ -46,6 +46,7 @@ using namespace ava::tests;
 void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked_session, ava::config::XdgPaths const& paths,
                                          std::filesystem::path const& workspace, std::vector<ava::app::CommandHotkey> const& custom_hotkeys)
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto session_id = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(); };
   auto session_workspace_dir = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->workspace_dir(); };
   auto const slash_items = ava::app::command_catalog_slash_items_1(unlocked_session, custom_hotkeys);
@@ -282,7 +283,8 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
   auto reload_models = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/reload models"});
   auto const model_reload_snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::pair{session_r->scoped_model_cycle(), session_r->model().model_id};
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    return std::pair{model_selection_r->scoped_model_cycle, model_selection_r->model.model_id};
   }();
   auto const& [scoped_model_cycle, active_model_id] = model_reload_snapshot;
   expect(reload_models && reload_models->handled && !reload_models->output.empty() && reload_models->output[0].find("models: loaded") != std::string::npos &&
@@ -849,17 +851,18 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
   auto const permission_selection =
       permission_match_index ? ava::tui::slash_command_selection_text("/permissions explain ", slash_items_after_permission_rule, *permission_match_index)
                              : std::string{};
-  auto const permission_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                       .provider = "openai",
-                                                                                       .model = "gpt-5.5",
-                                                                                       .session_id = "session_test",
-                                                                                       .input = "/permissions explain ",
-                                                                                       .status = "ready",
-                                                                                       .transcript = {},
-                                                                                       .slash_commands = slash_items_after_permission_rule,
-                                                                                       .selected_slash_command_index = permission_match_index.value_or(0),
-                                                                                       .width = 96,
-                                                                                       .height = 14});
+  auto const permission_palette =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "/permissions explain ",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .slash_commands = slash_items_after_permission_rule,
+                                                                                .selected_slash_command_index = permission_match_index.value_or(0),
+                                                                                .width = 96,
+                                                                                .height = 14});
   auto const permission_ref = permission_explain ? extract_completion_ref(permission_explain->description) : std::string{};
   expect(
       permission_explain != nullptr && permission_remove != nullptr && permission_explain->value == permission_rule_id &&
@@ -903,17 +906,17 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
   auto const selection_a = match_a ? ava::tui::slash_command_selection_text("/permissions explain ", slash_items_duplicate_rules, *match_a) : std::string{};
   auto const selection_b = match_b ? ava::tui::slash_command_selection_text("/permissions explain ", slash_items_duplicate_rules, *match_b) : std::string{};
   auto render_permission_palette = [&](std::size_t selected_index) {
-    return ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                .provider = "openai",
-                                                                .model = "gpt-5.5",
-                                                                .session_id = "session_test",
-                                                                .input = "/permissions explain ",
-                                                                .status = "ready",
-                                                                .transcript = {},
-                                                                .slash_commands = slash_items_duplicate_rules,
-                                                                .selected_slash_command_index = selected_index,
-                                                                .width = 96,
-                                                                .height = 16});
+    return ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                     //.provider = "openai",
+                                                                                     //.model = "gpt-5.5",
+                                                                                     .session_id = "session_test",
+                                                                                     .input = "/permissions explain ",
+                                                                                     .status = "ready",
+                                                                                     .transcript = {},
+                                                                                     .slash_commands = slash_items_duplicate_rules,
+                                                                                     .selected_slash_command_index = selected_index,
+                                                                                     .width = 96,
+                                                                                     .height = 16});
   };
   auto const duplicate_permission_palette_a = render_permission_palette(match_a.value_or(0));
   auto const duplicate_permission_palette_b = render_permission_palette(match_b.value_or(0));
@@ -1001,17 +1004,17 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
       auto const job_selection = job_match ? ava::tui::slash_command_selection_text("/jobs show ", slash_items_with_job, *job_match) : std::string{};
       auto const job_selection_twin =
           job_match_twin ? ava::tui::slash_command_selection_text("/jobs show ", slash_items_with_job, *job_match_twin) : std::string{};
-      auto const job_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                    .provider = "openai",
-                                                                                    .model = "gpt-5.5",
-                                                                                    .session_id = "session_test",
-                                                                                    .input = "/jobs show ",
-                                                                                    .status = "ready",
-                                                                                    .transcript = {},
-                                                                                    .slash_commands = slash_items_with_job,
-                                                                                    .selected_slash_command_index = job_match.value_or(0),
-                                                                                    .width = 96,
-                                                                                    .height = 14});
+      auto const job_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                         //.provider = "openai",
+                                                                                                         //.model = "gpt-5.5",
+                                                                                                         .session_id = "session_test",
+                                                                                                         .input = "/jobs show ",
+                                                                                                         .status = "ready",
+                                                                                                         .transcript = {},
+                                                                                                         .slash_commands = slash_items_with_job,
+                                                                                                         .selected_slash_command_index = job_match.value_or(0),
+                                                                                                         .width = 96,
+                                                                                                         .height = 14});
       auto const job_ref = job_show ? extract_completion_ref(job_show->description) : std::string{};
       auto const job_ref_twin = job_show_twin ? extract_completion_ref(job_show_twin->description) : std::string{};
       expect(job_show != nullptr && job_show_twin != nullptr && job_wait != nullptr && job_result != nullptr && job_cancel != nullptr &&

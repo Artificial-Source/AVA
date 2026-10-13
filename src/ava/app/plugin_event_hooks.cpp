@@ -243,6 +243,15 @@ PluginEventObserverOptions plugin_event_observer_options(runtime::session_ts& un
 {
   auto const resource_policy = runtime::make_extension_resource_policy_1(unlocked_session);
   SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+  std::string provider_id;
+  std::string model_id;
+  {
+    // Get read access to the ModelSelection.
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    // Take a snapshot of the provider_id/model_id.
+    provider_id = model_selection_r->model.provider_id;
+    model_id = model_selection_r->model.model_id;
+  }
   return PluginEventObserverOptions{
       .workspace_dir = session_r->workspace_dir(),
       .plugin_global_plugins_dir = resource_policy.plugin_discovery.global_plugins_dir,
@@ -259,8 +268,8 @@ PluginEventObserverOptions plugin_event_observer_options(runtime::session_ts& un
       .cancel_requested = nullptr,
       .process_scope = session_r->session_process_scope(),
       .session_id = session_r->store.session_id(),
-      .provider_id = session_r->model().provider_id,
-      .model_id = session_r->model().model_id,
+      .provider_id = std::move(provider_id),
+      .model_id = std::move(model_id),
       .current_dir = session_r->current_dir()};
 }
 

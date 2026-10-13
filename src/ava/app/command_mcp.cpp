@@ -414,6 +414,7 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
 
   CRITICAL_AREA_BEGIN_R(session);
   auto const workspace_dir = session_r->workspace_dir();
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
   auto context =
       ava::tools::ToolContext{.workspace_dir = workspace_dir,
                               .mode = session_r->mode(),
@@ -428,8 +429,8 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
                                 return runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry));
                               },
                               .session_id = session_r->store.session_id(),
-                              .provider_id = session_r->model().provider_id,
-                              .model_id = session_r->model().model_id,
+                              .provider_id = model_selection_r->model.provider_id,
+                              .model_id = model_selection_r->model.model_id,
                               .current_dir = session_r->current_dir()};
   CRITICAL_AREA_END_R(session);
 

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/tui_test_support.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/prompt_stash_internal.h"
 #include "ava/tui/runtime.h"
@@ -126,6 +127,7 @@ void test_prompt_stash_store_semantics()
 
 void test_prompt_stash_runtime_controller()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(20, 80));
 
@@ -139,7 +141,7 @@ void test_prompt_stash_runtime_controller()
   };
   ava::tui::RuntimePresentationState presentation(options);
   ava::tui::RuntimeDraftState draft_state;
-  ava::tui::RuntimeRenderer renderer(presentation.snapshot, presentation.sidebar, draft_state);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   auto active_list = ava::tui::ActiveSelectList::None;
   ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, options.key_bindings);
   ava::tui::RuntimeNavigationController navigation(options, presentation.snapshot, presentation.sidebar, draft_state, renderer);

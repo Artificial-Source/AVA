@@ -33,6 +33,7 @@
 
 void run_tui_selector_tests()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   expect(ava::tui::runtime_commands::session_switching_command("/clear") && ava::tui::runtime_commands::session_switching_command("  /clear Fresh session  ") &&
              !ava::tui::runtime_commands::session_switching_command("/clearance") &&
              !ava::tui::runtime_commands::session_switching_command("/clearance Fresh session"),
@@ -224,8 +225,8 @@ void run_tui_selector_tests()
     auto visible_model_picker = model_picker;
     visible_model_picker.selected_item_index = 2;
     auto model_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                     .provider = "openai",
-                                                     .model = "gpt-5.5",
+                                                     //.provider = "openai",
+                                                     //.model = "gpt-5.5",
                                                      .session_id = "session_test",
                                                      .input = "",
                                                      .status = "selecting model",
@@ -233,7 +234,7 @@ void run_tui_selector_tests()
                                                      .select_list = visible_model_picker,
                                                      .width = width,
                                                      .height = height};
-    auto const frame = ava::tui::render_composer(model_snapshot);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), model_snapshot);
     auto const selected_line = std::ranges::find_if(frame, [](std::string const& line) {
       auto const visible = strip_sgr(line);
       return visible.find("›") != std::string::npos && visible.find("Diagnostic Local") != std::string::npos;
@@ -375,8 +376,8 @@ void run_tui_selector_tests()
   if (explicit_reasoning_picker)
   {
     auto tiny_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                    .provider = "openai",
-                                                    .model = "Reasoning Policy",
+                                                    //.provider = "openai",
+                                                    //.model = "Reasoning Policy",
                                                     .session_id = "session_reasoning_selector",
                                                     .input = {},
                                                     .status = "selecting thinking mode",
@@ -384,7 +385,7 @@ void run_tui_selector_tests()
                                                     .select_list = *explicit_reasoning_picker,
                                                     .width = 44,
                                                     .height = 8};
-    auto const frame = ava::tui::render_composer(tiny_snapshot);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), tiny_snapshot);
     auto const selected_line = std::ranges::find_if(frame, [](std::string const& line) {
       auto const visible = strip_sgr(line);
       return visible.find("›") != std::string::npos && visible.find("High") != std::string::npos;
@@ -491,8 +492,8 @@ void run_tui_selector_tests()
     auto visible_sessions = tree_sessions;
     visible_sessions.query.clear();
     auto session_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                       .provider = "openai",
-                                                       .model = "gpt-5.5",
+                                                       //.provider = "openai",
+                                                       //.model = "gpt-5.5",
                                                        .session_id = "session_child",
                                                        .input = "",
                                                        .status = "selecting session",
@@ -500,7 +501,7 @@ void run_tui_selector_tests()
                                                        .select_list = visible_sessions,
                                                        .width = width,
                                                        .height = height};
-    auto const frame = ava::tui::render_composer(session_snapshot);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), session_snapshot);
     auto const selected_line = std::ranges::find_if(frame, [](std::string const& line) {
       auto const visible = strip_sgr(line);
       return visible.find("›") != std::string::npos && visible.find("Review branch") != std::string::npos;
@@ -586,16 +587,16 @@ void run_tui_selector_tests()
              archived_session_selector.subtitle.find("archived") != std::string::npos,
          "session selector hides archived sessions by default and can render them when explicitly requested");
 
-  auto const session_selector_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                           .provider = "openai",
-                                                                                           .model = "gpt-5.5",
-                                                                                           .session_id = "session_beta",
-                                                                                           .input = "composer behind session selector",
-                                                                                           .status = "selecting session",
-                                                                                           .transcript = {},
-                                                                                           .select_list = recent_sessions,
-                                                                                           .width = 96,
-                                                                                           .height = 18});
+  auto const session_selector_frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                                //.provider = "openai",
+                                                                                                                //.model = "gpt-5.5",
+                                                                                                                .session_id = "session_beta",
+                                                                                                                .input = "composer behind session selector",
+                                                                                                                .status = "selecting session",
+                                                                                                                .transcript = {},
+                                                                                                                .select_list = recent_sessions,
+                                                                                                                .width = 96,
+                                                                                                                .height = 18});
   expect(std::ranges::any_of(session_selector_frame, [](std::string const& line) { return strip_sgr(line).find("Select session") != std::string::npos; }) &&
              std::ranges::any_of(session_selector_frame,
                                  [](std::string const& line) {
@@ -607,16 +608,16 @@ void run_tui_selector_tests()
 
   auto hotkeys_view = ava::tui::hotkeys_select_list_view(ava::tui::default_key_bindings());
   hotkeys_view.query = "mode";
-  auto const hotkeys_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                  .provider = "openai",
-                                                                                  .model = "gpt-5.5",
-                                                                                  .session_id = "session_test",
-                                                                                  .input = "composer behind hotkeys",
-                                                                                  .status = "hotkeys opened",
-                                                                                  .transcript = {},
-                                                                                  .select_list = hotkeys_view,
-                                                                                  .width = 92,
-                                                                                  .height = 18});
+  auto const hotkeys_frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                       //.provider = "openai",
+                                                                                                       //.model = "gpt-5.5",
+                                                                                                       .session_id = "session_test",
+                                                                                                       .input = "composer behind hotkeys",
+                                                                                                       .status = "hotkeys opened",
+                                                                                                       .transcript = {},
+                                                                                                       .select_list = hotkeys_view,
+                                                                                                       .width = 92,
+                                                                                                       .height = 18});
   auto const mode_toggle_item = std::ranges::find_if(hotkeys_view.items, [](ava::tui::SelectListItemView const& item) { return item.value == "mode_toggle"; });
   expect(hotkeys_view.title == "Keybindings" && hotkeys_view.subtitle.find("$XDG_CONFIG_HOME/ava/keybinds.json") != std::string::npos &&
              hotkeys_view.subtitle.find("Enter drafts /keybindings set") != std::string::npos &&
@@ -638,16 +639,16 @@ void run_tui_selector_tests()
   if (!mode_toggle_matches.empty())
     mode_toggle_render_view.selected_item_index = mode_toggle_matches.front();
   auto const render_mode_toggle_width = [&](std::size_t width) {
-    return ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                .provider = "openai",
-                                                                .model = "gpt-5.5",
-                                                                .session_id = "session_test",
-                                                                .input = "composer behind hotkeys",
-                                                                .status = "hotkeys opened",
-                                                                .transcript = {},
-                                                                .select_list = mode_toggle_render_view,
-                                                                .width = width,
-                                                                .height = 18});
+    return ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                     //.provider = "openai",
+                                                                                     //.model = "gpt-5.5",
+                                                                                     .session_id = "session_test",
+                                                                                     .input = "composer behind hotkeys",
+                                                                                     .status = "hotkeys opened",
+                                                                                     .transcript = {},
+                                                                                     .select_list = mode_toggle_render_view,
+                                                                                     .width = width,
+                                                                                     .height = 18});
   };
   auto const mode_toggle_frame_80 = render_mode_toggle_width(80);
   auto const mode_toggle_frame_92 = render_mode_toggle_width(92);
@@ -693,8 +694,8 @@ void run_tui_selector_tests()
 
   auto make_settings_snapshot = [](std::vector<ava::tui::ThemeOptionItem> custom_themes = {}) {
     return ava::tui::ComposerSnapshot{.mode = "build",
-                                      .provider = "openai",
-                                      .model = "gpt-5.5",
+                                      //.provider = "openai",
+                                      //.model = "gpt-5.5",
                                       .session_id = "session_test",
                                       .input = "",
                                       .status = "ready",
@@ -704,8 +705,8 @@ void run_tui_selector_tests()
                                       .custom_themes = std::move(custom_themes),
                                       .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
                                                                            .mode = "build",
-                                                                           .provider = "openai",
-                                                                           .model = "gpt-5.5",
+                                                                           //.provider = "openai",
+                                                                           //.model = "gpt-5.5",
                                                                            .workspace = "/workspace/project",
                                                                            .git_branch = "develop",
                                                                            .version = "0.32",
@@ -726,32 +727,34 @@ void run_tui_selector_tests()
 
   auto const settings_snapshot = make_settings_snapshot();
   auto const settings_root = ava::tui::settings_select_list_view(settings_snapshot, settings_key_bindings);
-  auto const settings_theme = ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Theme, settings_snapshot, settings_key_bindings);
-  auto const settings_display = ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Display, settings_snapshot, settings_key_bindings);
-  auto const settings_models =
-      ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::ModelsAndReasoning, settings_snapshot, settings_key_bindings);
-  auto const settings_input =
-      ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::InputAndKeybindings, settings_snapshot, settings_key_bindings);
-  auto const settings_workspace =
-      ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::SessionsAndWorkspace, settings_snapshot, settings_key_bindings);
-  auto const settings_tools =
-      ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::ToolsAndExtensions, settings_snapshot, settings_key_bindings);
+  auto const settings_theme =
+      ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Theme, settings_snapshot, settings_key_bindings);
+  auto const settings_display =
+      ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Display, settings_snapshot, settings_key_bindings);
+  auto const settings_models = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::ModelsAndReasoning,
+                                                                               settings_snapshot, settings_key_bindings);
+  auto const settings_input = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::InputAndKeybindings,
+                                                                              settings_snapshot, settings_key_bindings);
+  auto const settings_workspace = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::SessionsAndWorkspace,
+                                                                                  settings_snapshot, settings_key_bindings);
+  auto const settings_tools = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::ToolsAndExtensions,
+                                                                              settings_snapshot, settings_key_bindings);
   auto labels = [](ava::tui::SelectListView const& view) {
     std::vector<std::string> result;
     for (auto const& item : view.items)
       result.push_back(item.label);
     return result;
   };
-  auto const settings_root_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                        .provider = "openai",
-                                                                                        .model = "gpt-5.5",
-                                                                                        .session_id = "session_test",
-                                                                                        .input = "",
-                                                                                        .status = "settings opened",
-                                                                                        .transcript = {},
-                                                                                        .select_list = settings_root,
-                                                                                        .width = 96,
-                                                                                        .height = 20});
+  auto const settings_root_frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                             //.provider = "openai",
+                                                                                                             //.model = "gpt-5.5",
+                                                                                                             .session_id = "session_test",
+                                                                                                             .input = "",
+                                                                                                             .status = "settings opened",
+                                                                                                             .transcript = {},
+                                                                                                             .select_list = settings_root,
+                                                                                                             .width = 96,
+                                                                                                             .height = 20});
   auto frame_contains = [](std::vector<std::string> const& frame, std::string_view text) {
     return std::ranges::any_of(frame, [&](std::string const& line) { return strip_sgr(line).find(text) != std::string::npos; });
   };
@@ -812,24 +815,24 @@ void run_tui_selector_tests()
 
     theme_filter.query = "light";
     theme_filter.selected_item_index = 1;
-    auto const filtered_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                     .provider = "openai",
-                                                                                     .model = "gpt-5.5",
-                                                                                     .session_id = "session_test",
-                                                                                     .input = "",
-                                                                                     .status = "settings opened",
-                                                                                     .transcript = {},
-                                                                                     .select_list = theme_filter,
-                                                                                     .width = 72,
-                                                                                     .height = 10});
+    auto const filtered_frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                          //.provider = "openai",
+                                                                                                          //.model = "gpt-5.5",
+                                                                                                          .session_id = "session_test",
+                                                                                                          .input = "",
+                                                                                                          .status = "settings opened",
+                                                                                                          .transcript = {},
+                                                                                                          .select_list = theme_filter,
+                                                                                                          .width = 72,
+                                                                                                          .height = 10});
     auto const filtered_selected_line =
         std::ranges::find_if(filtered_frame, [](std::string const& line) { return strip_sgr(line).find("Light") != std::string::npos; });
     auto const filtered_hit =
         filtered_selected_line == filtered_frame.end()
             ? std::optional<std::size_t>{}
             : ava::tui::select_list_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                             .provider = "openai",
-                                                                                             .model = "gpt-5.5",
+                                                                                             //.provider = "openai",
+                                                                                             //.model = "gpt-5.5",
                                                                                              .session_id = "session_test",
                                                                                              .input = "",
                                                                                              .status = "settings opened",
@@ -847,20 +850,20 @@ void run_tui_selector_tests()
     for (auto section : {ava::tui::SettingsSection::Root, ava::tui::SettingsSection::Theme, ava::tui::SettingsSection::Display,
                          ava::tui::SettingsSection::SessionsAndWorkspace})
     {
-      auto view = ava::tui::settings_select_list_view_for_section(section, settings_snapshot, settings_key_bindings);
+      auto view = ava::tui::settings_select_list_view_for_section(frontend.frontend(), section, settings_snapshot, settings_key_bindings);
       if (view.items.empty())
         continue;
       view.selected_item_index = view.items.size() - 1;
-      auto frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                        .provider = "openai",
-                                                                        .model = "gpt-5.5",
-                                                                        .session_id = "session_test",
-                                                                        .input = "",
-                                                                        .status = "settings opened",
-                                                                        .transcript = {},
-                                                                        .select_list = view,
-                                                                        .width = 72,
-                                                                        .height = height});
+      auto frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                             //.provider = "openai",
+                                                                                             //.model = "gpt-5.5",
+                                                                                             .session_id = "session_test",
+                                                                                             .input = "",
+                                                                                             .status = "settings opened",
+                                                                                             .transcript = {},
+                                                                                             .select_list = view,
+                                                                                             .width = 72,
+                                                                                             .height = height});
       auto const selected_label = view.items.back().label;
       auto const selected_line =
           std::ranges::find_if(frame, [&](std::string const& line) { return strip_sgr(line).find(selected_label) != std::string::npos; });
@@ -868,8 +871,8 @@ void run_tui_selector_tests()
       if (selected_line != frame.end())
       {
         auto const hit = ava::tui::select_list_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                                        .provider = "openai",
-                                                                                                        .model = "gpt-5.5",
+                                                                                                        //.provider = "openai",
+                                                                                                        //.model = "gpt-5.5",
                                                                                                         .session_id = "session_test",
                                                                                                         .input = "",
                                                                                                         .status = "settings opened",
@@ -1049,7 +1052,7 @@ void run_tui_selector_tests()
               ava::tui::TuiThemePalette{
                   .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 255, .composer_bg = 236},
           .revision = "sunrise-selected"}});
-      auto before = ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Theme, sunrise_only, settings_key_bindings);
+      auto before = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Theme, sunrise_only, settings_key_bindings);
       std::optional<std::size_t> sunrise_index;
       for (std::size_t index = 0; index < before.items.size(); ++index)
       {
@@ -1080,7 +1083,7 @@ void run_tui_selector_tests()
                    ava::tui::TuiThemePalette{
                        .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 255, .composer_bg = 236},
                .revision = "sunrise-selected"}});
-      auto after = ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Theme, with_alpha, settings_key_bindings);
+      auto after = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Theme, with_alpha, settings_key_bindings);
       after.query = before.query;
       // Index-only preservation would land on whatever now occupies sunrise's old slot (alpha).
       auto const index_only = *sunrise_index < after.items.size() ? *sunrise_index : std::size_t{0};
@@ -1111,7 +1114,8 @@ void run_tui_selector_tests()
               ava::tui::TuiThemePalette{
                   .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 255, .composer_bg = 230},
           .revision = "alpha-v1"}});
-      auto fallback_view = ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Theme, alpha_only, settings_key_bindings);
+      auto fallback_view =
+          ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Theme, alpha_only, settings_key_bindings);
       // Stage alpha, then ask reselect to recover via staged overlay after selected value vanished.
       fallback_view.selected_item_index = reselect_settings_display_row_after_rebuild(fallback_view, "theme:sunrise", "theme:alpha", sunrise_index);
       expect(fallback_view.selected_item_index < fallback_view.items.size() && fallback_view.items[fallback_view.selected_item_index].value == "theme:alpha",
@@ -1129,7 +1133,7 @@ void run_tui_selector_tests()
     ScopedEnvVar colorfgbg_guard("COLORFGBG", "");
     ava::tui::set_tui_config_theme(std::nullopt);
     auto const light_settings_view =
-        ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Theme, make_settings_snapshot(), settings_key_bindings);
+        ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Theme, make_settings_snapshot(), settings_key_bindings);
     expect(std::ranges::any_of(light_settings_view.items, [](ava::tui::SelectListItemView const& item) { return item.value == "theme:light" && item.current; }),
            "settings view marks the process-selected built-in light theme as current");
   }
@@ -1140,7 +1144,7 @@ void run_tui_selector_tests()
     ScopedEnvVar colorfgbg_guard("COLORFGBG", "");
     ava::tui::set_tui_config_theme("light");
     auto const configured_light_settings_view =
-        ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Theme, make_settings_snapshot(), settings_key_bindings);
+        ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Theme, make_settings_snapshot(), settings_key_bindings);
     expect(std::ranges::any_of(configured_light_settings_view.items,
                                [](ava::tui::SelectListItemView const& item) { return item.value == "theme:light" && item.current; }),
            "settings view marks the persisted built-in light theme as current");
@@ -1160,7 +1164,7 @@ void run_tui_selector_tests()
         .revision = "test-custom-theme"};
     ava::tui::set_tui_config_theme("sunrise", custom_theme);
     auto const custom_settings_view = ava::tui::settings_select_list_view_for_section(
-        ava::tui::SettingsSection::Theme,
+        frontend.frontend(), ava::tui::SettingsSection::Theme,
         make_settings_snapshot({ava::tui::ThemeOptionItem{
             .name = "sunrise", .detail = "/tmp/ava/sunrise.json", .palette = custom_theme.palette, .revision = custom_theme.revision}}),
         settings_key_bindings);
@@ -1179,17 +1183,17 @@ void run_tui_selector_tests()
     ScopedEnvVar colorfgbg_guard("COLORFGBG", "0;15");
     ava::tui::set_tui_config_theme(std::nullopt);
     auto const plain_settings_view =
-        ava::tui::settings_select_list_view_for_section(ava::tui::SettingsSection::Theme, make_settings_snapshot(), settings_key_bindings);
-    auto const plain_settings_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                           .provider = "openai",
-                                                                                           .model = "gpt-5.5",
-                                                                                           .session_id = "session_test",
-                                                                                           .input = "",
-                                                                                           .status = "settings opened",
-                                                                                           .transcript = {},
-                                                                                           .select_list = plain_settings_view,
-                                                                                           .width = 96,
-                                                                                           .height = 20});
+        ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::Theme, make_settings_snapshot(), settings_key_bindings);
+    auto const plain_settings_frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                                //.provider = "openai",
+                                                                                                                //.model = "gpt-5.5",
+                                                                                                                .session_id = "session_test",
+                                                                                                                .input = "",
+                                                                                                                .status = "settings opened",
+                                                                                                                .transcript = {},
+                                                                                                                .select_list = plain_settings_view,
+                                                                                                                .width = 96,
+                                                                                                                .height = 20});
     expect(
         std::ranges::any_of(plain_settings_view.items, [](ava::tui::SelectListItemView const& item) { return item.value == "theme:plain" && item.current; }) &&
             std::ranges::all_of(plain_settings_frame, [](std::string const& line) { return line.find("\x1b[") == std::string::npos; }),
@@ -1235,8 +1239,8 @@ void run_tui_selector_tests()
     tall_picker.query.clear();
     tall_picker.selected_item_index = 2;
     auto snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                               .provider = "openai",
-                                               .model = "gpt-5.5",
+                                               //.provider = "openai",
+                                               //.model = "gpt-5.5",
                                                .session_id = "session_test",
                                                .input = "",
                                                .status = "fork-from selector opened",
@@ -1244,7 +1248,7 @@ void run_tui_selector_tests()
                                                .select_list = tall_picker,
                                                .width = 80,
                                                .height = height};
-    auto const frame = ava::tui::render_composer(snapshot);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), snapshot);
     auto const selected_line = std::ranges::find_if(frame, [](std::string const& line) {
       auto const visible = strip_sgr(line);
       return visible.find("›") != std::string::npos && visible.find("alpha first line") != std::string::npos;
@@ -1259,8 +1263,8 @@ void run_tui_selector_tests()
 
   auto prompt_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_test",
       .input = "",
       .status = "permission required",
@@ -1299,8 +1303,8 @@ void run_tui_selector_tests()
   auto prior_transcript = std::vector<ava::tui::TranscriptItem>{ava::tui::TranscriptItem{.label = "you", .text = "later turn must clear"},
                                                                 ava::tui::TranscriptItem{.label = "ava", .text = "assistant later"}};
   auto presentation = ava::tui::ComposerSnapshot{.mode = "build",
-                                                 .provider = "openai",
-                                                 .model = "gpt-5.5",
+                                                 //.provider = "openai",
+                                                 //.model = "gpt-5.5",
                                                  .session_id = "session_old",
                                                  .input = "",
                                                  .status = "forking session…",
@@ -1476,7 +1480,7 @@ void run_tui_selector_tests()
   selector_screen_snapshot.select_list = jobs_selector;
   selector_screen_snapshot.width = 88;
   selector_screen_snapshot.height = 20;
-  auto const selector_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(selector_screen_snapshot));
+  auto const selector_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), selector_screen_snapshot));
   auto const priority_ref = [](std::string const& suffix) {
     auto const start = suffix.find("ref ");
     auto const end = start == std::string::npos ? start : suffix.find(" · ", start);
@@ -1498,7 +1502,7 @@ void run_tui_selector_tests()
   duplicate_snapshot.select_list = duplicate_selector;
   duplicate_snapshot.width = 88;
   duplicate_snapshot.height = 12;
-  auto const duplicate_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(duplicate_snapshot));
+  auto const duplicate_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), duplicate_snapshot));
   auto const duplicate_ref_0 = priority_ref(duplicate_selector.items[0].priority_suffix);
   auto const duplicate_ref_1 = priority_ref(duplicate_selector.items[1].priority_suffix);
   expect(duplicate_selector.items.size() == 2 && duplicate_selector.items[0].label == duplicate_selector.items[1].label &&
@@ -1562,7 +1566,7 @@ void run_tui_selector_tests()
   unsafe_selector_snapshot.select_list = unsafe_jobs_selector;
   unsafe_selector_snapshot.width = 80;
   unsafe_selector_snapshot.height = 16;
-  auto const unsafe_selector_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(unsafe_selector_snapshot));
+  auto const unsafe_selector_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), unsafe_selector_snapshot));
   expect(unsafe_selector_screen.find("<task>") == std::string::npos && unsafe_selector_screen.find("/tmp/") == std::string::npos &&
              unsafe_selector_screen.find("session_secret") == std::string::npos && unsafe_selector_screen.find("job_secret") == std::string::npos &&
              unsafe_jobs_selector.items.front().label == "Subagent" && unsafe_jobs_selector.items.front().priority_suffix.find("ref @") != std::string::npos,
@@ -1602,7 +1606,7 @@ void run_tui_selector_tests()
       owner_snapshot.select_list = *right_owner;
       owner_snapshot.width = 90;
       owner_snapshot.height = 18;
-      auto const owner_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(owner_snapshot));
+      auto const owner_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), owner_snapshot));
       expect(owner_screen.find("RAW SECRET PROMPT") == std::string::npos && owner_screen.find("<task>") == std::string::npos &&
                  owner_screen.find("/tmp/secret-child.jsonl") == std::string::npos && owner_screen.find("session_owner_secret") == std::string::npos &&
                  owner_screen.find(started ? started->job.identity.job_id : std::string{}) == std::string::npos,
@@ -1874,7 +1878,7 @@ void run_tui_selector_tests()
   prompt_precedence_snapshot.question_prompt = std::move(prompt_view);
   prompt_precedence_snapshot.width = 64;
   prompt_precedence_snapshot.height = 16;
-  auto const prompt_precedence_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(prompt_precedence_snapshot));
+  auto const prompt_precedence_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), prompt_precedence_snapshot));
   expect(prompt_precedence_screen.find("Continue parent prompt?") != std::string::npos &&
              prompt_precedence_screen.find("Committed result line.") == std::string::npos,
          "question prompts render ahead of the jobs workspace");
@@ -1888,7 +1892,8 @@ void run_tui_selector_tests()
   permission_precedence_snapshot.permission_prompt = std::move(permission_view);
   permission_precedence_snapshot.width = 64;
   permission_precedence_snapshot.height = 16;
-  auto const permission_precedence_screen = tui_test_support::join_visible_lines(ava::tui::render_composer(permission_precedence_snapshot));
+  auto const permission_precedence_screen =
+      tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), permission_precedence_snapshot));
   expect(permission_precedence_screen.find("Permission required") != std::string::npos &&
              permission_precedence_screen.find("Committed result line.") == std::string::npos,
          "permission prompts render ahead of the jobs workspace");
@@ -1919,7 +1924,7 @@ void run_tui_selector_tests()
     short_snapshot.select_list = view;
     short_snapshot.width = 48;
     short_snapshot.height = 8;
-    auto frame = ava::tui::render_composer(short_snapshot);
+    auto frame = ava::tui::render_composer(frontend.frontend(), short_snapshot);
     expect(std::ranges::any_of(frame, [](std::string const& line) { return strip_sgr(line).find("Startup overview") != std::string::npos; }) &&
                std::ranges::any_of(frame, [](std::string const& line) { return strip_sgr(line).find("Mode") != std::string::npos; }),
            "overview select-list remains usable at short heights");
@@ -1931,7 +1936,7 @@ void run_tui_selector_tests()
     hit_snapshot.select_list = view;
     hit_snapshot.width = 48;
     hit_snapshot.height = 12;
-    auto const hit_frame = ava::tui::render_composer(hit_snapshot);
+    auto const hit_frame = ava::tui::render_composer(frontend.frontend(), hit_snapshot);
     auto const mode_line = std::ranges::find_if(hit_frame, [](std::string const& line) { return strip_sgr(line).find("Mode") != std::string::npos; });
     expect(mode_line != hit_frame.end(), "overview short frame exposes a Mode row for hit-testing");
     if (mode_line != hit_frame.end())

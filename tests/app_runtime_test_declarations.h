@@ -62,6 +62,7 @@ void test_app_session_fork_from_entry_and_user_turns();
 void test_app_session_new_resume_commands();
 void test_app_session_metadata_commands();
 void test_request_projection_validates_committed_v4_history();
+void test_unlocked_data_access_and_notifications();
 void test_runtime_model_switch_accepts_committed_openai_responses_reasoning();
 void test_application_catalog_cache_reuses_workspace_and_session_indexes();
 void test_application_catalog_coordinator_serializes_refresh_and_snapshot();

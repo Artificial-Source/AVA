@@ -72,7 +72,7 @@ TrustSessionSnapshot trust_session_snapshot(runtime::session_ts& unlocked_sessio
 {
   SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
   return {.paths = session_r->paths(),
-          .model = session_r->model(),
+          .model = session_r->model_selection_r()->model,
           .mode = session_r->mode(),
           .workspace_dir = session_r->workspace_dir(),
           .current_dir = session_r->current_dir(),

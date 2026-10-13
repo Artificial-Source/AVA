@@ -279,7 +279,7 @@ std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(Inp
     return renderer_.request_render();
   }
 
-  auto const max_scroll = sidebar_drawer_max_scroll_offset(snapshot_);
+  auto const max_scroll = sidebar_drawer_max_scroll_offset(renderer_.frontend, snapshot_);
   if (key_matches_action(options_.key_bindings, TuiAction::PageUp, event.key))
   {
     auto const page = sidebar_drawer_page_size();

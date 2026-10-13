@@ -96,7 +96,7 @@ ava::core::Result<ava::session::CompactionConfig> resolve_compaction_config(runt
 {
   auto [paths, provider_catalog, current_model] = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->paths(), session_r->provider_catalog(), session_r->model()};
+    return std::tuple{session_r->paths(), session_r->provider_catalog(), session_r->model_selection_r()->model};
   }();
   return resolve_compaction_config_impl(paths, provider_catalog, current_model, std::move(config));
 }
@@ -224,7 +224,7 @@ ava::core::Result<std::string> generate_compaction_summary(runtime::session_ts c
 {
   auto [paths, provider_catalog, current_model, offline, session_id, session_process_scope] = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->paths(),      session_r->provider_catalog(), session_r->model(),
+    return std::tuple{session_r->paths(),      session_r->provider_catalog(), session_r->model_selection_r()->model,
                       session_r->is_offline(), session_r->store.session_id(), session_r->session_process_scope()};
   }();
   return generate_compaction_summary_impl(paths, provider_catalog, current_model, offline, std::move(session_id), session_process_scope, entries, config,
@@ -246,7 +246,7 @@ ava::core::Result<bool> compact_runtime_context(session_ts& unlocked_session, av
 
   auto [paths, provider_catalog, current_model, offline, session_id, session_process_scope] = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::tuple{session_r->paths(),      session_r->provider_catalog(), session_r->model(),
+    return std::tuple{session_r->paths(),      session_r->provider_catalog(), session_r->model_selection_r()->model,
                       session_r->is_offline(), session_r->store.session_id(), session_r->session_process_scope()};
   }();
 

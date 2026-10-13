@@ -334,10 +334,8 @@ class Session : protected Session_aggregate_base
   ava::session::SessionReadLimits const& session_read_limits() const { return invocation_inputs_.session_read_limits; }
   PromptOverrides const& prompt_overrides() const { return invocation_inputs_.prompt_overrides; }
 
-  // Model selection.
-  ava::config::ModelInfo const& model() const { return ModelSelection_ts::crat(model_selection_)->model; }
-  std::optional<ReasoningSelection> const& reasoning() const { return ModelSelection_ts::crat(model_selection_)->reasoning; }
-  std::optional<std::vector<std::string>> const& scoped_model_cycle() const { return ModelSelection_ts::crat(model_selection_)->scoped_model_cycle; }
+  // Return read-access type for the ModelSelection object.
+  ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }

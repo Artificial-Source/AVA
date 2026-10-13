@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
@@ -690,7 +691,7 @@ void push_sidebar_drawer_section(std::vector<std::string>& lines, std::string_vi
   lines.push_back(detail::screen_surface_line(std::string("  ") + std::string(kSgrBold) + sanitize_terminal_text(title) + std::string(kSgrReset), width));
 }
 
-std::vector<std::string> render_sidebar_drawer_body(SidebarSnapshot const& sidebar, std::size_t width)
+std::vector<std::string> render_sidebar_drawer_body(TuiFrontEnd* frontend, SidebarSnapshot const& sidebar, std::size_t width)
 {
   std::vector<std::string> lines;
   push_sidebar_drawer_section(lines, "Activity", width);
@@ -750,10 +751,14 @@ std::vector<std::string> render_sidebar_drawer_body(SidebarSnapshot const& sideb
     }
   }
 
+  std::string sidebar_provider;
+  std::string sidebar_model_display;
+  [[maybe_unused]] bool sidebar_provider_changed = frontend->model_selection().refresh_provider(frontend, sidebar_provider);
+  [[maybe_unused]] bool sidebar_model_display_changed = frontend->model_selection().refresh_model_display(frontend, sidebar_model_display);
   push_sidebar_drawer_section(lines, "Session", width);
   push_sidebar_drawer_value(lines, "mode", sanitize_terminal_text(sidebar.mode), width);
-  push_sidebar_drawer_value(lines, "provider", sanitize_terminal_text(sidebar.provider), width);
-  push_sidebar_drawer_value(lines, "model", sanitize_terminal_text(sidebar.model), width);
+  push_sidebar_drawer_value(lines, "provider", sanitize_terminal_text(sidebar_provider), width);
+  push_sidebar_drawer_value(lines, "model", sanitize_terminal_text(sidebar_model_display), width);
   push_sidebar_drawer_value(lines, "session", sanitize_terminal_text(sidebar.session_id), width);
   push_sidebar_drawer_value(lines, "path", sanitize_terminal_text(sidebar.session_path), width);
   push_sidebar_drawer_value(lines, "entries", sidebar.session_entry_count ? std::to_string(*sidebar.session_entry_count) : std::string("unknown"), width);
@@ -786,13 +791,13 @@ std::size_t sidebar_drawer_body_height(ComposerSnapshot const& snapshot, std::si
   return drawer_height > 1 + footer_lines ? drawer_height - 1 - footer_lines : std::size_t{0};
 }
 
-ComposerFrame render_sidebar_drawer(ComposerSnapshot const& snapshot, std::size_t width, std::size_t height)
+ComposerFrame render_sidebar_drawer(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width, std::size_t height)
 {
   ComposerFrame frame;
   auto const composer_line_count = detail::composer_block_line_count(snapshot, height, width);
   auto const drawer_height = height > composer_line_count ? height - composer_line_count : std::size_t{0};
   auto const body_height = sidebar_drawer_body_height(snapshot, width, height);
-  auto const body = render_sidebar_drawer_body(*snapshot.sidebar, width);
+  auto const body = render_sidebar_drawer_body(frontend, *snapshot.sidebar, width);
   auto const max_offset = body.size() > body_height ? body.size() - body_height : std::size_t{0};
   auto const offset = std::min(snapshot.sidebar_drawer_scroll_offset, max_offset);
 
@@ -814,7 +819,7 @@ ComposerFrame render_sidebar_drawer(ComposerSnapshot const& snapshot, std::size_
     frame.lines.push_back(
         detail::screen_surface_line(std::string("  ") + std::string(kSgrDim) + "PgUp/PgDn scroll · Home/End jump · Esc close" + std::string(kSgrReset), width));
   }
-  auto const composer_lines = detail::render_composer_block(snapshot, width, composer_line_count);
+  auto const composer_lines = detail::render_composer_block(frontend, snapshot, width, composer_line_count);
   frame.lines.insert(frame.lines.end(), composer_lines.begin(), composer_lines.end());
   while (frame.lines.size() < height)
     frame.lines.push_back(detail::screen_surface_line("", width));
@@ -832,7 +837,7 @@ std::string normalized_sidebar_value(std::string_view value)
   return normalized;
 }
 
-std::vector<std::string> render_sidebar(SidebarSnapshot const& sidebar, std::size_t width, std::size_t height)
+std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot const& sidebar, std::size_t width, std::size_t height)
 {
   std::vector<std::string> lines;
   lines.reserve(height);
@@ -869,13 +874,18 @@ std::vector<std::string> render_sidebar(SidebarSnapshot const& sidebar, std::siz
   if (known_value(sidebar.mode))
     metadata = sanitize_terminal_text(sidebar.mode);
   std::string provider_model;
-  if (known_value(sidebar.provider))
-    provider_model = sanitize_terminal_text(sidebar.provider);
-  if (known_value(sidebar.model))
+  std::string sidebar_provider;
+  std::string sidebar_model_display;
+  [[maybe_unused]] bool sidebar_provider_changed = frontend->model_selection().refresh_provider(frontend, sidebar_provider);
+  [[maybe_unused]] bool sidebar_model_display_changed = frontend->model_selection().refresh_model_display(frontend, sidebar_model_display);
+
+  if (known_value(sidebar_provider))
+    provider_model = sanitize_terminal_text(sidebar_provider);
+  if (known_value(sidebar_model_display))
   {
     if (!provider_model.empty())
       provider_model += "/";
-    provider_model += sanitize_terminal_text(sidebar.model);
+    provider_model += sanitize_terminal_text(sidebar_model_display);
   }
   if (!provider_model.empty())
   {
@@ -954,9 +964,10 @@ std::vector<std::string> render_sidebar(SidebarSnapshot const& sidebar, std::siz
   return lines;
 }
 
-ComposerFrame render_composer_main_frame(ComposerSnapshot snapshot, std::size_t width, std::size_t height, detail::CompletionMatchCache& completion_cache,
-                                         std::size_t source_revision, detail::TranscriptLayoutCache* transcript_cache, std::size_t transcript_generation,
-                                         bool freeze_transcript_layout, bool allow_frozen_width_mismatch)
+ComposerFrame render_composer_main_frame(TuiFrontEnd* frontend, ComposerSnapshot snapshot, std::size_t width, std::size_t height,
+                                         detail::CompletionMatchCache& completion_cache, std::size_t source_revision,
+                                         detail::TranscriptLayoutCache* transcript_cache, std::size_t transcript_generation, bool freeze_transcript_layout,
+                                         bool allow_frozen_width_mismatch)
 {
   snapshot.width = width;
   snapshot.height = height;
@@ -967,7 +978,7 @@ ComposerFrame render_composer_main_frame(ComposerSnapshot snapshot, std::size_t 
   snapshot.reasoning_feedback.reset();
   snapshot.local_command_feedback.reset();
   snapshot.sidebar = std::nullopt;
-  return detail::render_composer_frame_cached(snapshot, completion_cache, source_revision, transcript_cache, transcript_generation, false, true,
+  return detail::render_composer_frame_cached(frontend, snapshot, completion_cache, source_revision, transcript_cache, transcript_generation, false, true,
                                               freeze_transcript_layout, allow_frozen_width_mismatch);
 }
 
@@ -1729,9 +1740,10 @@ ComposerCanvasLayout composer_canvas_layout(ComposerSnapshot const& snapshot)
   return {.content_width = content_width, .left = (width - content_width) / 2, .rail_visible = false};
 }
 
-ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
-                                                   TranscriptLayoutCache* transcript_cache, std::size_t transcript_generation, bool center_canvas,
-                                                   bool allow_transcript_gap, bool freeze_transcript_layout, bool allow_frozen_width_mismatch)
+ComposerFrame detail::render_composer_frame_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache,
+                                                   std::size_t source_revision, TranscriptLayoutCache* transcript_cache, std::size_t transcript_generation,
+                                                   bool center_canvas, bool allow_transcript_gap, bool freeze_transcript_layout,
+                                                   bool allow_frozen_width_mismatch)
 {
   refresh_completion_match_cache(completion_cache, snapshot, source_revision);
   auto const width = std::max<std::size_t>(detail::kMinWidth, snapshot.width);
@@ -1741,7 +1753,7 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
   {
     auto inner = snapshot;
     inner.width = canvas.content_width;
-    auto frame = detail::render_composer_frame_cached(inner, completion_cache, source_revision, transcript_cache, transcript_generation, false,
+    auto frame = detail::render_composer_frame_cached(frontend, inner, completion_cache, source_revision, transcript_cache, transcript_generation, false,
                                                       allow_transcript_gap, freeze_transcript_layout, allow_frozen_width_mismatch);
     auto const right = width - canvas.left - canvas.content_width;
     for (auto& line : frame.lines)
@@ -1766,7 +1778,7 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
     base.sidebar = std::nullopt;
     // Preserve the modal's authoritative vertical policy while rendering its quiet backdrop.
     base.sidebar_drawer_visible = true;
-    auto frame = detail::render_composer_frame_cached(base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
+    auto frame = detail::render_composer_frame_cached(frontend, base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
                                                       freeze_transcript_layout, allow_frozen_width_mismatch);
     frame.lines = overlay_question_modal(quiet_modal_backdrop(std::move(frame.lines)), prompt, width, height);
     frame.graphics.clear();
@@ -1784,7 +1796,7 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
     base.local_command_feedback.reset();
     base.sidebar = std::nullopt;
     base.sidebar_drawer_visible = true;
-    auto frame = detail::render_composer_frame_cached(base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
+    auto frame = detail::render_composer_frame_cached(frontend, base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
                                                       freeze_transcript_layout, allow_frozen_width_mismatch);
     frame.lines = overlay_command_output_modal(quiet_modal_backdrop(std::move(frame.lines)), view, width, height, snapshot.tool_presentation);
     frame.graphics.clear();
@@ -1807,7 +1819,7 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
     base.sidebar = std::nullopt;
     // Preserve the modal's authoritative vertical policy while rendering its quiet backdrop.
     base.sidebar_drawer_visible = true;
-    auto frame = detail::render_composer_frame_cached(base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
+    auto frame = detail::render_composer_frame_cached(frontend, base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
                                                       freeze_transcript_layout, allow_frozen_width_mismatch);
     frame.lines = overlay_select_list_modal(quiet_modal_backdrop(std::move(frame.lines)), view, width, height);
     frame.graphics.clear();
@@ -1822,7 +1834,7 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
     base.local_command_feedback.reset();
     base.sidebar = std::nullopt;
     base.sidebar_drawer_visible = true;
-    auto frame = detail::render_composer_frame_cached(base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
+    auto frame = detail::render_composer_frame_cached(frontend, base, completion_cache, source_revision, transcript_cache, transcript_generation, false, false,
                                                       freeze_transcript_layout, allow_frozen_width_mismatch);
     frame.lines = overlay_plugin_ui_modal(quiet_modal_backdrop(std::move(frame.lines)), view, width, height);
     frame.graphics.clear();
@@ -1832,9 +1844,9 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
   {
     auto const sidebar_width = std::min<std::size_t>(kSidebarWidth, width / 3);
     auto const main_width = canvas.content_width;
-    auto main_frame = render_composer_main_frame(snapshot, main_width, height, completion_cache, source_revision, transcript_cache, transcript_generation,
-                                                 freeze_transcript_layout, allow_frozen_width_mismatch);
-    auto sidebar_lines = render_sidebar(*snapshot.sidebar, sidebar_width, height);
+    auto main_frame = render_composer_main_frame(frontend, snapshot, main_width, height, completion_cache, source_revision, transcript_cache,
+                                                 transcript_generation, freeze_transcript_layout, allow_frozen_width_mismatch);
+    auto sidebar_lines = render_sidebar(frontend, *snapshot.sidebar, sidebar_width, height);
     ComposerFrame combined;
     combined.lines.reserve(height);
     for (std::size_t row = 0; row < height; ++row)
@@ -1849,7 +1861,7 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
   }
   if (sidebar_drawer_active(snapshot))
   {
-    auto frame = render_sidebar_drawer(snapshot, width, height);
+    auto frame = render_sidebar_drawer(frontend, snapshot, width, height);
     frame.graphics.clear();
     return finish_frame(std::move(frame));
   }
@@ -1980,20 +1992,21 @@ ComposerFrame detail::render_composer_frame_cached(ComposerSnapshot const& snaps
   {
     frame.lines.push_back(line);
   }
-  auto const composer_lines = detail::render_composer_block(snapshot, width, normal_composer_lines);
+  auto const composer_lines = detail::render_composer_block(frontend, snapshot, width, normal_composer_lines);
   frame.lines.insert(frame.lines.end(), composer_lines.begin(), composer_lines.end());
   return finish_frame(std::move(frame));
 }
 
-ComposerFrame render_composer_frame(ComposerSnapshot const& snapshot)
+ComposerFrame render_composer_frame(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot)
 {
   detail::CompletionMatchCache completion_cache;
-  return detail::render_composer_frame_cached(snapshot, completion_cache, snapshot.file_references_generation, nullptr, snapshot.transcript_generation);
+  return detail::render_composer_frame_cached(frontend, snapshot, completion_cache, snapshot.file_references_generation, nullptr,
+                                              snapshot.transcript_generation);
 }
 
-std::vector<std::string> render_composer(ComposerSnapshot const& snapshot)
+std::vector<std::string> render_composer(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot)
 {
-  return render_composer_frame(snapshot).lines;
+  return render_composer_frame(frontend, snapshot).lines;
 }
 
 std::size_t composer_main_width(ComposerSnapshot const& snapshot)
@@ -2254,14 +2267,14 @@ std::size_t composer_max_transcript_scroll_offset(ComposerSnapshot const& snapsh
                                                               snapshot.transcript_generation);
 }
 
-std::size_t sidebar_drawer_max_scroll_offset(ComposerSnapshot const& snapshot)
+std::size_t sidebar_drawer_max_scroll_offset(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot)
 {
   if (!snapshot.sidebar_drawer_visible || !snapshot.sidebar)
     return 0;
   auto const width = std::max<std::size_t>(detail::kMinWidth, snapshot.width);
   auto const height = std::max<std::size_t>(detail::kMinHeight, snapshot.height);
   auto const body_height = sidebar_drawer_body_height(snapshot, width, height);
-  auto const body = render_sidebar_drawer_body(*snapshot.sidebar, width);
+  auto const body = render_sidebar_drawer_body(frontend, *snapshot.sidebar, width);
   return body.size() > body_height ? body.size() - body_height : std::size_t{0};
 }
 
@@ -2413,7 +2426,7 @@ void detail::clear_composer_terminal_graphics(terminal::Context& terminal_contex
   terminal_context.flush_raw();
 }
 
-bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
+bool detail::draw_screen_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& completion_cache, std::size_t source_revision,
                                 TranscriptLayoutCache& transcript_cache, std::size_t transcript_generation, ScreenRowCache& screen_cache,
                                 bool freeze_transcript_layout, bool allow_frozen_width_mismatch)
 {
@@ -2434,7 +2447,7 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
     window.set_background(terminal::ComplexChar{terminal::GraphemeCluster{L" "}, rendition});
   }
   auto const canvas = composer_canvas_layout(snapshot);
-  auto frame = detail::render_composer_frame_cached(snapshot, completion_cache, source_revision, &transcript_cache, transcript_generation, true, true,
+  auto frame = detail::render_composer_frame_cached(frontend, snapshot, completion_cache, source_revision, &transcript_cache, transcript_generation, true, true,
                                                     freeze_transcript_layout, allow_frozen_width_mismatch);
   auto const& lines = frame.lines;
   std::vector<std::string> surfaces;
@@ -2545,8 +2558,9 @@ bool detail::draw_screen_cached(ComposerSnapshot const& snapshot, CompletionMatc
   return true;
 }
 
-bool detail::draw_processing_footer_cached(ComposerSnapshot const& snapshot, CompletionMatchCache& /*completion_cache*/, std::size_t /*source_revision*/,
-                                           TranscriptLayoutCache& /*transcript_cache*/, std::size_t /*transcript_generation*/, ScreenRowCache& screen_cache)
+bool detail::draw_processing_footer_cached(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, CompletionMatchCache& /*completion_cache*/,
+                                           std::size_t /*source_revision*/, TranscriptLayoutCache& /*transcript_cache*/, std::size_t /*transcript_generation*/,
+                                           ScreenRowCache& screen_cache)
 {
   if (!snapshot.processing || snapshot.permission_prompt || snapshot.question_prompt || snapshot.command_output || snapshot.select_list ||
       snapshot.subagent_workspace || sidebar_drawer_active(snapshot))
@@ -2558,7 +2572,7 @@ bool detail::draw_processing_footer_cached(ComposerSnapshot const& snapshot, Com
   auto const terminal_cols = terminal_context.cols();
   auto const height = std::max<std::size_t>(detail::kMinHeight, snapshot.height);
   auto const canvas = composer_canvas_layout(snapshot);
-  auto footer = detail::render_composer_footer_line(snapshot, canvas.content_width);
+  auto footer = detail::render_composer_footer_line(frontend, snapshot, canvas.content_width);
   if (tui_plain_output())
     footer = strip_sgr_sequences(footer);
   auto const row = std::min<std::size_t>(height - 1, terminal_rows > 0 ? terminal_rows - 1 : 0);
@@ -2577,12 +2591,12 @@ bool detail::draw_processing_footer_cached(ComposerSnapshot const& snapshot, Com
   return true;
 }
 
-bool draw_screen(ComposerSnapshot const& snapshot)
+bool draw_screen(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot)
 {
   detail::CompletionMatchCache completion_cache;
   detail::TranscriptLayoutCache transcript_cache;
   detail::ScreenRowCache screen_cache;
-  return detail::draw_screen_cached(snapshot, completion_cache, snapshot.file_references_generation, transcript_cache, snapshot.transcript_generation,
+  return detail::draw_screen_cached(frontend, snapshot, completion_cache, snapshot.file_references_generation, transcript_cache, snapshot.transcript_generation,
                                     screen_cache);
 }
 

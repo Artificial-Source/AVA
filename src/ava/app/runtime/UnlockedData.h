@@ -2,6 +2,7 @@
 
 #include "ava/app/frontend/Data.h"
 #include "ava/app/frontend/FrontEnd.h"
+#include "ava/app/runtime/UnlockedDataPolicy.h"
 #include "threadsafe/threadsafe.h"
 #include "utils/macros.h"
 #include <utility>
@@ -71,52 +72,21 @@ namespace ava::app::runtime {
 //     foobar.make_change(payload);
 //   });
 
-template<typename T, typename POLICY_MUTEX = threadsafe::policy::Primitive<std::mutex>>
-class UnlockedData : protected threadsafe::Unlocked<T, POLICY_MUTEX>, public frontend::Data
+template<typename T>
+class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPolicy<T>>, public frontend::Data
 {
  public:
-  using unlocked_type = threadsafe::Unlocked<T, POLICY_MUTEX>;
-
-  struct DataNotifier {
-    UnlockedData& data_;
-    DataNotifier(UnlockedData& data) : data_(data) { }
-    ~DataNotifier() { data_.notify(); }
-
-    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-  };
-
-  struct wat : DataNotifier {
-    unlocked_type::wat write_access;
-    wat(UnlockedData& unlocked_ts) : DataNotifier(unlocked_ts), write_access(unlocked_ts) { }
-    typename unlocked_type::data_type* operator->() const { return &*write_access; }
-    typename unlocked_type::data_type& operator*() const { return *write_access; }
-
-    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-  };
-
-  struct rat {
-    unlocked_type::rat read_access;
-    rat(UnlockedData& unlocked_ts) : read_access(unlocked_ts) { }
-    typename unlocked_type::data_type const* operator->() const { return &*read_access; }
-    typename unlocked_type::data_type const& operator*() const { return *read_access; }
-
-    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-  };
-
-  struct crat {
-    unlocked_type::crat read_access;
-    crat(UnlockedData const& unlocked_ts) : read_access(unlocked_ts) { }
-    typename unlocked_type::data_type const* operator->() const { return &*read_access; }
-    typename unlocked_type::data_type const& operator*() const { return *read_access; }
-
-    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-  };
+  using policy_type = detail::PrimitiveDataPolicy<T>;
+  using unlocked_type = threadsafe::Unlocked<T, policy_type>;
+  using crat = unlocked_type::crat;
+  using rat = unlocked_type::rat;
+  using wat = unlocked_type::wat;
 
   // Construct an UnlockedData object in its final place; this registers the object with `frontend`.
   // Passing nullptr for `frontend` is reserved for application modes that don't have a frontend at all.
   template<typename... Args>
   UnlockedData(frontend::FrontEnd* frontend, Args&&... args) :
-    threadsafe::Unlocked<T, POLICY_MUTEX>(std::forward<Args>(args)...), frontend::Data(frontend)
+    unlocked_type(std::forward<Args>(args)...), frontend::Data(frontend)
   {
   }
 
@@ -127,7 +97,7 @@ class UnlockedData : protected threadsafe::Unlocked<T, POLICY_MUTEX>, public fro
   template<typename FirstArg, typename... Rest>
   requires (!std::is_convertible_v<FirstArg&&, frontend::FrontEnd*>)
   UnlockedData(FirstArg&& first, Rest&&... rest) :
-    threadsafe::Unlocked<T, POLICY_MUTEX>(std::forward<FirstArg>(first), std::forward<Rest>(rest)...)
+    unlocked_type(std::forward<FirstArg>(first), std::forward<Rest>(rest)...)
   {
   }
 
@@ -137,11 +107,8 @@ class UnlockedData : protected threadsafe::Unlocked<T, POLICY_MUTEX>, public fro
   template<typename F>
   void change(F&& update)
   {
-    {
-      typename threadsafe::Unlocked<T, POLICY_MUTEX>::wat write_access(*this);
-      std::invoke(std::forward<F>(update), *write_access);
-    }
-    notify();
+    wat write_access(*this);
+    std::invoke(std::forward<F>(update), *write_access);
   }
 
   // This object requires a custom print_on.
@@ -153,18 +120,41 @@ class UnlockedData : protected threadsafe::Unlocked<T, POLICY_MUTEX>, public fro
     os << static_cast<frontend::Data const&>(*this) << "@" << (void*)static_cast<unlocked_type const*>(this);
   }
 #endif
+
+ private:
+  static unlocked_type& as_unlocked(UnlockedData& data) { return static_cast<unlocked_type&>(data); }
+  static unlocked_type const& as_unlocked(UnlockedData const& data) { return static_cast<unlocked_type const&>(data); }
+  static UnlockedData& from_unlocked(unlocked_type& unlocked) { return static_cast<UnlockedData&>(unlocked); }
+
+  friend class detail::DataNotifier<T>;
+  template<typename, class>
+  friend struct detail::NotifyingAccess;
+
+  friend unlocked_type& threadsafe_access(UnlockedData& data, threadsafe::AccessKey<unlocked_type>) { return as_unlocked(data); }
+  friend unlocked_type const& threadsafe_access(UnlockedData const& data, threadsafe::AccessKey<unlocked_type>) { return as_unlocked(data); }
 };
 
-template<typename T, typename POLICY_MUTEX>
-UnlockedData<T, POLICY_MUTEX>::UnlockedData(UnlockedData&& orig) :
-  threadsafe::Unlocked<T, POLICY_MUTEX>(std::move(static_cast<threadsafe::Unlocked<T, POLICY_MUTEX>&&>(orig)))
+namespace detail {
+
+template<typename T>
+DataNotifier<T>::~DataNotifier()
+{
+  if (armed_)
+    data_->notify();
+}
+
+} // namespace detail
+
+template<typename T>
+UnlockedData<T>::UnlockedData(UnlockedData&& orig) :
+  unlocked_type(std::move(as_unlocked(orig)))
 {
   // Move-construct from a registered object is not allowed.
   ASSERT(!static_cast<frontend::Data const&>(orig).is_registered());
 }
 
-template<typename T, typename POLICY_MUTEX>
-UnlockedData<T, POLICY_MUTEX>& UnlockedData<T, POLICY_MUTEX>::operator=(UnlockedData&& orig)
+template<typename T>
+UnlockedData<T>& UnlockedData<T>::operator=(UnlockedData&& orig)
 {
   if (AI_LIKELY(&orig != this))
   {
@@ -175,8 +165,8 @@ UnlockedData<T, POLICY_MUTEX>& UnlockedData<T, POLICY_MUTEX>::operator=(Unlocked
     // But that will never happen and would be a bug either way (even with proper locking, avoiding a deadlock, that would constitute
     // a race condition between which move happens first, when the result is not the same). The reason this never can happen is that
     // all such moves must go in a single direction. The graph of moves must be (and will be) a directed acyclic graph.
-    typename unlocked_type::wat source_w(orig);
-    typename unlocked_type::wat target_w(*this);
+    wat source_w(orig);
+    wat target_w(*this);
     *target_w = std::move(*source_w);
   }
   return *this;

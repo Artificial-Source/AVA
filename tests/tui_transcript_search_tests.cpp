@@ -455,8 +455,8 @@ void test_transcript_search_bounded_thinking_hidden_tail_and_generation()
   }
   ava::tui::ComposerSnapshot snapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_thinking_search",
       .input = "",
       .status = "ready",

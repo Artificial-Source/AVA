@@ -106,8 +106,6 @@ struct TuiActiveRunQueues
 struct TuiRuntimeStateSnapshot
 {
   std::string mode;
-  std::string provider;
-  std::string model;
   std::string session_id;
   std::string session_path;
   std::string workspace;
@@ -297,8 +295,6 @@ struct TuiBranchSummarySnapshot
 struct TuiRuntimeOptions
 {
   std::string mode;
-  std::string provider;
-  std::string model;
   std::string session_id;
   std::string session_path;
   std::string workspace;
@@ -409,13 +405,12 @@ enum class SettingsSection
   ToolsAndExtensions,
 };
 
-[[nodiscard]] int run_interactive_composer(TuiRuntimeOptions options);
 [[nodiscard]] SelectListView hotkeys_select_list_view(TuiKeyBindings const& bindings, std::string footer_hint = {});
 // Root settings selector with shallow section rows.
 [[nodiscard]] SelectListView settings_select_list_view(ComposerSnapshot const& snapshot, TuiKeyBindings const& bindings, std::string footer_hint = {});
 [[nodiscard]] SelectListView settings_select_list_view(ComposerSnapshot const& snapshot, std::string footer_hint = {});
-[[nodiscard]] SelectListView settings_select_list_view_for_section(SettingsSection section, ComposerSnapshot const& snapshot, TuiKeyBindings const& bindings,
-                                                                   std::string footer_hint = {});
+[[nodiscard]] SelectListView settings_select_list_view_for_section(TuiFrontEnd* frontend, SettingsSection section, ComposerSnapshot const& snapshot,
+                                                                   TuiKeyBindings const& bindings, std::string footer_hint = {});
 // Read-only host-owned startup overview list. Enter closes without backend mutation.
 [[nodiscard]] SelectListView overview_select_list_view(StartupOverviewSnapshot const& overview, std::string footer_hint = {});
 [[nodiscard]] ava::core::Result<ava::agent::QuestionAnswer> question_answer_from_prompt_view(QuestionPromptView const& prompt);

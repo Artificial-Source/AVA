@@ -15,6 +15,8 @@
 
 namespace ava::tui {
 
+class TuiFrontEnd;
+
 namespace terminal {
 class Context;
 }
@@ -113,7 +115,7 @@ class RuntimeRenderer final
 {
  public:
   // Render `snapshot` and apply its cursor settings through `terminal_context` when provided.
-  RuntimeRenderer(ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context = nullptr);
+  RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state, terminal::Context* terminal_context = nullptr);
 
   [[nodiscard]] bool render();
   [[nodiscard]] bool render_processing_frame();
@@ -151,6 +153,7 @@ class RuntimeRenderer final
   std::optional<SidebarSnapshot> detached_sidebar_snapshot;
   WheelBurstGovernor wheel_governor;
   std::recursive_mutex ui_mutex;
+  TuiFrontEnd* frontend;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 

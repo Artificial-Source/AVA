@@ -113,11 +113,10 @@ ReloadReportRow reload_model_settings(runtime::session_ts& unlocked_session)
   std::string active_model;
   {
     SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-    session_w->model_selection().change([registry](auto& model_selection){
-      model_selection.scoped_model_cycle = registry->scoped_model_cycle;
-    });
-    scoped_cycle = session_w->scoped_model_cycle() ? "configured" : "not configured";
-    active_model = session_w->model().provider_id + "/" + session_w->model().model_id + " (unchanged)";
+    runtime::ModelSelection_ts::wat model_selection_w(session_w->model_selection());
+    model_selection_w->scoped_model_cycle = registry->scoped_model_cycle;
+    scoped_cycle = model_selection_w->scoped_model_cycle ? "configured" : "not configured";
+    active_model = model_selection_w->model.provider_id + "/" + model_selection_w->model.model_id + " (unchanged)";
   }
   if (auto refreshed = runtime::Session::refresh_parent_configuration(unlocked_session); !refreshed)
     return reload_error_row("models", refreshed.error());
@@ -134,7 +133,7 @@ ReloadReportRow reload_prompt_settings(runtime::session_ts& unlocked_session)
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     return std::tuple{session_r->paths(),
-                      session_r->model(),
+                      session_r->model_selection_r()->model,
                       session_r->mode(),
                       session_r->workspace_dir(),
                       session_r->current_dir(),
@@ -219,7 +218,8 @@ ReloadReportRow reload_compaction_settings(runtime::session_ts& unlocked_session
   append_reload_detail(row, "auto_threshold_percent", std::to_string(config->auto_threshold_percent));
   append_reload_detail(
       row, "effective_threshold_tokens",
-      std::to_string(ava::session::effective_auto_threshold_tokens(*config, runtime::session_ts::rat(unlocked_session)->model().context_window_tokens)));
+      std::to_string(ava::session::effective_auto_threshold_tokens(
+          *config, runtime::session_ts::rat(unlocked_session)->model_selection_r()->model.context_window_tokens)));
   append_reload_detail(row, "keep_recent_tokens", std::to_string(config->keep_recent_tokens));
   append_reload_detail(row, "keep_recent_turns", std::to_string(config->keep_recent_turns));
   append_reload_detail(row, "keep_recent_messages", std::to_string(config->keep_recent_messages));

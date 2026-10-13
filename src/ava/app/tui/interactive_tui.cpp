@@ -207,9 +207,9 @@ int run_tui(InteractiveState state)
     std::shared_ptr<ava::app::BranchSummaryCoordinator> coordinator;
     ~BranchSummaryShutdownGuard() { coordinator->shutdown(); }
   } branch_summary_shutdown{branch_summary_coordinator};
-  auto model_display = [](ava::config::ModelInfo const& model) {
-    return model.display_name.empty() ? ava::config::model_display_label(model.model_id) : model.display_name;
-  };
+//  auto model_display = [](ava::config::ModelInfo const& model) {
+//    return model.display_name.empty() ? ava::config::model_display_label(model.model_id) : model.display_name;
+//  };
   auto custom_theme_options = [&invocation_paths]() {
     std::vector<ava::tui::ThemeOptionItem> themes;
     for (auto const& theme : ava::app::available_tui_custom_themes(invocation_paths))
@@ -243,8 +243,6 @@ int run_tui(InteractiveState state)
   struct SessionPresentation
   {
     std::string mode;
-    std::string provider;
-    std::string model;
     std::string session_id;
     std::string session_path;
     std::string workspace;
@@ -252,12 +250,10 @@ int run_tui(InteractiveState state)
     std::size_t context_source_count;
     ava::tui::ProjectTrustSnapshot project_trust;
   };
-  auto session_presentation = [&unlocked_session, &model_display]() {
+  auto session_presentation = [&unlocked_session]() {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const workspace = session_r->current_dir().empty() ? session_r->workspace_dir() : session_r->current_dir();
     return SessionPresentation{.mode = ava::agent::to_string(session_r->mode()),
-                               .provider = session_r->model().provider_id,
-                               .model = model_display(session_r->model()),
                                .session_id = session_r->store.session_id(),
                                .session_path = session_r->store.session_path().string(),
                                .workspace = workspace.string(),
@@ -277,8 +273,6 @@ int run_tui(InteractiveState state)
     auto const mermaid_configuration = mermaid_bridge->presentation_configuration();
     auto startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
     return ava::tui::TuiRuntimeStateSnapshot{.mode = std::move(presentation.mode),
-                                             .provider = std::move(presentation.provider),
-                                             .model = std::move(presentation.model),
                                              .session_id = std::move(presentation.session_id),
                                              .session_path = std::move(presentation.session_path),
                                              .workspace = std::move(presentation.workspace),
@@ -392,10 +386,9 @@ int run_tui(InteractiveState state)
   auto const [initial_show_images, initial_image_width_cells, initial_cursor] = copy_effective_display_presentation();
   auto initial_startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
   ava::tui::TuiFrontEnd frontend;
+  frontend.register_frontend_data(unlocked_session);
   auto result = frontend.run(ava::tui::TuiRuntimeOptions{
       .mode = std::move(initial_presentation.mode),
-      .provider = std::move(initial_presentation.provider),
-      .model = std::move(initial_presentation.model),
       .session_id = std::move(initial_presentation.session_id),
       .session_path = std::move(initial_presentation.session_path),
       .workspace = std::move(initial_presentation.workspace),
@@ -912,7 +905,7 @@ int run_tui(InteractiveState state)
             return std::unexpected(std::move(changed.error()));
           return state_snapshot(*changed ? "thinking mode set to Default" : "thinking mode already Default");
         }
-        auto const model = ava::app::runtime::session_ts::rat(unlocked_session)->model();
+        ava::config::ModelInfo const model = ava::app::runtime::session_ts::rat(unlocked_session)->model_selection_r()->model;
         auto selection = ava::app::reasoning_selection_for_level(model, *level);
         if (!selection)
           return std::unexpected(std::move(selection.error()));

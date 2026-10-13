@@ -25,7 +25,8 @@ void run_tui_modal_tests_part_1()
       .allow_custom = true,
       .selected_option_index = 0,
       .custom_text = ""};
-  auto question_input = ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = '2'});
+  auto question_input =
+      ava::tui::handle_question_prompt_input(single_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = '2'});
   expect(
       question_input.action == ava::tui::QuestionPromptInputAction::Resolve && question_input.selected_option_index == 1 && question_input.options[1].selected,
       "question prompt numeric shortcut selects and resolves a single-select option");
@@ -104,7 +105,8 @@ void run_tui_modal_tests_part_1()
   question_input = ava::tui::handle_question_prompt_input(multi_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape});
   expect(question_input.action == ava::tui::QuestionPromptInputAction::Cancel, "question prompt escape cancels safely");
   auto empty_multi_question = multi_question;
-  for (auto& option : empty_multi_question.options) option.selected = false;
+  for (auto& option : empty_multi_question.options)
+    option.selected = false;
   empty_multi_question.custom_text.clear();
   auto empty_multi_answer = ava::tui::question_answer_from_prompt_view(empty_multi_question);
   expect(empty_multi_answer && empty_multi_answer->selected_options.empty() && empty_multi_answer->custom_text.empty(),
@@ -112,6 +114,7 @@ void run_tui_modal_tests_part_1()
 }
 void run_tui_modal_tests_part_2()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto const& slash_commands = tui_test_support::standard_slash_commands();
   std::vector<ava::tui::SlashCommandItem> const disabled_slash_commands = {
       ava::tui::SlashCommandItem{.command = "/models",
@@ -128,17 +131,17 @@ void run_tui_modal_tests_part_2()
   auto const disabled_reason = ava::tui::slash_command_selection_disabled_reason("/model", disabled_slash_commands, 0);
   expect(disabled_reason && disabled_reason->find("not implemented") != std::string::npos, "tui slash selection exposes disabled command explanations");
 
-  auto const disabled_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                     .provider = "openai",
-                                                                                     .model = "gpt-5.5",
-                                                                                     .session_id = "session_test",
-                                                                                     .input = "/model",
-                                                                                     .status = "ready",
-                                                                                     .transcript = {},
-                                                                                     .slash_commands = disabled_slash_commands,
-                                                                                     .selected_slash_command_index = 0,
-                                                                                     .width = 140,
-                                                                                     .height = 10});
+  auto const disabled_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                          //.provider = "openai",
+                                                                                                          //.model = "gpt-5.5",
+                                                                                                          .session_id = "session_test",
+                                                                                                          .input = "/model",
+                                                                                                          .status = "ready",
+                                                                                                          .transcript = {},
+                                                                                                          .slash_commands = disabled_slash_commands,
+                                                                                                          .selected_slash_command_index = 0,
+                                                                                                          .width = 140,
+                                                                                                          .height = 10});
   expect(std::ranges::any_of(disabled_palette,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -147,17 +150,17 @@ void run_tui_modal_tests_part_2()
                              }),
          "tui slash palette renders aliases, key displays, and disabled reasons");
 
-  auto const palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                            .provider = "openai",
-                                                                            .model = "gpt-5.5",
-                                                                            .session_id = "session_test",
-                                                                            .input = "/g",
-                                                                            .status = "ready",
-                                                                            .transcript = {},
-                                                                            .slash_commands = slash_commands,
-                                                                            .selected_slash_command_index = 1,
-                                                                            .width = 80,
-                                                                            .height = 12});
+  auto const palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                 //.provider = "openai",
+                                                                                                 //.model = "gpt-5.5",
+                                                                                                 .session_id = "session_test",
+                                                                                                 .input = "/g",
+                                                                                                 .status = "ready",
+                                                                                                 .transcript = {},
+                                                                                                 .slash_commands = slash_commands,
+                                                                                                 .selected_slash_command_index = 1,
+                                                                                                 .width = 80,
+                                                                                                 .height = 12});
   expect(std::ranges::any_of(palette, [](std::string const& line) { return line.find("commands matching /g") == std::string::npos; }) &&
              std::ranges::any_of(palette,
                                  [](std::string const& line) {
@@ -174,10 +177,9 @@ void run_tui_modal_tests_part_2()
                                           visible.find("(2/2)") == std::string::npos;
                                  }) &&
              std::ranges::any_of(palette, [](std::string const& line) { return line.find("\x1b[1m/glob") != std::string::npos; }) &&
-             std::ranges::any_of(palette,
-                                 [](std::string const& line) {
-                                   return line.find("/glob") != std::string::npos && line.find("\x1b[48;2;26;31;46m") != std::string::npos;
-                                 }) &&
+             std::ranges::any_of(
+                 palette,
+                 [](std::string const& line) { return line.find("/glob") != std::string::npos && line.find("\x1b[48;2;26;31;46m") != std::string::npos; }) &&
              std::ranges::any_of(palette,
                                  [](std::string const& line) {
                                    return strip_sgr(line).starts_with("│  /g") && line.find("\x1b[49m") != std::string::npos &&
@@ -186,23 +188,23 @@ void run_tui_modal_tests_part_2()
              std::ranges::none_of(palette, [](std::string const& line) { return line.find("\x1b[7m") != std::string::npos; }) &&
              std::ranges::none_of(palette, [](std::string const& line) { return line.find("/help") != std::string::npos; }),
          "tui renders filtered slash-command palette with elevated composer surface while the draft dock stays on the screen background");
-  auto const suppressed_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                       .provider = "openai",
-                                                                                       .model = "gpt-5.5",
-                                                                                       .session_id = "session_test",
-                                                                                       .input = "/g",
-                                                                                       .status = "ready",
-                                                                                       .transcript = {},
-                                                                                       .slash_commands = slash_commands,
-                                                                                       .slash_palette_suppressed = true,
-                                                                                       .width = 80,
-                                                                                       .height = 12});
+  auto const suppressed_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                            //.provider = "openai",
+                                                                                                            //.model = "gpt-5.5",
+                                                                                                            .session_id = "session_test",
+                                                                                                            .input = "/g",
+                                                                                                            .status = "ready",
+                                                                                                            .transcript = {},
+                                                                                                            .slash_commands = slash_commands,
+                                                                                                            .slash_palette_suppressed = true,
+                                                                                                            .width = 80,
+                                                                                                            .height = 12});
   expect(std::ranges::none_of(suppressed_palette, [](std::string const& line) { return strip_sgr(line).find("/grep") != std::string::npos; }) &&
              std::ranges::any_of(suppressed_palette, [](std::string const& line) { return strip_sgr(line).find("│  /g") != std::string::npos; }),
          "tui can dismiss slash autocomplete without clearing the draft input");
   auto const clicked_palette_index = ava::tui::slash_palette_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                                                      .provider = "openai",
-                                                                                                                      .model = "gpt-5.5",
+                                                                                                                      //.provider = "openai",
+                                                                                                                      //.model = "gpt-5.5",
                                                                                                                       .session_id = "session_test",
                                                                                                                       .input = "/g",
                                                                                                                       .status = "ready",
@@ -215,8 +217,8 @@ void run_tui_modal_tests_part_2()
   expect(clicked_palette_index && *clicked_palette_index == 1, "tui maps slash palette screen rows back to selectable commands for clicks");
   auto const suppressed_clicked_palette_index =
       ava::tui::slash_palette_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                       .provider = "openai",
-                                                                                       .model = "gpt-5.5",
+                                                                                       //.provider = "openai",
+                                                                                       //.model = "gpt-5.5",
                                                                                        .session_id = "session_test",
                                                                                        .input = "/g",
                                                                                        .status = "ready",
@@ -230,8 +232,8 @@ void run_tui_modal_tests_part_2()
   expect(!suppressed_clicked_palette_index, "tui ignores slash palette click mapping after autocomplete is dismissed");
   auto const blocked_question_palette_index = ava::tui::slash_palette_selection_for_screen_position(
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "/g",
                                  .status = "ready",
@@ -255,24 +257,24 @@ void run_tui_modal_tests_part_2()
   {
     many_slash_commands.push_back(ava::tui::SlashCommandItem{.command = "/item" + std::to_string(index), .description = "Command " + std::to_string(index)});
   }
-  auto const tiny_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                 .provider = "openai",
-                                                                                 .model = "gpt-5.5",
-                                                                                 .session_id = "session_test",
-                                                                                 .input = "/",
-                                                                                 .status = "ready",
-                                                                                 .transcript = {},
-                                                                                 .slash_commands = many_slash_commands,
-                                                                                 .selected_slash_command_index = 6,
-                                                                                 .width = 80,
-                                                                                 .height = 8});
+  auto const tiny_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                      //.provider = "openai",
+                                                                                                      //.model = "gpt-5.5",
+                                                                                                      .session_id = "session_test",
+                                                                                                      .input = "/",
+                                                                                                      .status = "ready",
+                                                                                                      .transcript = {},
+                                                                                                      .slash_commands = many_slash_commands,
+                                                                                                      .selected_slash_command_index = 6,
+                                                                                                      .width = 80,
+                                                                                                      .height = 8});
   expect(std::ranges::any_of(tiny_palette, [](std::string const& line) { return strip_sgr(line).find("› /item6") != std::string::npos; }) &&
              std::ranges::none_of(tiny_palette, [](std::string const& line) { return line.find("/item0") != std::string::npos; }),
          "tui keeps selected slash palette item visible when height is tight");
   auto const first_scrolled_palette_click =
       ava::tui::slash_palette_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                       .provider = "openai",
-                                                                                       .model = "gpt-5.5",
+                                                                                       //.provider = "openai",
+                                                                                       //.model = "gpt-5.5",
                                                                                        .session_id = "session_test",
                                                                                        .input = "/",
                                                                                        .status = "ready",
@@ -284,8 +286,8 @@ void run_tui_modal_tests_part_2()
                                                             1, 1);
   auto const selected_scrolled_palette_click =
       ava::tui::slash_palette_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                       .provider = "openai",
-                                                                                       .model = "gpt-5.5",
+                                                                                       //.provider = "openai",
+                                                                                       //.model = "gpt-5.5",
                                                                                        .session_id = "session_test",
                                                                                        .input = "/",
                                                                                        .status = "ready",
@@ -297,8 +299,8 @@ void run_tui_modal_tests_part_2()
                                                             6, 1);
   auto const outside_scrolled_palette_click =
       ava::tui::slash_palette_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                       .provider = "openai",
-                                                                                       .model = "gpt-5.5",
+                                                                                       //.provider = "openai",
+                                                                                       //.model = "gpt-5.5",
                                                                                        .session_id = "session_test",
                                                                                        .input = "/",
                                                                                        .status = "ready",
@@ -312,57 +314,60 @@ void run_tui_modal_tests_part_2()
              !outside_scrolled_palette_click,
          "tui maps slash palette click rows through a scrolled visible window and ignores outside rows");
 
-  auto const starved_palette =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "/",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "must not leak"}},
-                                                           .slash_commands = many_slash_commands,
-                                                           .selected_slash_command_index = 4,
-                                                           .width = 40,
-                                                           .height = 8});
+  auto const starved_palette = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "/",
+                                                      .status = "ready",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "must not leak"}},
+                                                      .slash_commands = many_slash_commands,
+                                                      .selected_slash_command_index = 4,
+                                                      .width = 40,
+                                                      .height = 8});
   expect(starved_palette.size() == 8 &&
              std::ranges::any_of(starved_palette, [](std::string const& line) { return strip_sgr(line).find("› /item4") != std::string::npos; }) &&
              std::ranges::none_of(starved_palette, [](std::string const& line) { return strip_sgr(line).find("must not leak") != std::string::npos; }),
          "tui keeps the bottom composer fixed when the slash palette exhausts transcript height");
 
-  auto const no_match_palette = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                     .provider = "openai",
-                                                                                     .model = "gpt-5.5",
-                                                                                     .session_id = "session_test",
-                                                                                     .input = "/zz",
-                                                                                     .status = "ready",
-                                                                                     .transcript = {},
-                                                                                     .slash_commands = slash_commands,
-                                                                                     .width = 80,
-                                                                                     .height = 12});
+  auto const no_match_palette = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                          //.provider = "openai",
+                                                                                                          //.model = "gpt-5.5",
+                                                                                                          .session_id = "session_test",
+                                                                                                          .input = "/zz",
+                                                                                                          .status = "ready",
+                                                                                                          .transcript = {},
+                                                                                                          .slash_commands = slash_commands,
+                                                                                                          .width = 80,
+                                                                                                          .height = 12});
   expect(std::ranges::any_of(no_match_palette, [](std::string const& line) { return strip_sgr(line).find("no commands match /zz") != std::string::npos; }),
          "tui slash-command palette renders deterministic empty state");
 }
 void run_tui_modal_tests_part_3()
 {
-  auto const question_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "do not focus composer",
-      .status = "question required",
-      .transcript = {},
-      .question_prompt =
-          ava::tui::QuestionPromptView{.header = "Choose tools",
-                                       .question = "Pick the tools to run",
-                                       .options = {ava::tui::QuestionPromptOptionView{.value = "read", .label = "Read files"},
-                                                   ava::tui::QuestionPromptOptionView{.value = "grep", .label = "Search text", .selected = true}},
-                                       .multiple = true,
-                                       .allow_custom = true,
-                                       .selected_option_index = 1,
-                                       .custom_text = "explain"},
-      .width = 64,
-      .height = 12});
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto const question_frame = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "do not focus composer",
+          .status = "question required",
+          .transcript = {},
+          .question_prompt =
+              ava::tui::QuestionPromptView{.header = "Choose tools",
+                                           .question = "Pick the tools to run",
+                                           .options = {ava::tui::QuestionPromptOptionView{.value = "read", .label = "Read files"},
+                                                       ava::tui::QuestionPromptOptionView{.value = "grep", .label = "Search text", .selected = true}},
+                                           .multiple = true,
+                                           .allow_custom = true,
+                                           .selected_option_index = 1,
+                                           .custom_text = "explain"},
+          .width = 64,
+          .height = 12});
   expect(
       question_frame.size() == 12 &&
           std::ranges::any_of(question_frame, [](std::string const& line) { return strip_sgr(line).find("│  do not focus composer") != std::string::npos; }) &&
@@ -375,8 +380,8 @@ void run_tui_modal_tests_part_3()
 
   auto wrapped_question_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_test",
       .input = "",
       .status = "question required",
@@ -389,7 +394,7 @@ void run_tui_modal_tests_part_3()
                                                       .custom_text = {}},
       .width = 40,
       .height = 10};
-  auto const wrapped_question_frame = ava::tui::render_composer(wrapped_question_snapshot);
+  auto const wrapped_question_frame = ava::tui::render_composer(frontend.frontend(), wrapped_question_snapshot);
   expect(std::ranges::any_of(wrapped_question_frame, [](std::string const& line) { return strip_sgr(line).find("intentionall") != std::string::npos; }) &&
              std::ranges::any_of(wrapped_question_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("question should wrap acro") != std::string::npos; }) &&
@@ -399,8 +404,8 @@ void run_tui_modal_tests_part_3()
 
   auto single_click_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_test",
       .input = "",
       .status = "question required",
@@ -414,7 +419,7 @@ void run_tui_modal_tests_part_3()
                                                       .custom_text = {}},
       .width = 80,
       .height = 24};
-  auto const single_click_frame = ava::tui::render_composer(single_click_snapshot);
+  auto const single_click_frame = ava::tui::render_composer(frontend.frontend(), single_click_snapshot);
   auto const single_beta_row = static_cast<std::size_t>(
       std::ranges::find_if(single_click_frame, [](std::string const& line) { return strip_sgr(line).find("2. Beta") != std::string::npos; }) -
       single_click_frame.begin());
@@ -422,7 +427,7 @@ void run_tui_modal_tests_part_3()
   expect(single_click && *single_click == 1, "question dock hit testing maps a visible single-select option at 80x24");
   auto centered_dock_click_snapshot = single_click_snapshot;
   centered_dock_click_snapshot.width = 160;
-  auto const centered_dock_click_frame = ava::tui::render_composer(centered_dock_click_snapshot);
+  auto const centered_dock_click_frame = ava::tui::render_composer(frontend.frontend(), centered_dock_click_snapshot);
   auto const centered_dock_beta_row = static_cast<std::size_t>(
       std::ranges::find_if(centered_dock_click_frame, [](std::string const& line) { return strip_sgr(line).find("2. Beta") != std::string::npos; }) -
       centered_dock_click_frame.begin());
@@ -444,7 +449,7 @@ void run_tui_modal_tests_part_3()
   auto retained_drawer_dock = single_click_snapshot;
   retained_drawer_dock.sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test"};
   retained_drawer_dock.sidebar_drawer_visible = true;
-  auto const retained_drawer_dock_frame = ava::tui::render_composer(retained_drawer_dock);
+  auto const retained_drawer_dock_frame = ava::tui::render_composer(frontend.frontend(), retained_drawer_dock);
   auto const retained_drawer_beta_row = static_cast<std::size_t>(
       std::ranges::find_if(retained_drawer_dock_frame, [](std::string const& line) { return strip_sgr(line).find("2. Beta") != std::string::npos; }) -
       retained_drawer_dock_frame.begin());
@@ -455,7 +460,7 @@ void run_tui_modal_tests_part_3()
 
   auto custom_cursor_snapshot = single_click_snapshot;
   custom_cursor_snapshot.question_prompt->custom_text = "custom answer";
-  auto const custom_cursor_frame = ava::tui::render_composer(custom_cursor_snapshot);
+  auto const custom_cursor_frame = ava::tui::render_composer(frontend.frontend(), custom_cursor_snapshot);
   expect(
       std::ranges::any_of(custom_cursor_frame, [](std::string const& line) { return strip_sgr(line).find("› Custom: custom answer") != std::string::npos; }) &&
           std::ranges::none_of(custom_cursor_frame,
@@ -473,7 +478,7 @@ void run_tui_modal_tests_part_3()
   multi_click_snapshot.question_prompt->custom_text = "keep these notes";
   multi_click_snapshot.width = 100;
   multi_click_snapshot.height = 12;
-  auto const multi_click_frame = ava::tui::render_composer(multi_click_snapshot);
+  auto const multi_click_frame = ava::tui::render_composer(frontend.frontend(), multi_click_snapshot);
   auto const multi_beta_row = static_cast<std::size_t>(
       std::ranges::find_if(multi_click_frame, [](std::string const& line) { return strip_sgr(line).find("2. · Beta") != std::string::npos; }) -
       multi_click_frame.begin());
@@ -486,7 +491,7 @@ void run_tui_modal_tests_part_3()
   auto copy_click_snapshot = single_click_snapshot;
   copy_click_snapshot.question_prompt->options = {ava::tui::QuestionPromptOptionView{.value = "copy:https://example.test/path?q=exact", .label = "Copy URL"}};
   copy_click_snapshot.question_prompt->custom_text = "unrelated custom text";
-  auto const copy_click_frame = ava::tui::render_composer(copy_click_snapshot);
+  auto const copy_click_frame = ava::tui::render_composer(frontend.frontend(), copy_click_snapshot);
   auto const copy_row = static_cast<std::size_t>(
       std::ranges::find_if(copy_click_frame, [](std::string const& line) { return strip_sgr(line).find("1. Copy URL") != std::string::npos; }) -
       copy_click_frame.begin());
@@ -507,7 +512,8 @@ void run_tui_modal_tests_part_3()
   }
   auto question_navigation_prompt = ava::tui::QuestionPromptView{
       .header = "Choose one", .question = "Pick an option", .options = long_question_options, .selected_option_index = 0, .custom_text = {}};
-  auto question_navigation = ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown});
+  auto question_navigation =
+      ava::tui::handle_question_prompt_input(question_navigation_prompt, ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown});
   expect(question_navigation.action == ava::tui::QuestionPromptInputAction::Redraw && question_navigation.selected_option_index == 1,
          "question modal down arrow advances the selected option");
   question_navigation_prompt.selected_option_index = question_navigation.selected_option_index;
@@ -523,19 +529,21 @@ void run_tui_modal_tests_part_3()
   expect(question_navigation.action == ava::tui::QuestionPromptInputAction::Redraw && question_navigation.selected_option_index == 10,
          "question modal mouse wheel uses the same selection path as arrow navigation");
 
-  auto const long_question_dock = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "question required",
-      .transcript = {},
-      .question_prompt =
-          ava::tui::QuestionPromptView{
-              .header = "Choose one", .question = "Pick an option", .options = long_question_options, .selected_option_index = 9, .custom_text = {}},
-      .width = 64,
-      .height = 12});
+  auto const long_question_dock = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "question required",
+          .transcript = {},
+          .question_prompt =
+              ava::tui::QuestionPromptView{
+                  .header = "Choose one", .question = "Pick an option", .options = long_question_options, .selected_option_index = 9, .custom_text = {}},
+          .width = 64,
+          .height = 12});
   expect(std::ranges::any_of(long_question_dock, [](std::string const& line) { return strip_sgr(line).find("10. Option 9") != std::string::npos; }),
          "question dock scrolls its option window to keep the selected row visible");
   bool every_question_dock_selection_visible = true;
@@ -543,14 +551,14 @@ void run_tui_modal_tests_part_3()
   {
     auto dock_snapshot = ava::tui::ComposerSnapshot{};
     dock_snapshot.mode = "build";
-    dock_snapshot.provider = "openai";
-    dock_snapshot.model = "gpt-5.5";
+    //    dock_snapshot.provider = "openai";
+    //    dock_snapshot.model = "gpt-5.5";
     dock_snapshot.session_id = "session_test";
     dock_snapshot.question_prompt = question_navigation_prompt;
     dock_snapshot.question_prompt->selected_option_index = index;
     dock_snapshot.width = 64;
     dock_snapshot.height = 12;
-    auto const frame = ava::tui::render_composer(dock_snapshot);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), dock_snapshot);
     auto const wanted = std::to_string(index + 1) + ". Option " + std::to_string(index);
     every_question_dock_selection_visible &=
         std::ranges::any_of(frame, [&](std::string const& line) { return strip_sgr(line).find(wanted) != std::string::npos; });
@@ -560,8 +568,8 @@ void run_tui_modal_tests_part_3()
   {
     auto compact_dock = ava::tui::ComposerSnapshot{};
     compact_dock.mode = "build";
-    compact_dock.provider = "openai";
-    compact_dock.model = "gpt-5.5";
+    //    compact_dock.provider = "openai";
+    //    compact_dock.model = "gpt-5.5";
     compact_dock.session_id = "session_test";
     compact_dock.input = "draft one\ndraft two\ndraft three\ndraft four\ndraft five\ndraft six";
     compact_dock.status = "question required";
@@ -569,54 +577,56 @@ void run_tui_modal_tests_part_3()
     compact_dock.question_prompt->selected_option_index = 9;
     compact_dock.width = 64;
     compact_dock.height = height;
-    auto const frame = ava::tui::render_composer(compact_dock);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), compact_dock);
     expect(std::ranges::any_of(frame, [](std::string const& line) { return strip_sgr(line).find("10. Option 9") != std::string::npos; }),
            "minimum-height question dock keeps the selected option visible above a wrapped composer draft");
   }
 
-  auto const secret_question_frame =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "question required",
-                                                           .transcript = {},
-                                                           .question_prompt = ava::tui::QuestionPromptView{.header = "Connect",
-                                                                                                           .question = "Paste API key",
-                                                                                                           .options = {},
-                                                                                                           .multiple = false,
-                                                                                                           .allow_custom = true,
-                                                                                                           .secret = true,
-                                                                                                           .custom_text = "sk-visible-secret"},
-                                                           .width = 64,
-                                                           .height = 9});
+  auto const secret_question_frame = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "",
+                                                      .status = "question required",
+                                                      .transcript = {},
+                                                      .question_prompt = ava::tui::QuestionPromptView{.header = "Connect",
+                                                                                                      .question = "Paste API key",
+                                                                                                      .options = {},
+                                                                                                      .multiple = false,
+                                                                                                      .allow_custom = true,
+                                                                                                      .secret = true,
+                                                                                                      .custom_text = "sk-visible-secret"},
+                                                      .width = 64,
+                                                      .height = 9});
   expect(std::ranges::none_of(secret_question_frame, [](std::string const& line) { return strip_sgr(line).find("sk-visible-secret") != std::string::npos; }) &&
              std::ranges::any_of(secret_question_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("Custom: *****************") != std::string::npos; }),
          "tui question dock masks secret custom input");
 
-  auto const modal_question_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "composer stays behind modal",
-      .status = "question required",
-      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "background transcript"}},
-      .question_prompt = ava::tui::QuestionPromptView{.header = "Connect a provider",
-                                                      .question = "Select provider",
-                                                      .options = {ava::tui::QuestionPromptOptionView{.value = "openai", .label = "OpenAI"},
-                                                                  ava::tui::QuestionPromptOptionView{.value = "anthropic", .label = "Anthropic"}},
-                                                      .multiple = false,
-                                                      .allow_custom = true,
-                                                      .secret = false,
-                                                      .modal = true,
-                                                      .searchable = true,
-                                                      .selected_option_index = 1,
-                                                      .custom_text = "anth"},
-      .width = 80,
-      .height = 16});
+  auto const modal_question_frame = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{.mode = "build",
+                                 //.provider = "",
+                                 //.model = "gpt-5.5",
+                                 .session_id = "session_test",
+                                 .input = "composer stays behind modal",
+                                 .status = "question required",
+                                 .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "background transcript"}},
+                                 .question_prompt =
+                                     ava::tui::QuestionPromptView{.header = "Connect a provider",
+                                                                  .question = "Select provider",
+                                                                  .options = {ava::tui::QuestionPromptOptionView{.value = "openai", .label = "OpenAI"},
+                                                                              ava::tui::QuestionPromptOptionView{.value = "anthropic", .label = "Anthropic"}},
+                                                                  .multiple = false,
+                                                                  .allow_custom = true,
+                                                                  .secret = false,
+                                                                  .modal = true,
+                                                                  .searchable = true,
+                                                                  .selected_option_index = 1,
+                                                                  .custom_text = "anth"},
+                                 .width = 80,
+                                 .height = 16});
   expect(
       modal_question_frame.size() == 16 &&
           std::ranges::any_of(modal_question_frame, [](std::string const& line) { return strip_sgr(line).find("Connect a provider") != std::string::npos; }) &&
@@ -639,8 +649,8 @@ void run_tui_modal_tests_part_3()
 
   auto modal_click_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_test",
       .input = "",
       .status = "question required",
@@ -654,7 +664,7 @@ void run_tui_modal_tests_part_3()
                                                       .custom_text = {}},
       .width = 80,
       .height = 24};
-  auto const modal_click_frame = ava::tui::render_composer(modal_click_snapshot);
+  auto const modal_click_frame = ava::tui::render_composer(frontend.frontend(), modal_click_snapshot);
   auto const modal_beta_row = static_cast<std::size_t>(
       std::ranges::find_if(modal_click_frame, [](std::string const& line) { return strip_sgr(line).find("› 2. Beta") != std::string::npos; }) -
       modal_click_frame.begin());
@@ -666,7 +676,7 @@ void run_tui_modal_tests_part_3()
   auto retained_drawer_modal = modal_click_snapshot;
   retained_drawer_modal.sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test"};
   retained_drawer_modal.sidebar_drawer_visible = true;
-  auto const retained_drawer_modal_frame = ava::tui::render_composer(retained_drawer_modal);
+  auto const retained_drawer_modal_frame = ava::tui::render_composer(frontend.frontend(), retained_drawer_modal);
   auto const retained_drawer_modal_beta_row = static_cast<std::size_t>(
       std::ranges::find_if(retained_drawer_modal_frame, [](std::string const& line) { return strip_sgr(line).find("› 2. Beta") != std::string::npos; }) -
       retained_drawer_modal_frame.begin());
@@ -680,16 +690,17 @@ void run_tui_modal_tests_part_3()
       .activity = {ava::tui::SidebarActivityItem{.id = "active", .label = "rail-must-not-render", .status = ava::tui::ToolTimelineStatus::Running}},
       .session_id = "session_test",
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5"};
-  auto const rail_modal_frame = ava::tui::render_composer(rail_modal_click);
+      //.provider = "openai",
+      //.model = "gpt-5.5"
+  };
+  auto const rail_modal_frame = ava::tui::render_composer(frontend.frontend(), rail_modal_click);
   auto const rail_modal_beta_row = static_cast<std::size_t>(
       std::ranges::find_if(rail_modal_frame, [](std::string const& line) { return strip_sgr(line).find("› 2. Beta") != std::string::npos; }) -
       rail_modal_frame.begin());
   auto modal_without_rail = rail_modal_click;
   modal_without_rail.sidebar = std::nullopt;
   expect(ava::tui::composer_canvas_layout(rail_modal_click).content_width == 120 && ava::tui::composer_canvas_layout(rail_modal_click).left == 28 &&
-             rail_modal_frame == ava::tui::render_composer(modal_without_rail) &&
+             rail_modal_frame == ava::tui::render_composer(frontend.frontend(), modal_without_rail) &&
              ava::tui::question_option_for_screen_position(rail_modal_click, rail_modal_beta_row + 1, 53) == 1 &&
              ava::tui::question_option_for_screen_position(rail_modal_click, rail_modal_beta_row + 1, 124) == 1 &&
              ava::tui::question_option_for_screen_position(modal_without_rail, rail_modal_beta_row + 1, 60) == 1 &&
@@ -707,8 +718,8 @@ void run_tui_modal_tests_part_3()
   {
     ScopedEnvVar no_color_guard("NO_COLOR", "");
     ScopedTerminalCapabilityProfile hyperlink_terminal("vscode");
-    auto const depth_base_frame = ava::tui::render_composer(depth_base_snapshot);
-    auto const depth_modal_frame = ava::tui::render_composer(depth_modal_snapshot);
+    auto const depth_base_frame = ava::tui::render_composer(frontend.frontend(), depth_base_snapshot);
+    auto const depth_modal_frame = ava::tui::render_composer(frontend.frontend(), depth_modal_snapshot);
     expect(!depth_base_frame.empty() && depth_modal_frame.size() == depth_base_frame.size() &&
                depth_base_frame.front().find("\x1b]8;;https://example.test/modal-backdrop") != std::string::npos &&
                depth_modal_frame.front().find("Backdrop context") != std::string::npos &&
@@ -719,8 +730,8 @@ void run_tui_modal_tests_part_3()
   }
   {
     ScopedEnvVar no_color_guard("NO_COLOR", "1");
-    auto const plain_base_frame = ava::tui::render_composer(depth_base_snapshot);
-    auto const plain_modal_frame = ava::tui::render_composer(depth_modal_snapshot);
+    auto const plain_base_frame = ava::tui::render_composer(frontend.frontend(), depth_base_snapshot);
+    auto const plain_modal_frame = ava::tui::render_composer(frontend.frontend(), depth_modal_snapshot);
     expect(!plain_base_frame.empty() && plain_modal_frame.front() == plain_base_frame.front() &&
                plain_modal_frame.front().find("Backdrop context") != std::string::npos &&
                std::ranges::none_of(plain_modal_frame, [](std::string const& line) { return line.find('\x1b') != std::string::npos; }),
@@ -734,16 +745,16 @@ void run_tui_modal_tests_part_3()
                                                         .searchable = true,
                                                         .selected_option_index = 9,
                                                         .custom_text = {}};
-  auto const long_modal_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                     .provider = "openai",
-                                                                                     .model = "gpt-5.5",
-                                                                                     .session_id = "session_test",
-                                                                                     .input = "",
-                                                                                     .status = "question required",
-                                                                                     .transcript = {},
-                                                                                     .question_prompt = long_modal_prompt,
-                                                                                     .width = 64,
-                                                                                     .height = 12});
+  auto const long_modal_frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                          //.provider = "openai",
+                                                                                                          //.model = "gpt-5.5",
+                                                                                                          .session_id = "session_test",
+                                                                                                          .input = "",
+                                                                                                          .status = "question required",
+                                                                                                          .transcript = {},
+                                                                                                          .question_prompt = long_modal_prompt,
+                                                                                                          .width = 64,
+                                                                                                          .height = 12});
   expect(std::ranges::any_of(long_modal_frame, [](std::string const& line) { return strip_sgr(line).find("Option 9") != std::string::npos; }),
          "question modal scrolls its option window to keep the selected row visible");
   bool every_question_modal_selection_visible = true;
@@ -751,14 +762,14 @@ void run_tui_modal_tests_part_3()
   {
     auto modal_snapshot = ava::tui::ComposerSnapshot{};
     modal_snapshot.mode = "build";
-    modal_snapshot.provider = "openai";
-    modal_snapshot.model = "gpt-5.5";
+    //    modal_snapshot.provider = "openai";
+    //    modal_snapshot.model = "gpt-5.5";
     modal_snapshot.session_id = "session_test";
     modal_snapshot.question_prompt = long_modal_prompt;
     modal_snapshot.question_prompt->selected_option_index = index;
     modal_snapshot.width = 64;
     modal_snapshot.height = 12;
-    auto const frame = ava::tui::render_composer(modal_snapshot);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), modal_snapshot);
     auto const wanted = "Option " + std::to_string(index);
     every_question_modal_selection_visible &=
         std::ranges::any_of(frame, [&](std::string const& line) { return strip_sgr(line).find(wanted) != std::string::npos; });
@@ -770,14 +781,14 @@ void run_tui_modal_tests_part_3()
     {
       auto compact_modal = ava::tui::ComposerSnapshot{};
       compact_modal.mode = "build";
-      compact_modal.provider = "openai";
-      compact_modal.model = "gpt-5.5";
+      //      compact_modal.provider = "openai";
+      //      compact_modal.model = "gpt-5.5";
       compact_modal.session_id = "session_test";
       compact_modal.question_prompt = long_modal_prompt;
       compact_modal.question_prompt->selected_option_index = selected;
       compact_modal.width = 64;
       compact_modal.height = height;
-      auto const frame = ava::tui::render_composer(compact_modal);
+      auto const frame = ava::tui::render_composer(frontend.frontend(), compact_modal);
       auto const selected_label = "Option " + std::to_string(selected);
       expect(std::ranges::any_of(frame,
                                  [&](std::string const& line) {
@@ -788,31 +799,33 @@ void run_tui_modal_tests_part_3()
     }
   }
 
-  auto const oauth_modal_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "question required",
-      .transcript = {},
-      .question_prompt = ava::tui::QuestionPromptView{.header = "ChatGPT Pro/Plus (browser)",
-                                                      .question = "https://auth.openai.com/oauth/authorize?client_id="
-                                                                  "app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455"
-                                                                  "%2Fauth%2Fcallback&code_challenge=longchallengevalue&state=state\n"
-                                                                  "\nComplete authorization in your browser. This window will close automatically."
-                                                                  "\n\nWaiting for authorization...",
-                                                      .options = {ava::tui::QuestionPromptOptionView{.value = "copy:https://auth.openai.com/oauth/authorize",
-                                                                                                     .label = "C Copy"}},
-                                                      .multiple = false,
-                                                      .allow_custom = false,
-                                                      .secret = false,
-                                                      .modal = true,
-                                                      .searchable = false,
-                                                      .selected_option_index = 0,
-                                                      .custom_text = ""},
-      .width = 80,
-      .height = 20});
+  auto const oauth_modal_frame = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{.mode = "build",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
+                                 .session_id = "session_test",
+                                 .input = "",
+                                 .status = "question required",
+                                 .transcript = {},
+                                 .question_prompt =
+                                     ava::tui::QuestionPromptView{.header = "ChatGPT Pro/Plus (browser)",
+                                                                  .question = "https://auth.openai.com/oauth/authorize?client_id="
+                                                                              "app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455"
+                                                                              "%2Fauth%2Fcallback&code_challenge=longchallengevalue&state=state\n"
+                                                                              "\nComplete authorization in your browser. This window will close automatically."
+                                                                              "\n\nWaiting for authorization...",
+                                                                  .options = {ava::tui::QuestionPromptOptionView{
+                                                                      .value = "copy:https://auth.openai.com/oauth/authorize", .label = "C Copy"}},
+                                                                  .multiple = false,
+                                                                  .allow_custom = false,
+                                                                  .secret = false,
+                                                                  .modal = true,
+                                                                  .searchable = false,
+                                                                  .selected_option_index = 0,
+                                                                  .custom_text = ""},
+                                 .width = 80,
+                                 .height = 20});
   expect(std::ranges::any_of(oauth_modal_frame, [](std::string const& line) { return strip_sgr(line).find("https://auth.openai.com") != std::string::npos; }) &&
              std::ranges::any_of(oauth_modal_frame, [](std::string const& line) { return strip_sgr(line).find("C Copy") != std::string::npos; }) &&
              std::ranges::any_of(oauth_modal_frame,
@@ -823,8 +836,8 @@ void run_tui_modal_tests_part_3()
 
   auto sidebar_modal_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_test",
       .input = "",
       .status = "question required",
@@ -845,13 +858,13 @@ void run_tui_modal_tests_part_3()
           .activity = {ava::tui::SidebarActivityItem{.id = "connect", .label = "rail-connect", .status = ava::tui::ToolTimelineStatus::Running}},
           .session_id = "session_test",
           .mode = "build",
-          .provider = "openai",
-          .model = "gpt-5.5",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
           .workspace = "/workspace",
           .git_branch = "develop",
           .version = "0.32",
           .context_source_count = 1}};
-  auto const sidebar_modal_frame = ava::tui::render_composer(sidebar_modal_snapshot);
+  auto const sidebar_modal_frame = ava::tui::render_composer(frontend.frontend(), sidebar_modal_snapshot);
   expect(ava::tui::composer_canvas_layout(sidebar_modal_snapshot).content_width == 120 && ava::tui::composer_canvas_layout(sidebar_modal_snapshot).left == 28 &&
              std::ranges::any_of(sidebar_modal_frame, [](std::string const& line) { return strip_sgr(line).find("? Connect OpenAI") == 56; }),
          "tui modal centers inside the width-limited canvas when an automatic rail snapshot exists");
@@ -907,7 +920,8 @@ void run_tui_modal_tests_part_3()
                                                           .searchable = true,
                                                           .selected_option_index = 0,
                                                           .custom_text = ""};
-  auto searchable_input = ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'h'});
+  auto searchable_input =
+      ava::tui::handle_question_prompt_input(searchable_question, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'h'});
   expect(searchable_input.action == ava::tui::QuestionPromptInputAction::Redraw && searchable_input.custom_text == "h" &&
              searchable_input.selected_option_index == 1,
          "searchable question typing filters and moves selection to the first match");
@@ -988,16 +1002,16 @@ void run_tui_modal_tests_part_3()
                                                                     .disabled_reason = {}});
   }
   scrolling_selector.selected_item_index = 10;
-  auto const scrolling_selector_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                             .provider = "openai",
-                                                                                             .model = "gpt-5.5",
-                                                                                             .session_id = "session_test",
-                                                                                             .input = "",
-                                                                                             .status = "selecting",
-                                                                                             .transcript = {},
-                                                                                             .select_list = scrolling_selector,
-                                                                                             .width = 64,
-                                                                                             .height = 16});
+  auto const scrolling_selector_frame = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                                  //.provider = "openai",
+                                                                                                                  //.model = "gpt-5.5",
+                                                                                                                  .session_id = "session_test",
+                                                                                                                  .input = "",
+                                                                                                                  .status = "selecting",
+                                                                                                                  .transcript = {},
+                                                                                                                  .select_list = scrolling_selector,
+                                                                                                                  .width = 64,
+                                                                                                                  .height = 16});
   expect(std::ranges::any_of(scrolling_selector_frame, [](std::string const& line) { return strip_sgr(line).find("Model 10") != std::string::npos; }),
          "grouped select-list modals scroll far enough to keep the selected row visible");
   expect(std::ranges::none_of(scrolling_selector_frame, [](std::string const& line) { return line.find("\x1b[7m") != std::string::npos; }),
@@ -1006,8 +1020,8 @@ void run_tui_modal_tests_part_3()
       std::ranges::find_if(scrolling_selector_frame, [](std::string const& line) { return strip_sgr(line).find("Model 10") != std::string::npos; });
   auto scrolling_hit_snapshot = ava::tui::ComposerSnapshot{};
   scrolling_hit_snapshot.mode = "build";
-  scrolling_hit_snapshot.provider = "openai";
-  scrolling_hit_snapshot.model = "gpt-5.5";
+  //  scrolling_hit_snapshot.provider = "openai";
+  //  scrolling_hit_snapshot.model = "gpt-5.5";
   scrolling_hit_snapshot.session_id = "session_test";
   scrolling_hit_snapshot.select_list = scrolling_selector;
   scrolling_hit_snapshot.width = 64;
@@ -1024,13 +1038,13 @@ void run_tui_modal_tests_part_3()
     selected_view.selected_item_index = index;
     auto selected_snapshot = ava::tui::ComposerSnapshot{};
     selected_snapshot.mode = "build";
-    selected_snapshot.provider = "openai";
-    selected_snapshot.model = "gpt-5.5";
+    //    selected_snapshot.provider = "openai";
+    //    selected_snapshot.model = "gpt-5.5";
     selected_snapshot.session_id = "session_test";
     selected_snapshot.select_list = std::move(selected_view);
     selected_snapshot.width = 64;
     selected_snapshot.height = 16;
-    auto const frame = ava::tui::render_composer(selected_snapshot);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), selected_snapshot);
     auto const wanted = "Model " + std::to_string(index);
     every_select_list_selection_visible &=
         std::ranges::any_of(frame, [&](std::string const& line) { return strip_sgr(line).find(wanted) != std::string::npos; });
@@ -1043,13 +1057,13 @@ void run_tui_modal_tests_part_3()
       scrolling_selector.selected_item_index = selected;
       auto compact_snapshot = ava::tui::ComposerSnapshot{};
       compact_snapshot.mode = "build";
-      compact_snapshot.provider = "openai";
-      compact_snapshot.model = "gpt-5.5";
+      //      compact_snapshot.provider = "openai";
+      //      compact_snapshot.model = "gpt-5.5";
       compact_snapshot.session_id = "session_test";
       compact_snapshot.select_list = scrolling_selector;
       compact_snapshot.width = 64;
       compact_snapshot.height = height;
-      auto const frame = ava::tui::render_composer(compact_snapshot);
+      auto const frame = ava::tui::render_composer(frontend.frontend(), compact_snapshot);
       auto const selected_label = "Model " + std::to_string(selected);
       auto const selected_line = std::ranges::find_if(frame, [&](std::string const& line) {
         auto const text = strip_sgr(line);
@@ -1151,28 +1165,35 @@ void run_tui_modal_tests_part_3()
   auto const session_selector_bindings = session_selector_keybinds ? *session_selector_keybinds : ava::tui::default_key_bindings();
   auto session_bound_selector = selector;
   session_bound_selector.query = "custom";
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlO}, session_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlO}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::TogglePathDisplay && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.togglePath binding before raw composer details actions");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlY}, session_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlY}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::CycleSort && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.toggleSort binding before raw composer yank actions");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlU}, session_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlU}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleNamedFilter && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.toggleNamedFilter binding before raw composer line deletion");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlK}, session_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlK}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Rename && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.rename binding before raw composer line-end deletion");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltD}, session_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::AltD}, session_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::Archive && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.session.delete binding before raw composer word deletion");
   auto const tree_selector_keybinds = ava::tui::parse_key_bindings_json(tui_test_support::tree_action_key_bindings_json());
   expect(static_cast<bool>(tree_selector_keybinds), "tree selector custom keybind fixture parses");
   auto const tree_selector_bindings = tree_selector_keybinds ? *tree_selector_keybinds : ava::tui::default_key_bindings();
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlO}, tree_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlO}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchParent && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.tree.foldOrUp binding before raw composer details actions");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlY}, tree_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlY}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::BranchChild && selector_input.query == session_bound_selector.query,
          "select-list routes custom app.tree.unfoldOrDown binding before raw composer yank actions");
   selector_input = ava::tui::handle_select_list_input(
@@ -1187,10 +1208,12 @@ void run_tui_modal_tests_part_3()
       session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::Character, .character = 'T', .text = "T"}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleLabelTimestamp && selector_input.query == session_bound_selector.query,
          "select-list routes Pi app.tree.toggleLabelTimestamp Shift+T binding to the label-time toggle");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlSpace}, tree_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlSpace}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleNamedFilter && selector_input.query == session_bound_selector.query,
          "select-list routes Pi app.tree.filter.labeledOnly to the existing named/labeled filter");
-  selector_input = ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlSlash}, tree_selector_bindings);
+  selector_input =
+      ava::tui::handle_select_list_input(session_bound_selector, ava::tui::InputEvent{.key = ava::tui::terminal::Key::CtrlSlash}, tree_selector_bindings);
   expect(selector_input.action == ava::tui::SelectListInputAction::ToggleArchivedFilter && selector_input.query == session_bound_selector.query,
          "select-list routes Pi app.tree.filter.all to the existing archived visibility filter");
   selector_input = ava::tui::handle_select_list_input(
@@ -1323,23 +1346,23 @@ void run_tui_modal_tests_part_3()
   expect(selector_input.action == ava::tui::SelectListInputAction::ModelsReorderDown && selector_input.query == selector.query,
          "select-list alt+down exposes a scoped-model reorder-down action without clearing search state");
 
-  auto const selector_frame =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "composer behind selector",
-                                                           .status = "selecting model",
-                                                           .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "background transcript"}},
-                                                           .select_list = selector,
-                                                           .width = 88,
-                                                           .height = 18});
+  auto const selector_frame = ava::tui::render_composer(
+      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                      //.provider = "openai",
+                                                      //.model = "gpt-5.5",
+                                                      .session_id = "session_test",
+                                                      .input = "composer behind selector",
+                                                      .status = "selecting model",
+                                                      .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "background transcript"}},
+                                                      .select_list = selector,
+                                                      .width = 88,
+                                                      .height = 18});
   auto click_selector = selector;
   click_selector.query.clear();
   click_selector.selected_item_index = 0;
   auto click_selector_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
-                                                            .provider = "openai",
-                                                            .model = "gpt-5.5",
+                                                            //.provider = "openai",
+                                                            //.model = "gpt-5.5",
                                                             .session_id = "session_test",
                                                             .input = "composer behind selector",
                                                             .status = "selector opened",
@@ -1347,7 +1370,7 @@ void run_tui_modal_tests_part_3()
                                                             .select_list = click_selector,
                                                             .width = 92,
                                                             .height = 18};
-  auto const click_selector_frame = ava::tui::render_composer(click_selector_snapshot);
+  auto const click_selector_frame = ava::tui::render_composer(frontend.frontend(), click_selector_snapshot);
   auto const click_row =
       std::ranges::find_if(click_selector_frame, [](std::string const& line) { return strip_sgr(line).find("Claude Sonnet 4.5") != std::string::npos; }) -
       click_selector_frame.begin() + 1;
@@ -1356,15 +1379,19 @@ void run_tui_modal_tests_part_3()
   auto rail_selector_snapshot = click_selector_snapshot;
   rail_selector_snapshot.width = 176;
   rail_selector_snapshot.sidebar = ava::tui::SidebarSnapshot{
-      .modified_files = {ava::tui::SidebarModifiedFile{.path = "rail-must-not-render.cpp"}}, .mode = "build", .provider = "openai", .model = "gpt-5.5"};
-  auto const rail_selector_frame = ava::tui::render_composer(rail_selector_snapshot);
+      .modified_files = {ava::tui::SidebarModifiedFile{.path = "rail-must-not-render.cpp"}},
+      .mode = "build",
+      //.provider = "openai",
+      //.model = "gpt-5.5"
+  };
+  auto const rail_selector_frame = ava::tui::render_composer(frontend.frontend(), rail_selector_snapshot);
   auto const rail_selector_row =
       std::ranges::find_if(rail_selector_frame, [](std::string const& line) { return strip_sgr(line).find("Claude Sonnet 4.5") != std::string::npos; }) -
       rail_selector_frame.begin() + 1;
   auto selector_without_rail = rail_selector_snapshot;
   selector_without_rail.sidebar = std::nullopt;
   expect(ava::tui::composer_canvas_layout(rail_selector_snapshot).content_width == 120 && ava::tui::composer_canvas_layout(rail_selector_snapshot).left == 28 &&
-             rail_selector_frame == ava::tui::render_composer(selector_without_rail) &&
+             rail_selector_frame == ava::tui::render_composer(frontend.frontend(), selector_without_rail) &&
              ava::tui::select_list_selection_for_screen_position(rail_selector_snapshot, rail_selector_row, 53) == 1 &&
              ava::tui::select_list_selection_for_screen_position(rail_selector_snapshot, rail_selector_row, 124) == 1 &&
              ava::tui::select_list_selection_for_screen_position(selector_without_rail, rail_selector_row, 60) == 1 &&
@@ -1374,8 +1401,8 @@ void run_tui_modal_tests_part_3()
                                   [](std::string const& line) { return strip_sgr(line).find("rail-must-not-render.cpp") != std::string::npos; }),
          "select-list modal suppresses an actionable rail and maps centered physical mouse geometry exactly once");
   auto const outside_selector = ava::tui::select_list_selection_for_screen_position(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                                               .provider = "openai",
-                                                                                                               .model = "gpt-5.5",
+                                                                                                               //.provider = "openai",
+                                                                                                               //.model = "gpt-5.5",
                                                                                                                .session_id = "session_test",
                                                                                                                .input = "composer behind selector",
                                                                                                                .status = "selector opened",

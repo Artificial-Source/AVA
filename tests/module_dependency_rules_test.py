@@ -80,9 +80,9 @@ ALLOWED = {
     "tui": frozenset({"agent", "app_common", "config", "core", "debug", "event", "permissions", "session"}),
 }
 APP_COMMON_PATHS = frozenset({"app/terminal_text.cpp", "app/terminal_text.h"})
-# The historical frontend base remains app-owned; do not classify its relative
-# Data.h dependency as part of AVA::app_common.
-APP_FRONTEND_CONTRACT_INCLUDES = frozenset({"ava/app/frontend/FrontEnd.h"})
+# Frontends consume the base interface and understand the concrete model data contract.
+# Both remain app-owned; neither belongs to the core-only AVA::app_common target.
+APP_FRONTEND_CONTRACT_INCLUDES = frozenset({"ava/app/frontend/FrontEnd.h", "ava/app/frontend/ModelSelection.h"})
 SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".cpp"})
 IGNORED_TREE_NAMES = frozenset({"build", "generated", "reference", "tests", "vendor"})
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:<([^>]+)>|"([^"]+)")')
@@ -287,6 +287,7 @@ class ModuleDependencyRulesSelfTest(unittest.TestCase):
     def test_tui_app_contracts_are_exactly_governed(self) -> None:
         self.assertEqual(self.run_check('#include "ava/app/terminal_text.h"\n', [], module="tui"), [])
         self.assertEqual(self.run_check('#include "ava/app/frontend/FrontEnd.h"\n', [], module="tui"), [])
+        self.assertEqual(self.run_check('#include "ava/app/frontend/ModelSelection.h"\n', [], module="tui"), [])
         self.assertEqual(
             self.run_check('#include "ava/app/command_palette.h"\n', [], module="tui"),
             ["src/ava/tui/fixture.cpp:1: implementation tui -> app (ava/app/command_palette.h)"],

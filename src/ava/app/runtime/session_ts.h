@@ -10,19 +10,22 @@ namespace ava::app::runtime {
 class Session;
 
 #ifdef CWDEBUG
+using SessionMutex = ava::core::SessionDebugMutex;
+
 template <typename SESSION>
-class UnlockedSession : public threadsafe::Unlocked<SESSION, threadsafe::policy::Primitive<ava::core::SessionDebugMutex>>
+class UnlockedSession : public threadsafe::Unlocked<SESSION, threadsafe::policy::Primitive<SessionMutex>>
 {
  public:
-  using threadsafe::Unlocked<SESSION, threadsafe::policy::Primitive<ava::core::SessionDebugMutex>>::Unlocked;
-  using threadsafe::Unlocked<SESSION, threadsafe::policy::Primitive<ava::core::SessionDebugMutex>>::mutex;
+  using threadsafe::Unlocked<SESSION, threadsafe::policy::Primitive<SessionMutex>>::Unlocked;
+  using threadsafe::Unlocked<SESSION, threadsafe::policy::Primitive<SessionMutex>>::mutex;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 using session_ts = UnlockedSession<Session>;
 #else
-using session_ts = threadsafe::Unlocked<Session, threadsafe::policy::Primitive<std::mutex>>;
+using SessionMutex = std::mutex;
+using session_ts = threadsafe::Unlocked<Session, threadsafe::policy::Primitive<SessionMutex>>;
 #endif
 
 }  // namespace ava::app::runtime

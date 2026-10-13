@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
@@ -203,8 +204,10 @@ void do_beep(terminal::Context& terminal_context)
   terminal_context.beep();
 }
 
-int run_interactive_composer(TuiRuntimeOptions options)
+int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
 {
+  DoutEntering(dc::notice, "TuiFrontEnd::run_interactive_composer(options)");
+
   RuntimeBeforeShutdownGuard before_shutdown(options);
   if (!terminal_is_tty())
   {
@@ -266,7 +269,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
   auto& draft_selection_anchor = draft_state.draft_selection_anchor;
   auto& draft_selection_cursor = draft_state.draft_selection_cursor;
   auto& pending_escape_clear = draft_state.pending_escape_clear;
-  RuntimeRenderer renderer(snapshot, sidebar, draft_state, &terminal_context);
+  RuntimeRenderer renderer(this, snapshot, sidebar, draft_state, &terminal_context);
   RuntimeNavigationController navigation(options, snapshot, sidebar, draft_state, renderer);
   auto& transcript_scroll_offset = renderer.transcript_scroll_offset;
   auto& completion_cache = renderer.completion_cache;
@@ -319,7 +322,7 @@ int run_interactive_composer(TuiRuntimeOptions options)
     // active_tui_theme() consults the presentation overlay; clear it only while constructing rows.
     auto const restage_theme_preview = settings_nav.preview.active();
     settings_nav.preview.clear_theme_overlay();
-    auto view = settings_select_list_view_for_section(section, settings_snapshot, options.key_bindings);
+    auto view = settings_select_list_view_for_section(this, section, settings_snapshot, options.key_bindings);
     if (restage_theme_preview)
       settings_nav.preview.apply_theme_overlay();
     view.query = std::move(query);

@@ -19,21 +19,24 @@
 
 void run_tui_tool_card_tests_part_1()
 {
-  auto const tool_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                                 .name = "read_file",
-                                                                                 .argument_summary = "path=note.txt\x1b[31m",
-                                                                                 .result_summary = "read lines 1-12/12",
-                                                                                 .lifecycle = ava::tui::ToolLifecycleState::Complete}}},
-      .width = 80,
-      .height = 10,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto const tool_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                                     .name = "read_file",
+                                                                                     .argument_summary = "path=note.txt\x1b[31m",
+                                                                                     .result_summary = "read lines 1-12/12",
+                                                                                     .lifecycle = ava::tui::ToolLifecycleState::Complete}}},
+          .width = 80,
+          .height = 10,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(tool_card,
                              [](std::string const& line) {
                                auto visible = strip_sgr(line);
@@ -50,7 +53,8 @@ void run_tui_tool_card_tests_part_1()
   auto plain_tool_row = [](ava::tui::ToolTimelineItem const& item) {
     auto const rows = ava::tui::detail::render_tool_card(item, 120, false);
     auto row = rows.empty() ? std::string{} : strip_sgr(rows.front());
-    while (!row.empty() && row.back() == ' ') row.pop_back();
+    while (!row.empty() && row.back() == ' ')
+      row.pop_back();
     return row;
   };
   auto running_outcome = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Running,
@@ -87,16 +91,17 @@ void run_tui_tool_card_tests_part_1()
          "tui tool card rendering removes untrusted raw sgr escape sequences");
   {
     ScopedEnvVar no_color_guard("NO_COLOR", "1");
-    auto const plain_tool_frame = ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                                                       .provider = "openai",
-                                                                                       .model = "gpt-5.5",
-                                                                                       .session_id = "session_plain_tool",
-                                                                                       .input = "",
-                                                                                       .status = "ready",
-                                                                                       .transcript = {ava::tui::TranscriptItem{.tool = successful_outcome}},
-                                                                                       .width = 40,
-                                                                                       .height = 10,
-                                                                                       .tool_presentation = ava::tui::ToolPresentation::Compact});
+    auto const plain_tool_frame =
+        ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                  //.provider = "openai",
+                                                                                  //.model = "gpt-5.5",
+                                                                                  .session_id = "session_plain_tool",
+                                                                                  .input = "",
+                                                                                  .status = "ready",
+                                                                                  .transcript = {ava::tui::TranscriptItem{.tool = successful_outcome}},
+                                                                                  .width = 40,
+                                                                                  .height = 10,
+                                                                                  .tool_presentation = ava::tui::ToolPresentation::Compact});
     auto const plain_tool_line = std::ranges::find_if(plain_tool_frame, [](std::string const& line) { return line.find("+ read_file") != std::string::npos; });
     expect(plain_tool_line != plain_tool_frame.end() && plain_tool_line->starts_with("  │ + read_file") &&
                std::ranges::all_of(plain_tool_frame,
@@ -166,16 +171,16 @@ void run_tui_tool_card_tests_part_1()
          "tui compact cards hide routine allows and retain a human-readable denial reason");
 
   auto const compact_permission_card =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.tool = permission_tool_item}},
-                                                           .width = 72,
-                                                           .height = 12,
-                                                           .tool_presentation = ava::tui::ToolPresentation::Compact});
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = {ava::tui::TranscriptItem{.tool = permission_tool_item}},
+                                                                                .width = 72,
+                                                                                .height = 12,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(compact_permission_card,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -296,7 +301,8 @@ void run_tui_tool_card_tests_part_1()
     for (auto const& line : lines)
     {
       auto visible = strip_sgr(line);
-      for (auto offset = visible.find("src/cache.cpp"); offset != std::string::npos; offset = visible.find("src/cache.cpp", offset + 1)) ++count;
+      for (auto offset = visible.find("src/cache.cpp"); offset != std::string::npos; offset = visible.find("src/cache.cpp", offset + 1))
+        ++count;
     }
     return count;
   };
@@ -414,16 +420,16 @@ void run_tui_tool_card_tests_part_1()
 
   permission_tool_item.details_visible = true;
   auto const expanded_permission_card =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.tool = permission_tool_item}},
-                                                           .width = 88,
-                                                           .height = 28,
-                                                           .tool_presentation = ava::tui::ToolPresentation::Compact});
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = {ava::tui::TranscriptItem{.tool = permission_tool_item}},
+                                                                                .width = 88,
+                                                                                .height = 28,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(expanded_permission_card,
                              [](std::string const& line) { return strip_sgr(line).find("command permission denied") != std::string::npos; }) &&
              std::ranges::none_of(expanded_permission_card,
@@ -439,16 +445,16 @@ void run_tui_tool_card_tests_part_1()
   {
     ScopedEnvVar no_color_permission_guard("NO_COLOR", "1");
     auto const plain_narrow_permission_card =
-        ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                             .provider = "openai",
-                                                             .model = "gpt-5.5",
-                                                             .session_id = "session_test",
-                                                             .input = "",
-                                                             .status = "ready",
-                                                             .transcript = {ava::tui::TranscriptItem{.tool = permission_tool_item}},
-                                                             .width = 57,
-                                                             .height = 24,
-                                                             .tool_presentation = ava::tui::ToolPresentation::Expanded});
+        ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                  //.provider = "openai",
+                                                                                  //.model = "gpt-5.5",
+                                                                                  .session_id = "session_test",
+                                                                                  .input = "",
+                                                                                  .status = "ready",
+                                                                                  .transcript = {ava::tui::TranscriptItem{.tool = permission_tool_item}},
+                                                                                  .width = 57,
+                                                                                  .height = 24,
+                                                                                  .tool_presentation = ava::tui::ToolPresentation::Expanded});
     auto plain_permission_text = std::string{};
     for (auto const& line : plain_narrow_permission_card)
     {
@@ -464,9 +470,10 @@ void run_tui_tool_card_tests_part_1()
   }
 
   auto const grouped_context_tools = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -491,18 +498,20 @@ void run_tui_tool_card_tests_part_1()
              std::ranges::any_of(grouped_context_tools, [](std::string const& line) { return strip_sgr(line).find("read_file") != std::string::npos; }),
          "tui groups consecutive context-gathering tool cards with a single readable heading while keeping details");
 
-  auto const empty_tool_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{
-          .tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "", .argument_summary = "", .result_summary = ""}}},
-      .width = 40,
-      .height = 8,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const empty_tool_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{
+              .tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "", .argument_summary = "", .result_summary = ""}}},
+          .width = 40,
+          .height = 8,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(empty_tool_card,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -581,9 +590,10 @@ void run_tui_tool_card_tests_part_1()
   {
     ScopedEnvVar no_color_tool_guard("NO_COLOR", "1");
     auto const plain_non_shell_card = ava::tui::render_composer(
+        frontend.frontend(),
         ava::tui::ComposerSnapshot{.mode = "build",
-                                   .provider = "openai",
-                                   .model = "gpt-5.5",
+                                   //.provider = "openai",
+                                   //.model = "gpt-5.5",
                                    .session_id = "session_test",
                                    .input = "",
                                    .status = "ready",
@@ -599,24 +609,26 @@ void run_tui_tool_card_tests_part_1()
            "tui plain narrow non-shell tool cards keep names and output readable without color");
   }
 
-  auto const running_error_cards = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Running,
-                                                                                 .name = "bash",
-                                                                                 .argument_summary = "command=build\x1b[31m now",
-                                                                                 .result_summary = ""}},
-                     ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Error,
-                                                                                 .name = "write_file",
-                                                                                 .argument_summary = std::string(120, 'a') + "\x1b[31m",
-                                                                                 .result_summary = "error: denied\x1b[31m"}}},
-      .width = 60,
-      .height = 14,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const running_error_cards = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Running,
+                                                                                     .name = "bash",
+                                                                                     .argument_summary = "command=build\x1b[31m now",
+                                                                                     .result_summary = ""}},
+                         ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Error,
+                                                                                     .name = "write_file",
+                                                                                     .argument_summary = std::string(120, 'a') + "\x1b[31m",
+                                                                                     .result_summary = "error: denied\x1b[31m"}}},
+          .width = 60,
+          .height = 14,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(running_error_cards,
                              [](std::string const& line) {
                                auto visible = strip_sgr(line);
@@ -636,23 +648,25 @@ void run_tui_tool_card_tests_part_1()
              std::ranges::any_of(running_error_cards, [](std::string const& line) { return line.find("\x1b[38;2;248;113;113mx") != std::string::npos; }),
          "tui emits trusted sgr status colors for running and error tool cards");
 
-  auto const canceled_tool_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Canceled,
-                                                                                 .name = "bash",
-                                                                                 .argument_summary = "command=sleep 30",
-                                                                                 .result_summary = "stopped by user",
-                                                                                 .arguments_json = "{\"command\":\"sleep 30\"}",
-                                                                                 .result_json = "{\"tool\":\"bash\",\"canceled\":true}",
-                                                                                 .lifecycle = ava::tui::ToolLifecycleState::Canceled}}},
-      .width = 64,
-      .height = 16,
-      .tool_presentation = ava::tui::ToolPresentation::Expanded});
+  auto const canceled_tool_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Canceled,
+                                                                                     .name = "bash",
+                                                                                     .argument_summary = "command=sleep 30",
+                                                                                     .result_summary = "stopped by user",
+                                                                                     .arguments_json = "{\"command\":\"sleep 30\"}",
+                                                                                     .result_json = "{\"tool\":\"bash\",\"canceled\":true}",
+                                                                                     .lifecycle = ava::tui::ToolLifecycleState::Canceled}}},
+          .width = 64,
+          .height = 16,
+          .tool_presentation = ava::tui::ToolPresentation::Expanded});
   expect(std::ranges::any_of(canceled_tool_card,
                              [](std::string const& line) {
                                auto visible = strip_sgr(line);
@@ -675,20 +689,22 @@ void run_tui_tool_card_tests_part_1()
              canceled_copy_text.find("lifecycle:") == std::string::npos && canceled_copy_text.find("\x1b[") == std::string::npos,
          "tui copy text preserves canceled tool state and safe call text without internal lifecycle receipts");
 
-  auto const detailed_tool_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                                 .name = "bash",
-                                                                                 .argument_summary = "command=cmake --build build",
-                                                                                 .result_summary = "line one line two line three line four"}}},
-      .width = 48,
-      .height = 12,
-      .tool_presentation = ava::tui::ToolPresentation::Expanded});
+  auto const detailed_tool_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                                     .name = "bash",
+                                                                                     .argument_summary = "command=cmake --build build",
+                                                                                     .result_summary = "line one line two line three line four"}}},
+          .width = 48,
+          .height = 12,
+          .tool_presentation = ava::tui::ToolPresentation::Expanded});
   expect(std::ranges::any_of(detailed_tool_card, [](std::string const& line) { return strip_sgr(line).find("$ cmake --build build") != std::string::npos; }) &&
              std::ranges::any_of(detailed_tool_card, [](std::string const& line) { return strip_sgr(line).find("bash · line one") != std::string::npos; }) &&
              std::ranges::none_of(detailed_tool_card, [](std::string const& line) { return strip_sgr(line).find("args:") != std::string::npos; }) &&
@@ -785,9 +801,10 @@ void run_tui_tool_card_tests_part_1()
          "tui copy query matching finds visible tool, permission, changed-path, and diff context case-insensitively");
 
   auto const collapsed_override_card = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -804,9 +821,10 @@ void run_tui_tool_card_tests_part_1()
       "tui supports per-tool detail collapse even when the global details toggle is enabled");
 
   auto const expanded_override_card = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -830,23 +848,25 @@ void run_tui_tool_card_tests_part_1()
              std::ranges::any_of(expanded_override_card, [](std::string const& line) { return strip_sgr(line).find("spill incomplete") != std::string::npos; }),
          "tui renders backend-provided truncation counts and separate truthful spill metadata only when present");
 
-  auto const changed_paths_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{
-          .tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                             .name = "apply_patch",
-                                             .argument_summary = "2 edits",
-                                             .result_summary = "updated files",
-                                             .details_visible = true,
-                                             .changed_paths = {"src/main.cpp", "tests/tui.cpp", "docs/mvp.md", "goals/ledger.md", "\x1b[31mhidden.txt"}}}},
-      .width = 120,
-      .height = 16,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const changed_paths_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{
+              .tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                 .name = "apply_patch",
+                                                 .argument_summary = "2 edits",
+                                                 .result_summary = "updated files",
+                                                 .details_visible = true,
+                                                 .changed_paths = {"src/main.cpp", "tests/tui.cpp", "docs/mvp.md", "goals/ledger.md", "\x1b[31mhidden.txt"}}}},
+          .width = 120,
+          .height = 16,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(changed_paths_card,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -865,16 +885,16 @@ void run_tui_tool_card_tests_part_1()
                                                                 .details_visible = true,
                                                                 .diff = "--- notes/output.txt\n+++ notes/output.txt\n-old\n+new"};
   auto const inferred_changed_card =
-      ava::tui::render_composer(ava::tui::ComposerSnapshot{.mode = "build",
-                                                           .provider = "openai",
-                                                           .model = "gpt-5.5",
-                                                           .session_id = "session_test",
-                                                           .input = "",
-                                                           .status = "ready",
-                                                           .transcript = {ava::tui::TranscriptItem{.tool = inferred_changed_tool}},
-                                                           .width = 88,
-                                                           .height = 14,
-                                                           .tool_presentation = ava::tui::ToolPresentation::Compact});
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = {ava::tui::TranscriptItem{.tool = inferred_changed_tool}},
+                                                                                .width = 88,
+                                                                                .height = 14,
+                                                                                .tool_presentation = ava::tui::ToolPresentation::Compact});
   auto const inferred_changed_copy = ava::tui::detail::tool_card_copy_text(inferred_changed_tool);
   expect(std::ranges::any_of(inferred_changed_card,
                              [](std::string const& line) { return strip_sgr(line).find("changed: notes/output.txt") != std::string::npos; }) &&
@@ -885,9 +905,10 @@ void run_tui_tool_card_tests_part_1()
          "tui infers changed-file summaries from mutating tool result JSON when timeline metadata is sparse");
 
   auto const wide_diff_card = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -909,46 +930,50 @@ void run_tui_tool_card_tests_part_1()
              std::ranges::any_of(wide_diff_card, [](std::string const& line) { return strip_sgr(line).find("diff truncated") != std::string::npos; }),
          "tui renders backend-provided unified diff previews with mutation colors and truncation markers");
 
-  auto const narrow_diff_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                                 .name = "edit_file",
-                                                                                 .argument_summary = "path=very/long/path/to/note.txt",
-                                                                                 .result_summary = "wrote 9 bytes",
-                                                                                 .details_visible = true,
-                                                                                 .diff = "--- very/long/path/to/note.txt\n+++ very/long/path/to/"
-                                                                                         "note.txt\n-old value\n+new value"}}},
-      .width = 36,
-      .height = 14,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const narrow_diff_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                                     .name = "edit_file",
+                                                                                     .argument_summary = "path=very/long/path/to/note.txt",
+                                                                                     .result_summary = "wrote 9 bytes",
+                                                                                     .details_visible = true,
+                                                                                     .diff = "--- very/long/path/to/note.txt\n+++ very/long/path/to/"
+                                                                                             "note.txt\n-old value\n+new value"}}},
+          .width = 36,
+          .height = 14,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(narrow_diff_card, [](std::string const& line) { return strip_sgr(line).find("diff:") != std::string::npos; }) &&
              std::ranges::all_of(narrow_diff_card, [](std::string const& line) { return visible_columns(line) <= 36; }),
          "tui keeps backend-provided diff previews width-safe on narrow terminals");
 
-  auto const bash_ux_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Error,
-                                                                                 .name = "bash",
-                                                                                 .argument_summary = "command=ctest --test-dir build",
-                                                                                 .result_summary = "exit 1",
-                                                                                 .arguments_json = "{\"command\":\"ctest --test-dir build\"}",
-                                                                                 .result_json = "{\"tool\":\"bash\",\"exit_code\":1,"
-                                                                                                "\"duration_ms\":1530,\"total_lines\":4,"
-                                                                                                "\"output_lines\":4,\"output\":"
-                                                                                                "\"configure\\nbuild\\nfail\\nsummary\"}"}}},
-      .width = 72,
-      .height = 16,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const bash_ux_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Error,
+                                                                                     .name = "bash",
+                                                                                     .argument_summary = "command=ctest --test-dir build",
+                                                                                     .result_summary = "exit 1",
+                                                                                     .arguments_json = "{\"command\":\"ctest --test-dir build\"}",
+                                                                                     .result_json = "{\"tool\":\"bash\",\"exit_code\":1,"
+                                                                                                    "\"duration_ms\":1530,\"total_lines\":4,"
+                                                                                                    "\"output_lines\":4,\"output\":"
+                                                                                                    "\"configure\\nbuild\\nfail\\nsummary\"}"}}},
+          .width = 72,
+          .height = 16,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(bash_ux_card,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
@@ -965,25 +990,27 @@ void run_tui_tool_card_tests_part_1()
              std::ranges::all_of(bash_ux_card, [](std::string const& line) { return visible_columns(line) <= 72; }),
          "tui collapsed bash cards keep status and duration on one header without output preview bodies");
 
-  auto const expanded_bash_ux_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                                 .name = "bash",
-                                                                                 .argument_summary = "command=cmake --build build",
-                                                                                 .result_summary = "exit 0",
-                                                                                 .arguments_json = "{\"command\":\"cmake --build build\"}",
-                                                                                 .result_json = "{\"tool\":\"bash\",\"exit_code\":0,"
-                                                                                                "\"duration_ms\":250,\"total_lines\":3,"
-                                                                                                "\"output_lines\":3,\"output\":"
-                                                                                                "\"[1/2] compile\\n[2/2] link\\nok\"}"}}},
-      .width = 80,
-      .height = 18,
-      .tool_presentation = ava::tui::ToolPresentation::Expanded});
+  auto const expanded_bash_ux_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                                     .name = "bash",
+                                                                                     .argument_summary = "command=cmake --build build",
+                                                                                     .result_summary = "exit 0",
+                                                                                     .arguments_json = "{\"command\":\"cmake --build build\"}",
+                                                                                     .result_json = "{\"tool\":\"bash\",\"exit_code\":0,"
+                                                                                                    "\"duration_ms\":250,\"total_lines\":3,"
+                                                                                                    "\"output_lines\":3,\"output\":"
+                                                                                                    "\"[1/2] compile\\n[2/2] link\\nok\"}"}}},
+          .width = 80,
+          .height = 18,
+          .tool_presentation = ava::tui::ToolPresentation::Expanded});
   expect(
       std::ranges::any_of(expanded_bash_ux_card, [](std::string const& line) { return strip_sgr(line).find("$ cmake --build build") != std::string::npos; }) &&
           std::ranges::any_of(expanded_bash_ux_card, [](std::string const& line) { return strip_sgr(line).find("exit 0 · 250ms") != std::string::npos; }) &&
@@ -991,47 +1018,52 @@ void run_tui_tool_card_tests_part_1()
           std::ranges::any_of(expanded_bash_ux_card, [](std::string const& line) { return strip_sgr(line).find("[2/2] link") != std::string::npos; }),
       "tui expanded bash cards show an accented human call, status, duration, and retained output");
 
-  auto const quoted_bash_summary_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                                 .name = "bash",
-                                                                                 .argument_summary = "command=echo \"a, b\", timeout=1000",
-                                                                                 .result_summary = "exit 0",
-                                                                                 .details_visible = true}}},
-      .width = 80,
-      .height = 14,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const quoted_bash_summary_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                                     .name = "bash",
+                                                                                     .argument_summary = "command=echo \"a, b\", timeout=1000",
+                                                                                     .result_summary = "exit 0",
+                                                                                     .details_visible = true}}},
+          .width = 80,
+          .height = 14,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(quoted_bash_summary_card, [](std::string const& line) { return strip_sgr(line).find("$ echo \"a, b\"") != std::string::npos; }),
          "tui bash human calls do not split fallback summaries at comma-space inside shell quotes");
 
-  auto const escaped_bash_summary_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                                 .name = "bash",
-                                                                                 .argument_summary = "command=printf foo\\, bar, timeout=1000",
-                                                                                 .result_summary = "exit 0",
-                                                                                 .details_visible = true}}},
-      .width = 80,
-      .height = 14,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const escaped_bash_summary_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{
+          .mode = "build",
+          //.provider = "openai",
+          //.model = "gpt-5.5",
+          .session_id = "session_test",
+          .input = "",
+          .status = "ready",
+          .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                                     .name = "bash",
+                                                                                     .argument_summary = "command=printf foo\\, bar, timeout=1000",
+                                                                                     .result_summary = "exit 0",
+                                                                                     .details_visible = true}}},
+          .width = 80,
+          .height = 14,
+          .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(
       std::ranges::any_of(escaped_bash_summary_card, [](std::string const& line) { return strip_sgr(line).find("$ printf foo\\, bar") != std::string::npos; }),
       "tui bash human calls do not split fallback summaries at escaped comma-space");
 
   auto const running_bash_ux_card = ava::tui::render_composer(
+      frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
-                                 .provider = "openai",
-                                 .model = "gpt-5.5",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
                                  .session_id = "session_test",
                                  .input = "",
                                  .status = "ready",
@@ -1048,23 +1080,25 @@ void run_tui_tool_card_tests_part_1()
              std::ranges::all_of(running_bash_ux_card, [](std::string const& line) { return visible_columns(line) <= 52; }),
          "tui resting running bash cards remain one concise primary row");
 
-  auto const rich_diff_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-      .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
-      .session_id = "session_test",
-      .input = "",
-      .status = "ready",
-      .transcript = {ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                                 .name = "edit_file",
-                                                                                 .argument_summary = "path=note.txt",
-                                                                                 .result_summary = "edited note.txt",
-                                                                                 .details_visible = true,
-                                                                                 .diff = "--- note.txt\n+++ note.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n context",
-                                                                                 .changed_paths = {"note.txt"}}}},
-      .width = 92,
-      .height = 18,
-      .tool_presentation = ava::tui::ToolPresentation::Compact});
+  auto const rich_diff_card = ava::tui::render_composer(
+      frontend.frontend(),
+      ava::tui::ComposerSnapshot{.mode = "build",
+                                 //.provider = "openai",
+                                 //.model = "gpt-5.5",
+                                 .session_id = "session_test",
+                                 .input = "",
+                                 .status = "ready",
+                                 .transcript = {ava::tui::TranscriptItem{
+                                     .tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                        .name = "edit_file",
+                                                                        .argument_summary = "path=note.txt",
+                                                                        .result_summary = "edited note.txt",
+                                                                        .details_visible = true,
+                                                                        .diff = "--- note.txt\n+++ note.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n context",
+                                                                        .changed_paths = {"note.txt"}}}},
+                                 .width = 92,
+                                 .height = 18,
+                                 .tool_presentation = ava::tui::ToolPresentation::Compact});
   expect(std::ranges::any_of(rich_diff_card, [](std::string const& line) { return strip_sgr(line).find("diff note.txt:") != std::string::npos; }) &&
              std::ranges::any_of(rich_diff_card, [](std::string const& line) { return strip_sgr(line).find("hunk @@ -1,2 +1,2 @@") != std::string::npos; }) &&
              std::ranges::any_of(rich_diff_card,
@@ -1204,7 +1238,8 @@ void test_tui_large_tool_output_preview_is_bounded()
          "tui Rich output previews use Pi-aligned grep, listing, and file caps with exact hidden counts");
 
   std::string retained_crlf_json = "{\"output\":\"";
-  for (std::size_t line = 901; line <= 1000; ++line) retained_crlf_json += "retained " + std::to_string(line) + "\\r\\n";
+  for (std::size_t line = 901; line <= 1000; ++line)
+    retained_crlf_json += "retained " + std::to_string(line) + "\\r\\n";
   retained_crlf_json += "\"}";
   auto const retained_crlf =
       tui_test_support::join_visible_lines(ava::tui::detail::render_tool_card(ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
@@ -1235,7 +1270,8 @@ void test_tui_large_tool_output_preview_is_bounded()
          "tui huge single-line shell preview rows remain width bounded");
 
   std::string seq_output_json = "{\"output\":\"";
-  for (std::size_t line = 19801; line <= 20000; ++line) seq_output_json += std::to_string(line) + "\\n";
+  for (std::size_t line = 19801; line <= 20000; ++line)
+    seq_output_json += std::to_string(line) + "\\n";
   seq_output_json += "\"}";
   auto const seq_preview_lines = ava::tui::detail::render_tool_card(ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
                                                                                                .name = "bash",
@@ -1294,12 +1330,14 @@ void test_tui_large_tool_output_preview_is_bounded()
 
 void test_tui_f5_progressive_tool_details()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto const& joined = tui_test_support::join_plain_lines;
   using tui_test_support::plain_lines;
   auto row_text = [](ava::tui::ToolTimelineItem item) {
     auto const lines = ava::tui::detail::render_tool_card(item, 120, false);
     auto row = lines.empty() ? std::string{} : strip_sgr(lines.front());
-    while (!row.empty() && row.back() == ' ') row.pop_back();
+    while (!row.empty() && row.back() == ' ')
+      row.pop_back();
     return row;
   };
   for (auto const lifecycle :
@@ -1413,8 +1451,8 @@ void test_tui_f5_progressive_tool_details()
 
   auto hit_snapshot = ava::tui::ComposerSnapshot{
       .mode = "build",
-      .provider = "openai",
-      .model = "gpt-5.5",
+      //.provider = "openai",
+      //.model = "gpt-5.5",
       .session_id = "session_hit",
       .input = "draft",
       .status = "ready",
@@ -1428,7 +1466,7 @@ void test_tui_f5_progressive_tool_details()
       .width = 160,
       .height = 48,
       .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_hit"}};
-  auto const hit_frame = plain_lines(ava::tui::render_composer(hit_snapshot));
+  auto const hit_frame = plain_lines(ava::tui::render_composer(frontend.frontend(), hit_snapshot));
   auto const intro_line = std::ranges::find_if(hit_frame, [](std::string const& line) { return line.find("intro") != std::string::npos; });
   auto const glob_line = std::ranges::find_if(hit_frame, [](std::string const& line) { return line.find("+ glob") != std::string::npos; });
   auto const detail_line = std::ranges::find_if(hit_frame, [](std::string const& line) { return line.find("x edit_file") != std::string::npos; });
@@ -1449,7 +1487,7 @@ void test_tui_f5_progressive_tool_details()
          "tui F5 tool header hit testing uses centered transcript geometry and rejects headings, both two-cell card margins, and composer rows");
 
   hit_snapshot.transcript[2].tool->details_visible = true;
-  auto expanded_hit_frame = plain_lines(ava::tui::render_composer(hit_snapshot));
+  auto expanded_hit_frame = plain_lines(ava::tui::render_composer(frontend.frontend(), hit_snapshot));
   auto const expanded_detail_line =
       std::ranges::find_if(expanded_hit_frame, [](std::string const& line) { return line.find("x edit_file") != std::string::npos; });
   auto const expanded_detail_row =
@@ -1498,7 +1536,7 @@ void test_tui_f5_progressive_tool_details()
     bounded.width = width;
     bounded.height = height;
     bounded.sidebar.reset();
-    auto const frame = ava::tui::render_composer(bounded);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), bounded);
     expect(frame.size() == height && std::ranges::all_of(frame, [width](std::string const& line) { return visible_columns(line) <= width; }),
            "tui F5 progressive tool details stay within requested frame dimensions");
   }
@@ -1508,7 +1546,7 @@ void test_tui_f5_progressive_tool_details()
     plain.width = 100;
     plain.height = 12;
     plain.sidebar.reset();
-    auto const frame = ava::tui::render_composer(plain);
+    auto const frame = ava::tui::render_composer(frontend.frontend(), plain);
     expect(frame.size() == 12 &&
                std::ranges::all_of(frame, [](std::string const& line) { return line.find('\x1b') == std::string::npos && visible_columns(line) <= 100; }),
            "tui F5 progressive tool details retain compact NO_COLOR bounds");
@@ -1544,6 +1582,7 @@ std::string find_styled_diff_line(std::vector<std::string> const& lines, std::st
 
 void test_tui_diff_intraline_emphasis()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto const one_to_one =
       ava::tui::detail::render_unified_diff_body("--- note.txt\n+++ note.txt\n@@ -1,1 +1,1 @@\n-hello world\n+hello earth\n", false, 120, "", 20);
   auto const removed = find_styled_diff_line(one_to_one, "-hello world");
@@ -1633,24 +1672,25 @@ void test_tui_diff_intraline_emphasis()
 
   {
     ScopedEnvVar no_color("NO_COLOR", "1");
-    auto const plain_card = ava::tui::render_composer(ava::tui::ComposerSnapshot{
-        .mode = "build",
-        .provider = "openai",
-        .model = "gpt-5.5",
-        .session_id = "session_test",
-        .input = "",
-        .status = "ready",
-        .transcript = {ava::tui::TranscriptItem{.tool =
-                                                    ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
-                                                                               .name = "edit_file",
-                                                                               .argument_summary = "path=note.txt",
-                                                                               .result_summary = "edited",
-                                                                               .details_visible = true,
-                                                                               .diff = "--- note.txt\n+++ note.txt\n@@ -1 +1 @@\n-hello world\n+hello earth\n",
-                                                                               .changed_paths = {"note.txt"}}}},
-        .width = 100,
-        .height = 18,
-        .tool_presentation = ava::tui::ToolPresentation::Compact});
+    auto const plain_card = ava::tui::render_composer(
+        frontend.frontend(),
+        ava::tui::ComposerSnapshot{.mode = "build",
+                                   //.provider = "openai",
+                                   //.model = "gpt-5.5",
+                                   .session_id = "session_test",
+                                   .input = "",
+                                   .status = "ready",
+                                   .transcript = {ava::tui::TranscriptItem{
+                                       .tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
+                                                                          .name = "edit_file",
+                                                                          .argument_summary = "path=note.txt",
+                                                                          .result_summary = "edited",
+                                                                          .details_visible = true,
+                                                                          .diff = "--- note.txt\n+++ note.txt\n@@ -1 +1 @@\n-hello world\n+hello earth\n",
+                                                                          .changed_paths = {"note.txt"}}}},
+                                   .width = 100,
+                                   .height = 18,
+                                   .tool_presentation = ava::tui::ToolPresentation::Compact});
     expect(std::ranges::all_of(plain_card, [](std::string const& line) { return line.find('\x1b') == std::string::npos; }) &&
                std::ranges::any_of(plain_card, [](std::string const& line) { return line.find("-hello world") != std::string::npos; }) &&
                std::ranges::any_of(plain_card, [](std::string const& line) { return line.find("+hello earth") != std::string::npos; }),
@@ -1676,17 +1716,17 @@ void test_tui_task_job_tool_card_presentation()
   constexpr std::string_view kTaskResult = "Found 3 auth handlers in src/auth.";
   constexpr std::string_view kCodeLikeResult = "use std::vector<int> when a < b && tag != \"</div>\"";
   auto const xml_content = std::string("<task id=\"") + std::string(kTaskId) + "\" job_id=\"" + std::string(kJobId) +
-                           "\" state=\"completed\"><summary>Subagent task completed: " + std::string(kDescription) +
-                           "</summary><task_result>" + std::string(kTaskResult) + "</task_result></task>";
+                           "\" state=\"completed\"><summary>Subagent task completed: " + std::string(kDescription) + "</summary><task_result>" +
+                           std::string(kTaskResult) + "</task_result></task>";
   auto const j = [](std::string_view value) { return ava::core::json::escape(value); };
 
   auto const task_arguments = std::string("{\"description\":\"") + j(kDescription) + "\",\"prompt\":\"" + j(kPrompt) +
                               "\",\"subagent_type\":\"explore\",\"mode\":\"foreground\",\"task_id\":\"" + j(kTaskId) + "\"}";
-  auto const task_result_json =
-      std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) + "\",\"subagent_type\":\"explore\",\"description\":\"" +
-      j(kDescription) + "\",\"session_path\":\"" + j(kSessionPath) + "\",\"state\":\"completed\",\"job_id\":\"" + j(kJobId) +
-      "\",\"stop_reason\":\"completed\",\"provider_iterations\":2,\"tool_calls\":4,\"tool_iterations\":4,\"task_result\":\"" + j(kTaskResult) +
-      "\",\"content\":\"" + j(xml_content) + "\"}";
+  auto const task_result_json = std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) +
+                                "\",\"subagent_type\":\"explore\",\"description\":\"" + j(kDescription) + "\",\"session_path\":\"" + j(kSessionPath) +
+                                "\",\"state\":\"completed\",\"job_id\":\"" + j(kJobId) +
+                                "\",\"stop_reason\":\"completed\",\"provider_iterations\":2,\"tool_calls\":4,\"tool_iterations\":4,\"task_result\":\"" +
+                                j(kTaskResult) + "\",\"content\":\"" + j(xml_content) + "\"}";
 
   auto completed_task = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success,
                                                    .name = "task",
@@ -1704,16 +1744,15 @@ void test_tui_task_job_tool_card_presentation()
   running_fg.result_json.clear();
 
   auto background_started = completed_task;
-  background_started.arguments_json = std::string("{\"description\":\"") + j(kDescription) + "\",\"prompt\":\"" + j(kPrompt) +
-                                      "\",\"subagent_type\":\"explore\",\"mode\":\"background\"}";
+  background_started.arguments_json =
+      std::string("{\"description\":\"") + j(kDescription) + "\",\"prompt\":\"" + j(kPrompt) + "\",\"subagent_type\":\"explore\",\"mode\":\"background\"}";
   auto const bg_xml = std::string("<task id=\"") + std::string(kTaskId) + "\" job_id=\"" + std::string(kJobId) +
                       "\" state=\"running\"><summary>Background subagent task started: " + std::string(kDescription) +
                       "</summary><task_result></task_result></task>";
   background_started.result_json =
-      std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) + "\",\"subagent_type\":\"explore\",\"description\":\"" +
-      j(kDescription) + "\",\"session_path\":\"" + j(kSessionPath) + "\",\"state\":\"running\",\"job_id\":\"" + j(kJobId) +
-      "\",\"stop_reason\":\"\",\"provider_iterations\":0,\"tool_calls\":0,\"tool_iterations\":0,\"task_result\":\"\",\"content\":\"" + j(bg_xml) +
-      "\"}";
+      std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) + "\",\"subagent_type\":\"explore\",\"description\":\"" + j(kDescription) +
+      "\",\"session_path\":\"" + j(kSessionPath) + "\",\"state\":\"running\",\"job_id\":\"" + j(kJobId) +
+      "\",\"stop_reason\":\"\",\"provider_iterations\":0,\"tool_calls\":0,\"tool_iterations\":0,\"task_result\":\"\",\"content\":\"" + j(bg_xml) + "\"}";
 
   auto canceled_task = completed_task;
   canceled_task.status = ava::tui::ToolTimelineStatus::Canceled;
@@ -1756,25 +1795,25 @@ void test_tui_task_job_tool_card_presentation()
     std::string body = body_prefix + "🌍中";
     cluster_boundary_task.arguments_json =
         std::string("{\"description\":\"") + j(desc) + "\",\"prompt\":\"" + j(kPrompt) + "\",\"subagent_type\":\"explore\",\"mode\":\"foreground\"}";
-    cluster_boundary_task.result_json =
-        std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) + "\",\"subagent_type\":\"explore\",\"description\":\"" + j(desc) +
-        "\",\"session_path\":\"" + j(kSessionPath) + "\",\"state\":\"completed\",\"tool_calls\":1,\"task_result\":\"" + j(body) + "\",\"content\":\"" +
-        j(xml_content) + "\"}";
+    cluster_boundary_task.result_json = std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) +
+                                        "\",\"subagent_type\":\"explore\",\"description\":\"" + j(desc) + "\",\"session_path\":\"" + j(kSessionPath) +
+                                        "\",\"state\":\"completed\",\"tool_calls\":1,\"task_result\":\"" + j(body) + "\",\"content\":\"" + j(xml_content) +
+                                        "\"}";
   }
 
   auto code_like_task = completed_task;
-  code_like_task.result_json =
-      std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) + "\",\"subagent_type\":\"explore\",\"description\":\"" + j(kDescription) +
-      "\",\"session_path\":\"" + j(kSessionPath) + "\",\"state\":\"completed\",\"tool_calls\":1,\"task_result\":\"" + j(kCodeLikeResult) +
-      "\",\"content\":\"" + j(xml_content) + "\"}";
+  code_like_task.result_json = std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) +
+                               "\",\"subagent_type\":\"explore\",\"description\":\"" + j(kDescription) + "\",\"session_path\":\"" + j(kSessionPath) +
+                               "\",\"state\":\"completed\",\"tool_calls\":1,\"task_result\":\"" + j(kCodeLikeResult) + "\",\"content\":\"" + j(xml_content) +
+                               "\"}";
 
   auto long_result_task = completed_task;
   {
     std::string long_body(6000, 'R');
     long_result_task.result_json = std::string("{\"tool\":\"task\",\"ok\":true,\"task_id\":\"") + j(kTaskId) +
-                                   "\",\"subagent_type\":\"explore\",\"description\":\"" + j(kDescription) + "\",\"session_path\":\"" +
-                                   j(kSessionPath) + "\",\"state\":\"completed\",\"tool_calls\":2,\"task_result\":\"" + j(long_body) +
-                                   "\",\"content\":\"" + j(xml_content) + "\"}";
+                                   "\",\"subagent_type\":\"explore\",\"description\":\"" + j(kDescription) + "\",\"session_path\":\"" + j(kSessionPath) +
+                                   "\",\"state\":\"completed\",\"tool_calls\":2,\"task_result\":\"" + j(long_body) + "\",\"content\":\"" + j(xml_content) +
+                                   "\"}";
   }
 
   auto duplicate_description_task = completed_task;
@@ -1940,8 +1979,7 @@ void test_tui_task_job_tool_card_presentation()
     expect(ava::core::json::is_valid_utf8(default_copy), std::string("tui task/job default copy is valid UTF-8 for ") + std::string(label));
     if (item.name == "task" && !std::string(kTaskResult).empty())
     {
-      expect(default_copy.find(std::string(kTaskResult)) == std::string::npos &&
-                 default_copy.find("task_result:") == std::string::npos &&
+      expect(default_copy.find(std::string(kTaskResult)) == std::string::npos && default_copy.find("task_result:") == std::string::npos &&
                  !ava::tui::detail::tool_card_matches_copy_query(item, std::string(kTaskResult)),
              std::string("tui default task copy/search omit task_result for ") + std::string(label));
     }
@@ -1974,11 +2012,10 @@ void test_tui_task_job_tool_card_presentation()
   });
 
   check_item(completed_task, "completed task", [&](std::string const& plain, ava::tui::ToolPresentation presentation) {
-    expect(plain.find("Explore") != std::string::npos && plain.find(std::string(kDescription)) != std::string::npos &&
-               plain.find("4 tools") != std::string::npos,
-           "tui completed task cards show type, description, and tool count");
-    expect(plain.find("2.4s") == std::string::npos && plain.find("duration") == std::string::npos,
-           "tui completed task cards do not invent duration fields");
+    expect(
+        plain.find("Explore") != std::string::npos && plain.find(std::string(kDescription)) != std::string::npos && plain.find("4 tools") != std::string::npos,
+        "tui completed task cards show type, description, and tool count");
+    expect(plain.find("2.4s") == std::string::npos && plain.find("duration") == std::string::npos, "tui completed task cards do not invent duration fields");
     for (auto const& line : plain_lines(ava::tui::detail::render_tool_card(completed_task, 120, presentation)))
     {
       auto const pos = line.find(std::string(kDescription));

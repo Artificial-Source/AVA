@@ -55,6 +55,10 @@ class Data
   // Called from FrontEnd::register_frontend_data.
   void register_with_front_end(utils::Badge<FrontEnd>, FrontEnd* frontend);
 
+  // Accessors.
+  FrontEnd* frontend() const { return frontend_; }
+  DataListIndex index() const { return index_; }
+
 #if CW_DEBUG
   // Returns true if this object is registered with a FrontEnd.
   bool is_registered() const { return frontend_; }

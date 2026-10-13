@@ -89,14 +89,15 @@ ava::tools::ToolContext prompt_file_reference_context(runtime::session_ts& unloc
 {
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
     return std::tuple{session_r->workspace_dir(),
                       session_r->store.session_path().parent_path() / "spill",
                       session_r->mode(),
                       session_r->anchor_set(),
                       session_r->ava_authority_roots_1(),
                       session_r->store.session_id(),
-                      session_r->model().provider_id,
-                      session_r->model().model_id,
+                      model_selection_r->model.provider_id,
+                      model_selection_r->model.model_id,
                       session_r->current_dir()};
   }();
   auto& [workspace_dir, spill_dir, mode, anchor_set, authority_roots, session_id, provider_id, model_id, current_dir] = snapshot;

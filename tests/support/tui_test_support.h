@@ -5,11 +5,45 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+namespace ava::tui {
+class TuiFrontEnd;
+}
+
 namespace tui_test_support {
+
+struct TuiTestModel
+{
+  std::string provider_id = "openai";
+  std::string model_id = "gpt-5.5";
+  std::string display_name = "gpt-5.5";
+};
+
+// Owns the canonical backend session before registering its stable ModelSelection
+// address with a real frontend. The declaration order in Impl keeps the frontend
+// alive until after the registered session data has been destroyed.
+class TuiFrontEndFixture final
+{
+ public:
+  explicit TuiFrontEndFixture(TuiTestModel model = {});
+  TuiFrontEndFixture(TuiFrontEndFixture const&) = delete;
+  TuiFrontEndFixture& operator=(TuiFrontEndFixture const&) = delete;
+  TuiFrontEndFixture(TuiFrontEndFixture&&) = delete;
+  TuiFrontEndFixture& operator=(TuiFrontEndFixture&&) = delete;
+  ~TuiFrontEndFixture();
+
+  [[nodiscard]] ava::tui::TuiFrontEnd* frontend() noexcept;
+  [[nodiscard]] std::pair<std::string, std::string> selected_model_metadata();
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 struct ScopedTerminalCapabilityProfile
 {

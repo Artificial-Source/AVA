@@ -481,10 +481,11 @@ ava::tui::StartupOverviewSnapshot build_startup_overview_snapshot(runtime::sessi
   // Keep the non-owning spans guarded only for the builder's bounded, in-memory
   // projection; the returned snapshot owns everything it retains.
   SCOPED_CRITICAL_AREA_CR(session_r, session);
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
   auto const& trust = session_r->project_trust();
   auto const mode = ava::agent::to_string(session_r->mode());
-  auto const& provider = session_r->model().provider_id;
-  auto const& model = session_r->model().display_name.empty() ? session_r->model().model_id : session_r->model().display_name;
+  auto const& provider = model_selection_r->model.provider_id;
+  auto const& model = model_selection_r->model.display_name.empty() ? model_selection_r->model.model_id : model_selection_r->model.display_name;
   auto const trust_decision = std::string(to_string(trust.decision));
   auto const project_resources = project_resources_trusted(trust) ? std::string("enabled") : std::string("skipped");
   StartupOverviewBuildInput input{

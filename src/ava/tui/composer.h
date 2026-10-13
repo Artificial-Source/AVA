@@ -24,6 +24,7 @@ struct PermissionPrompt;
 
 namespace ava::tui {
 
+class TuiFrontEnd;
 struct TuiKeyBindings;
 namespace detail {
 class MermaidTranscriptProjection;
@@ -260,8 +261,6 @@ struct SidebarSnapshot
   std::vector<TodoItem> todos = {};
   std::string session_id = {};
   std::string mode = {};
-  std::string provider = {};
-  std::string model = {};
   std::string workspace = {};
   std::string git_branch = {};
   std::string version = {};
@@ -613,8 +612,6 @@ enum class ToolPresentation
 struct ComposerSnapshot
 {
   std::string mode;
-  std::string provider;
-  std::string model;
   std::string session_id;
   std::string input;
   std::string status;
@@ -790,8 +787,9 @@ struct ComposerPaletteScreenLayout
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 [[nodiscard]] std::optional<ComposerPaletteScreenLayout> composer_palette_screen_layout(ComposerSnapshot const& snapshot);
-[[nodiscard]] ComposerFrame render_composer_frame(ComposerSnapshot const& snapshot);
-[[nodiscard]] std::vector<std::string> render_composer(ComposerSnapshot const& snapshot);
+// Test rendering entry points require a registered, initialized frontend.
+[[nodiscard]] ComposerFrame render_composer_frame(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot);
+[[nodiscard]] std::vector<std::string> render_composer(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot);
 [[nodiscard]] std::vector<std::string> render_subagent_workspace(SubagentWorkspaceView const& view, std::size_t width, std::size_t height);
 [[nodiscard]] std::size_t subagent_workspace_max_scroll_offset(SubagentWorkspaceView const& view, std::size_t width, std::size_t height);
 [[nodiscard]] std::size_t composer_main_width(ComposerSnapshot const& snapshot);
@@ -808,8 +806,9 @@ struct PluginUiSurfaceGeometry
 // The coordinator uses this before authorizing a surface.
 [[nodiscard]] PluginUiSurfaceGeometry plugin_ui_surface_geometry(ComposerSnapshot const& snapshot, TuiPluginUiKind kind);
 [[nodiscard]] std::size_t composer_max_transcript_scroll_offset(ComposerSnapshot const& snapshot, std::size_t width, std::size_t height);
-[[nodiscard]] std::size_t sidebar_drawer_max_scroll_offset(ComposerSnapshot const& snapshot);
-[[nodiscard]] bool draw_screen(ComposerSnapshot const& snapshot);
+[[nodiscard]] std::size_t sidebar_drawer_max_scroll_offset(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot);
+// Test terminal drawing requires a registered, initialized frontend.
+[[nodiscard]] bool draw_screen(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot);
 [[nodiscard]] std::vector<std::string> split_lines(std::string_view text);
 [[nodiscard]] PermissionPromptRememberAvailability permission_prompt_remember_availability(ava::permissions::PermissionPrompt const& prompt,
                                                                                            bool rule_storage_available) noexcept;

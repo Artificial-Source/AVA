@@ -290,7 +290,7 @@ std::optional<std::string> token_status_for_session(ava::app::runtime::session_t
 {
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::pair{session_r->read_authority_1(), session_r->model().context_window_tokens};
+    return std::pair{session_r->read_authority_1(), session_r->model_selection_r()->model.context_window_tokens};
   }();
   auto& [read_authority, context_window_tokens] = snapshot;
   if (!read_authority)
@@ -342,7 +342,7 @@ ava::core::Result<std::string> formatted_active_context_status(ava::app::runtime
 {
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->read_authority_1(), session_r->system_prompt(), session_r->model().context_window_tokens};
+    return std::tuple{session_r->read_authority_1(), session_r->system_prompt(), session_r->model_selection_r()->model.context_window_tokens};
   }();
   auto& [read_authority, system_prompt, context_window_tokens] = snapshot;
   if (!read_authority)
@@ -543,7 +543,7 @@ void store_model_scope(ava::app::runtime::session_ts& unlocked_session, std::vec
 
 std::vector<std::string> active_model_scope_or_all(ava::app::runtime::session_ts const& unlocked_session, std::vector<std::string> const& all_values)
 {
-  auto const scoped_cycle = runtime::session_ts::crat(unlocked_session)->scoped_model_cycle();
+  auto const scoped_cycle = runtime::session_ts::crat(unlocked_session)->model_selection_r()->scoped_model_cycle;
   if (scoped_cycle)
     return normalized_model_scope(*scoped_cycle, all_values);
   return all_values;
@@ -589,7 +589,7 @@ ava::core::Result<ava::tui::SelectListView> toggle_scoped_model(ava::app::runtim
   auto const all_values = registered_model_cycle_values(unlocked_session);
   if (!contains_value(all_values, value))
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "model is not available for scoped cycling"));
-  auto const scoped_cycle = runtime::session_ts::rat(unlocked_session)->scoped_model_cycle();
+  auto const scoped_cycle = runtime::session_ts::rat(unlocked_session)->model_selection_r()->scoped_model_cycle;
   if (!scoped_cycle)
   {
     std::vector<std::string> v{std::string(value)};
@@ -687,7 +687,7 @@ ava::core::Result<ava::tui::SelectListView> reorder_scoped_model(ava::app::runti
 
 ava::core::Result<std::string> save_scoped_model_cycle(ava::app::runtime::session_ts& unlocked_session)
 {
-  auto scope_to_save = runtime::session_ts::rat(unlocked_session)->scoped_model_cycle();
+  auto scope_to_save = runtime::session_ts::rat(unlocked_session)->model_selection_r()->scoped_model_cycle;
   if (scope_to_save)
   {
     auto const all_values = registered_model_cycle_values(unlocked_session);

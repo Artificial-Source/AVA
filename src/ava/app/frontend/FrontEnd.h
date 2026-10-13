@@ -6,7 +6,15 @@
 
 #include <string>
 
-namespace ava::app::frontend {
+namespace ava::app {
+
+namespace runtime {
+// Avoid having to define Session.
+using SessionUnlockedBase = threadsafe::Unlocked<Session, threadsafe::policy::Primitive<SessionMutex>>;
+using SessionConstReadAccess = threadsafe::AccessConst<SessionUnlockedBase>;
+} // namespace runtime
+
+namespace frontend {
 
 class FrontEnd
 {
@@ -24,15 +32,22 @@ class FrontEnd
   virtual ~FrontEnd() = default;
 
   // Register a Data (derived) object.
-  DataListIndex register_data(Data* data);
+  DataListIndex register_data(Data const* data);
 
   // Register all Data (derived) objects.
   void register_frontend_data(runtime::session_ts& unlocked_session);
 
+  // Let the derived class initialize its displayable state. Called by FrontEnd::register_frontend_data.
+  virtual void initialize_frontend_state(runtime::SessionConstReadAccess const& session_r) = 0;
+
   // One of the registered Data objects was changed. Called by the backend.
   virtual void data_changed(DataListIndex index) = 0;
+
+  // Obtain Data pointer for index previously returned by register_data.
+  Data const* get_data(DataListIndex index) const { return data_list_[index]; }
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-} // namespace ava::app::frontend
+} // namespace frontend
+} // namespace ava::app

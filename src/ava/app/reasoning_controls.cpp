@@ -27,15 +27,19 @@ std::string reasoning_selected_status(runtime::ReasoningSelection const& selecti
 
 }  // namespace
 
+// Read model capabilities and the selected reasoning level under the same model-selection lock, acquired after the Session lock.
+// Return an owning level string, or no status when reasoning is unavailable or no level is selected.
 std::optional<std::string> reasoning_status_for_session(runtime::session_ts const& unlocked_session)
 {
   SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-  auto const& model = session_r->model();
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+  auto const& model = model_selection_r->model;
   if (!model.supports_reasoning.value_or(false) && ava::config::supported_reasoning_levels(model).size() <= 1)
     return std::nullopt;
-  if (!session_r->reasoning() || session_r->reasoning()->level.empty())
+  auto const& reasoning = model_selection_r->reasoning;
+  if (!reasoning || reasoning->level.empty())
     return std::nullopt;
-  return session_r->reasoning()->level;
+  return reasoning->level;
 }
 
 ava::core::Result<runtime::ReasoningSelection> reasoning_selection_for_level(ava::config::ModelInfo const& model, std::string level)
@@ -85,8 +89,9 @@ ava::core::Result<std::string> cycle_runtime_reasoning(runtime::session_ts& unlo
   std::optional<runtime::ReasoningSelection> current_reasoning;
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    model = session_r->model();
-    current_reasoning = session_r->reasoning();
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    model = model_selection_r->model;
+    current_reasoning = model_selection_r->reasoning;
   }
   if (!model.supports_reasoning.value_or(false))
   {

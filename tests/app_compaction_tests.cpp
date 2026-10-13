@@ -635,7 +635,7 @@ void test_app_compaction_model_selection_uses_runtime_catalog()
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
 
-  auto const active_model = session_w->model();
+  auto const active_model = session_w->model_selection_r()->model;
   CRITICAL_AREA_END_W(session);
   auto active = ava::app::resolve_compaction_config(unlocked_session, ava::session::default_compaction_config());
   auto same_config = ava::session::parse_compaction_config(R"({"model":"gpt-5.5"})");

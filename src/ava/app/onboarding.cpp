@@ -61,7 +61,7 @@ std::string auth_setup_message(runtime::session_ts const& unlocked_session, std:
   std::filesystem::path auth_file;
   {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    configured_provider_id = session_r->model().provider_id;
+    configured_provider_id = session_r->model_selection_r()->model.provider_id;
     auth_file = session_r->paths().auth_file;
   }
   auto const provider_id = configured_provider_id.empty() ? std::string("openai") : configured_provider_id;
@@ -84,7 +84,7 @@ std::optional<std::string> first_run_auth_onboarding_message(runtime::session_ts
   {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
     paths = session_r->paths();
-    provider_id = session_r->model().provider_id;
+    provider_id = session_r->model_selection_r()->model.provider_id;
   }
   auto credential = ava::config::provider_credential_for_startup(paths, provider_id);
   if (provider_id.empty())
@@ -99,7 +99,7 @@ std::optional<std::string> first_run_auth_onboarding_message(runtime::session_ts
 
 std::string provider_auth_required_message(runtime::session_ts const& unlocked_session, std::string_view offline_suffix)
 {
-  auto const configured_provider_id = runtime::session_ts::crat(unlocked_session)->model().provider_id;
+  auto const configured_provider_id = runtime::session_ts::crat(unlocked_session)->model_selection_r()->model.provider_id;
   auto const provider_id = configured_provider_id.empty() ? std::string("openai") : configured_provider_id;
   auto message = auth_setup_message(unlocked_session, "Auth is required for provider `" + provider_id + "`.");
   if (!offline_suffix.empty())

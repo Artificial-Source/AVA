@@ -645,7 +645,7 @@ void SessionTitleCoordinator::schedule(runtime::session_ts const& unlocked_sessi
         };
       }
       return std::optional{std::tuple{std::move(*read_authority), std::move(append_route), session_r->run_controller(),
-                                      std::string(session_r->store.session_id()), session_r->paths(), session_r->model(), session_r->anchor_set(),
+                                      std::string(session_r->store.session_id()), session_r->paths(), session_r->model_selection_r()->model, session_r->anchor_set(),
                                       session_r->provider_catalog(), session_r->is_offline(), std::move(transport_factory)}};
     }();
     if (!session_snapshot)

@@ -465,7 +465,7 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
     }
     if (preserve_viewport && !detached_sidebar_snapshot)
       detached_sidebar_snapshot = sidebar;
-    apply_assistant_turn_meta(turn_transcript, assistant_meta_for_snapshot(snapshot, std::chrono::steady_clock::now() - turn_started_at),
+    apply_assistant_turn_meta(turn_transcript, assistant_meta_for_snapshot(renderer_.frontend, snapshot, std::chrono::steady_clock::now() - turn_started_at),
                               snapshot.thinking_visible);
     auto const tool_detail_overrides = capture_tool_detail_visibility(snapshot.transcript);
     auto const thinking_expansion_overrides = capture_thinking_expansion(snapshot.transcript);
@@ -990,7 +990,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   if (settlement.policy.project_conversation && !events_received)
   {
     auto const turn_elapsed = std::chrono::steady_clock::now() - turn_started_at;
-    auto const assistant_meta = assistant_meta_for_snapshot(snapshot, turn_elapsed);
+    auto const assistant_meta = assistant_meta_for_snapshot(renderer_.frontend, snapshot, turn_elapsed);
     auto const transcript_size_before_fallback = snapshot.transcript.size();
     std::ptrdiff_t item_index_shift = 0;
     if (!is_command_submission && !session_changed)

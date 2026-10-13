@@ -256,7 +256,7 @@ tui::SelectListView model_selector_view_1(runtime::session_ts const& unlocked_se
 {
   auto [paths, model, catalog] = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->paths(), session_r->model(), session_r->ensure_provider_catalog()};
+    return std::tuple{session_r->paths(), session_r->model_selection_r()->model, session_r->ensure_provider_catalog()};
   }();
   if (auto registry = ava::config::load_model_registry(paths))
     return model_selector_view(*registry, model, std::move(catalog), std::move(footer_hint));
@@ -322,7 +322,8 @@ tui::SelectListView scoped_model_selector_view_1(runtime::session_ts const& unlo
 {
   auto [paths, model, cycle, catalog] = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->paths(), session_r->model(), session_r->scoped_model_cycle(), session_r->ensure_provider_catalog()};
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    return std::tuple{session_r->paths(), model_selection_r->model, model_selection_r->scoped_model_cycle, session_r->ensure_provider_catalog()};
   }();
   if (auto registry = ava::config::load_model_registry(paths))
     return scoped_model_selector_view(*registry, model, cycle, std::move(catalog), std::move(footer_hint));

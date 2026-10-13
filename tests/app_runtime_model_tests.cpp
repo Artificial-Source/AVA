@@ -11,6 +11,7 @@
 #include "ava/app/runtime/RunOptions.h"
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime/UnlockedData.h"
 #include "ava/app/runtime_model.h"
 #include "ava/agent/message_builder.h"
 #include "ava/config/model_config.h"
@@ -25,9 +26,11 @@
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <concepts>
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -44,6 +47,77 @@
 namespace ava::tests::app_runtime_tests {
 
 using namespace ava::tests;
+
+namespace {
+
+class CallbackFrontEnd final : public ava::app::frontend::FrontEnd
+{
+ public:
+  std::function<void(ava::app::frontend::DataListIndex)> on_data_changed;
+
+  void initialize_frontend_state(app::runtime::SessionConstReadAccess const&) override { }
+
+  void data_changed(ava::app::frontend::DataListIndex index) override
+  {
+    if (on_data_changed)
+      on_data_changed(index);
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+} // namespace
+
+void test_unlocked_data_access_and_notifications()
+{
+  using data_type = ava::app::runtime::UnlockedData<std::string>;
+  static_assert(std::derived_from<data_type::wat, data_type::rat>);
+  static_assert(std::derived_from<data_type::wat, data_type::crat>);
+  static_assert(std::move_constructible<data_type::wat>);
+
+  CallbackFrontEnd frontend;
+  data_type data(&frontend, "seven");
+  int notifications = 0;
+  std::string observed_value;
+  frontend.on_data_changed = [&](ava::app::frontend::DataListIndex) {
+    ++notifications;
+    data_type::crat data_r(std::as_const(data));
+    observed_value = *data_r;
+  };
+
+  expect(notifications == 0, "constructing registered observable data does not emit a change notification");
+  {
+    data_type::rat data_r(data);
+    expect(*data_r == "seven", "standard mutable-owner read access accepts an observable owner with a protected Unlocked base");
+  }
+  {
+    data_type::crat data_cr(std::as_const(data));
+    expect(*data_cr == "seven", "standard const-owner read access accepts an observable owner with a protected Unlocked base");
+  }
+  expect(notifications == 0, "read access guards do not emit change notifications");
+
+  {
+    data_type::wat data_w(data);
+    auto read_rat = [](data_type::rat const& data_r) { return *data_r; };
+    auto read_crat = [](data_type::crat const& data_r) { return *data_r; };
+    expect(read_rat(data_w) == "seven" && read_crat(data_w) == "seven", "write access retains inherited rat and crat reference conversions");
+  }
+  expect(notifications == 1 && observed_value == "seven", "a write guard notifies after unlocking even when no value was modified");
+
+  {
+    data_type::wat first(data);
+    data_type::wat moved(std::move(first));
+    *moved = "nine";
+  }
+  expect(notifications == 2 && observed_value == "nine", "moving a write guard transfers its single pending notification");
+
+  data.change([](std::string& value) { value = "eleven"; });
+  expect(notifications == 3 && observed_value == "eleven", "change emits exactly one unlocked notification");
+
+  data_type replacement("forty-two");
+  data = std::move(replacement);
+  expect(notifications == 4 && observed_value == "forty-two", "move assignment preserves destination registration and publishes the transferred value");
+}
 
 std::optional<std::string> app_error_context(ava::core::Error const& error, std::string_view key)
 {
@@ -283,8 +357,11 @@ void test_runtime_model_switch_accepts_committed_openai_responses_reasoning()
     auto controller = std::move(session_w->resources().run_controller);
     auto rejected_append_switch = session_w->switch_model(*target);
     session_w->resources().run_controller = std::move(controller);
-    expect(!rejected_append_switch && session_w->model().provider_id == "openai" && session_w->model().model_id == "gpt-5.5",
-           "a model_change append failure is reported truthfully and leaves active runtime model state unchanged");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(!rejected_append_switch && model_selection_r->model.provider_id == "openai" && model_selection_r->model.model_id == "gpt-5.5",
+             "a model_change append failure is reported truthfully and leaves active runtime model state unchanged");
+    }
 
     auto switched = session_w->switch_model(*target);
     auto entries = session_w->store.load();
@@ -293,8 +370,12 @@ void test_runtime_model_switch_accepts_committed_openai_responses_reasoning()
                                                 entry.data_json.find(R"("previous_model":"gpt-5.5")") != std::string::npos &&
                                                 entry.data_json.find(R"("model":"gpt-5.6-sol")") != std::string::npos;
                                        });
-    expect(switched && *switched && session_w->model().provider_id == "openai" && session_w->model().model_id == "gpt-5.6-sol" && appended_model_change,
-           "committed GPT-5.5 OpenAI Responses native reasoning safely switches to GPT-5.6 Sol and appends model_change");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(switched && *switched && model_selection_r->model.provider_id == "openai" && model_selection_r->model.model_id == "gpt-5.6-sol" &&
+                 appended_model_change,
+             "committed GPT-5.5 OpenAI Responses native reasoning safely switches to GPT-5.6 Sol and appends model_change");
+    }
   }
 }
 
@@ -342,8 +423,9 @@ void test_app_runtime_model_switch_persists_and_reopens()
   std::string session_id;
   {
     SCOPED_CRITICAL_AREA_W(session_w, *unlocked_session_result);
-    expect(session_w->scoped_model_cycle() && session_w->scoped_model_cycle()->size() == 2 &&
-               (*session_w->scoped_model_cycle())[0] == "anthropic/claude-test" && (*session_w->scoped_model_cycle())[1] == "openai/gpt-5.5",
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+    expect(model_selection_r->scoped_model_cycle && model_selection_r->scoped_model_cycle->size() == 2 &&
+               (*model_selection_r->scoped_model_cycle)[0] == "anthropic/claude-test" && (*model_selection_r->scoped_model_cycle)[1] == "openai/gpt-5.5",
            "runtime session restores persisted scoped model cycle");
     session_id = session_w->store.session_id();
   }
@@ -356,7 +438,11 @@ void test_app_runtime_model_switch_persists_and_reopens()
     SCOPED_CRITICAL_AREA_W(session_w, *unlocked_session_result);
     auto switched = session_w->switch_model(*model);
     expect(switched.has_value() && *switched, "runtime model switch reports a change");
-    expect(session_w->model().provider_id == "anthropic" && session_w->model().model_id == "claude-test", "runtime model switch updates active session model");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "anthropic" && model_selection_r->model.model_id == "claude-test",
+             "runtime model switch updates active session model");
+    }
 
     auto entries = session_w->store.load();
     expect(entries.has_value(), "runtime model switch loads session entries");
@@ -423,16 +509,18 @@ void test_app_runtime_model_switch_persists_and_reopens()
   if (unlocked_reopened_result)
   {
     SCOPED_CRITICAL_AREA_R(reopened_r, *unlocked_reopened_result);
-    expect(reopened_r->model().provider_id == "anthropic" && reopened_r->model().model_id == "claude-test",
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = reopened_r->model_selection_r();
+    expect(model_selection_r->model.provider_id == "anthropic" && model_selection_r->model.model_id == "claude-test",
            "runtime reopen restores latest persisted model_change");
     auto const resumed_unknown_launch_display =
-        ava::agent::SubagentLaunchDisplay::normalized(ava::config::proven_configured_model_display_name(reopened_r->model()));
-    expect(reopened_r->model().display_name == "Claude Test" && ava::config::proven_configured_model_display_name(reopened_r->model()).empty() &&
+        ava::agent::SubagentLaunchDisplay::normalized(ava::config::proven_configured_model_display_name(model_selection_r->model));
+    expect(model_selection_r->model.display_name == "Claude Test" &&
+               ava::config::proven_configured_model_display_name(model_selection_r->model).empty() &&
                resumed_unknown_launch_display.model_display_name().empty(),
            "resumed unknown model retains its public fallback label but is omitted from private launch display without process-local provenance");
     auto const emoji_quirk = std::string("\xF0\x9F\x98\x80");
-    bool const restored_emoji_quirk = std::ranges::find(reopened_r->model().compatibility_quirks, emoji_quirk) !=
-                                      reopened_r->model().compatibility_quirks.end();
+    bool const restored_emoji_quirk = std::ranges::find(model_selection_r->model.compatibility_quirks, emoji_quirk) !=
+                                      model_selection_r->model.compatibility_quirks.end();
     expect(restored_emoji_quirk, "runtime reopen decodes escaped supplementary-plane metadata");
   }
   if (unlocked_reopened_result)
@@ -518,15 +606,16 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
 
     auto project_current_request = [&]() {
       auto physical = session_w->store.load();
-      bool const supports_images = std::ranges::find(session_w->model().input_modalities, "image") != session_w->model().input_modalities.end();
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      bool const supports_images = std::ranges::find(model_selection_r->model.input_modalities, "image") != model_selection_r->model.input_modalities.end();
       return physical
                  ? ava::agent::build_provider_messages_from_entries(
-                       *physical, ava::agent::MessageBuildOptions{.target = ava::agent::HistoryReplayTarget{.provider_id = session_w->model().provider_id,
-                                                                                                            .model_id = session_w->model().model_id,
-                                                                                                            .api_family = session_w->model().api_family,
-                                                                                                            .reasoning_format = session_w->model().reasoning_format,
+                       *physical, ava::agent::MessageBuildOptions{.target = ava::agent::HistoryReplayTarget{.provider_id = model_selection_r->model.provider_id,
+                                                                                                            .model_id = model_selection_r->model.model_id,
+                                                                                                            .api_family = model_selection_r->model.api_family,
+                                                                                                            .reasoning_format = model_selection_r->model.reasoning_format,
                                                                                                             .supports_tools =
-                                                                                                                session_w->model().supports_tools.value_or(false),
+                                                                                                                model_selection_r->model.supports_tools.value_or(false),
                                                                                                             .supports_images = supports_images}})
                  : ava::core::Result<std::vector<ava::provider::ChatMessage>>(std::unexpected(std::move(physical.error())));
     };
@@ -551,8 +640,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
       return;
     auto switched_no_tools = session_w->switch_model(*no_tools_model);
     expect(switched_no_tools.has_value() && *switched_no_tools, "runtime switches immediately to a model without tool support after tool history");
-    expect(session_w->model().provider_id == "openai" && session_w->model().model_id == "no-tools",
-           "tool-history model switch updates active state without scanning history");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "openai" && model_selection_r->model.model_id == "no-tools",
+             "tool-history model switch updates active state without scanning history");
+    }
     auto no_tools_request = project_current_request();
     expect(no_tools_request &&
                std::ranges::any_of(*no_tools_request, [](auto const& message) { return message.content.find("Tool call") != std::string::npos; }) &&
@@ -576,7 +668,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
       return;
     auto switched_anthropic = session_w->switch_model(*anthropic_replay);
     expect(switched_anthropic.has_value() && *switched_anthropic, "runtime allows switch to Anthropic model that can replay Anthropic reasoning");
-    expect(session_w->model().provider_id == "anthropic" && session_w->model().model_id == "claude-replay", "compatible reasoning switch updates active model");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "anthropic" && model_selection_r->model.model_id == "claude-replay",
+             "compatible reasoning switch updates active model");
+    }
 
     auto kimi_model = ava::app::resolve_runtime_model(paths, "kimi", "kimi-k2-thinking");
     expect(kimi_model.has_value(), "runtime resolves Kimi model");
@@ -584,8 +680,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
       return;
     auto switched_reasoning = session_w->switch_model(*kimi_model);
     expect(switched_reasoning.has_value() && *switched_reasoning, "runtime switches immediately across incompatible reasoning providers");
-    expect(session_w->model().provider_id == "kimi" && session_w->model().model_id == "kimi-k2-thinking",
-           "cross-provider reasoning switch updates active state without scanning history");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "kimi" && model_selection_r->model.model_id == "kimi-k2-thinking",
+             "cross-provider reasoning switch updates active state without scanning history");
+    }
     auto cross_reasoning_request = project_current_request();
     expect(cross_reasoning_request && std::ranges::none_of(*cross_reasoning_request,
                                                             [](auto const& message) {
@@ -604,7 +703,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
     auto switched_no_tools_after_compaction = session_w->switch_model(*no_tools_model);
     expect(switched_no_tools_after_compaction.has_value() && *switched_no_tools_after_compaction,
            "runtime ignores pre-compaction native history for switch compatibility");
-    expect(session_w->model().provider_id == "openai" && session_w->model().model_id == "no-tools", "post-compaction switch updates active model");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "openai" && model_selection_r->model.model_id == "no-tools",
+             "post-compaction switch updates active model");
+    }
 
     auto appended_large_image = session_w->append_owned(ava::session::SessionEntry{
         .id = ava::core::make_id("entry"),
@@ -621,8 +724,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
     auto switched_large_image = session_w->switch_model(*anthropic_image);
     expect(switched_large_image.has_value() && *switched_large_image,
            "runtime switches immediately despite historical images exceeding the target's provider-specific limit");
-    expect(session_w->model().provider_id == "anthropic" && session_w->model().model_id == "claude-image",
-           "image-history model switch updates active state without scanning history");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "anthropic" && model_selection_r->model.model_id == "claude-image",
+             "image-history model switch updates active state without scanning history");
+    }
     auto anthropic_image_request = project_current_request();
     expect(anthropic_image_request &&
                std::ranges::any_of(*anthropic_image_request,
@@ -651,8 +757,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
     auto switched_deepseek_to_kimi = session_w->switch_model(*kimi_model);
     expect(switched_deepseek_to_kimi.has_value() && *switched_deepseek_to_kimi,
            "runtime switches immediately across providers that use the same reasoning format");
-    expect(session_w->model().provider_id == "kimi" && session_w->model().model_id == "kimi-k2-thinking",
-           "same-format cross-provider switch updates active state without replaying native reasoning");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "kimi" && model_selection_r->model.model_id == "kimi-k2-thinking",
+             "same-format cross-provider switch updates active state without replaying native reasoning");
+    }
 
     auto appended_deepseek_compaction = session_w->append_owned(ava::session::SessionEntry{.id = ava::core::make_id("entry"),
                                                                                            .parent_id = "",
@@ -673,7 +782,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
 
     auto switched_kimi = session_w->switch_model(*kimi_model);
     expect(switched_kimi.has_value() && !*switched_kimi, "switching to the already-active Kimi model remains an accepted no-op");
-    expect(session_w->model().provider_id == "kimi" && session_w->model().model_id == "kimi-k2-thinking", "accepted Kimi no-op preserves the active model");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "kimi" && model_selection_r->model.model_id == "kimi-k2-thinking",
+             "accepted Kimi no-op preserves the active model");
+    }
 
     auto moonshot_model = ava::app::resolve_runtime_model(paths, "moonshot", "kimi-k2.6");
     expect(moonshot_model.has_value(), "runtime resolves Moonshot model");
@@ -681,8 +794,11 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
       return;
     auto switched_moonshot = session_w->switch_model(*moonshot_model);
     expect(switched_moonshot.has_value() && *switched_moonshot, "runtime switches immediately without a native-reasoning preservation quirk");
-    expect(session_w->model().provider_id == "moonshot" && session_w->model().model_id == "kimi-k2.6",
-           "Moonshot switch updates active state while request projection owns replay safety");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->model.provider_id == "moonshot" && model_selection_r->model.model_id == "kimi-k2.6",
+             "Moonshot switch updates active state while request projection owns replay safety");
+    }
 
     auto entries = session_w->store.load();
     expect(entries.has_value(), "model switch compatibility test reloads entries");
@@ -763,8 +879,11 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
     session_id = session_w->store.session_id();
 
     auto selected = session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = " low ", .budget_tokens = std::nullopt, .display = ""});
-    expect(selected.has_value() && *selected && session_w->reasoning() && session_w->reasoning()->level == "low",
-           "runtime reasoning selection validates, normalizes, and updates state");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(selected.has_value() && *selected && model_selection_r->reasoning && model_selection_r->reasoning->level == "low",
+             "runtime reasoning selection validates, normalizes, and updates state");
+    }
 
     auto duplicate = session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = "low", .budget_tokens = std::nullopt, .display = ""});
     expect(duplicate.has_value() && !*duplicate, "runtime reasoning selection is idempotent when unchanged");
@@ -814,7 +933,7 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
            "a second runtime cannot inspect reasoning by bypassing the active owner's lease");
 
     auto cleared = session_w->set_reasoning(std::nullopt);
-    expect(cleared.has_value() && *cleared && !session_w->reasoning(), "runtime reasoning selection can be cleared");
+    expect(cleared.has_value() && *cleared && !session_w->model_selection_r()->reasoning, "runtime reasoning selection can be cleared");
 
     auto reselected = session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = "low", .budget_tokens = std::nullopt, .display = ""});
     expect(reselected.has_value() && *reselected, "runtime reasoning test re-enables reasoning before switch boundary");
@@ -830,7 +949,7 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
       expect(!kimi_budget.has_value() && kimi_budget.error().format().find("Kimi reasoning supports level only") != std::string::npos,
              "runtime reasoning selection rejects unsupported OpenAI-compatible budget/display controls");
       auto switched_back = session_w->switch_model(*openai_model);
-      expect(switched_back.has_value() && *switched_back && !session_w->reasoning(), "runtime model switches clear active reasoning selection");
+      expect(switched_back.has_value() && *switched_back && !session_w->model_selection_r()->reasoning, "runtime model switches clear active reasoning selection");
       auto reopened_after_switch = ava::app::runtime::Session::open(reopen_context, {.sessionless = false,
                                                                                    .requested_session_id = session_id,
                                                                                    .fork_session_id = std::nullopt,
@@ -879,9 +998,12 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
       CRITICAL_AREA_END_W(session);
       auto cycled = ava::app::cycle_runtime_reasoning(unlocked_session);
       CRITICAL_AREA_CONTINUE_W(session);
-      expect(cycled.has_value() && session_w->reasoning() && session_w->reasoning()->level == "enabled" && session_w->reasoning()->budget_tokens &&
-                 *session_w->reasoning()->budget_tokens == 4096,
-             "runtime reasoning cycling uses API-family fallback profile for custom Anthropic-compatible models");
+      {
+        ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+        expect(cycled.has_value() && model_selection_r->reasoning && model_selection_r->reasoning->level == "enabled" && model_selection_r->reasoning->budget_tokens &&
+                   *model_selection_r->reasoning->budget_tokens == 4096,
+               "runtime reasoning cycling uses API-family fallback profile for custom Anthropic-compatible models");
+      }
       auto missing_budget =
           session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = "enabled", .budget_tokens = std::nullopt, .display = ""});
       expect(!missing_budget.has_value() && missing_budget.error().format().find("Anthropic-proxy enabled reasoning requires budget_tokens") != std::string::npos,
@@ -1048,7 +1170,10 @@ void test_app_runtime_initial_reasoning_level_option()
   std::string session_id;
   {
     SCOPED_CRITICAL_AREA_W(session_w, *unlocked_session_result);
-    expect(session_w->reasoning() && session_w->reasoning()->level == "high", "runtime startup applies initial reasoning level");
+    {
+      ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
+      expect(model_selection_r->reasoning && model_selection_r->reasoning->level == "high", "runtime startup applies initial reasoning level");
+    }
     session_id = session_w->store.session_id();
 
     auto entries = session_w->store.load();
@@ -1073,7 +1198,7 @@ void test_app_runtime_initial_reasoning_level_option()
   if (unlocked_cleared_result)
   {
     SCOPED_CRITICAL_AREA_R(cleared_r, *unlocked_cleared_result);
-    expect(!cleared_r->reasoning(), "runtime startup reasoning accepts off as clear_reasoning alias");
+    expect(!cleared_r->model_selection_r()->reasoning, "runtime startup reasoning accepts off as clear_reasoning alias");
     auto cleared_entries = cleared_r->store.load();
     expect(cleared_entries.has_value(), "runtime startup reasoning clear reloads entries");
     if (cleared_entries)

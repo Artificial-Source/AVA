@@ -88,7 +88,7 @@ void test_app_rpc_model_commands()
   expect(jsonl.find("\"id\":\"cycle\"") != std::string::npos && jsonl.find("\"provider\":\"deepseek\"") != std::string::npos,
          "RPC cycle_model advances to the next configured provider model");
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-  expect(session_w->model().provider_id == "deepseek", "RPC cycle_model updates active session model");
+  expect(session_w->model_selection_r()->model.provider_id == "deepseek", "RPC cycle_model updates active session model");
   auto previous = ava::app::rpc::previous_runtime_model(session_w);
   expect(previous && previous->provider_id == "anthropic" && previous->model_id == "claude-sonnet-4-5",
          "runtime previous model helper returns the configured predecessor for TUI reverse cycling");
@@ -158,7 +158,7 @@ void test_app_rpc_reasoning_commands()
          "RPC set_reasoning off clears reasoning state instead of storing an active off selection");
   expect(jsonl.find("\"id\":\"clear\"") != std::string::npos && jsonl.rfind("\"reasoning_enabled\":false") != std::string::npos,
          "RPC clear_reasoning disables reasoning state");
-  expect(!session_r->reasoning(), "RPC clear_reasoning updates active session state");
+  expect(!session_r->model_selection_r()->reasoning, "RPC clear_reasoning updates active session state");
 
   auto entries = session_r->store.load();
   expect(entries.has_value(), "RPC reasoning command test reloads entries");

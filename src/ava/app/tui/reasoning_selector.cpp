@@ -123,7 +123,8 @@ std::optional<tui::SelectListView> reasoning_selector_view(ava::config::ModelInf
 std::optional<tui::SelectListView> reasoning_selector_view(runtime::session_ts const& unlocked_session, std::string footer_hint)
 {
   SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-  return reasoning_selector_view(session_r->model(), session_r->reasoning(), std::move(footer_hint));
+  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+  return reasoning_selector_view(model_selection_r->model, model_selection_r->reasoning, std::move(footer_hint));
 }
 
 }  // namespace ava::app

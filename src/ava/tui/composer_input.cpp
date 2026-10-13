@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/config/model_profiles.h"
@@ -168,9 +169,11 @@ void append_input_text(std::string& line, ComposerSnapshot const& snapshot, std:
   append_input_text_segment(line, text.substr(selected_end), false);
 }
 
-std::string render_composer_footer_line_impl(ComposerSnapshot const& snapshot, std::size_t width)
+std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width)
 {
-  auto const model = model_label(snapshot.model);
+  std::string model_display;
+  [[maybe_unused]] bool changed = frontend->model_selection().refresh_model_display(frontend, model_display);
+  auto const model = model_label(model_display);
   auto const active_context_status = snapshot.active_context_status;
 
   auto const build_left_status = [&](std::size_t budget) {
@@ -291,9 +294,9 @@ std::size_t composer_input_prefix_columns(bool /*first_line*/)
   return 3;
 }
 
-std::string render_composer_footer_line(ComposerSnapshot const& snapshot, std::size_t width)
+std::string render_composer_footer_line(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width)
 {
-  return render_composer_footer_line_impl(snapshot, width);
+  return render_composer_footer_line_impl(frontend, snapshot, width);
 }
 
 std::vector<std::string> input_render_lines(std::string_view input)
@@ -357,7 +360,7 @@ ComposerInputLayout composer_input_layout(std::size_t input_line_count, std::siz
           .hidden_below = effective_input_lines - first_visible - visible_input_lines};
 }
 
-std::vector<std::string> render_composer_block(ComposerSnapshot const& snapshot, std::size_t width, std::size_t max_lines)
+std::vector<std::string> render_composer_block(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width, std::size_t max_lines)
 {
   if (max_lines == 0)
     return {};
@@ -378,7 +381,7 @@ std::vector<std::string> render_composer_block(ComposerSnapshot const& snapshot,
                                            : render_input_fragment_line(snapshot, input_line.text, input_line.first_line, width, input_line.start));
   }
   if (max_lines > 1)
-    lines.push_back(render_composer_footer_line(snapshot, width));
+    lines.push_back(render_composer_footer_line(frontend, snapshot, width));
   return lines;
 }
 

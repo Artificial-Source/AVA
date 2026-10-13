@@ -16,8 +16,13 @@ int TuiFrontEnd::run(TuiRuntimeOptions options)
 // Queue the notification and wake the frontend so it fetches the latest snapshot and updates the UI on the main thread.
 void TuiFrontEnd::data_changed(app::frontend::DataListIndex index)
 {
-  // FIXME: Data notification delivery is not implemented yet.
-  DoutEntering(dc::warning, "TuiFrontEnd::data_changed(" << index << ")");
+  DoutEntering(dc::notice, "TuiFrontEnd::data_changed(" << index << ")");
+  app::frontend::Data const* data = get_data(index);
+
+  if (dynamic_cast<app::runtime::ModelSelection_ts const*>(data) != nullptr)
+  {
+    model_selection_.dirty();
+  }
 }
 
 } // namespace ava::tui

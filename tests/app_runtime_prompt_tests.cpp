@@ -245,7 +245,7 @@ void test_app_run_prompt_isolates_ambient_extensions()
          "runtime prompt reloads reuse the resolved selected primary in ordinary and ambient-free variants");
   {
     SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-    auto switched_model = session_w->model();
+    auto switched_model = session_w->model_selection_r()->model;
     switched_model.model_id += "-selected-primary-switch";
     auto switched = session_w->switch_model(std::move(switched_model));
     expect(switched && *switched && session_w->system_prompt().find("SELECTED_PRIMARY_PROMPT_CANARY_11f4") != std::string::npos &&
@@ -1267,8 +1267,9 @@ void test_app_run_prompt_sources_private_launch_display_from_runtime_invocation(
     ava::tests::FakeTransport unnamed_transport({task_response("runtime_task_unnamed"), text_response("parent unnamed")});
     auto unnamed_result = ava::app::run_prompt(*unlocked_unnamed_session, "launch unnamed", provider, unnamed_transport, unnamed_options);
     SCOPED_CRITICAL_AREA_R(unnamed_session_r, *unlocked_unnamed_session);
-    expect(unnamed_result && unnamed_launches.size() == 1 && unnamed_session_r->model().display_name == "unnamed-launch-model" &&
-               ava::config::proven_configured_model_display_name(unnamed_session_r->model()).empty() &&
+    ava::app::runtime::ModelSelection_ts::crat model_selection_r = unnamed_session_r->model_selection_r();
+    expect(unnamed_result && unnamed_launches.size() == 1 && model_selection_r->model.display_name == "unnamed-launch-model" &&
+               ava::config::proven_configured_model_display_name(model_selection_r->model).empty() &&
                unnamed_launches.front().display.model_display_name().empty() && !unnamed_launches.front().request_id.empty() &&
                unnamed_launches.front().request_id == unnamed_launches.front().correlation_id,
            "direct run_prompt generates and consistently uses one admitted request identity while unnamed custom launch display never falls back to ids");

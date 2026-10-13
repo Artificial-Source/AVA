@@ -52,7 +52,7 @@ InteractiveResult with_provider_runtime(InteractiveState& state, std::string_vie
   runtime::session_ts& unlocked_session = state.unlocked_session;
   auto const session_snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::tuple{session_r->is_offline(), session_r->model().provider_id, session_r->session_process_scope()};
+    return std::tuple{session_r->is_offline(), session_r->model_selection_r()->model.provider_id, session_r->session_process_scope()};
   }();
   auto const& [offline, model_provider_id, session_process_scope] = session_snapshot;
 
