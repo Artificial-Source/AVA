@@ -1,5 +1,13 @@
 # AVA Desktop
 
+**Current mock revision 20:** [inline tool image preview](tool-image-preview.md)
+embeds explicitly supplied pixels within expanded Inspect image details. Responsive
+containment and truthful missing/load-error states preserve existing tool status,
+disclosures and draft/reading authority. Main passed 834 tests / 42 Chrome checks;
+the sole actual-source/12-actual-PNG Sol MAX gate found no material findings.
+Browser-only supplied presentation, not host image reading. Earlier summaries and
+complete acceptance bodies remain dated history.
+
 **Current mock revision 19:** [chat display presets](chat-display-presets.md) add
 Compact, Auto and Expanded in parent chat and Conversation behavior Settings.
 Auto folds uninspected finished detail; manual reading/selection remains authoritative.

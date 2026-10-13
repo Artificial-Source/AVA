@@ -1,5 +1,14 @@
 # Frontend component system and readiness comparison
 
+## Current inline image component — revision 20
+
+[Inline image acceptance](tool-image-preview.md) adds a closed image-only fixture ID,
+strict copied projection and a guarded native lazy/async image inside existing tool
+details. Passive decoding does not pin Auto inspection or mutate tool/run authority;
+missing/load-error and responsive bounds are verified. Main passed 834 tests / 42
+Chrome checks; the sole actual-source/12-actual-PNG Sol MAX gate is clear. Complete
+older bodies remain below; this is supplied preview content, not a media platform.
+
 ## Current chat display components — revision 19
 
 [Chat display acceptance](chat-display-presets.md) adds a pure lifecycle-aware detail

@@ -1,5 +1,15 @@
 # AVA desktop UI preview
 
+## Revision 20: inline tool image (current)
+
+Opening Inspect image now embeds its explicitly supplied raster in the tool details,
+with bounded scaling and honest missing/load-error states. Existing display presets,
+failed status and draft/reading authority remain unchanged. Main passed **834 tests /
+42 Chrome checks**; the sole actual-source/12-actual-PNG Sol MAX gate is clear.
+[Scope and nine reviewed captures](../../docs/desktop/tool-image-preview.md).
+Browser-only supplied content, not host file reading. Earlier complete bodies below
+remain dated acceptance history.
+
 ## Revision 19: chat display presets (current)
 
 **Compact**, **Auto** and **Expanded** are available above the parent transcript

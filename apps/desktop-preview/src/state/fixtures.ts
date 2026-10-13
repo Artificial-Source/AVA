@@ -55,7 +55,7 @@ export function createInitialState(): PreviewState {
                 { id: 'search-state', filename: 'search-state.ts', operation: 'modified', additions: 2, deletions: 2, diff: { state: 'text', truncated: false, text: '@@ -1,2 +1,2 @@\n-const query = "";\n-const tags: string[] = [];\n+const query = params.get("q") ?? "";\n+const tags = params.getAll("tag");' } },
                 { id: 'search-page', filename: 'SearchPage.tsx', operation: 'modified', additions: 1, deletions: 1, diff: { state: 'text', truncated: false, text: '@@ -1 +1 @@\n-const href = `/results/${id}`;\n+const href = `/results/${id}${location.search}`;' } },
               ] },
-              { id: 'inspect-image', action: 'Inspect image', detail: 'No failure cause supplied.', state: 'failed', resource: { kind: 'image', path: '/tmp/example/pi-clipboard-12345678.png' } },
+              { id: 'inspect-image', action: 'Inspect image', detail: 'No failure cause supplied.', state: 'failed', resource: { kind: 'image', path: '/tmp/example/pi-clipboard-12345678.png', previewId: 'search-results-example' } },
             ],
             code: {
               filename: 'search-state.ts',

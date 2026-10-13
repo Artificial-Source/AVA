@@ -1,4 +1,5 @@
-import type { ToolChangeView, ToolView } from '../chat/contracts';
+import type { ToolChangeView, ToolResource, ToolView } from '../chat/contracts';
+import { isToolImagePreviewId } from '../chat/toolImages';
 import { denseArray, plain, validId, type AssistantMessage, type RunEvent } from './suppliedRun';
 
 function shape(value: unknown, required: string[], optional: string[] = []): value is Record<string, unknown> {
@@ -14,8 +15,14 @@ function changes(value: unknown): value is readonly ToolChangeView[] {
     return shape(change.diff, ['state', 'text', 'truncated']) && change.diff.state === 'text' && text(change.diff.text, 100000) && typeof change.diff.truncated === 'boolean' || shape(change.diff, ['state']) && ['binary', 'unavailable'].includes(change.diff.state as string);
   });
 }
+function resource(value: unknown): value is ToolResource {
+  return shape(value, ['kind', 'path'], ['previewId']) && Object.getOwnPropertyNames(value).length === Object.keys(value).length && text(value.path, 1024) && !!value.path.trim() && (
+    value.kind === 'file' && !Object.hasOwn(value, 'previewId') ||
+    value.kind === 'image' && (!Object.hasOwn(value, 'previewId') || isToolImagePreviewId(value.previewId))
+  );
+}
 function tool(value: unknown): value is ToolView {
-  return shape(value, ['id', 'action', 'detail', 'state'], ['resource', 'changes']) && validId(value.id) && text(value.action, 256) && !!value.action.trim() && text(value.detail, 2048) && ['queued', 'running', 'completed', 'failed', 'canceled', 'unavailable'].includes(value.state as string) && (!Object.hasOwn(value, 'resource') || shape(value.resource, ['kind', 'path']) && ['file', 'image'].includes(value.resource.kind as string) && text(value.resource.path, 1024) && !!value.resource.path.trim()) && (!Object.hasOwn(value, 'changes') || changes(value.changes));
+  return shape(value, ['id', 'action', 'detail', 'state'], ['resource', 'changes']) && validId(value.id) && text(value.action, 256) && !!value.action.trim() && text(value.detail, 2048) && ['queued', 'running', 'completed', 'failed', 'canceled', 'unavailable'].includes(value.state as string) && (!Object.hasOwn(value, 'resource') || resource(value.resource)) && (!Object.hasOwn(value, 'changes') || changes(value.changes));
 }
 const envelope = ['chatId', 'runId', 'generation', 'sequence', 'kind'];
 

@@ -1,10 +1,13 @@
 import type { ContextUsageView } from './contextUsage';
+import type { ToolImagePreviewId } from './toolImages';
 
 // Experimental presentation models, not AVA transport schemas or resolver authority.
 export type TurnState = 'streaming' | 'committed' | 'failed' | 'canceled';
 // Supplied invocation facts only; never derived from the current composer model.
 export type TurnAttribution = Readonly<{ modelLabel?: string; thinkingLabel?: string }>;
-export type ToolResource = Readonly<{ kind: 'file' | 'image'; path: string }>;
+export type ToolResource =
+  | Readonly<{ kind: 'file'; path: string; previewId?: never }>
+  | Readonly<{ kind: 'image'; path: string; previewId?: ToolImagePreviewId }>;
 export type MessageTurnView = Readonly<{
   id: string;
   label: string;

@@ -1,5 +1,14 @@
 # Chat and run rendering refinement
 
+## Current inline image follow-up — revision 20
+
+[Inline tool images](tool-image-preview.md) add explicitly supplied image previews
+inside existing expanded details. Known image-only IDs are validated/copy-projected;
+paths and output never resolve media. Loading/error preserves failed facts, preset
+intent and reading/editor state. Main passed 834 tests / 42 Chrome checks; the sole
+actual-source/12-actual-PNG Sol MAX review is clear. Full older acceptances and
+captures remain intact dated history; no backend/filesystem execution is added.
+
 ## Current display follow-up — revision 19
 
 [Chat display presets](chat-display-presets.md) add Compact, Auto and Expanded to

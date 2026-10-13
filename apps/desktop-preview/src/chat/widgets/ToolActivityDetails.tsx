@@ -2,6 +2,7 @@ import type { ToolView } from '../contracts';
 import { paintText } from '../textPaint';
 import { useBottomFollow } from '../useBottomFollow';
 import { ToolDiffView } from './ToolDiffView';
+import { ToolImagePreview } from './ToolImagePreview';
 import { IncrementalText } from './IncrementalText';
 import styles from './ToolActivityDetails.module.css';
 
@@ -17,6 +18,7 @@ function ToolOutput({ record }: { record: ToolView }) {
 export default function ToolActivityDetails({ record, showCompletedOutput = true }: { record: ToolView; showCompletedOutput?: boolean }) {
   return <div className={styles.details}>
     {record.resource ? <><p>{record.detail}</p><code className={styles.path}>{record.resource.path}</code></> : null}
+    {record.resource?.kind === 'image' ? <ToolImagePreview key={record.id} previewId={record.resource.previewId} /> : null}
     {record.state === 'completed' && !showCompletedOutput && record.output ? <p>Completed output hidden by your conversation preference.</p> : record.output ? <ToolOutput record={record} /> : <p>No output supplied.</p>}
     {record.changes !== undefined ? <ToolDiffView changes={record.changes} /> : null}
   </div>;

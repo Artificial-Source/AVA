@@ -1,5 +1,14 @@
 # React UI prototype
 
+## Revision 20 — inline tool image (current)
+
+[Inline image acceptance](tool-image-preview.md) embeds an explicitly supplied local
+raster in expanded Inspect image details, with bounded geometry and unavailable/error
+fallbacks. Paths never select browser image sources; tool status/presets/reading state
+remain separate. Main passed 834 tests and 42 Chrome checks; one actual-source/
+12-actual-PNG Sol MAX review found no material findings. Earlier complete bodies
+remain dated history; live backend/host image integration is separate.
+
 ## Revision 19 — chat display presets (current)
 
 [Chat display acceptance](chat-display-presets.md) adds Compact, Auto and Expanded

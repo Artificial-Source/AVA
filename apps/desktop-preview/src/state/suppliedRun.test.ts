@@ -13,6 +13,50 @@ const message = (state: PreviewState) => state.chats.find((chat) => chat.id === 
 const tool = { id: 'one', action: 'Read', detail: 'Supplied file', state: 'running' };
 function frozen<T>(value: T): T { if (value && typeof value === 'object') { Object.values(value).forEach(frozen); Object.freeze(value); } return value; }
 
+describe('supplied image references in atomic run projection', () => {
+  const image = { kind: 'image', path: '/tmp/example/pi-clipboard-12345678.png', previewId: 'search-results-example' };
+  it.each([undefined, null, '', 'unknown', '__proto__', 'constructor', 'prototype', 'toString', 'https://example.invalid/image.png', '//example.invalid/image.png', '/tool-previews/search-results.png', 'file:///tmp/image.png', 'blob:example', 'data:image/png;base64,abc', 'data:image/svg+xml,<svg/>', '<img src=x>', '<svg/>', 'image.svg', 'image.html', 1, false, {}, [], ['search-results-example'], new String('search-results-example')])('rejects invalid image IDs atomically: %j', (previewId) => {
+    const state = frozen(receive(start(), [event(1, 'tool', { tool: { ...tool, resource: image } })])); const before = JSON.stringify(state);
+    expect(receive(state, [event(2), event(3, 'tool', { tool: { ...tool, id: 'other' } }), event(4, 'tool', { tool: { ...tool, resource: { ...image, previewId } } })])).toBe(state);
+    expect(JSON.stringify(state)).toBe(before); expect(state.suppliedRun?.sequence).toBe(1);
+  });
+  it('rejects file IDs, extra/hidden fields, accessors, arrays and exotic resource shapes without reading getters', () => {
+    const state = frozen(start());
+    const accessor = Object.defineProperty({ ...image }, 'previewId', { get() { throw new Error('Must not read preview accessor'); } });
+    const pathAccessor = Object.defineProperty({ ...image }, 'path', { get() { throw new Error('Must not read path accessor'); } });
+    const hidden = Object.defineProperty({ ...image }, 'src', { value: '/tool-previews/search-results.png' });
+    const hiddenId = Object.defineProperty({ kind: 'image', path: 'x' }, 'previewId', { value: 'search-results-example' });
+    for (const resource of [
+      { ...image, kind: 'file' }, { kind: 'file', path: 'x', previewId: undefined }, { kind: 'file', path: 'x', previewId: null }, { kind: 'file', path: 'x', previewId: 'unknown' },
+      { ...image, src: '/tool-previews/search-results.png' }, { ...image, alt: 'override' }, { ...image, width: 640 }, { ...image, extra: true }, { ...image, [Symbol('extra')]: true },
+      { ...image, kind: 'svg' }, { ...image, path: '' }, { ...image, path: ' ' }, { ...image, path: 'x'.repeat(1025) }, { kind: 'image', previewId: image.previewId }, { path: image.path, previewId: image.previewId },
+      accessor, pathAccessor, hidden, hiddenId, Object.create(image), Object.assign(Object.create(null), image), null, undefined, [], Array(1), Object.assign([], image),
+    ]) expect(receive(state, [event(1), event(2, 'tool', { tool: { ...tool, resource } })])).toBe(state);
+    expect(message(state)).toMatchObject({ markdown: '' }); expect(state.suppliedRun?.sequence).toBe(0);
+  });
+  it('copies accepted IDs, replaces/omits them on same-ID updates, and retains output/history/draft/authority and failed facts', () => {
+    const state = start(); const payload = { ...tool, resource: { ...image } };
+    let next = receive(state, [event(1, 'tool', { tool: payload }), event(2, 'output', { toolId: tool.id, delta: 'Supplied output', truncated: false })]);
+    payload.resource.path = 'changed'; payload.resource.previewId = 'https://example.invalid/image.png';
+    expect(message(next)).toMatchObject({ activity: [{ resource: image, output: { text: 'Supplied output' } }] });
+    expect(next.chats[0].messages[0]).toBe(state.chats[0].messages[0]); expect(next.chats[1]).toBe(state.chats[1]); expect(next.chats[0].changes).toBe(state.chats[0].changes);
+    for (const key of ['draft', 'model', 'mode', 'contextIds'] as const) expect(next.chats[0][key]).toBe(state.chats[0][key]);
+    next = receive(next, [event(3, 'tool', { tool })]);
+    const omitted = message(next); if (omitted.role !== 'assistant') throw new Error('Expected assistant');
+    expect(omitted.activity![0]).not.toHaveProperty('resource'); expect(omitted.activity![0].output?.text).toBe('Supplied output');
+    for (const [index, resource] of [{ kind: 'image', path: image.path }, { kind: 'file', path: image.path }].entries()) {
+      next = receive(next, [event(index + 4, 'tool', { tool: { ...tool, resource } })]);
+      const turn = message(next); if (turn.role !== 'assistant') throw new Error('Expected assistant');
+      expect(turn.activity![0].resource).toEqual(resource); expect(turn.activity![0].resource).not.toHaveProperty('previewId');
+    }
+    const failure = { ...tool, action: 'Inspect image', detail: 'No failure cause supplied.', state: 'failed', resource: { ...image } };
+    next = receive(next, [event(6, 'tool', { tool: failure })]);
+    expect(message(next)).toMatchObject({ activity: [{ ...failure, output: { text: 'Supplied output', truncated: false } }] });
+    expect(receive(next, [event(7, 'tool', { tool: { ...failure, state: 'completed' } })])).toBe(next);
+    expect(receive(next, [event(7, 'complete')]).suppliedRun).toMatchObject({ sequence: 7, state: 'committed' });
+  });
+});
+
 describe('supplied-run core authority and bounded projection', () => {
   it('only starts an explicit selected-parent run with immutable supplied attribution, never from Send or composer facts', () => {
     let state = createInitialState(); const before = state.chats[0];
