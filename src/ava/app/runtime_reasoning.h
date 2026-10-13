@@ -9,8 +9,9 @@
 namespace ava::app::runtime {
 
 [[nodiscard]] std::optional<ReasoningSelection> latest_persisted_reasoning(std::vector<ava::session::SessionEntry> const& entries,
-                                                                                    ava::config::ModelInfo const& model);
+                                                                           ava::config::ModelInfo const& model);
 [[nodiscard]] ava::provider::ProviderReasoningOptions provider_reasoning_options(ReasoningSelection const& selection);
+[[nodiscard]] bool has_reasoning_choice(ava::config::ModelInfo const& model);
 
 // Resolve a candidate reasoning selection against the model's supported levels.
 //

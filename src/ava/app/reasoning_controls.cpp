@@ -27,21 +27,6 @@ std::string reasoning_selected_status(runtime::ReasoningSelection const& selecti
 
 }  // namespace
 
-// Read model capabilities and the selected reasoning level under the same model-selection lock, acquired after the Session lock.
-// Return an owning level string, or no status when reasoning is unavailable or no level is selected.
-std::optional<std::string> reasoning_status_for_session(runtime::session_ts const& unlocked_session)
-{
-  SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-  runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
-  auto const& model = model_selection_r->model;
-  if (!model.supports_reasoning.value_or(false) && ava::config::supported_reasoning_levels(model).size() <= 1)
-    return std::nullopt;
-  auto const& reasoning = model_selection_r->reasoning;
-  if (!reasoning || reasoning->level.empty())
-    return std::nullopt;
-  return reasoning->level;
-}
-
 ava::core::Result<runtime::ReasoningSelection> reasoning_selection_for_level(ava::config::ModelInfo const& model, std::string level)
 {
   if (level == "off")

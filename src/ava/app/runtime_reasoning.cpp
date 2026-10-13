@@ -16,6 +16,11 @@ ava::provider::ProviderReasoningOptions provider_reasoning_options(ReasoningSele
       .type = selection.provider_level.value_or(selection.level), .budget_tokens = selection.budget_tokens, .display = selection.display};
 }
 
+bool has_reasoning_choice(ava::config::ModelInfo const& model)
+{
+  return model.supports_reasoning.value_or(false) && ava::config::supported_reasoning_levels(model).size() > 1;
+}
+
 ava::core::Result<ReasoningSelection> resolve_runtime_reasoning_selection(ava::config::ModelInfo const& model, ReasoningSelection selection)
 {
   auto const level = core::trim(selection.level);
@@ -56,6 +61,9 @@ ava::core::Result<ReasoningSelection> resolve_runtime_reasoning_selection(ava::c
 
 std::optional<ReasoningSelection> latest_persisted_reasoning(std::vector<ava::session::SessionEntry> const& entries, ava::config::ModelInfo const& model)
 {
+  if (!has_reasoning_choice(model))
+    return std::nullopt;
+
   std::optional<ReasoningSelection> latest;
   bool saw_change = false;
   for (auto const& entry : entries)

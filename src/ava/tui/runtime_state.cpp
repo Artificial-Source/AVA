@@ -117,12 +117,6 @@ void RuntimePresentationState::refresh_active_context_status(TuiRuntimeOptions c
   snapshot.active_context_status = options.active_context_status_provider ? options.active_context_status_provider() : std::nullopt;
 }
 
-void RuntimePresentationState::refresh_reasoning_status(TuiRuntimeOptions const& options)
-{
-  snapshot.reasoning_status = options.reasoning_status_provider ? options.reasoning_status_provider() : std::nullopt;
-  sidebar.reasoning_status = snapshot.reasoning_status;
-}
-
 void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state)
 {
   auto const session_changed = command_session_grants.clear_for_session_transition(snapshot.session_id, state.session_id);
@@ -179,7 +173,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
   sidebar.todos = std::move(state.todos);
   refresh_token_status(options);
   refresh_active_context_status(options);
-  refresh_reasoning_status(options);
 }
 
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list)

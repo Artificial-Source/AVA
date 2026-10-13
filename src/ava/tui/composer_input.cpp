@@ -171,9 +171,8 @@ void append_input_text(std::string& line, ComposerSnapshot const& snapshot, std:
 
 std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width)
 {
-  std::string model_display;
-  [[maybe_unused]] bool changed = frontend->model_selection().refresh_model_display(frontend, model_display);
-  auto const model = model_label(model_display);
+  auto model = frontend->model_selection().refresh_model();
+  auto const model_label = detail::model_label(model.display);
   auto const active_context_status = snapshot.active_context_status;
 
   auto const build_left_status = [&](std::size_t budget) {
@@ -187,9 +186,9 @@ std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnap
     auto const content_budget = budget - bar_columns;
 
     auto append_fitted_model = [&](std::size_t model_budget) {
-      if (model.empty() || model_budget == 0)
+      if (model_label.empty() || model_budget == 0)
         return;
-      auto styled_model = std::string(kSgrBold) + std::string(kSgrText) + model + std::string(kSgrReset);
+      auto styled_model = std::string(kSgrBold) + std::string(kSgrText) + model_label + std::string(kSgrReset);
       line += fit_line_preserving_sgr(std::move(styled_model), model_budget);
       line += std::string(kSgrScreenBg);
     };
@@ -207,7 +206,7 @@ std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnap
     constexpr auto kPreferredMinimumModelColumns = std::size_t{8};
     auto const separator_columns =
         content_budget >= context_columns + kSeparatorColumns + kPreferredMinimumModelColumns ? kSeparatorColumns : kCompactSeparatorColumns;
-    if (!model.empty() && content_budget > context_columns + separator_columns)
+    if (!model_label.empty() && content_budget > context_columns + separator_columns)
     {
       append_fitted_model(content_budget - context_columns - separator_columns);
       if (separator_columns == kSeparatorColumns)

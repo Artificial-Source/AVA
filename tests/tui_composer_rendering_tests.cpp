@@ -197,7 +197,6 @@ bool test_changed_session_snapshot_resets_presentation()
   //  options.provider = "fake";
   //  options.model = "old-model";
   options.workspace = "/workspace/old";
-  options.reasoning_status_provider = []() { return std::optional<std::string>("high"); };
   options.initial_transcript = {
       ava::tui::TranscriptItem{.label = "you", .text = "OLD-TRANSCRIPT-MARKER"},
       ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "read_file"}},
@@ -275,14 +274,13 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const changed_state_ok =
       changed && search_opened && presentation.snapshot.session_id == "session_new_presentation" && presentation.snapshot.mode == "plan" &&
       // presentation.snapshot.provider == "fake-next" && presentation.snapshot.model == "new-model" &&
-      presentation.snapshot.status == "new session receipt" && presentation.snapshot.reasoning_status == std::optional<std::string>("high") &&
-      presentation.snapshot.transcript.empty() && presentation.snapshot.transcript_generation == previous_generation + 1 &&
-      presentation.snapshot.queued_messages.empty() && presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() &&
-      presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().content == "new todo" &&
-      presentation.sidebar.session_entry_count == std::nullopt && draft_state.draft.text.empty() && draft_state.input_history.empty() && !history_restored &&
-      !draft_state.selection_bounds() && draft_state.draft_input.empty() && !draft_state.history_index &&
-      draft_state.jump_mode == ava::tui::ComposerJumpMode::None && draft_state.draft_scroll_offset == 0 && presentation.snapshot.input.empty() &&
-      presentation.snapshot.input_cursor == 0 && presentation.snapshot.input_selection_start == std::string::npos &&
+      presentation.snapshot.status == "new session receipt" && presentation.snapshot.transcript.empty() &&
+      presentation.snapshot.transcript_generation == previous_generation + 1 && presentation.snapshot.queued_messages.empty() &&
+      presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() && presentation.sidebar.todos.size() == 1 &&
+      presentation.sidebar.todos.front().content == "new todo" && presentation.sidebar.session_entry_count == std::nullopt && draft_state.draft.text.empty() &&
+      draft_state.input_history.empty() && !history_restored && !draft_state.selection_bounds() && draft_state.draft_input.empty() &&
+      !draft_state.history_index && draft_state.jump_mode == ava::tui::ComposerJumpMode::None && draft_state.draft_scroll_offset == 0 &&
+      presentation.snapshot.input.empty() && presentation.snapshot.input_cursor == 0 && presentation.snapshot.input_selection_start == std::string::npos &&
       presentation.snapshot.input_selection_end == std::string::npos && presentation.snapshot.transcript_selection_anchor_item == std::string::npos &&
       presentation.snapshot.transcript_selection_focus_item == std::string::npos && !presentation.snapshot.command_output &&
       !presentation.snapshot.local_command_feedback && presentation.snapshot.tool_index.empty() &&
@@ -2003,7 +2001,6 @@ void run_tui_composer_rendering_tests_part_1()
                                                                                                          .session_id = "session_test",
                                                                                                          .input = "explain this",
                                                                                                          .status = "ready",
-                                                                                                         .reasoning_status = "low",
                                                                                                          .transcript = {},
                                                                                                          .width = 80,
                                                                                                          .height = 10});
@@ -2503,6 +2500,8 @@ void run_tui_composer_rendering_tests_part_3()
 void run_tui_composer_rendering_tests_part_4()
 {
   tui_test_support::TuiFrontEndFixture frontend;
+  frontend.set_reasoning_capabilities(true, {"low\x1b[31m", "high\x1b[31m"});
+  frontend.set_reasoning("low\x1b[31m");
   auto const sidebar_frame = ava::tui::render_composer(
       frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",
@@ -2526,7 +2525,6 @@ void run_tui_composer_rendering_tests_part_4()
                                      .git_branch = "develop\x1b[31m",
                                      .version = "0.32",
                                      .token_status = "1.2k (4.0%)",
-                                     .reasoning_status = "low\x1b[31m",
                                      .context_source_count = 2}});
   expect(std::ranges::any_of(sidebar_frame,
                              [](std::string const& line) {
@@ -2588,6 +2586,27 @@ void run_tui_composer_rendering_tests_part_4()
           std::ranges::none_of(idle_after_completed_activity_frame, [](std::string const& line) { return strip_sgr(line).find("idle") != std::string::npos; }),
       "tui automatic rail omits completed assistant activity history and idle placeholders");
 
+  auto absent_reasoning_renders_as_unknown_only_in_drawer = [&]() {
+    frontend.set_reasoning(std::nullopt);
+    auto snapshot = ava::tui::ComposerSnapshot{.mode = "build",
+                                               .session_id = "session_test",
+                                               .input = "",
+                                               .status = "ready",
+                                               .transcript = {},
+                                               .width = 176,
+                                               .height = 40,
+                                               .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test", .mode = "build"}};
+    auto const compact_text = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), snapshot));
+    snapshot.width = 100;
+    snapshot.sidebar_drawer_visible = true;
+    auto const drawer_text = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), snapshot));
+    return compact_text.find("Context") == std::string::npos && compact_text.find("reasoning ") == std::string::npos &&
+           drawer_text.find("reasoning unknown") != std::string::npos;
+  };
+  expect(absent_reasoning_renders_as_unknown_only_in_drawer(),
+         "tui renders an unset reasoning selection as drawer unknown while omitting it from the compact sidebar");
+
+  frontend.set_reasoning(std::nullopt);
   auto const unknown_sidebar_frame =
       ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
                                                                                 //.provider = "openai",
@@ -2602,14 +2621,15 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                                                      .mode = "build",
                                                                                                                      //.provider = "openai",
                                                                                                                      .git_branch = "unknown",
-                                                                                                                     .token_status = "tokens unknown",
-                                                                                                                     .reasoning_status = "unknown"}});
+                                                                                                                     .token_status = "tokens unknown"}});
   expect(std::ranges::none_of(unknown_sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("Context") != std::string::npos; }) &&
              std::ranges::none_of(unknown_sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("unknown") != std::string::npos; }),
          "tui automatic rail omits the Context group and placeholders when all context values are unknown");
 
   tui_test_support::TuiFrontEndFixture unknown_model_frontend(
       {.provider_id = "unknown-labs", .model_id = "model-unknown-v2", .display_name = "model-unknown-v2"});
+  unknown_model_frontend.set_reasoning_capabilities(true, {"UnKnOwN"});
+  unknown_model_frontend.set_reasoning("UnKnOwN");
   auto const legitimate_unknown_substring_frame = ava::tui::render_composer(
       unknown_model_frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
                                                                     //.provider = "unknown-labs",
@@ -2624,8 +2644,7 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                                          //.provider = "unknown-labs",
                                                                                                          //.model = "model-unknown-v2",
                                                                                                          .git_branch = "fix/unknown-token-count",
-                                                                                                         .token_status = "tokens unknown",
-                                                                                                         .reasoning_status = "UnKnOwN"}});
+                                                                                                         .token_status = "tokens unknown"}});
   expect(std::ranges::any_of(legitimate_unknown_substring_frame,
                              [](std::string const& line) { return strip_sgr(line).find("build · unknown-labs/model-unknow") != std::string::npos; }) &&
              std::ranges::any_of(legitimate_unknown_substring_frame,
@@ -2672,7 +2691,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                            .git_branch = "develop",
                                                                                            .version = "0.32",
                                                                                            .token_status = "180k (90.0%)",
-                                                                                           .reasoning_status = std::nullopt,
                                                                                            .context_source_count = 3,
                                                                                            .session_path = "/tmp/ava/sessions/session_test.jsonl",
                                                                                            .session_entry_count = 42}});
@@ -2709,7 +2727,6 @@ void run_tui_composer_rendering_tests_part_4()
               .workspace = "/raw/workspace/must/stay/hidden",
               .version = "9.9.9-must-stay-hidden",
               .token_status = std::nullopt,
-              .reasoning_status = std::nullopt,
               .context_source_count = std::nullopt,
               .session_path = "/raw/session/path/must/stay/hidden.jsonl",
               .session_entry_count = 999}});
@@ -2742,6 +2759,7 @@ void run_tui_composer_rendering_tests_part_4()
                                  }),
          "tui idle automatic rail is a bounded two-cell-inset Session summary with the quiet footer and no placeholders or drawer-only metadata");
 
+  frontend.set_reasoning("high\x1b[31m");
   auto const curated_populated_sidebar = ava::tui::render_composer(
       frontend.frontend(),
       ava::tui::ComposerSnapshot{
@@ -2771,7 +2789,6 @@ void run_tui_composer_rendering_tests_part_4()
               .git_branch = "develop\x1b[31m",
               .version = "8.8.8-must-stay-hidden",
               .token_status = "180k (90.0%)\x1b[31m",
-              .reasoning_status = "high\x1b[31m",
               .context_source_count = 7,
               .session_path = "/raw/populated/session/path.jsonl",
               .session_entry_count = 42}});
@@ -3045,7 +3062,6 @@ void run_tui_composer_rendering_tests_part_4()
                   .git_branch = "develop-responsive-sidebar-checkpoint",
                   .version = "1.0.0-responsive-sidebar",
                   .token_status = "180k (90.0%)",
-                  .reasoning_status = "high",
                   .context_source_count = 7,
                   .session_path = "/tmp/ava/sessions/a/very/long/session/path/session_drawer.jsonl",
                   .session_entry_count = 42},
@@ -3273,7 +3289,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                              .status = "ready",
                                                                                              .processing = true,
                                                                                              .token_status = "tokens unknown",
-                                                                                             .reasoning_status = "thinking visible",
                                                                                              .transcript = stress_transcript,
                                                                                              .transcript_scroll_offset = 50,
                                                                                              .width = width,
@@ -3311,10 +3326,10 @@ void run_tui_composer_rendering_tests_part_4()
       ava::tui::composer_max_transcript_scroll_offset(rail_feedback_snapshot, rail_feedback_snapshot.width, rail_feedback_snapshot.height);
   auto const no_feedback_rail_scroll =
       ava::tui::composer_max_transcript_scroll_offset(no_feedback_rail_snapshot, no_feedback_rail_snapshot.width, no_feedback_rail_snapshot.height);
-  auto ordinary_reasoning_status_snapshot = cycle_feedback_snapshot;
-  ordinary_reasoning_status_snapshot.reasoning_feedback.reset();
-  ordinary_reasoning_status_snapshot.status = "reasoning ordinary status";
-  auto const ordinary_reasoning_status_frame = ava::tui::render_composer(frontend.frontend(), ordinary_reasoning_status_snapshot);
+  auto ordinary_reasoning_message_snapshot = cycle_feedback_snapshot;
+  ordinary_reasoning_message_snapshot.reasoning_feedback.reset();
+  ordinary_reasoning_message_snapshot.status = "reasoning ordinary status";
+  auto const ordinary_reasoning_message_frame = ava::tui::render_composer(frontend.frontend(), ordinary_reasoning_message_snapshot);
   auto runtime_reasoning_snapshot = cycle_feedback_snapshot;
   runtime_reasoning_snapshot.status = "stale status";
   ava::tui::apply_reasoning_cycle_success(runtime_reasoning_snapshot, "reasoning changed to high");
@@ -3326,7 +3341,7 @@ void run_tui_composer_rendering_tests_part_4()
              std::ranges::none_of(idle_rail_feedback_frame,
                                   [](std::string const& line) { return strip_sgr(line).find("reasoning changed to high") != std::string::npos; }) &&
              rail_feedback_scroll == no_feedback_rail_scroll &&
-             std::ranges::none_of(ordinary_reasoning_status_frame,
+             std::ranges::none_of(ordinary_reasoning_message_frame,
                                   [](std::string const& line) { return strip_sgr(line).find("reasoning ordinary status") != std::string::npos; }) &&
              runtime_success_is_presentation_only && !runtime_reasoning_snapshot.reasoning_feedback,
          "tui reasoning-cycle feedback is one-action presentation state: visible without a rail, suppressed without rail geometry drift, and cleared by user "

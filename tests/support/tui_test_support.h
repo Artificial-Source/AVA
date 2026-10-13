@@ -2,10 +2,12 @@
 
 #include "tests/support/test_harness.h"
 #include "ava/tui/composer.h"
+#include "ava/config/model_config.h"
 
 #include <cstddef>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +24,9 @@ struct TuiTestModel
   std::string provider_id = "openai";
   std::string model_id = "gpt-5.5";
   std::string display_name = "gpt-5.5";
+  std::optional<bool> supports_reasoning = std::nullopt;
+  std::optional<std::vector<std::string>> reasoning_levels = std::nullopt;
+  std::optional<std::vector<ava::config::ModelReasoningLevelMapping>> reasoning_level_mappings = std::nullopt;
 };
 
 // Owns the canonical backend session before registering its stable ModelSelection
@@ -39,6 +44,10 @@ class TuiFrontEndFixture final
 
   [[nodiscard]] ava::tui::TuiFrontEnd* frontend() noexcept;
   [[nodiscard]] std::pair<std::string, std::string> selected_model_metadata();
+  void set_model(TuiTestModel model);
+  void set_reasoning(std::optional<std::string> level);
+  // Replace all capability inputs used by supported_reasoning_levels; inherited built-in mappings are deliberately cleared.
+  void set_reasoning_capabilities(std::optional<bool> supports_reasoning, std::vector<std::string> reasoning_levels);
 
  private:
   struct Impl;

@@ -751,20 +751,19 @@ std::vector<std::string> render_sidebar_drawer_body(TuiFrontEnd* frontend, Sideb
     }
   }
 
-  std::string sidebar_provider;
-  std::string sidebar_model_display;
-  [[maybe_unused]] bool sidebar_provider_changed = frontend->model_selection().refresh_provider(frontend, sidebar_provider);
-  [[maybe_unused]] bool sidebar_model_display_changed = frontend->model_selection().refresh_model_display(frontend, sidebar_model_display);
+  auto provider = frontend->model_selection().refresh_provider();
+  auto model = frontend->model_selection().refresh_model();
+  auto reasoning = frontend->model_selection().refresh_reasoning();
   push_sidebar_drawer_section(lines, "Session", width);
   push_sidebar_drawer_value(lines, "mode", sanitize_terminal_text(sidebar.mode), width);
-  push_sidebar_drawer_value(lines, "provider", sanitize_terminal_text(sidebar_provider), width);
-  push_sidebar_drawer_value(lines, "model", sanitize_terminal_text(sidebar_model_display), width);
+  push_sidebar_drawer_value(lines, "provider", sanitize_terminal_text(provider.display), width);
+  push_sidebar_drawer_value(lines, "model", sanitize_terminal_text(model.display), width);
   push_sidebar_drawer_value(lines, "session", sanitize_terminal_text(sidebar.session_id), width);
   push_sidebar_drawer_value(lines, "path", sanitize_terminal_text(sidebar.session_path), width);
   push_sidebar_drawer_value(lines, "entries", sidebar.session_entry_count ? std::to_string(*sidebar.session_entry_count) : std::string("unknown"), width);
   push_sidebar_drawer_value(lines, "workspace", sanitize_terminal_text(sidebar.workspace), width);
   push_sidebar_drawer_value(lines, "branch", sanitize_terminal_text(sidebar.git_branch), width);
-  push_sidebar_drawer_value(lines, "reasoning", sidebar.reasoning_status ? sanitize_terminal_text(*sidebar.reasoning_status) : std::string("unknown"), width);
+  push_sidebar_drawer_value(lines, "reasoning", sanitize_terminal_text(reasoning.display), width);
   push_sidebar_drawer_value(lines, "usage", sidebar.token_status ? sanitize_terminal_text(*sidebar.token_status) : std::string("tokens unknown"), width);
   if (auto const percent = percent_text_from_token_status(sidebar.token_status))
   {
@@ -873,19 +872,17 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
   std::string metadata;
   if (known_value(sidebar.mode))
     metadata = sanitize_terminal_text(sidebar.mode);
+  auto provider = frontend->model_selection().refresh_provider();
+  auto model = frontend->model_selection().refresh_model();
+  auto reasoning = frontend->model_selection().refresh_reasoning();
   std::string provider_model;
-  std::string sidebar_provider;
-  std::string sidebar_model_display;
-  [[maybe_unused]] bool sidebar_provider_changed = frontend->model_selection().refresh_provider(frontend, sidebar_provider);
-  [[maybe_unused]] bool sidebar_model_display_changed = frontend->model_selection().refresh_model_display(frontend, sidebar_model_display);
-
-  if (known_value(sidebar_provider))
-    provider_model = sanitize_terminal_text(sidebar_provider);
-  if (known_value(sidebar_model_display))
+  if (known_value(provider.display))
+    provider_model = sanitize_terminal_text(provider.display);
+  if (known_value(model.display))
   {
     if (!provider_model.empty())
       provider_model += "/";
-    provider_model += sanitize_terminal_text(sidebar_model_display);
+    provider_model += sanitize_terminal_text(model.display);
   }
   if (!provider_model.empty())
   {
@@ -939,7 +936,7 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
   }
 
   auto const known_branch = known_value(sidebar.git_branch);
-  auto const known_reasoning = sidebar.reasoning_status && known_value(*sidebar.reasoning_status);
+  auto const known_reasoning = known_value(reasoning.display);
   auto const known_token_status = sidebar.token_status && known_token_value(*sidebar.token_status);
   auto const has_context = known_branch || known_reasoning || known_token_status || sidebar.context_source_count.has_value();
   if (has_context && lines.size() < height)
@@ -948,7 +945,7 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
     if (known_branch)
       push_sidebar_line(lines, "branch " + sanitize_terminal_text(sidebar.git_branch), width);
     if (known_reasoning)
-      push_sidebar_line(lines, "reasoning " + sanitize_terminal_text(*sidebar.reasoning_status), width);
+      push_sidebar_line(lines, "reasoning " + sanitize_terminal_text(reasoning.display), width);
     if (known_token_status)
     {
       push_sidebar_line(lines, "usage " + sanitize_terminal_text(*sidebar.token_status), width);

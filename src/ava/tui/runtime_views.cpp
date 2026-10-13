@@ -204,14 +204,13 @@ void populate_display_section(SelectListView& view, ComposerSnapshot const& snap
   add_settings_action_row(view, std::string(kSettingsDraftThinking), "Thinking blocks", snapshot.thinking_visible ? "visible" : "hidden");
 }
 
-void populate_models_section(TuiFrontEnd* frontend, SelectListView& view, ComposerSnapshot const& snapshot)
+void populate_models_section(TuiFrontEnd* frontend, SelectListView& view)
 {
-  std::string provider;
-  std::string model_display;
-  [[maybe_unused]] bool provider_changed = frontend->model_selection().refresh_provider(frontend, provider);
-  [[maybe_unused]] bool model_changed = frontend->model_selection().refresh_model_display(frontend, model_display);
-  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(provider) + "/" + value_or_unknown(model_display));
-  add_settings_action_row(view, std::string(kSettingsOpenReasoning), "Reasoning", snapshot.reasoning_status.value_or("default"));
+  auto provider = frontend->model_selection().refresh_provider();
+  auto model = frontend->model_selection().refresh_model();
+  auto reasoning = frontend->model_selection().refresh_reasoning();
+  add_settings_action_row(view, std::string(kSettingsOpenModels), "Model", value_or_unknown(provider.display) + "/" + value_or_unknown(model.display));
+  add_settings_action_row(view, std::string(kSettingsOpenReasoning), "Reasoning", reasoning.display == "unknown" ? "default" : reasoning.display);
   add_settings_action_row(view, std::string(kSettingsOpenScopedModels), "Cycle scope", "Ctrl+P");
 }
 
@@ -645,7 +644,7 @@ SelectListView build_settings_select_list_view_for_section(TuiFrontEnd* frontend
       auto view = make_settings_shell("Settings › Model", "No model settings match",
                                       footer_hint.empty() ? std::string("Enter select · Esc back") : std::move(footer_hint));
       view.items.reserve(3);
-      populate_models_section(frontend, view, snapshot);
+      populate_models_section(frontend, view);
       return view;
     }
     case SettingsSection::InputAndKeybindings: {

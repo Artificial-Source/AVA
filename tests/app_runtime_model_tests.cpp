@@ -13,6 +13,7 @@
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime/UnlockedData.h"
 #include "ava/app/runtime_model.h"
+#include "ava/app/runtime_reasoning.h"
 #include "ava/agent/message_builder.h"
 #include "ava/config/model_config.h"
 #include "ava/session/assistant_output.h"
@@ -812,6 +813,46 @@ void test_app_runtime_model_switch_projects_incompatible_history_at_request_time
 
 void test_app_runtime_reasoning_selection_persists_and_requests()
 {
+  ava::config::ModelInfo mapped_model;
+  mapped_model.provider_id = "synthetic";
+  mapped_model.model_id = "mapped-reasoning";
+  mapped_model.supports_reasoning = true;
+  mapped_model.reasoning_level_mappings = {{.level = "high", .provider_level = "provider-high"}};
+  auto mapped = ava::app::reasoning_selection_for_level(mapped_model, "high");
+  expect(mapped && mapped->level == "high" && mapped->provider_level == std::optional<std::string>("provider-high"),
+         "runtime reasoning accepts an explicit mapping when support is true and the supported set includes off plus the mapped level");
+
+  auto unsupported_model = mapped_model;
+  unsupported_model.supports_reasoning = false;
+  auto unsupported_mapping = ava::app::reasoning_selection_for_level(unsupported_model, "high");
+  auto unsupported_resolved =
+      ava::app::runtime::resolve_runtime_reasoning_selection(unsupported_model, ava::app::runtime::ReasoningSelection{.level = "high", .display = {}});
+  expect(unsupported_mapping && unsupported_resolved && unsupported_resolved->provider_level == std::optional<std::string>("provider-high"),
+         "explicit provider mappings remain valid lower-level metadata when the model does not expose a reasoning choice");
+
+  auto single_level_model = mapped_model;
+  single_level_model.model_id = "off-only-reasoning";
+  single_level_model.reasoning_level_mappings.clear();
+  auto single_level =
+      ava::app::runtime::resolve_runtime_reasoning_selection(single_level_model, ava::app::runtime::ReasoningSelection{.level = "off", .display = {}});
+  auto empty_level =
+      ava::app::runtime::resolve_runtime_reasoning_selection(mapped_model, ava::app::runtime::ReasoningSelection{.level = " \t ", .display = {}});
+  expect(single_level && single_level->level == "off" && !empty_level && empty_level.error().format().find("reasoning level is required") != std::string::npos,
+         "the lower-level resolver accepts singleton provider metadata while still rejecting trim-empty selections");
+
+  std::vector<ava::session::SessionEntry> persisted_reasoning_entries = {
+      {.id = "reasoning_change_invalid_capability",
+       .parent_id = "",
+       .type = ava::session::EntryType::ReasoningChange,
+       .timestamp = "2026-10-13T00:00:00Z",
+       .data_json = R"JSON({"provider":"synthetic","model":"mapped-reasoning","enabled":true,"level":"high"})JSON"}};
+  expect(!ava::app::runtime::latest_persisted_reasoning(persisted_reasoning_entries, unsupported_model),
+         "persisted reasoning normalizes to absent when the current model does not expose a choice");
+  auto singleton_persisted_entries = persisted_reasoning_entries;
+  singleton_persisted_entries.front().data_json = R"JSON({"provider":"synthetic","model":"off-only-reasoning","enabled":true,"level":"off"})JSON";
+  expect(!ava::app::runtime::latest_persisted_reasoning(singleton_persisted_entries, single_level_model),
+         "persisted reasoning normalizes to absent for singleton level metadata without rejecting that metadata");
+
   auto const root = create_empty_root("app-runtime-reasoning-selection");
 
   auto const workspace = root / "workspace";
@@ -969,8 +1010,8 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
       expect(switched.has_value() && *switched, "runtime reasoning test switches to no-level custom model");
       auto no_level_selection =
           session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = "low", .budget_tokens = std::nullopt, .display = ""});
-      expect(!no_level_selection.has_value() && no_level_selection.error().format().find("supported reasoning levels") != std::string::npos,
-             "runtime reasoning selection rejects models without declared reasoning levels");
+      expect(no_level_selection && !*no_level_selection && !session_w->model_selection_r()->reasoning,
+             "runtime reasoning selection normalizes to absent for models without a user-selectable reasoning level");
     }
 
     auto anthropic_default_max = ava::app::resolve_runtime_model(paths, "anthropic", "claude-default-max");
@@ -1012,6 +1053,29 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
       expect(!too_large_budget.has_value() && too_large_budget.error().format().find("reasoning budget must be below max output tokens") != std::string::npos,
              "runtime reasoning validation applies fallback budget limits to custom providers");
     }
+
+    session_w->model_selection().change([&mapped_model](auto& model_selection) {
+      model_selection.model = mapped_model;
+      model_selection.reasoning = ava::app::runtime::ReasoningSelection{.level = "high", .provider_level = "provider-high", .display = {}};
+    });
+    session_w->model_selection().change([&unsupported_model](auto& model_selection) { model_selection.model = unsupported_model; });
+    auto normalized_false_mapping =
+        session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = "high", .budget_tokens = std::nullopt, .display = ""});
+    expect(normalized_false_mapping && *normalized_false_mapping && !session_w->model_selection_r()->reasoning,
+           "setting valid mapped metadata on a model without a choice succeeds by clearing non-canonical active reasoning");
+    auto normalized_false_mapping_again =
+        session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = "high", .budget_tokens = std::nullopt, .display = ""});
+    expect(normalized_false_mapping_again && !*normalized_false_mapping_again && !session_w->model_selection_r()->reasoning,
+           "setting valid mapped metadata on an already canonical model remains absent without another write");
+
+    session_w->model_selection().change([&single_level_model](auto& model_selection) { model_selection.model = single_level_model; });
+    auto initial_off = session_w->apply_initial_reasoning_level("off");
+    auto normalized_singleton = session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = "off", .budget_tokens = std::nullopt, .display = ""});
+    auto empty_selection = session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = " \t ", .budget_tokens = std::nullopt, .display = ""});
+    expect(initial_off && normalized_singleton && !*normalized_singleton && !session_w->model_selection_r()->reasoning,
+           "initial off and singleton selections succeed as canonical absent reasoning");
+    expect(!empty_selection && empty_selection.error().format().find("reasoning level is required") != std::string::npos,
+           "the session setter rejects trim-empty selections before canonical no-choice normalization");
   }
 }
 

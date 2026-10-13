@@ -331,7 +331,6 @@ void RuntimeActionController::cycle_reasoning()
     return;
   }
   apply_reasoning_cycle_success(snapshot, std::move(*result));
-  presentation_state_.refresh_reasoning_status(options_);
 }
 
 void RuntimeActionController::toggle_thinking_visibility()
