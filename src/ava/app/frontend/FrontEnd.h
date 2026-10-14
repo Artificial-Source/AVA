@@ -34,13 +34,14 @@ struct DisplayString
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Type returned by refresh_* functions.
+// Return a refreshed projection value together with its independently consumed change notification.
+template <typename T>
 struct RefreshResult
 {
-  std::string const& display;           // Reference to corresponding `DisplayString::display_`.
-  bool const changed;                   // True if `display` was potentially changed since the last time.
+  T value;
+  bool changed;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 // class FrontEnd

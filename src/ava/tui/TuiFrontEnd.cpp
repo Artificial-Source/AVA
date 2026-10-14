@@ -23,8 +23,7 @@ void TuiFrontEnd::data_changed(app::frontend::DataListIndex index)
   {
     model_selection_.dirty();
   }
-  else if (dynamic_cast<app::runtime::SessionStats_ts const*>(data) != nullptr ||
-           dynamic_cast<app::runtime::SystemPromptTokenEstimate_ts const*>(data) != nullptr)
+  else if (dynamic_cast<app::runtime::SessionStats_ts const*>(data) != nullptr)
   {
     session_stats_.dirty();
   }

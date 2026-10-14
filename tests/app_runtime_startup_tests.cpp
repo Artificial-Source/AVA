@@ -312,7 +312,7 @@ void test_app_token_status_tracks_compaction_projection()
                                                  : ava::core::Result<std::size_t>(std::unexpected(compacted_entries.error()));
   auto const canonical_active_tokens = session_w->session_stats_r()->active_context_tokens;
   auto const cumulative_tokens = session_w->session_stats_r()->total_tokens;
-  auto const canonical_system_prompt_tokens = session_w->system_prompt_token_estimate_r()->tokens;
+  auto const canonical_system_prompt_tokens = session_w->session_stats_r()->system_prompt_tokens;
   auto const expected_system_prompt_tokens = ava::session::estimate_tokens(session_w->system_prompt());
   expect(appended_user && compaction && appended_compaction && appended_recent && compacted_entries && active_tokens && complete_tokens &&
              canonical_active_tokens == std::optional<std::size_t>{*active_tokens} &&
@@ -485,8 +485,10 @@ void test_app_runtime_process_scope_lifecycle()
 
   {
     SCOPED_CRITICAL_AREA_W(first_w, *first_result);
-    first_w->session_stats().change([](ava::session::SessionStats& stats) { stats.active_context_tokens = 321; });
-    first_w->system_prompt_token_estimate().change([](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate.tokens = 123; });
+    first_w->session_stats().change([](ava::session::SessionStats& stats) {
+      stats.active_context_tokens = 321;
+      stats.system_prompt_tokens = 123;
+    });
   }
 
   std::optional<ava::process::ProcessScopeV1> first_session_scope;
@@ -503,11 +505,10 @@ void test_app_runtime_process_scope_lifecycle()
     {
       auto detached = first_r->create_detached_state(std::move(*duplicate), std::move(*authority), first_r->subagent_delivery_manager());
       ava::app::runtime::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
-      ava::app::runtime::SystemPromptTokenEstimate_ts::crat detached_prompt_r(detached.system_prompt_token_estimate_);
       expect(detached.resources_.session_process_scope && first_session_scope && same_owner(*detached.resources_.session_process_scope, *first_session_scope) &&
                  &detached.resources_.session_process_scope->supervisor() == supervisor.get() &&
-                 detached_stats_r->active_context_tokens == std::optional<std::size_t>{321} && detached_prompt_r->tokens == std::optional<std::size_t>{123} &&
-                 detached.session_stats_.frontend() == nullptr && detached.system_prompt_token_estimate_.frontend() == nullptr,
+                 detached_stats_r->active_context_tokens == std::optional<std::size_t>{321} &&
+                 detached_stats_r->system_prompt_tokens == std::optional<std::size_t>{123} && detached.session_stats_.frontend() == nullptr,
              "detached state copies both token estimates without inheriting frontend registration and shares its existing process scope");
     }
 

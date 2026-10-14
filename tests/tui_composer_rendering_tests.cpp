@@ -1556,7 +1556,7 @@ void run_tui_composer_rendering_tests_part_1()
     idle_input.pop_back();
   while (!idle_footer.empty() && idle_footer.back() == ' ')
     idle_footer.pop_back();
-  expect(idle_two_row_lines.size() == 10 && idle_input == "│  Type a message..." && idle_footer == "│  GPT-5.5 · ctx 870" &&
+  expect(idle_two_row_lines.size() == 10 && idle_input == "│  Type a message..." && idle_footer == "│  GPT-5.5 · ctx 870 (0.3%)" &&
              idle_two_row_lines[8].find("\x1b[49m") != std::string::npos && idle_two_row_lines[9].find("\x1b[49m") != std::string::npos &&
              std::ranges::none_of(idle_two_row_lines, [](std::string const& line) { return line.find("\x1b[48;2;26;31;46m") != std::string::npos; }) &&
              std::ranges::none_of(idle_two_row_lines, [](std::string const& line) { return strip_sgr(line).find("❯") != std::string::npos; }),
@@ -1792,7 +1792,7 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(narrow_footer_lines,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-") != std::string::npos && visible.find("ctx 12k") != std::string::npos && visible_columns(line) == 20;
+                               return visible.find("ctx 12k (4.4%)") != std::string::npos && visible_columns(line) == 20;
                              }),
          "tui shortens a long model label before dropping multi-digit context metadata at the supported minimum width");
 
@@ -2544,7 +2544,7 @@ void run_tui_composer_rendering_tests_part_4()
                                    auto const visible = strip_sgr(line);
                                    return visible.find("branch develop") != std::string::npos || visible.find("AVA 0.32") != std::string::npos;
                                  }) &&
-             std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("usage 1.2k") != std::string::npos; }) &&
+             std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("usage 1.2k (0.4%)") != std::string::npos; }) &&
              std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("reasoning low") != std::string::npos; }) &&
              std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("context sources 2") != std::string::npos; }) &&
              std::ranges::none_of(sidebar_frame, [](std::string const& line) { return line.find("\x1b[31m") != std::string::npos; }) &&
@@ -3023,6 +3023,8 @@ void run_tui_composer_rendering_tests_part_4()
              std::ranges::none_of(boundary_frame, [](std::string const& line) { return strip_sgr(line).find("boundary-activity") != std::string::npos; }),
          "tui automatic sidebar stays hidden and centers the canvas on a short 160x12 terminal");
 
+  // Pin usage so drawer, sidebar, and subsequent minimum-width assertions cover a known percentage.
+  frontend.set_active_token_estimates(150'000, 300);
   auto drawer_snapshot =
       ava::tui::ComposerSnapshot{
           .mode = "build",
@@ -3081,7 +3083,7 @@ void run_tui_composer_rendering_tests_part_4()
          "tui narrow sidebar drawer replaces the transcript, wraps semantic data, stays bounded, and retains the full-width quiet composer");
   drawer_snapshot.sidebar_drawer_scroll_offset = drawer_max;
   auto const drawer_end_frame = ava::tui::render_composer(frontend.frontend(), drawer_snapshot);
-  expect(std::ranges::any_of(drawer_end_frame, [](std::string const& line) { return strip_sgr(line).find("context pressure unknown") != std::string::npos; }) &&
+  expect(std::ranges::any_of(drawer_end_frame, [](std::string const& line) { return strip_sgr(line).find("usage 150.3k (55.3%)") != std::string::npos; }) &&
              std::ranges::any_of(drawer_end_frame, [](std::string const& line) { return strip_sgr(line).find("context sources 7") != std::string::npos; }) &&
              std::ranges::any_of(drawer_end_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("AVA 1.0.0-responsive-sidebar") != std::string::npos; }),
@@ -3204,7 +3206,7 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                                           .width = 20,
                                                                                                           .height = 8});
   expect(std::ranges::all_of(exact_width_utf8, [](std::string const& line) { return visible_columns(line) <= 20; }) &&
-             std::ranges::any_of(exact_width_utf8, [](std::string const& line) { return strip_sgr(line).find("│  GPT-5.5") != std::string::npos; }),
+             std::ranges::any_of(exact_width_utf8, [](std::string const& line) { return strip_sgr(line).find("ctx 150.3k") != std::string::npos; }),
          "tui width fitting preserves the AVA composer surface at minimum width");
 
   auto const utf8 = ava::tui::render_composer(
@@ -3394,7 +3396,7 @@ void run_tui_composer_rendering_tests_part_4()
                !find_visible(transcript_discovery_lines, "/ commands") && !find_visible(processing_discovery_lines, "/ commands") &&
                !find_visible(prompt_discovery_lines, "/ commands") && !find_visible(question_discovery_lines, "/ commands") &&
                !find_visible(select_discovery_lines, "/ commands") && !find_visible(attachment_discovery_lines, "/ commands") &&
-               strip_sgr(idle_discovery_80x24.back()).find("GPT-5.5 · ctx 870") != std::string::npos &&
+               strip_sgr(idle_discovery_80x24.back()).find("GPT-5.5 · ctx 870 (0.3%)") != std::string::npos &&
                strip_sgr(idle_discovery_80x24.back()).find("build") == std::string::npos &&
                strip_sgr(idle_discovery_80x24.back()).find("session") == std::string::npos &&
                std::ranges::none_of(idle_discovery_80x24, [](std::string const& line) { return strip_sgr(line).find("AVA") != std::string::npos; }) &&

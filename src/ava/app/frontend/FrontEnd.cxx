@@ -21,7 +21,6 @@ void FrontEnd::register_frontend_data(runtime::session_ts& unlocked_session)
   runtime::session_ts::wat session_w(unlocked_session);
   session_w->model_selection().register_with_front_end({}, this);
   session_w->session_stats().register_with_front_end({}, this);
-  session_w->system_prompt_token_estimate().register_with_front_end({}, this);
   initialize_frontend_state(session_w);
 }
 

@@ -96,12 +96,22 @@ std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata(
 {
   auto provider = impl_->frontend.model_selection().refresh_provider();
   auto model = impl_->frontend.model_selection().refresh_model();
-  return {provider.display, model.display};
+  return {provider.value, model.value};
 }
 
 void TuiFrontEndFixture::set_model(TuiTestModel model)
 {
   select_frontend_test_model(impl_->session, model);
+}
+
+// Update only context_window_tokens in the canonical model and notify the frontend numeric projection.
+// An absent value exercises unknown-window transitions without changing the model's displayed name.
+void TuiFrontEndFixture::set_context_window_tokens(std::optional<long long> context_window_tokens)
+{
+  // Preserve every other canonical model field so this isolates numeric projection behavior.
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->model_selection().change(
+      [context_window_tokens](ava::app::runtime::ModelSelection& selection) { selection.model.context_window_tokens = context_window_tokens; });
 }
 
 void TuiFrontEndFixture::set_reasoning(std::optional<std::string> level)
@@ -133,10 +143,8 @@ void TuiFrontEndFixture::set_active_token_estimates(std::optional<std::size_t> h
 {
   ava::session::SessionStats stats;
   stats.active_context_tokens = history_tokens;
+  stats.system_prompt_tokens = system_prompt_tokens;
   set_session_stats(std::move(stats));
-  ava::app::runtime::session_ts::wat session_w(impl_->session);
-  session_w->system_prompt_token_estimate().change(
-      [system_prompt_tokens](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate.tokens = system_prompt_tokens; });
 }
 
 void TuiFrontEndFixture::set_session_stats(ava::session::SessionStats stats)
@@ -157,9 +165,10 @@ bool TuiFrontEndFixture::replace_session_with_active_token_estimates(std::size_t
     return false;
   {
     ava::app::runtime::session_ts::wat replacement_w(*replacement);
-    replacement_w->session_stats().change([history_tokens](ava::session::SessionStats& stats) { stats.active_context_tokens = history_tokens; });
-    replacement_w->system_prompt_token_estimate().change(
-        [system_prompt_tokens](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate.tokens = system_prompt_tokens; });
+    replacement_w->session_stats().change([history_tokens, system_prompt_tokens](ava::session::SessionStats& stats) {
+      stats.active_context_tokens = history_tokens;
+      stats.system_prompt_tokens = system_prompt_tokens;
+    });
   }
   return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
 }

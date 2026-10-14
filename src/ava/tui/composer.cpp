@@ -693,18 +693,20 @@ std::vector<std::string> render_sidebar_drawer_body(TuiFrontEnd* frontend, Sideb
   auto model = frontend->model_selection().refresh_model();
   auto reasoning = frontend->model_selection().refresh_reasoning();
   auto const token_count = frontend->session_stats().token_count_refresh();
+  auto const percentage = frontend->session_stats().contex_percentage_refresh();
+  // Omit unknown percentage parentheses while retaining a known active-token count.
+  auto const usage = token_count.value + (percentage.value == "unknown" ? std::string{} : " (" + percentage.value + ")");
   push_sidebar_drawer_section(lines, "Session", width);
   push_sidebar_drawer_value(lines, "mode", sanitize_terminal_text(sidebar.mode), width);
-  push_sidebar_drawer_value(lines, "provider", sanitize_terminal_text(provider.display), width);
-  push_sidebar_drawer_value(lines, "model", sanitize_terminal_text(model.display), width);
+  push_sidebar_drawer_value(lines, "provider", sanitize_terminal_text(provider.value), width);
+  push_sidebar_drawer_value(lines, "model", sanitize_terminal_text(model.value), width);
   push_sidebar_drawer_value(lines, "session", sanitize_terminal_text(sidebar.session_id), width);
   push_sidebar_drawer_value(lines, "path", sanitize_terminal_text(sidebar.session_path), width);
   push_sidebar_drawer_value(lines, "entries", sidebar.session_entry_count ? std::to_string(*sidebar.session_entry_count) : std::string("unknown"), width);
   push_sidebar_drawer_value(lines, "workspace", sanitize_terminal_text(sidebar.workspace), width);
   push_sidebar_drawer_value(lines, "branch", sanitize_terminal_text(sidebar.git_branch), width);
-  push_sidebar_drawer_value(lines, "reasoning", sanitize_terminal_text(reasoning.display), width);
-  push_sidebar_drawer_value(lines, "usage", token_count.display, width);
-  push_sidebar_drawer_value(lines, "context", "pressure unknown", width);
+  push_sidebar_drawer_value(lines, "reasoning", sanitize_terminal_text(reasoning.value), width);
+  push_sidebar_drawer_value(lines, "usage", usage, width);
   push_sidebar_drawer_value(lines, "context sources",
                             sidebar.context_source_count.has_value() ? std::to_string(*sidebar.context_source_count) : std::string("unknown"), width);
   push_sidebar_drawer_value(lines, "version", sidebar.version.empty() ? std::string("unknown") : std::string("AVA ") + sanitize_terminal_text(sidebar.version),
@@ -804,14 +806,17 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
   auto model = frontend->model_selection().refresh_model();
   auto reasoning = frontend->model_selection().refresh_reasoning();
   auto const token_count = frontend->session_stats().token_count_refresh();
+  auto const percentage = frontend->session_stats().contex_percentage_refresh();
+  // Append a known percentage to the exact same usage label used by the drawer.
+  auto const usage = token_count.value + (percentage.value == "unknown" ? std::string{} : " (" + percentage.value + ")");
   std::string provider_model;
-  if (known_value(provider.display))
-    provider_model = sanitize_terminal_text(provider.display);
-  if (known_value(model.display))
+  if (known_value(provider.value))
+    provider_model = sanitize_terminal_text(provider.value);
+  if (known_value(model.value))
   {
     if (!provider_model.empty())
       provider_model += "/";
-    provider_model += sanitize_terminal_text(model.display);
+    provider_model += sanitize_terminal_text(model.value);
   }
   if (!provider_model.empty())
   {
@@ -865,8 +870,8 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
   }
 
   auto const known_branch = known_value(sidebar.git_branch);
-  auto const known_reasoning = known_value(reasoning.display);
-  auto const known_token_status = known_value(token_count.display);
+  auto const known_reasoning = known_value(reasoning.value);
+  auto const known_token_status = known_value(token_count.value);
   auto const has_context = known_branch || known_reasoning || known_token_status || sidebar.context_source_count.has_value();
   if (has_context && lines.size() < height)
   {
@@ -874,9 +879,9 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
     if (known_branch)
       push_sidebar_line(lines, "branch " + sanitize_terminal_text(sidebar.git_branch), width);
     if (known_reasoning)
-      push_sidebar_line(lines, "reasoning " + sanitize_terminal_text(reasoning.display), width);
+      push_sidebar_line(lines, "reasoning " + sanitize_terminal_text(reasoning.value), width);
     if (known_token_status)
-      push_sidebar_line(lines, "usage " + token_count.display, width);
+      push_sidebar_line(lines, "usage " + usage, width);
     if (sidebar.context_source_count.has_value())
       push_sidebar_line(lines, "context sources " + std::to_string(*sidebar.context_source_count), width);
   }

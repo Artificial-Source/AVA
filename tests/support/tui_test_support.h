@@ -46,6 +46,8 @@ class TuiFrontEndFixture final
   [[nodiscard]] ava::tui::TuiFrontEnd* frontend() noexcept;
   [[nodiscard]] std::pair<std::string, std::string> selected_model_metadata();
   void set_model(TuiTestModel model);
+  // Change only canonical context-window metadata for projection and percentage tests.
+  void set_context_window_tokens(std::optional<long long> context_window_tokens);
   void set_reasoning(std::optional<std::string> level);
   void set_active_token_estimates(std::optional<std::size_t> history_tokens, std::optional<std::size_t> system_prompt_tokens = 0);
   void set_session_stats(ava::session::SessionStats stats);

@@ -118,17 +118,8 @@ struct ModelSelection
 };
 
 using ModelSelection_ts = UnlockedData<ModelSelection>;
-// Canonical session statistics, including cumulative provider usage and the active retained-history estimate.
+// Canonical session statistics, including cumulative provider usage and the paired active-context estimates.
 using SessionStats_ts = UnlockedData<ava::session::SessionStats>;
-
-struct SystemPromptTokenEstimate
-{
-  std::optional<std::size_t> tokens;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-using SystemPromptTokenEstimate_ts = UnlockedData<SystemPromptTokenEstimate>;
 
 // Trust state.
 //
@@ -198,7 +189,6 @@ struct Session_aggregate_base
   ResolvedPromptState resolved_prompt_state_;
   ModelSelection_ts model_selection_;
   SessionStats_ts session_stats_;
-  SystemPromptTokenEstimate_ts system_prompt_token_estimate_;
   TrustState trust_state_;
   SessionResources resources_;
 
@@ -324,9 +314,6 @@ class Session : protected Session_aggregate_base
   SessionStats_ts& session_stats() { return session_stats_; }
   SessionStats_ts const& session_stats() const { return session_stats_; }
 
-  SystemPromptTokenEstimate_ts& system_prompt_token_estimate() { return system_prompt_token_estimate_; }
-  SystemPromptTokenEstimate_ts const& system_prompt_token_estimate() const { return system_prompt_token_estimate_; }
-
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
 
@@ -360,9 +347,6 @@ class Session : protected Session_aggregate_base
 
   // Return read-access type for the canonical session statistics.
   SessionStats_ts::crat session_stats_r() const { return SessionStats_ts::crat{session_stats_}; }
-
-  // Return read-access type for the canonical system-prompt token estimate.
-  SystemPromptTokenEstimate_ts::crat system_prompt_token_estimate_r() const { return SystemPromptTokenEstimate_ts::crat{system_prompt_token_estimate_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }

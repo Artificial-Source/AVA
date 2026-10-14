@@ -624,7 +624,6 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   ModelSelection_ts model_selection(
       ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
   SessionStats_ts session_stats;
-  SystemPromptTokenEstimate_ts system_prompt_token_estimate;
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try
@@ -651,7 +650,6 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                    .resolved_prompt_state_ = std::move(resolved_prompt_state),
                    .model_selection_ = std::move(model_selection),
                    .session_stats_ = std::move(session_stats),
-                   .system_prompt_token_estimate_ = std::move(system_prompt_token_estimate),
                    .trust_state_ = std::move(trust_state),
                    .resources_ = std::move(resources),
                    .store = std::move(store),
@@ -715,10 +713,8 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                 .resolved_prompt_state_ = resolve_prompt_state(),
                                 // Copy the model selection without inheriting the source object's frontend registration.
                                 .model_selection_ = ModelSelection_ts{*model_selection_r()},
-                                // Copy statistics without inheriting the source object's frontend registration.
+                                // Copy statistics, including both context estimates, without inheriting frontend registration.
                                 .session_stats_ = SessionStats_ts{*session_stats_r()},
-                                // Copy the prompt estimate without inheriting the source object's frontend registration.
-                                .system_prompt_token_estimate_ = SystemPromptTokenEstimate_ts{*system_prompt_token_estimate_r()},
                                 .trust_state_ = trust_state(),
                                 .resources_ = std::move(session_resources),
                                 .store = store,

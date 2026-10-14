@@ -172,8 +172,9 @@ void append_input_text(std::string& line, ComposerSnapshot const& snapshot, std:
 std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width)
 {
   auto model = frontend->model_selection().refresh_model();
-  auto const model_label = detail::model_label(model.display);
+  auto const model_label = detail::model_label(model.value);
   auto const token_count = frontend->session_stats().token_count_refresh();
+  auto const percentage = frontend->session_stats().contex_percentage_refresh();
 
   auto const build_left_status = [&](std::size_t budget) {
     if (budget == 0)
@@ -193,13 +194,14 @@ std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnap
       line += std::string(kSgrScreenBg);
     };
 
-    if (token_count.display == "unknown")
+    if (token_count.value == "unknown")
     {
       append_fitted_model(content_budget);
       return fit_line_preserving_sgr(std::move(line), budget);
     }
 
-    auto const context_label = "ctx " + token_count.display;
+    // Unknown percentages are omitted to avoid rendering nonsensical parentheses.
+    auto const context_label = "ctx " + token_count.value + (percentage.value == "unknown" ? std::string{} : " (" + percentage.value + ")");
     auto const context_columns = terminal_text_columns(context_label);
     constexpr auto kSeparatorColumns = std::size_t{3};
     constexpr auto kCompactSeparatorColumns = std::size_t{1};

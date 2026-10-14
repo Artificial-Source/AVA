@@ -22,6 +22,8 @@ class ModelSelection
   DisplayString model_;
   DisplayString provider_;
   DisplayString reasoning_;
+  // Accumulate numeric changes until the numeric consumer observes them.
+  bool context_window_tokens_changed_{true};
 
  private:
   static std::string model_display_str(ava::config::ModelInfo const& model_info)
@@ -69,6 +71,9 @@ class ModelSelection
     auto const& new_reasoning = reasoning_display_str(model_selection_r->reasoning);
     reasoning_.changed_ = reasoning_.changed_ || old_reasoning != new_reasoning;
 
+    // Compare through the existing full-model snapshot so the numeric projection does not duplicate canonical model state.
+    context_window_tokens_changed_ = context_window_tokens_changed_ || model_snapshot_.context_window_tokens != model_selection_r->model.context_window_tokens;
+
     // Refresh all snapshots.
     model_snapshot_ = model_selection_r->model;
     reasoning_snapshot_ = model_selection_r->reasoning;
@@ -89,7 +94,7 @@ class ModelSelection
   void dirty() { dirty_ = true; }
 
   // Refresh our snapshot of `model_` if necessary. `changed` is set to true iff re-display is necessary.
-  RefreshResult refresh_model()
+  RefreshResult<std::string const&> refresh_model()
   {
     // Call initialize first.
     ASSERT(!index_.undefined());
@@ -105,7 +110,7 @@ class ModelSelection
   }
 
   // Refresh our snapshot of `provider_` if necessary. `changed` is set to true iff re-display is necessary.
-  RefreshResult refresh_provider()
+  RefreshResult<std::string const&> refresh_provider()
   {
     if (dirty_.exchange(false))
       refresh();
@@ -119,7 +124,7 @@ class ModelSelection
   //
   // Returns the cached display and whether it needs redisplay, consuming only reasoning's pending change flag.
   // An empty display means no visible reasoning selection.
-  RefreshResult refresh_reasoning()
+  RefreshResult<std::string const&> refresh_reasoning()
   {
     if (dirty_.exchange(false))
       refresh();
@@ -127,6 +132,20 @@ class ModelSelection
     if (reasoning_changed)
       reasoning_.display_ = reasoning_display_str(reasoning_snapshot_);
     return {reasoning_.display_, reasoning_changed};
+  }
+
+  // Return the context-window metadata by value and consume only its pending numeric change on the frontend thread.
+  // An absent value means the window is unknown; changes to or from that state also set changed.
+  // SessionStats owns consumption of this notification when the projections are wired together.
+  RefreshResult<std::optional<long long>> context_window_tokens_refresh()
+  {
+    // Call initialize before requesting a projected context window.
+    ASSERT(!index_.undefined());
+    if (dirty_.exchange(false))
+      refresh();
+    bool const changed = context_window_tokens_changed_;
+    context_window_tokens_changed_ = false;
+    return {model_snapshot_.context_window_tokens, changed};
   }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

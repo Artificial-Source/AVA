@@ -224,14 +224,13 @@ void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
         updated_stats.active_context_tokens = *active_context_tokens;
     }
   }
-  ava::app::runtime::SystemPromptTokenEstimate const updated_system_prompt{.tokens = ava::session::estimate_tokens(system_prompt)};
+  updated_stats.system_prompt_tokens = ava::session::estimate_tokens(system_prompt);
 
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
   if (session_w->store.session_id() != session_id || session_w->append_target() != append_target || session_w->system_prompt() != system_prompt)
     return;
+  // Publish the history and prompt estimates as one canonical change so frontend totals use one coherent snapshot.
   session_w->session_stats().change([&updated_stats](ava::session::SessionStats& stats) { stats = std::move(updated_stats); });
-  session_w->system_prompt_token_estimate().change(
-      [&updated_system_prompt](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate = updated_system_prompt; });
 }
 
 ava::tui::TodoStatus to_tui_todo_status(ava::agent::TodoStatus status)

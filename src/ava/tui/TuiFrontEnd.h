@@ -18,14 +18,15 @@ class TuiFrontEnd : public app::frontend::FrontEnd
   app::frontend::SessionStats session_stats_;
 
  public:
-  TuiFrontEnd() : model_selection_(this), session_stats_(this) { }
+  // Explicitly connect session percentages to this frontend's model projection.
+  TuiFrontEnd() : model_selection_(this), session_stats_(this, &model_selection_) { }
 
   // Implement virtual function of FrontEnd.
   void initialize_frontend_state(app::runtime::session_ts::crat const& session_r) override
   {
     // Initialize our frontend state objects.
     model_selection_.initialize(&session_r->model_selection());
-    session_stats_.initialize(&session_r->session_stats(), &session_r->system_prompt_token_estimate());
+    session_stats_.initialize(&session_r->session_stats());
   }
 
   // Launch the terminal user interface (TUI) using runtime options `options`.

@@ -48,8 +48,10 @@ struct SessionStats
   std::optional<long long> estimated_input_bytes;
   std::optional<long long> estimated_output_bytes;
   std::optional<long long> estimated_total_bytes;
-  // Estimated tokens in the active retained history after the latest valid compaction; excludes the system prompt.
+  // Runtime context estimates are published together so consumers never observe a history/prompt pair from different refreshes.
+  // active_context_tokens covers retained history after the latest valid compaction and excludes the system prompt.
   std::optional<std::size_t> active_context_tokens;
+  std::optional<std::size_t> system_prompt_tokens;
   std::optional<long double> total_cost_usd;
   std::optional<long double> known_cost_usd;
   bool cost_complete = true;
