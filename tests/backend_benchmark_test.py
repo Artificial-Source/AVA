@@ -640,7 +640,11 @@ class BenchmarkHarnessTests(unittest.TestCase):
                     (after_root, after_commit),
                     (harness_root, harness_commit),
                 ):
-                    git("worktree", "add", "--detach", str(path), revision)
+                    # Keep complete production trees, harness scripts and root files,
+                    # omitting desktop/docs assets without a wasteful first full checkout.
+                    git("worktree", "add", "--detach", "--no-checkout", str(path), revision)
+                    run_fixture_git(path, "sparse-checkout", "set", "--cone", "src", "cmake", "scripts")
+                    run_fixture_git(path, "checkout", "--detach", revision)
 
                 before, after = self.comparison_documents()
                 for document, source_root, revision in (
