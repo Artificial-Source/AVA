@@ -16,8 +16,7 @@ void test_app_event_serialization();
 void test_extension_resource_policy_derives_synthetic_paths_and_trust();
 void test_app_runtime_open_session_and_context_prompt();
 void test_app_runtime_preserves_legacy_subagent_job_tree();
-void test_app_active_context_status_format_semantics();
-void test_app_active_context_status_tracks_compaction_projection();
+void test_app_token_status_tracks_compaction_projection();
 void test_app_runtime_no_session_mode();
 // Verify inherited runtime state and retained frontend policy in replacement contexts.
 void test_app_runtime_replacement_open_context();

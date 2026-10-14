@@ -85,6 +85,7 @@ class ModelSelection
     dirty_ = true;
   }
 
+  // Mark the snapshot stale.
   void dirty() { dirty_ = true; }
 
   // Refresh our snapshot of `model_` if necessary. `changed` is set to true iff re-display is necessary.

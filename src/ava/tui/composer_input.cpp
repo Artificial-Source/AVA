@@ -173,7 +173,7 @@ std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnap
 {
   auto model = frontend->model_selection().refresh_model();
   auto const model_label = detail::model_label(model.display);
-  auto const active_context_status = snapshot.active_context_status;
+  auto const token_count = frontend->session_stats().token_count_refresh();
 
   auto const build_left_status = [&](std::size_t budget) {
     if (budget == 0)
@@ -193,13 +193,13 @@ std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnap
       line += std::string(kSgrScreenBg);
     };
 
-    if (!active_context_status || active_context_status->empty())
+    if (token_count.display == "unknown")
     {
       append_fitted_model(content_budget);
       return fit_line_preserving_sgr(std::move(line), budget);
     }
 
-    auto const context_label = "ctx " + *active_context_status;
+    auto const context_label = "ctx " + token_count.display;
     auto const context_columns = terminal_text_columns(context_label);
     constexpr auto kSeparatorColumns = std::size_t{3};
     constexpr auto kCompactSeparatorColumns = std::size_t{1};

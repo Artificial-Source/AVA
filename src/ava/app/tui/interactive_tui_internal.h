@@ -35,11 +35,13 @@ void append_status_line(std::string& target, std::string line);
 [[nodiscard]] std::string display_theme_status(std::string_view prefix);
 [[nodiscard]] ava::tui::ProjectTrustSnapshot project_trust_snapshot(ProjectTrustState const& state);
 [[nodiscard]] std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent::ToolTimelineEntry> const& entries);
-[[nodiscard]] std::optional<std::string> token_status_for_session(runtime::session_ts const& unlocked_session);
+// Refresh canonical session statistics for unlocked_session when the TUI requests a token-usage update.
+//
+// Read failures leave active history unknown while preserving an independently known system-prompt estimate.
+// A session replacement or prompt change during the read discards both results.
+void refresh_session_statistics(runtime::session_ts& unlocked_session);
 // Fail-closed presentation hydration from the latest successful committed todowrite.
 [[nodiscard]] std::vector<ava::tui::TodoItem> todos_for_session(runtime::session_ts const& unlocked_session);
-[[nodiscard]] std::string format_active_context_status_value(long long tokens, std::optional<long long> context_window_tokens);
-[[nodiscard]] std::optional<std::string> active_context_status_for_session(runtime::session_ts const& unlocked_session);
 [[nodiscard]] std::string session_selector_footer_hint(SessionSelectorSort sort, bool named_only, bool show_paths, bool show_archived, bool show_label_time);
 [[nodiscard]] ava::tui::TuiBranchSummarySnapshot tui_branch_summary_snapshot(BranchSummarySnapshot const& snapshot);
 [[nodiscard]] std::string scoped_model_selector_footer_hint();

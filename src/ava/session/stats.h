@@ -27,6 +27,9 @@ struct SessionEntryCounts
   std::size_t error = 0;
   std::size_t cancel = 0;
 
+  // Compare all entry counts with other using memberwise equality.
+  bool operator==(SessionEntryCounts const& other) const = default;
+
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
@@ -45,12 +48,17 @@ struct SessionStats
   std::optional<long long> estimated_input_bytes;
   std::optional<long long> estimated_output_bytes;
   std::optional<long long> estimated_total_bytes;
+  // Estimated tokens in the active retained history after the latest valid compaction; excludes the system prompt.
+  std::optional<std::size_t> active_context_tokens;
   std::optional<long double> total_cost_usd;
   std::optional<long double> known_cost_usd;
   bool cost_complete = true;
   std::size_t unknown_cost_entries = 0;
   std::size_t exact_usage_entries = 0;
   std::size_t estimated_usage_entries = 0;
+
+  // Compare all statistics, including nested entry counts, with other using memberwise equality.
+  bool operator==(SessionStats const& other) const = default;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

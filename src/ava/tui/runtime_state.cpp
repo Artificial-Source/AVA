@@ -108,13 +108,8 @@ RuntimePresentationState::RuntimePresentationState(TuiRuntimeOptions& options)
 
 void RuntimePresentationState::refresh_token_status(TuiRuntimeOptions const& options)
 {
-  snapshot.token_status = options.token_status_provider ? options.token_status_provider() : std::nullopt;
-  sidebar.token_status = snapshot.token_status;
-}
-
-void RuntimePresentationState::refresh_active_context_status(TuiRuntimeOptions const& options)
-{
-  snapshot.active_context_status = options.active_context_status_provider ? options.active_context_status_provider() : std::nullopt;
+  if (options.refresh_session_statistics)
+    options.refresh_session_statistics();
 }
 
 void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state)
@@ -172,7 +167,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
   sidebar.context_source_count = state.context_source_count;
   sidebar.todos = std::move(state.todos);
   refresh_token_status(options);
-  refresh_active_context_status(options);
 }
 
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list)

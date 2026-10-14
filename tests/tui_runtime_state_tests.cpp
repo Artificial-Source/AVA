@@ -198,22 +198,17 @@ void apply_session_start(ava::tui::TuiEventState& state, ava::core::Mode mode, s
 void test_tui_event_state_reduces_runtime_events()
 {
   tui_test_support::TuiFrontEndFixture frontend;
-  auto active_context_status = std::optional<std::string>{"300 (1.1%)"};
   ava::tui::TuiRuntimeOptions presentation_options;
   //  presentation_options.model = "GPT-5.5";
   presentation_options.context_source_count = 2;
-  presentation_options.active_context_status_provider = [&active_context_status] { return active_context_status; };
   ava::tui::RuntimePresentationState presentation(presentation_options);
-  presentation.refresh_active_context_status(presentation_options);
-  active_context_status = "600 (2.2%)";
   ava::tui::TuiRuntimeStateSnapshot runtime_state;
   //  runtime_state.model = "GPT-5.6";
   runtime_state.context_source_count = 3;
   presentation.apply_runtime_state_snapshot(presentation_options, std::move(runtime_state));
-  expect(presentation.snapshot.active_context_status == std::optional<std::string>{"600 (2.2%)"} &&
-             presentation.snapshot.context_source_count == std::optional<std::size_t>{3} &&
-             presentation.sidebar.context_source_count == std::optional<std::size_t>{3},
-         "tui presentation refreshes active context usage on runtime state changes while preserving sidebar source counts");
+  expect(
+      presentation.snapshot.context_source_count == std::optional<std::size_t>{3} && presentation.sidebar.context_source_count == std::optional<std::size_t>{3},
+      "tui presentation refreshes runtime state while preserving sidebar source counts");
 
   ava::tui::TuiEventState state;
   apply_session_start(state, ava::core::Mode::Build, "openai", "gpt-5.5");

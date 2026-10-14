@@ -635,17 +635,17 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       auto take_next_follow_up = active_queues ? active_queues->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{};
       auto mark_follow_up_started = active_queues ? active_queues->mark_follow_up_started : std::function<ava::core::VoidResult(TuiQueuedFollowUp const&)>{};
       return options_.on_submit(submitted, TuiSubmitContext{.request_id = submit_request_id,
-                                                           .permission_resolver = permission_resolver,
-                                                           .question_resolver = question_resolver,
-                                                           .event_sink = event_sink,
-                                                           .cancel_requested = cancel_requested,
-                                                           .take_steering_messages = take_steering_messages,
-                                                           .skip_active_steering = skip_active_steering,
-                                                           .take_next_follow_up = take_next_follow_up,
-                                                           .mark_follow_up_started = mark_follow_up_started,
-                                                           .on_subagent_launch = event_queue.subagent_launch_sink(),
-                                                           .plugin_ui = plugin_ui_endpoint,
-                                                           .image_attachments = submit_image_attachments});
+                                                            .permission_resolver = permission_resolver,
+                                                            .question_resolver = question_resolver,
+                                                            .event_sink = event_sink,
+                                                            .cancel_requested = cancel_requested,
+                                                            .take_steering_messages = take_steering_messages,
+                                                            .skip_active_steering = skip_active_steering,
+                                                            .take_next_follow_up = take_next_follow_up,
+                                                            .mark_follow_up_started = mark_follow_up_started,
+                                                            .on_subagent_launch = event_queue.subagent_launch_sink(),
+                                                            .plugin_ui = plugin_ui_endpoint,
+                                                            .image_attachments = submit_image_attachments});
     });
     bool render_failed = false;
     auto fail_active_run = [&]() {
@@ -1035,7 +1035,6 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     sidebar.context_source_count = result.context_source_count;
   }
   presentation_state_.refresh_token_status(options_);
-  presentation_state_.refresh_active_context_status(options_);
   if (!service_mermaid_presentation_() || !render())
   {
     active_run_outcome.terminal_write_failed = true;

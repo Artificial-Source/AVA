@@ -317,8 +317,7 @@ struct TuiRuntimeOptions
   TuiMermaidRenderBridge mermaid_render;
   TuiKeyBindings key_bindings = default_key_bindings();
   // Called on the TUI main thread at startup and after a submit worker completes; never from render/spinner loops.
-  std::function<std::optional<std::string>()> token_status_provider;
-  std::function<std::optional<std::string>()> active_context_status_provider;
+  std::function<void()> refresh_session_statistics;
   std::function<TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;
   std::function<TuiSubmitResult(std::string const&, TuiSubmitContext)> on_submit;
   std::function<ava::core::Result<ava::session::ImageAttachmentRef>(std::string const&)> on_attach_image;

@@ -22,8 +22,7 @@ void run_app_runtime_tests()
   test_extension_resource_policy_derives_synthetic_paths_and_trust();
   test_app_runtime_open_session_and_context_prompt();
   test_app_runtime_preserves_legacy_subagent_job_tree();
-  test_app_active_context_status_format_semantics();
-  test_app_active_context_status_tracks_compaction_projection();
+  test_app_token_status_tracks_compaction_projection();
   test_app_runtime_no_session_mode();
   test_app_runtime_replacement_open_context();
   test_app_runtime_process_scope_lifecycle();

@@ -207,9 +207,6 @@ int run_tui(InteractiveState state)
     std::shared_ptr<ava::app::BranchSummaryCoordinator> coordinator;
     ~BranchSummaryShutdownGuard() { coordinator->shutdown(); }
   } branch_summary_shutdown{branch_summary_coordinator};
-//  auto model_display = [](ava::config::ModelInfo const& model) {
-//    return model.display_name.empty() ? ava::config::model_display_label(model.model_id) : model.display_name;
-//  };
   auto custom_theme_options = [&invocation_paths]() {
     std::vector<ava::tui::ThemeOptionItem> themes;
     for (auto const& theme : ava::app::available_tui_custom_themes(invocation_paths))
@@ -410,8 +407,7 @@ int run_tui(InteractiveState state)
       .startup_overview = std::move(initial_startup_overview),
       .mermaid_render = mermaid_bridge->tui_bridge(),
       .key_bindings = key_bindings,
-      .token_status_provider = [&unlocked_session]() { return token_status_for_session(unlocked_session); },
-      .active_context_status_provider = [&unlocked_session]() { return active_context_status_for_session(unlocked_session); },
+      .refresh_session_statistics = [&unlocked_session]() { refresh_session_statistics(unlocked_session); },
       .create_active_run_queues =
           [&unlocked_session](ava::event::EventEnvelopeSink event_sink) {
             auto jobs_binding = ava::app::capture_jobs_command_binding(unlocked_session);

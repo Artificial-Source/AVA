@@ -607,68 +607,6 @@ void push_sidebar_line(std::vector<std::string>& lines, std::string line, std::s
   lines.push_back(detail::fit_line_preserving_sgr("  " + std::move(line), width));
 }
 
-std::optional<std::string> percent_text_from_token_status(std::optional<std::string> const& token_status)
-{
-  if (!token_status || token_status->empty())
-    return std::nullopt;
-  auto const open = token_status->rfind('(');
-  if (open == std::string::npos)
-    return std::nullopt;
-  auto const percent = token_status->find('%', open + 1);
-  if (percent == std::string::npos || percent <= open + 1)
-    return std::nullopt;
-  return token_status->substr(open + 1, percent - open - 1);
-}
-
-double context_pressure_value(std::string const& percent_text)
-{
-  double value = 0.0;
-  double scale = 1.0;
-  bool fractional = false;
-  bool parsed_digit = false;
-  for (auto const ch : percent_text)
-  {
-    auto const byte = static_cast<unsigned char>(ch);
-    if (std::isdigit(byte) != 0)
-    {
-      parsed_digit = true;
-      auto const digit = static_cast<double>(byte - static_cast<unsigned char>('0'));
-      if (fractional)
-      {
-        scale *= 10.0;
-        value += digit / scale;
-      }
-      else
-      {
-        value = (value * 10.0) + digit;
-      }
-    }
-    else if (ch == '.' && !fractional)
-    {
-      fractional = true;
-    }
-    else
-    {
-      break;
-    }
-  }
-  return parsed_digit ? value : 0.0;
-}
-
-std::string context_pressure_level(std::string const& percent_text)
-{
-  auto const value = context_pressure_value(percent_text);
-  return value >= 90.0 ? "critical" : value >= 70.0 ? "high" : value >= 40.0 ? "moderate" : "low";
-}
-
-std::string context_pressure_line(std::string const& percent_text)
-{
-  auto const value = context_pressure_value(percent_text);
-  auto const color = value >= 70.0 ? kSgrWarning : kSgrDim;
-  return std::string("context pressure ") + std::string(color) + context_pressure_level(percent_text) + " " + sanitize_terminal_text(percent_text) + "%" +
-         std::string(kSgrReset);
-}
-
 void push_sidebar_drawer_value(std::vector<std::string>& lines, std::string_view label, std::string_view value, std::size_t width)
 {
   auto const first_prefix = std::string("  ") + std::string(label) + " ";
@@ -754,6 +692,7 @@ std::vector<std::string> render_sidebar_drawer_body(TuiFrontEnd* frontend, Sideb
   auto provider = frontend->model_selection().refresh_provider();
   auto model = frontend->model_selection().refresh_model();
   auto reasoning = frontend->model_selection().refresh_reasoning();
+  auto const token_count = frontend->session_stats().token_count_refresh();
   push_sidebar_drawer_section(lines, "Session", width);
   push_sidebar_drawer_value(lines, "mode", sanitize_terminal_text(sidebar.mode), width);
   push_sidebar_drawer_value(lines, "provider", sanitize_terminal_text(provider.display), width);
@@ -764,15 +703,8 @@ std::vector<std::string> render_sidebar_drawer_body(TuiFrontEnd* frontend, Sideb
   push_sidebar_drawer_value(lines, "workspace", sanitize_terminal_text(sidebar.workspace), width);
   push_sidebar_drawer_value(lines, "branch", sanitize_terminal_text(sidebar.git_branch), width);
   push_sidebar_drawer_value(lines, "reasoning", sanitize_terminal_text(reasoning.display), width);
-  push_sidebar_drawer_value(lines, "usage", sidebar.token_status ? sanitize_terminal_text(*sidebar.token_status) : std::string("tokens unknown"), width);
-  if (auto const percent = percent_text_from_token_status(sidebar.token_status))
-  {
-    push_sidebar_drawer_value(lines, "context pressure", context_pressure_level(*percent) + " " + sanitize_terminal_text(*percent) + "%", width);
-  }
-  else
-  {
-    push_sidebar_drawer_value(lines, "context", "pressure unknown", width);
-  }
+  push_sidebar_drawer_value(lines, "usage", token_count.display, width);
+  push_sidebar_drawer_value(lines, "context", "pressure unknown", width);
   push_sidebar_drawer_value(lines, "context sources",
                             sidebar.context_source_count.has_value() ? std::to_string(*sidebar.context_source_count) : std::string("unknown"), width);
   push_sidebar_drawer_value(lines, "version", sidebar.version.empty() ? std::string("unknown") : std::string("AVA ") + sanitize_terminal_text(sidebar.version),
@@ -845,10 +777,6 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
     auto const normalized = normalized_sidebar_value(value);
     return !normalized.empty() && normalized != "unknown";
   };
-  auto const known_token_value = [&](std::string_view value) {
-    auto const normalized = normalized_sidebar_value(value);
-    return known_value(value) && normalized != "tokens unknown";
-  };
   auto begin_group = [&](std::string_view title) {
     if (!lines.empty())
       push_sidebar_line(lines, "", width);
@@ -875,6 +803,7 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
   auto provider = frontend->model_selection().refresh_provider();
   auto model = frontend->model_selection().refresh_model();
   auto reasoning = frontend->model_selection().refresh_reasoning();
+  auto const token_count = frontend->session_stats().token_count_refresh();
   std::string provider_model;
   if (known_value(provider.display))
     provider_model = sanitize_terminal_text(provider.display);
@@ -937,7 +866,7 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
 
   auto const known_branch = known_value(sidebar.git_branch);
   auto const known_reasoning = known_value(reasoning.display);
-  auto const known_token_status = sidebar.token_status && known_token_value(*sidebar.token_status);
+  auto const known_token_status = known_value(token_count.display);
   auto const has_context = known_branch || known_reasoning || known_token_status || sidebar.context_source_count.has_value();
   if (has_context && lines.size() < height)
   {
@@ -947,11 +876,7 @@ std::vector<std::string> render_sidebar(TuiFrontEnd* frontend, SidebarSnapshot c
     if (known_reasoning)
       push_sidebar_line(lines, "reasoning " + sanitize_terminal_text(reasoning.display), width);
     if (known_token_status)
-    {
-      push_sidebar_line(lines, "usage " + sanitize_terminal_text(*sidebar.token_status), width);
-      if (auto const percent = percent_text_from_token_status(sidebar.token_status))
-        push_sidebar_line(lines, context_pressure_line(*percent), width);
-    }
+      push_sidebar_line(lines, "usage " + token_count.display, width);
     if (sidebar.context_source_count.has_value())
       push_sidebar_line(lines, "context sources " + std::to_string(*sidebar.context_source_count), width);
   }

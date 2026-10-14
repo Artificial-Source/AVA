@@ -9,15 +9,16 @@
 #include "SessionLifecycleRequest.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
-#include "ava/app/runtime/session_ts.h"
 #include "ava/app/runtime/UnlockedData.h"
+#include "ava/app/runtime/session_ts.h"
 #include "ava/app/session_run_controller.h"
-#include "ava/agent/agent_loop.h"
 #include "ava/agent/agent_config.h"
+#include "ava/agent/agent_loop.h"
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/session/session_store.h"
+#include "ava/session/stats.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/error.h"
@@ -117,6 +118,17 @@ struct ModelSelection
 };
 
 using ModelSelection_ts = UnlockedData<ModelSelection>;
+// Canonical session statistics, including cumulative provider usage and the active retained-history estimate.
+using SessionStats_ts = UnlockedData<ava::session::SessionStats>;
+
+struct SystemPromptTokenEstimate
+{
+  std::optional<std::size_t> tokens;
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
+using SystemPromptTokenEstimate_ts = UnlockedData<SystemPromptTokenEstimate>;
 
 // Trust state.
 //
@@ -181,11 +193,14 @@ struct SessionResources
 // along which this aggregate is expected to be decomposed into smaller types.
 struct Session_aggregate_base
 {
-  InvocationInputs invocation_inputs_;          // Do NOT use this variable name outside of this file!
-  ResolvedPromptState resolved_prompt_state_;   // Do NOT use this variable name outside of this file!
-  ModelSelection_ts model_selection_;           // Do NOT use this variable name outside of this file!
-  TrustState trust_state_;                      // Do NOT use this variable name outside of this file!
-  SessionResources resources_;                  // Do NOT use this variable name outside of this file!
+  // DO NOT USE any of these members outside of this file except with a designated initializer for Session.
+  InvocationInputs invocation_inputs_;
+  ResolvedPromptState resolved_prompt_state_;
+  ModelSelection_ts model_selection_;
+  SessionStats_ts session_stats_;
+  SystemPromptTokenEstimate_ts system_prompt_token_estimate_;
+  TrustState trust_state_;
+  SessionResources resources_;
 
   // ===========================================================================
   // Persistent session identity.
@@ -306,6 +321,12 @@ class Session : protected Session_aggregate_base
   ModelSelection_ts& model_selection() { return model_selection_; }
   ModelSelection_ts const& model_selection() const { return model_selection_; }
 
+  SessionStats_ts& session_stats() { return session_stats_; }
+  SessionStats_ts const& session_stats() const { return session_stats_; }
+
+  SystemPromptTokenEstimate_ts& system_prompt_token_estimate() { return system_prompt_token_estimate_; }
+  SystemPromptTokenEstimate_ts const& system_prompt_token_estimate() const { return system_prompt_token_estimate_; }
+
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
 
@@ -337,6 +358,12 @@ class Session : protected Session_aggregate_base
   // Return read-access type for the ModelSelection object.
   ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
 
+  // Return read-access type for the canonical session statistics.
+  SessionStats_ts::crat session_stats_r() const { return SessionStats_ts::crat{session_stats_}; }
+
+  // Return read-access type for the canonical system-prompt token estimate.
+  SystemPromptTokenEstimate_ts::crat system_prompt_token_estimate_r() const { return SystemPromptTokenEstimate_ts::crat{system_prompt_token_estimate_}; }
+
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }
 
@@ -355,7 +382,8 @@ class Session : protected Session_aggregate_base
   std::shared_ptr<ava::provider::ProviderCatalog const> const& provider_catalog() const { return resources_.provider_catalog; }
 
   // Convenience accessor that returns ProviderCatalog::build_builtins_only() if no provider_catalog is set.
-  std::shared_ptr<ava::provider::ProviderCatalog const> ensure_provider_catalog() const {
+  std::shared_ptr<ava::provider::ProviderCatalog const> ensure_provider_catalog() const
+  {
     return resources_.provider_catalog ? resources_.provider_catalog : ava::provider::ProviderCatalog::build_builtins_only();
   }
 

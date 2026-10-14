@@ -18,11 +18,8 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iterator>
-#include <limits>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -204,104 +201,37 @@ std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent
   return items;
 }
 
-void add_token_component(std::optional<long long>& total, std::optional<long long> value)
-{
-  if (!value || *value < 0)
-    return;
-  if (!total)
-    total = 0;
-  constexpr auto maximum = std::numeric_limits<long long>::max();
-  *total = *total > maximum - *value ? maximum : *total + *value;
-}
-
-std::optional<long long> compact_token_total(ava::session::SessionStats const& stats)
-{
-  if (stats.total_tokens)
-    return stats.total_tokens;
-
-  std::optional<long long> total;
-  add_token_component(total, stats.input_tokens);
-  add_token_component(total, stats.output_tokens);
-  add_token_component(total, stats.reasoning_tokens);
-  add_token_component(total, stats.cache_read_tokens);
-  add_token_component(total, stats.cache_write_tokens);
-  return total;
-}
-
-std::string format_compact_token_count(long long value)
-{
-  if (value < 1000)
-    return std::to_string(value);
-
-  auto const format_scaled = [](long long tenths, std::string_view suffix) {
-    std::ostringstream output;
-    output << (tenths / 10);
-    if (tenths % 10 != 0)
-      output << '.' << (tenths % 10);
-    output << suffix;
-    return output.str();
-  };
-
-  if (value < 1'000'000)
-    return format_scaled(value / 100, "k");
-  return format_scaled(value / 100'000, "m");
-}
-
-std::optional<std::string> format_context_window_percent(long long tokens, std::optional<long long> context_window_tokens)
-{
-  if (!context_window_tokens || *context_window_tokens <= 0)
-    return std::nullopt;
-  if (tokens <= 0)
-    return std::string("0.0%");
-
-  auto const percent = (static_cast<long double>(tokens) * 100.0L) / static_cast<long double>(*context_window_tokens);
-  if (percent > 0.0L && percent < 0.1L)
-    return std::string("<0.1%");
-
-  std::ostringstream output;
-  output << std::fixed << std::setprecision(1) << percent << '%';
-  return output.str();
-}
-
-std::string format_active_context_status_value(long long tokens, std::optional<long long> context_window_tokens)
-{
-  auto const count = format_compact_token_count(tokens);
-  if (auto const percent = format_context_window_percent(tokens, context_window_tokens))
-    return count + " (" + *percent + ')';
-  return "~" + count;
-}
-
-std::optional<std::string> compact_token_status(ava::session::SessionStats const& stats, std::optional<long long> context_window_tokens)
-{
-  auto const tokens = compact_token_total(stats);
-  if (!tokens)
-    return std::nullopt;
-
-  std::ostringstream output;
-  output << format_compact_token_count(*tokens);
-  if (auto const percent = format_context_window_percent(*tokens, context_window_tokens))
-  {
-    output << " (" << *percent << ')';
-  }
-  return output.str();
-}
-
-std::optional<std::string> token_status_for_session(ava::app::runtime::session_ts const& unlocked_session)
+// Capture the history authority before loading and computing outside the Session lock.
+// Publish both estimates under the Session write lock only if the session, append target, and prompt are still current.
+void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
 {
   auto snapshot = [&] {
-    SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::pair{session_r->read_authority_1(), session_r->model_selection_r()->model.context_window_tokens};
+    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    return std::tuple{session_r->store.session_id(), session_r->append_target(), session_r->system_prompt(), session_r->read_authority_1()};
   }();
-  auto& [read_authority, context_window_tokens] = snapshot;
-  if (!read_authority)
-    return std::nullopt;
-  auto entries = read_authority->load();
-  if (!entries)
-    return std::nullopt;
-  auto stats = ava::session::compute_session_stats(*entries);
-  if (!stats)
-    return std::nullopt;
-  return compact_token_status(*stats, context_window_tokens);
+  auto& [session_id, append_target, system_prompt, read_authority] = snapshot;
+  ava::session::SessionStats updated_stats;
+  if (read_authority)
+  {
+    auto entries = read_authority->load();
+    if (entries)
+    {
+      auto computed = ava::session::compute_session_stats(*entries);
+      if (computed)
+        updated_stats = std::move(*computed);
+      auto active_context_tokens = ava::session::estimate_active_context_tokens(*entries);
+      if (active_context_tokens)
+        updated_stats.active_context_tokens = *active_context_tokens;
+    }
+  }
+  ava::app::runtime::SystemPromptTokenEstimate const updated_system_prompt{.tokens = ava::session::estimate_tokens(system_prompt)};
+
+  SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
+  if (session_w->store.session_id() != session_id || session_w->append_target() != append_target || session_w->system_prompt() != system_prompt)
+    return;
+  session_w->session_stats().change([&updated_stats](ava::session::SessionStats& stats) { stats = std::move(updated_stats); });
+  session_w->system_prompt_token_estimate().change(
+      [&updated_system_prompt](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate = updated_system_prompt; });
 }
 
 ava::tui::TodoStatus to_tui_todo_status(ava::agent::TodoStatus status)
@@ -336,38 +266,6 @@ std::vector<ava::tui::TodoItem> todos_for_session(runtime::session_ts const& unl
     todos.push_back(ava::tui::TodoItem{.id = item.id, .content = item.content, .status = to_tui_todo_status(item.status)});
   }
   return todos;
-}
-
-ava::core::Result<std::string> formatted_active_context_status(ava::app::runtime::session_ts const& unlocked_session)
-{
-  auto snapshot = [&] {
-    SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->read_authority_1(), session_r->system_prompt(), session_r->model_selection_r()->model.context_window_tokens};
-  }();
-  auto& [read_authority, system_prompt, context_window_tokens] = snapshot;
-  if (!read_authority)
-    return std::unexpected(std::move(read_authority.error()));
-  auto entries = read_authority->load();
-  if (!entries)
-    return std::unexpected(std::move(entries.error()));
-  auto active_tokens = ava::session::estimate_active_context_tokens(*entries);
-  if (!active_tokens)
-    return std::unexpected(std::move(active_tokens.error()));
-
-  auto const system_prompt_tokens = ava::session::estimate_tokens(system_prompt);
-  auto const maximum = std::numeric_limits<std::size_t>::max();
-  auto const total_tokens = *active_tokens > maximum - system_prompt_tokens ? maximum : *active_tokens + system_prompt_tokens;
-  auto const display_tokens = total_tokens > static_cast<std::size_t>(std::numeric_limits<long long>::max()) ? std::numeric_limits<long long>::max()
-                                                                                                             : static_cast<long long>(total_tokens);
-  return format_active_context_status_value(display_tokens, context_window_tokens);
-}
-
-std::optional<std::string> active_context_status_for_session(ava::app::runtime::session_ts const& unlocked_session)
-{
-  auto status = formatted_active_context_status(unlocked_session);
-  if (!status)
-    return std::nullopt;
-  return std::move(*status);
 }
 
 std::string session_selector_footer_hint(ava::app::SessionSelectorSort sort, bool named_only, bool show_paths, bool show_archived, bool show_label_time)
@@ -532,13 +430,9 @@ void store_model_scope(ava::app::runtime::session_ts& unlocked_session, std::vec
   auto normalized = normalized_model_scope(candidate, all_values);
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
   if (reset_full_scope_to_all && normalized.size() == all_values.size())
-    session_w->model_selection().change([](auto& model_selection){
-      model_selection.scoped_model_cycle = std::nullopt;
-    });
+    session_w->model_selection().change([](auto& model_selection) { model_selection.scoped_model_cycle = std::nullopt; });
   else
-    session_w->model_selection().change([&normalized](auto& model_selection){
-      model_selection.scoped_model_cycle = std::move(normalized);
-    });
+    session_w->model_selection().change([&normalized](auto& model_selection) { model_selection.scoped_model_cycle = std::move(normalized); });
 }
 
 std::vector<std::string> active_model_scope_or_all(ava::app::runtime::session_ts const& unlocked_session, std::vector<std::string> const& all_values)
@@ -593,9 +487,7 @@ ava::core::Result<ava::tui::SelectListView> toggle_scoped_model(ava::app::runtim
   if (!scoped_cycle)
   {
     std::vector<std::string> v{std::string(value)};
-    runtime::session_ts::wat(unlocked_session)->model_selection().change([&v](auto& model_selection){
-      model_selection.scoped_model_cycle = std::move(v);
-    });
+    runtime::session_ts::wat(unlocked_session)->model_selection().change([&v](auto& model_selection) { model_selection.scoped_model_cycle = std::move(v); });
     return refreshed_scoped_model_selector(unlocked_session, previous);
   }
   auto next = normalized_model_scope(*scoped_cycle, all_values);
@@ -692,7 +584,7 @@ ava::core::Result<std::string> save_scoped_model_cycle(ava::app::runtime::sessio
   {
     auto const all_values = registered_model_cycle_values(unlocked_session);
     scope_to_save = normalized_model_scope(*scope_to_save, all_values);
-    runtime::session_ts::wat(unlocked_session)->model_selection().change([&scope_to_save](auto& model_selection){
+    runtime::session_ts::wat(unlocked_session)->model_selection().change([&scope_to_save](auto& model_selection) {
       model_selection.scoped_model_cycle = scope_to_save;
     });
   }

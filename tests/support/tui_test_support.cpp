@@ -129,6 +129,41 @@ void TuiFrontEndFixture::set_reasoning(std::optional<std::string> level)
   });
 }
 
+void TuiFrontEndFixture::set_active_token_estimates(std::optional<std::size_t> history_tokens, std::optional<std::size_t> system_prompt_tokens)
+{
+  ava::session::SessionStats stats;
+  stats.active_context_tokens = history_tokens;
+  set_session_stats(std::move(stats));
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->system_prompt_token_estimate().change(
+      [system_prompt_tokens](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate.tokens = system_prompt_tokens; });
+}
+
+void TuiFrontEndFixture::set_session_stats(ava::session::SessionStats stats)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->session_stats().change([stats = std::move(stats)](ava::session::SessionStats& canonical_stats) mutable { canonical_stats = std::move(stats); });
+}
+
+bool TuiFrontEndFixture::replace_session_with_active_token_estimates(std::size_t history_tokens, std::size_t system_prompt_tokens)
+{
+  ava::app::runtime::OpenContext replacement_context;
+  {
+    ava::app::runtime::session_ts::crat session_r(impl_->session);
+    replacement_context = session_r->replacement_open_context({});
+  }
+  auto replacement = ava::app::runtime::Session::open(replacement_context, {.sessionless = true});
+  if (!replacement)
+    return false;
+  {
+    ava::app::runtime::session_ts::wat replacement_w(*replacement);
+    replacement_w->session_stats().change([history_tokens](ava::session::SessionStats& stats) { stats.active_context_tokens = history_tokens; });
+    replacement_w->system_prompt_token_estimate().change(
+        [system_prompt_tokens](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate.tokens = system_prompt_tokens; });
+  }
+  return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
+}
+
 void TuiFrontEndFixture::set_reasoning_capabilities(std::optional<bool> supports_reasoning, std::vector<std::string> reasoning_levels)
 {
   ava::app::runtime::session_ts::wat session_w(impl_->session);

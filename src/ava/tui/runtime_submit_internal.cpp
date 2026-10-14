@@ -355,7 +355,6 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     {
       push_history(input_history, submitted);
       presentation_state_.refresh_token_status(options_);
-      presentation_state_.refresh_active_context_status(options_);
       auto settings_snapshot = snapshot;
       settings_snapshot.sidebar = sidebar;
       snapshot.select_list = settings_select_list_view(settings_snapshot, options_.key_bindings);

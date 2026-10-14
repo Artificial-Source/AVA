@@ -248,7 +248,6 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
   } plugin_ui_shutdown{&plugin_ui, &snapshot};
 
   presentation_state.refresh_token_status(options);
-  presentation_state.refresh_active_context_status(options);
 
   bool terminal_write_failed = false;
   bool terminal_signal_received = false;

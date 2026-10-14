@@ -66,6 +66,52 @@ void run_tui_selector_tests()
                !refresh_frontend.frontend()->model_selection().refresh_reasoning().changed,
            "each frontend model-selection pending flag clears independently after delivery");
 
+    tui_test_support::TuiFrontEndFixture stats_frontend;
+    auto default_stats = stats_frontend.frontend()->session_stats().token_count_refresh();
+    bool const default_changed = default_stats.changed;
+    std::string const default_display = default_stats.display;
+    stats_frontend.set_active_token_estimates(400'000, 13'200);
+    auto populated_stats = stats_frontend.frontend()->session_stats().token_count_refresh();
+    bool const populated_changed = populated_stats.changed;
+    std::string const populated_display = populated_stats.display;
+    stats_frontend.set_active_token_estimates(400'000, 13'200);
+    auto text_unchanged = stats_frontend.frontend()->session_stats().token_count_refresh();
+    ava::session::SessionStats metadata_only_stats;
+    metadata_only_stats.entry_count = 7;
+    metadata_only_stats.last_timestamp = "2026-10-14T12:00:00Z";
+    metadata_only_stats.active_context_tokens = 400'000;
+    metadata_only_stats.total_tokens = 999'999;
+    metadata_only_stats.total_cost_usd = 12.5L;
+    stats_frontend.set_session_stats(std::move(metadata_only_stats));
+    auto metadata_only = stats_frontend.frontend()->session_stats().token_count_refresh();
+    std::string const metadata_display = metadata_only.display;
+    stats_frontend.set_active_token_estimates(12'000, 340);
+    auto truncated_count = stats_frontend.frontend()->session_stats().token_count_refresh();
+    std::string const truncated_display = truncated_count.display;
+    stats_frontend.set_active_token_estimates(12'001, 340);
+    auto same_display = stats_frontend.frontend()->session_stats().token_count_refresh();
+    ava::session::SessionStats fallback_stats;
+    fallback_stats.active_context_tokens = 1'000;
+    stats_frontend.set_session_stats(std::move(fallback_stats));
+    auto fallback_count = stats_frontend.frontend()->session_stats().token_count_refresh();
+    std::string const fallback_display = fallback_count.display;
+    stats_frontend.set_active_token_estimates(0, 0);
+    auto zero_count = stats_frontend.frontend()->session_stats().token_count_refresh();
+    bool const zero_changed = zero_count.changed;
+    std::string const zero_display = zero_count.display;
+    stats_frontend.set_active_token_estimates(0, std::nullopt);
+    auto cleared_stats = stats_frontend.frontend()->session_stats().token_count_refresh();
+    bool const cleared_changed = cleared_stats.changed;
+    std::string const cleared_display = cleared_stats.display;
+    bool const replaced_stats = stats_frontend.replace_session_with_active_token_estimates(2'000, 400);
+    auto replacement_stats = stats_frontend.frontend()->session_stats().token_count_refresh();
+    expect(default_changed && default_display == "unknown" && populated_changed && populated_display == "413.2k" && !text_unchanged.changed &&
+               !metadata_only.changed && metadata_display == "413.2k" && truncated_count.changed && truncated_display == "12.3k" && !same_display.changed &&
+               fallback_count.changed && fallback_display == "1.3k" && zero_changed && zero_display == "0" && cleared_changed && cleared_display == "unknown" &&
+               replaced_stats && replacement_stats.changed && replacement_stats.display == "2.4k",
+           "frontend session statistics compare compact active-context text, display absent counts as unknown, and retain both estimates across session "
+           "replacement");
+
     refresh_frontend.set_reasoning("low");
     auto unchanged_provider = refresh_frontend.frontend()->model_selection().refresh_provider();
     auto unchanged_model = refresh_frontend.frontend()->model_selection().refresh_model();
@@ -827,7 +873,6 @@ void run_tui_selector_tests()
                                       .session_id = "session_test",
                                       .input = "",
                                       .status = "ready",
-                                      .token_status = "1.3k (0.7%)",
                                       .transcript = {},
                                       .custom_themes = std::move(custom_themes),
                                       .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
@@ -837,7 +882,6 @@ void run_tui_selector_tests()
                                                                            .workspace = "/workspace/project",
                                                                            .git_branch = "develop",
                                                                            .version = "0.32",
-                                                                           .token_status = "1.3k (0.7%)",
                                                                            .context_source_count = 2,
                                                                            .session_path = "/tmp/ava/session_test.jsonl",
                                                                            .session_entry_count = 42},

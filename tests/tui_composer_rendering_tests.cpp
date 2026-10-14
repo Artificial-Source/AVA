@@ -1538,13 +1538,13 @@ void run_tui_composer_rendering_tests_part_1()
            "tui user identity remains meaningful and width-bounded with NO_COLOR");
   }
 
+  frontend.set_active_token_estimates(800, 70);
   auto const idle_two_row_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
                                                                 //.provider = "openai",
                                                                 //.model = "gpt-5.5",
                                                                 .session_id = "session_test",
                                                                 .input = "",
                                                                 .status = "ready",
-                                                                .active_context_status = "870 (3.2%)",
                                                                 .context_source_count = 2,
                                                                 .transcript = {},
                                                                 .width = 80,
@@ -1556,7 +1556,7 @@ void run_tui_composer_rendering_tests_part_1()
     idle_input.pop_back();
   while (!idle_footer.empty() && idle_footer.back() == ' ')
     idle_footer.pop_back();
-  expect(idle_two_row_lines.size() == 10 && idle_input == "│  Type a message..." && idle_footer == "│  GPT-5.5 · ctx 870 (3.2%)" &&
+  expect(idle_two_row_lines.size() == 10 && idle_input == "│  Type a message..." && idle_footer == "│  GPT-5.5 · ctx 870" &&
              idle_two_row_lines[8].find("\x1b[49m") != std::string::npos && idle_two_row_lines[9].find("\x1b[49m") != std::string::npos &&
              std::ranges::none_of(idle_two_row_lines, [](std::string const& line) { return line.find("\x1b[48;2;26;31;46m") != std::string::npos; }) &&
              std::ranges::none_of(idle_two_row_lines, [](std::string const& line) { return strip_sgr(line).find("❯") != std::string::npos; }),
@@ -1738,7 +1738,6 @@ void run_tui_composer_rendering_tests_part_1()
                                                                                 .processing = true,
                                                                                 .active_run_hint = ava::tui::ActiveRunHint{.interrupt = "Esc"},
                                                                                 .spinner_frame = 1,
-                                                                                .token_status = "1.3k (0.7%)",
                                                                                 .transcript = {},
                                                                                 .width = 80,
                                                                                 .height = 10});
@@ -1778,13 +1777,13 @@ void run_tui_composer_rendering_tests_part_1()
              ava::tui::detail::processing_indicator_elapsed_frames(std::chrono::milliseconds(365)) == 3,
          "tui processing indicator has a shared 120ms four-cell lower-block signal meter and advances by elapsed intervals independent of redraws");
 
+  frontend.set_active_token_estimates(10'000, 2'000);
   auto narrow_footer_snapshot = ava::tui::ComposerSnapshot{.mode = "build",
                                                            //.provider = "openai",
                                                            //.model = "gpt-5.6-terra",
                                                            .session_id = "session_test",
                                                            .input = "",
                                                            .status = "ready",
-                                                           .active_context_status = "~12k",
                                                            .context_source_count = 12,
                                                            .transcript = {},
                                                            .width = 20,
@@ -1793,7 +1792,7 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(narrow_footer_lines,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-") != std::string::npos && visible.find("ctx ~12k") != std::string::npos && visible_columns(line) == 20;
+                               return visible.find("GPT-") != std::string::npos && visible.find("ctx 12k") != std::string::npos && visible_columns(line) == 20;
                              }),
          "tui shortens a long model label before dropping multi-digit context metadata at the supported minimum width");
 
@@ -1808,7 +1807,7 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(narrow_processing_lines,
                              [&](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("ctx ~12k") != std::string::npos && visible.find(narrow_meter_raw) != std::string::npos &&
+                               return visible.find("ctx 12k") != std::string::npos && visible.find(narrow_meter_raw) != std::string::npos &&
                                       line.find(narrow_muted_outer) != std::string::npos && line.find(narrow_accent_inner) != std::string::npos &&
                                       visible_columns(line) == 20;
                              }),
@@ -1816,7 +1815,7 @@ void run_tui_composer_rendering_tests_part_1()
 
   auto combined_narrow_footer = narrow_footer_snapshot;
   //  combined_narrow_footer.model = "gpt-5.6-terra";
-  combined_narrow_footer.active_context_status = "150.3k (55.3%)";
+  frontend.set_active_token_estimates(140'000, 10'300);
   combined_narrow_footer.width = 28;
   combined_narrow_footer.height = 8;
   combined_narrow_footer.processing = true;
@@ -1825,12 +1824,12 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(combined_narrow_lines,
                              [&](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("ctx 150.3k (55.3%)") != std::string::npos && visible.find(narrow_meter_raw) != std::string::npos &&
+                               return visible.find("ctx 150.3k") != std::string::npos && visible.find(narrow_meter_raw) != std::string::npos &&
                                       line.find(narrow_muted_outer) != std::string::npos && line.find(narrow_accent_inner) != std::string::npos &&
                                       visible_columns(line) == 28;
                              }) &&
              std::ranges::all_of(combined_narrow_lines, [](std::string const& line) { return visible_columns(line) <= 28; }),
-         "tui keeps combined count/percent context and the four-cell meter width-bounded on a narrow canvas");
+         "tui keeps the compact active-context count and four-cell meter width-bounded on a narrow canvas");
 
   auto normal_combined_footer = combined_narrow_footer;
   //  normal_combined_footer.model = "gpt-5.5";
@@ -1840,10 +1839,10 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(normal_combined_lines,
                              [&](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-5.5 · ctx 150.3k (55.3%)") != std::string::npos &&
-                                      visible.find(narrow_meter_raw) != std::string::npos && visible_columns(line) == 80;
+                               return visible.find("GPT-5.5 · ctx 150.3k") != std::string::npos && visible.find(narrow_meter_raw) != std::string::npos &&
+                                      visible_columns(line) == 80;
                              }),
-         "tui shows count plus percent with the four-cell meter at normal width without overflow");
+         "tui shows the compact active-context count with the four-cell meter at normal width without overflow");
   {
     ScopedEnvVar no_color_guard("NO_COLOR", "1");
     auto plain_processing = narrow_footer_snapshot;
@@ -2053,13 +2052,13 @@ void run_tui_composer_rendering_tests_part_1()
                                  }),
          "tui keeps build and plan mode badges out of the composer footer");
 
+  frontend.set_active_token_estimates(1'000, 300);
   auto const token_margin_lines = ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
                                                                                                             //.provider = "openai",
                                                                                                             //.model = "gpt-5.5",
                                                                                                             .session_id = "session_test",
                                                                                                             .input = "",
                                                                                                             .status = "ready",
-                                                                                                            .token_status = "1.3k (0.7%)",
                                                                                                             .transcript = {},
                                                                                                             .width = 80,
                                                                                                             .height = 10});
@@ -2073,8 +2072,6 @@ void run_tui_composer_rendering_tests_part_1()
                                                                                 .session_id = "session_test",
                                                                                 .input = "",
                                                                                 .status = "ready",
-                                                                                .token_status = "1.3k (0.7%)",
-                                                                                .active_context_status = "870 (3.2%)",
                                                                                 .transcript = {},
                                                                                 .width = 110,
                                                                                 .height = 10,
@@ -2084,19 +2081,19 @@ void run_tui_composer_rendering_tests_part_1()
                                                                                                                      //.model = "gpt-5.5",
                                                                                                                      .workspace = "/workspace/project",
                                                                                                                      .git_branch = "develop",
-                                                                                                                     .token_status = "1.3k (0.7%)",
                                                                                                                      .context_source_count = 2,
                                                                                                                      .session_entry_count = 42}});
   expect(std::ranges::any_of(compact_footer_lines,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-5.5 · ctx 870 (3.2%)") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
+                               return visible.find("GPT-5.5 · ctx 1.3k") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
                                       visible.find("Build") == std::string::npos && visible.find("OpenAI") == std::string::npos &&
                                       visible.find("cwd") == std::string::npos && visible.find("git") == std::string::npos &&
                                       visible.find("entries") == std::string::npos && visible.find("1.3k (0.7%)") == std::string::npos;
                              }),
          "tui compact footer shows only the model name and active context usage");
 
+  frontend.set_active_token_estimates(1'000, 200);
   auto const refreshed_context_lines =
       ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
                                                                                 //.provider = "openai",
@@ -2104,7 +2101,6 @@ void run_tui_composer_rendering_tests_part_1()
                                                                                 .session_id = "session_test",
                                                                                 .input = "",
                                                                                 .status = "ready",
-                                                                                .active_context_status = "~1.2k",
                                                                                 .context_source_count = 3,
                                                                                 .transcript = {},
                                                                                 .width = 110,
@@ -2113,11 +2109,12 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(refreshed_context_lines,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-5.5 · ctx ~1.2k") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
+                               return visible.find("GPT-5.5 · ctx 1.2k") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
                                       visible.find("ctx 3") == std::string::npos;
                              }),
          "tui composer footer uses refreshed active context usage rather than sidebar source metadata");
 
+  frontend.set_active_token_estimates(std::nullopt, 0);
   auto const source_only_footer_lines =
       ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
                                                                                 //.provider = "openai",
@@ -2500,6 +2497,7 @@ void run_tui_composer_rendering_tests_part_3()
 void run_tui_composer_rendering_tests_part_4()
 {
   tui_test_support::TuiFrontEndFixture frontend;
+  frontend.set_active_token_estimates(1'000, 200);
   frontend.set_reasoning_capabilities(true, {"low\x1b[31m", "high\x1b[31m"});
   frontend.set_reasoning("low\x1b[31m");
   auto const sidebar_frame = ava::tui::render_composer(
@@ -2524,7 +2522,6 @@ void run_tui_composer_rendering_tests_part_4()
                                      .workspace = "/workspace/project\x1b[31m",
                                      .git_branch = "develop\x1b[31m",
                                      .version = "0.32",
-                                     .token_status = "1.2k (4.0%)",
                                      .context_source_count = 2}});
   expect(std::ranges::any_of(sidebar_frame,
                              [](std::string const& line) {
@@ -2547,7 +2544,7 @@ void run_tui_composer_rendering_tests_part_4()
                                    auto const visible = strip_sgr(line);
                                    return visible.find("branch develop") != std::string::npos || visible.find("AVA 0.32") != std::string::npos;
                                  }) &&
-             std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("usage 1.2k (4.0%)") != std::string::npos; }) &&
+             std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("usage 1.2k") != std::string::npos; }) &&
              std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("reasoning low") != std::string::npos; }) &&
              std::ranges::any_of(sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("context sources 2") != std::string::npos; }) &&
              std::ranges::none_of(sidebar_frame, [](std::string const& line) { return line.find("\x1b[31m") != std::string::npos; }) &&
@@ -2586,6 +2583,7 @@ void run_tui_composer_rendering_tests_part_4()
           std::ranges::none_of(idle_after_completed_activity_frame, [](std::string const& line) { return strip_sgr(line).find("idle") != std::string::npos; }),
       "tui automatic rail omits completed assistant activity history and idle placeholders");
 
+  frontend.set_active_token_estimates(std::nullopt, 0);
   auto absent_reasoning_renders_as_unknown_only_in_drawer = [&]() {
     frontend.set_reasoning(std::nullopt);
     auto snapshot = ava::tui::ComposerSnapshot{.mode = "build",
@@ -2600,11 +2598,12 @@ void run_tui_composer_rendering_tests_part_4()
     snapshot.width = 100;
     snapshot.sidebar_drawer_visible = true;
     auto const drawer_text = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), snapshot));
-    return compact_text.find("Context") == std::string::npos && compact_text.find("reasoning ") == std::string::npos &&
+    return compact_text.find("Context") == std::string::npos && compact_text.find("usage unknown") == std::string::npos &&
+           compact_text.find("reasoning unknown") == std::string::npos && drawer_text.find("usage unknown") != std::string::npos &&
            drawer_text.find("reasoning unknown") != std::string::npos;
   };
   expect(absent_reasoning_renders_as_unknown_only_in_drawer(),
-         "tui renders an unset reasoning selection as drawer unknown while omitting it from the compact sidebar");
+         "tui renders unknown usage and reasoning in the drawer while omitting them from the compact sidebar");
 
   frontend.set_reasoning(std::nullopt);
   auto const unknown_sidebar_frame =
@@ -2620,8 +2619,7 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                 .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
                                                                                                                      .mode = "build",
                                                                                                                      //.provider = "openai",
-                                                                                                                     .git_branch = "unknown",
-                                                                                                                     .token_status = "tokens unknown"}});
+                                                                                                                     .git_branch = "unknown"}});
   expect(std::ranges::none_of(unknown_sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("Context") != std::string::npos; }) &&
              std::ranges::none_of(unknown_sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("unknown") != std::string::npos; }),
          "tui automatic rail omits the Context group and placeholders when all context values are unknown");
@@ -2643,14 +2641,13 @@ void run_tui_composer_rendering_tests_part_4()
                                                                     .sidebar = ava::tui::SidebarSnapshot{.mode = "build",
                                                                                                          //.provider = "unknown-labs",
                                                                                                          //.model = "model-unknown-v2",
-                                                                                                         .git_branch = "fix/unknown-token-count",
-                                                                                                         .token_status = "tokens unknown"}});
+                                                                                                         .git_branch = "fix/unknown-token-count"}});
   expect(std::ranges::any_of(legitimate_unknown_substring_frame,
                              [](std::string const& line) { return strip_sgr(line).find("build · unknown-labs/model-unknow") != std::string::npos; }) &&
              std::ranges::any_of(legitimate_unknown_substring_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("branch fix/unknown-token-count") != std::string::npos; }) &&
              std::ranges::none_of(legitimate_unknown_substring_frame,
-                                  [](std::string const& line) { return strip_sgr(line).find("usage tokens unknown") != std::string::npos; }) &&
+                                  [](std::string const& line) { return strip_sgr(line).find("usage unknown") != std::string::npos; }) &&
              std::ranges::none_of(legitimate_unknown_substring_frame,
                                   [](std::string const& line) { return strip_sgr(line).find("reasoning UnKnOwN") != std::string::npos; }),
          "tui automatic rail preserves legitimate values containing unknown while omitting exact normalized unknown sentinels");
@@ -2673,6 +2670,7 @@ void run_tui_composer_rendering_tests_part_4()
       std::ranges::any_of(zero_context_sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("context sources 0") != std::string::npos; }),
       "tui automatic rail distinguishes a known zero context source count from unknown context data");
 
+  frontend.set_active_token_estimates(170'000, 10'000);
   auto const long_session_sidebar_frame = ava::tui::render_composer(
       frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
                                                       //.provider = "openai",
@@ -2690,7 +2688,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                            .workspace = "/workspace/project",
                                                                                            .git_branch = "develop",
                                                                                            .version = "0.32",
-                                                                                           .token_status = "180k (90.0%)",
                                                                                            .context_source_count = 3,
                                                                                            .session_path = "/tmp/ava/sessions/session_test.jsonl",
                                                                                            .session_entry_count = 42}});
@@ -2698,13 +2695,12 @@ void run_tui_composer_rendering_tests_part_4()
       std::ranges::none_of(long_session_sidebar_frame,
                            [](std::string const& line) { return strip_sgr(line).find("path /tmp/ava/sessions") != std::string::npos; }) &&
           std::ranges::none_of(long_session_sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("entries 42") != std::string::npos; }) &&
-          std::ranges::any_of(long_session_sidebar_frame,
-                              [](std::string const& line) {
-                                auto const visible = strip_sgr(line);
-                                return visible.find("context pressure critical 90.0%") != std::string::npos;
-                              }),
-      "tui automatic rail shows critical context pressure while omitting raw session path and entry count");
+          std::ranges::any_of(long_session_sidebar_frame, [](std::string const& line) { return strip_sgr(line).find("usage 180k") != std::string::npos; }) &&
+          std::ranges::none_of(long_session_sidebar_frame,
+                               [](std::string const& line) { return strip_sgr(line).find("context pressure") != std::string::npos; }),
+      "tui automatic rail shows cumulative token count without deriving context pressure and omits raw session metadata");
 
+  frontend.set_active_token_estimates(std::nullopt, 0);
   auto const curated_idle_sidebar = ava::tui::render_composer(
       frontend.frontend(),
       ava::tui::ComposerSnapshot{
@@ -2726,7 +2722,6 @@ void run_tui_composer_rendering_tests_part_4()
               //.model = "gpt-5.5",
               .workspace = "/raw/workspace/must/stay/hidden",
               .version = "9.9.9-must-stay-hidden",
-              .token_status = std::nullopt,
               .context_source_count = std::nullopt,
               .session_path = "/raw/session/path/must/stay/hidden.jsonl",
               .session_entry_count = 999}});
@@ -2760,6 +2755,7 @@ void run_tui_composer_rendering_tests_part_4()
          "tui idle automatic rail is a bounded two-cell-inset Session summary with the quiet footer and no placeholders or drawer-only metadata");
 
   frontend.set_reasoning("high\x1b[31m");
+  frontend.set_active_token_estimates(170'000, 10'000);
   auto const curated_populated_sidebar = ava::tui::render_composer(
       frontend.frontend(),
       ava::tui::ComposerSnapshot{
@@ -2788,7 +2784,6 @@ void run_tui_composer_rendering_tests_part_4()
               .workspace = "/raw/populated/workspace/must/stay/hidden",
               .git_branch = "develop\x1b[31m",
               .version = "8.8.8-must-stay-hidden",
-              .token_status = "180k (90.0%)\x1b[31m",
               .context_source_count = 7,
               .session_path = "/raw/populated/session/path.jsonl",
               .session_entry_count = 42}});
@@ -2824,8 +2819,7 @@ void run_tui_composer_rendering_tests_part_4()
              curated_populated_text.find("src/curated-file.cpp") != std::string::npos && curated_populated_text.find("+12") != std::string::npos &&
              curated_populated_text.find("-3") != std::string::npos && curated_populated_text.find("Context") != std::string::npos &&
              curated_populated_text.find("branch develop") != std::string::npos && curated_populated_text.find("reasoning high") != std::string::npos &&
-             curated_populated_text.find("usage 180k (90.0%)") != std::string::npos &&
-             curated_populated_text.find("context pressure critical 90.0%") != std::string::npos &&
+             curated_populated_text.find("usage 180k") != std::string::npos && curated_populated_text.find("context pressure") == std::string::npos &&
              curated_populated_text.find("context sources 7") != std::string::npos && curated_populated_text.find("completed-history") == std::string::npos &&
              curated_populated_text.find("raw-populated-session") == std::string::npos && curated_populated_text.find("/raw/populated") == std::string::npos &&
              curated_populated_text.find("entries 42") == std::string::npos && curated_populated_text.find("8.8.8") == std::string::npos &&
@@ -3061,7 +3055,6 @@ void run_tui_composer_rendering_tests_part_4()
                   .workspace = "/workspace/a/very/long/project/path/that/must/wrap/and/remain/reachable/in/the/session/overview",
                   .git_branch = "develop-responsive-sidebar-checkpoint",
                   .version = "1.0.0-responsive-sidebar",
-                  .token_status = "180k (90.0%)",
                   .context_source_count = 7,
                   .session_path = "/tmp/ava/sessions/a/very/long/session/path/session_drawer.jsonl",
                   .session_entry_count = 42},
@@ -3088,8 +3081,7 @@ void run_tui_composer_rendering_tests_part_4()
          "tui narrow sidebar drawer replaces the transcript, wraps semantic data, stays bounded, and retains the full-width quiet composer");
   drawer_snapshot.sidebar_drawer_scroll_offset = drawer_max;
   auto const drawer_end_frame = ava::tui::render_composer(frontend.frontend(), drawer_snapshot);
-  expect(std::ranges::any_of(drawer_end_frame,
-                             [](std::string const& line) { return strip_sgr(line).find("context pressure critical 90.0%") != std::string::npos; }) &&
+  expect(std::ranges::any_of(drawer_end_frame, [](std::string const& line) { return strip_sgr(line).find("context pressure unknown") != std::string::npos; }) &&
              std::ranges::any_of(drawer_end_frame, [](std::string const& line) { return strip_sgr(line).find("context sources 7") != std::string::npos; }) &&
              std::ranges::any_of(drawer_end_frame,
                                  [](std::string const& line) { return strip_sgr(line).find("AVA 1.0.0-responsive-sidebar") != std::string::npos; }),
@@ -3229,6 +3221,7 @@ void run_tui_composer_rendering_tests_part_4()
   expect(std::ranges::none_of(utf8, [](std::string const& line) { return !line.empty() && (static_cast<unsigned char>(line.back()) & 0xC0U) == 0xC0U; }),
          "tui truncation does not leave a trailing utf-8 starter byte");
 
+  frontend.set_active_token_estimates(std::nullopt, 0);
   std::vector<ava::tui::TranscriptItem> stress_transcript;
   for (int index = 0; index < 36; ++index)
   {
@@ -3273,7 +3266,6 @@ void run_tui_composer_rendering_tests_part_4()
       .workspace = "/workspace",
       .git_branch = "develop",
       .version = "test",
-      .token_status = "tokens unknown",
       .context_source_count = 2};
   std::vector<std::size_t> const stress_widths = {1, 20, 28, 40, 72, 111, 112, 160};
   std::vector<std::size_t> const stress_heights = {1, 8, 10, 18, 32};
@@ -3288,7 +3280,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                              .input = "draft line one\nsecond draft line with \xE7\x95\x8C",
                                                                                              .status = "ready",
                                                                                              .processing = true,
-                                                                                             .token_status = "tokens unknown",
                                                                                              .transcript = stress_transcript,
                                                                                              .transcript_scroll_offset = 50,
                                                                                              .width = width,
@@ -3347,6 +3338,7 @@ void run_tui_composer_rendering_tests_part_4()
          "tui reasoning-cycle feedback is one-action presentation state: visible without a rail, suppressed without rail geometry drift, and cleared by user "
          "input");
 
+  frontend.set_active_token_estimates(800, 70);
   auto wave_a_base = ava::tui::ComposerSnapshot{.mode = "build",
                                                 //.provider = "openai",
                                                 //.model = "gpt-5.5",
@@ -3354,7 +3346,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                 .input = "",
                                                 .status = "ready",
                                                 .active_run_hint = ava::tui::ActiveRunHint{.interrupt = "Esc", .jump_to_bottom = "Ctrl+End"},
-                                                .active_context_status = "870 (3.2%)",
                                                 .transcript = {},
                                                 .width = 80,
                                                 .height = 24};
@@ -3403,7 +3394,7 @@ void run_tui_composer_rendering_tests_part_4()
                !find_visible(transcript_discovery_lines, "/ commands") && !find_visible(processing_discovery_lines, "/ commands") &&
                !find_visible(prompt_discovery_lines, "/ commands") && !find_visible(question_discovery_lines, "/ commands") &&
                !find_visible(select_discovery_lines, "/ commands") && !find_visible(attachment_discovery_lines, "/ commands") &&
-               strip_sgr(idle_discovery_80x24.back()).find("GPT-5.5 · ctx 870 (3.2%)") != std::string::npos &&
+               strip_sgr(idle_discovery_80x24.back()).find("GPT-5.5 · ctx 870") != std::string::npos &&
                strip_sgr(idle_discovery_80x24.back()).find("build") == std::string::npos &&
                strip_sgr(idle_discovery_80x24.back()).find("session") == std::string::npos &&
                std::ranges::none_of(idle_discovery_80x24, [](std::string const& line) { return strip_sgr(line).find("AVA") != std::string::npos; }) &&
@@ -3458,7 +3449,7 @@ void run_tui_composer_rendering_tests_part_4()
              find_visible(completed_lifecycle_lines, "Esc stop · type a follow-up") && !find_visible(completed_lifecycle_lines, "retry attempt") &&
              !find_visible(completed_lifecycle_lines, "compaction") && find_visible(custom_interrupt_lines, "F9 stop · type a follow-up") &&
              find_visible(unbound_interrupt_lines, "stop unbound") && !find_visible(unbound_interrupt_lines, "Esc stop") &&
-             strip_sgr(retry_lines.back()).find("GPT-5.5") != std::string::npos && strip_sgr(retry_lines.back()).find("ctx 870 (3.2%)") != std::string::npos &&
+             strip_sgr(retry_lines.back()).find("GPT-5.5") != std::string::npos && strip_sgr(retry_lines.back()).find("ctx 870") != std::string::npos &&
              !find_visible(retry_lines, "1.3k (0.7%)"),
          "Wave A active-run contextual row prioritizes newest allowlisted RUNNING retry/compaction status, keeps configured Cancel stop (or stop unbound), "
          "ignores completed/generic activity, and never leaks provider body text into chrome or footer");

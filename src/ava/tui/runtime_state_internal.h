@@ -99,7 +99,6 @@ class RuntimePresentationState final
   explicit RuntimePresentationState(TuiRuntimeOptions& options);
 
   void refresh_token_status(TuiRuntimeOptions const& options);
-  void refresh_active_context_status(TuiRuntimeOptions const& options);
   void apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state);
 
   ComposerSnapshot snapshot;

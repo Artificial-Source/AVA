@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from tui_smoke_helpers import (
-    ACTIVE_CONTEXT_STATUS_PATTERN,
+    ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN,
     SmokeContext,
     assert_screen_absent_for,
     capture,
@@ -104,7 +104,7 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
         raise RuntimeError(f"fresh TUI startup created an onboarding marker: {onboarding_marker}")
     footer_lines = [line for line in initial.splitlines() if "GPT-5.5" in line and "ctx " in line]
     footer_text = footer_lines[-1].removeprefix("│  ").strip() if footer_lines else ""
-    if not re.fullmatch(rf"GPT-5\.5 · ctx {ACTIVE_CONTEXT_STATUS_PATTERN}", footer_text) or any(
+    if not re.fullmatch(rf"GPT-5\.5 · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}", footer_text) or any(
         marker in footer_text for marker in ("Build", "OpenAI", "cwd ", "git ", "entries ")
     ):
         raise RuntimeError(
@@ -124,7 +124,7 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
         settled = wait_for(
             tmux_exe,
             session,
-            rf"(?m)\A(?:[^\n]*\n){{{input_row}}}{inset}│  Type a message\.\.\.[^\n]*\n{inset}│  GPT-5\.5 · ctx {ACTIVE_CONTEXT_STATUS_PATTERN}[^\n]*(?:\n|\Z)",
+            rf"(?m)\A(?:[^\n]*\n){{{input_row}}}{inset}│  Type a message\.\.\.[^\n]*\n{inset}│  GPT-5\.5 · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}[^\n]*(?:\n|\Z)",
             f"{label} target composer/footer rows {input_row}/{footer_row}",
         )
         settled_lines = settled.splitlines()
@@ -175,7 +175,7 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
         canvas_width = width - 39 if sidebar_expected else min(width, 120)
         settled_footer = settled_lines[height - 1][canvas_left + 3 : canvas_left + canvas_width]
         settled_footer = settled_footer.strip()
-        if not re.fullmatch(rf"GPT-5\.5 · ctx {ACTIVE_CONTEXT_STATUS_PATTERN}", settled_footer):
+        if not re.fullmatch(rf"GPT-5\.5 · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}", settled_footer):
             raise RuntimeError(
                 f"{name} footer did not contain only the idle model name and active context usage\nscreen:\n{settled}"
             )
@@ -596,7 +596,7 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
     trust_project = wait_for(
         tmux_exe,
         session,
-        rf"GPT-5\.5\s+·\s+ctx {ACTIVE_CONTEXT_STATUS_PATTERN}",
+        rf"GPT-5\.5\s+·\s+ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}",
         "composer footer active context meter after project trust reload",
     )
     save_evidence(root, "footer-active-context-meter-refreshed", trust_project)

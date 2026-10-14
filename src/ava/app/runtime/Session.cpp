@@ -552,7 +552,8 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to secure the AVA state anchor"));
     anchor_roots.push_back(context.paths.ava_state_dir);
 
-    for (auto const& dir : context.additional_writable_dirs) anchor_roots.push_back(dir);
+    for (auto const& dir : context.additional_writable_dirs)
+      anchor_roots.push_back(dir);
     if (context.anchor_set)
     {
       anchor_set = context.anchor_set;
@@ -620,7 +621,10 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                                             .freshness_sources = std::move(prompt_state->freshness_sources),
                                             .system_prompt = std::move(prompt_state->system_prompt),
                                             .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
-  ModelSelection_ts model_selection(ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
+  ModelSelection_ts model_selection(
+      ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
+  SessionStats_ts session_stats;
+  SystemPromptTokenEstimate_ts system_prompt_token_estimate;
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try
@@ -646,6 +650,8 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   Session session({.invocation_inputs_ = std::move(invocation_inputs),
                    .resolved_prompt_state_ = std::move(resolved_prompt_state),
                    .model_selection_ = std::move(model_selection),
+                   .session_stats_ = std::move(session_stats),
+                   .system_prompt_token_estimate_ = std::move(system_prompt_token_estimate),
                    .trust_state_ = std::move(trust_state),
                    .resources_ = std::move(resources),
                    .store = std::move(store),
@@ -709,6 +715,10 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                 .resolved_prompt_state_ = resolve_prompt_state(),
                                 // Copy the model selection without inheriting the source object's frontend registration.
                                 .model_selection_ = ModelSelection_ts{*model_selection_r()},
+                                // Copy statistics without inheriting the source object's frontend registration.
+                                .session_stats_ = SessionStats_ts{*session_stats_r()},
+                                // Copy the prompt estimate without inheriting the source object's frontend registration.
+                                .system_prompt_token_estimate_ = SystemPromptTokenEstimate_ts{*system_prompt_token_estimate_r()},
                                 .trust_state_ = trust_state(),
                                 .resources_ = std::move(session_resources),
                                 .store = store,
@@ -816,9 +826,8 @@ ava::core::VoidResult Session::replace_with(session_ts& unlocked_current, sessio
   // Note that it is impossible for a `manager->coordinator()` to be null, if the `manager` exists.
   // If this fires, old_resources paired a delivery manager with a coordinator not taken from that manager; keep the
   // manager/coordinator pair consistent by taking the coordinator from the manager when the resources are built.
-  ASSERT(!old_resources.subagent_delivery_manager ||
-         (old_resources.subagent_delivery_manager->coordinator() &&
-          old_resources.subagent_delivery_manager->coordinator() == old_resources.subagent_coordinator));
+  ASSERT(!old_resources.subagent_delivery_manager || (old_resources.subagent_delivery_manager->coordinator() &&
+                                                      old_resources.subagent_delivery_manager->coordinator() == old_resources.subagent_coordinator));
   // If this fires, current_w paired a delivery manager with a coordinator not taken from that manager; keep the
   // manager/coordinator pair consistent by taking the coordinator from the manager when the resources are built.
   ASSERT(!current_w->resources().subagent_delivery_manager ||
@@ -1010,8 +1019,7 @@ ava::core::VoidResult Session::apply_prompt_state_and_refresh(session_ts& unlock
 
 //static
 ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& unlocked_session, ProjectTrustState project_trust,
-                                                                    std::optional<ava::agent::AgentDefinition> selected_primary_agent,
-                                                                    PromptState prompt_state)
+                                                                    std::optional<ava::agent::AgentDefinition> selected_primary_agent, PromptState prompt_state)
 {
   AVA_ASSERT_NO_SESSION_LOCK_HELD("calling Session::apply_trust_prompt_state_and_refresh");
   bool const selected_primary_agent_is_non_project =
@@ -1059,7 +1067,7 @@ ava::core::Result<bool> Session::switch_model(ava::config::ModelInfo model)
                                                .system_prompt = std::move(prompt_state->system_prompt),
                                                .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
 
-  model_selection().change([&model](auto& model_selection){
+  model_selection().change([&model](auto& model_selection) {
     model_selection.model = std::move(model);
     model_selection.reasoning = std::nullopt;
   });
@@ -1112,9 +1120,7 @@ ava::core::Result<bool> Session::set_reasoning(std::optional<ReasoningSelection>
   if (!appended)
     return std::unexpected(std::move(appended.error()));
 
-  model_selection().change([&selection](auto& model_selection){
-    model_selection.reasoning = std::move(selection);
-  });
+  model_selection().change([&selection](auto& model_selection) { model_selection.reasoning = std::move(selection); });
 
   return true;
 }

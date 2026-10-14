@@ -2,6 +2,7 @@
 
 #include "ava/app/frontend/FrontEnd.h"
 #include "ava/app/frontend/ModelSelection.h"
+#include "ava/app/frontend/SessionStats.h"
 
 // For OLD API
 #include "ava/tui/runtime.h"    // TuiRuntimeOptions
@@ -14,15 +15,17 @@ class TuiFrontEnd : public app::frontend::FrontEnd
 {
  private:
   app::frontend::ModelSelection model_selection_;
+  app::frontend::SessionStats session_stats_;
 
  public:
-  TuiFrontEnd() : model_selection_(this) { }
+  TuiFrontEnd() : model_selection_(this), session_stats_(this) { }
 
   // Implement virtual function of FrontEnd.
   void initialize_frontend_state(app::runtime::session_ts::crat const& session_r) override
   {
     // Initialize our frontend state objects.
     model_selection_.initialize(&session_r->model_selection());
+    session_stats_.initialize(&session_r->session_stats(), &session_r->system_prompt_token_estimate());
   }
 
   // Launch the terminal user interface (TUI) using runtime options `options`.
@@ -39,6 +42,8 @@ class TuiFrontEnd : public app::frontend::FrontEnd
 
   app::frontend::ModelSelection& model_selection() { return model_selection_; }
   app::frontend::ModelSelection const& model_selection() const { return model_selection_; }
+  app::frontend::SessionStats& session_stats() { return session_stats_; }
+  app::frontend::SessionStats const& session_stats() const { return session_stats_; }
 
   // OLD API
   [[nodiscard]] int run_interactive_composer(TuiRuntimeOptions options);

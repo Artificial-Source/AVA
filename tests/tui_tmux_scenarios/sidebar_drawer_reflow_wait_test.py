@@ -62,7 +62,7 @@ def _drawer_frame(
     height: int = HEIGHT,
     title: str | None = "Session overview",
     composer: str = "│  Type a message...",
-    footer: str = "│  GPT-5.5 · ctx 12%",
+    footer: str = "│  GPT-5.5 · ctx 12k",
     activity_rows: int = 1,
     live_session: bool = False,
     overflow: bool = False,

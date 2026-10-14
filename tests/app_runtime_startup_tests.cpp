@@ -264,28 +264,7 @@ void test_app_runtime_preserves_legacy_subagent_job_tree()
       "real runtime construction, coordinator use, delivery-manager shutdown, and session shutdown leave the legacy tree byte-for-byte and metadata unchanged");
 }
 
-void test_app_active_context_status_format_semantics()
-{
-  using ava::app::interactive_internal::format_active_context_status_value;
-
-  expect(format_active_context_status_value(0, 100'000) == "0 (0.0%)" && format_active_context_status_value(0, std::nullopt) == "~0" &&
-             format_active_context_status_value(0, 0) == "~0" && format_active_context_status_value(0, -1) == "~0",
-         "active context status formats zero tokens with known percent and unknown-window tilde count");
-  expect(format_active_context_status_value(1, 100'000) == "1 (<0.1%)" && format_active_context_status_value(99, 100'000) == "99 (<0.1%)" &&
-             format_active_context_status_value(100, 100'000) == "100 (0.1%)",
-         "active context status preserves the sub-tenth percent boundary");
-  expect(format_active_context_status_value(999, 10'000) == "999 (10.0%)" && format_active_context_status_value(1'000, 10'000) == "1k (10.0%)" &&
-             format_active_context_status_value(1'200, 10'000) == "1.2k (12.0%)" && format_active_context_status_value(150'300, 272'000) == "150.3k (55.3%)" &&
-             format_active_context_status_value(1'000'000, 2'000'000) == "1m (50.0%)" &&
-             format_active_context_status_value(1'200'000, 2'000'000) == "1.2m (60.0%)",
-         "active context status keeps raw sub-1k counts and one-decimal k/m compact counts");
-  expect(format_active_context_status_value(150'300, std::nullopt) == "~150.3k" && format_active_context_status_value(12'000, std::nullopt) == "~12k",
-         "active context status preserves the unknown-window tilde count fallback exactly");
-  expect(format_active_context_status_value(200'000, 100'000) == "200k (200.0%)" && format_active_context_status_value(150'300, 100'000) == "150.3k (150.3%)",
-         "active context status reports over-window percentages without clamping");
-}
-
-void test_app_active_context_status_tracks_compaction_projection()
+void test_app_token_status_tracks_compaction_projection()
 {
   auto const root = create_empty_root("app-active-context-status");
   auto const workspace = root / "workspace";
@@ -303,61 +282,11 @@ void test_app_active_context_status_tracks_compaction_projection()
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
-
-  session_w->model_selection().change([](auto& model_selection){
-    model_selection.model.context_window_tokens = 272'000;
-  });
-  auto expected_status = [&](std::size_t active_tokens) {
-    auto const system_prompt_tokens = ava::session::estimate_tokens(session_w->system_prompt());
-    auto const total = active_tokens + system_prompt_tokens;
-    auto const display =
-        total > static_cast<std::size_t>(std::numeric_limits<long long>::max()) ? std::numeric_limits<long long>::max() : static_cast<long long>(total);
-    return ava::app::interactive_internal::format_active_context_status_value(display,
-                                                                               session_w->model_selection_r()->model.context_window_tokens);
-  };
-
-  CRITICAL_AREA_END_W(session);
-  auto const initial_status = ava::app::interactive_internal::active_context_status_for_session(unlocked_session);
-  CRITICAL_AREA_CONTINUE_W(session);
-  auto authority = session_w->read_authority_1();
-  auto entries = authority ? authority->load() : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(authority.error()));
-  auto const initial_tokens =
-      entries ? ava::session::estimate_active_context_tokens(*entries) : ava::core::Result<std::size_t>(std::unexpected(entries.error()));
-  expect(initial_status && initial_tokens && *initial_status == expected_status(*initial_tokens) && initial_status->find('(') != std::string::npos &&
-             initial_status->find('%') != std::string::npos && !initial_status->starts_with('~'),
-         "active context status uses compact count plus percent when the model window is known");
-
-  session_w->model_selection().change([](auto& model_selection){
-    model_selection.model.context_window_tokens = std::nullopt;
-  });
-  CRITICAL_AREA_END_W(session);
-  auto const unknown_status = ava::app::interactive_internal::active_context_status_for_session(unlocked_session);
-  CRITICAL_AREA_CONTINUE_W(session);
-  auto const unknown_expected = initial_tokens
-                                    ? std::optional<std::string>{ava::app::interactive_internal::format_active_context_status_value(
-                                          static_cast<long long>(*initial_tokens + ava::session::estimate_tokens(session_w->system_prompt())), std::nullopt)}
-                                    : std::nullopt;
-  expect(unknown_status && unknown_expected && *unknown_status == *unknown_expected && unknown_status->starts_with('~') &&
-             unknown_status->find('%') == std::string::npos,
-         "active context status falls back to tilde compact count when the model window is unknown");
-  session_w->model_selection().change([](auto& model_selection){
-    model_selection.model.context_window_tokens = 272'000;
-  });
-
   auto const appended_user = session_w->append_target()->append(ava::session::SessionEntry{.id = "active-context-user",
                                                                                            .parent_id = "",
                                                                                            .type = ava::session::EntryType::UserMessage,
                                                                                            .timestamp = "2026-01-01T00:00:00Z",
                                                                                            .data_json = "{\"text\":\"" + std::string(50'000, 'x') + "\"}"});
-  CRITICAL_AREA_END_W(session);
-  auto const grown_status = appended_user ? ava::app::interactive_internal::active_context_status_for_session(unlocked_session) : std::nullopt;
-  CRITICAL_AREA_CONTINUE_W(session);
-  auto grown_authority = session_w->read_authority_1();
-  auto grown_entries =
-      grown_authority ? grown_authority->load() : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(grown_authority.error()));
-  auto const grown_tokens =
-      grown_entries ? ava::session::estimate_active_context_tokens(*grown_entries) : ava::core::Result<std::size_t>(std::unexpected(grown_entries.error()));
-
   ava::session::ManualCompactionRequest compaction_request;
   compaction_request.summary = "condensed history";
   compaction_request.config = ava::session::default_compaction_config();
@@ -372,7 +301,7 @@ void test_app_active_context_status_tracks_compaction_projection()
                                                                                                                    .data_json = "{\"text\":\"recent\"}"})
                                                    : ava::core::VoidResult(std::unexpected(appended_compaction.error()));
   CRITICAL_AREA_END_W(session);
-  auto const compacted_status = appended_recent ? ava::app::interactive_internal::active_context_status_for_session(unlocked_session) : std::nullopt;
+  ava::app::interactive_internal::refresh_session_statistics(unlocked_session);
   CRITICAL_AREA_CONTINUE_W(session);
   auto compacted_authority = session_w->read_authority_1();
   auto compacted_entries = compacted_authority ? compacted_authority->load()
@@ -381,15 +310,15 @@ void test_app_active_context_status_tracks_compaction_projection()
                                                : ava::core::Result<std::size_t>(std::unexpected(compacted_entries.error()));
   auto const complete_tokens = compacted_entries ? ava::session::estimate_session_tokens(*compacted_entries)
                                                  : ava::core::Result<std::size_t>(std::unexpected(compacted_entries.error()));
-  CRITICAL_AREA_END_W(session);
-  auto const cumulative_token_status = ava::app::interactive_internal::token_status_for_session(unlocked_session);
-  CRITICAL_AREA_CONTINUE_W(session);
-  expect(initial_status && appended_user && grown_status && grown_tokens && compaction && appended_compaction && appended_recent && compacted_status &&
-             active_tokens && complete_tokens && *grown_status != *initial_status && *grown_status == expected_status(*grown_tokens) &&
-             *compacted_status != *grown_status && *compacted_status == expected_status(*active_tokens) && *active_tokens < *complete_tokens &&
-             grown_status->find('(') != std::string::npos && compacted_status->find('(') != std::string::npos &&
-             (!cumulative_token_status || *cumulative_token_status != *grown_status),
-         "active context status grows with committed history, follows the compaction-active projection, and stays separate from cumulative token status");
+  auto const canonical_active_tokens = session_w->session_stats_r()->active_context_tokens;
+  auto const cumulative_tokens = session_w->session_stats_r()->total_tokens;
+  auto const canonical_system_prompt_tokens = session_w->system_prompt_token_estimate_r()->tokens;
+  auto const expected_system_prompt_tokens = ava::session::estimate_tokens(session_w->system_prompt());
+  expect(appended_user && compaction && appended_compaction && appended_recent && compacted_entries && active_tokens && complete_tokens &&
+             canonical_active_tokens == std::optional<std::size_t>{*active_tokens} &&
+             canonical_system_prompt_tokens == std::optional<std::size_t>{expected_system_prompt_tokens} && *active_tokens < *complete_tokens &&
+             !cumulative_tokens,
+         "token refresh publishes compaction-aware retained history and the system prompt separately without repurposing cumulative provider usage");
 }
 
 void test_app_runtime_no_session_mode()
@@ -554,6 +483,12 @@ void test_app_runtime_process_scope_lifecycle()
   if (!first_result)
     return;
 
+  {
+    SCOPED_CRITICAL_AREA_W(first_w, *first_result);
+    first_w->session_stats().change([](ava::session::SessionStats& stats) { stats.active_context_tokens = 321; });
+    first_w->system_prompt_token_estimate().change([](ava::app::runtime::SystemPromptTokenEstimate& estimate) { estimate.tokens = 123; });
+  }
+
   std::optional<ava::process::ProcessScopeV1> first_session_scope;
   ava::app::runtime::OpenContext replacement_context;
   {
@@ -567,9 +502,13 @@ void test_app_runtime_process_scope_lifecycle()
     if (duplicate && authority)
     {
       auto detached = first_r->create_detached_state(std::move(*duplicate), std::move(*authority), first_r->subagent_delivery_manager());
+      ava::app::runtime::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
+      ava::app::runtime::SystemPromptTokenEstimate_ts::crat detached_prompt_r(detached.system_prompt_token_estimate_);
       expect(detached.resources_.session_process_scope && first_session_scope && same_owner(*detached.resources_.session_process_scope, *first_session_scope) &&
-                 &detached.resources_.session_process_scope->supervisor() == supervisor.get(),
-             "detached state for the same runtime session shares its existing process scope");
+                 &detached.resources_.session_process_scope->supervisor() == supervisor.get() &&
+                 detached_stats_r->active_context_tokens == std::optional<std::size_t>{321} && detached_prompt_r->tokens == std::optional<std::size_t>{123} &&
+                 detached.session_stats_.frontend() == nullptr && detached.system_prompt_token_estimate_.frontend() == nullptr,
+             "detached state copies both token estimates without inheriting frontend registration and shares its existing process scope");
     }
 
     replacement_context = first_r->replacement_open_context({});
