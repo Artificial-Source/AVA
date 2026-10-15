@@ -43,6 +43,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include "debug.h"
 
 namespace ava::tui {
 using runtime_input::printable_jump_target;

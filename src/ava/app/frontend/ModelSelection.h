@@ -6,6 +6,7 @@
 #include "ava/config/model_profiles.h"  // ava::config::model_display_label
 
 #include <atomic>
+#include "debug.h"
 
 namespace ava::app::frontend {
 
@@ -58,10 +59,14 @@ class ModelSelection
 
     auto const old_model = model_display_str(model_snapshot_);
     auto const new_model = model_display_str(model_selection_r->model);
-    model_.changed_ = model_.changed_ || old_model != new_model;
+    bool const model_changed = old_model != new_model;
+    Dout(dc::frontend(model_changed), "model changed from " << old_model << " to " << new_model);
+    model_.changed_ = model_.changed_ || model_changed;
 
     auto const& old_provider = model_snapshot_.provider_id;
     auto const& new_provider = model_selection_r->model.provider_id;
+    bool const provider_changed = old_provider != new_provider;
+    Dout(dc::frontend(provider_changed), "provider hanged from " << old_provider << " to " << new_provider);
     provider_.changed_ = provider_.changed_ || old_provider != new_provider;
 
     auto const& old_reasoning = reasoning_display_str(reasoning_snapshot_);
@@ -69,10 +74,17 @@ class ModelSelection
     ASSERT(!model_selection_r->reasoning ||
            (model_selection_r->model.supports_reasoning.value_or(false) && ava::config::supported_reasoning_levels(model_selection_r->model).size() > 1));
     auto const& new_reasoning = reasoning_display_str(model_selection_r->reasoning);
-    reasoning_.changed_ = reasoning_.changed_ || old_reasoning != new_reasoning;
+    bool const reasoning_changed = old_reasoning != new_reasoning;
+    Dout(dc::frontend(reasoning_changed), "reasoning changed from " << old_reasoning << " to " << new_reasoning);
+    reasoning_.changed_ = reasoning_.changed_ || reasoning_changed;
 
     // Compare through the existing full-model snapshot so the numeric projection does not duplicate canonical model state.
-    context_window_tokens_changed_ = context_window_tokens_changed_ || model_snapshot_.context_window_tokens != model_selection_r->model.context_window_tokens;
+
+    auto const old_context_window_tokens = model_snapshot_.context_window_tokens;
+    auto const new_context_window_tokens = model_selection_r->model.context_window_tokens;
+    bool const context_window_tokens_changed = old_context_window_tokens != new_context_window_tokens;
+    Dout(dc::frontend(context_window_tokens_changed), "context_window_tokens changed from " << old_context_window_tokens << " to " << new_context_window_tokens);
+    context_window_tokens_changed_ = context_window_tokens_changed_ || context_window_tokens_changed;
 
     // Refresh all snapshots.
     model_snapshot_ = model_selection_r->model;

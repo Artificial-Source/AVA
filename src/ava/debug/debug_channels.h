@@ -6,19 +6,20 @@
 namespace LIBCWD_DEBUG_CHANNELS::dc {
 using libcwd::Channel;
 extern Channel ava;
+extern Channel avacore;
 extern Channel agent;
 extern Channel app;
-extern Channel rpc;
-extern Channel runtime;
 extern Channel config;
 extern Channel context;
-extern Channel avacore;
+extern Channel frontend;
 extern Channel json;
 extern Channel lsp;
 extern Channel mcp;
 extern Channel permissions;
 extern Channel plugin;
 extern Channel provider;
+extern Channel rpc;
+extern Channel runtime;
 extern Channel session;
 extern Channel tools;
 extern Channel tui;

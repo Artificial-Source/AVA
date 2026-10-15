@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include "debug.h"
 
 namespace ava::app::frontend {
 
@@ -92,12 +93,17 @@ class SessionStats
     auto const old_token_count = token_count_display_str(active_token_total_);
     // Keep the full frontend snapshot in step with every canonical refresh before deriving individual displays.
     stats_snapshot_ = *stats_r;
-    auto const new_total = active_token_total(stats_snapshot_);
-    auto const new_token_count = token_count_display_str(new_total);
-    token_count_.changed_ = token_count_.changed_ || old_token_count != new_token_count;
+    auto const new_active_token_total = active_token_total(stats_snapshot_);
+    auto const new_token_count = token_count_display_str(new_active_token_total);
+    bool const token_count_changed = old_token_count != new_token_count;
+    Dout(dc::frontend(token_count_changed), "token_count changed from " << old_token_count << " to " << new_token_count);
+    token_count_.changed_ = token_count_.changed_ || token_count_changed;
+
     // Exact changes matter to percentage even when compact token text is unchanged.
-    percentage_recompute_pending_ = percentage_recompute_pending_ || active_token_total_ != new_total;
-    active_token_total_ = new_total;
+    bool const active_token_total_changed = active_token_total_ != new_active_token_total;
+    Dout(dc::frontend(active_token_total_changed), "active_token_total changed from " << active_token_total_ << " to " << new_active_token_total);
+    percentage_recompute_pending_ = percentage_recompute_pending_ || active_token_total_changed;
+    active_token_total_ = new_active_token_total;
   }
 
  public:
@@ -145,7 +151,9 @@ class SessionStats
     if (percentage_recompute_pending_)
     {
       auto const new_percentage = percentage_display_str(active_token_total_, context_window.value);
-      percentage_.changed_ = percentage_.changed_ || percentage_.display_ != new_percentage;
+      bool const percentage_changed = percentage_.display_ != new_percentage;
+      Dout(dc::frontend, "percentage changed from " << percentage_.display_ << " to " << new_percentage);
+      percentage_.changed_ = percentage_.changed_ || percentage_changed;
       percentage_.display_ = new_percentage;
       percentage_recompute_pending_ = false;
     }
