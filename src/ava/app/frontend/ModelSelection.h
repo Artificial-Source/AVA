@@ -1,9 +1,7 @@
 #pragma once
 
 #include "FrontEnd.h"
-#include "ava/debug/print_members_on.h"
-#include "ava/app/runtime/Session.h"    // runtime::ModelSelection
-#include "ava/config/model_profiles.h"  // ava::config::model_display_label
+#include "ava/app/runtime/Session.h" // runtime::ModelSelection
 
 #include <atomic>
 #include "debug.h"
@@ -27,82 +25,26 @@ class ModelSelection
   bool context_window_tokens_changed_{true};
 
  private:
-  static std::string model_display_str(ava::config::ModelInfo const& model_info)
-  {
-    return model_info.display_name.empty() ? ava::config::model_display_label(model_info.model_id) : model_info.display_name;
-  }
+  // Return the frontend label for model_info, preferring its explicit display name.
+  static std::string model_display_str(ava::config::ModelInfo const& model_info);
 
   // Project model capabilities and the optional reasoning selection to the level shown by frontends.
+  // reasoning is the canonical optional selection from the model-selection snapshot.
   // Return no level when reasoning is unavailable or no non-empty level is selected.
   // Callers reading shared state must keep both arguments protected by the same model-selection lock.
-  static std::string reasoning_display_str(std::optional<runtime::ReasoningSelection> const& reasoning)
-  {
-    if (reasoning)
-    {
-      // Don't set the optional to a runtime::ReasoningSelection with an empty `level`.
-      ASSERT(!reasoning->level.empty());
-      return reasoning->level;
-    }
+  static std::string reasoning_display_str(std::optional<runtime::ReasoningSelection> const& reasoning);
 
-    static std::string const unknown_reasoning("unknown");
-    return unknown_reasoning;
-  }
-
-  void refresh()
-  {
-    Data const* data = frontend_->get_data(index_);
-    // index_ must be set to the index returned by FrontEnd::register_data while registering a ModelSelection_ts.
-    // The life-time of that ModelSelection_ts must be larger than the use of this function, and never be moved in memory.
-    ASSERT(dynamic_cast<runtime::ModelSelection_ts const*>(data) != nullptr);
-    runtime::ModelSelection_ts const* unlocked_model_selection = static_cast<runtime::ModelSelection_ts const*>(data);
-    runtime::ModelSelection_ts::crat model_selection_r{*unlocked_model_selection};
-
-    auto const old_model = model_display_str(model_snapshot_);
-    auto const new_model = model_display_str(model_selection_r->model);
-    bool const model_changed = old_model != new_model;
-    Dout(dc::frontend(model_changed), "model changed from " << old_model << " to " << new_model);
-    model_.changed_ = model_.changed_ || model_changed;
-
-    auto const& old_provider = model_snapshot_.provider_id;
-    auto const& new_provider = model_selection_r->model.provider_id;
-    bool const provider_changed = old_provider != new_provider;
-    Dout(dc::frontend(provider_changed), "provider hanged from " << old_provider << " to " << new_provider);
-    provider_.changed_ = provider_.changed_ || old_provider != new_provider;
-
-    auto const& old_reasoning = reasoning_display_str(reasoning_snapshot_);
-    // Don't set the optional `reasoning` if the model doesn't support more than one reasoning level.
-    ASSERT(!model_selection_r->reasoning ||
-           (model_selection_r->model.supports_reasoning.value_or(false) && ava::config::supported_reasoning_levels(model_selection_r->model).size() > 1));
-    auto const& new_reasoning = reasoning_display_str(model_selection_r->reasoning);
-    bool const reasoning_changed = old_reasoning != new_reasoning;
-    Dout(dc::frontend(reasoning_changed), "reasoning changed from " << old_reasoning << " to " << new_reasoning);
-    reasoning_.changed_ = reasoning_.changed_ || reasoning_changed;
-
-    // Compare through the existing full-model snapshot so the numeric projection does not duplicate canonical model state.
-
-    auto const old_context_window_tokens = model_snapshot_.context_window_tokens;
-    auto const new_context_window_tokens = model_selection_r->model.context_window_tokens;
-    bool const context_window_tokens_changed = old_context_window_tokens != new_context_window_tokens;
-    Dout(dc::frontend(context_window_tokens_changed), "context_window_tokens changed from " << old_context_window_tokens << " to " << new_context_window_tokens);
-    context_window_tokens_changed_ = context_window_tokens_changed_ || context_window_tokens_changed;
-
-    // Refresh all snapshots.
-    model_snapshot_ = model_selection_r->model;
-    reasoning_snapshot_ = model_selection_r->reasoning;
-  }
+  // Refresh all cached projections from the registered canonical model selection under one read lock.
+  void refresh();
 
  public:
+  // Construct a projection backed by frontend, which must remain valid for this object's lifetime.
   ModelSelection(FrontEnd const* frontend) : frontend_(frontend) { }
 
-  void initialize(runtime::ModelSelection_ts const* unlocked_model_selection)
-  {
-    // Only call initialize once.
-    ASSERT(index_.undefined());
-    index_ = unlocked_model_selection->index();
-    dirty_ = true;
-  }
+  // Connect once to unlocked_model_selection at its stable registered address and request an initial refresh.
+  void initialize(runtime::ModelSelection_ts const* unlocked_model_selection);
 
-  // Mark the snapshot stale.
+  // Mark the snapshot stale so the next public refresh observes canonical state.
   void dirty() { dirty_ = true; }
 
   // Refresh our snapshot of `model_` if necessary. `changed` is set to true iff re-display is necessary.

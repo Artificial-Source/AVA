@@ -205,6 +205,8 @@ std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent
 // Publish both estimates under the Session write lock only if the session, append target, and prompt are still current.
 void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
 {
+  DoutEntering(dc::notice, "refresh_session_statistics(unlocked_session)");
+
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     return std::tuple{session_r->store.session_id(), session_r->append_target(), session_r->system_prompt(), session_r->read_authority_1()};

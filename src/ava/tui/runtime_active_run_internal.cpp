@@ -501,6 +501,8 @@ RuntimeEventDrainResult RuntimeActiveRunController::drain_events(RuntimeActiveRu
 
 RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_value)
 {
+  DoutEntering(dc::notice, "RuntimeActiveRunController::run(\"" << submitted_value << "\")");
+
   RuntimeActiveRunOutcome active_run_outcome{.break_loop = true};
   auto& snapshot = presentation_state_.snapshot;
   auto& sidebar = presentation_state_.sidebar;

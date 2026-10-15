@@ -122,6 +122,8 @@ target_sources(ava_app
     "frontend/Data.cxx"
     "frontend/FeedbackKey.cxx"
     "frontend/FrontEnd.cxx"
+    "frontend/ModelSelection.cxx"
+    "frontend/SessionStats.cxx"
 )
 
 target_include_directories(ava_app

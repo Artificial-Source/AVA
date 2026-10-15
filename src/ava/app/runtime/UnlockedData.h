@@ -107,10 +107,10 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
   template<typename F>
   void change(F&& update)
   {
-    DoutEntering(dc::notice, "UnlockedData<" << libcwd::type_info_of<T>().demangled_name() << ">::change()");
+    DoutEntering(dc::frontend, "UnlockedData<" << libcwd::type_info_of<T>().demangled_name() << ">::change()");
     wat write_access(*this);
     std::invoke(std::forward<F>(update), *write_access);
-    Dout(dc::notice, "Updated to " << *write_access);
+    Dout(dc::frontend, "Updated to " << *write_access);
   }
 
   // This object requires a custom print_on.
