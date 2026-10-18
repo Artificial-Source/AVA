@@ -4,6 +4,7 @@
 #include "ContextSourceMetadata.h"
 #include "FreshnessSourceMetadata.h"
 #include "OpenContext.h"
+#include "ModelSelection.h"
 #include "PromptOverrides.h"
 #include "ReasoningSelection.h"
 #include "SessionLifecycleRequest.h"
@@ -99,25 +100,6 @@ struct ResolvedPromptState
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
-
-// Model selection.
-//
-// The active model and its derived/user-selected companions: the resolved
-// ModelInfo, the latest reasoning selection, and the optional scoped model
-// rotation. `model` and `reasoning` are re-derived on resume (model from the
-// persisted entries, reasoning from the last assistant turn); all three are
-// runtime-mutable: model/reasoning change on /models, scoped_model_cycle on
-// /models scope commands.
-struct ModelSelection
-{
-  ava::config::ModelInfo model;
-  std::optional<ReasoningSelection> reasoning = std::nullopt;
-  std::optional<std::vector<std::string>> scoped_model_cycle = std::nullopt;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-using ModelSelection_ts = UnlockedData<ModelSelection>;
 
 // Trust state.
 //
