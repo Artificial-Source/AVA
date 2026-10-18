@@ -1,14 +1,17 @@
 #pragma once
 
 #include "ava/app/frontend/Data.h"
-#include "ava/app/frontend/FrontEnd.h"
 #include "ava/app/runtime/UnlockedDataPolicy.h"
 #include "threadsafe/threadsafe.h"
 #include "utils/macros.h"
 #include <utility>
 #include "debug.h"
 
-namespace ava::app::runtime {
+namespace ava::app {
+namespace frontend {
+class FrontEnd;
+} // namespace frontend
+namespace runtime {
 
 // Moving an object derived from an `UnlockedData` must behave as follows:
 //
@@ -174,4 +177,5 @@ UnlockedData<T>& UnlockedData<T>::operator=(UnlockedData&& orig)
   return *this;
 }
 
-} // namespace ava::app::runtime
+} // namespace runtime
+} // namespace ava::app
