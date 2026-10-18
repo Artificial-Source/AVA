@@ -108,12 +108,16 @@ RuntimePresentationState::RuntimePresentationState(TuiRuntimeOptions& options)
 
 void RuntimePresentationState::refresh_token_status(TuiRuntimeOptions const& options)
 {
+  DoutEntering(dc::notice, "RuntimePresentationState::refresh_token_status(" << options << ")");
+
   if (options.refresh_session_statistics)
     options.refresh_session_statistics();
 }
 
 void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state)
 {
+  DoutEntering(dc::notice, "RuntimePresentationState::apply_runtime_state_snapshot(" << options << ", " << state << ")");
+
   auto const session_changed = command_session_grants.clear_for_session_transition(snapshot.session_id, state.session_id);
   if (session_changed)
   {

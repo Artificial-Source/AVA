@@ -82,7 +82,7 @@ struct TuiMermaidRenderBridge
   std::function<bool(std::uint64_t identity, std::uint64_t config_epoch)> cancel;
   std::function<std::vector<TuiMermaidRenderCompletion>()> drain;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct TuiActiveRunQueues
@@ -388,7 +388,10 @@ struct TuiRuntimeOptions
   // workers that can notify this runtime must be canceled and joined here.
   std::function<void()> on_before_tui_shutdown;
 
+  // This struct has a custom print_on.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+  void print_on(std::ostream& os) const;
 };
 
 // Shallow nested settings hierarchy used by /settings.

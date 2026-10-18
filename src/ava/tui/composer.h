@@ -103,7 +103,7 @@ struct ToolTimelineItem
   std::string spill_path = {};
   bool spill_truncated = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 enum class TuiToolIndexOrigin
@@ -139,7 +139,7 @@ struct TranscriptItem
   std::string stream_id = {};
   bool append_only_stream = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // TUI-only local command presentation. The title is a sanitized command token;
@@ -235,7 +235,7 @@ struct ComposerFrame
   std::vector<std::string> lines;
   std::vector<TerminalGraphicOverlay> graphics;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct SlashCommandArgumentCompletion

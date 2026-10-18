@@ -1,4 +1,7 @@
 #include "sys.h"
+// clang-format off
+#include "ava/debug/debug_ostream_operators.h"  // Must be included immediately after "sys.h".
+// clang-format on
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -2615,5 +2618,36 @@ ava::core::Result<TuiRuntimeStateSnapshot> dispatch_tui_selector_authority(Compo
     snapshot.status = result.error().format();
   return result;
 }
+
+#ifdef CWDEBUG
+void TuiRuntimeOptions::print_on(std::ostream& os) const
+{
+  LIBCWD_USING_OSTREAM_PRELUDE;
+  os << '{'
+     << "mode:" << mode
+     << ", session_id:" << session_id
+     << ", session_path:" << session_path
+     << ", workspace:" << workspace
+     << ", git_branch:" << git_branch
+     << ", app_version:" << app_version
+     << ", context_source_count:" << context_source_count
+     << ", initial_status:" << initial_status
+     << ", initial_transcript:" << initial_transcript
+     << ", slash_commands:{...}"
+     << ", slash_catalog_generation:" << slash_catalog_generation
+     << ", file_references:" << file_references
+     << ", workspace_catalog_generation:" << workspace_catalog_generation
+     << ", custom_themes:" << custom_themes
+     << ", project_trust:" << project_trust
+     << ", initial_todos:" << initial_todos
+     << ", show_images:" << show_images
+     << ", image_width_cells:" << image_width_cells
+     << ", cursor:" << cursor
+     << ", startup_overview:" << startup_overview
+     << ", mermaid_render:" << mermaid_render
+     << ", key_bindings:{...}"
+     << '}';
+}
+#endif
 
 }  // namespace ava::tui

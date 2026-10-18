@@ -300,6 +300,7 @@ target_link_libraries(ava_debug
     AVA::agent          # ava::agent::to_string
     AVA::app            # ava::app::runtime::to_string
     AVA::lsp            # ava::lsp::to_string
+    AVA::provider       # Generated provider enum printers call ava::provider::to_string.
     AVA::tui            # ava::tui::to_string
 )
 
