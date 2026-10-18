@@ -118,8 +118,6 @@ struct ModelSelection
 };
 
 using ModelSelection_ts = UnlockedData<ModelSelection>;
-// Canonical session statistics, including cumulative provider usage and the paired active-context estimates.
-using SessionStats_ts = UnlockedData<ava::session::SessionStats>;
 
 // Trust state.
 //
@@ -188,7 +186,7 @@ struct Session_aggregate_base
   InvocationInputs invocation_inputs_;
   ResolvedPromptState resolved_prompt_state_;
   ModelSelection_ts model_selection_;
-  SessionStats_ts session_stats_;
+  session::SessionStats_ts session_stats_;
   TrustState trust_state_;
   SessionResources resources_;
 
@@ -311,8 +309,8 @@ class Session : protected Session_aggregate_base
   ModelSelection_ts& model_selection() { return model_selection_; }
   ModelSelection_ts const& model_selection() const { return model_selection_; }
 
-  SessionStats_ts& session_stats() { return session_stats_; }
-  SessionStats_ts const& session_stats() const { return session_stats_; }
+  session::SessionStats_ts& session_stats() { return session_stats_; }
+  session::SessionStats_ts const& session_stats() const { return session_stats_; }
 
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
@@ -346,7 +344,7 @@ class Session : protected Session_aggregate_base
   ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
 
   // Return read-access type for the canonical session statistics.
-  SessionStats_ts::crat session_stats_r() const { return SessionStats_ts::crat{session_stats_}; }
+  session::SessionStats_ts::crat session_stats_r() const { return session::SessionStats_ts::crat{session_stats_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }

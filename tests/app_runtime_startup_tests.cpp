@@ -504,7 +504,7 @@ void test_app_runtime_process_scope_lifecycle()
     if (duplicate && authority)
     {
       auto detached = first_r->create_detached_state(std::move(*duplicate), std::move(*authority), first_r->subagent_delivery_manager());
-      ava::app::runtime::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
+      session::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
       expect(detached.resources_.session_process_scope && first_session_scope && same_owner(*detached.resources_.session_process_scope, *first_session_scope) &&
                  &detached.resources_.session_process_scope->supervisor() == supervisor.get() &&
                  detached_stats_r->active_context_tokens == std::optional<std::size_t>{321} &&

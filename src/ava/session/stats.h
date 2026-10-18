@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/app/runtime/UnlockedData.h"
 #include "ava/session/session_store.h"
 
 #include <cstddef>
@@ -64,6 +65,9 @@ struct SessionStats
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
+
+// Canonical session statistics, including cumulative provider usage and the paired active-context estimates.
+using SessionStats_ts = app::runtime::UnlockedData<SessionStats>;
 
 // Produces stats only from a classifier-valid logical history. A malformed v4
 // transaction is never silently omitted from accounting or status surfaces.

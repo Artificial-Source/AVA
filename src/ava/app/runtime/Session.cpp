@@ -623,7 +623,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                                             .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
   ModelSelection_ts model_selection(
       ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
-  SessionStats_ts session_stats;
+  session::SessionStats_ts session_stats;
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try
@@ -714,7 +714,7 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                 // Copy the model selection without inheriting the source object's frontend registration.
                                 .model_selection_ = ModelSelection_ts{*model_selection_r()},
                                 // Copy statistics, including both context estimates, without inheriting frontend registration.
-                                .session_stats_ = SessionStats_ts{*session_stats_r()},
+                                .session_stats_ = session::SessionStats_ts{*session_stats_r()},
                                 .trust_state_ = trust_state(),
                                 .resources_ = std::move(session_resources),
                                 .store = store,

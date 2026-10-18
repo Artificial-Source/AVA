@@ -52,7 +52,7 @@ class SessionStats
   SessionStats(FrontEnd const* frontend, ModelSelection* model_selection) : frontend_(frontend), model_selection_(model_selection) { }
 
   // Connect this cache once to the registered canonical statistics at its stable address.
-  void initialize(runtime::SessionStats_ts const* unlocked_stats);
+  void initialize(session::SessionStats_ts const* unlocked_stats);
 
   void dirty() { dirty_ = true; }
 
