@@ -12,7 +12,7 @@ namespace ava::app::frontend {
 
 namespace {
 // Add active-history and system-prompt estimates without overflowing the signed projection.
-std::optional<long long> active_token_total(ava::session::SessionStats const& stats)
+std::optional<long long> active_token_total(ava::session::Stats const& stats)
 {
   if (!stats.active_context_tokens || !stats.system_prompt_tokens)
     return std::nullopt;
@@ -67,9 +67,9 @@ void SessionStats::refresh()
 {
   Data const* stats_data = frontend_->get_data(stats_index_);
   // stats_index_ must identify the stable SessionStats_ts address registered by initialize().
-  ASSERT(dynamic_cast<session::SessionStats_ts const*>(stats_data) != nullptr);
-  auto const* unlocked_stats = static_cast<session::SessionStats_ts const*>(stats_data);
-  session::SessionStats_ts::crat stats_r{*unlocked_stats};
+  ASSERT(dynamic_cast<runtime::SessionStats_ts const*>(stats_data) != nullptr);
+  auto const* unlocked_stats = static_cast<runtime::SessionStats_ts const*>(stats_data);
+  runtime::SessionStats_ts::crat stats_r{*unlocked_stats};
 
   auto const old_token_count = token_count_display_str(active_token_total_);
   // Keep the full frontend snapshot in step with every canonical refresh before deriving individual displays.
@@ -102,7 +102,7 @@ void SessionStats::recompute_percentage(std::optional<long long> context_window_
 }
 
 // Connect this cache once to the registered canonical statistics at its stable address.
-void SessionStats::initialize(session::SessionStats_ts const* unlocked_stats)
+void SessionStats::initialize(runtime::SessionStats_ts const* unlocked_stats)
 {
   // Only call initialize once.
   ASSERT(stats_index_.undefined());

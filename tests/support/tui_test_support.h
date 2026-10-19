@@ -3,7 +3,7 @@
 #include "tests/support/test_harness.h"
 #include "ava/tui/composer.h"
 #include "ava/config/model_config.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 
 #include <cstddef>
 #include <cstdio>
@@ -50,7 +50,7 @@ class TuiFrontEndFixture final
   void set_context_window_tokens(std::optional<long long> context_window_tokens);
   void set_reasoning(std::optional<std::string> level);
   void set_active_token_estimates(std::optional<std::size_t> history_tokens, std::optional<std::size_t> system_prompt_tokens = 0);
-  void set_session_stats(ava::session::SessionStats stats);
+  void set_session_stats(ava::session::Stats stats);
   [[nodiscard]] bool replace_session_with_active_token_estimates(std::size_t history_tokens, std::size_t system_prompt_tokens = 0);
   // Replace all capability inputs used by supported_reasoning_levels; inherited built-in mappings are deliberately cleared.
   void set_reasoning_capabilities(std::optional<bool> supports_reasoning, std::vector<std::string> reasoning_levels);

@@ -10,7 +10,7 @@
 #include "ava/session/export.h"
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/session/validation.h"
 
 #include <algorithm>

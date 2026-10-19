@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ava/app/runtime/UnlockedData.h"
 #include "ava/session/session_store.h"
 
 #include <cstddef>
@@ -10,7 +9,7 @@
 
 namespace ava::session {
 
-struct SessionEntryCounts
+struct EntryCounts
 {
   std::size_t session_start = 0;
   std::size_t session_metadata = 0;
@@ -29,17 +28,17 @@ struct SessionEntryCounts
   std::size_t cancel = 0;
 
   // Compare all entry counts with other using memberwise equality.
-  bool operator==(SessionEntryCounts const& other) const = default;
+  bool operator==(EntryCounts const& other) const = default;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-struct SessionStats
+struct Stats
 {
   std::size_t entry_count = 0;
   std::string first_timestamp;
   std::string last_timestamp;
-  SessionEntryCounts counts;
+  EntryCounts counts;
   std::optional<long long> input_tokens;
   std::optional<long long> output_tokens;
   std::optional<long long> reasoning_tokens;
@@ -61,16 +60,13 @@ struct SessionStats
   std::size_t estimated_usage_entries = 0;
 
   // Compare all statistics, including nested entry counts, with other using memberwise equality.
-  bool operator==(SessionStats const& other) const = default;
+  bool operator==(Stats const& other) const = default;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-// Canonical session statistics, including cumulative provider usage and the paired active-context estimates.
-using SessionStats_ts = app::runtime::UnlockedData<SessionStats>;
-
 // Produces stats only from a classifier-valid logical history. A malformed v4
 // transaction is never silently omitted from accounting or status surfaces.
-[[nodiscard]] ava::core::Result<SessionStats> compute_session_stats(std::vector<SessionEntry> const& entries);
+[[nodiscard]] ava::core::Result<Stats> compute_session_stats(std::vector<SessionEntry> const& entries);
 
 }  // namespace ava::session

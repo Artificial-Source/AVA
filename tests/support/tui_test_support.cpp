@@ -141,16 +141,16 @@ void TuiFrontEndFixture::set_reasoning(std::optional<std::string> level)
 
 void TuiFrontEndFixture::set_active_token_estimates(std::optional<std::size_t> history_tokens, std::optional<std::size_t> system_prompt_tokens)
 {
-  ava::session::SessionStats stats;
+  ava::session::Stats stats;
   stats.active_context_tokens = history_tokens;
   stats.system_prompt_tokens = system_prompt_tokens;
   set_session_stats(std::move(stats));
 }
 
-void TuiFrontEndFixture::set_session_stats(ava::session::SessionStats stats)
+void TuiFrontEndFixture::set_session_stats(ava::session::Stats stats)
 {
   ava::app::runtime::session_ts::wat session_w(impl_->session);
-  session_w->session_stats().change([stats = std::move(stats)](ava::session::SessionStats& canonical_stats) mutable { canonical_stats = std::move(stats); });
+  session_w->session_stats().change([stats = std::move(stats)](ava::session::Stats& canonical_stats) mutable { canonical_stats = std::move(stats); });
 }
 
 bool TuiFrontEndFixture::replace_session_with_active_token_estimates(std::size_t history_tokens, std::size_t system_prompt_tokens)
@@ -165,7 +165,7 @@ bool TuiFrontEndFixture::replace_session_with_active_token_estimates(std::size_t
     return false;
   {
     ava::app::runtime::session_ts::wat replacement_w(*replacement);
-    replacement_w->session_stats().change([history_tokens, system_prompt_tokens](ava::session::SessionStats& stats) {
+    replacement_w->session_stats().change([history_tokens, system_prompt_tokens](ava::session::Stats& stats) {
       stats.active_context_tokens = history_tokens;
       stats.system_prompt_tokens = system_prompt_tokens;
     });

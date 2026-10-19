@@ -18,7 +18,7 @@ class SessionStats
   FrontEnd const* frontend_;
   ModelSelection* model_selection_;
   // Preserve complete canonical copies for current and future session-stat projections.
-  ava::session::SessionStats stats_snapshot_;
+  ava::session::Stats stats_snapshot_;
   // Retain the exact saturated total rather than recovering it from compact display text.
   std::optional<long long> active_token_total_;
   DataListIndex stats_index_;
@@ -46,7 +46,7 @@ class SessionStats
   SessionStats(FrontEnd const* frontend, ModelSelection* model_selection) : frontend_(frontend), model_selection_(model_selection) { }
 
   // Connect this cache once to the registered canonical statistics at its stable address.
-  void initialize(session::SessionStats_ts const* unlocked_stats);
+  void initialize(runtime::SessionStats_ts const* unlocked_stats);
 
   void dirty() { dirty_ = true; }
 

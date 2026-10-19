@@ -8,6 +8,7 @@
 #include "ResolvedPromptState.h"
 #include "SessionLifecycleRequest.h"
 #include "SessionResources.h"
+#include "SessionStats.h"
 #include "TrustState.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
@@ -20,7 +21,7 @@
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/session/session_store.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/error.h"
@@ -61,7 +62,7 @@ struct Session_aggregate_base
   InvocationInputs invocation_inputs_;
   ResolvedPromptState resolved_prompt_state_;
   ModelSelection_ts model_selection_;
-  session::SessionStats_ts session_stats_;
+  SessionStats_ts session_stats_;
   TrustState trust_state_;
   SessionResources resources_;
 
@@ -184,8 +185,8 @@ class Session : protected Session_aggregate_base
   ModelSelection_ts& model_selection() { return model_selection_; }
   ModelSelection_ts const& model_selection() const { return model_selection_; }
 
-  session::SessionStats_ts& session_stats() { return session_stats_; }
-  session::SessionStats_ts const& session_stats() const { return session_stats_; }
+  SessionStats_ts& session_stats() { return session_stats_; }
+  SessionStats_ts const& session_stats() const { return session_stats_; }
 
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
@@ -219,7 +220,7 @@ class Session : protected Session_aggregate_base
   ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
 
   // Return read-access type for the canonical session statistics.
-  session::SessionStats_ts::crat session_stats_r() const { return session::SessionStats_ts::crat{session_stats_}; }
+  SessionStats_ts::crat session_stats_r() const { return SessionStats_ts::crat{session_stats_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }

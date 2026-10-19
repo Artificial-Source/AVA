@@ -1,6 +1,6 @@
 #include "sys.h"
 #include "ava/session/assistant_output.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/core/json.h"
 
 #include <cctype>
@@ -147,7 +147,7 @@ void add_optional_cost(std::optional<long double>& total, std::optional<long dou
     *total += *value;
 }
 
-void add_usage_and_cost(SessionStats& stats, std::string_view data_json, bool is_assistant_message)
+void add_usage_and_cost(Stats& stats, std::string_view data_json, bool is_assistant_message)
 {
   auto const usage = ava::core::json::object_field(data_json, "usage");
   if (usage)
@@ -180,7 +180,7 @@ void add_usage_and_cost(SessionStats& stats, std::string_view data_json, bool is
     ++stats.unknown_cost_entries;
 }
 
-void add_timestamp(SessionStats& stats, std::string_view timestamp)
+void add_timestamp(Stats& stats, std::string_view timestamp)
 {
   if (stats.first_timestamp.empty())
     stats.first_timestamp = timestamp;
@@ -189,9 +189,9 @@ void add_timestamp(SessionStats& stats, std::string_view timestamp)
 
 }  // namespace
 
-ava::core::Result<SessionStats> compute_session_stats(std::vector<SessionEntry> const& entries)
+ava::core::Result<Stats> compute_session_stats(std::vector<SessionEntry> const& entries)
 {
-  SessionStats stats;
+  Stats stats;
   auto const assistant_output = classify_assistant_output(entries);
   for (auto const& diagnostic : assistant_output.diagnostics)
   {

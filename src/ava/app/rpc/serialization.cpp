@@ -8,7 +8,7 @@
 #include "ava/config/model_config.h"
 #include "ava/session/logical_projection.h"
 #include "ava/session/session_tree.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/session/validation.h"
 #include "ava/core/json.h"
 #include "ava/core/string_utils.h"

@@ -91,7 +91,7 @@ void run_tui_selector_tests()
     std::string const populated_display = populated_stats.value;
     stats_frontend.set_active_token_estimates(400'000, 13'200);
     auto text_unchanged = stats_frontend.frontend()->session_stats().token_count_refresh();
-    ava::session::SessionStats metadata_only_stats;
+    ava::session::Stats metadata_only_stats;
     metadata_only_stats.entry_count = 7;
     metadata_only_stats.last_timestamp = "2026-10-14T12:00:00Z";
     metadata_only_stats.active_context_tokens = 400'000;
@@ -106,7 +106,7 @@ void run_tui_selector_tests()
     std::string const truncated_display = truncated_count.value;
     stats_frontend.set_active_token_estimates(12'001, 340);
     auto same_display = stats_frontend.frontend()->session_stats().token_count_refresh();
-    ava::session::SessionStats fallback_stats;
+    ava::session::Stats fallback_stats;
     fallback_stats.active_context_tokens = 1'000;
     fallback_stats.system_prompt_tokens = 340;
     stats_frontend.set_session_stats(std::move(fallback_stats));

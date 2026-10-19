@@ -485,7 +485,7 @@ void test_app_runtime_process_scope_lifecycle()
 
   {
     SCOPED_CRITICAL_AREA_W(first_w, *first_result);
-    first_w->session_stats().change([](ava::session::SessionStats& stats) {
+    first_w->session_stats().change([](ava::session::Stats& stats) {
       stats.active_context_tokens = 321;
       stats.system_prompt_tokens = 123;
     });
@@ -504,7 +504,7 @@ void test_app_runtime_process_scope_lifecycle()
     if (duplicate && authority)
     {
       auto detached = first_r->create_detached_state(std::move(*duplicate), std::move(*authority), first_r->subagent_delivery_manager());
-      session::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
+      ava::app::runtime::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
       expect(detached.resources_.session_process_scope && first_session_scope && same_owner(*detached.resources_.session_process_scope, *first_session_scope) &&
                  &detached.resources_.session_process_scope->supervisor() == supervisor.get() &&
                  detached_stats_r->active_context_tokens == std::optional<std::size_t>{321} &&

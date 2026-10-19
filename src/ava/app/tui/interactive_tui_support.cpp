@@ -10,7 +10,7 @@
 #include "ava/tui/theme.h"
 #include "ava/config/model_config.h"
 #include "ava/session/compaction.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/permissions/permission.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/mode.h"
@@ -212,7 +212,7 @@ void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
     return std::tuple{session_r->store.session_id(), session_r->append_target(), session_r->system_prompt(), session_r->read_authority_1()};
   }();
   auto& [session_id, append_target, system_prompt, read_authority] = snapshot;
-  ava::session::SessionStats updated_stats;
+  ava::session::Stats updated_stats;
   if (read_authority)
   {
     auto entries = read_authority->load();
@@ -232,7 +232,7 @@ void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
   if (session_w->store.session_id() != session_id || session_w->append_target() != append_target || session_w->system_prompt() != system_prompt)
     return;
   // Publish the history and prompt estimates as one canonical change so frontend totals use one coherent snapshot.
-  session_w->session_stats().change([&updated_stats](ava::session::SessionStats& stats) { stats = std::move(updated_stats); });
+  session_w->session_stats().change([&updated_stats](ava::session::Stats& stats) { stats = std::move(updated_stats); });
 }
 
 ava::tui::TodoStatus to_tui_todo_status(ava::agent::TodoStatus status)
