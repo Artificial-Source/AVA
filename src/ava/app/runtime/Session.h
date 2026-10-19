@@ -71,7 +71,8 @@ struct Session_aggregate_base
   // `store` is the session's on-disk identity (a durable content handle);
   // `created` records whether this Session was freshly created vs resumed.
   // Resolved model/reasoning live in `model_selection_` above and are
-  // projected back out of the persisted entries on resume.
+  // initially projected back out of the persisted entries on resume, after
+  // which model_selection_ becomes the canonical current model/reasoning used.
   // ===========================================================================
   ava::session::SessionStore store;
   bool created = false;                         // True when this is a freshly created session rather than a resumed one.
