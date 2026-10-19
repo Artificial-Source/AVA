@@ -603,27 +603,27 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   if (*selected_primary_agent && (*selected_primary_agent)->tool_preset == ava::agent::AgentToolPreset::ReadOnly)
     effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
 
-  InvocationInputs invocation_inputs{.workspace_dir = workspace_dir,
-                                     .current_dir = current_dir,
-                                     .requested_tool_visibility = context.tool_visibility,
+  InvocationInputs invocation_inputs{.requested_tool_visibility = context.tool_visibility,
                                      .tool_visibility = std::move(effective_tool_visibility),
                                      .requested_primary_agent = context.requested_primary_agent,
                                      .selected_primary_agent = std::move(*selected_primary_agent),
                                      .paths = context.paths,
                                      .sessionless = sessionless,
                                      .is_offline_ = context.offline,
-                                     .additional_writable_dirs = context.additional_writable_dirs,
                                      .session_read_limits = session_read_limits,
                                      .prompt_overrides = context.prompt_overrides};
-  ResolvedPromptState resolved_prompt_state{.mode = context.mode,
-                                            .base_prompt = std::move(prompt_state->base_prompt),
-                                            .context_sources = std::move(prompt_state->context_sources),
+  Directories_ts canonical_directories(
+      Directories{.workspace_dir = workspace_dir, .current_dir = current_dir, .additional_writable_dirs = context.additional_writable_dirs});
+  ResolvedPromptState resolved_prompt_state{.base_prompt = std::move(prompt_state->base_prompt),
                                             .freshness_sources = std::move(prompt_state->freshness_sources),
                                             .system_prompt = std::move(prompt_state->system_prompt),
-                                            .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
+                                            .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt),
+                                            .mode_and_context_sources = PromptModeAndContextSources{
+                                                .mode = context.mode, .context_sources = std::move(prompt_state->context_sources)}};
   ModelSelection_ts model_selection(
       ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
   SessionStats_ts session_stats;
+  GitBranch_ts git_branch(observe_git_branch(workspace_dir));
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try
@@ -647,9 +647,11 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                              .diagnostics = context.diagnostics,
                              .provider_catalog = std::move(*provider_catalog)};
   Session session({.invocation_inputs_ = std::move(invocation_inputs),
+                   .directories_ = std::move(canonical_directories),
                    .resolved_prompt_state_ = std::move(resolved_prompt_state),
                    .model_selection_ = std::move(model_selection),
                    .session_stats_ = std::move(session_stats),
+                   .git_branch_ = std::move(git_branch),
                    .trust_state_ = std::move(trust_state),
                    .resources_ = std::move(resources),
                    .store = std::move(store),
@@ -710,11 +712,21 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                      .mcp_config = mcp_config(),
                                      .provider_catalog = provider_catalog()};
   return Session_aggregate_base{.invocation_inputs_ = std::move(detached_inputs),
-                                .resolved_prompt_state_ = resolve_prompt_state(),
+                                // Copy directory configuration without inheriting the source object's frontend registration.
+                                .directories_ = Directories_ts{*Directories_ts::crat(directories())},
+                                .resolved_prompt_state_ =
+                                    ResolvedPromptState{.base_prompt = base_prompt(),
+                                                        .freshness_sources = freshness_sources(),
+                                                        .system_prompt = system_prompt(),
+                                                        .ambient_extension_free_system_prompt = ambient_extension_free_system_prompt(),
+                                                        .mode_and_context_sources = PromptModeAndContextSources{.mode = mode(),
+                                                                                                                  .context_sources = context_sources()}},
                                 // Copy the model selection without inheriting the source object's frontend registration.
                                 .model_selection_ = ModelSelection_ts{*model_selection_r()},
                                 // Copy statistics, including both context estimates, without inheriting frontend registration.
                                 .session_stats_ = SessionStats_ts{*session_stats_r()},
+                                // Copy the branch without inheriting the source object's frontend registration.
+                                .git_branch_ = GitBranch_ts{*GitBranch_ts::crat(git_branch())},
                                 .trust_state_ = trust_state(),
                                 .resources_ = std::move(session_resources),
                                 .store = store,
@@ -992,12 +1004,15 @@ ava::core::VoidResult Session::apply_initial_reasoning_level(std::string_view re
 
 ava::core::VoidResult Session::apply_prompt_state(PromptState prompt_state)
 {
-  resolve_prompt_state() = ResolvedPromptState{.mode = prompt_state.mode,
-                                               .base_prompt = std::move(prompt_state.base_prompt),
-                                               .context_sources = std::move(prompt_state.context_sources),
-                                               .freshness_sources = std::move(prompt_state.freshness_sources),
-                                               .system_prompt = std::move(prompt_state.system_prompt),
-                                               .ambient_extension_free_system_prompt = std::move(prompt_state.ambient_extension_free_system_prompt)};
+  auto& resolved = resolve_prompt_state();
+  resolved.base_prompt = std::move(prompt_state.base_prompt);
+  resolved.freshness_sources = std::move(prompt_state.freshness_sources);
+  resolved.system_prompt = std::move(prompt_state.system_prompt);
+  resolved.ambient_extension_free_system_prompt = std::move(prompt_state.ambient_extension_free_system_prompt);
+  resolved.mode_and_context_sources.change([&prompt_state](PromptModeAndContextSources& metadata) {
+    metadata.mode = prompt_state.mode;
+    metadata.context_sources = std::move(prompt_state.context_sources);
+  });
   return {};
 }
 
@@ -1056,12 +1071,15 @@ ava::core::Result<bool> Session::switch_model(ava::config::ModelInfo model)
   if (!appended)
     return std::unexpected(std::move(appended.error()));
 
-  resolve_prompt_state() = ResolvedPromptState{.mode = prompt_state->mode,
-                                               .base_prompt = std::move(prompt_state->base_prompt),
-                                               .context_sources = std::move(prompt_state->context_sources),
-                                               .freshness_sources = std::move(prompt_state->freshness_sources),
-                                               .system_prompt = std::move(prompt_state->system_prompt),
-                                               .ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt)};
+  auto& resolved = resolve_prompt_state();
+  resolved.base_prompt = std::move(prompt_state->base_prompt);
+  resolved.freshness_sources = std::move(prompt_state->freshness_sources);
+  resolved.system_prompt = std::move(prompt_state->system_prompt);
+  resolved.ambient_extension_free_system_prompt = std::move(prompt_state->ambient_extension_free_system_prompt);
+  resolved.mode_and_context_sources.change([&prompt_state](PromptModeAndContextSources& metadata) {
+    metadata.mode = prompt_state->mode;
+    metadata.context_sources = std::move(prompt_state->context_sources);
+  });
 
   model_selection().change([&model](auto& model_selection) {
     model_selection.model = std::move(model);

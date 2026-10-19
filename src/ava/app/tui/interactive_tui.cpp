@@ -11,6 +11,7 @@
 #include "ava/app/reasoning_controls.h"
 #include "ava/app/rpc/runtime_navigation.h"
 #include "ava/app/runtime.h"
+#include "ava/app/runtime/GitBranch.h"
 #include "ava/app/session_title_coordinator.h"
 #include "ava/app/session_user_turns.h"
 #include "ava/app/tui/command_palette_views.h"
@@ -239,27 +240,24 @@ int run_tui(InteractiveState state)
   };
   struct SessionPresentation
   {
-    std::string mode;
     std::string session_id;
     std::string session_path;
     std::string workspace;
     std::filesystem::path workspace_dir;
-    std::size_t context_source_count;
     ava::tui::ProjectTrustSnapshot project_trust;
   };
   auto session_presentation = [&unlocked_session]() {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const workspace = session_r->current_dir().empty() ? session_r->workspace_dir() : session_r->current_dir();
-    return SessionPresentation{.mode = ava::agent::to_string(session_r->mode()),
-                               .session_id = session_r->store.session_id(),
+    return SessionPresentation{.session_id = session_r->store.session_id(),
                                .session_path = session_r->store.session_path().string(),
                                .workspace = workspace.string(),
                                .workspace_dir = session_r->workspace_dir(),
-                               .context_source_count = session_r->context_sources().size(),
                                .project_trust = project_trust_snapshot(session_r->project_trust())};
   };
   auto state_snapshot = [&unlocked_session, &application_catalog, &custom_theme_options, &refresh_title_catalog, &session_presentation, &key_bindings,
                          copy_effective_display_presentation, mermaid_bridge](std::string status) {
+    static_cast<void>(ava::app::runtime::refresh_git_branch(unlocked_session));
     static_cast<void>(refresh_title_catalog());
     auto delivery = application_catalog.delivery_snapshot();
     auto presentation = session_presentation();
@@ -269,12 +267,9 @@ int run_tui(InteractiveState state)
     auto const [show_images, image_width_cells, cursor] = copy_effective_display_presentation();
     auto const mermaid_configuration = mermaid_bridge->presentation_configuration();
     auto startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
-    return ava::tui::TuiRuntimeStateSnapshot{.mode = std::move(presentation.mode),
-                                             .session_id = std::move(presentation.session_id),
+    return ava::tui::TuiRuntimeStateSnapshot{.session_id = std::move(presentation.session_id),
                                              .session_path = std::move(presentation.session_path),
                                              .workspace = std::move(presentation.workspace),
-                                             .git_branch = git_branch_for_sidebar(presentation.workspace_dir),
-                                             .context_source_count = presentation.context_source_count,
                                              .status = std::move(status),
                                              .slash_commands = project_slash_command_items(std::move(delivery.slash_commands)),
                                              .slash_catalog_generation = delivery.slash_catalog_generation,
@@ -379,19 +374,17 @@ int run_tui(InteractiveState state)
     initial_transcript.push_back(ava::tui::TranscriptItem{.label = "setup", .text = std::move(*onboarding)});
   }
   auto initial_catalog_snapshot = application_catalog.snapshot();
+  static_cast<void>(ava::app::runtime::refresh_git_branch(unlocked_session));
   auto initial_presentation = session_presentation();
   auto const [initial_show_images, initial_image_width_cells, initial_cursor] = copy_effective_display_presentation();
   auto initial_startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
   ava::tui::TuiFrontEnd frontend;
   frontend.register_frontend_data(unlocked_session);
   auto result = frontend.run(ava::tui::TuiRuntimeOptions{
-      .mode = std::move(initial_presentation.mode),
       .session_id = std::move(initial_presentation.session_id),
       .session_path = std::move(initial_presentation.session_path),
       .workspace = std::move(initial_presentation.workspace),
-      .git_branch = git_branch_for_sidebar(initial_presentation.workspace_dir),
       .app_version = std::string(version::kDisplayVersion),
-      .context_source_count = initial_presentation.context_source_count,
       .initial_status = keybind_status,
       .initial_transcript = std::move(initial_transcript),
       .slash_commands = project_slash_command_items(std::move(initial_catalog_snapshot.slash_commands)),
@@ -546,7 +539,6 @@ int run_tui(InteractiveState state)
             }
             else if (!workspace_changed)
               application_catalog.refresh_values(unlocked_session, hotkeys);
-            auto const context_source_count = ava::app::runtime::session_ts::rat(unlocked_session)->context_sources().size();
             std::optional<ava::tui::TuiLocalCommandResult> local_command_result;
             if (request_presentation.has_local_command)
             {
@@ -561,7 +553,6 @@ int run_tui(InteractiveState state)
                                              .local_command_result = std::move(local_command_result),
                                              .conversation_output = std::move(request_presentation.conversation.output),
                                              .conversation_tool_timeline = tui_tool_timeline(request_presentation.conversation.tool_timeline),
-                                             .context_source_count = context_source_count,
                                              .state_snapshot = state_snapshot({})};
           },
       .on_attach_image = [&unlocked_session](std::string const& path) -> ava::core::Result<ava::session::ImageAttachmentRef> {

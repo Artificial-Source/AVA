@@ -428,7 +428,7 @@ void test_idle_delivery_and_terminal_before_registration()
 
   CRITICAL_AREA_BEGIN_R(fixture_session);
   std::string fixture_session_id = fixture_session_r->store.session_id();
-  auto& fixture_workspace_dir = fixture_session_r->workspace_dir();
+  auto fixture_workspace_dir = fixture_session_r->workspace_dir();
   auto history = fixture_session_r->read_authority_1();
   CRITICAL_AREA_END_R(fixture_session);
 

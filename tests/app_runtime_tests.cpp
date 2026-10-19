@@ -27,6 +27,7 @@ void run_app_runtime_tests()
   test_app_runtime_replacement_open_context();
   test_app_runtime_process_scope_lifecycle();
   test_app_runtime_session_startup_options();
+  test_app_runtime_git_branch_observation_and_refresh();
   test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork();
   test_app_runtime_reconciles_committed_function_calls_on_resume();
   test_app_runtime_cli_prompt_overrides();

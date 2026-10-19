@@ -19,8 +19,11 @@ void FrontEnd::register_frontend_data(runtime::session_ts& unlocked_session)
   DoutEntering(dc::notice, "FrontEnd::register_frontend_data()");
 
   runtime::session_ts::wat session_w(unlocked_session);
+  session_w->directories().register_with_front_end({}, this);
+  session_w->prompt_mode_and_context_sources().register_with_front_end({}, this);
   session_w->model_selection().register_with_front_end({}, this);
   session_w->session_stats().register_with_front_end({}, this);
+  session_w->git_branch().register_with_front_end({}, this);
   initialize_frontend_state(session_w);
 }
 

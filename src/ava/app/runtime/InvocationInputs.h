@@ -6,10 +6,8 @@
 #include "ava/config/xdg_paths.h"
 #include "ava/session/session_store.h"
 
-#include <filesystem>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace ava::app::runtime {
 
@@ -21,8 +19,6 @@ namespace ava::app::runtime {
 //
 struct InvocationInputs
 {
-  std::filesystem::path workspace_dir;
-  std::filesystem::path current_dir;
   // Invocation-requested visibility is retained separately so a replacement can re-resolve primary policy from the original CLI boundary.
   ava::agent::ToolVisibilityOptions requested_tool_visibility = {};
   ava::agent::ToolVisibilityOptions tool_visibility = {};
@@ -32,9 +28,6 @@ struct InvocationInputs
   ava::config::XdgPaths paths;
   bool sessionless;
   bool is_offline_ = false;
-  // Additional writable directories beyond workspace_dir (e.g., user-configured paths).
-  // These are opened as anchor descriptors at startup and made available to tools via ToolContext::anchor_set.
-  std::vector<std::filesystem::path> additional_writable_dirs = {};
   // Resolved once at open time and reused by every runtime history reader.
   ava::session::SessionReadLimits session_read_limits = ava::session::legacy_unbounded_session_read_limits();
   PromptOverrides prompt_overrides = {};

@@ -944,7 +944,6 @@ void run_tui_selector_tests()
                                                                            //.provider = "openai",
                                                                            //.model = "gpt-5.5",
                                                                            .workspace = "/workspace/project",
-                                                                           .git_branch = "develop",
                                                                            .version = "0.32",
                                                                            .context_source_count = 2,
                                                                            .session_path = "/tmp/ava/session_test.jsonl",

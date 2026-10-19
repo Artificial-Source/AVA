@@ -96,14 +96,16 @@ struct PendingSessionArchiveAction
 class RuntimePresentationState final
 {
  public:
-  explicit RuntimePresentationState(TuiRuntimeOptions& options);
+  RuntimePresentationState(TuiFrontEnd* frontend, TuiRuntimeOptions& options);
 
   void refresh_token_status(TuiRuntimeOptions const& options);
+  void refresh_prompt_metadata();
   void apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state);
 
   ComposerSnapshot snapshot;
 
  private:
+  TuiFrontEnd* frontend_;
   std::optional<std::size_t> applied_slash_catalog_generation_;
   std::optional<std::size_t> applied_workspace_catalog_generation_;
 

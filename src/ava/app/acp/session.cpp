@@ -195,7 +195,7 @@ std::string const& AcpSessionHost::session_id() const noexcept
   return session_id_;
 }
 
-std::filesystem::path const& AcpSessionHost::current_dir(runtime::session_ts::crat const& session_r) const noexcept
+std::filesystem::path AcpSessionHost::current_dir(runtime::session_ts::crat const& session_r) const
 {
   return session_r->current_dir();
 }

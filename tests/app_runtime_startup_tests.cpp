@@ -12,6 +12,7 @@
 #include "ava/app/rpc_mode.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
+#include "ava/app/runtime/GitBranch.h"
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/subagent_delivery_manager.h"
@@ -128,6 +129,8 @@ void test_app_runtime_open_session_and_context_prompt()
     CRITICAL_AREA_BEGIN_R(session);
     expect(session_r->created && session_r->mode() == ava::agent::Mode::Plan && session_r->model_selection_r()->model.model_id == "gpt-5.5",
            "runtime session records created state, mode, and model");
+    expect(session_r->workspace_dir() == workspace && session_r->current_dir() == current,
+           "runtime session preserves distinct canonical workspace-root and current-directory paths");
     CRITICAL_AREA_END_R(session);
     auto const resource_policy = ava::app::runtime::make_extension_resource_policy_1(unlocked_session);
     expect(!resource_policy.include_project_resources && resource_policy.plugin_discovery.global_plugins_dir == paths.ava_config_dir / "plugins" &&
@@ -505,11 +508,18 @@ void test_app_runtime_process_scope_lifecycle()
     {
       auto detached = first_r->create_detached_state(std::move(*duplicate), std::move(*authority), first_r->subagent_delivery_manager());
       ava::app::runtime::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
+      ava::app::runtime::Directories_ts::crat detached_directories_r(detached.directories_);
+      ava::app::runtime::Directories_ts::crat source_directories_r(first_r->directories());
+      ava::app::runtime::GitBranch_ts::crat detached_branch_r(detached.git_branch_);
+      ava::app::runtime::GitBranch_ts::crat source_branch_r(first_r->git_branch());
       expect(detached.resources_.session_process_scope && first_session_scope && same_owner(*detached.resources_.session_process_scope, *first_session_scope) &&
                  &detached.resources_.session_process_scope->supervisor() == supervisor.get() &&
                  detached_stats_r->active_context_tokens == std::optional<std::size_t>{321} &&
-                 detached_stats_r->system_prompt_tokens == std::optional<std::size_t>{123} && detached.session_stats_.frontend() == nullptr,
-             "detached state copies both token estimates without inheriting frontend registration and shares its existing process scope");
+                 detached_stats_r->system_prompt_tokens == std::optional<std::size_t>{123} &&
+                 detached_directories_r->workspace_dir == source_directories_r->workspace_dir &&
+                 detached_directories_r->current_dir == source_directories_r->current_dir && *detached_branch_r == *source_branch_r &&
+                 detached.session_stats_.frontend() == nullptr && detached.directories_.frontend() == nullptr && detached.git_branch_.frontend() == nullptr,
+             "detached state copies token, directory, and branch state without inheriting frontend registration and shares its existing process scope");
     }
 
     replacement_context = first_r->replacement_open_context({});
@@ -704,6 +714,44 @@ void test_app_runtime_session_startup_options()
                                                                                 .initial_reasoning_level = std::nullopt,
                                                                                 .expected_original_cwd = std::nullopt});
   expect(!fork_no_session_result && fork_no_session_result.error().message().find("no-session") != std::string::npos, "runtime rejects --fork with no-session");
+}
+
+void test_app_runtime_git_branch_observation_and_refresh()
+{
+  auto const root = create_empty_root("app-runtime-git-branch");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace / ".git");
+  {
+    std::ofstream head(workspace / ".git" / "HEAD");
+    head << "ref: refs/heads/feature/initial\n";
+  }
+
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = app_test_paths(root);
+  context.offline = true;
+  auto session = ava::app::runtime::Session::open(context, {.sessionless = true});
+  expect(session.has_value(), session ? "runtime session observes initial git branch" : session.error().format());
+  if (!session)
+    return;
+
+  auto initial = *ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch());
+  auto const unchanged = ava::app::runtime::refresh_git_branch(*session);
+  {
+    std::ofstream head(workspace / ".git" / "HEAD");
+    head << "ref: refs/heads/feature/changed\n";
+  }
+  auto const changed = ava::app::runtime::refresh_git_branch(*session);
+  auto refreshed = *ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch());
+
+  {
+    std::ofstream head(workspace / ".git" / "HEAD");
+    head << "0123456789abcdef0123456789abcdef\n";
+  }
+  expect(initial == "feature/initial" && !unchanged && changed && refreshed == "feature/changed" &&
+             ava::app::runtime::observe_git_branch(workspace) == "0123456789ab",
+         "git branch observation preserves textual refs, detached truncation, and change-only publication");
 }
 
 void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()

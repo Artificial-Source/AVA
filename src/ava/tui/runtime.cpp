@@ -235,7 +235,7 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
   TerminalBackgroundDetectionGuard terminal_background_detection;
   maybe_probe_terminal_background_appearance(terminal_context);
 
-  RuntimePresentationState presentation_state(options);
+  RuntimePresentationState presentation_state(this, options);
   auto& snapshot = presentation_state.snapshot;
   auto& sidebar = presentation_state.sidebar;
   auto& command_session_grants = presentation_state.command_session_grants;
@@ -2624,13 +2624,10 @@ void TuiRuntimeOptions::print_on(std::ostream& os) const
 {
   LIBCWD_USING_OSTREAM_PRELUDE;
   os << '{'
-     << "mode:" << mode
-     << ", session_id:" << session_id
+     << "session_id:" << session_id
      << ", session_path:" << session_path
      << ", workspace:" << workspace
-     << ", git_branch:" << git_branch
      << ", app_version:" << app_version
-     << ", context_source_count:" << context_source_count
      << ", initial_status:" << initial_status
      << ", initial_transcript:" << initial_transcript
      << ", slash_commands:{...}"

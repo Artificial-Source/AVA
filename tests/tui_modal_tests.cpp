@@ -861,7 +861,6 @@ void run_tui_modal_tests_part_3()
           //.provider = "openai",
           //.model = "gpt-5.5",
           .workspace = "/workspace",
-          .git_branch = "develop",
           .version = "0.32",
           .context_source_count = 1}};
   auto const sidebar_modal_frame = ava::tui::render_composer(frontend.frontend(), sidebar_modal_snapshot);

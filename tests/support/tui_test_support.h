@@ -2,11 +2,13 @@
 
 #include "tests/support/test_harness.h"
 #include "ava/tui/composer.h"
+#include "ava/agent/mode.h"
 #include "ava/config/model_config.h"
 #include "ava/session/Stats.h"
 
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -45,13 +47,25 @@ class TuiFrontEndFixture final
 
   [[nodiscard]] ava::tui::TuiFrontEnd* frontend() noexcept;
   [[nodiscard]] std::pair<std::string, std::string> selected_model_metadata();
+  [[nodiscard]] std::pair<std::string, bool> git_branch_metadata();
+  [[nodiscard]] std::pair<std::string, bool> workspace_root_metadata();
+  [[nodiscard]] std::pair<std::string, bool> current_directory_metadata();
+  [[nodiscard]] std::pair<std::string, bool> prompt_mode_metadata();
+  [[nodiscard]] std::pair<std::string, bool> context_source_count_metadata();
   void set_model(TuiTestModel model);
+  void set_git_branch(std::string branch);
+  void set_directories(std::filesystem::path workspace_root, std::filesystem::path current_directory,
+                       std::vector<std::filesystem::path> additional_writable_dirs = {});
+  void set_prompt_metadata(ava::agent::Mode mode, std::size_t context_source_count);
   // Change only canonical context-window metadata for projection and percentage tests.
   void set_context_window_tokens(std::optional<long long> context_window_tokens);
   void set_reasoning(std::optional<std::string> level);
   void set_active_token_estimates(std::optional<std::size_t> history_tokens, std::optional<std::size_t> system_prompt_tokens = 0);
   void set_session_stats(ava::session::Stats stats);
   [[nodiscard]] bool replace_session_with_active_token_estimates(std::size_t history_tokens, std::size_t system_prompt_tokens = 0);
+  [[nodiscard]] bool replace_session_with_git_branch(std::string branch);
+  [[nodiscard]] bool replace_session_with_directories(std::filesystem::path workspace_root, std::filesystem::path current_directory);
+  [[nodiscard]] bool replace_session_with_prompt_metadata(ava::agent::Mode mode, std::size_t context_source_count);
   // Replace all capability inputs used by supported_reasoning_levels; inherited built-in mappings are deliberately cleared.
   void set_reasoning_capabilities(std::optional<bool> supports_reasoning, std::vector<std::string> reasoning_levels);
 

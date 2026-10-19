@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_draft_internal.h"
@@ -13,13 +14,13 @@
 namespace ava::tui {
 namespace {
 
-ComposerSnapshot initial_snapshot(TuiRuntimeOptions& options)
+ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend, TuiRuntimeOptions& options)
 {
-  ComposerSnapshot snapshot{.mode = options.mode,
+  auto const mode = frontend->prompt_metadata().mode_refresh();
+  ComposerSnapshot snapshot{.mode = mode.value,
                             .session_id = options.session_id,
                             .input = "",
                             .status = options.initial_status,
-                            .context_source_count = options.context_source_count,
                             .transcript = std::move(options.initial_transcript),
                             .slash_commands = std::move(options.slash_commands),
                             .file_references = std::move(options.file_references),
@@ -91,17 +92,16 @@ bool RuntimeEventQueue::received_any()
   return received;
 }
 
-RuntimePresentationState::RuntimePresentationState(TuiRuntimeOptions& options)
-    : snapshot(initial_snapshot(options)),
+RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend, TuiRuntimeOptions& options)
+    : snapshot(initial_snapshot(frontend, options)),
+      frontend_(frontend),
       applied_slash_catalog_generation_(options.slash_catalog_generation),
       applied_workspace_catalog_generation_(options.workspace_catalog_generation),
       sidebar{.todos = std::move(options.initial_todos),
               .session_id = options.session_id,
-              .mode = options.mode,
+              .mode = snapshot.mode,
               .workspace = options.workspace,
-              .git_branch = options.git_branch,
               .version = options.app_version,
-              .context_source_count = options.context_source_count,
               .session_path = options.session_path}
 {
 }
@@ -114,6 +114,13 @@ void RuntimePresentationState::refresh_token_status(TuiRuntimeOptions const& opt
     options.refresh_session_statistics();
 }
 
+void RuntimePresentationState::refresh_prompt_metadata()
+{
+  auto const mode = frontend_->prompt_metadata().mode_refresh();
+  snapshot.mode = mode.value;
+  sidebar.mode = mode.value;
+}
+
 void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state)
 {
   DoutEntering(dc::notice, "RuntimePresentationState::apply_runtime_state_snapshot(" << options << ", " << state << ")");
@@ -124,7 +131,7 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
     pending_image_attachments.clear();
     snapshot.pending_attachments.clear();
   }
-  snapshot.mode = std::move(state.mode);
+  refresh_prompt_metadata();
   snapshot.session_id = std::move(state.session_id);
   snapshot.status = std::move(state.status);
   bool completion_sources_changed = false;
@@ -145,7 +152,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
     ++snapshot.file_references_generation;
   snapshot.custom_themes = std::move(state.custom_themes);
   snapshot.project_trust = std::move(state.project_trust);
-  snapshot.context_source_count = state.context_source_count;
   snapshot.show_images = state.show_images;
   snapshot.image_width_cells = state.image_width_cells;
   snapshot.cursor = state.cursor;
@@ -163,12 +169,9 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
       attachment.preview.reset();
   }
 
-  sidebar.mode = snapshot.mode;
   sidebar.session_id = snapshot.session_id;
   sidebar.session_path = std::move(state.session_path);
   sidebar.workspace = std::move(state.workspace);
-  sidebar.git_branch = std::move(state.git_branch);
-  sidebar.context_source_count = state.context_source_count;
   sidebar.todos = std::move(state.todos);
   refresh_token_status(options);
 }

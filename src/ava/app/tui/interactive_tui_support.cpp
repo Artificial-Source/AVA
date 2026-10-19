@@ -17,7 +17,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -35,20 +34,6 @@ void append_status_line(std::string& target, std::string line)
   if (!target.empty())
     target += '\n';
   target += std::move(line);
-}
-
-std::string git_branch_for_sidebar(std::filesystem::path const& workspace)
-{
-  auto const head_path = workspace / ".git" / "HEAD";
-  std::ifstream input(head_path);
-  if (!input)
-    return {};
-  std::string head;
-  std::getline(input, head);
-  constexpr std::string_view ref_prefix = "ref: refs/heads/";
-  if (head.rfind(ref_prefix, 0) == 0)
-    return head.substr(ref_prefix.size());
-  return head.size() > 12 ? head.substr(0, 12) : head;
 }
 
 std::vector<ava::app::CommandHotkey> command_hotkeys_from_key_bindings(ava::tui::TuiKeyBindings const& key_bindings)

@@ -139,7 +139,7 @@ void test_prompt_stash_runtime_controller()
     ++backend_submit_calls;
     return ava::tui::TuiSubmitResult{};
   };
-  ava::tui::RuntimePresentationState presentation(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   auto active_list = ava::tui::ActiveSelectList::None;

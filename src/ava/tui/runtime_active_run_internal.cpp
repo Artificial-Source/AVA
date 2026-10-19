@@ -1031,11 +1031,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
                                       : (result.output.empty() ? "ok" : "done");
   }
   snapshot.processing = false;
-  if (result.context_source_count)
-  {
-    snapshot.context_source_count = result.context_source_count;
-    sidebar.context_source_count = result.context_source_count;
-  }
+  presentation_state_.refresh_prompt_metadata();
   presentation_state_.refresh_token_status(options_);
   if (!service_mermaid_presentation_() || !render())
   {

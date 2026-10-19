@@ -99,9 +99,65 @@ std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata(
   return {provider.value, model.value};
 }
 
+std::pair<std::string, bool> TuiFrontEndFixture::git_branch_metadata()
+{
+  auto branch = impl_->frontend.git_branch().git_branch_refresh();
+  return {branch.value, branch.changed};
+}
+
+std::pair<std::string, bool> TuiFrontEndFixture::workspace_root_metadata()
+{
+  auto workspace_root = impl_->frontend.directories().workspace_root_refresh();
+  return {workspace_root.value, workspace_root.changed};
+}
+
+std::pair<std::string, bool> TuiFrontEndFixture::current_directory_metadata()
+{
+  auto current_directory = impl_->frontend.directories().current_directory_refresh();
+  return {current_directory.value, current_directory.changed};
+}
+
+std::pair<std::string, bool> TuiFrontEndFixture::prompt_mode_metadata()
+{
+  auto mode = impl_->frontend.prompt_metadata().mode_refresh();
+  return {mode.value, mode.changed};
+}
+
+std::pair<std::string, bool> TuiFrontEndFixture::context_source_count_metadata()
+{
+  auto count = impl_->frontend.prompt_metadata().context_source_count_refresh();
+  return {count.value, count.changed};
+}
+
 void TuiFrontEndFixture::set_model(TuiTestModel model)
 {
   select_frontend_test_model(impl_->session, model);
+}
+
+void TuiFrontEndFixture::set_git_branch(std::string branch)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->git_branch().change([branch = std::move(branch)](std::string& canonical_branch) mutable { canonical_branch = std::move(branch); });
+}
+
+void TuiFrontEndFixture::set_directories(std::filesystem::path workspace_root, std::filesystem::path current_directory,
+                                         std::vector<std::filesystem::path> additional_writable_dirs)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  ava::app::runtime::Directories_ts::wat directories_w(session_w->directories());
+  directories_w->workspace_dir = std::move(workspace_root);
+  directories_w->current_dir = std::move(current_directory);
+  directories_w->additional_writable_dirs = std::move(additional_writable_dirs);
+}
+
+void TuiFrontEndFixture::set_prompt_metadata(ava::agent::Mode mode, std::size_t context_source_count)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->prompt_mode_and_context_sources().change([mode, context_source_count](ava::app::runtime::PromptModeAndContextSources& metadata) {
+    metadata.mode = mode;
+    metadata.context_sources.clear();
+    metadata.context_sources.resize(context_source_count);
+  });
 }
 
 // Update only context_window_tokens in the canonical model and notify the frontend numeric projection.
@@ -168,6 +224,59 @@ bool TuiFrontEndFixture::replace_session_with_active_token_estimates(std::size_t
     replacement_w->session_stats().change([history_tokens, system_prompt_tokens](ava::session::Stats& stats) {
       stats.active_context_tokens = history_tokens;
       stats.system_prompt_tokens = system_prompt_tokens;
+    });
+  }
+  return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
+}
+
+bool TuiFrontEndFixture::replace_session_with_git_branch(std::string branch)
+{
+  ava::app::runtime::OpenContext replacement_context;
+  {
+    ava::app::runtime::session_ts::crat session_r(impl_->session);
+    replacement_context = session_r->replacement_open_context({});
+  }
+  auto replacement = ava::app::runtime::Session::open(replacement_context, {.sessionless = true});
+  if (!replacement)
+    return false;
+  {
+    ava::app::runtime::session_ts::wat replacement_w(*replacement);
+    replacement_w->git_branch().change([branch = std::move(branch)](std::string& canonical_branch) mutable { canonical_branch = std::move(branch); });
+  }
+  return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
+}
+
+bool TuiFrontEndFixture::replace_session_with_directories(std::filesystem::path workspace_root, std::filesystem::path current_directory)
+{
+  std::filesystem::create_directories(workspace_root);
+  std::filesystem::create_directories(current_directory);
+  ava::app::runtime::OpenContext replacement_context;
+  {
+    ava::app::runtime::session_ts::crat session_r(impl_->session);
+    replacement_context = session_r->replacement_open_context({});
+  }
+  replacement_context.workspace_dir = std::move(workspace_root);
+  replacement_context.current_dir = std::move(current_directory);
+  auto replacement = ava::app::runtime::Session::open(replacement_context, {.sessionless = true});
+  return replacement && ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
+}
+
+bool TuiFrontEndFixture::replace_session_with_prompt_metadata(ava::agent::Mode mode, std::size_t context_source_count)
+{
+  ava::app::runtime::OpenContext replacement_context;
+  {
+    ava::app::runtime::session_ts::crat session_r(impl_->session);
+    replacement_context = session_r->replacement_open_context({});
+  }
+  auto replacement = ava::app::runtime::Session::open(replacement_context, {.sessionless = true});
+  if (!replacement)
+    return false;
+  {
+    ava::app::runtime::session_ts::wat replacement_w(*replacement);
+    replacement_w->prompt_mode_and_context_sources().change([mode, context_source_count](ava::app::runtime::PromptModeAndContextSources& metadata) {
+      metadata.mode = mode;
+      metadata.context_sources.clear();
+      metadata.context_sources.resize(context_source_count);
     });
   }
   return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();

@@ -262,7 +262,6 @@ struct SidebarSnapshot
   std::string session_id = {};
   std::string mode = {};
   std::string workspace = {};
-  std::string git_branch = {};
   std::string version = {};
   std::optional<std::size_t> context_source_count = std::nullopt;
   std::string session_path = {};

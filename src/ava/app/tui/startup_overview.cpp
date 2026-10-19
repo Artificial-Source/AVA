@@ -488,6 +488,7 @@ ava::tui::StartupOverviewSnapshot build_startup_overview_snapshot(runtime::sessi
   auto const& model = model_selection_r->model.display_name.empty() ? model_selection_r->model.model_id : model_selection_r->model.display_name;
   auto const trust_decision = std::string(to_string(trust.decision));
   auto const project_resources = project_resources_trusted(trust) ? std::string("enabled") : std::string("skipped");
+  auto const context_sources = session_r->context_sources();
   StartupOverviewBuildInput input{
       .mode = mode,
       .provider = provider,
@@ -495,7 +496,7 @@ ava::tui::StartupOverviewSnapshot build_startup_overview_snapshot(runtime::sessi
       .trust_decision = trust_decision,
       .project_resources = project_resources,
       .protected_resource_count = trust.protected_resources.size(),
-      .context_sources = session_r->context_sources(),
+      .context_sources = context_sources,
       .freshness_sources = session_r->freshness_sources(),
       .theme_name = theme.name,
       .theme_badge = theme.badge,

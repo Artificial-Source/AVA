@@ -3,6 +3,7 @@
 #include "BasePromptMetadata.h"
 #include "ContextSourceMetadata.h"
 #include "FreshnessSourceMetadata.h"
+#include "UnlockedData.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/agent/mode.h"
 
@@ -10,6 +11,16 @@
 #include <vector>
 
 namespace ava::app::runtime {
+
+struct PromptModeAndContextSources
+{
+  ava::agent::Mode mode = ava::agent::Mode::Build;
+  std::vector<ContextSourceMetadata> context_sources;
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
+using PromptModeAndContextSources_ts = UnlockedData<PromptModeAndContextSources>;
 
 // Resolved prompt state.
 //
@@ -20,17 +31,17 @@ namespace ava::app::runtime {
 // whenever the mode or model changes (see apply_prompt_state and
 // switch_model) and is otherwise the session's live resolved state.
 //
-// It is field-compatible with the transient PromptState returned by
-// load_runtime_prompt_state, which apply_prompt_state moves into this
-// member as a single object rather than copying fields one at a time.
+// PromptState material is applied in place so the nested observable object's
+// mutex, registration, and address survive session updates and replacement.
 struct ResolvedPromptState
 {
-  ava::agent::Mode mode = ava::agent::Mode::Build;
   BasePromptMetadata base_prompt;
-  std::vector<ContextSourceMetadata> context_sources;
   std::vector<FreshnessSourceMetadata> freshness_sources;
   std::string system_prompt;
   std::string ambient_extension_free_system_prompt;
+  // Keep observable prompt metadata last so its address remains stable while
+  // the surrounding resolved state is updated in place.
+  PromptModeAndContextSources_ts mode_and_context_sources;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

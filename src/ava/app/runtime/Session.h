@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Directories.h"
+#include "GitBranch.h"
 #include "InvocationInputs.h"
 #include "ModelSelection.h"
 #include "OpenContext.h"
@@ -60,9 +62,11 @@ struct Session_aggregate_base
 {
   // DO NOT USE any of these members outside of this file except with a designated initializer for Session.
   InvocationInputs invocation_inputs_;
+  Directories_ts directories_;
   ResolvedPromptState resolved_prompt_state_;
   ModelSelection_ts model_selection_;
   SessionStats_ts session_stats_;
+  GitBranch_ts git_branch_;
   TrustState trust_state_;
   SessionResources resources_;
 
@@ -180,14 +184,23 @@ class Session : protected Session_aggregate_base
   InvocationInputs& invocation_inputs() { return invocation_inputs_; }
   InvocationInputs const& invocation_inputs() const { return invocation_inputs_; }
 
+  Directories_ts& directories() { return directories_; }
+  Directories_ts const& directories() const { return directories_; }
+
   ResolvedPromptState& resolve_prompt_state() { return resolved_prompt_state_; }
   ResolvedPromptState const& resolve_prompt_state() const { return resolved_prompt_state_; }
+
+  PromptModeAndContextSources_ts& prompt_mode_and_context_sources() { return resolved_prompt_state_.mode_and_context_sources; }
+  PromptModeAndContextSources_ts const& prompt_mode_and_context_sources() const { return resolved_prompt_state_.mode_and_context_sources; }
 
   ModelSelection_ts& model_selection() { return model_selection_; }
   ModelSelection_ts const& model_selection() const { return model_selection_; }
 
   SessionStats_ts& session_stats() { return session_stats_; }
   SessionStats_ts const& session_stats() const { return session_stats_; }
+
+  GitBranch_ts& git_branch() { return git_branch_; }
+  GitBranch_ts const& git_branch() const { return git_branch_; }
 
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
@@ -196,8 +209,8 @@ class Session : protected Session_aggregate_base
   SessionResources const& resources() const { return resources_; }
 
   // Invocation inputs.
-  std::filesystem::path const& workspace_dir() const { return invocation_inputs_.workspace_dir; }
-  std::filesystem::path const& current_dir() const noexcept { return invocation_inputs_.current_dir; }
+  std::filesystem::path workspace_dir() const { return Directories_ts::crat(directories_)->workspace_dir; }
+  std::filesystem::path current_dir() const { return Directories_ts::crat(directories_)->current_dir; }
   ava::agent::ToolVisibilityOptions const& tool_visibility() const { return invocation_inputs_.tool_visibility; }
   std::optional<std::string> const& requested_primary_agent() const { return invocation_inputs_.requested_primary_agent; }
   std::optional<ava::agent::AgentDefinition> const& selected_primary_agent() const { return invocation_inputs_.selected_primary_agent; }
@@ -205,14 +218,17 @@ class Session : protected Session_aggregate_base
   bool sessionless() const { return invocation_inputs_.sessionless; }
 
   // Resolved prompt state.
-  ava::agent::Mode mode() const { return resolved_prompt_state_.mode; }
+  ava::agent::Mode mode() const { return PromptModeAndContextSources_ts::crat(resolved_prompt_state_.mode_and_context_sources)->mode; }
   BasePromptMetadata const& base_prompt() const { return resolved_prompt_state_.base_prompt; }
-  std::vector<ContextSourceMetadata> const& context_sources() const { return resolved_prompt_state_.context_sources; }
+  std::vector<ContextSourceMetadata> context_sources() const
+  {
+    return PromptModeAndContextSources_ts::crat(resolved_prompt_state_.mode_and_context_sources)->context_sources;
+  }
   std::vector<FreshnessSourceMetadata> const& freshness_sources() const { return resolved_prompt_state_.freshness_sources; }
   std::string const& system_prompt() const { return resolved_prompt_state_.system_prompt; }
   std::string const& ambient_extension_free_system_prompt() const { return resolved_prompt_state_.ambient_extension_free_system_prompt; }
   bool is_offline() const { return invocation_inputs_.is_offline_; }
-  std::vector<std::filesystem::path> const& additional_writable_dirs() const { return invocation_inputs_.additional_writable_dirs; }
+  std::vector<std::filesystem::path> additional_writable_dirs() const { return Directories_ts::crat(directories_)->additional_writable_dirs; }
   // Resolved once at open time and reused by every runtime history reader.
   ava::session::SessionReadLimits const& session_read_limits() const { return invocation_inputs_.session_read_limits; }
   PromptOverrides const& prompt_overrides() const { return invocation_inputs_.prompt_overrides; }

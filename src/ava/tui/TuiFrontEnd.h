@@ -1,7 +1,10 @@
 #pragma once
 
+#include "ava/app/frontend/Directories.h"
 #include "ava/app/frontend/FrontEnd.h"
+#include "ava/app/frontend/GitBranch.h"
 #include "ava/app/frontend/ModelSelection.h"
+#include "ava/app/frontend/PromptMetadata.h"
 #include "ava/app/frontend/SessionStats.h"
 
 // For OLD API
@@ -15,19 +18,17 @@ class TuiFrontEnd : public app::frontend::FrontEnd
 {
  private:
   app::frontend::ModelSelection model_selection_;
+  app::frontend::PromptMetadata prompt_metadata_;
   app::frontend::SessionStats session_stats_;
+  app::frontend::Directories directories_;
+  app::frontend::GitBranch git_branch_;
 
  public:
   // Explicitly connect session percentages to this frontend's model projection.
-  TuiFrontEnd() : model_selection_(this), session_stats_(this, &model_selection_) { }
+  TuiFrontEnd();
 
   // Implement virtual function of FrontEnd.
-  void initialize_frontend_state(app::runtime::session_ts::crat const& session_r) override
-  {
-    // Initialize our frontend state objects.
-    model_selection_.initialize(&session_r->model_selection());
-    session_stats_.initialize(&session_r->session_stats());
-  }
+  void initialize_frontend_state(app::runtime::session_ts::crat const& session_r) override;
 
   // Launch the terminal user interface (TUI) using runtime options `options`.
   // Called by ava::app::interactive_internal::run_tui after registering all frontend::Data objects.
@@ -43,8 +44,11 @@ class TuiFrontEnd : public app::frontend::FrontEnd
 
   app::frontend::ModelSelection& model_selection() { return model_selection_; }
   app::frontend::ModelSelection const& model_selection() const { return model_selection_; }
+  app::frontend::PromptMetadata& prompt_metadata() { return prompt_metadata_; }
   app::frontend::SessionStats& session_stats() { return session_stats_; }
   app::frontend::SessionStats const& session_stats() const { return session_stats_; }
+  app::frontend::Directories& directories() { return directories_; }
+  app::frontend::GitBranch& git_branch() { return git_branch_; }
 
   // OLD API
   [[nodiscard]] int run_interactive_composer(TuiRuntimeOptions options);

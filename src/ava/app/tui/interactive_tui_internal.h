@@ -30,7 +30,6 @@ struct TuiRequestPresentation
 };
 
 void append_status_line(std::string& target, std::string line);
-[[nodiscard]] std::string git_branch_for_sidebar(std::filesystem::path const& workspace);
 [[nodiscard]] std::vector<CommandHotkey> command_hotkeys_from_key_bindings(ava::tui::TuiKeyBindings const& key_bindings);
 [[nodiscard]] std::string display_theme_status(std::string_view prefix);
 [[nodiscard]] ava::tui::ProjectTrustSnapshot project_trust_snapshot(ProjectTrustState const& state);

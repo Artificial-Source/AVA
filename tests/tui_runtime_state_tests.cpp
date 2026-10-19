@@ -200,15 +200,12 @@ void test_tui_event_state_reduces_runtime_events()
   tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::TuiRuntimeOptions presentation_options;
   //  presentation_options.model = "GPT-5.5";
-  presentation_options.context_source_count = 2;
-  ava::tui::RuntimePresentationState presentation(presentation_options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), presentation_options);
   ava::tui::TuiRuntimeStateSnapshot runtime_state;
   //  runtime_state.model = "GPT-5.6";
-  runtime_state.context_source_count = 3;
   presentation.apply_runtime_state_snapshot(presentation_options, std::move(runtime_state));
-  expect(
-      presentation.snapshot.context_source_count == std::optional<std::size_t>{3} && presentation.sidebar.context_source_count == std::optional<std::size_t>{3},
-      "tui presentation refreshes runtime state while preserving sidebar source counts");
+  expect(!presentation.snapshot.context_source_count && !presentation.sidebar.context_source_count,
+         "runtime snapshot application leaves source-count presentation to the frontend display projection");
 
   ava::tui::TuiEventState state;
   apply_session_start(state, ava::core::Mode::Build, "openai", "gpt-5.5");
@@ -2161,6 +2158,7 @@ void test_tui_retry_activity_settles_and_restores_contextual_hint()
 
 void test_tui_todowrite_event_state_and_snapshot_hydration()
 {
+  tui_test_support::TuiFrontEndFixture frontend;
   auto const success_json =
       R"({"schema_version":1,"tool":"todowrite","ok":true,"todos":[{"id":"a","content":"First","status":"completed"},{"id":"b","content":"Second","status":"in_progress"},{"id":"c","content":"Third","status":"pending"}],"counts":{"total":3,"pending":1,"in_progress":1,"completed":1}})";
   auto make_todo_payload = [](std::string text, std::string call_id, std::string result_json, std::string status) {
@@ -2196,10 +2194,9 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
 
   ava::tui::TuiRuntimeOptions options;
   options.initial_todos = {ava::tui::TodoItem{.id = "seed", .content = "Hydrated", .status = ava::tui::TodoStatus::Pending}};
-  ava::tui::RuntimePresentationState presentation(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
   expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "runtime options hydrate sidebar todos at startup");
   ava::tui::TuiRuntimeStateSnapshot switched;
-  switched.mode = "build";
   //  switched.provider = "openai";
   //  switched.model = "gpt-5.5";
   switched.session_id = "session_b";

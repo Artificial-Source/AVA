@@ -117,12 +117,16 @@ target_sources(ava_app
     "runtime/Session.cpp"
     "runtime/ExtensionResourcePolicy.cpp"
     "runtime/FreshnessSourceMetadata.cpp"
+    "runtime/GitBranch.cpp"
     "runtime/markdown_files.cpp"
     "runtime/command_names.cpp"
     "frontend/Data.cxx"
+    "frontend/Directories.cxx"
     "frontend/FeedbackKey.cxx"
     "frontend/FrontEnd.cxx"
+    "frontend/GitBranch.cxx"
     "frontend/ModelSelection.cxx"
+    "frontend/PromptMetadata.cxx"
     "frontend/SessionStats.cxx"
 )
 

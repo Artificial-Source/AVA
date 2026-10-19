@@ -105,12 +105,9 @@ struct TuiActiveRunQueues
 
 struct TuiRuntimeStateSnapshot
 {
-  std::string mode;
   std::string session_id;
   std::string session_path;
   std::string workspace;
-  std::string git_branch;
-  std::optional<std::size_t> context_source_count = std::nullopt;
   std::string status;
   std::vector<SlashCommandItem> slash_commands = {};
   std::optional<std::size_t> slash_catalog_generation = std::nullopt;
@@ -158,7 +155,6 @@ struct TuiSubmitResult
   std::optional<TuiLocalCommandResult> local_command_result = std::nullopt;
   std::vector<std::string> conversation_output;
   std::vector<ToolTimelineItem> conversation_tool_timeline;
-  std::optional<std::size_t> context_source_count = std::nullopt;
   // Returned by submit workers so the TUI thread applies state changes before
   // accepting another prompt. This is intentionally distinct from command
   // output/status, which the TUI settles after rendering the completed turn.
@@ -294,13 +290,10 @@ struct TuiBranchSummarySnapshot
 
 struct TuiRuntimeOptions
 {
-  std::string mode;
   std::string session_id;
   std::string session_path;
   std::string workspace;
-  std::string git_branch;
   std::string app_version;
-  std::optional<std::size_t> context_source_count = std::nullopt;
   std::string initial_status = "";
   std::vector<TranscriptItem> initial_transcript = {};
   std::vector<SlashCommandItem> slash_commands = {};
