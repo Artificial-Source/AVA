@@ -30,14 +30,8 @@ class SessionStats
   bool percentage_recompute_pending_{true};
 
  private:
-  // Add active-history and system-prompt estimates without overflowing the signed projection.
-  static std::optional<long long> active_token_total(ava::session::SessionStats const& stats);
-
   // Format the exact total compactly for existing token-count presentation.
   static std::string token_count_display_str(std::optional<long long> total);
-
-  // Format context usage with one decimal, preserving very small positive usage and values above 100 percent.
-  static std::string percentage_display_str(std::optional<long long> total, std::optional<long long> context_window_tokens);
 
   // Copy one canonical stats snapshot under one lock and retain pending display changes until consumed.
   void refresh();

@@ -1,13 +1,14 @@
 #pragma once
 
-#include "BasePromptMetadata.h"
-#include "ContextSourceMetadata.h"
-#include "FreshnessSourceMetadata.h"
-#include "OpenContext.h"
+#include "InvocationInputs.h"
 #include "ModelSelection.h"
+#include "OpenContext.h"
 #include "PromptOverrides.h"
 #include "ReasoningSelection.h"
+#include "ResolvedPromptState.h"
 #include "SessionLifecycleRequest.h"
+#include "SessionResources.h"
+#include "TrustState.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/UnlockedData.h"
@@ -47,114 +48,6 @@ class SubagentDeliveryManager;
 namespace ava::app::runtime {
 
 struct PromptState;
-
-// Invocation inputs.
-//
-// Mirrors of OpenContext describing how this session was opened. None of
-// these are restored from the store on resume; each is sourced from the
-// OpenContext of the current process invocation.
-//
-struct InvocationInputs
-{
-  std::filesystem::path workspace_dir;
-  std::filesystem::path current_dir;
-  // Invocation-requested visibility is retained separately so a replacement can re-resolve primary policy from the original CLI boundary.
-  ava::agent::ToolVisibilityOptions requested_tool_visibility = {};
-  ava::agent::ToolVisibilityOptions tool_visibility = {};
-  // Keep bounded selection intent separately from the currently permitted, provenance-carrying definition.
-  std::optional<std::string> requested_primary_agent = std::nullopt;
-  std::optional<ava::agent::AgentDefinition> selected_primary_agent = std::nullopt;
-  ava::config::XdgPaths paths;
-  bool sessionless;
-  bool is_offline_ = false;
-  // Additional writable directories beyond workspace_dir (e.g., user-configured paths).
-  // These are opened as anchor descriptors at startup and made available to tools via ToolContext::anchor_set.
-  std::vector<std::filesystem::path> additional_writable_dirs = {};
-  // Resolved once at open time and reused by every runtime history reader.
-  ava::session::SessionReadLimits session_read_limits = ava::session::legacy_unbounded_session_read_limits();
-  PromptOverrides prompt_overrides = {};
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Resolved prompt state.
-//
-// The agent mode and assembled prompt material currently in effect for the
-// session: base-prompt metadata, contributing context and freshness sources,
-// the ordinary system prompt, and its ambient-extension-free runtime variant.
-// This whole bundle is recomputed
-// whenever the mode or model changes (see apply_prompt_state and
-// switch_model) and is otherwise the session's live resolved state.
-//
-// It is field-compatible with the transient PromptState returned by
-// load_runtime_prompt_state, which apply_prompt_state moves into this
-// member as a single object rather than copying fields one at a time.
-struct ResolvedPromptState
-{
-  ava::agent::Mode mode = ava::agent::Mode::Build;
-  BasePromptMetadata base_prompt;
-  std::vector<ContextSourceMetadata> context_sources;
-  std::vector<FreshnessSourceMetadata> freshness_sources;
-  std::string system_prompt;
-  std::string ambient_extension_free_system_prompt;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Trust state.
-//
-// The project trust decision loaded for this session. Mutated when the user
-// adjusts trust (/trust commands); otherwise stable for the session lifetime.
-struct TrustState
-{
-  ProjectTrustState project_trust;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Session resources.
-//
-// Process-held live infrastructure bound to this process: the cross-process
-// lease, pre-opened anchor descriptors, the run controller and append target,
-// the bound read authority for detached capsules, and the shared
-// application-scoped services (subagent coordinator/delivery, title
-// coordinator, diagnostics, MCP config). These cannot round-trip through
-// disk; the three app-scoped services are rebound by Session::replace_with
-// and mcp_config is set once at ACP session setup.
-struct SessionResources
-{
-  // Persistent runtime owners hold a cross-process lease for the complete session lifetime.
-  ava::session::SessionLease lease;
-  // One generated session owner, when explicit application process authority
-  // was supplied. Copies representing this same runtime session share it.
-  std::optional<ava::process::ProcessScopeV1> session_process_scope = std::nullopt;
-  // Pre-opened anchor descriptors for all writable directories. Opened once
-  // at session creation and shared across all prompts and subagent loops.
-  std::shared_ptr<ava::core::AnchorSet> anchor_set = nullptr;
-  std::shared_ptr<SessionRunController> run_controller = nullptr;
-  // Immutable append target bound into the controller-owned serialized routes.
-  // Tests and retained runtime capsules may inspect/copy it, but mutations flow
-  // through the controller so append failures remain latched.
-  std::shared_ptr<ava::session::SessionAppendTarget> append_target = nullptr;
-  // Detached retained capsules bind reads to the exact original leased inode
-  // without reacquiring the pathname. Ordinary visible sessions leave this
-  // empty and derive an authority from their owned lease.
-  std::optional<ava::session::SessionReadAuthority> bound_read_authority = std::nullopt;
-  // Shared application process state. Direct coordinator injection remains a
-  // compatibility seam; production sessions use the delivery manager.
-  std::shared_ptr<ava::agent::SubagentCoordinator> subagent_coordinator = nullptr;
-  std::shared_ptr<ava::app::SubagentDeliveryManager> subagent_delivery_manager = nullptr;
-  std::shared_ptr<ava::app::SessionTitleCoordinator> session_title_coordinator = nullptr;
-  std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics = nullptr;
-  // Null uses normal global/project discovery; non-null is immutable session-local MCP composition.
-  std::shared_ptr<ava::mcp::McpConfig const> mcp_config = nullptr;
-  // Exact application-scoped provider catalog pinned for this session's lifetime.
-  std::shared_ptr<ava::provider::ProviderCatalog const> provider_catalog = nullptr;
-
-  void swap(SessionResources& other);
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
 
 // Old aggregate for Session.
 // This class holds members that are still initialized by a designated initializer list.

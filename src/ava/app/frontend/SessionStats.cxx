@@ -10,9 +10,9 @@
 
 namespace ava::app::frontend {
 
+namespace {
 // Add active-history and system-prompt estimates without overflowing the signed projection.
-//static
-std::optional<long long> SessionStats::active_token_total(ava::session::SessionStats const& stats)
+std::optional<long long> active_token_total(ava::session::SessionStats const& stats)
 {
   if (!stats.active_context_tokens || !stats.system_prompt_tokens)
     return std::nullopt;
@@ -24,6 +24,23 @@ std::optional<long long> SessionStats::active_token_total(ava::session::SessionS
   auto const maximum_display = std::numeric_limits<long long>::max();
   return size_total > static_cast<std::size_t>(maximum_display) ? maximum_display : static_cast<long long>(size_total);
 }
+
+// Format context usage with one decimal, preserving very small positive usage and values above 100 percent.
+std::string percentage_display_str(std::optional<long long> total, std::optional<long long> context_window_tokens)
+{
+  if (!total || !context_window_tokens || *context_window_tokens <= 0)
+    return "unknown";
+  if (*total == 0)
+    return "0.0%";
+  long double const percentage = static_cast<long double>(*total) * 100.0L / static_cast<long double>(*context_window_tokens);
+  if (percentage < 0.1L)
+    return "<0.1%";
+  std::ostringstream output;
+  output << std::fixed << std::setprecision(1) << percentage << '%';
+  return output.str();
+}
+
+} // namespace
 
 // Format the exact total compactly for existing token-count presentation.
 //static
@@ -43,22 +60,6 @@ std::string SessionStats::token_count_display_str(std::optional<long long> total
     return output.str();
   };
   return *total < 1'000'000 ? format_scaled(*total / 100, 'k') : format_scaled(*total / 100'000, 'M');
-}
-
-// Format context usage with one decimal, preserving very small positive usage and values above 100 percent.
-//static
-std::string SessionStats::percentage_display_str(std::optional<long long> total, std::optional<long long> context_window_tokens)
-{
-  if (!total || !context_window_tokens || *context_window_tokens <= 0)
-    return "unknown";
-  if (*total == 0)
-    return "0.0%";
-  long double const percentage = static_cast<long double>(*total) * 100.0L / static_cast<long double>(*context_window_tokens);
-  if (percentage < 0.1L)
-    return "<0.1%";
-  std::ostringstream output;
-  output << std::fixed << std::setprecision(1) << percentage << '%';
-  return output.str();
 }
 
 // Copy one canonical stats snapshot under one lock and retain pending display changes until consumed.
