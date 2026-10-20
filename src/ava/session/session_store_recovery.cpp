@@ -342,7 +342,7 @@ ava::core::Result<std::optional<std::filesystem::path>> SessionStore::recover_to
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "ephemeral sessions do not support torn tail recovery"));
   if (auto valid_limits = validate_read_limits(limits); !valid_limits)
     return std::unexpected(std::move(valid_limits.error()));
-  if (auto valid_session_id = validate_session_id(options_.session_id); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
     return std::unexpected(std::move(valid_session_id.error()));
   if (lease.fd_ < 0 || lease.canonical_path_.empty())
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "torn tail recovery requires an active session lease"));
@@ -817,7 +817,7 @@ ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> SessionStore::re
   }
   if (auto valid_limits = validate_read_limits(limits); !valid_limits)
     return std::unexpected(std::move(valid_limits.error()));
-  if (auto valid_session_id = validate_session_id(options_.session_id); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
     return std::unexpected(std::move(valid_session_id.error()));
   if (!lease.active() || lease.canonical_path_.empty())
   {

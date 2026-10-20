@@ -439,7 +439,7 @@ ava::core::Result<std::vector<SessionEntry>> SessionStore::load() const
         observation->account_external_failure();
     }
   }
-  if (auto valid_session_id = validate_session_id(options_.session_id); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
   {
     return std::unexpected(std::move(valid_session_id.error()));
   }
@@ -514,7 +514,7 @@ ava::core::VoidResult SessionStore::visit_entries(SessionReadLimits limits, Sess
     return valid;
   if (!visitor)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session entry visitor is required"));
-  if (auto valid_session_id = validate_session_id(options_.session_id); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
     return valid_session_id;
 
   if (ephemeral_state_)
@@ -553,7 +553,7 @@ ava::core::VoidResult SessionStore::visit_entries_leased(SessionLease const& lea
     return valid;
   if (!visitor)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session entry visitor is required"));
-  if (auto valid_session_id = validate_session_id(options_.session_id); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
     return valid_session_id;
   if (ephemeral_state_)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "lease-bound reads require a persistent session store"));

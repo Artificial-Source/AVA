@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <sys/stat.h>
@@ -22,6 +23,56 @@ namespace session_tests {
 void test_session_store_round_trip()
 {
   auto const root = create_empty_root("test_session_store_round_trip");
+
+  static_assert(std::is_copy_constructible_v<ava::session::SessionStore>);
+  static_assert(std::is_copy_assignable_v<ava::session::SessionStore>);
+  static_assert(std::is_move_constructible_v<ava::session::SessionStore>);
+  static_assert(std::is_move_assignable_v<ava::session::SessionStore>);
+
+  // Explicit store special members must preserve historical shared attachments while every store
+  // owns a distinct options wrapper and assignment retains the destination wrapper's stable address.
+  auto copy_source_result = ava::session::SessionStore::create_ephemeral(root / "copy-source");
+  expect(copy_source_result.has_value(), "ephemeral copy source creates");
+  if (copy_source_result)
+  {
+    ava::session::SessionStore copy_source = std::move(*copy_source_result);
+    auto appended = copy_source.append_ephemeral(
+        {.id = "shared-entry", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "2026-04-27T00:00:00Z", .data_json = "{}"});
+    ava::session::SessionStore copied(copy_source);
+    auto copied_entries = copied.load();
+    expect(appended && copied_entries && copied_entries->size() == 1 && copied_entries->front().id == "shared-entry",
+           "copy construction retains shared ephemeral state");
+    expect(&copied.options() != &copy_source.options(), "copy construction creates a distinct options wrapper");
+    expect(copied.session_id() == copy_source.session_id(), "copy construction snapshots the protected options value");
+
+    auto detached = copy_source.detached_copy_for_background_persistence();
+    expect(&detached.options() != &copy_source.options() && detached.session_id() == copy_source.session_id(),
+           "background persistence copy has a fresh options wrapper with the same value");
+
+    ava::session::SessionStore assigned(ava::session::SessionStoreOptions{.root_dir = root, .workspace_dir = root, .session_id = "assignment-destination"});
+    auto* assigned_options_address = &assigned.options();
+    assigned = copy_source;
+    auto assigned_entries = assigned.load();
+    expect(&assigned.options() == assigned_options_address && assigned.session_id() == copy_source.session_id(),
+           "copy assignment preserves the destination options wrapper address and copies its value");
+    expect(assigned_entries && assigned_entries->size() == 1, "copy assignment retains shared ephemeral state");
+
+    ava::session::SessionStore moved(std::move(copied));
+    expect(moved.session_id() == copy_source.session_id(), "move construction transfers unregistered wrapped options");
+    assigned_options_address = &assigned.options();
+    assigned = std::move(moved);
+    assigned_entries = assigned.load();
+    expect(&assigned.options() == assigned_options_address && assigned.session_id() == copy_source.session_id(),
+           "move assignment preserves the destination options wrapper address and transfers its value");
+    expect(assigned_entries && assigned_entries->size() == 1, "move assignment retains transferred shared ephemeral state");
+
+    std::string guarded_session_id;
+    {
+      auto assigned_options_r = std::as_const(assigned).options_r();
+      guarded_session_id = assigned_options_r->session_id;
+    }
+    expect(guarded_session_id == assigned.session_id(), "const options accessor supports guarded wrapper reads");
+  }
 
   auto store = ava::session::SessionStore::create(std::filesystem::current_path(), root);
   expect(store.has_value(), "session store creates");

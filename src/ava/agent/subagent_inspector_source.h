@@ -49,7 +49,8 @@ class SubagentLiveInspectionSource final
   struct Impl;
   explicit SubagentLiveInspectionSource(std::unique_ptr<Impl> impl);
 
-  [[nodiscard]] std::string const& session_id() const noexcept;
+  // Return an owned identity because the authority's wrapped store options are guard-protected.
+  [[nodiscard]] std::string session_id() const;
   [[nodiscard]] bool is_ephemeral() const noexcept;
   // Persistent: exact fstat(2) of the owned lease FD. Ephemeral: append-only
   // in-memory tip summary under the store entries lock. The coordinator rejects

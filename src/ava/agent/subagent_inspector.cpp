@@ -56,7 +56,7 @@ ava::core::Result<std::shared_ptr<SubagentLiveInspectionSource>> SubagentLiveIns
   }
 }
 
-std::string const& SubagentLiveInspectionSource::session_id() const noexcept
+std::string SubagentLiveInspectionSource::session_id() const
 {
   return impl_->authority.session_id();
 }

@@ -248,10 +248,9 @@ std::uint64_t hash_tip(std::string_view id, std::string_view timestamp, std::siz
 
 }  // namespace
 
-std::string const& SessionReadAuthority::session_id() const noexcept
+std::string SessionReadAuthority::session_id() const
 {
-  static std::string const kEmpty;
-  return state_ ? state_->store.session_id() : kEmpty;
+  return state_ ? state_->store.session_id() : std::string{};
 }
 
 bool SessionReadAuthority::is_ephemeral() const noexcept

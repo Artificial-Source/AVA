@@ -1,6 +1,8 @@
 #pragma once
 
+#include "sys.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/frontend/UnlockedData.h"
 #include "ava/observability/trace_context.h"
 #include "ava/session/assistant_output.h"
 #include "ava/core/result.h"
@@ -85,6 +87,10 @@ struct SessionStoreOptions
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
+
+// Store options use a separately lockable frontend-data wrapper so future registration can observe
+// options changes without exposing the wrapper's protected value or moving its registered address.
+using SessionStoreOptions_ts = ava::frontend::UnlockedData<SessionStoreOptions>;
 
 struct SessionReadLimits
 {
@@ -207,10 +213,26 @@ class SessionStore
 {
  public:
   explicit SessionStore(SessionStoreOptions options);
+  // Copies retain the store's historically shared ephemeral and observation attachments, while
+  // constructing a fresh, unregistered options wrapper for the copied store.
+  SessionStore(SessionStore const& other);
+  SessionStore& operator=(SessionStore const& other);
+  // Moves follow UnlockedData's address contract: construction requires an unregistered source,
+  // while assignment preserves the destination options wrapper and any future registration.
+  SessionStore(SessionStore&& other);
+  SessionStore& operator=(SessionStore&& other);
 
-  [[nodiscard]] std::string const& session_id() const noexcept;
+  // Copy the session ID under the options lock so the result remains valid after replacement.
+  [[nodiscard]] std::string session_id() const;
   [[nodiscard]] std::filesystem::path session_path() const;
   [[nodiscard]] bool is_ephemeral() const noexcept;
+
+  // Narrow wrapper access supports future frontend registration while requiring guarded value access.
+  [[nodiscard]] SessionStoreOptions_ts& options() { return options_; }
+  [[nodiscard]] SessionStoreOptions_ts const& options() const { return options_; }
+
+  // Acquire read access to the options; retain this guard while using references into the value.
+  [[nodiscard]] SessionStoreOptions_ts::crat options_r() const { return SessionStoreOptions_ts::crat{options_}; }
 
   // Observation is non-authoritative and never serialized into session JSONL.
   // Copies of a store share this attachment. A generation lets a finished stale
@@ -323,7 +345,7 @@ class SessionStore
   [[nodiscard]] ava::core::VoidResult append_impl(SessionLease const* lease, SessionEntry const& entry, bool append_serialization_held = false);
   explicit SessionStore(SessionStoreOptions options, std::shared_ptr<EphemeralState> ephemeral_state);
 
-  SessionStoreOptions options_;
+  SessionStoreOptions_ts options_;
   std::shared_ptr<EphemeralState> ephemeral_state_;
   std::shared_ptr<ObservationAttachment> observation_attachment_;
   std::function<void()> before_append_identity_check_for_test_;
@@ -378,7 +400,8 @@ class SessionReadAuthority
   [[nodiscard]] static ava::core::Result<SessionReadAuthority> create_ephemeral(SessionStore const& store,
                                                                                 SessionReadLimits limits = legacy_unbounded_session_read_limits());
 
-  [[nodiscard]] std::string const& session_id() const noexcept;
+  // Return an owned identity because the wrapped store cannot expose options storage past its guard.
+  [[nodiscard]] std::string session_id() const;
   [[nodiscard]] bool is_ephemeral() const noexcept;
   [[nodiscard]] bool active() const noexcept;
   // Persistent fingerprints are fstat(2) of the owned lease descriptor only.
