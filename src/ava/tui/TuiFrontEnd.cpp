@@ -45,7 +45,7 @@ void TuiFrontEnd::data_changed(frontend::DataListIndex index)
   {
     prompt_metadata_.dirty();
   }
-  else if (dynamic_cast<app::runtime::SessionStats_ts const*>(data) != nullptr)
+  else if (dynamic_cast<session::Stats_ts const*>(data) != nullptr)
   {
     session_stats_.dirty();
   }

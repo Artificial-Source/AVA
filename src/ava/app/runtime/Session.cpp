@@ -622,7 +622,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                                                 .mode = context.mode, .context_sources = std::move(prompt_state->context_sources)}};
   ModelSelection_ts model_selection(
       ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
-  SessionStats_ts session_stats;
+  session::Stats_ts session_stats;
   GitBranch_ts git_branch(observe_git_branch(workspace_dir));
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
@@ -724,7 +724,7 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                 // Copy the model selection without inheriting the source object's frontend registration.
                                 .model_selection_ = ModelSelection_ts{*model_selection_r()},
                                 // Copy statistics, including both context estimates, without inheriting frontend registration.
-                                .session_stats_ = SessionStats_ts{*session_stats_r()},
+                                .session_stats_ = session::Stats_ts{*session_stats_r()},
                                 // Copy the branch without inheriting the source object's frontend registration.
                                 .git_branch_ = GitBranch_ts{*GitBranch_ts::crat(git_branch())},
                                 .trust_state_ = trust_state(),

@@ -10,7 +10,6 @@
 #include "ResolvedPromptState.h"
 #include "SessionLifecycleRequest.h"
 #include "SessionResources.h"
-#include "SessionStats.h"
 #include "TrustState.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
@@ -64,7 +63,7 @@ struct Session_aggregate_base
   Directories_ts directories_;
   ResolvedPromptState resolved_prompt_state_;
   ModelSelection_ts model_selection_;
-  SessionStats_ts session_stats_;
+  session::Stats_ts session_stats_;
   GitBranch_ts git_branch_;
   TrustState trust_state_;
   SessionResources resources_;
@@ -195,8 +194,8 @@ class Session : protected Session_aggregate_base
   ModelSelection_ts& model_selection() { return model_selection_; }
   ModelSelection_ts const& model_selection() const { return model_selection_; }
 
-  SessionStats_ts& session_stats() { return session_stats_; }
-  SessionStats_ts const& session_stats() const { return session_stats_; }
+  session::Stats_ts& session_stats() { return session_stats_; }
+  session::Stats_ts const& session_stats() const { return session_stats_; }
 
   GitBranch_ts& git_branch() { return git_branch_; }
   GitBranch_ts const& git_branch() const { return git_branch_; }
@@ -236,7 +235,7 @@ class Session : protected Session_aggregate_base
   ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
 
   // Return read-access type for the canonical session statistics.
-  SessionStats_ts::crat session_stats_r() const { return SessionStats_ts::crat{session_stats_}; }
+  session::Stats_ts::crat session_stats_r() const { return session::Stats_ts::crat{session_stats_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }

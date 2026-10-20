@@ -507,7 +507,7 @@ void test_app_runtime_process_scope_lifecycle()
     if (duplicate && authority)
     {
       auto detached = first_r->create_detached_state(std::move(*duplicate), std::move(*authority), first_r->subagent_delivery_manager());
-      ava::app::runtime::SessionStats_ts::crat detached_stats_r(detached.session_stats_);
+      ava::session::Stats_ts::crat detached_stats_r(detached.session_stats_);
       ava::app::runtime::Directories_ts::crat detached_directories_r(detached.directories_);
       ava::app::runtime::Directories_ts::crat source_directories_r(first_r->directories());
       ava::app::runtime::GitBranch_ts::crat detached_branch_r(detached.git_branch_);
