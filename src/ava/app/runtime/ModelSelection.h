@@ -28,6 +28,6 @@ struct ModelSelection
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-using ModelSelection_ts = UnlockedData<ModelSelection>;
+using ModelSelection_ts = frontend::UnlockedData<ModelSelection>;
 
 } // namespace ava::app::runtime

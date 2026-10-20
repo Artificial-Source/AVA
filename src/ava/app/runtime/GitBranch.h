@@ -8,7 +8,7 @@
 
 namespace ava::app::runtime {
 
-using GitBranch_ts = UnlockedData<std::string>;
+using GitBranch_ts = frontend::UnlockedData<std::string>;
 
 // Read the workspace's textual Git HEAD. Returns an empty string when HEAD is unavailable.
 [[nodiscard]] std::string observe_git_branch(std::filesystem::path const& workspace);

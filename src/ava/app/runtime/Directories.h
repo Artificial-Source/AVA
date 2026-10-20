@@ -17,6 +17,6 @@ struct Directories
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-using Directories_ts = UnlockedData<Directories>;
+using Directories_ts = frontend::UnlockedData<Directories>;
 
 } // namespace ava::app::runtime

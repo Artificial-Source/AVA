@@ -20,7 +20,7 @@ struct PromptModeAndContextSources
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-using PromptModeAndContextSources_ts = UnlockedData<PromptModeAndContextSources>;
+using PromptModeAndContextSources_ts = frontend::UnlockedData<PromptModeAndContextSources>;
 
 // Resolved prompt state.
 //

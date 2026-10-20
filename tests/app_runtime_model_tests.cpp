@@ -72,7 +72,7 @@ class CallbackFrontEnd final : public ava::app::frontend::FrontEnd
 
 void test_unlocked_data_access_and_notifications()
 {
-  using data_type = ava::app::runtime::UnlockedData<std::string>;
+  using data_type = ava::app::frontend::UnlockedData<std::string>;
   static_assert(std::derived_from<data_type::wat, data_type::rat>);
   static_assert(std::derived_from<data_type::wat, data_type::crat>);
   static_assert(std::move_constructible<data_type::wat>);

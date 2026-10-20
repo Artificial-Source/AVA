@@ -7,11 +7,8 @@
 #include <utility>
 #include "debug.h"
 
-namespace ava::app {
-namespace frontend {
+namespace ava::app::frontend {
 class FrontEnd;
-} // namespace frontend
-namespace runtime {
 
 // Moving an object derived from an `UnlockedData` must behave as follows:
 //
@@ -76,7 +73,7 @@ namespace runtime {
 //   });
 
 template<typename T>
-class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPolicy<T>>, public frontend::Data
+class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPolicy<T>>, public Data
 {
  public:
   using policy_type = detail::PrimitiveDataPolicy<T>;
@@ -88,8 +85,8 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
   // Construct an UnlockedData object in its final place; this registers the object with `frontend`.
   // Passing nullptr for `frontend` is reserved for application modes that don't have a frontend at all.
   template<typename... Args>
-  UnlockedData(frontend::FrontEnd* frontend, Args&&... args) :
-    unlocked_type(std::forward<Args>(args)...), frontend::Data(frontend)
+  UnlockedData(FrontEnd* frontend, Args&&... args) :
+    unlocked_type(std::forward<Args>(args)...), Data(frontend)
   {
   }
 
@@ -98,7 +95,7 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
 
   // Construct an unregistered object from value-constructor arguments.
   template<typename FirstArg, typename... Rest>
-  requires (!std::is_convertible_v<FirstArg&&, frontend::FrontEnd*>)
+  requires (!std::is_convertible_v<FirstArg&&, FrontEnd*>)
   UnlockedData(FirstArg&& first, Rest&&... rest) :
     unlocked_type(std::forward<FirstArg>(first), std::forward<Rest>(rest)...)
   {
@@ -122,7 +119,7 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
 #ifdef CWDEBUG
   void print_on(std::ostream& os) const
   {
-    os << static_cast<frontend::Data const&>(*this) << "@" << (void*)static_cast<unlocked_type const*>(this);
+    os << static_cast<Data const&>(*this) << "@" << (void*)static_cast<unlocked_type const*>(this);
   }
 #endif
 
@@ -155,7 +152,7 @@ UnlockedData<T>::UnlockedData(UnlockedData&& orig) :
   unlocked_type(std::move(as_unlocked(orig)))
 {
   // Move-construct from a registered object is not allowed.
-  ASSERT(!static_cast<frontend::Data const&>(orig).is_registered());
+  ASSERT(!static_cast<Data const&>(orig).is_registered());
 }
 
 template<typename T>
@@ -177,5 +174,4 @@ UnlockedData<T>& UnlockedData<T>::operator=(UnlockedData&& orig)
   return *this;
 }
 
-} // namespace runtime
-} // namespace ava::app
+} // namespace ava::app::frontend
