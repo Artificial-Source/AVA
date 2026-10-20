@@ -85,7 +85,7 @@ ava::core::VoidResult AgentTurnExecutor::initialize_tools()
                               .skill_project_dirs = tool_resources.skill_project_dirs,
                               .include_global_skills = tool_resources.include_global_skills,
                               .include_project_skills = tool_resources.include_project_resources,
-                              .session_id = store_.session_id(),
+                              .session_id = store_.options_r()->session_id,
                               .provider_id = options_.model.provider_id,
                               .model_id = options_.model.model_id,
                               .current_dir = options_.current_dir.empty() ? options_.workspace_dir : options_.current_dir});

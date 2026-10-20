@@ -1240,7 +1240,7 @@ struct BranchSummaryCoordinator::Impl
 
     {
       auto source = ava::session::SessionStore::open(work.request.workspace_dir, work.request.source_session_id, work.request.root_dir);
-      if (!source || !source_path_matches(work.request, *source) || source->session_id() != work.request.source_session_id)
+      if (!source || !source_path_matches(work.request, *source) || source->options_r()->session_id != work.request.source_session_id)
         return ineligible(BranchSummaryEligibilityCode::SourceUnavailable, "the selected source session could not be opened exactly");
       auto lease = ava::session::SessionLease::acquire(source->session_path());
       if (!lease)
@@ -1269,7 +1269,7 @@ struct BranchSummaryCoordinator::Impl
 
       // Consent is bound to these exact bounded bytes and semantic range, not
       // to inode metadata. No entry or payload copy leaves this scope.
-      work.prepared_source_session_id = source->session_id();
+      work.prepared_source_session_id = source->options_r()->session_id;
       work.prepared_source_path = ava::core::normalized_absolute_path(source->session_path());
       work.prepared_fingerprint = snapshot->fingerprint;
       work.prepared_fork_entry_id = relation.fork_entry_id;
@@ -1311,7 +1311,7 @@ struct BranchSummaryCoordinator::Impl
     publish_phase(work, BranchSummaryPhase::Generating, "recovering and generating abandoned parent context");
 
     auto source = ava::session::SessionStore::open(work.request.workspace_dir, work.request.source_session_id, work.request.root_dir);
-    if (!source || !source_path_matches(work.request, *source) || source->session_id() != work.prepared_source_session_id ||
+    if (!source || !source_path_matches(work.request, *source) || source->options_session_id_copy() != work.prepared_source_session_id ||
         work.request.source_session_id != work.prepared_source_session_id ||
         ava::core::normalized_absolute_path(source->session_path()) != work.prepared_source_path ||
         ava::core::normalized_absolute_path(work.request.source_session_path) != work.prepared_source_path)
@@ -1882,7 +1882,7 @@ ava::core::Result<BranchSummaryOperationRequest> make_branch_summary_operation_r
         return std::unexpected(std::move(duplicated_lease.error()));
       lease.emplace(std::move(*duplicated_lease));
     }
-    return RuntimeProjection{.current_session_id = session_r->store.session_id(),
+    return RuntimeProjection{.current_session_id = session_r->store.options_session_id_copy(),
                              .workspace_dir = session_r->workspace_dir(),
                              .paths = session_r->paths(),
                              .session_read_limits = session_r->session_read_limits(),

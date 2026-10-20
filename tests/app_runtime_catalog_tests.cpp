@@ -71,7 +71,7 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
     ++session_tree_builds;
     auto current_snapshot = [&] {
       SCOPED_CRITICAL_AREA_CR(current_r, unlocked_current);
-      return std::tuple{current_r->store.session_id(), current_r->store.session_path().string()};
+      return std::tuple{current_r->store.options_session_id_copy(), current_r->store.session_path().string()};
     }();
     auto const& [current_session_id, current_session_path] = current_snapshot;
     ava::session::SessionTreeIndex tree;
@@ -90,7 +90,7 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
   };
 
   auto cache = ava::app::build_application_catalog_cache(unlocked_session, {}, workspace_walker, tree_builder);
-  auto const session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
+  auto const session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
   auto const projected_slash_commands = ava::app::project_slash_command_items(cache.slash_commands);
   auto const* read_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/read");
   auto const* sessions_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/sessions");
@@ -309,7 +309,7 @@ void test_application_catalog_current_session_incremental_refresh()
   if (!unlocked_session_result || !other)
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
-  auto const session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
+  auto const session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
   auto const append_target = ava::app::runtime::session_ts::rat(unlocked_session)->append_target();
 
   std::size_t workspace_walks = 0;
@@ -367,7 +367,7 @@ void test_application_catalog_current_session_incremental_refresh()
   auto successful_tree_builder = [&](ava::app::runtime::session_ts const& unlocked_current) {
     ++topology_build_calls;
     SCOPED_CRITICAL_AREA_CR(current_r, unlocked_current);
-    return ava::session::build_session_tree(current_r->workspace_dir(), current_r->paths().sessions_dir, current_r->store.session_id());
+    return ava::session::build_session_tree(current_r->workspace_dir(), current_r->paths().sessions_dir, current_r->store.options_r()->session_id);
   };
   auto const captured_before_topology = ava::app::SessionTitleCatalogChanges{.cursor = 8, .dirty_session_ids = {"old_session_dirty_before_switch"}};
   auto topology_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_session, captured_before_topology, {}, successful_tree_builder);

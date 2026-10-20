@@ -875,7 +875,7 @@ void test_live_inspection_missing_mismatch_owner_and_prepublication()
   if (!matched_child)
     return;
   auto started = coordinator->start_background(
-      "parent_a", {.child_session_id = matched_child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "owner"); },
+      "parent_a", {.child_session_id = matched_child->store.options_r()->session_id}, [worker](auto const& context) { return worker->run(context, "owner"); },
       matched_child->source);
   expect(started && worker->wait_started(), "owner isolation fixture starts");
   if (!started)
@@ -903,7 +903,7 @@ void test_live_inspection_generation_freeze_and_lifecycle()
 
   auto worker = std::make_shared<BlockingWorker>();
   auto started = coordinator->start_background(
-      "parent_freeze", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "final summary"); },
+      "parent_freeze", {.child_session_id = child->store.options_r()->session_id}, [worker](auto const& context) { return worker->run(context, "final summary"); },
       child->source);
   expect(started && worker->wait_started(), "freeze fixture starts running job");
   if (!started)
@@ -956,7 +956,7 @@ void test_live_inspection_generation_freeze_and_lifecycle()
   if (!immediate_coordinator)
     return;
   auto immediate = immediate_coordinator->start_background(
-      "parent_immediate", {.child_session_id = immediate_child->store.session_id()},
+      "parent_immediate", {.child_session_id = immediate_child->store.options_r()->session_id},
       [](auto const&) {
         return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
       },
@@ -977,7 +977,7 @@ void test_live_inspection_generation_freeze_and_lifecycle()
   auto promote_worker = std::make_shared<BlockingWorker>();
   auto gate = ava::agent::SubagentInteractionGate::create(ava::agent::SubagentJobMode::Foreground, nullptr, nullptr);
   auto promoted_start = coordinator->start(
-      "parent_promote", ava::agent::SubagentJobMode::Foreground, {.child_session_id = promote_child->store.session_id()},
+      "parent_promote", ava::agent::SubagentJobMode::Foreground, {.child_session_id = promote_child->store.options_r()->session_id},
       [promote_worker](auto const& context) { return promote_worker->run(context); }, gate, promote_child->source);
   expect(promoted_start && promote_worker->wait_started(), "promote inspect fixture starts");
   if (!promoted_start)
@@ -998,7 +998,7 @@ void test_live_inspection_generation_freeze_and_lifecycle()
     return;
   auto shutdown_worker = std::make_shared<BlockingWorker>();
   auto shutdown_start = coordinator->start_background(
-      "parent_shutdown_src", {.child_session_id = shutdown_child->store.session_id()},
+      "parent_shutdown_src", {.child_session_id = shutdown_child->store.options_r()->session_id},
       [shutdown_worker](auto const& context) { return shutdown_worker->run(context); }, shutdown_child->source);
   expect(shutdown_start && shutdown_worker->wait_started(), "shutdown source fixture starts");
   if (!shutdown_start)
@@ -1035,7 +1035,7 @@ void test_live_inspection_deterministic_stale_inflight_race()
     return;
   auto worker = std::make_shared<BlockingWorker>();
   auto started = coordinator->start_background(
-      "parent_race", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "race-done"); },
+      "parent_race", {.child_session_id = child->store.options_r()->session_id}, [worker](auto const& context) { return worker->run(context, "race-done"); },
       child->source);
   expect(started && worker->wait_started(), "deterministic race fixture starts");
   if (!started)
@@ -1115,7 +1115,7 @@ void test_live_inspection_monotonic_concurrent_publish_race()
     return;
   auto worker = std::make_shared<BlockingWorker>();
   auto started = coordinator->start_background(
-      "parent_mono_race", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "mono-done"); },
+      "parent_mono_race", {.child_session_id = child->store.options_r()->session_id}, [worker](auto const& context) { return worker->run(context, "mono-done"); },
       child->source);
   expect(started && worker->wait_started(), "monotonic race fixture starts");
   if (!started)
@@ -1216,7 +1216,7 @@ void test_live_inspection_two_client_lost_response_and_sink()
     return;
   auto worker = std::make_shared<BlockingWorker>();
   auto started = coordinator->start_background(
-      "parent_two_client", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "done"); },
+      "parent_two_client", {.child_session_id = child->store.options_r()->session_id}, [worker](auto const& context) { return worker->run(context, "done"); },
       child->source);
   expect(started && worker->wait_started(), "two-client fixture starts");
   if (!started)
@@ -1271,7 +1271,7 @@ void test_live_inspection_path_free_refresh_failures()
     return;
   auto worker = std::make_shared<BlockingWorker>();
   auto started = coordinator->start_background(
-      "parent_path_free", {.child_session_id = child->store.session_id()}, [worker](auto const& context) { return worker->run(context, "x"); }, child->source);
+      "parent_path_free", {.child_session_id = child->store.options_r()->session_id}, [worker](auto const& context) { return worker->run(context, "x"); }, child->source);
   expect(started && worker->wait_started(), "path-free fixture starts");
   if (!started)
     return;
@@ -1305,7 +1305,7 @@ void test_live_inspection_path_free_refresh_failures()
     return;
   auto over_worker = std::make_shared<BlockingWorker>();
   auto over_started = coordinator->start_background(
-      "parent_over_cap", {.child_session_id = over_child->store.session_id()}, [over_worker](auto const& context) { return over_worker->run(context, "x"); },
+      "parent_over_cap", {.child_session_id = over_child->store.options_r()->session_id}, [over_worker](auto const& context) { return over_worker->run(context, "x"); },
       over_child->source);
   expect(over_started && over_worker->wait_started(), "over-cap fixture starts");
   if (!over_started)
@@ -1360,7 +1360,7 @@ void test_live_inspection_eviction_and_freeze_failure()
     // Foreground/direct terminal jobs are retention-eligible immediately, so the
     // hard cap can drop older sources without delivery-ack choreography.
     auto started = coordinator->start(
-        parent, ava::agent::SubagentJobMode::Foreground, {.child_session_id = child.store.session_id()},
+        parent, ava::agent::SubagentJobMode::Foreground, {.child_session_id = child.store.options_r()->session_id},
         [](auto const&) {
           return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "done", .stop_reason = "completed"};
         },
@@ -1396,7 +1396,7 @@ void test_live_inspection_eviction_and_freeze_failure()
     return;
   auto fail_worker = std::make_shared<BlockingWorker>();
   auto fail_started = failure_coordinator->start_background(
-      "parent_fail", {.child_session_id = fail_child->store.session_id()}, [fail_worker](auto const& context) { return fail_worker->run(context, "x"); },
+      "parent_fail", {.child_session_id = fail_child->store.options_r()->session_id}, [fail_worker](auto const& context) { return fail_worker->run(context, "x"); },
       fail_child->source);
   expect(fail_started && fail_worker->wait_started(), "freeze-failure fixture starts");
   if (!fail_started)
@@ -1428,7 +1428,7 @@ void test_live_inspection_eviction_and_freeze_failure()
     corrupt << "{this is not a session record}\n";
   }
   auto bare_started = bare_coordinator->start_background(
-      "parent_bare", {.child_session_id = bare_child->store.session_id()},
+      "parent_bare", {.child_session_id = bare_child->store.options_r()->session_id},
       [](auto const&) {
         return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "x", .stop_reason = "completed"};
       },

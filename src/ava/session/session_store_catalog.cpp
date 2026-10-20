@@ -68,7 +68,7 @@ ava::core::Result<SessionStore> SessionStore::open(std::filesystem::path const& 
   if (!opened)
   {
     auto error = std::move(opened.error());
-    error.with_context("session_id", store.session_id());
+    error.with_context("session_id", store.options_r()->session_id);
     return std::unexpected(std::move(error));
   }
   ScopedFd snapshot_fd(opened->first);

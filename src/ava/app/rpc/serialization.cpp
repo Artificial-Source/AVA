@@ -682,7 +682,7 @@ std::string context_sources_json(runtime::session_ts const& unlocked_session)
 namespace detail {
 
 MessagesResultSerializer::MessagesResultSerializer(utils::Badge<runtime::Session>, runtime::Session const& session) // `runtime::Session const&` is allowed here.
-    : session_(session), prefix_("{" + string_field_json("session_id", session.store.session_id()) + ",\"messages\":[")
+    : session_(session), prefix_("{" + string_field_json("session_id", session.store.options_r()->session_id) + ",\"messages\":[")
 {
 }
 
@@ -841,7 +841,7 @@ std::string SessionResultSerializer::state_result_json(bool cancel_requested) co
   json += "\"protocol_version\":";
   json += std::to_string(kRpcProtocolVersion);
   json += ',';
-  json += string_field_json("session_id", session_.store.session_id());
+  json += string_field_json("session_id", session_.store.options_r()->session_id);
   json += ',';
   json += string_field_json("session_path", session_.store.session_path().string());
   json += ',';
@@ -919,7 +919,7 @@ ava::core::Result<std::string> SessionResultSerializer::list_sessions_result_jso
 
 ava::core::Result<std::string> SessionResultSerializer::session_tree_result_json() const
 {
-  auto tree = ava::session::build_session_tree(session_.workspace_dir(), session_.paths().sessions_dir, session_.store.session_id());
+  auto tree = ava::session::build_session_tree(session_.workspace_dir(), session_.paths().sessions_dir, session_.store.options_r()->session_id);
   if (!tree)
     return std::unexpected(std::move(tree.error()));
   std::string json = "{";
@@ -1027,7 +1027,7 @@ ava::core::Result<std::string> SessionResultSerializer::session_stats_result_jso
   auto const& stats = *stats_result;
 
   std::string json = "{";
-  json += string_field_json("session_id", session_.store.session_id());
+  json += string_field_json("session_id", session_.store.options_r()->session_id);
   json += ',';
   json += string_field_json("session_path", session_.store.session_path().string());
   json += ',';
@@ -1144,7 +1144,7 @@ ava::core::Result<std::string> SessionResultSerializer::session_validation_resul
   auto const validation = ava::session::validate_session_replay(*entries);
 
   std::string json = "{";
-  json += string_field_json("session_id", session_.store.session_id());
+  json += string_field_json("session_id", session_.store.options_r()->session_id);
   json += ',';
   json += string_field_json("session_path", session_.store.session_path().string());
   json += ',';

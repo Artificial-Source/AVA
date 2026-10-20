@@ -72,7 +72,7 @@ ava::core::VoidResult SessionStore::remove_created_file(SessionLease const& leas
 {
   if (ephemeral_state_)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "ephemeral sessions do not have a persistent file to remove"));
-  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(options_r()->session_id); !valid_session_id)
     return valid_session_id;
   if (lease.fd_ < 0 || lease.canonical_path_.empty())
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "created session cleanup requires an active session lease"));

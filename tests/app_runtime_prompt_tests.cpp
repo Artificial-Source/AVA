@@ -1002,7 +1002,7 @@ void test_workspace_revocation_retires_retained_sessions_transactionally()
   {
     SCOPED_CRITICAL_AREA_R(session_r, *session_a);
     controller_a = session_r->run_controller();
-    session_a_id = session_r->store.session_id();
+    session_a_id = session_r->store.options_r()->session_id;
     stale_owner_route = session_r->owner_append_route_1();
     expect(session_r->system_prompt().find(kProjectCanary) != std::string::npos &&
                session_r->ambient_extension_free_system_prompt().find(kProjectCanary) != std::string::npos,
@@ -1135,7 +1135,7 @@ void test_app_run_prompt_sources_private_launch_display_from_runtime_invocation(
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  auto const session_id = session_w->store.session_id();
+  auto const session_id = session_w->store.options_r()->session_id;
 
   auto task_response = [](std::string_view call_id) {
     return ava::http::HttpResponse{.status_code = 200,
@@ -1661,7 +1661,7 @@ void test_app_run_prompt_observation_shares_context_across_compaction_and_retry(
   std::ifstream session_file(session_w->store.session_path(), std::ios::binary);
   std::string session_json((std::istreambuf_iterator<char>(session_file)), std::istreambuf_iterator<char>());
   auto messages_json = session_w->messages_result_json();
-  auto prompt_json = ava::app::rpc::prompt_result_json(session_w->store.session_id(), *result);
+  auto prompt_json = ava::app::rpc::prompt_result_json(session_w->store.options_r()->session_id, *result);
   auto state_json = session_w->state_result_json_1(false);
   auto has_observer_fields = [](std::string_view json) {
     return json.find("agent.run_start") != std::string_view::npos || json.find("transport.attempt_result") != std::string_view::npos ||

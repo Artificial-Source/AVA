@@ -151,7 +151,7 @@ void test_app_runtime_open_session_and_context_prompt()
                (*entries)[0].data_json.find("\"context_sources\":3") != std::string::npos,
            "runtime session appends session_start on creation");
 
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
   }
   ava::app::runtime::OpenContext reopen_context;
   reopen_context.workspace_dir = workspace;
@@ -171,7 +171,7 @@ void test_app_runtime_open_session_and_context_prompt()
   if (unlocked_reopened_result)
   {
     SCOPED_CRITICAL_AREA_R(reopened_r, *unlocked_reopened_result);
-    expect(!reopened_r->created && reopened_r->store.session_id() == session_id,
+    expect(!reopened_r->created && reopened_r->store.options_r()->session_id == session_id,
            "runtime session resolves requested session id prefixes without creating a new session");
     auto reopened_entries = reopened_r->store.load();
     expect(reopened_entries && reopened_entries->size() == 1, "runtime reopened session does not append another session_start");
@@ -228,7 +228,7 @@ void test_app_runtime_preserves_legacy_subagent_job_tree()
            "real runtime session constructs its application coordinator and delivery manager against the seeded XDG state root");
     auto coordinator = session_w->subagent_coordinator();
     auto manager = session_w->subagent_delivery_manager();
-    std::string session_id = session_w->store.session_id();
+    std::string session_id = session_w->store.options_r()->session_id;
     CRITICAL_AREA_END_W(session);
 
     auto started = coordinator->start(session_id, ava::agent::SubagentJobMode::Foreground, {.child_session_id = "child_runtime_legacy"}, [](auto const&) {
@@ -363,7 +363,7 @@ void test_app_runtime_no_session_mode()
   expect(listed && listed->empty(), "runtime no-session mode does not appear in persisted session listings");
 
   auto requested_result = ava::app::runtime::Session::open(open_context, {.sessionless = true,
-                                                                          .requested_session_id = session_w->store.session_id(),
+                                                                          .requested_session_id = session_w->store.options_r()->session_id,
                                                                           .fork_session_id = std::nullopt,
                                                                           .initial_session_name = std::nullopt,
                                                                           .continue_last_session = false,
@@ -607,7 +607,7 @@ void test_app_runtime_session_startup_options()
 
     expect(unlocked_named_result.has_value() && named_r->created, "runtime opens a named startup session");
 
-    named_session_id = named_r->store.session_id();
+    named_session_id = named_r->store.options_r()->session_id;
     auto named_metadata = ava::session::load_session_metadata(named_r->store);
     expect(named_metadata && named_metadata->name == "named startup" && named_metadata->actor == "cli", "runtime startup --name records session metadata");
     named_entries = named_r->store.load();
@@ -634,7 +634,7 @@ void test_app_runtime_session_startup_options()
     auto custom_sessions = ava::session::SessionStore::list_sessions(workspace, custom_paths.sessions_dir);
     expect(default_sessions && default_sessions->size() == 1 && default_sessions->front().session_id == named_session_id,
            "runtime custom session directory leaves default session listing unchanged");
-    expect(custom_sessions && custom_sessions->size() == 1 && custom_sessions->front().session_id == custom_r->store.session_id(),
+    expect(custom_sessions && custom_sessions->size() == 1 && custom_sessions->front().session_id == custom_r->store.options_r()->session_id,
            "runtime custom session directory has its own session listing");
   }
 
@@ -670,7 +670,7 @@ void test_app_runtime_session_startup_options()
   if (unlocked_forked_result)
   {
     SCOPED_CRITICAL_AREA_R(forked_r, *unlocked_forked_result);
-    expect(forked_r->created && forked_r->store.session_id() != named_session_id, "runtime --fork creates a new session from a source prefix");
+    expect(forked_r->created && forked_r->store.options_r()->session_id != named_session_id, "runtime --fork creates a new session from a source prefix");
     auto fork_metadata = ava::session::load_session_metadata(forked_r->store);
     expect(fork_metadata && fork_metadata->name == "forked startup" && fork_metadata->parent_session_id == named_session_id &&
                fork_metadata->source_session_id == named_session_id && fork_metadata->branch_origin == "fork" && fork_metadata->actor == "cli" &&
@@ -778,7 +778,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
     std::filesystem::path session_path;
     {
       SCOPED_CRITICAL_AREA_R(seeded_r, *unlocked_seeded_result);
-      session_id = seeded_r->store.session_id();
+      session_id = seeded_r->store.options_r()->session_id;
       session_path = seeded_r->store.session_path();
     }
     auto const valid_bytes = app_read_binary_file(session_path);
@@ -803,7 +803,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
       SCOPED_CRITICAL_AREA_R(resumed_r, *unlocked_resumed_result);
       auto loaded = unlocked_resumed_result ? resumed_r->store.load()
                                             : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(unlocked_resumed_result.error()));
-      expect(unlocked_resumed_result && resumed_r->store.session_id() == session_id && loaded && loaded->size() == 1 &&
+      expect(unlocked_resumed_result && resumed_r->store.options_r()->session_id == session_id && loaded && loaded->size() == 1 &&
                  app_read_binary_file(session_path) == valid_bytes,
              "runtime " + mode + " resume acquires the lease, quarantines the torn tail, and then loads validated history");
     }
@@ -827,7 +827,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
   std::filesystem::path source_path;
   {
     SCOPED_CRITICAL_AREA_R(source_r, *unlocked_source_result);
-    source_id = source_r->store.session_id();
+    source_id = source_r->store.options_r()->session_id;
     source_path = source_r->store.session_path();
   }
   auto const valid_source_bytes = app_read_binary_file(source_path);
@@ -887,7 +887,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
   std::filesystem::path byte_limited_path;
   {
     SCOPED_CRITICAL_AREA_R(byte_limited_r, *unlocked_byte_limited_seed_result);
-    byte_limited_id = byte_limited_r->store.session_id();
+    byte_limited_id = byte_limited_r->store.options_r()->session_id;
     byte_limited_path = byte_limited_r->store.session_path();
   }
   auto byte_limited_bytes = app_read_binary_file(byte_limited_path);
@@ -921,7 +921,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
   std::filesystem::path entry_limited_path;
   {
     SCOPED_CRITICAL_AREA_W(entry_limited_w, *unlocked_entry_limited_seed_result);
-    entry_limited_id = entry_limited_w->store.session_id();
+    entry_limited_id = entry_limited_w->store.options_r()->session_id;
     entry_limited_path = entry_limited_w->store.session_path();
     auto appended_entry = entry_limited_w->append_owned(ava::session::SessionEntry{.id = "bounded_second_entry",
                                                                                    .parent_id = "",
@@ -971,7 +971,7 @@ void test_app_runtime_reconciles_committed_function_calls_on_resume()
   std::string session_id;
   {
     SCOPED_CRITICAL_AREA_R(seeded_r, *unlocked_seeded_result);
-    session_id = seeded_r->store.session_id();
+    session_id = seeded_r->store.options_r()->session_id;
   }
   auto function = [](std::string id, std::string call_id, std::size_t sequence) {
     auto data = ava::session::serialize_assistant_output_item_data_json(ava::session::AssistantOutputItem{
@@ -1104,7 +1104,7 @@ void test_app_runtime_reconciles_committed_function_calls_on_resume()
                                                                                                                     .usage_json = std::nullopt});
   {
     SCOPED_CRITICAL_AREA_W(zero_result_w, *unlocked_zero_result_seed_result);
-    zero_result_session_id = zero_result_w->store.session_id();
+    zero_result_session_id = zero_result_w->store.options_r()->session_id;
     auto zero_committed = zero_result_w->append_owned(function("zero-result-function", "zero-result-call", 0));
     zero_committed = zero_committed ? zero_result_w->append_owned(ava::session::SessionEntry{.id = "zero-result-commit",
                                                                                              .parent_id = "",
@@ -1153,7 +1153,7 @@ void test_app_runtime_reconciles_committed_function_calls_on_resume()
   ava::core::VoidResult invalid_result;
   {
     SCOPED_CRITICAL_AREA_W(invalid_w, *unlocked_invalid_seed_result);
-    invalid_session_id = invalid_w->store.session_id();
+    invalid_session_id = invalid_w->store.options_r()->session_id;
     invalid_session_path = invalid_w->store.session_path();
     invalid_committed = invalid_w->append_owned(function("invalid-window-function", "invalid-window-call", 0));
     invalid_committed = invalid_committed ? invalid_w->append_owned(ava::session::SessionEntry{.id = "invalid-window-commit",

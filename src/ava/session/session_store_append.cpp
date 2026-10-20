@@ -261,7 +261,7 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
         observation->account_external_failure();
     }
   }
-  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(options_r()->session_id); !valid_session_id)
     return valid_session_id;
   if (entry.data_json.empty() || entry.data_json.front() != '{' || entry.data_json.back() != '}')
   {

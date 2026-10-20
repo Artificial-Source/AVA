@@ -225,7 +225,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
 
   auto const run_controller_copy = session_r->run_controller();
 
-  std::string const session_id_copy = session_r->store.session_id();
+  std::string const session_id_copy = session_r->store.options_r()->session_id;
   std::string const provider_id_copy = session_r->model_selection_r()->model.provider_id;
   bool const offline_copy = session_r->is_offline() || options.offline;
 

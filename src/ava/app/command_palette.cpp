@@ -414,7 +414,7 @@ void add_backend_argument_completions(std::vector<SlashCommandCatalogItem>& item
                       session_r->workspace_dir(),
                       project_resources_trusted(session_r->project_trust()),
                       session_r->subagent_coordinator(),
-                      session_r->store.session_id(),
+                      session_r->store.options_r()->session_id,
                       session_r->anchor_set(),
                       session_r->context_sources()};
   }();
@@ -798,7 +798,7 @@ ava::core::Result<ava::session::SessionTreeIndex> build_current_session_tree(run
     return session_tree_builder(unlocked_session);
   auto [workspace_dir, sessions_dir, session_id] = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->workspace_dir(), session_r->paths().sessions_dir, session_r->store.session_id()};
+    return std::tuple{session_r->workspace_dir(), session_r->paths().sessions_dir, session_r->store.options_r()->session_id};
   }();
   return ava::session::build_session_tree(workspace_dir, sessions_dir, session_id);
 }
@@ -959,7 +959,7 @@ ava::core::Result<bool> ApplicationCatalogCoordinator::refresh_current_session_d
 {
   auto [authority, session_id, session_path] = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    return std::tuple{session_r->read_authority_1(), session_r->store.session_id(), session_r->store.session_path()};
+    return std::tuple{session_r->read_authority_1(), session_r->store.options_session_id_copy(), session_r->store.session_path()};
   }();
   if (!authority)
     return std::unexpected(std::move(authority.error()));
@@ -1005,7 +1005,7 @@ ava::core::Result<bool> ApplicationCatalogCoordinator::refresh_title_changes(run
   if (changes.dirty_session_ids.empty())
     return false;
 
-  auto const current_session_id = runtime::session_ts::crat(unlocked_session)->store.session_id();
+  auto const current_session_id = runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id;
   auto const needs_full_rebuild =
       std::ranges::any_of(changes.dirty_session_ids, [&](std::string const& session_id) { return session_id != current_session_id; });
   if (needs_full_rebuild)

@@ -222,8 +222,6 @@ class SessionStore
   SessionStore(SessionStore&& other);
   SessionStore& operator=(SessionStore&& other);
 
-  // Copy the session ID under the options lock so the result remains valid after replacement.
-  [[nodiscard]] std::string session_id() const;
   [[nodiscard]] std::filesystem::path session_path() const;
   [[nodiscard]] bool is_ephemeral() const noexcept;
 
@@ -233,6 +231,9 @@ class SessionStore
 
   // Acquire read access to the options; retain this guard while using references into the value.
   [[nodiscard]] SessionStoreOptions_ts::crat options_r() const { return SessionStoreOptions_ts::crat{options_}; }
+
+  // Return the session_id by value.
+  [[nodiscard]] std::string options_session_id_copy() const { return options_r()->session_id; }
 
   // Observation is non-authoritative and never serialized into session JSONL.
   // Copies of a store share this attachment. A generation lets a finished stale

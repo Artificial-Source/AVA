@@ -49,7 +49,7 @@ ava::core::Result<CommandResult> run_branch_command(runtime::session_ts& unlocke
     // Branch creation receives a pointer to the source lease, so this critical area must span the
     // synchronous branch snapshot. Opening and installing the resulting session happen outside it.
     SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-    source_session_id = session_w->store.session_id();
+    source_session_id = session_w->store.options_r()->session_id;
     if (session_w->sessionless())
     {
       add_output(result, "Cannot branch a sessionless session.");
@@ -80,7 +80,7 @@ ava::core::Result<CommandResult> run_branch_command(runtime::session_ts& unlocke
     return std::unexpected(std::move(branched.error()));
   }
 
-  auto const created_session_id = branched->store.session_id();
+  auto const created_session_id = branched->store.options_r()->session_id;
   auto const resolved_branch_from_entry_id = branched->branch_from_entry_id;
   auto unlocked_opened_result = runtime::Session::open_owned(owned_options, branched->store, branched->lease, true);
   if (!unlocked_opened_result)
@@ -96,7 +96,7 @@ ava::core::Result<CommandResult> run_branch_command(runtime::session_ts& unlocke
   }
   if (auto replaced = runtime::Session::replace_with(unlocked_session, *unlocked_opened_result); !replaced)
     return std::unexpected(std::move(replaced.error()));
-  switched_session_id = runtime::session_ts::rat(unlocked_session)->store.session_id();
+  switched_session_id = runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
 
   result.session_tree_changed = true;
   auto const mode_text = mode == ava::session::SessionBranchMode::Clone ? std::string("cloned") : std::string("forked");
@@ -131,7 +131,7 @@ ava::core::Result<CommandResult> run_new_session_command(runtime::session_ts& un
   auto previous_session_title = std::string("Untitled session");
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    previous_session_id = session_r->store.session_id();
+    previous_session_id = session_r->store.options_r()->session_id;
     if (auto metadata = session_r->load_metadata(); metadata && !metadata->effective_title().empty())
       previous_session_title = sanitize_inline_text(metadata->effective_title());
   }
@@ -145,7 +145,7 @@ ava::core::Result<CommandResult> run_new_session_command(runtime::session_ts& un
   std::string created_session_id;
   {
     SCOPED_CRITICAL_AREA_W(opened_w, *unlocked_opened_result);
-    created_session_id = opened_w->store.session_id();
+    created_session_id = opened_w->store.options_r()->session_id;
     if (!trimmed_name.empty())
     {
       auto metadata =
@@ -183,7 +183,7 @@ ava::core::Result<CommandResult> run_resume_command(runtime::session_ts& unlocke
 
   if (auto replaced = runtime::Session::replace_with(unlocked_session, *unlocked_opened_result); !replaced)
     return std::unexpected(std::move(replaced.error()));
-  add_output(result, "resumed session " + runtime::session_ts::rat(unlocked_session)->store.session_id());
+  add_output(result, "resumed session " + runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id);
   return result;
 }
 

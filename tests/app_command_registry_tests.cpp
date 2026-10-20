@@ -245,7 +245,7 @@ void test_builtin_session_alias_registers_as_current_stats_command()
   auto invalid_wait = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/jobs wait job_missing nope"});
   auto const job_snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::pair{session_r->subagent_coordinator(), session_r->store.session_id()};
+    return std::pair{session_r->subagent_coordinator(), session_r->store.options_r()->session_id};
   }();
   auto active_wait = ava::app::run_jobs_command(job_snapshot.first, job_snapshot.second, "wait job_missing 10", true);
   auto active_result = ava::app::run_jobs_command(job_snapshot.first, job_snapshot.second, "result job_missing", true);
@@ -271,7 +271,7 @@ void test_interactive_jobs_human_output_keeps_public_json_contract()
   auto unlocked_session = open_test_session(root, workspace);
   auto const session_snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::pair{session_r->subagent_coordinator(), session_r->store.session_id()};
+    return std::pair{session_r->subagent_coordinator(), session_r->store.options_r()->session_id};
   }();
   auto const& [coordinator, session_id] = session_snapshot;
   expect(coordinator != nullptr, "interactive jobs human-output test requires a coordinator");
@@ -602,7 +602,7 @@ void test_jobs_command_reads_owned_session_history_after_reopen_path()
     ava::agent::SessionAppendSink owner;
     {
       SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-      session_id = session_r->store.session_id();
+      session_id = session_r->store.options_r()->session_id;
       owner = session_r->owner_append_route_1();
     }
     ava::session::SubagentJobHistoryRecord completed;
@@ -651,7 +651,7 @@ void test_jobs_command_reads_owned_session_history_after_reopen_path()
   {
     SCOPED_CRITICAL_AREA_R(session_r, *reopened);
     coordinator = session_r->subagent_coordinator();
-    expect(session_r->store.session_id() == session_id, "reopen keeps the exact session identity");
+    expect(session_r->store.options_r()->session_id == session_id, "reopen keeps the exact session identity");
   }
   expect(coordinator && coordinator->list(session_id).empty(), "reopen uses a fresh empty coordinator and does not rehydrate jobs");
   auto listed = ava::app::run_command(*reopened, ava::app::CommandRequest{.command = "/jobs list"});
@@ -839,7 +839,7 @@ void test_jobs_live_cancel_survives_historical_read_failure()
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     coordinator = session_r->subagent_coordinator();
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
     owner = session_r->owner_append_route_1();
   }
   expect(coordinator && owner, "read-failure fixture has coordinator and owner append");
@@ -885,7 +885,7 @@ void test_jobs_active_run_binding_overlays_captured_history()
   ava::agent::SessionAppendSink owner;
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
     owner = session_r->owner_append_route_1();
   }
   ava::session::SubagentJobHistoryRecord completed;

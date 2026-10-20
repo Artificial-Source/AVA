@@ -101,13 +101,13 @@ void test_app_session_jsonl_import_export_portable_attachments()
                                                        .timestamp = "2026-05-02T00:00:00Z",
                                                        .data_json = "{\"mode\":\"build\",\"provider\":\"openai\",\"model\":\"gpt-5.5\"}"};
   write_import_entries(workspace / "nonportable-attachment.jsonl", {import_start, attached_entry});
-  auto const session_before_nonportable_import = session_w->store.session_id();
+  auto const session_before_nonportable_import = session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(session);
   auto nonportable_import = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/import nonportable-attachment.jsonl --confirm"});
   CRITICAL_AREA_CONTINUE_W(session);
   expect(nonportable_import && nonportable_import->handled && !nonportable_import->output.empty() &&
              nonportable_import->output[0].find("non-redacted image attachment metadata") != std::string::npos &&
-             session_w->store.session_id() == session_before_nonportable_import,
+             session_w->store.options_r()->session_id == session_before_nonportable_import,
          "direct non-portable attachment references remain rejected rather than creating dangling bytes");
 
   CRITICAL_AREA_END_W(session);
@@ -224,7 +224,7 @@ void test_app_session_branch_commands()
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
 
-  auto const source_session_id = session_w->store.session_id();
+  auto const source_session_id = session_w->store.options_r()->session_id;
   auto seed = session_w->append_owned(ava::session::SessionEntry{.id = "entry_branch_seed",
                                                                  .parent_id = "",
                                                                  .type = ava::session::EntryType::UserMessage,
@@ -241,7 +241,7 @@ void test_app_session_branch_commands()
   CRITICAL_AREA_END_W(session);
   auto forked = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/fork Review branch"});
   CRITICAL_AREA_CONTINUE_W(session);
-  auto const fork_session_id = session_w->store.session_id();
+  auto const fork_session_id = session_w->store.options_r()->session_id;
   auto fork_metadata = ava::session::load_session_metadata(session_w->store);
   expect(forked && forked->handled && !forked->output.empty() && fork_session_id != source_session_id &&
              forked->output[0].find("forked session " + fork_session_id) != std::string::npos &&
@@ -264,7 +264,7 @@ void test_app_session_branch_commands()
   CRITICAL_AREA_END_W(session);
   auto cloned = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/clone Full copy"});
   CRITICAL_AREA_CONTINUE_W(session);
-  auto const clone_session_id = session_w->store.session_id();
+  auto const clone_session_id = session_w->store.options_r()->session_id;
   auto clone_metadata = ava::session::load_session_metadata(session_w->store);
   auto clone_entries = session_w->store.load();
   expect(cloned && cloned->handled && !cloned->output.empty() && clone_session_id != fork_session_id &&
@@ -362,21 +362,21 @@ void test_app_session_fork_from_entry_and_user_turns()
   expect(!oversized_copy, "user-turn clipboard path rejects payloads above the existing 64 KiB OSC 52 bound without truncation");
 
   CRITICAL_AREA_CONTINUE_W(session);
-  auto const source_session_id = session_w->store.session_id();
+  auto const source_session_id = session_w->store.options_r()->session_id;
   auto listed_before = ava::session::SessionStore::list_sessions(workspace, paths.sessions_dir);
   CRITICAL_AREA_END_W(session);
   auto invalid = ava::app::run_fork_command(unlocked_session, "Bad cut", "entry_does_not_exist");
   CRITICAL_AREA_CONTINUE_W(session);
   auto listed_after_invalid = ava::session::SessionStore::list_sessions(workspace, paths.sessions_dir);
   expect(!invalid && invalid.error().category() == ava::core::ErrorCategory::NotFound &&
-             invalid.error().message().find("branch source entry not found") != std::string::npos && session_w->store.session_id() == source_session_id &&
+             invalid.error().message().find("branch source entry not found") != std::string::npos && session_w->store.options_r()->session_id == source_session_id &&
              listed_before && listed_after_invalid && listed_after_invalid->size() == listed_before->size(),
          "invalid branch_from_entry_id fails closed without replacing the current session or leaking a created session");
 
   CRITICAL_AREA_END_W(session);
   auto tip_fork = ava::app::run_fork_command(unlocked_session, "Tip fork", {});
   CRITICAL_AREA_CONTINUE_W(session);
-  auto const tip_session_id = session_w->store.session_id();
+  auto const tip_session_id = session_w->store.options_r()->session_id;
   auto tip_metadata = ava::session::load_session_metadata(session_w->store);
   auto tip_entries = session_w->store.load();
   expect(tip_fork && tip_fork->handled && tip_session_id != source_session_id && tip_metadata && tip_metadata->branch_from_entry_id == "entry_assistant_c" &&
@@ -388,14 +388,14 @@ void test_app_session_fork_from_entry_and_user_turns()
   CRITICAL_AREA_END_W(session);
   auto resumed_source = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/resume " + source_session_id});
   CRITICAL_AREA_CONTINUE_W(session);
-  expect(resumed_source && resumed_source->handled && session_w->store.session_id() == source_session_id,
+  expect(resumed_source && resumed_source->handled && session_w->store.options_r()->session_id == source_session_id,
          "fork-from-entry test resumes the original source before the explicit cut");
 
   // Prove the picker-selected earlier id (not the tip / latest user turn) reaches the branch path.
   CRITICAL_AREA_END_W(session);
   auto cut_fork = ava::app::run_fork_command(unlocked_session, "Cut fork", earlier_entry_id);
   CRITICAL_AREA_CONTINUE_W(session);
-  auto const cut_session_id = session_w->store.session_id();
+  auto const cut_session_id = session_w->store.options_r()->session_id;
   auto cut_metadata = ava::session::load_session_metadata(session_w->store);
   auto cut_entries = session_w->store.load();
   expect(cut_fork && cut_fork->handled && cut_session_id != source_session_id && cut_session_id != tip_session_id && cut_metadata &&
@@ -447,11 +447,11 @@ void test_app_session_fork_from_entry_and_user_turns()
              sessionless_fork_guard.error().message().find("/copy user") != std::string::npos,
          "sessionless /fork-from fails closed before picker open with an actionable persistent-session error");
   CRITICAL_AREA_CONTINUE_W(ephemeral);
-  auto const ephemeral_id_before = ephemeral_w->store.session_id();
+  auto const ephemeral_id_before = ephemeral_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(ephemeral);
   auto sessionless_fork = ava::app::run_fork_command(unlocked_ephemeral, {}, "ephemeral_user");
   CRITICAL_AREA_CONTINUE_W(ephemeral);
-  expect(sessionless_fork && sessionless_fork->handled && !sessionless_fork->session_tree_changed && ephemeral_w->store.session_id() == ephemeral_id_before &&
+  expect(sessionless_fork && sessionless_fork->handled && !sessionless_fork->session_tree_changed && ephemeral_w->store.options_r()->session_id == ephemeral_id_before &&
              !sessionless_fork->output.empty() && sessionless_fork->output[0].find("sessionless") != std::string::npos,
          "sessionless run_fork_command remains a non-switching handled result that must not be treated as an opened snapshot");
   auto boundary_text = std::string(ava::app::kMaxSessionUserTurnPreviewBytes - 1, 'a') + "é trailing";
@@ -507,7 +507,7 @@ void test_app_session_new_resume_commands()
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
 
-  auto const source_session_id = session_w->store.session_id();
+  auto const source_session_id = session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(session);
   auto named_source = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/name Old title"});
   expect(named_source && named_source->handled && !named_source->output.empty() && named_source->output[0] == "session name set: \"Old title\"",
@@ -519,13 +519,13 @@ void test_app_session_new_resume_commands()
 
   auto clearance = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/clearance Fresh session"});
   CRITICAL_AREA_CONTINUE_W(session);
-  expect(clearance && !clearance->handled && session_w->store.session_id() == source_session_id,
+  expect(clearance && !clearance->handled && session_w->store.options_r()->session_id == source_session_id,
          "slash /clearance does not prefix-dispatch the exact /clear alias");
 
   CRITICAL_AREA_END_W(session);
   auto cleared = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/clear Fresh session"});
   CRITICAL_AREA_CONTINUE_W(session);
-  auto const fresh_session_id = session_w->store.session_id();
+  auto const fresh_session_id = session_w->store.options_r()->session_id;
   auto fresh_metadata = ava::session::load_session_metadata(session_w->store);
   auto fresh_entries = session_w->store.load();
   auto const expected_fresh_receipt = "started session \"Fresh session\" · id " + fresh_session_id + "\nprevious session \"Old title\" · id " +
@@ -550,7 +550,7 @@ void test_app_session_new_resume_commands()
   CRITICAL_AREA_END_W(session);
   auto resumed = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/resume " + source_session_id});
   CRITICAL_AREA_CONTINUE_W(session);
-  expect(resumed && resumed->handled && !resumed->output.empty() && session_w->store.session_id() == source_session_id &&
+  expect(resumed && resumed->handled && !resumed->output.empty() && session_w->store.options_r()->session_id == source_session_id &&
              resumed->output[0].find("resumed session " + source_session_id) != std::string::npos,
          "the previous session remains resumable after slash /clear");
   expect(session_w->is_offline() && session_w->additional_writable_dirs() == open_context.additional_writable_dirs &&
@@ -578,7 +578,7 @@ void test_app_session_new_resume_commands()
   CRITICAL_AREA_END_W(session);
   auto unnamed = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/new"});
   CRITICAL_AREA_CONTINUE_W(session);
-  auto const unnamed_session_id = session_w->store.session_id();
+  auto const unnamed_session_id = session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(session);
   auto const expected_unnamed_receipt = "started session \"Untitled session\" · id " + unnamed_session_id + "\nprevious session \"Old title\" · id " +
                                         source_session_id + "\nswitched to \"Untitled session\"";
@@ -609,7 +609,7 @@ void test_app_session_new_resume_commands()
   CRITICAL_AREA_END_W(session);
   auto resumed_from_ephemeral = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/resume " + source_session_id});
   CRITICAL_AREA_CONTINUE_W(session);
-  expect(resumed_from_ephemeral && resumed_from_ephemeral->handled && !session_w->sessionless() && session_w->store.session_id() == source_session_id,
+  expect(resumed_from_ephemeral && resumed_from_ephemeral->handled && !session_w->sessionless() && session_w->store.options_r()->session_id == source_session_id,
          "slash /resume from an ephemeral current session opens the requested persistent session");
   CRITICAL_AREA_END_W(session);
 }
@@ -673,12 +673,13 @@ void test_app_session_metadata_commands()
   };
   auto has_named_session_label = [&](ava::tui::SlashCommandItem const* item, std::size_t argument_index, std::vector<std::string> previous_args = {}) {
     return item != nullptr && std::ranges::any_of(item->argument_completions, [&](auto const& completion) {
-             return tui_test_support::slash_argument_completion_matches(completion, argument_index, session_w->store.session_id(), previous_args) &&
-                    completion.display_label == "Auth follow-up" && completion.description.find(session_w->store.session_id()) != std::string::npos;
+             auto const options_r(session_w->store.options_r());
+             return tui_test_support::slash_argument_completion_matches(completion, argument_index, options_r->session_id, previous_args) &&
+                    completion.display_label == "Auth follow-up" && completion.description.find(options_r->session_id) != std::string::npos;
            });
   };
   expect(has_named_session_label(tui_test_support::find_slash_command_item(slash_items, "/resume"), 0) &&
-             has_session_completion(tui_test_support::find_slash_command_item(slash_items, "/resume"), 0, session_w->store.session_id(), "labels=auth, bug") &&
+             has_session_completion(tui_test_support::find_slash_command_item(slash_items, "/resume"), 0, session_w->store.options_session_id_copy(), "labels=auth, bug") &&
              has_named_session_label(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 0) &&
              has_session_completion(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 0, "rename", "Rename a session") &&
              has_session_completion(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 0, "labels", "Set or clear labels") &&
@@ -687,10 +688,10 @@ void test_app_session_metadata_commands()
              has_named_session_label(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 1, {"rename"}) &&
              has_named_session_label(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 1, {"labels"}) &&
              has_session_completion(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 2, "--clear", "Clear labels",
-                                    {"labels", session_w->store.session_id()}) &&
+                                    {"labels", session_w->store.options_session_id_copy()}) &&
              has_named_session_label(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 1, {"archive"}) &&
              has_session_completion(tui_test_support::find_slash_command_item(slash_items, "/sessions"), 2, "--confirm", "Confirm archive",
-                                    {"archive", session_w->store.session_id()}),
+                                    {"archive", session_w->store.options_session_id_copy()}),
          "slash palette session completions expose session archive, rename, resume, and tree workflows");
 
   CRITICAL_AREA_END_W(session);
@@ -704,7 +705,7 @@ void test_app_session_metadata_commands()
              tree->output[0].find("labels=auth,bug") != std::string::npos,
          "slash /tree exposes names and labels written through slash metadata commands");
 
-  auto const active_session_id_before_selected_rename = session_w->store.session_id();
+  auto const active_session_id_before_selected_rename = session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(session);
   auto renamed_selected = ava::app::run_command(
       unlocked_session, ava::app::CommandRequest{.command = "/sessions rename " + active_session_id_before_selected_rename + " Selector name"});
@@ -713,7 +714,7 @@ void test_app_session_metadata_commands()
   expect(renamed_selected && renamed_selected->handled && !renamed_selected->output.empty() &&
              renamed_selected->output[0].find("session " + active_session_id_before_selected_rename + " name set: \"Selector name\"") != std::string::npos &&
              metadata_after_selected_rename && metadata_after_selected_rename->name == "Selector name" &&
-             session_w->store.session_id() == active_session_id_before_selected_rename,
+             session_w->store.options_r()->session_id == active_session_id_before_selected_rename,
          "slash /sessions rename appends name metadata to a selected session without switching runtime sessions");
 
   CRITICAL_AREA_END_W(session);

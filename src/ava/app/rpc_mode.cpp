@@ -325,7 +325,7 @@ ava::core::VoidResult run_rpc_loop_impl(runtime::session_ts& unlocked_session, r
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
-    DoutEntering(dc::rpc, "run_rpc_loop(...) with session_id=" << session_r->store.session_id()
+    DoutEntering(dc::rpc, "run_rpc_loop(...) with session_id=" << session_r->store.options_r()->session_id
                                                                << ", provider_id=" << model_selection_r->model.provider_id
                                                                << ", model_id=" << model_selection_r->model.model_id);
   }

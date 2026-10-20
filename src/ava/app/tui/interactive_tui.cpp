@@ -249,7 +249,7 @@ int run_tui(InteractiveState state)
   auto session_presentation = [&unlocked_session]() {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const workspace = session_r->current_dir().empty() ? session_r->workspace_dir() : session_r->current_dir();
-    return SessionPresentation{.session_id = session_r->store.session_id(),
+    return SessionPresentation{.session_id = session_r->store.options_session_id_copy(),
                                .session_path = session_r->store.session_path().string(),
                                .workspace = workspace.string(),
                                .workspace_dir = session_r->workspace_dir(),
@@ -308,7 +308,7 @@ int run_tui(InteractiveState state)
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session branch target is missing session id"));
     }
-    auto const current_session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
+    auto const current_session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
     if (target_session_id == current_session_id)
     {
       application_catalog.retarget_session(current_session_id);
@@ -319,7 +319,7 @@ int run_tui(InteractiveState state)
       return std::unexpected(std::move(unlocked_opened_result.error()));
     if (auto replaced = ava::app::runtime::Session::replace_with(unlocked_session, *unlocked_opened_result); !replaced)
       return std::unexpected(std::move(replaced.error()));
-    application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id());
+    application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id);
     application_catalog.refresh_values(unlocked_session, hotkeys);
     return state_snapshot(status_prefix + target_session_id);
   };
@@ -447,7 +447,7 @@ int run_tui(InteractiveState state)
             // session-grant registry.
             auto const permission_rule_store = ava::app::runtime::session_ts::rat(unlocked_session)->permission_rule_store();
             auto permission_resolver = ava::permissions::build_persistent_permission_rule_resolver(permission_rule_store, context.permission_resolver);
-            auto const session_id_before = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
+            auto const session_id_before = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
             bool workspace_catalog_reload = workspace_catalog_reload_requested(submitted);
             std::shared_ptr<ava::app::PluginUiInvocationCapability> plugin_ui_capability;
             bool plugin_ui_capability_unavailable = submitted.starts_with("/plugin run ");
@@ -498,7 +498,7 @@ int run_tui(InteractiveState state)
             capture_request_presentation(submitted, context.request_id, line_result);
             auto const session_changed = run_queued_follow_ups_until_session_transition(
                 line_result, workspace_catalog_reload, session_id_before, context,
-                [&unlocked_session]() { return ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(); },
+                [&unlocked_session]() { return ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id; },
                 [&](ava::tui::TuiQueuedFollowUp const& follow_up) {
                   auto follow_up_result = handle_interactive_submission(state, follow_up.message, permission_resolver, context.question_resolver, hotkeys,
                                                                         context.event_sink, context.cancel_requested, context.take_steering_messages, {},
@@ -516,7 +516,7 @@ int run_tui(InteractiveState state)
             }
             else if (session_changed)
             {
-              application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id());
+              application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id);
               application_catalog.refresh_values(unlocked_session, hotkeys);
             }
             else if (line_result.ordinary_turn_committed)
@@ -676,7 +676,7 @@ int run_tui(InteractiveState state)
             {
               SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
               coordinator = session_r->subagent_coordinator();
-              session_id = session_r->store.session_id();
+              session_id = session_r->store.options_r()->session_id;
             }
             return ava::app::subagent_selector_view(coordinator, session_id);
           },
@@ -687,7 +687,7 @@ int run_tui(InteractiveState state)
             {
               SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
               coordinator = session_r->subagent_coordinator();
-              session_id = session_r->store.session_id();
+              session_id = session_r->store.options_r()->session_id;
             }
             if (!coordinator)
             {
@@ -703,7 +703,7 @@ int run_tui(InteractiveState state)
             {
               SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
               coordinator = session_r->subagent_coordinator();
-              session_id = session_r->store.session_id();
+              session_id = session_r->store.options_r()->session_id;
             }
             return ava::app::cancel_subagent_for_workspace(coordinator, session_id, job_id);
           },
@@ -714,7 +714,7 @@ int run_tui(InteractiveState state)
             {
               SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
               coordinator = session_r->subagent_coordinator();
-              session_id = session_r->store.session_id();
+              session_id = session_r->store.options_r()->session_id;
             }
             return ava::app::promote_subagent_for_workspace(coordinator, session_id, job_id);
           },
@@ -913,7 +913,7 @@ int run_tui(InteractiveState state)
         std::string before_session_path;
         {
           SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-          before_session_id = session_r->store.session_id();
+          before_session_id = session_r->store.options_r()->session_id;
           before_session_path = session_r->store.session_path().string();
         }
         auto forked = ava::app::run_fork_command(unlocked_session, {}, entry_id);
@@ -924,7 +924,7 @@ int run_tui(InteractiveState state)
         std::string after_session_path;
         {
           SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-          after_session_id = session_r->store.session_id();
+          after_session_id = session_r->store.options_r()->session_id;
           after_session_path = session_r->store.session_path().string();
         }
         // F-001 defense: never return an "opened" snapshot when authority did not
@@ -989,7 +989,7 @@ int run_tui(InteractiveState state)
         {
           return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session selection is missing session id"));
         }
-        auto const current_session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
+        auto const current_session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
         if (value == current_session_id)
         {
           application_catalog.retarget_session(current_session_id);
@@ -1000,7 +1000,7 @@ int run_tui(InteractiveState state)
           return std::unexpected(std::move(unlocked_opened_result.error()));
         if (auto replaced = ava::app::runtime::Session::replace_with(unlocked_session, *unlocked_opened_result); !replaced)
           return std::unexpected(std::move(replaced.error()));
-        application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id());
+        application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id);
         application_catalog.refresh_values(unlocked_session, hotkeys);
         return state_snapshot("session opened");
       },

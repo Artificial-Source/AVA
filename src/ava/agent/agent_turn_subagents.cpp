@@ -235,10 +235,10 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
     auto ownership_entries = child_store.load_recoverable_prefix_bounded(child_lease, options_.session_read_limits, options_.cancel_requested);
     if (!ownership_entries)
       return std::unexpected(std::move(ownership_entries.error()));
-    auto ownership = ava::session::session_metadata_from_entries(child_store.session_id(), *ownership_entries);
+    auto ownership = ava::session::session_metadata_from_entries(child_store.options_r()->session_id, *ownership_entries);
     if (!ownership)
       return std::unexpected(std::move(ownership.error()));
-    if (ownership->parent_session_id != store_.session_id())
+    if (ownership->parent_session_id != store_.options_r()->session_id)
     {
       auto error = ava::core::Error(ava::core::ErrorCategory::NotFound, "task child session is not owned by the current parent session");
       error.with_context("task_id", *request.task_id);
@@ -259,7 +259,7 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
       name.resize(ava::session::kMaxSessionNameBytes);
     }
     auto metadata = ava::session::append_session_metadata(
-        child_store, child_lease, ava::session::SessionMetadataUpdate{.name = std::move(name), .parent_session_id = store_.session_id(), .actor = "subagent"});
+        child_store, child_lease, ava::session::SessionMetadataUpdate{.name = std::move(name), .parent_session_id = store_.options_r()->session_id, .actor = "subagent"});
     if (!metadata)
       return std::unexpected(std::move(metadata.error()));
   }
@@ -286,11 +286,11 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
                                  .provider_id = options_.model.provider_id,
                                  .parent_run_id = trace_context_.run_id,
                                  .parent_turn_id = trace_context_.turn_id,
-                                 .parent_session_id = store_.session_id()};
+                                 .parent_session_id = store_.options_r()->session_id};
 
   if (use_coordinator)
   {
-    auto const task_id = child_store.session_id();
+    auto const task_id = child_store.options_r()->session_id;
     auto const session_path = child_store.session_path();
     auto child_provider = options_.background_provider_factory();
     if (!child_provider)
@@ -418,7 +418,7 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
     };
 
     auto coordinated = options_.subagent_coordinator->start(
-        SubagentCoordinatorStartRequest{.parent_session_id = store_.session_id(),
+        SubagentCoordinatorStartRequest{.parent_session_id = store_.options_r()->session_id,
                                         .mode = request.background ? SubagentJobMode::Background : SubagentJobMode::Foreground,
                                         .job = std::move(start_options),
                                         .launch_display = run_state->child_options.subagent_launch.display,
@@ -451,9 +451,10 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
                                 .tool_iterations = 0};
     }
 
+    auto const parent_session_id = store_.options_session_id_copy();
     for (;;)
     {
-      auto waited = options_.subagent_coordinator->wait(store_.session_id(), job_id, std::chrono::milliseconds(50), SubagentWaitMode::TerminalOrPromotion);
+      auto waited = options_.subagent_coordinator->wait(parent_session_id, job_id, std::chrono::milliseconds(50), SubagentWaitMode::TerminalOrPromotion);
       if (!waited)
         return std::unexpected(std::move(waited.error()));
       if (waited->job.was_promoted && !subagent_terminal(waited->job.execution))
@@ -501,7 +502,7 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
                                   .tool_iterations = run_state->result_state->terminal_result->tool_iterations};
       }
       if (options_.cancel_requested && options_.cancel_requested())
-        static_cast<void>(options_.subagent_coordinator->cancel(store_.session_id(), job_id));
+        static_cast<void>(options_.subagent_coordinator->cancel(store_.options_r()->session_id, job_id));
     }
   }
 
@@ -529,7 +530,7 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
   auto child_result = child_loop.run_turn(request.prompt, child_store, provider_, transport_);
   if (!child_result)
     return std::unexpected(std::move(child_result.error()));
-  return TaskSubagentResult{.task_id = child_store.session_id(),
+  return TaskSubagentResult{.task_id = child_store.options_session_id_copy(),
                             .job_id = "",
                             .session_path = child_store.session_path(),
                             .subagent_type = request.subagent_type,

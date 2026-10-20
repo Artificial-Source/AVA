@@ -553,7 +553,7 @@ void test_app_rpc_permission_reply_session_grant_flow()
   expect(result.has_value() && first_completed && grant_listed && second_completed, "RPC permission session grant loop exits successfully");
   expect(count_substrings(jsonl, "\"name\":\"permission_requested\"") == 1 && jsonl.find("\"payload_type\":\"permission\"") != std::string::npos &&
              jsonl.find("\"decision\":\"allow_session\"") != std::string::npos && jsonl.find("\"id\":\"grants\"") != std::string::npos &&
-             jsonl.find("\"session_id\":\"" + session_r->store.session_id() + "\"") != std::string::npos &&
+             jsonl.find("\"session_id\":\"" + session_r->store.options_r()->session_id + "\"") != std::string::npos &&
              jsonl.find("\"operation\":\"read\"") != std::string::npos && jsonl.find("\"target_path\":\"" + outside_path.string() + "\"") != std::string::npos,
          "RPC session grants are serialized with their exact session and suppress only repeated matching prompts");
 
@@ -609,7 +609,7 @@ void test_app_rpc_session_grants_are_exact_session_scoped_and_cannot_override_de
     pending_state.permission_session_grants.push_back(ava::app::rpc::PermissionSessionGrant{
         .grant_id = "permgrant_matching",
         .permission_request_id = prompt.permission_request_id,
-        .session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(),
+        .session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id,
         .operation = prompt.operation,
         .mode = prompt.mode,
         .tool_name = prompt.tool_name,
@@ -665,7 +665,7 @@ void test_app_rpc_session_grants_are_exact_session_scoped_and_cannot_override_de
     pending_state.permission_session_grants.push_back(ava::app::rpc::PermissionSessionGrant{
         .grant_id = "permgrant_matching_again",
         .permission_request_id = prompt.permission_request_id,
-        .session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(),
+        .session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id,
         .operation = prompt.operation,
         .mode = prompt.mode,
         .tool_name = prompt.tool_name,

@@ -301,7 +301,7 @@ std::string format_session_stats_text(runtime::session_ts const& unlocked_sessio
   SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
   std::ostringstream output;
   output << "Session stats\n";
-  output << "  session: " << shorten_middle(session_r->store.session_id(), 32) << "   entries: " << stats.entry_count << '\n';
+  output << "  session: " << shorten_middle(session_r->store.options_r()->session_id, 32) << "   entries: " << stats.entry_count << '\n';
   runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
   output << "  model: " << model_selection_r->model.provider_id << '/' << model_selection_r->model.model_id
          << "   mode: " << ava::agent::to_string(session_r->mode())
@@ -326,7 +326,7 @@ std::string format_session_stats_text(runtime::session_ts const& unlocked_sessio
   output << "  cost: " << cost_text(stats) << "   usage entries exact/estimated " << stats.exact_usage_entries << '/' << stats.estimated_usage_entries << '\n';
 
   output << "\nHints:\n";
-  output << "  export: /export   resume: ava --session " << session_r->store.session_id();
+  output << "  export: /export   resume: ava --session " << session_r->store.options_r()->session_id;
   return output.str();
 }
 

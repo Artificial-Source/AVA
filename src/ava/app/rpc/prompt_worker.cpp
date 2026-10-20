@@ -109,7 +109,7 @@ ava::core::JoinThread make_rpc_prompt_worker(RpcPromptWorkerOptions options)
           make_rpc_question_resolver(options.pending_state, options.output, options.run_state, unlocked_session, request_id);
 
       // This callback runs inside run_prompt's write critical area, so retain an owning snapshot instead of relocking or capturing Session storage.
-      auto const session_id = runtime::session_ts::rat(unlocked_session)->store.session_id();
+      auto const session_id = runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
       prompt_options->take_steering_messages = [&options, session_id, request_id]() -> ava::core::Result<std::vector<std::string>> {
         auto queued = take_queued_steering_messages(options.run_state, request_id);
         std::vector<std::string> messages;

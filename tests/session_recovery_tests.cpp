@@ -752,8 +752,9 @@ void test_session_resume_and_listing()
   std::filesystem::last_write_time(first->session_path(), old_time);
   std::filesystem::last_write_time(second->session_path(), new_time);
 
-  auto reopened = ava::session::SessionStore::open(workspace, first->session_id(), session_root);
-  expect(reopened && reopened->session_id() == first->session_id(), "session opens by exact id");
+  std::string const first_session_id = first->options_r()->session_id;
+  auto reopened = ava::session::SessionStore::open(workspace, first_session_id, session_root);
+  expect(reopened && reopened->options_r()->session_id == first_session_id, "session opens by exact id");
   if (reopened)
   {
     auto reopened_entries = reopened->load();
@@ -762,7 +763,7 @@ void test_session_resume_and_listing()
 
   auto listed = ava::session::SessionStore::list_sessions(workspace, session_root);
   expect(listed && listed->size() == 2, "sessions list for workspace");
-  expect(listed && (*listed)[0].session_id == second->session_id(), "sessions list newest first");
+  expect(listed && (*listed)[0].session_id == second->options_r()->session_id, "sessions list newest first");
   expect(listed && (*listed)[0].entry_count == 1 && (*listed)[0].last_updated == "2026-04-27T00:01:00Z",
          "session summary includes entry count and last timestamp");
 

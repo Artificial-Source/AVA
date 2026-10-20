@@ -410,7 +410,7 @@ ava::core::Result<ImageAttachmentRef> import_detected_image_attachment(SessionSt
 
 std::filesystem::path attachment_storage_root(SessionStore const& store)
 {
-  return store.session_path().parent_path() / (store.session_id() + ".attachments");
+  return store.session_path().parent_path() / (store.options_session_id_copy() + ".attachments");
 }
 
 ava::core::Result<std::filesystem::path> resolve_attachment_storage_path(SessionStore const& store,

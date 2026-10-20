@@ -601,7 +601,7 @@ void test_incomplete_assistant_output_suffix_recovery()
                        : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
     if (!store || !lease)
       continue;
-    auto const session_id = store->session_id();
+    auto const session_id = store->options_r()->session_id;
     auto const path = store->session_path();
     auto seeded = store->append(*lease, ordinary("seed-" + std::to_string(count)));
     std::string expected_suffix;

@@ -199,8 +199,8 @@ void test_app_rpc_state_list_sessions_and_open_session()
   CRITICAL_AREA_BEGIN_R(first);
   CRITICAL_AREA_BEGIN_R(second);
 
-  auto const first_id = first_r->store.session_id();
-  auto const second_id = second_r->store.session_id();
+  auto const first_id = first_r->store.options_r()->session_id;
+  auto const second_id = second_r->store.options_r()->session_id;
 
   CRITICAL_AREA_END_R(second);
   CRITICAL_AREA_END_R(first);
@@ -226,7 +226,7 @@ void test_app_rpc_state_list_sessions_and_open_session()
              jsonl.find("\"id\":\"list\"") != std::string::npos && jsonl.find(first_id) != std::string::npos &&
              jsonl.find("\"id\":\"open\"") != std::string::npos,
          "RPC state, list_sessions, and open_session return session metadata");
-  expect(second_r->store.session_id() == first_id, "RPC open_session switches the active runtime session");
+  expect(second_r->store.options_r()->session_id == first_id, "RPC open_session switches the active runtime session");
 }
 
 void test_app_rpc_job_controls_are_active_safe_and_redacted()
@@ -293,7 +293,7 @@ void test_app_rpc_job_controls_are_active_safe_and_redacted()
   };
 
   auto coordinator = ava::app::runtime::session_ts::rat(unlocked_session)->subagent_coordinator();
-  auto const owner = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
+  auto const owner = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
   auto promoted_state = std::make_shared<WorkerState>();
   auto canceled_state = std::make_shared<WorkerState>();
   auto promotable = coordinator->start(owner, ava::agent::SubagentJobMode::Foreground, {.child_session_id = "rpc_promotable"},
@@ -507,7 +507,7 @@ void test_app_rpc_session_tree_command_and_switch_navigation()
   parent_metadata.labels = std::vector<std::string>{"root"};
   parent_metadata.branch_origin = "root";
   parent_metadata.actor = "test";
-  auto const parent_id = parent_w->store.session_id();
+  auto const parent_id = parent_w->store.options_r()->session_id;
   auto parent_meta = parent_w->append_metadata_1(std::move(parent_metadata));
 
   ava::session::SessionMetadataUpdate child_metadata;
@@ -519,7 +519,7 @@ void test_app_rpc_session_tree_command_and_switch_navigation()
   child_metadata.branch_from_entry_id = parent_entries->front().id;
   child_metadata.branch_origin = "fork";
   child_metadata.actor = "test";
-  auto const child_id = child_w->store.session_id();
+  auto const child_id = child_w->store.options_r()->session_id;
   auto child_meta = child_w->append_metadata_1(std::move(child_metadata));
   expect(parent_meta && child_meta, "RPC session_tree test persists branch metadata");
 
@@ -548,7 +548,7 @@ void test_app_rpc_session_tree_command_and_switch_navigation()
              jsonl.find("\"actor\":\"test\"") != std::string::npos,
          "RPC session_tree returns current path, children, labels, archive state, actor, and provenance metadata");
   expect(jsonl.find("\"id\":\"switch\"") != std::string::npos && jsonl.find("\"current_session_id\":\"" + parent_id + "\"") != std::string::npos &&
-             child_r->store.session_id() == parent_id,
+             child_r->store.options_r()->session_id == parent_id,
          "RPC switch_session navigates the active session used by following tree calls");
 }
 
@@ -572,7 +572,7 @@ void test_app_rpc_session_fork_and_clone_commands()
 
   CRITICAL_AREA_BEGIN_R(session);
 
-  auto const source_id = session_r->store.session_id();
+  auto const source_id = session_r->store.options_r()->session_id;
   auto source_entries = session_r->store.load();
   expect(source_entries && !source_entries->empty(), "RPC session branch test loads source start entry");
   if (!source_entries || source_entries->empty())
@@ -670,7 +670,7 @@ void test_app_rpc_branch_construction_failure_rolls_back_created_file()
   if (!appended)
     return;
 
-  auto const source_id = source_w->store.session_id();
+  auto const source_id = source_w->store.options_r()->session_id;
   auto const source_path = source_w->store.session_path();
 
   CRITICAL_AREA_END_W(source);
@@ -707,7 +707,7 @@ void test_app_rpc_branch_construction_failure_rolls_back_created_file()
   auto source_contender = ava::session::SessionLease::acquire(source_path);
   expect(result && created_id && jsonl.find("\"id\":\"fork-rollback\"") != std::string::npos && jsonl.find("\"success\":false") != std::string::npos &&
              jsonl.find("rollback_attachment_disposition: preserved") != std::string::npos && destination_jsonl_removed && destination_attachment_retained &&
-             source_r->store.session_id() == source_id && !source_contender && source_contender.error().message().find("already owned") != std::string::npos,
+             source_r->store.options_r()->session_id == source_id && !source_contender && source_contender.error().message().find("already owned") != std::string::npos,
          "RPC branch runtime-construction failure preserves the primary error, removes only destination JSONL, retains copied attachments, and leaves the "
          "source active");
 }
@@ -732,7 +732,7 @@ void test_app_rpc_noncurrent_branch_source_recovers_torn_tail()
 
   CRITICAL_AREA_BEGIN_R(source);
 
-  auto const source_id = source_r->store.session_id();
+  auto const source_id = source_r->store.options_r()->session_id;
   auto const source_path = source_r->store.session_path();
 
   CRITICAL_AREA_END_R(source);
@@ -759,7 +759,7 @@ void test_app_rpc_noncurrent_branch_source_recovers_torn_tail()
   SCOPED_CRITICAL_AREA_R(current_r, unlocked_current);
   auto cloned_entries = current_r->store.load();
   auto cloned_metadata = ava::session::load_session_metadata(current_r->store);
-  expect(result && out.str().find("\"id\":\"clone\"") != std::string::npos && current_r->store.session_id() != source_id && cloned_entries &&
+  expect(result && out.str().find("\"id\":\"clone\"") != std::string::npos && current_r->store.options_r()->session_id != source_id && cloned_entries &&
              cloned_entries->size() == 2 && cloned_metadata && cloned_metadata->source_session_id == source_id && cloned_metadata->branch_origin == "clone" &&
              app_read_binary_file(source_path) == valid_source_bytes,
          "RPC branching temporarily leases and recovers a different source before holding it through clone creation");
@@ -784,7 +784,7 @@ void test_app_rpc_maintenance_reservation_blocks_generic_mutation()
   std::optional<ava::app::SessionMaintenanceReservation> reservation;
   {
     SCOPED_CRITICAL_AREA_R(session_r, session);
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
     auto acquired = session_r->run_controller()->reserve_maintenance();
     expect(acquired.has_value(), acquired ? "RPC fixture acquires exclusive maintenance" : acquired.error().format());
     if (!acquired)
@@ -798,7 +798,7 @@ void test_app_rpc_maintenance_reservation_blocks_generic_mutation()
   std::ostringstream out;
   auto result = ava::app::run_rpc_loop(session, open_context, provider, transport, ava::app::runtime::RunOptions{}, in, out, ava::app::rpc::RpcInputWake{});
   SCOPED_CRITICAL_AREA_R(session_r, session);
-  expect(result && session_r->store.session_id() == session_id && out.str().find("\"code\":\"invalid_request\"") != std::string::npos &&
+  expect(result && session_r->store.options_r()->session_id == session_id && out.str().find("\"code\":\"invalid_request\"") != std::string::npos &&
              out.str().find("exclusive session maintenance") != std::string::npos,
          "central RPC mutation gate observes maintenance without classifying it as a normal active run");
 }
@@ -823,7 +823,7 @@ void test_app_rpc_summarize_branch_appends_to_source_session()
 
   CRITICAL_AREA_BEGIN_R(session);
 
-  auto const source_id = session_r->store.session_id();
+  auto const source_id = session_r->store.options_r()->session_id;
   auto source_entries = session_r->store.load();
   expect(source_entries && !source_entries->empty(), "RPC summarize_branch test loads source start entry");
   if (!source_entries || source_entries->empty())
@@ -902,7 +902,7 @@ void test_app_rpc_summarize_branch_appends_to_source_session()
   bool const duplicate_results_match =
       source_has_summary && noncurrent_has_one && response_repeats_entry(persisted_summary_id) && response_repeats_entry(noncurrent_after->back().id);
   expect(result.has_value(), "RPC summarize_branch loop completes successfully");
-  expect(source_has_summary && noncurrent_has_one && session_r->store.session_id() == source_id,
+  expect(source_has_summary && noncurrent_has_one && session_r->store.options_r()->session_id == source_id,
          "RPC summarize_branch appends once to current and noncurrent source sessions without switching sessions");
   expect(jsonl.find("\"id\":\"summary\"") != std::string::npos && jsonl.find("\"id\":\"summary-duplicate\"") != std::string::npos &&
              jsonl.find("\"id\":\"noncurrent-summary\"") != std::string::npos && jsonl.find("\"id\":\"noncurrent-summary-duplicate\"") != std::string::npos &&

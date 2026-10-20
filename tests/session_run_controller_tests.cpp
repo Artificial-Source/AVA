@@ -185,7 +185,7 @@ ava::session::SessionEntry branch_summary_entry(ava::session::SessionStore const
                                     .parent_id = std::move(parent_id),
                                     .type = ava::session::EntryType::BranchSummary,
                                     .timestamp = ava::session::now_timestamp(),
-                                    .data_json = "{\"schema_version\":1,\"summary\":\"summary\",\"source_session_id\":\"" + store.session_id() +
+                                    .data_json = "{\"schema_version\":1,\"summary\":\"summary\",\"source_session_id\":\"" + store.options_r()->session_id +
                                                  "\",\"branch_root_entry_id\":\"" + root_id + "\",\"branch_tip_entry_id\":\"" + tip_id +
                                                  "\",\"provider\":\"test\",\"model\":\"test\",\"reason\":\"test\"}"};
 }

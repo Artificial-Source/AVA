@@ -32,7 +32,7 @@ ava::http::RetryOptions runtime_retry_options(session_ts const& unlocked_session
     payload.remaining_ms = retry.remaining_ms;
     ava::event::RuntimeEventMetadata metadata{
       .timestamp = ava::session::now_timestamp(),
-      .session_id = session_ts::crat(unlocked_session)->store.session_id(),
+      .session_id = session_ts::crat(unlocked_session)->store.options_r()->session_id,
     };
     if (retry.countdown_tick)
     {

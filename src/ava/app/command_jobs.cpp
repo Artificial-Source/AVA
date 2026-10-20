@@ -427,7 +427,7 @@ JobsCommandBinding capture_jobs_command_binding(runtime::session_ts& unlocked_se
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     binding.coordinator = session_r->subagent_coordinator();
-    binding.parent_session_id = session_r->store.session_id();
+    binding.parent_session_id = session_r->store.options_r()->session_id;
   }
   binding.history = load_jobs_history_snapshot(unlocked_session, binding.parent_session_id);
   return binding;
@@ -440,7 +440,7 @@ ava::core::Result<CommandResult> run_jobs_command_1(runtime::session_ts& unlocke
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     coordinator = session_r->subagent_coordinator();
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
   }
   auto const kind = classify_jobs_command(arguments);
   JobsHistorySnapshot history;

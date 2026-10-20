@@ -175,7 +175,7 @@ ava::event::RuntimeEvent runtime_error_event(runtime::session_ts const& unlocked
   payload.error_details = error.format();
   return ava::event::RuntimeEvent{ava::event::RuntimeEventMetadata{
                                       .timestamp = ava::session::now_timestamp(),
-                                      .session_id = runtime::session_ts::crat(unlocked_session)->store.session_id(),
+                                      .session_id = runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id,
                                   },
                                   ava::event::ErrorEvent{.payload = std::move(payload)}};
 }

@@ -26,12 +26,12 @@ bool refresh_git_branch(session_ts& unlocked_session)
 {
   auto const identity = [&] {
     session_ts::crat session_r(unlocked_session);
-    return std::pair{session_r->store.session_id(), session_r->workspace_dir()};
+    return std::pair{session_r->store.options_r()->session_id, session_r->workspace_dir()};
   }();
   auto observed = observe_git_branch(identity.second);
 
   session_ts::wat session_w(unlocked_session);
-  if (session_w->store.session_id() != identity.first || session_w->workspace_dir() != identity.second)
+  if (session_w->store.options_r()->session_id != identity.first || session_w->workspace_dir() != identity.second)
     return false;
   if (*GitBranch_ts::crat(session_w->git_branch()) == observed)
     return false;

@@ -786,7 +786,7 @@ void test_app_rpc_active_prompt_rejects_second_prompt_and_session_switch()
   expect(requested, "RPC active reject test observes pending permission request");
   input_buffer.push("{\"id\":\"p2\",\"type\":\"prompt\",\"message\":\"second\"}\n");
   input_buffer.push("{\"id\":\"new\",\"type\":\"new_session\"}\n");
-  input_buffer.push("{\"id\":\"switch\",\"type\":\"switch_session\",\"session_id\":\"" + ava::app::runtime::session_ts::rat(*unlocked_other_result)->store.session_id() + "\"}\n");
+  input_buffer.push("{\"id\":\"switch\",\"type\":\"switch_session\",\"session_id\":\"" + ava::app::runtime::session_ts::rat(*unlocked_other_result)->store.options_r()->session_id + "\"}\n");
   input_buffer.push("{\"id\":\"messages\",\"type\":\"get_messages\"}\n");
   input_buffer.push("{\"id\":\"cancel\",\"type\":\"cancel\"}\n");
   input_buffer.close();

@@ -601,7 +601,7 @@ void test_created_session_rollback_is_identity_safe_and_preserves_attachments()
       ava::session::rollback_created_session_with_context(store, lease, primary);
       auto const formatted = primary.format();
       expect(!std::filesystem::exists(store.session_path()) && ava::tests::read_session_test_binary_file(attachment_file) == "retained attachment bytes" &&
-                 primary.message() == "runtime construction failed" && formatted.find("created_session_id: " + store.session_id()) != std::string::npos &&
+                 primary.message() == "runtime construction failed" && formatted.find("created_session_id: " + store.options_session_id_copy()) != std::string::npos &&
                  formatted.find("rollback_attachment_path: " + ava::session::attachment_storage_root(store).string()) != std::string::npos &&
                  formatted.find("rollback_attachment_disposition: preserved") != std::string::npos,
              "session rollback preserves an attachment subtree byte-for-byte and reports its retained path without replacing the primary error");

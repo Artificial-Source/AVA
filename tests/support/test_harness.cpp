@@ -501,7 +501,7 @@ std::map<std::string, std::weak_ptr<ava::session::SessionAppendTarget>> test_app
 
 ava::core::Result<ava::session::SessionLease> acquire_test_session_lease(ava::session::SessionStore const& store)
 {
-  if (auto valid = ava::session::validate_session_id(store.session_id()); !valid)
+  if (auto valid = ava::session::validate_session_id(store.options_r()->session_id); !valid)
     return std::unexpected(std::move(valid.error()));
   auto lease = ava::session::SessionLease::acquire(store.session_path());
   if (!lease)

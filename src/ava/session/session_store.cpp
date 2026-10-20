@@ -339,11 +339,6 @@ SessionStore& SessionStore::operator=(SessionStore&& other)
   return *this;
 }
 
-std::string SessionStore::session_id() const
-{
-  return options_r()->session_id;
-}
-
 std::filesystem::path SessionStore::session_path() const
 {
   auto const options_r = this->options_r();
@@ -370,7 +365,7 @@ std::uint64_t SessionStore::set_run_observation(std::shared_ptr<ava::observabili
     // append/load snapshot and SessionTraceScope construction no-throw.
     auto prepared_context = std::make_shared<ava::observability::TraceContext>(context);
     if (prepared_context->session_id.empty())
-      prepared_context->session_id = session_id();
+      prepared_context->session_id = options_r()->session_id;
     auto prepared_observation = observation;
 
     std::lock_guard lock(observation_attachment_->mutex);

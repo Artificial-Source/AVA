@@ -439,7 +439,7 @@ ava::core::Result<std::vector<SessionEntry>> SessionStore::load() const
         observation->account_external_failure();
     }
   }
-  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(options_r()->session_id); !valid_session_id)
   {
     return std::unexpected(std::move(valid_session_id.error()));
   }
@@ -468,14 +468,14 @@ ava::core::Result<std::vector<SessionEntry>> SessionStore::load() const
   if (std::filesystem::is_symlink(status))
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "session path must not be a symlink");
-    error.with_context("session_id", session_id());
+    error.with_context("session_id", options_r()->session_id);
     error.with_context("path", path.string());
     return std::unexpected(std::move(error));
   }
   if (!std::filesystem::is_regular_file(status))
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::Session, "session path is not a regular file");
-    error.with_context("session_id", session_id());
+    error.with_context("session_id", options_r()->session_id);
     error.with_context("path", path.string());
     return std::unexpected(std::move(error));
   }
@@ -484,7 +484,7 @@ ava::core::Result<std::vector<SessionEntry>> SessionStore::load() const
   if (!file)
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed to open session file");
-    error.with_context("session_id", session_id());
+    error.with_context("session_id", options_r()->session_id);
     error.with_context("path", path.string());
     return std::unexpected(std::move(error));
   }
@@ -514,7 +514,7 @@ ava::core::VoidResult SessionStore::visit_entries(SessionReadLimits limits, Sess
     return valid;
   if (!visitor)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session entry visitor is required"));
-  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(options_r()->session_id); !valid_session_id)
     return valid_session_id;
 
   if (ephemeral_state_)
@@ -553,7 +553,7 @@ ava::core::VoidResult SessionStore::visit_entries_leased(SessionLease const& lea
     return valid;
   if (!visitor)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session entry visitor is required"));
-  if (auto valid_session_id = validate_session_id(session_id()); !valid_session_id)
+  if (auto valid_session_id = validate_session_id(options_r()->session_id); !valid_session_id)
     return valid_session_id;
   if (ephemeral_state_)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "lease-bound reads require a persistent session store"));
@@ -763,7 +763,7 @@ ava::core::Result<SessionRecoverableSnapshot> SessionStore::load_recoverable_sna
 
 ava::core::Result<SessionSummary> SessionStore::inspect_bounded(SessionReadLimits limits, SessionCancelCallback cancel_requested) const
 {
-  SessionSummary summary{.session_id = session_id(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
+  SessionSummary summary{.session_id = options_session_id_copy(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
   bool has_manual_title = false;
   auto visited = visit_entries(
       limits,
@@ -806,7 +806,7 @@ ava::core::Result<SessionSummary> SessionStore::inspect_bounded(SessionReadLimit
 ava::core::Result<SessionSummary> SessionStore::inspect_bounded(SessionLease const& lease, SessionReadLimits limits,
                                                                 SessionCancelCallback cancel_requested) const
 {
-  SessionSummary summary{.session_id = session_id(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
+  SessionSummary summary{.session_id = options_session_id_copy(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
   bool has_manual_title = false;
   auto visited = visit_entries_leased(
       lease, limits,
@@ -851,7 +851,7 @@ ava::core::Result<SessionSummary> SessionStore::inspect_bounded_for_listing(Sess
 {
   if (auto valid = validate_read_limits(limits); !valid)
     return std::unexpected(std::move(valid.error()));
-  SessionSummary summary{.session_id = session_id(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
+  SessionSummary summary{.session_id = options_session_id_copy(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
   bool has_manual_title = false;
   auto visited = visit_regular_session_snapshot(
       session_path(), limits,

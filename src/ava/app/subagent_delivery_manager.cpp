@@ -850,7 +850,7 @@ ava::core::Result<SubagentDeliveryManager::CapsuleGeneration> SubagentDeliveryMa
   auto detached_state = session_r->create_detached_state(std::move(lease), *authority, nullptr);
 
   auto safe_options = detached_run_options(options);
-  auto const session_id = session_r->store.session_id();
+  auto const session_id = session_r->store.options_r()->session_id;
   auto const workspace_dir = session_r->workspace_dir();
   auto const controller = session_r->run_controller();
 
@@ -917,7 +917,7 @@ ava::core::VoidResult SubagentDeliveryManager::refresh_parent_configuration(runt
   CRITICAL_AREA_BEGIN_CR(session);
   if (normalized_workspace_identity(session_r->workspace_dir()) != normalized_workspace_identity(reserved_workspace))
     return std::unexpected(workspace_transaction_error("session_changed"));
-  auto const session_id = session_r->store.session_id();
+  auto const session_id = session_r->store.options_r()->session_id;
   auto const workspace_key = normalized_workspace_key(session_r->workspace_dir());
   CRITICAL_AREA_END_R(session);
 
@@ -1156,7 +1156,7 @@ ava::core::Result<runtime::session_ts> SubagentDeliveryManager::retained_session
     }
   }
   detached_state_result->created = false;
-  auto const attached_id = detached_state_result->store.session_id();
+  auto const attached_id = detached_state_result->store.options_r()->session_id;
 
   attach_parent(attached_id);
 

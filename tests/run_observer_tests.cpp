@@ -701,7 +701,7 @@ void test_session_attachment_generation_alias_stress()
   auto alias = *store;
   auto stale_generation = store->set_run_observation(first, {.run_id = "parent",
                                                              .turn_id = "turn",
-                                                             .session_id = store->session_id(),
+                                                             .session_id = store->options_r()->session_id,
                                                              .provider_id = {},
                                                              .parent_run_id = {},
                                                              .parent_turn_id = {},
@@ -724,7 +724,7 @@ void test_session_attachment_generation_alias_stress()
 
   auto newer_generation = alias.set_run_observation(second, {.run_id = "new",
                                                              .turn_id = "turn",
-                                                             .session_id = store->session_id(),
+                                                             .session_id = store->options_r()->session_id,
                                                              .provider_id = {},
                                                              .parent_run_id = {},
                                                              .parent_turn_id = {},
@@ -739,7 +739,7 @@ void test_session_attachment_generation_alias_stress()
     {
       auto generation = store->set_run_observation((i % 2) == 0 ? first : second, {.run_id = "stress",
                                                                                    .turn_id = "turn",
-                                                                                   .session_id = store->session_id(),
+                                                                                   .session_id = store->options_r()->session_id,
                                                                                    .provider_id = {},
                                                                                    .parent_run_id = {},
                                                                                    .parent_turn_id = {},
@@ -777,7 +777,7 @@ void test_session_attachment_generation_alias_stress()
   {
     auto run_a = overlap_store->set_run_observation(first, {.run_id = "A",
                                                             .turn_id = "A-turn",
-                                                            .session_id = overlap_store->session_id(),
+                                                            .session_id = overlap_store->options_r()->session_id,
                                                             .provider_id = {},
                                                             .parent_run_id = {},
                                                             .parent_turn_id = {},
@@ -786,7 +786,7 @@ void test_session_attachment_generation_alias_stress()
     overlap_store->clear_run_observation(run_a);
     auto run_b = overlap_store->set_run_observation(second, {.run_id = "B",
                                                              .turn_id = "B-turn",
-                                                             .session_id = overlap_store->session_id(),
+                                                             .session_id = overlap_store->options_r()->session_id,
                                                              .provider_id = {},
                                                              .parent_run_id = {},
                                                              .parent_turn_id = {},
@@ -814,7 +814,7 @@ void test_session_and_process_boundaries_are_independent()
   ava::observability::TraceContext session_context;
   session_context.run_id = "run";
   session_context.turn_id = "turn";
-  session_context.session_id = store->session_id();
+  session_context.session_id = store->options_r()->session_id;
   static_cast<void>(store->set_run_observation(observation, std::move(session_context)));
   auto appended = append_session_entry_for_test(
       *store, {.id = "entry-1", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"});

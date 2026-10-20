@@ -420,7 +420,7 @@ void test_coordinator_fallback_and_navigation_lifetime()
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
-  auto const source_id = session_w->store.session_id();
+  auto const source_id = session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(session);
   auto seeded = seed_committed_ordinary_turn(unlocked_session, "Design <skill>hidden scaffold</skill> durable navigation titles");
   expect(seeded.has_value(), seeded ? "title navigation committed turn is seeded" : seeded.error().format());
@@ -489,9 +489,9 @@ void test_session_specific_catalog_notifications_survive_navigation()
     return;
   CRITICAL_AREA_BEGIN_W(old_session);
   CRITICAL_AREA_BEGIN_W(late_session);
-  auto const old_session_id = old_session_w->store.session_id();
-  auto const late_session_id = late_session_w->store.session_id();
-  auto const new_session_id = new_session_w->store.session_id();
+  auto const old_session_id = old_session_w->store.options_r()->session_id;
+  auto const late_session_id = late_session_w->store.options_r()->session_id;
+  auto const new_session_id = new_session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(late_session);
   CRITICAL_AREA_END_W(old_session);
   CRITICAL_AREA_END_W(new_session);
@@ -505,7 +505,7 @@ void test_session_specific_catalog_notifications_survive_navigation()
   auto tree_builder = [&](ava::app::runtime::session_ts const& unlocked_current) {
     ++tree_builds;
     SCOPED_CRITICAL_AREA_CR(current_r, unlocked_current);
-    return ava::session::build_session_tree(current_r->workspace_dir(), current_r->paths().sessions_dir, current_r->store.session_id());
+    return ava::session::build_session_tree(current_r->workspace_dir(), current_r->paths().sessions_dir, current_r->store.options_r()->session_id);
   };
   auto cache = ava::app::build_application_catalog_cache(unlocked_old_session, {}, workspace_walker, tree_builder);
   ava::app::ApplicationCatalogCoordinator catalog(std::move(cache));
@@ -715,7 +715,7 @@ void test_runtime_trigger_is_after_completion_and_excludes_synthetic_turns()
       SCOPED_CRITICAL_AREA_W(session_w, *unlocked_session_result);
       auto authority = session_w->read_authority_1();
       auto entries = authority ? authority->load() : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(authority.error()));
-      auto metadata = entries ? ava::session::session_metadata_from_entries(session_w->store.session_id(), *entries)
+      auto metadata = entries ? ava::session::session_metadata_from_entries(session_w->store.options_r()->session_id, *entries)
                               : ava::core::Result<ava::session::SessionMetadataView>(std::unexpected(entries.error()));
       title_absent_at_done = metadata && metadata->effective_title().empty();
     }

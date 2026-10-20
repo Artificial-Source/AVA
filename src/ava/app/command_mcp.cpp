@@ -428,7 +428,7 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
                                                                         .data_json = ava::tools::permission_audit_data_json(event)};
                                 return runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry));
                               },
-                              .session_id = session_r->store.session_id(),
+                              .session_id = session_r->store.options_r()->session_id,
                               .provider_id = model_selection_r->model.provider_id,
                               .model_id = model_selection_r->model.model_id,
                               .current_dir = session_r->current_dir()};

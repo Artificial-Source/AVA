@@ -81,7 +81,7 @@ TrustSessionSnapshot trust_session_snapshot(runtime::session_ts& unlocked_sessio
           .run_controller = session_r->run_controller(),
           .append_target = session_r->append_target(),
           .delivery_manager = session_r->subagent_delivery_manager(),
-          .session_id = session_r->store.session_id()};
+          .session_id = session_r->store.options_r()->session_id};
 }
 
 ava::core::Result<std::optional<StagedProjectTrustMutation>> stage_trust_operation(ProjectTrustOperation operation, TrustSessionSnapshot const& snapshot)
@@ -210,7 +210,7 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
     SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
     publication_mismatch = session_w->subagent_delivery_manager() != current.delivery_manager || session_w->workspace_dir() != current.workspace_dir ||
                            session_w->run_controller() != current.run_controller || session_w->append_target() != current.append_target ||
-                           session_w->store.session_id() != current.session_id;
+                           session_w->store.options_r()->session_id != current.session_id;
     if (!publication_mismatch)
     {
       bool const selected_primary_is_permitted =

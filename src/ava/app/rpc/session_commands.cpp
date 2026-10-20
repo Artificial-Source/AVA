@@ -68,7 +68,7 @@ ava::core::Result<std::string> resolve_branch_source_session_id(runtime::session
   if (command.session_id && command.session_id->empty())
     return std::unexpected(invalid_rpc(command.type + " session_id must be non-empty when provided"));
   if (!command.session_id)
-    return current_r->store.session_id();
+    return current_r->store.options_r()->session_id;
 
   auto sessions = ava::session::SessionStore::list_sessions(current_r->workspace_dir(), current_r->paths().sessions_dir);
   if (!sessions)
@@ -244,7 +244,7 @@ ava::core::Result<bool> handle_session_rpc_command(RpcSessionCommandContext cont
     {
       SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
       coordinator = session_r->subagent_coordinator();
-      owner = session_r->store.session_id();
+      owner = session_r->store.options_r()->session_id;
     }
     if (!coordinator)
       return handled(write_error(context.output, command.id, invalid_rpc("job controls are unavailable")));
@@ -396,7 +396,7 @@ ava::core::Result<bool> handle_session_rpc_command(RpcSessionCommandContext cont
     {
       SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
       store = session_r->permission_rule_store();
-      session_id = session_r->store.session_id();
+      session_id = session_r->store.options_r()->session_id;
     }
     auto added = ava::permissions::add_persistent_permission_rule(store, std::move(*draft));
     if (!added)
@@ -425,7 +425,7 @@ ava::core::Result<bool> handle_session_rpc_command(RpcSessionCommandContext cont
     {
       SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
       store = session_r->permission_rule_store();
-      session_id = session_r->store.session_id();
+      session_id = session_r->store.options_r()->session_id;
     }
     auto removed = ava::permissions::remove_persistent_permission_rule(store, *command.rule_id);
     if (!removed)
@@ -511,7 +511,7 @@ ava::core::Result<bool> handle_session_rpc_command(RpcSessionCommandContext cont
     if (auto recovered = session_w->recover_source_for_mutation(*source_session_id, temporary_source_lease); !recovered)
       return handled(write_error(context.output, command.id, recovered.error()));
 
-    auto const* source_lease = *source_session_id == session_w->store.session_id() ? &session_w->lease() : &*temporary_source_lease;
+    auto const* source_lease = *source_session_id == session_w->store.options_r()->session_id ? &session_w->lease() : &*temporary_source_lease;
     auto branched = ava::session::create_session_branch(ava::session::SessionBranchOptions{
         .workspace_dir = session_w->workspace_dir(),
         .root_dir = session_w->paths().sessions_dir,
@@ -583,7 +583,7 @@ ava::core::Result<bool> handle_session_rpc_command(RpcSessionCommandContext cont
     auto source_session_id = resolve_branch_source_session_id(session_w, context.open_context, command);
     if (!source_session_id)
       return handled(write_error(context.output, command.id, source_session_id.error()));
-    bool const current_source = *source_session_id == session_w->store.session_id();
+    bool const current_source = *source_session_id == session_w->store.options_r()->session_id;
     std::optional<ava::session::SessionLease> temporary_source_lease;
     if (auto recovered = session_w->recover_source_for_mutation(*source_session_id, temporary_source_lease); !recovered)
       return handled(write_error(context.output, command.id, recovered.error()));

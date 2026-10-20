@@ -138,8 +138,8 @@ struct BranchFixture
   ava::app::BranchSummaryOperationRequest request(ava::app::BranchSummaryGenerator generator = nullptr) const
   {
     auto registry = ava::config::builtin_model_registry();
-    return {.current_session_id = current_store.session_id(),
-            .source_session_id = source_store.session_id(),
+    return {.current_session_id = current_store.options_r()->session_id,
+            .source_session_id = source_store.options_session_id_copy(),
             .source_session_path = source_store.session_path(),
             .source_label = "Abandoned parent work",
             .workspace_dir = workspace,
@@ -180,7 +180,7 @@ std::unique_ptr<BranchFixture> make_fixture(std::string_view name, bool append_s
 
   auto branched = ava::session::create_session_branch({.workspace_dir = workspace,
                                                        .root_dir = sessions_dir,
-                                                       .source_session_id = source->session_id(),
+                                                       .source_session_id = source->options_r()->session_id,
                                                        .branch_from_entry_id = fork_id,
                                                        .name = std::nullopt,
                                                        .labels = std::nullopt,
@@ -491,7 +491,7 @@ void test_explicit_confirmation_success_and_existing()
   auto source_contender = ava::session::SessionLease::acquire(fixture->source_store.session_path());
   auto awaiting = coordinator->snapshot();
   expect(source_contender && state->calls == 0 && awaiting.source_label == "Abandoned parent work" &&
-             awaiting.reason.find(fixture->source_store.session_id()) == std::string::npos && awaiting.reason.find("snapshot-secret") == std::string::npos &&
+             awaiting.reason.find(fixture->source_store.options_r()->session_id) == std::string::npos && awaiting.reason.find("snapshot-secret") == std::string::npos &&
              !awaiting.refresh_required,
          "preparation is read-only, releases temporary source authority, invokes no provider, and publishes only bounded display state");
   source_contender = ava::session::SessionLease{};
@@ -631,7 +631,7 @@ void test_typed_preparation_ineligibilities()
       if (ephemeral && target && authority)
       {
         auto request = fixture->request();
-        request.current_session_id = ephemeral->session_id();
+        request.current_session_id = ephemeral->options_r()->session_id;
         request.current_read_authority = *authority;
         request.current_controller = std::make_shared<ava::app::SessionRunController>(*target);
         auto coordinator = ava::app::BranchSummaryCoordinator::create();
@@ -683,8 +683,9 @@ void test_remaining_typed_preparation_ineligibilities()
   {
     auto current_entries = fixture->current_authority.load();
     auto missing_fork = ava::core::make_id("entry");
-    auto metadata = current_entries ? ava::session::make_session_metadata_entry({.parent_session_id = fixture->source_store.session_id(),
-                                                                                 .source_session_id = fixture->source_store.session_id(),
+    std::string const session_id = fixture->source_store.options_r()->session_id;
+    auto metadata = current_entries ? ava::session::make_session_metadata_entry({.parent_session_id = session_id,
+                                                                                 .source_session_id = session_id,
                                                                                  .branch_from_entry_id = missing_fork,
                                                                                  .branch_origin = "fork",
                                                                                  .actor = "test"},
@@ -707,8 +708,9 @@ void test_remaining_typed_preparation_ineligibilities()
   {
     auto const start_id = ava::core::make_id("entry");
     auto started = invalid_current->append(*invalid_lease, session_start(start_id));
-    auto metadata = ava::session::make_session_metadata_entry({.parent_session_id = fixture->source_store.session_id(),
-                                                               .source_session_id = fixture->source_store.session_id(),
+    std::string const session_id = fixture->source_store.options_r()->session_id;
+    auto metadata = ava::session::make_session_metadata_entry({.parent_session_id = session_id,
+                                                               .source_session_id = session_id,
                                                                .branch_from_entry_id = {},
                                                                .branch_origin = "fork",
                                                                .actor = "test"},
@@ -719,7 +721,7 @@ void test_remaining_typed_preparation_ineligibilities()
     if (started && metadata_appended && authority)
     {
       auto request = fixture->request();
-      request.current_session_id = invalid_current->session_id();
+      request.current_session_id = invalid_current->options_r()->session_id;
       request.current_read_authority = *authority;
       auto terminal = preparation_terminal(std::move(request));
       expect(terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::InvalidFork,
@@ -1452,7 +1454,7 @@ void test_stale_source_relation_identity_and_final_existing()
       {
         auto const marker_id = ava::core::make_id("entry");
         std::string data = "{\"schema_version\":1,\"summary\":\"won elsewhere\",\"source_session_id\":\"" +
-                           ava::core::json::escape(fixture->source_store.session_id()) + "\",\"branch_root_entry_id\":\"" +
+                           ava::core::json::escape(fixture->source_store.options_r()->session_id) + "\",\"branch_root_entry_id\":\"" +
                            ava::core::json::escape(fixture->branch_root_entry_id) + "\",\"branch_tip_entry_id\":\"" +
                            ava::core::json::escape(fixture->branch_tip_entry_id) +
                            "\",\"provider\":\"openai\",\"model\":\"gpt-5.5\",\"reason\":\"abandoned_parent\",\"actor\":\"tui\"}";
@@ -1481,7 +1483,7 @@ void test_matching_summary_is_existing_only_for_exact_final_coverage()
     return;
   auto const marker_id = ava::core::make_id("entry");
   std::string data = "{\"schema_version\":1,\"summary\":\"nonfinal competing summary\",\"source_session_id\":\"" +
-                     ava::core::json::escape(fixture->source_store.session_id()) + "\",\"branch_root_entry_id\":\"" +
+                     ava::core::json::escape(fixture->source_store.options_r()->session_id) + "\",\"branch_root_entry_id\":\"" +
                      ava::core::json::escape(fixture->branch_root_entry_id) + "\",\"branch_tip_entry_id\":\"" +
                      ava::core::json::escape(fixture->branch_tip_entry_id) +
                      "\",\"provider\":\"openai\",\"model\":\"gpt-5.5\",\"reason\":\"abandoned_parent\",\"actor\":\"tui\"}";
@@ -1854,8 +1856,9 @@ void test_runtime_request_factory_snapshots_without_authentication()
                                                             nullptr, std::move(provider_options));
   {
     SCOPED_CRITICAL_AREA_R(session_r, *runtime);
-    expect(request && request->current_session_id == session_r->store.session_id() &&
-               request->current_read_authority.session_id() == session_r->store.session_id() && request->current_controller == session_r->run_controller() &&
+    auto const options_r(session_r->store.options_r());
+    expect(request && request->current_session_id == options_r->session_id &&
+               request->current_read_authority.session_id() == options_r->session_id && request->current_controller == session_r->run_controller() &&
                request->provider_catalog.get() == catalog.get() && request->anchor_set == *anchors &&
                request->read_limits.max_file_bytes == ava::app::kBranchSummaryHardReadLimits.max_file_bytes &&
                request->read_limits.max_line_bytes == ava::app::kBranchSummaryHardReadLimits.max_line_bytes &&

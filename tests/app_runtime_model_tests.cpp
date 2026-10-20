@@ -429,7 +429,7 @@ void test_app_runtime_model_switch_persists_and_reopens()
     expect(model_selection_r->scoped_model_cycle && model_selection_r->scoped_model_cycle->size() == 2 &&
                (*model_selection_r->scoped_model_cycle)[0] == "anthropic/claude-test" && (*model_selection_r->scoped_model_cycle)[1] == "openai/gpt-5.5",
            "runtime session restores persisted scoped model cycle");
-    session_id = session_w->store.session_id();
+    session_id = session_w->store.options_r()->session_id;
   }
 
   auto model = ava::app::resolve_runtime_model(paths, "anthropic", "claude-test");
@@ -918,7 +918,7 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
   std::string session_id;
   {
     CRITICAL_AREA_BEGIN_W(session);
-    session_id = session_w->store.session_id();
+    session_id = session_w->store.options_r()->session_id;
 
     auto selected = session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = " low ", .budget_tokens = std::nullopt, .display = ""});
     {
@@ -1127,7 +1127,7 @@ void test_app_runtime_branch_construction_failure_rolls_back_created_file()
     expect(seed_source_attachment(unlocked_source), "TUI rollback test seeds an active source with a copyable attachment");
     {
       SCOPED_CRITICAL_AREA_W(source_w, unlocked_source);
-      source_id = source_w->store.session_id();
+      source_id = source_w->store.options_r()->session_id;
       source_path = source_w->store.session_path();
       std::filesystem::create_directories(paths.models_file);
     }
@@ -1146,7 +1146,7 @@ void test_app_runtime_branch_construction_failure_rolls_back_created_file()
     auto source_contender = ava::session::SessionLease::acquire(source_path);
     {
       SCOPED_CRITICAL_AREA_R(source_r, *unlocked_source_result);
-      source_id_unchanged = source_r->store.session_id() == source_id;
+      source_id_unchanged = source_r->store.options_r()->session_id == source_id;
     }
     expect(!forked && created_id && forked.error().message().find("rollback") == std::string::npos &&
                forked.error().format().find("rollback_attachment_disposition: preserved") != std::string::npos && destination_jsonl_removed &&
@@ -1176,7 +1176,7 @@ void test_app_runtime_branch_construction_failure_rolls_back_created_file()
     expect(seed_source_attachment(*unlocked_source_result), "startup fork rollback test seeds a source with a copyable attachment");
     {
       SCOPED_CRITICAL_AREA_W(source_w, *unlocked_source_result);
-      source_id = source_w->store.session_id();
+      source_id = source_w->store.options_r()->session_id;
       source_path = source_w->store.session_path();
     }
     auto const source_bytes = app_read_binary_file(source_path);
@@ -1239,7 +1239,7 @@ void test_app_runtime_initial_reasoning_level_option()
       ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
       expect(model_selection_r->reasoning && model_selection_r->reasoning->level == "high", "runtime startup applies initial reasoning level");
     }
-    session_id = session_w->store.session_id();
+    session_id = session_w->store.options_r()->session_id;
 
     auto entries = session_w->store.load();
     expect(entries.has_value(), "runtime startup reasoning test reloads session entries");

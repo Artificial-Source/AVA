@@ -325,7 +325,7 @@ DeliveryFixture make_fixture(std::string_view name, std::shared_ptr<DeliveryFact
 
 ava::agent::SubagentCoordinatorJobSnapshot start_completed(DeliveryFixture& fixture, std::string child = "child_delivery")
 {
-  auto parent = ava::app::runtime::session_ts::rat(fixture.unlocked_session_opt.value())->store.session_id();
+  auto parent = ava::app::runtime::session_ts::rat(fixture.unlocked_session_opt.value())->store.options_r()->session_id;
   auto started = fixture.coordinator->start_background(parent, {.title = "delivery", .description = "summarize", .child_session_id = std::move(child)},
                                                        [](ava::agent::BackgroundJobContext const&) {
                                                          return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed,
@@ -385,7 +385,7 @@ void test_ordinary_prompt_releases_unused_parents()
     }
     expect(abandoned == (exit_kind == 4), "only the injected callback exception abandons admission");
     auto controller = ava::app::runtime::session_ts::rat(*session)->run_controller();
-    auto id = ava::app::runtime::session_ts::rat(*session)->store.session_id();
+    auto id = ava::app::runtime::session_ts::rat(*session)->store.options_r()->session_id;
     expect(!controller->snapshot().active, "ordinary completion or abandoned guard leaves the controller idle");
     bool found = true;
     auto retained = fixture.manager->retained_session(id, context.workspace_dir, found, {.exact_session_id = true});
@@ -427,7 +427,7 @@ void test_idle_delivery_and_terminal_before_registration()
   expect(state->wait_completed(), "idle automatic delivery finishes through a fresh transport");
 
   CRITICAL_AREA_BEGIN_R(fixture_session);
-  std::string fixture_session_id = fixture_session_r->store.session_id();
+  std::string fixture_session_id = fixture_session_r->store.options_r()->session_id;
   auto fixture_workspace_dir = fixture_session_r->workspace_dir();
   auto history = fixture_session_r->read_authority_1();
   CRITICAL_AREA_END_R(fixture_session);
@@ -482,7 +482,7 @@ void test_active_turn_ordering_and_inactive_parent_navigation()
   expect(fixture.manager->refresh_parent(unlocked_fixture_session, options).has_value(), "navigation parent capsule refreshes");
 
   CRITICAL_AREA_BEGIN_R(fixture_session);
-  auto const parent_id = fixture_session_r->store.session_id();
+  auto const parent_id = fixture_session_r->store.options_r()->session_id;
   auto* const parent_controller = fixture_session_r->run_controller().get();
   ava::app::runtime::OpenContext continue_options;
   continue_options.workspace_dir = fixture_session_r->workspace_dir();
@@ -548,7 +548,7 @@ void test_active_turn_ordering_and_inactive_parent_navigation()
     return;
   ava::app::runtime::session_ts& unlocked_replacement = *unlocked_replacement_result;
 
-  auto const replacement_id = ava::app::runtime::session_ts::rat(unlocked_replacement)->store.session_id();
+  auto const replacement_id = ava::app::runtime::session_ts::rat(unlocked_replacement)->store.options_r()->session_id;
   expect(ava::app::runtime::Session::replace_with(unlocked_fixture_session, unlocked_replacement).has_value(), "navigation replaces the visible session");
 
   CRITICAL_AREA_BEGIN_W(fixture_session);
@@ -580,7 +580,7 @@ void test_active_turn_ordering_and_inactive_parent_navigation()
   auto snapshot = fixture.coordinator->snapshot(parent_id, started.job.identity.job_id);
   expect(snapshot && snapshot->job.delivery == ava::agent::SubagentDeliveryState::Acknowledged && snapshot->job.delivery_attempts == 1 && factories == 1,
          "inactive parent receives and acknowledges automatic delivery in exactly one attempt");
-  expect(ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.session_id() == replacement_id,
+  expect(ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.options_r()->session_id == replacement_id,
          "inactive delivery does not change the visible session");
   fixture.manager->shutdown();
 }
@@ -595,7 +595,7 @@ void test_retained_open_enforces_cwd_and_read_policy()
     return;
   auto context = fixture.session_r()->replacement_open_context({});
   context.exact_session_id = true;
-  auto const id = fixture.session_r()->store.session_id();
+  auto const id = fixture.session_r()->store.options_r()->session_id;
   auto controller = fixture.session_r()->run_controller();
   auto append_target = fixture.session_r()->append_target();
   auto original_authority = fixture.session_r()->read_authority_1();
@@ -705,7 +705,7 @@ void test_retained_session_workspace_isolation()
   foreign.subagent_coordinator = fixture.coordinator;
   foreign.subagent_delivery_manager = fixture.manager;
   auto rejected = ava::app::runtime::Session::open(foreign, {.sessionless = false,
-                                                             .requested_session_id = fixture.session_r()->store.session_id(),
+                                                             .requested_session_id = fixture.session_r()->store.options_r()->session_id,
                                                              .fork_session_id = std::nullopt,
                                                              .initial_session_name = std::nullopt,
                                                              .continue_last_session = false,
@@ -736,7 +736,7 @@ void test_capsule_generation_release_and_active_retention()
     return;
 
   CRITICAL_AREA_BEGIN_R(fixture_session);
-  auto const fixture_session_id = fixture_session_r->store.session_id();
+  auto const fixture_session_id = fixture_session_r->store.options_r()->session_id;
   auto const fixture_workspace_dir = fixture_session_r->workspace_dir();
   auto const parent_controller = fixture_session_r->run_controller();
   CRITICAL_AREA_END_R(fixture_session);
@@ -822,7 +822,7 @@ void test_runtime_mutations_refresh_retained_delivery_configuration()
   bool retained_found = false;
   auto const fixture_model_id = fixture_session_w->model_selection_r()->model.model_id;
   auto retained =
-      fixture.manager->retained_session(fixture_session_w->store.session_id(), fixture_session_w->workspace_dir(), retained_found, {.exact_session_id = true});
+      fixture.manager->retained_session(fixture_session_w->store.options_r()->session_id, fixture_session_w->workspace_dir(), retained_found, {.exact_session_id = true});
   bool retained_matches = false;
   if (retained_found && retained)
   {
@@ -899,7 +899,7 @@ void test_bounded_delivery_retries()
 
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
-  auto session_id = session_w->store.session_id();
+  auto session_id = session_w->store.options_r()->session_id;
   auto workspace_dir = session_w->workspace_dir();
   CRITICAL_AREA_END_W(session);
 
@@ -1004,7 +1004,7 @@ void test_retry_after_synthetic_user_append_uses_same_marker()
   expect(manager->refresh_parent(unlocked_session, options).has_value(), "after-user-append retry parent refreshes");
 
   CRITICAL_AREA_BEGIN_W(session);
-  auto session_id = session_w->store.session_id();
+  auto session_id = session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(session);
   auto started =
       coordinator->start_background(session_id, {.title = "retry", .description = "retry", .child_session_id = "child_user_append"}, [](auto const&) {
@@ -1051,7 +1051,7 @@ void test_two_pending_deliveries_survive_coordinator_retention()
   auto second = start_completed(fixture, "child_retention_two");
   if (first.job.identity.job_id.empty() || second.job.identity.job_id.empty())
     return;
-  auto const parent = fixture.session_r()->store.session_id();
+  auto const parent = fixture.session_r()->store.options_r()->session_id;
   auto first_terminal = fixture.coordinator->wait(parent, first.job.identity.job_id, std::chrono::seconds(2));
   auto second_terminal = fixture.coordinator->wait(parent, second.job.identity.job_id, std::chrono::seconds(2));
   expect(first_terminal && second_terminal && admission->wait_reached() && fixture.coordinator->pending_deliveries(parent)->size() == 2,
@@ -1110,7 +1110,7 @@ void test_forged_text_marker_cannot_ack_delivery()
   if (started.job.identity.job_id.empty())
     return;
 
-  auto const fixture_session_id = ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.session_id();
+  auto const fixture_session_id = ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.options_r()->session_id;
   auto terminal = fixture.coordinator->wait(fixture_session_id, started.job.identity.job_id, std::chrono::seconds(2));
   auto const fingerprint = terminal ? delivery_prompt_fingerprint(terminal->job) : std::string{};
   auto attempt = fixture.coordinator->record_delivery_attempt(fixture_session_id, started.job.identity.job_id, "attempt_forged", fingerprint);
@@ -1135,7 +1135,7 @@ void test_forged_text_marker_cannot_ack_delivery()
   options.access_token = "stale-forged-token";
   expect(fixture.manager->refresh_parent(unlocked_fixture_session, options).has_value(), "forged-marker fixture registers delivery parent");
   expect(state->wait_completed(), "forged text marker does not suppress the real automatic provider integration");
-  auto acknowledged = fixture.coordinator->snapshot(fixture.session_r()->store.session_id(), started.job.identity.job_id);
+  auto acknowledged = fixture.coordinator->snapshot(fixture.session_r()->store.options_r()->session_id, started.job.identity.job_id);
   std::size_t factories = 0;
   {
     std::lock_guard lock(state->mutex);
@@ -1164,7 +1164,7 @@ void test_automatic_delivery_uses_fresh_untrusted_prompt_authority()
                       session_r->ambient_extension_free_system_prompt().find(kProjectCanary) != std::string::npos;
   }
   auto stale_completed = start_completed(fixture, "child_pending_before_revocation");
-  auto const parent_id = fixture.session_r()->store.session_id();
+  auto const parent_id = fixture.session_r()->store.options_r()->session_id;
   if (!stale_completed.job.identity.job_id.empty())
     static_cast<void>(fixture.coordinator->wait(parent_id, stale_completed.job.identity.job_id, std::chrono::seconds(3)));
   auto denied = ava::app::run_command(session, ava::app::CommandRequest{.command = "/trust deny"});
@@ -1207,7 +1207,7 @@ void test_workspace_revocation_rejects_running_job_and_in_flight_delivery_before
       return;
     auto& session = fixture.unlocked_session_opt.value();
     auto trusted = ava::app::run_command(session, ava::app::CommandRequest{.command = "/trust project"});
-    auto const session_id = fixture.session_r()->store.session_id();
+    auto const session_id = fixture.session_r()->store.options_r()->session_id;
     auto blocking = std::make_shared<DeliveryBlockingJob>();
     auto started = fixture.coordinator->start_background(session_id, {.title = "running conflict", .child_session_id = "child_running_conflict"},
                                                          [blocking](auto const& context) { return blocking->run(context); });
@@ -1247,7 +1247,7 @@ void test_workspace_revocation_rejects_running_job_and_in_flight_delivery_before
     bool const in_flight = admission->wait_reached();
     auto denied = ava::app::run_command(session, ava::app::CommandRequest{.command = "/trust deny"});
     auto const persisted = ava::app::load_project_trust_state(fixture.paths, fixture.session_r()->workspace_dir());
-    auto pending = fixture.coordinator->pending_deliveries(fixture.session_r()->store.session_id());
+    auto pending = fixture.coordinator->pending_deliveries(fixture.session_r()->store.options_r()->session_id);
     expect(trusted && refreshed && !completed.job.identity.job_id.empty() && in_flight && !denied &&
                persisted.decision == ava::app::ProjectTrustDecision::Trusted && pending && pending->size() == 1 &&
                pending->front().job.delivery != ava::agent::SubagentDeliveryState::Acknowledged,
@@ -1270,7 +1270,7 @@ void test_same_process_reconciliation_acks_existing_commit_without_rerun()
   if (started.job.identity.job_id.empty())
     return;
 
-  auto const fixture_session_id = ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.session_id();
+  auto const fixture_session_id = ava::app::runtime::session_ts::rat(unlocked_fixture_session)->store.options_r()->session_id;
   auto terminal = fixture.coordinator->wait(fixture_session_id, started.job.identity.job_id, std::chrono::seconds(2));
   expect(terminal && terminal->job.delivery == ava::agent::SubagentDeliveryState::Pending, "reconciliation fixture has process-local pending delivery");
   auto const marker = "[AVA_SUBAGENT_DELIVERY_V1 delivery_id=" + started.job.identity.delivery_id + "]";

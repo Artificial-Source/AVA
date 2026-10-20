@@ -127,7 +127,7 @@ ava::event::EventEnvelopeContext rpc_event_context(std::string_view request_id)
 
 std::string session_id_snapshot(runtime::session_ts const& unlocked_session)
 {
-  return runtime::session_ts::crat(unlocked_session)->store.session_id();
+  return runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id;
 }
 
 ava::event::EventEnvelope resolver_event_envelope(std::string name, std::string request_id, std::string correlation_id, std::string session_id,

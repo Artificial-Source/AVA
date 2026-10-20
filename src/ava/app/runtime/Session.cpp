@@ -634,7 +634,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "failed to allocate the runtime session controller"));
   }
-  if (auto registered = delivery_manager->register_workspace_controller(workspace_dir, store.session_id(), run_controller); !registered)
+  if (auto registered = delivery_manager->register_workspace_controller(workspace_dir, store.options_r()->session_id, run_controller); !registered)
     return std::unexpected(std::move(registered.error()));
   SessionResources resources{.lease = std::move(lease),
                              .session_process_scope = std::move(session_process_scope),
@@ -668,7 +668,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
     }
   }
   if (!sessionless)
-    session.subagent_delivery_manager()->attach_parent(session.store.session_id());
+    session.subagent_delivery_manager()->attach_parent(session.store.options_r()->session_id);
   return session;
 }
 
@@ -804,8 +804,8 @@ ava::core::VoidResult Session::replace_with(session_ts& unlocked_current, sessio
   CRITICAL_AREA_BEGIN_W(replacement);
 
   // We might need to call release_detached_parent on this after releasing the locks.
-  auto const detached_parent_id = current_w->sessionless() ? std::string{} : current_w->store.session_id();
-  bool const leaves_detached_parent = !detached_parent_id.empty() && (replacement_w->sessionless() || replacement_w->store.session_id() != detached_parent_id);
+  auto const detached_parent_id = current_w->sessionless() ? std::string{} : current_w->store.options_r()->session_id;
+  bool const leaves_detached_parent = !detached_parent_id.empty() && (replacement_w->sessionless() || replacement_w->store.options_r()->session_id != detached_parent_id);
   auto const old_subagent_delivery_manager = old_resources.subagent_delivery_manager;
 
   // Replace current with replacement.
@@ -889,7 +889,7 @@ ava::core::VoidResult Session::replace_with(session_ts& unlocked_current, sessio
 ava::core::VoidResult Session::recover_source_for_mutation(std::string const& source_session_id,
                                                            std::optional<ava::session::SessionLease>& temporary_source_lease)
 {
-  if (source_session_id == store.session_id())
+  if (source_session_id == store.options_r()->session_id)
   {
     auto recovered = store.recover_torn_tail(lease(), session_read_limits());
     if (!recovered)
@@ -957,7 +957,7 @@ ava::core::Result<ava::session::SessionMetadataView> Session::append_metadata_1(
   if (auto appended = append_owned(*entry); !appended)
     return std::unexpected(std::move(appended.error()));
   entries->push_back(std::move(*entry));
-  return ava::session::session_metadata_from_entries(store.session_id(), *entries);
+  return ava::session::session_metadata_from_entries(store.options_r()->session_id, *entries);
 }
 
 ava::core::VoidResult Session::append_mode_change_1(ava::agent::Mode mode)
@@ -1161,7 +1161,7 @@ ava::core::Result<ava::session::SessionMetadataView> Session::load_metadata() co
   auto entries = read_authority->load();
   if (!entries)
     return std::unexpected(std::move(entries.error()));
-  return ava::session::session_metadata_from_entries(store.session_id(), *entries);
+  return ava::session::session_metadata_from_entries(store.options_r()->session_id, *entries);
 }
 
 std::vector<std::filesystem::path> Session::ava_authority_roots_1() const

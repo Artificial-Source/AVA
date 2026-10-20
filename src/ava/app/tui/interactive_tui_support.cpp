@@ -194,7 +194,7 @@ void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
 
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::tuple{session_r->store.session_id(), session_r->append_target(), session_r->system_prompt(), session_r->read_authority_1()};
+    return std::tuple{session_r->store.options_session_id_copy(), session_r->append_target(), session_r->system_prompt(), session_r->read_authority_1()};
   }();
   auto& [session_id, append_target, system_prompt, read_authority] = snapshot;
   ava::session::Stats updated_stats;
@@ -214,7 +214,7 @@ void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
   updated_stats.system_prompt_tokens = ava::session::estimate_tokens(system_prompt);
 
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-  if (session_w->store.session_id() != session_id || session_w->append_target() != append_target || session_w->system_prompt() != system_prompt)
+  if (session_w->store.options_r()->session_id != session_id || session_w->append_target() != append_target || session_w->system_prompt() != system_prompt)
     return;
   // Publish the history and prompt estimates as one canonical change so frontend totals use one coherent snapshot.
   session_w->session_stats().change([&updated_stats](ava::session::Stats& stats) { stats = std::move(updated_stats); });
