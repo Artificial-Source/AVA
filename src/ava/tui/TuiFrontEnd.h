@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ava/app/frontend/Directories.h"
-#include "ava/app/frontend/FrontEnd.h"
-#include "ava/app/frontend/GitBranch.h"
-#include "ava/app/frontend/ModelSelection.h"
-#include "ava/app/frontend/PromptMetadata.h"
-#include "ava/app/frontend/SessionStats.h"
+#include "ava/frontend/Directories.h"
+#include "ava/frontend/FrontEnd.h"
+#include "ava/frontend/GitBranch.h"
+#include "ava/frontend/ModelSelection.h"
+#include "ava/frontend/PromptMetadata.h"
+#include "ava/frontend/SessionStats.h"
 
 // For OLD API
 #include "ava/tui/runtime.h"    // TuiRuntimeOptions

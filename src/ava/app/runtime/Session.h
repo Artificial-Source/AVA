@@ -14,7 +14,6 @@
 #include "TrustState.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
-#include "ava/app/frontend/UnlockedData.h"
 #include "ava/app/runtime/session_ts.h"
 #include "ava/app/session_run_controller.h"
 #include "ava/agent/agent_config.h"

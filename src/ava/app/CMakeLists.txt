@@ -120,14 +120,6 @@ target_sources(ava_app
     "runtime/GitBranch.cpp"
     "runtime/markdown_files.cpp"
     "runtime/command_names.cpp"
-    "frontend/Data.cxx"
-    "frontend/Directories.cxx"
-    "frontend/FeedbackKey.cxx"
-    "frontend/FrontEnd.cxx"
-    "frontend/GitBranch.cxx"
-    "frontend/ModelSelection.cxx"
-    "frontend/PromptMetadata.cxx"
-    "frontend/SessionStats.cxx"
 )
 
 target_include_directories(ava_app
