@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ava/app/runtime/UnlockedData.h"
+#include "ava/app/frontend/UnlockedData.h"
 #include "ava/app/runtime/session_ts.h"
 
 #include <filesystem>

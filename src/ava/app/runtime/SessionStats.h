@@ -1,6 +1,6 @@
 #pragma once
 
-#include "UnlockedData.h"
+#include "ava/app/frontend/UnlockedData.h"
 #include "ava/session/Stats.h"
 
 namespace ava::app::runtime {

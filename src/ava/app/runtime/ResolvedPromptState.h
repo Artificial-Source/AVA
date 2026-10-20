@@ -3,7 +3,7 @@
 #include "BasePromptMetadata.h"
 #include "ContextSourceMetadata.h"
 #include "FreshnessSourceMetadata.h"
-#include "UnlockedData.h"
+#include "ava/app/frontend/UnlockedData.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/agent/mode.h"
 

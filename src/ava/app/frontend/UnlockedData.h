@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ava/app/frontend/Data.h"
-#include "ava/app/runtime/UnlockedDataPolicy.h"
+#include "UnlockedDataPolicy.h"
+#include "Data.h"
 #include "threadsafe/threadsafe.h"
 #include "utils/macros.h"
 #include <utility>
