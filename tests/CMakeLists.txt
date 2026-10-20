@@ -1450,7 +1450,7 @@ if(AVA_AVA_LAUNCHING_TESTS)
   set_property(TEST ${AVA_AVA_LAUNCHING_TESTS} APPEND PROPERTY ENVIRONMENT "LIBCWD_NO_STARTUP_MSGS=1;AVA_NO_DEBUG_OUTPUT=1")
 endif()
 
-# Apply the finite default per-test TIMEOUT (120s) to every registered test
+# Apply the finite default per-test TIMEOUT (60s) to every registered test
 # without an explicit limit, then the configure-time AVA_DEBUG_NO_TIMEOUT
 # debug override. Both layers live in test_timeout_policy.cmake so the
 # focused ava_tests.test_timeout_policy self-test exercises the real policy;

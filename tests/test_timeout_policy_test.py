@@ -88,7 +88,7 @@ class TimeoutPolicyTests(unittest.TestCase):
 
     def test_default_fills_only_unset_timeouts(self) -> None:
         timeouts = self.configure_timeouts()
-        self.assertEqual(timeouts["fixture.default"], 120)
+        self.assertEqual(timeouts["fixture.default"], 60)
         self.assertEqual(timeouts["fixture.explicit_narrow"], 30)
         self.assertEqual(timeouts["fixture.explicit_long"], 240)
 
