@@ -39,7 +39,7 @@ void Signals::signal_handler(int signal_number) noexcept
 
 // Reserve AVA's process signals while construction is still single-threaded.
 // SIGPIPE remains blocked and ignored; command parsing later selects dispositions for the foreground control signals.
-Signals::Signals(utils::Badge<Application>) : signals_({SIGHUP, SIGINT, SIGPIPE, SIGTERM})
+Signals::Signals(utils::Badge<Application>) : signals_(CWDEBUG_ONLY(NAMESPACE_DEBUG::being_traced() ? used_signums_gdb :) used_signums)
 {
   DoutEntering(dc::signals, "core::Signals::Signals()");
 }
