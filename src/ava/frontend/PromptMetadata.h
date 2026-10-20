@@ -7,7 +7,7 @@
 #include <cstddef>
 #include "debug.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 // Frontend projection of the observable mode and context-source count.
 class PromptMetadata
@@ -28,7 +28,7 @@ class PromptMetadata
   explicit PromptMetadata(FrontEnd const* frontend) : frontend_(frontend) { }
 
   // Connect once to the registered backend metadata at unlocked_metadata's stable address.
-  void initialize(runtime::PromptModeAndContextSources_ts const* unlocked_metadata);
+  void initialize(app::runtime::PromptModeAndContextSources_ts const* unlocked_metadata);
   // Mark both display strings potentially stale from a backend notification thread.
   void dirty() { dirty_ = true; }
 
@@ -40,4 +40,4 @@ class PromptMetadata
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

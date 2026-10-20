@@ -14,14 +14,14 @@ namespace ava::tui {
 
 struct TuiRuntimeOptions;
 
-class TuiFrontEnd : public app::frontend::FrontEnd
+class TuiFrontEnd : public frontend::FrontEnd
 {
  private:
-  app::frontend::ModelSelection model_selection_;
-  app::frontend::PromptMetadata prompt_metadata_;
-  app::frontend::SessionStats session_stats_;
-  app::frontend::Directories directories_;
-  app::frontend::GitBranch git_branch_;
+  frontend::ModelSelection model_selection_;
+  frontend::PromptMetadata prompt_metadata_;
+  frontend::SessionStats session_stats_;
+  frontend::Directories directories_;
+  frontend::GitBranch git_branch_;
 
  public:
   // Explicitly connect session percentages to this frontend's model projection.
@@ -38,17 +38,17 @@ class TuiFrontEnd : public app::frontend::FrontEnd
 
   // Schedule a refresh on the frontend of the registered Data object identified by `index`.
   // Called from Data::notify() on the notifying backend thread when that object's data was changed.
-  void data_changed(app::frontend::DataListIndex index) override;
+  void data_changed(frontend::DataListIndex index) override;
 
   // Accessors.
 
-  app::frontend::ModelSelection& model_selection() { return model_selection_; }
-  app::frontend::ModelSelection const& model_selection() const { return model_selection_; }
-  app::frontend::PromptMetadata& prompt_metadata() { return prompt_metadata_; }
-  app::frontend::SessionStats& session_stats() { return session_stats_; }
-  app::frontend::SessionStats const& session_stats() const { return session_stats_; }
-  app::frontend::Directories& directories() { return directories_; }
-  app::frontend::GitBranch& git_branch() { return git_branch_; }
+  frontend::ModelSelection& model_selection() { return model_selection_; }
+  frontend::ModelSelection const& model_selection() const { return model_selection_; }
+  frontend::PromptMetadata& prompt_metadata() { return prompt_metadata_; }
+  frontend::SessionStats& session_stats() { return session_stats_; }
+  frontend::SessionStats const& session_stats() const { return session_stats_; }
+  frontend::Directories& directories() { return directories_; }
+  frontend::GitBranch& git_branch() { return git_branch_; }
 
   // OLD API
   [[nodiscard]] int run_interactive_composer(TuiRuntimeOptions options);

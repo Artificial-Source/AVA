@@ -8,7 +8,7 @@
 #include <atomic>
 #include "debug.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 // Frontend projection of canonical session statistics, including both active-context estimates.
 // Refresh and snapshot access are confined to the frontend thread; dirty() may be called by backend notification threads.
@@ -46,7 +46,7 @@ class SessionStats
   SessionStats(FrontEnd const* frontend, ModelSelection* model_selection) : frontend_(frontend), model_selection_(model_selection) { }
 
   // Connect this cache once to the registered canonical statistics at its stable address.
-  void initialize(runtime::SessionStats_ts const* unlocked_stats);
+  void initialize(app::runtime::SessionStats_ts const* unlocked_stats);
 
   void dirty() { dirty_ = true; }
 
@@ -83,4 +83,4 @@ class SessionStats
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

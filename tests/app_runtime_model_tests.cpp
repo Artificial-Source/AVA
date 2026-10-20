@@ -52,14 +52,14 @@ using namespace ava::tests;
 
 namespace {
 
-class CallbackFrontEnd final : public ava::app::frontend::FrontEnd
+class CallbackFrontEnd final : public ava::frontend::FrontEnd
 {
  public:
-  std::function<void(ava::app::frontend::DataListIndex)> on_data_changed;
+  std::function<void(ava::frontend::DataListIndex)> on_data_changed;
 
   void initialize_frontend_state(app::runtime::SessionConstReadAccess const&) override { }
 
-  void data_changed(ava::app::frontend::DataListIndex index) override
+  void data_changed(ava::frontend::DataListIndex index) override
   {
     if (on_data_changed)
       on_data_changed(index);
@@ -72,7 +72,7 @@ class CallbackFrontEnd final : public ava::app::frontend::FrontEnd
 
 void test_unlocked_data_access_and_notifications()
 {
-  using data_type = ava::app::frontend::UnlockedData<std::string>;
+  using data_type = ava::frontend::UnlockedData<std::string>;
   static_assert(std::derived_from<data_type::wat, data_type::rat>);
   static_assert(std::derived_from<data_type::wat, data_type::crat>);
   static_assert(std::move_constructible<data_type::wat>);
@@ -81,7 +81,7 @@ void test_unlocked_data_access_and_notifications()
   data_type data(&frontend, "seven");
   int notifications = 0;
   std::string observed_value;
-  frontend.on_data_changed = [&](ava::app::frontend::DataListIndex) {
+  frontend.on_data_changed = [&](ava::frontend::DataListIndex) {
     ++notifications;
     data_type::crat data_r(std::as_const(data));
     observed_value = *data_r;

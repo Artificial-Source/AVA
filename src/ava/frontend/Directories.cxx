@@ -1,7 +1,7 @@
 #include "sys.h"
 #include "Directories.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 // Compare both displayed paths, then retain a full copy including additional writable directories.
 // Only an actual path-text change marks the corresponding display string pending.
@@ -9,9 +9,9 @@ void Directories::refresh_snapshot()
 {
   Data const* data = frontend_->get_data(index_);
   // Initialize with a stable registered Directories_ts before refreshing this projection.
-  ASSERT(dynamic_cast<runtime::Directories_ts const*>(data) != nullptr);
-  auto const* unlocked_directories = static_cast<runtime::Directories_ts const*>(data);
-  runtime::Directories_ts::crat directories_r(*unlocked_directories);
+  ASSERT(dynamic_cast<app::runtime::Directories_ts const*>(data) != nullptr);
+  auto const* unlocked_directories = static_cast<app::runtime::Directories_ts const*>(data);
+  app::runtime::Directories_ts::crat directories_r(*unlocked_directories);
 
   workspace_root_.changed_ = workspace_root_.changed_ || directories_snapshot_.workspace_dir != directories_r->workspace_dir;
   current_directory_.changed_ = current_directory_.changed_ || directories_snapshot_.current_dir != directories_r->current_dir;
@@ -19,7 +19,7 @@ void Directories::refresh_snapshot()
 }
 
 // Connect to unlocked_directories at its registered final address and request an initial copy.
-void Directories::initialize(runtime::Directories_ts const* unlocked_directories)
+void Directories::initialize(app::runtime::Directories_ts const* unlocked_directories)
 {
   // Call initialize exactly once for each frontend projection.
   ASSERT(index_.undefined());
@@ -53,4 +53,4 @@ RefreshResult<std::string const&> Directories::current_directory_refresh()
   return {current_directory_.display_, changed};
 }
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

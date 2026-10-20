@@ -7,7 +7,7 @@
 #include <utility>
 #include "debug.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 class FrontEnd;
 
 // Moving an object derived from an `UnlockedData` must behave as follows:
@@ -174,4 +174,4 @@ UnlockedData<T>& UnlockedData<T>::operator=(UnlockedData&& orig)
   return *this;
 }
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

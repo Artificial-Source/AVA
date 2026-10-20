@@ -5,7 +5,7 @@
 #include "ModelSelection.h"
 #include "ava/config/model_profiles.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 // Return the explicit model display name or derive the configured label from its identifier.
 //static
@@ -16,11 +16,11 @@ std::string ModelSelection::model_display_str(ava::config::ModelInfo const& mode
 
 // Project the optional canonical reasoning selection to its frontend display value.
 //static
-std::string ModelSelection::reasoning_display_str(std::optional<runtime::ReasoningSelection> const& reasoning)
+std::string ModelSelection::reasoning_display_str(std::optional<app::runtime::ReasoningSelection> const& reasoning)
 {
   if (reasoning)
   {
-    // Don't set the optional to a runtime::ReasoningSelection with an empty `level`.
+    // Don't set the optional to a app::runtime::ReasoningSelection with an empty `level`.
     ASSERT(!reasoning->level.empty());
     return reasoning->level;
   }
@@ -35,9 +35,9 @@ void ModelSelection::refresh()
   Data const* data = frontend_->get_data(index_);
   // index_ must be set to the index returned by FrontEnd::register_data while registering a ModelSelection_ts.
   // The life-time of that ModelSelection_ts must be larger than the use of this function, and never be moved in memory.
-  ASSERT(dynamic_cast<runtime::ModelSelection_ts const*>(data) != nullptr);
-  runtime::ModelSelection_ts const* unlocked_model_selection = static_cast<runtime::ModelSelection_ts const*>(data);
-  runtime::ModelSelection_ts::crat model_selection_r{*unlocked_model_selection};
+  ASSERT(dynamic_cast<app::runtime::ModelSelection_ts const*>(data) != nullptr);
+  app::runtime::ModelSelection_ts const* unlocked_model_selection = static_cast<app::runtime::ModelSelection_ts const*>(data);
+  app::runtime::ModelSelection_ts::crat model_selection_r{*unlocked_model_selection};
 
   auto const old_model = model_display_str(model_snapshot_);
   auto const new_model = model_display_str(model_selection_r->model);
@@ -74,7 +74,7 @@ void ModelSelection::refresh()
 }
 
 // Connect this projection to the canonical model selection exactly once.
-void ModelSelection::initialize(runtime::ModelSelection_ts const* unlocked_model_selection)
+void ModelSelection::initialize(app::runtime::ModelSelection_ts const* unlocked_model_selection)
 {
   // Only call initialize once.
   ASSERT(index_.undefined());
@@ -82,4 +82,4 @@ void ModelSelection::initialize(runtime::ModelSelection_ts const* unlocked_model
   dirty_ = true;
 }
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

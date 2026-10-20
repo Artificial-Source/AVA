@@ -5,7 +5,7 @@
 #include <iosfwd>
 #endif
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 enum class KeyType
 {
@@ -42,4 +42,4 @@ struct FeedbackKey
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

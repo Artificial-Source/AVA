@@ -6,7 +6,7 @@
 #include <mutex>
 #include <utility>
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 template <typename T>
 class UnlockedData;
@@ -104,4 +104,4 @@ class PrimitiveDataPolicy
 };
 
 } // namespace detail
-} // namespace ava::app::frontend
+} // namespace ava::frontend

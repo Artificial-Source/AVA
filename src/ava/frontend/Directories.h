@@ -6,13 +6,13 @@
 #include <atomic>
 #include <string>
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 class Directories
 {
  private:
   FrontEnd const* frontend_;
-  runtime::Directories directories_snapshot_;
+  app::runtime::Directories directories_snapshot_;
   DisplayString workspace_root_;
   DisplayString current_directory_;
   std::atomic_bool dirty_;
@@ -23,7 +23,7 @@ class Directories
  public:
   explicit Directories(FrontEnd const* frontend) : frontend_(frontend) { }
 
-  void initialize(runtime::Directories_ts const* unlocked_directories);
+  void initialize(app::runtime::Directories_ts const* unlocked_directories);
   void dirty() { dirty_ = true; }
 
   RefreshResult<std::string const&> workspace_root_refresh();
@@ -32,4 +32,4 @@ class Directories
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

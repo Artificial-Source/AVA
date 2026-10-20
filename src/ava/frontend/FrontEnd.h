@@ -6,15 +6,13 @@
 
 #include <string>
 
-namespace ava::app {
-
-namespace runtime {
+namespace ava::app::runtime {
 // Avoid having to define Session.
 using SessionUnlockedBase = threadsafe::Unlocked<Session, threadsafe::policy::Primitive<SessionMutex>>;
 using SessionConstReadAccess = threadsafe::AccessConst<SessionUnlockedBase>;
-} // namespace runtime
+} // namespace ava::app::runtime
 
-namespace frontend {
+namespace ava::frontend {
 
 // A string as displayed on the UI.
 // This type is used to store (private) state in snapshot objects, in the form of a display string,
@@ -66,10 +64,10 @@ class FrontEnd
   DataListIndex register_data(Data const* data);
 
   // Register all Data (derived) objects.
-  void register_frontend_data(runtime::session_ts& unlocked_session);
+  void register_frontend_data(app::runtime::session_ts& unlocked_session);
 
   // Let the derived class initialize its displayable state. Called by FrontEnd::register_frontend_data.
-  virtual void initialize_frontend_state(runtime::SessionConstReadAccess const& session_r) = 0;
+  virtual void initialize_frontend_state(app::runtime::SessionConstReadAccess const& session_r) = 0;
 
   // One of the registered Data objects was changed. Called by the backend.
   virtual void data_changed(DataListIndex index) = 0;
@@ -80,5 +78,4 @@ class FrontEnd
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-} // namespace frontend
-} // namespace ava::app
+} // namespace ava::frontend

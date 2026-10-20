@@ -1,19 +1,19 @@
 #pragma once
 
 #include "FrontEnd.h"
-#include "ava/app/runtime/Session.h" // runtime::ModelSelection
+#include "ava/app/runtime/ModelSelection.h"     // app::runtime::ModelSelection_ts
 
 #include <atomic>
 #include "debug.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 class ModelSelection
 {
  private:
   FrontEnd const* frontend_;
   config::ModelInfo model_snapshot_;                                                    // Copy of the canonical ava::app::runtime::ModelSelection::model.
-  std::optional<runtime::ReasoningSelection> reasoning_snapshot_ = std::nullopt;        // Copy of the canonical ava::app::runtime::ModelSelection::reasoning.
+  std::optional<app::runtime::ReasoningSelection> reasoning_snapshot_ = std::nullopt;   // Copy of the canonical ava::app::runtime::ModelSelection::reasoning.
   DataListIndex index_;
   std::atomic_bool dirty_;
 
@@ -32,7 +32,7 @@ class ModelSelection
   // reasoning is the canonical optional selection from the model-selection snapshot.
   // Return no level when reasoning is unavailable or no non-empty level is selected.
   // Callers reading shared state must keep both arguments protected by the same model-selection lock.
-  static std::string reasoning_display_str(std::optional<runtime::ReasoningSelection> const& reasoning);
+  static std::string reasoning_display_str(std::optional<app::runtime::ReasoningSelection> const& reasoning);
 
   // Refresh all cached projections from the registered canonical model selection under one read lock.
   void refresh();
@@ -42,7 +42,7 @@ class ModelSelection
   ModelSelection(FrontEnd const* frontend) : frontend_(frontend) { }
 
   // Connect once to unlocked_model_selection at its stable registered address and request an initial refresh.
-  void initialize(runtime::ModelSelection_ts const* unlocked_model_selection);
+  void initialize(app::runtime::ModelSelection_ts const* unlocked_model_selection);
 
   // Mark the snapshot stale so the next public refresh observes canonical state.
   void dirty() { dirty_ = true; }
@@ -105,4 +105,4 @@ class ModelSelection
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

@@ -7,7 +7,7 @@
 #include <string>
 #include "debug.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 // Cache a frontend-thread snapshot of the backend's last observed Git branch.
 // Backend notifications only invalidate the snapshot; they do not read the filesystem.
@@ -28,7 +28,7 @@ class GitBranch
   explicit GitBranch(FrontEnd const* frontend) : frontend_(frontend) { }
 
   // Connect once to the stable registered unlocked_git_branch and request the initial copy.
-  void initialize(runtime::GitBranch_ts const* unlocked_git_branch);
+  void initialize(app::runtime::GitBranch_ts const* unlocked_git_branch);
 
   // Mark the snapshot stale from a backend notification thread.
   void dirty() { dirty_ = true; }
@@ -50,4 +50,4 @@ class GitBranch
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

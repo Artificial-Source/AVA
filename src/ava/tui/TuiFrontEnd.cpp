@@ -28,10 +28,10 @@ int TuiFrontEnd::run(TuiRuntimeOptions options)
 
 // Record possible canonical changes from a notifying backend thread for the next frontend refresh.
 // This callback does not itself wake the event loop or access the terminal.
-void TuiFrontEnd::data_changed(app::frontend::DataListIndex index)
+void TuiFrontEnd::data_changed(frontend::DataListIndex index)
 {
   DoutEntering(dc::frontend, "TuiFrontEnd::data_changed(" << index << ")");
-  app::frontend::Data const* data = get_data(index);
+  frontend::Data const* data = get_data(index);
 
   if (dynamic_cast<app::runtime::Directories_ts const*>(data) != nullptr)
   {
