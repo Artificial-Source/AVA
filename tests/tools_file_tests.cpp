@@ -3,6 +3,7 @@
 #include "ava/agent/mode.h"
 #include "ava/tools/bash_tool.h"
 #include "ava/tools/file_tools.h"
+#include "ava/tools/file_tools_internal.h"
 #include "ava/tools/mutation_queue.h"
 #include "ava/tools/secure_workspace.h"
 #include "ava/tools/tool_permission.h"
@@ -1079,6 +1080,16 @@ void test_injected_exact_file_access()
   auto denied_write = ava::tools::write_file(plan_context, workspace / "source.cpp", "int changed;\n");
   expect(!outside_read && !denied_write && adapter->read_calls + adapter->write_calls == calls_before_denial,
          "workspace-root and permission denials happen before injected exact-file callbacks");
+
+  auto const oversized_path = ava::core::normalized_absolute_path(workspace) / "oversized-remote.txt";
+  adapter->files[oversized_path] = std::string(10U * 1024U * 1024U + 1, 'x');
+  auto oversized_read = ava::tools::read_file(context, oversized_path);
+  auto oversized_edit = ava::tools::edit_file(context, oversized_path, "x", "y");
+  expect(!oversized_read && oversized_read.error().code() == ava::core::ErrorCode::FileSizeLimit &&
+             has_error_context(oversized_read.error(), "operation", "read_file") && !oversized_edit &&
+             oversized_edit.error().code() == ava::core::ErrorCode::FileSizeLimit && oversized_edit.error().message() == "file is too large for edit_file" &&
+             has_error_context(oversized_edit.error(), "operation", "edit_file") && adapter->files[oversized_path].front() == 'x',
+         "exact-file size failures use the requested operation and shared size-limit code without editing remote bytes");
 }
 
 void test_secure_workspace_file_tools()
@@ -1104,6 +1115,9 @@ void test_secure_workspace_file_tools()
   auto nested_read = ava::tools::read_file(secure_context, workspace / "nested" / "deeper" / "note.txt");
   expect(nested_write && nested_edit && nested_read && nested_read->content == "alpha gamma",
          "secure workspace creates nested parents and preserves ordinary read/edit regressions");
+  auto opened = (*secure)->open_regular_file(workspace / "nested" / "deeper" / "note.txt");
+  int const flags = opened ? ::fcntl(opened->fd(), F_GETFL) : -1;
+  expect(opened && flags >= 0 && (flags & O_NONBLOCK) == 0, "workspace regular-file handles clear their nonblocking open flag");
 
   std::error_code symlink_error;
   std::filesystem::create_directory_symlink(outside, workspace / "linked-parent", symlink_error);
@@ -1974,6 +1988,171 @@ void test_permission_user_guidance_propagation()
          "over-cap forged user_guidance never enters the per-dispatch capture or Error format");
 }
 
+void test_secure_stage_write_over_symlink_uses_private_mode()
+{
+  auto const root = create_empty_root("secure-stage-write-symlink-mode");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace);
+  auto const link_target = workspace / "AGENTS.md";
+  auto const link = workspace / "CLAUDE.md";
+  {
+    std::ofstream target(link_target, std::ios::binary | std::ios::trunc);
+    target << "agents original\n";
+  }
+  std::error_code link_error;
+  std::filesystem::create_symlink("AGENTS.md", link, link_error);
+  bool const target_mode = ::chmod(link_target.c_str(), 0644) == 0;
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(!link_error && target_mode && secure.has_value(), "symlink staged-write fixture creates an in-workspace link and anchors the workspace");
+  if (link_error || !target_mode || !secure)
+    return;
+
+  {
+    auto staged = (*secure)->stage_write(link, "discarded replacement\n");
+    expect(
+        staged.has_value() && std::filesystem::is_symlink(std::filesystem::symlink_status(link)) && read_text_file_for_test(link_target) == "agents original\n",
+        "staging over a contained symlink leaves the link and target intact until commit");
+  }
+  expect(std::filesystem::is_symlink(std::filesystem::symlink_status(link)) && !has_secure_write_temp_for(workspace),
+         "discarding a staged symlink replacement preserves the link and removes its private temporary file");
+
+  bool committed = false;
+  {
+    auto staged = (*secure)->stage_write(link, "replacement\n");
+    committed = staged && staged->commit().has_value();
+  }
+  struct stat replaced{};
+  bool const replaced_stat = ::lstat(link.c_str(), &replaced) == 0;
+  expect(committed && replaced_stat && S_ISREG(replaced.st_mode) && (replaced.st_mode & 07777) == 0600 && read_text_file_for_test(link) == "replacement\n" &&
+             read_text_file_for_test(link_target) == "agents original\n",
+         "descriptor-secure staged write over an in-workspace symlink creates an owner-only regular file, never the link's 0777 mode");
+  struct stat target_after{};
+  expect(::stat(link_target.c_str(), &target_after) == 0 && (target_after.st_mode & 07777) == 0644 && !has_secure_write_temp_for(workspace),
+         "committing a staged symlink replacement leaves the original target mode unchanged and no staging files behind");
+}
+
+void test_secure_workspace_accepts_physical_and_trailing_slash_roots()
+{
+  auto const root = create_empty_root("secure-root-spellings");
+  auto const real = root / "real";
+  auto const logical = root / "logical";
+  auto const outside = root / "outside";
+  std::filesystem::create_directories(real / "sub");
+  std::filesystem::create_directories(outside);
+  std::filesystem::create_directory_symlink(real, logical);
+  auto const physical = std::filesystem::canonical(real);
+  std::ofstream(real / "note.txt") << "original";
+  std::ofstream(outside / "note.txt") << "outside";
+  std::filesystem::create_directory_symlink(outside, real / "escape");
+  for (auto const& spelling : {logical, logical / ""})
+  {
+    auto secure = ava::tools::SecureWorkspace::open(spelling);
+    expect(secure.has_value(), "secure root accepts logical and trailing-slash launch spellings");
+    if (!secure)
+      continue;
+    ava::tools::ToolContext context{.workspace_dir = spelling,
+                                    .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+                                      return ava::permissions::PermissionResolution::Allow;
+                                    },
+                                    .secure_workspace = *secure};
+    auto identity = (*secure)->resolve(physical / "note.txt", ava::tools::SecureWorkspaceResolveMode::Existing);
+    auto read = ava::tools::read_file(context, physical / "note.txt");
+    auto write = ava::tools::write_file(context, physical / "new.txt", "new");
+    auto escaped_read = ava::tools::read_file(context, physical / "escape" / "note.txt");
+    auto escaped_write = ava::tools::write_file(context, physical / "escape" / "planted.txt", "bad");
+    auto logical_escape = ava::tools::write_file(context, logical / "escape" / "planted.txt", "bad");
+    expect(identity && identity->relative == "note.txt" && read && read->content == "original" && write && read_text_file_for_test(real / "new.txt") == "new",
+           "physical root spelling resolves and reads/writes through the retained workspace descriptor");
+    expect(!escaped_read && !escaped_write && !logical_escape && !std::filesystem::exists(outside / "planted.txt"),
+           "physical aliases and trailing-slash roots never route escaping workspace paths to pathname I/O");
+  }
+}
+
+void test_secure_outside_reads_require_anchors()
+{
+  auto const root = create_empty_root("secure-outside-read-anchors");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  auto const outside = ava::core::normalized_absolute_path(root / "outside.txt");
+  std::filesystem::create_directories(workspace);
+  std::ofstream(outside) << "approved outside bytes";
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "outside-read fixture opens a secure workspace");
+  if (!secure)
+    return;
+  int prompts = 0;
+  ava::tools::ToolContext context{.workspace_dir = workspace,
+                                  .permission_resolver = [&prompts](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+                                    ++prompts;
+                                    return ava::permissions::PermissionResolution::Allow;
+                                  },
+                                  .secure_workspace = *secure};
+  auto missing_anchors = ava::tools::read_file(context, outside);
+  expect(!missing_anchors && missing_anchors.error().category() == ava::core::ErrorCategory::InvalidArgument &&
+             missing_anchors.error().message().find("ToolContext::anchor_set") != std::string::npos && prompts == 1,
+         "an approved outside-workspace read fails closed with setup guidance when anchors are absent");
+
+  auto anchors = ava::core::AnchorSet::open({workspace});
+  expect(anchors.has_value(), "outside-read fixture opens its explicit AnchorSet");
+  if (!anchors)
+    return;
+  context.anchor_set = std::move(*anchors);
+  auto approved = ava::tools::read_file(context, outside);
+  expect(approved && approved->content == "approved outside bytes" && prompts == 2, "installing explicit anchors preserves approved outside-workspace reads");
+  auto opened = ava::tools::file_tools_internal::open_secure_read_file(context, outside);
+  int const flags = opened ? ::fcntl(opened->fd(), F_GETFL) : -1;
+  expect(opened && flags >= 0 && (flags & O_NONBLOCK) == 0, "outside-workspace regular files retain their original owner and use blocking reads");
+}
+
+void test_secure_edit_caps_files_that_grow_after_open()
+{
+#ifdef __linux__
+  auto const workspace = create_empty_root("secure-read-growing-file");
+  auto const path = workspace / "growing.txt";
+  std::ofstream(path) << "old";
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  struct stat identity{};
+  bool const inspected = ::stat(path.c_str(), &identity) == 0;
+  expect(secure.has_value() && inspected, "growing-file fixture opens its workspace and records the file identity");
+  if (!secure || !inspected)
+    return;
+  bool grew = false;
+  std::error_code grow_error;
+  ava::tools::ToolContext const context{
+      .workspace_dir = workspace,
+      .cancel_requested =
+          [&] {
+            if (grew)
+              return false;
+            auto descriptors = proc_open_file_descriptors();
+            if (!descriptors)
+              return false;
+            for (int const fd : *descriptors)
+            {
+              struct stat opened{};
+              int const flags = ::fcntl(fd, F_GETFL);
+              if (flags >= 0 && (flags & O_PATH) == 0 && ::fstat(fd, &opened) == 0 && opened.st_dev == identity.st_dev && opened.st_ino == identity.st_ino)
+              {
+            // The read loop's cancellation boundary runs after open/fstat.
+            // Growing here deterministically bypasses only the initial size check.
+                std::filesystem::resize_file(path, 10U * 1024U * 1024U + 1, grow_error);
+                grew = true;
+                break;
+              }
+            }
+            return false;
+          },
+      .secure_workspace = *secure};
+  auto edited = ava::tools::edit_file(context, path, "old", "new");
+  expect(grew && !grow_error && !edited && edited.error().code() == ava::core::ErrorCode::FileSizeLimit &&
+             edited.error().message().find("edit_file") != std::string::npos,
+         "secure exact reads enforce the byte limit per chunk even when the opened file grows after its initial fstat");
+  std::ifstream file(path);
+  std::array<char, 3> prefix{};
+  file.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+  expect(std::string_view(prefix.data(), prefix.size()) == "old", "size-limit failure leaves the growing file unedited");
+#endif
+}
+
 }  // namespace
 
 void run_tools_file_tests()
@@ -1990,4 +2169,8 @@ void run_tools_file_tests()
   test_anchor_set_symlinked_root();
   test_anchor_open();
   test_permission_user_guidance_propagation();
+  test_secure_stage_write_over_symlink_uses_private_mode();
+  test_secure_workspace_accepts_physical_and_trailing_slash_roots();
+  test_secure_outside_reads_require_anchors();
+  test_secure_edit_caps_files_that_grow_after_open();
 }

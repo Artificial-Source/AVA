@@ -114,8 +114,9 @@ struct ToolContext
   // rule files from ordinary file-tool mutation. This is protection identity,
   // not mutation or storage authority; never copy AnchorSet into it.
   std::optional<ava::permissions::PermissionRuleStore> protected_permission_rule_store = std::nullopt;
-  // Strict adapters share one descriptor-anchored root across permission
-  // identity resolution and the actual built-in file operation.
+  // Every model dispatcher shares one descriptor-anchored root across
+  // permission identity resolution and the actual built-in file operation for
+  // lexically in-workspace paths (see file_tools_internal::secure_workspace_for).
   std::shared_ptr<SecureWorkspace> secure_workspace = nullptr;
   // Pre-opened anchor descriptors for all writable directories (workspace,
   // spill, session storage, synthetic command roots, and any user-configured
@@ -161,6 +162,9 @@ struct ToolContext
   // Present means compose exactly these built-ins with immutable session MCP
   // and fail closed on unavailable names, discovery failures, or collisions.
   std::optional<std::vector<std::string>> exact_builtin_tool_names = std::nullopt;
+  // Strict adapters (ACP) confine built-in file tools to secure_workspace even
+  // for lexically outside paths, which then fail instead of following the
+  // approved outside-workspace read/pathname layer.
   bool require_descriptor_secure_workspace = false;
   std::vector<std::filesystem::path> skill_global_dirs = {};
   std::vector<std::filesystem::path> skill_project_dirs = {};

@@ -5,6 +5,7 @@
 #include "ava/tools/edit_match.h"
 #include "ava/tools/file_io.h"
 #include "ava/tools/file_tools.h"
+#include "ava/tools/file_tools_internal.h"
 #include "ava/tools/mutation_queue.h"
 #include "ava/tools/secure_workspace.h"
 #include "ava/tools/tool_permission.h"
@@ -13,6 +14,8 @@
 
 #include <algorithm>
 #include <map>
+#include <ranges>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -122,6 +125,9 @@ ava::core::Result<std::vector<StagedPatchWrite>> stage_patch_writes(ava::tools::
   return staged;
 }
 
+template <typename Paths>
+std::string describe_patch_paths(Paths const& paths);
+
 ava::core::VoidResult commit_staged_patch_writes(std::vector<StagedPatchWrite> const& staged)
 {
   for (std::size_t index = 0; index < staged.size(); ++index)
@@ -133,6 +139,8 @@ ava::core::VoidResult commit_staged_patch_writes(std::vector<StagedPatchWrite> c
       auto error = committed.error();
       error.with_context("stage", "commit_staged_patch_write");
       error.with_context("atomicity", "all edits are staged before commit, but cross-file rename commit is not atomic");
+      error.with_context("already_committed_paths", describe_patch_paths(std::span(staged).first(index) | std::views::transform(&StagedPatchWrite::target)));
+      error.with_context("commit_failed_path", write.target.generic_string());
       return std::unexpected(std::move(error));
     }
   }
@@ -166,7 +174,9 @@ ava::core::Result<std::vector<ava::tools::SecureWorkspace::StagedWrite>> stage_s
   return staged;
 }
 
-std::string describe_patch_paths(std::vector<std::filesystem::path> const& paths)
+// Accept path views as well as owned lists, avoiding copies just to format a prefix.
+template <typename Paths>
+std::string describe_patch_paths(Paths const& paths)
 {
   if (paths.empty())
     return "(none)";
@@ -264,7 +274,19 @@ ToolDispatchResult apply_patch_result(ava::tools::ToolContext const& context, Pr
       return tool_dispatch::tool_error_result(call, new_text.error());
 
     auto const unresolved_target = tool_dispatch::workspace_path(context, *path);
-    auto const target = context.secure_workspace ? unresolved_target.lexically_normal() : tool_dispatch::permission_dedupe_path(unresolved_target);
+    auto workspace = ava::tools::file_tools_internal::secure_workspace_for(context, unresolved_target);
+    if (!workspace)
+      return tool_dispatch::tool_error_result(call, workspace.error());
+    auto const target = *workspace ? unresolved_target.lexically_normal() : tool_dispatch::permission_dedupe_path(unresolved_target);
+    // Like write_file, never patch through a final symlink: the commit would replace the link with a regular file holding the link
+    // target's patched bytes and leave the target itself unchanged. Reject before any read or permission prompt.
+    if (std::error_code link_error; std::filesystem::is_symlink(std::filesystem::symlink_status(target, link_error)))
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "apply_patch does not patch through or replace symlinks");
+      error.with_context("operation", "apply_patch");
+      error.with_context("path", target.string());
+      return tool_dispatch::tool_error_result(call, error);
+    }
     permission_targets.emplace(target, target);
     parsed_edits.push_back(PatchEdit{.target = target, .old_text = std::move(*old_text), .new_text = std::move(*new_text)});
   }
@@ -401,6 +423,17 @@ ToolDispatchResult apply_patch_result(ava::tools::ToolContext const& context, Pr
     return tool_dispatch::tool_error_result(call, started.error());
   std::vector<StagedPatchWrite> completed_writes;
   completed_writes.reserve(applied_paths.size());
+  // Lexically in-workspace targets commit through the descriptor-anchored
+  // workspace; approved lexically outside targets keep pathname staging.
+  std::vector<std::filesystem::path> secure_paths;
+  std::vector<std::filesystem::path> pathname_paths;
+  for (auto const& target : applied_paths)
+  {
+    auto workspace = ava::tools::file_tools_internal::secure_workspace_for(context, target);
+    if (!workspace)
+      return tool_dispatch::tool_error_result(call, workspace.error());
+    (*workspace ? secure_paths : pathname_paths).push_back(target);
+  }
   if (context.exact_file_access && context.exact_file_access->supports_read_text_file() && context.exact_file_access->supports_write_text_file())
   {
     for (auto const& target : applied_paths)
@@ -412,16 +445,46 @@ ToolDispatchResult apply_patch_result(ava::tools::ToolContext const& context, Pr
       completed_writes.push_back(StagedPatchWrite{.target = target, .temp = {}, .bytes_written = written->bytes_written});
     }
   }
-  else if (context.secure_workspace)
+  else if (!secure_paths.empty())
   {
-    auto staged = stage_secure_patch_writes(context, applied_paths, final_contents);
+    auto staged = stage_secure_patch_writes(context, secure_paths, final_contents);
     if (!staged)
       return tool_dispatch::tool_error_result(call, staged.error());
+    auto pathname_staged = stage_patch_writes(context, pathname_paths, final_contents);
+    if (!pathname_staged)
+      return tool_dispatch::tool_error_result(call, pathname_staged.error());
     if (auto canceled = tool_dispatch::check_canceled(context, call); !canceled)
+    {
+      cleanup_staged_patch_writes(*pathname_staged);
       return tool_dispatch::tool_error_result(call, canceled.error());
+    }
     if (auto committed = commit_secure_patch_writes(*staged); !committed)
+    {
+      cleanup_staged_patch_writes(*pathname_staged);
       return tool_dispatch::tool_error_result(call, committed.error());
+    }
     for (auto const& write : *staged) completed_writes.push_back(StagedPatchWrite{.target = write.path(), .temp = {}, .bytes_written = write.bytes_written()});
+    if (auto committed = commit_staged_patch_writes(*pathname_staged); !committed)
+    {
+      auto const& cause = committed.error();
+      auto error = ava::core::Error(cause.category(), cause.message(), cause.code());
+      auto committed_paths = describe_patch_paths(secure_paths);
+      // commit_staged_patch_writes reports its committed paths only through
+      // error context, so merge that report with the secure commits here.
+      for (auto const& item : cause.context())
+      {
+        if (item.key == "already_committed_paths")
+        {
+          if (item.value != "(none)")
+            committed_paths += ", " + item.value;
+        }
+        else
+          error.with_context(item.key, item.value);
+      }
+      error.with_context("already_committed_paths", std::move(committed_paths));
+      return tool_dispatch::tool_error_result(call, error);
+    }
+    completed_writes.insert(completed_writes.end(), pathname_staged->begin(), pathname_staged->end());
   }
   else
   {

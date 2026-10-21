@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/tools/file_io.h"
+#include "ava/tools/file_tools_internal.h"
 #include "ava/tools/ignore_rules.h"
 #include "ava/tools/search_tools.h"
 #include "ava/tools/secure_workspace.h"
@@ -16,7 +17,6 @@
 #include <system_error>
 #include <utility>
 #include <vector>
-#include <unistd.h>
 
 namespace ava::tools {
 
@@ -355,6 +355,7 @@ ava::core::Result<GlobResult> glob_files(ToolContext const& context, std::string
     });
     if (!walked)
       return std::unexpected(std::move(walked.error()));
+    result.skipped_paths += walked->skipped_entries;
   }
   else
   {
@@ -412,6 +413,20 @@ ava::core::Result<GlobResult> glob_files(ToolContext const& context, std::string
           it.disable_recursion_pending();
           continue;
         }
+        if (!entry.is_symlink(iter_error) && !file_tools_internal::directory_is_listable(entry.path()))
+        {
+          // Entering this directory would end the whole walk; skip it and report the omission instead.
+          it.disable_recursion_pending();
+          ++result.skipped_paths;
+        }
+        continue;
+      }
+      if (std::error_code type_error; entry.symlink_status(type_error).type() == std::filesystem::file_type::directory)
+      {
+        // readdir reported a directory whose status cannot be read (its parent is not searchable, or it vanished). The iterator would end
+        // the whole walk trying to enter it; skip it and report the omission instead.
+        it.disable_recursion_pending();
+        ++result.skipped_paths;
         continue;
       }
       if (!entry.is_regular_file(iter_error))
@@ -459,6 +474,11 @@ ava::core::Result<GlobResult> glob_files(ToolContext const& context, std::string
       {
         result.truncated = true;
       }
+    }
+    if (iter_error)
+    {
+      // The iterator resets itself to end when an increment fails, so the rest of the tree was not visited.
+      ++result.skipped_paths;
     }
   }
   std::ranges::sort(result.paths, {}, [](std::filesystem::path const& path) { return path.generic_string(); });
@@ -509,6 +529,7 @@ ava::core::Result<GrepResult> grep_files(ToolContext const& context, std::string
 
   GrepResult result;
   result.truncated = files->truncated;
+  result.skipped_paths = files->skipped_paths;
   SpillBuffer spill_buffer;
   std::size_t next_match_progress = kSearchMatchProgressInterval;
   for (auto const& path : files->paths)
@@ -523,8 +544,15 @@ ava::core::Result<GrepResult> grep_files(ToolContext const& context, std::string
       auto content = detail::read_all_text_local_only(context, path, "grep");
       if (!content)
       {
-        if (content.error().category() == ava::core::ErrorCategory::NotFound || content.error().category() == ava::core::ErrorCategory::PermissionDenied)
+        // A listed file that vanished, became unreadable or a link, or exceeds the read size limit is omitted and reported. Any other
+        // failure, including any other InvalidArgument error, still fails the search.
+        auto const category = content.error().category();
+        if (category == ava::core::ErrorCategory::NotFound || category == ava::core::ErrorCategory::PermissionDenied ||
+            content.error().code() == ava::core::ErrorCode::FileSizeLimit)
+        {
+          ++result.skipped_paths;
           continue;
+        }
         return std::unexpected(std::move(content.error()));
       }
       secure_file.str(std::move(*content));
@@ -534,7 +562,10 @@ ava::core::Result<GrepResult> grep_files(ToolContext const& context, std::string
     {
       file.open(path, std::ios::binary);
       if (!file)
+      {
+        ++result.skipped_paths;
         continue;
+      }
       input = &file;
     }
 
@@ -662,12 +693,15 @@ ava::core::Result<ListDirectoryResult> list_directory(ToolContext const& context
   ListDirectoryResult result;
   result.path = path;
   std::vector<DirectoryEntry> visible_entries;
-  if (context.secure_workspace)
+  auto workspace = file_tools_internal::secure_workspace_for(context, path);
+  if (!workspace)
+    return std::unexpected(std::move(workspace.error()));
+  if (*workspace)
   {
-    auto entries = context.secure_workspace->list_directory(path);
+    auto entries = (*workspace)->list_directory(path);
     if (!entries)
       return std::unexpected(std::move(entries.error()));
-    auto resolved = context.secure_workspace->resolve(path, SecureWorkspaceResolveMode::Existing);
+    auto resolved = (*workspace)->resolve(path, SecureWorkspaceResolveMode::Existing);
     if (!resolved)
       return std::unexpected(std::move(resolved.error()));
     result.path = std::move(resolved->absolute);
@@ -675,8 +709,16 @@ ava::core::Result<ListDirectoryResult> list_directory(ToolContext const& context
     {
       if (auto canceled = check_canceled(context, "list_directory"); !canceled)
         return std::unexpected(std::move(canceled.error()));
-      if (entry.type == SecureWorkspaceNodeType::Symlink || is_git_dir(entry.absolute_path))
+      if (is_git_dir(entry.absolute_path))
         continue;
+      // The directory listing already authorizes the name, not the link target.
+      // An unresolved link carries no target metadata and must not be followed
+      // merely to decide whether to display its name.
+      if (entry.type == SecureWorkspaceNodeType::Symlink)
+      {
+        visible_entries.push_back(DirectoryEntry{.name = entry.name, .directory = false, .size = 0});
+        continue;
+      }
       auto can_read = can_read_search_match(context, entry.absolute_path);
       if (!can_read)
         return std::unexpected(std::move(can_read.error()));

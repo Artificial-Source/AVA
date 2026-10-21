@@ -48,6 +48,8 @@ struct GlobResult
   bool spill_truncated = false;
   std::size_t total_matches = 0;
   std::filesystem::path spill_path;
+  // Paths the search could not inspect (unreadable, vanished, or oversized), independently of inline-result truncation.
+  std::size_t skipped_paths = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -69,6 +71,8 @@ struct GrepResult
   bool spill_truncated = false;
   std::size_t total_matches = 0;
   std::filesystem::path spill_path;
+  // Paths the search could not inspect (unreadable, vanished, or oversized), independently of inline-result truncation.
+  std::size_t skipped_paths = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

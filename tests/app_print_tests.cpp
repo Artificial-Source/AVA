@@ -1,8 +1,10 @@
 #include "sys.h"
+#include "tests/support/agent_loop_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/command_tools.h"
 #include "ava/app/connect_openai.h"
 #include "ava/app/headless_policy.h"
@@ -17,6 +19,8 @@
 #include "ava/provider/openai_provider.h"
 #include "ava/core/json.h"
 
+#include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cstddef>
 #include <filesystem>
@@ -25,6 +29,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
@@ -1312,6 +1317,236 @@ void test_app_print_json_mode_streams_provider_deltas_before_final_message()
          "print json mode emits streaming message deltas before final assistant message");
 }
 
+void test_app_print_read_only_rejects_committed_directory_symlink_escape()
+{
+  std::string const git = ::access("/usr/bin/git", X_OK) == 0 ? "/usr/bin/git" : "/bin/git";
+  if (::access(git.c_str(), X_OK) != 0)
+  {
+    ava::tests::request_skip("committed directory symlink print test requires Git at /usr/bin/git or /bin/git");
+    return;
+  }
+  auto const root = create_empty_root("app-print-committed-symlink");
+  auto const workspace = root / "workspace";
+  auto const outside = root / "outside";
+  std::filesystem::create_directories(workspace);
+  std::filesystem::create_directories(outside);
+  write_app_test_file(workspace / "inside.txt", "PRINT-INSIDE-CONTROL-28\n");
+  write_app_test_file(outside / "note.txt", "PRINT-OUTSIDE-CONTENT-28\n");
+  write_app_test_file(outside / "outside-listing-marker-28.txt", "outside listing\n");
+  std::error_code link_error;
+  std::filesystem::create_directory_symlink("../outside", workspace / "link", link_error);
+  if (link_error == std::errc::operation_not_supported)
+    return;
+  expect(!link_error, "print fixture creates a relative directory symlink that can be checked into Git");
+  if (link_error)
+    return;
+
+  {
+    ava::process::Supervisor supervisor;
+    auto application = ava::process::OwnerPathV1::application();
+    expect(application.has_value(), "committed-symlink fixture creates supervised process ownership");
+    if (!application)
+      return;
+    auto run_git = [&](std::vector<std::string> arguments) {
+      auto owner = application->operation();
+      auto environment = ava::process::make_mcp_environment_v1(workspace, {{"HOME", root.string()},
+                                                                           {"GIT_CONFIG_NOSYSTEM", "1"},
+                                                                           {"GIT_CONFIG_GLOBAL", "/dev/null"},
+                                                                           {"GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z"},
+                                                                           {"GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z"}});
+      if (!owner || !environment)
+        return false;
+      auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      auto reservation = supervisor.reserve(*owner, ava::process::ProcessRoleV1::Mcp, {.execution_deadline = deadline});
+      if (!reservation)
+        return false;
+      std::vector<std::string> argv{git,
+                                    "-c",
+                                    "user.name=AVA Test",
+                                    "-c",
+                                    "user.email=ava-test@example.invalid",
+                                    "-c",
+                                    "core.hooksPath=/dev/null",
+                                    "-c",
+                                    "core.fsmonitor=false",
+                                    "-c",
+                                    "commit.gpgsign=false"};
+      argv.insert(argv.end(), arguments.begin(), arguments.end());
+      auto child = supervisor.spawn(std::move(*reservation), {.executable = git,
+                                                              .argv = std::move(argv),
+                                                              .environment = std::move(*environment),
+                                                              .cwd = workspace.string(),
+                                                              .stdout_mode = ava::process::StreamModeV1::Discard,
+                                                              .stderr_mode = ava::process::StreamModeV1::Discard});
+      if (!child)
+        return false;
+      auto status = supervisor.wait(child->handle, deadline + std::chrono::seconds(1));
+      return status && status->kind == ava::process::ExitKindV1::Exited && status->exit_code == 0 &&
+             status->reason == ava::process::TerminationReasonV1::NaturalExit && status->cleanup == ava::process::CleanupStateV1::Complete;
+    };
+    bool const committed = run_git({"init", "--quiet", "--template="}) && run_git({"add", "--", "link"}) &&
+                           run_git({"commit", "--quiet", "--no-gpg-sign", "-m", "Committed outside directory symlink"});
+    expect(committed, "print fixture commits the outside-directory symlink in an isolated credential-free repository");
+    if (!committed)
+      return;
+    std::filesystem::remove(workspace / "link");
+    bool const checked_out = run_git({"checkout", "HEAD", "--", "link"});
+    expect(checked_out && std::filesystem::read_symlink(workspace / "link") == "../outside", "Git checkout restores the committed symlink");
+    if (!checked_out)
+      return;
+  }
+
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.paths = app_test_paths(root);
+  auto session = ava::app::runtime::Session::open(open_context);
+  expect(session.has_value(), "print committed-symlink fixture opens a runtime session");
+  if (!session)
+    return;
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport(
+      {sse_response(agent_loop_test::tool_call_sse("call_link_read", "read_file", R"({"path":"link/note.txt"})") +
+                    agent_loop_test::tool_call_sse("call_link_list", "list_directory", R"({"path":"link"})") +
+                    agent_loop_test::tool_call_sse("call_inside", "read_file", R"({"path":"inside.txt"})") + "data: [DONE]\n\n"),
+       sse_response(final_text_sse("escape denied"))});
+  ava::app::HeadlessPermissionPolicyOptions policy;
+  auto allowed = ava::app::add_headless_allow_policy(policy, "read-only");
+  expect(allowed.has_value(), "print committed-symlink fixture configures --allow read-only");
+  auto resolver = ava::app::build_headless_permission_resolver(policy);
+  int prompts = 0;
+  ava::app::runtime::RunOptions runtime_options;
+  runtime_options.access_token = "offline-test-token";
+  runtime_options.isolate_ambient_extensions = true;
+  runtime_options.disable_session_mcp = true;
+  runtime_options.permission_resolver = [&](auto const& prompt) {
+    ++prompts;
+    return resolver(prompt);
+  };
+  ava::app::PrintModeRunOptions const options{.runtime_options = std::move(runtime_options)};
+  std::ostringstream out;
+  std::ostringstream err;
+  auto result = ava::app::run_print_prompt(*session, "Inspect the workspace files.", provider, transport, options, out, err);
+  auto const has_status = [&](std::string_view id, ava::agent::ToolTimelineStatus status) {
+    return result && std::ranges::any_of(result->tool_timeline, [&](auto const& entry) { return entry.call_id == id && entry.status == status; });
+  };
+  expect(result && result->tool_calls == 3 && has_status("call_link_read", ava::agent::ToolTimelineStatus::Error) &&
+             has_status("call_link_list", ava::agent::ToolTimelineStatus::Error) && has_status("call_inside", ava::agent::ToolTimelineStatus::Success) &&
+             prompts == 0 && out.str() == "escape denied",
+         "print --allow read-only rejects both read and list through a committed escaping directory symlink while ordinary reads still succeed");
+  expect(transport.requests().size() == 2 && transport.requests()[1].body.find("PRINT-INSIDE-CONTROL-28") != std::string::npos,
+         "the print continuation contains the successful in-workspace control read");
+  for (auto const& request : transport.requests())
+    expect(request.body.find("PRINT-OUTSIDE-CONTENT-28") == std::string::npos && request.body.find("outside-listing-marker-28") == std::string::npos,
+           "no provider request receives outside bytes or directory entries through the committed symlink");
+  expect(out.str().find("PRINT-OUTSIDE-CONTENT-28") == std::string::npos && err.str().find("PRINT-OUTSIDE-CONTENT-28") == std::string::npos &&
+             out.str().find("outside-listing-marker-28") == std::string::npos && err.str().find("outside-listing-marker-28") == std::string::npos,
+         "print stdout and diagnostics contain no outside content or listing marker");
+}
+
+void test_app_print_write_rejects_ancestor_swap_after_permission()
+{
+  auto const root = create_empty_root("app-print-write-ancestor-swap");
+  auto const workspace = root / "workspace";
+  auto const outside = root / "outside";
+  std::filesystem::create_directories(workspace / "parent");
+  std::filesystem::create_directories(outside);
+  write_app_test_file(workspace / "parent" / "note.txt", "inside original\n");
+  write_app_test_file(outside / "note.txt", "outside original\n");
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.paths = app_test_paths(root);
+  auto session = ava::app::runtime::Session::open(open_context);
+  expect(session.has_value(), "print write-swap fixture opens a runtime session");
+  if (!session)
+    return;
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport(
+      {sse_response(write_file_call_sse("parent/note.txt", "unauthorized replacement\n")), sse_response(final_text_sse("write denied"))});
+  int prompts = 0;
+  bool swapped = false;
+  ava::app::runtime::RunOptions runtime_options;
+  runtime_options.access_token = "offline-test-token";
+  runtime_options.isolate_ambient_extensions = true;
+  runtime_options.disable_session_mcp = true;
+  runtime_options.require_explicit_file_permissions = true;
+  // Leave require_descriptor_secure_workspace at its non-ACP default. The
+  // ordinary print dispatcher must install the workspace descriptor itself.
+  runtime_options.permission_resolver =
+      [&](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    ++prompts;
+    expect(prompt.operation == ava::permissions::Operation::EditFile && prompt.target_path == workspace / "parent" / "note.txt",
+           "print write approval is requested for the original in-workspace target");
+    if (!swapped)
+    {
+      std::filesystem::rename(workspace / "parent", workspace / "original-parent");
+      std::error_code link_error;
+      std::filesystem::create_directory_symlink(outside, workspace / "parent", link_error);
+      swapped = !link_error;
+    }
+    return ava::permissions::PermissionResolution::Allow;
+  };
+  ava::app::PrintModeRunOptions const options{.runtime_options = std::move(runtime_options)};
+  std::ostringstream out;
+  std::ostringstream err;
+  auto result = ava::app::run_print_prompt(*session, "Update parent/note.txt.", provider, transport, options, out, err);
+  expect(swapped && prompts == 1 && result && result->tool_calls == 1 && result->tool_timeline.size() == 1 &&
+             result->tool_timeline.front().status == ava::agent::ToolTimelineStatus::Error && out.str() == "write denied",
+         "ordinary print execution refuses a write when its checked parent becomes an outside symlink during approval");
+  expect(app_read_binary_file(outside / "note.txt") == "outside original\n" &&
+             app_read_binary_file(workspace / "original-parent" / "note.txt") == "inside original\n",
+         "a permission-time parent swap changes neither the outside target nor the original in-workspace file");
+}
+
+void test_app_print_patch_rejects_contained_symlink_target()
+{
+  auto const root = create_empty_root("app-print-patch-contained-symlink");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  auto const target = workspace / "original.txt";
+  auto const link = workspace / "alias.txt";
+  write_app_test_file(target, "original text\n");
+  expect(::chmod(target.c_str(), 0644) == 0, "print patch fixture gives the original target a known non-executable mode");
+  std::error_code link_error;
+  std::filesystem::create_symlink("original.txt", link, link_error);
+  if (link_error == std::errc::operation_not_supported)
+    return;
+  expect(!link_error, "print patch fixture creates an in-workspace symlink");
+  if (link_error)
+    return;
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.paths = app_test_paths(root);
+  auto session = ava::app::runtime::Session::open(open_context);
+  expect(session.has_value(), "print patch fixture opens a runtime session");
+  if (!session)
+    return;
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport(
+      {sse_response(
+           agent_loop_test::tool_call_sse("call_patch", "apply_patch", R"({"edits":[{"path":"alias.txt","old_text":"original","new_text":"replacement"}]})") +
+           "data: [DONE]\n\n"),
+       sse_response(final_text_sse("patch denied"))});
+  ava::app::runtime::RunOptions runtime_options;
+  runtime_options.access_token = "offline-test-token";
+  runtime_options.isolate_ambient_extensions = true;
+  runtime_options.disable_session_mcp = true;
+  ava::app::PrintModeRunOptions const options{.runtime_options = std::move(runtime_options)};
+  std::ostringstream out;
+  std::ostringstream err;
+  auto result = ava::app::run_print_prompt(*session, "Patch alias.txt.", provider, transport, options, out, err);
+  struct stat link_after{};
+  struct stat target_after{};
+  expect(result && result->tool_calls == 1 && result->tool_timeline.size() == 1 &&
+             result->tool_timeline.front().status == ava::agent::ToolTimelineStatus::Error &&
+             result->tool_timeline.front().result_summary.find("does not patch through or replace symlinks") != std::string::npos &&
+             ::lstat(link.c_str(), &link_after) == 0 && S_ISLNK(link_after.st_mode) && std::filesystem::read_symlink(link) == "original.txt" &&
+             ::stat(target.c_str(), &target_after) == 0 && (target_after.st_mode & 07777) == 0644 && app_read_binary_file(target) == "original text\n",
+         "print apply_patch rejects a contained symlink without replacing it, changing its target, or inheriting symlink permissions");
+}
+
 }  // namespace
 
 void run_app_print_tests()
@@ -1334,4 +1569,7 @@ void run_app_print_tests()
   test_app_connect_provider_credentials_headlessly();
   test_app_print_json_mode_outputs_runtime_events();
   test_app_print_json_mode_streams_provider_deltas_before_final_message();
+  test_app_print_read_only_rejects_committed_directory_symlink_escape();
+  test_app_print_write_rejects_ancestor_swap_after_permission();
+  test_app_print_patch_rejects_contained_symlink_target();
 }

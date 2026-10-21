@@ -316,6 +316,7 @@ void test_agent_loop_parallel_read_search_falls_back_for_ask_preflight()
   int prompts = 0;
   ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
       .workspace_dir = workspace,
+      .anchor_set = command_anchors_for_test(workspace, store.session_path().parent_path() / "spill"),
       .mode = ava::agent::Mode::Build,
       .model = agent_loop_test::model_invocation_options(),
       .access_token = "token",

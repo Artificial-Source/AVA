@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "ava/tools/file_io.h"
+#include "ava/tools/file_tools_internal.h"
 #include "ava/tools/secure_workspace.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/ids.h"
 
 #include <algorithm>
@@ -18,6 +20,16 @@ namespace ava::tools::detail {
 namespace {
 
 constexpr std::uintmax_t kMaxSafeReadBytes = 10 * 1024 * 1024;
+
+ava::core::Error file_too_large_error(std::string_view operation, std::filesystem::path const& path, std::uintmax_t max_bytes)
+{
+  auto error =
+      ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "file is too large for " + std::string(operation), ava::core::ErrorCode::FileSizeLimit);
+  error.with_context("operation", std::string(operation));
+  error.with_context("path", path.string());
+  error.with_context("max_bytes", std::to_string(max_bytes));
+  return error;
+}
 
 std::size_t logical_line_count(std::string_view text)
 {
@@ -38,6 +50,8 @@ void trim_partial_final_line(std::string& text)
 ava::core::Result<std::filesystem::path> resolve_exact_file_path(ToolContext const& context, std::filesystem::path const& path, SecureWorkspaceResolveMode mode,
                                                                  bool require_regular_file)
 {
+  if (context.require_descriptor_secure_workspace && !context.secure_workspace)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "strict file tools require an open secure workspace"));
   auto workspace = context.secure_workspace;
   if (!workspace)
   {
@@ -161,13 +175,7 @@ ava::core::Result<std::uintmax_t> inspect_regular_read_file(std::filesystem::pat
     return std::unexpected(std::move(error));
   }
   if (size > kMaxSafeReadBytes)
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "file is too large to read safely");
-    error.with_context("operation", std::string(operation));
-    error.with_context("path", path.string());
-    error.with_context("max_bytes", std::to_string(kMaxSafeReadBytes));
-    return std::unexpected(std::move(error));
-  }
+    return std::unexpected(file_too_large_error(operation, path, kMaxSafeReadBytes));
   return size;
 }
 
@@ -209,37 +217,30 @@ ava::core::Result<std::string> read_all_text_local_only(ToolContext const& conte
   {
     return std::unexpected(std::move(canceled.error()));
   }
-  if (context.secure_workspace)
+  auto workspace = file_tools_internal::secure_workspace_for(context, path);
+  if (!workspace)
+    return std::unexpected(std::move(workspace.error()));
+  if (*workspace != nullptr)
   {
-    auto opened = context.secure_workspace->open_regular_file(path);
+    auto opened = (*workspace)->open_regular_file(path);
     if (!opened)
       return std::unexpected(std::move(opened.error()));
     if (opened->size() > kMaxSafeReadBytes)
     {
-      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "file is too large for exact edit");
-      error.with_context("path", opened->path().string());
-      error.with_context("max_bytes", std::to_string(kMaxSafeReadBytes));
+      auto error = file_too_large_error(operation, opened->path(), kMaxSafeReadBytes);
+      error.with_context("size_bytes", std::to_string(opened->size()));
       return std::unexpected(std::move(error));
     }
-    std::string content;
-    content.reserve(static_cast<std::size_t>(opened->size()));
-    std::array<char, 4096> buffer{};
-    while (true)
+    auto content = ava::core::read_descriptor_bounded(opened->fd(), static_cast<std::size_t>(kMaxSafeReadBytes), [&context] { return is_canceled(context); });
+    if (!content)
     {
-      if (auto canceled = check_canceled(context, operation, opened->path()); !canceled)
-        return std::unexpected(std::move(canceled.error()));
-      auto const count = ::read(opened->fd(), buffer.data(), buffer.size());
-      if (count < 0)
-      {
-        if (errno == EINTR)
-          continue;
-        return std::unexpected(io_error("failed while reading secure workspace file", opened->path(), errno_cause(errno)));
-      }
-      if (count == 0)
-        break;
-      content.append(buffer.data(), static_cast<std::size_t>(count));
+      if (content.error() == ECANCELED)
+        return std::unexpected(canceled_error(operation, opened->path()));
+      if (content.error() == EFBIG)
+        return std::unexpected(file_too_large_error(operation, opened->path(), kMaxSafeReadBytes));
+      return std::unexpected(io_error("failed while reading secure workspace file", opened->path(), errno_cause(content.error())));
     }
-    return content;
+    return std::move(*content);
   }
 
   auto inspected = inspect_regular_read_file(path, operation);
@@ -268,10 +269,7 @@ ava::core::Result<std::string> read_all_text_local_only(ToolContext const& conte
     {
       if (content.size() + static_cast<std::size_t>(count) > max_edit_file_bytes)
       {
-        auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "file is too large for exact edit");
-        error.with_context("path", path.string());
-        error.with_context("max_bytes", std::to_string(max_edit_file_bytes));
-        return std::unexpected(std::move(error));
+        return std::unexpected(file_too_large_error(operation, path, max_edit_file_bytes));
       }
       content.append(buffer.data(), static_cast<std::size_t>(count));
     }
@@ -304,10 +302,7 @@ ava::core::Result<std::string> read_all_text(ToolContext const& context, std::fi
     return std::unexpected(std::move(content.error()));
   if (content->size() > kMaxSafeReadBytes)
   {
-    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "file is too large for exact edit");
-    error.with_context("path", resolved->string());
-    error.with_context("max_bytes", std::to_string(kMaxSafeReadBytes));
-    return std::unexpected(std::move(error));
+    return std::unexpected(file_too_large_error(operation, *resolved, kMaxSafeReadBytes));
   }
   return content;
 }
@@ -338,28 +333,18 @@ ava::core::Result<TextOutput> read_head_text(ToolContext const& context, std::fi
     if (!content)
       return std::unexpected(std::move(content.error()));
     if (content->size() > kMaxSafeReadBytes)
-    {
-      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "file window is too large to read safely");
-      error.with_context("path", resolved->string());
-      error.with_context("max_bytes", std::to_string(kMaxSafeReadBytes));
-      return std::unexpected(std::move(error));
-    }
+      return std::unexpected(file_too_large_error("read_file", *resolved, kMaxSafeReadBytes));
     return bounded_window_text_output(*content, options);
   }
-  std::optional<SecureWorkspaceHandle> secure_file;
+  std::optional<file_tools_internal::ReadFileHandle> secure_file;
   std::ifstream file;
-  if (context.secure_workspace)
+  if (context.secure_workspace || context.require_descriptor_secure_workspace)
   {
-    auto opened = context.secure_workspace->open_regular_file(path);
+    auto opened = ava::tools::file_tools_internal::open_secure_read_file(context, path);
     if (!opened)
       return std::unexpected(std::move(opened.error()));
     if (opened->size() > kMaxSafeReadBytes)
-    {
-      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "file is too large to read safely");
-      error.with_context("path", opened->path().string());
-      error.with_context("max_bytes", std::to_string(kMaxSafeReadBytes));
-      return std::unexpected(std::move(error));
-    }
+      return std::unexpected(file_too_large_error("read_file", opened->path(), kMaxSafeReadBytes));
     secure_file.emplace(std::move(*opened));
   }
   else
@@ -530,9 +515,12 @@ ava::core::Result<FileMutationResult> write_file_unlocked(ToolContext const& con
     return FileMutationResult{
         .path = std::move(*resolved), .bytes_written = content.size(), .diff = {}, .diff_truncated = false, .line_endings = {}, .had_utf8_bom = false};
   }
-  if (context.secure_workspace)
+  auto workspace = file_tools_internal::secure_workspace_for(context, path);
+  if (!workspace)
+    return std::unexpected(std::move(workspace.error()));
+  if (*workspace)
   {
-    auto written = context.secure_workspace->write_file(path, content, context.cancel_requested);
+    auto written = (*workspace)->write_file(path, content, context.cancel_requested);
     if (!written)
       return std::unexpected(std::move(written.error()));
     return FileMutationResult{.path = std::move(written->path),

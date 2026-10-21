@@ -77,4 +77,6 @@ void run_agent_loop_tests()
   test_agent_loop_model_auto_allow_deny_preflight_blocks_auto_allow_without_process();
   test_agent_loop_model_command_rejects_authority_workspace_before_permission_or_process();
   test_agent_loop_truncates_tool_context();
+  test_agent_loop_secure_workspace_refuses_in_workspace_symlink_escape();
+  test_agent_loop_secure_workspace_read_survives_ancestor_swap_after_permission();
 }
