@@ -19,6 +19,28 @@
 namespace ava::agent::detail {
 namespace {
 
+std::string_view default_api_family(std::string_view provider_id) noexcept
+{
+  if (provider_id == "openai")
+    return "openai_responses";
+  if (provider_id == "anthropic")
+    return "anthropic_messages";
+  if (provider_id == "gemini")
+    return "gemini_generate_content";
+  return "openai_chat_completions";
+}
+
+std::string_view default_reasoning_format(std::string_view api_family) noexcept
+{
+  if (api_family == "openai_responses")
+    return "openai_responses";
+  if (api_family == "anthropic_messages")
+    return "anthropic_thinking";
+  if (api_family == "gemini_generate_content")
+    return "gemini";
+  return {};
+}
+
 ava::core::Result<std::unordered_set<std::string>> load_persisted_provider_tool_call_ids(ava::session::SessionReadAuthority read_authority,
                                                                                          ava::session::SessionReadLimits const& read_limits)
 {
@@ -114,10 +136,16 @@ ava::core::VoidResult AgentTurnSession::append_replay_user_message(ActiveTurnUse
 ava::core::Result<PersistedAssistantTurn> AgentTurnSession::append_assistant_turn(ParsedAssistantTurn const& turn, ava::provider::TokenUsage const& usage,
                                                                                   std::optional<long double> const& cost_usd)
 {
-  auto const source_api_family =
-      options_.model.api_family.empty() ? std::optional<std::string_view>{} : std::optional<std::string_view>{options_.model.api_family};
-  auto const source_reasoning_format =
+  auto source_api_family = options_.model.api_family.empty() ? std::optional<std::string_view>{} : std::optional<std::string_view>{options_.model.api_family};
+  // Only Gemini provenance is inferred: native thought-signature replay needs the persisted turn to name
+  // its API family and reasoning format, while inferring defaults for other providers would move their
+  // history from portable to native replay.
+  if (!source_api_family && options_.model.provider_id == "gemini")
+    source_api_family = "gemini_generate_content";
+  auto source_reasoning_format =
       options_.model.reasoning_format.empty() ? std::optional<std::string_view>{} : std::optional<std::string_view>{options_.model.reasoning_format};
+  if (!source_reasoning_format && source_api_family == "gemini_generate_content")
+    source_reasoning_format = default_reasoning_format(*source_api_family);
   return ava::agent::append_assistant_turn(options_.append_batch, turn, options_.model.provider_id, options_.model.model_id, usage, cost_usd, source_api_family,
                                            source_reasoning_format);
 }
@@ -185,23 +213,9 @@ MessageBuildOptions AgentTurnExecutor::message_build_options() const
   auto api_family = options_.model.api_family;
   auto reasoning_format = options_.model.reasoning_format;
   if (api_family.empty())
-  {
-    if (options_.model.provider_id == "openai")
-      api_family = "openai_responses";
-    else if (options_.model.provider_id == "anthropic")
-      api_family = "anthropic_messages";
-    else if (options_.model.provider_id == "gemini")
-      api_family = "gemini_generate_content";
-    else
-      api_family = "openai_chat_completions";
-  }
+    api_family = default_api_family(options_.model.provider_id);
   if (reasoning_format.empty())
-  {
-    if (api_family == "openai_responses")
-      reasoning_format = "openai_responses";
-    else if (api_family == "anthropic_messages")
-      reasoning_format = "anthropic_thinking";
-  }
+    reasoning_format = default_reasoning_format(api_family);
   std::vector<std::string> active_entry_ids;
   active_entry_ids.reserve(active_turn_user_messages_.size());
   for (auto const& message : active_turn_user_messages_)

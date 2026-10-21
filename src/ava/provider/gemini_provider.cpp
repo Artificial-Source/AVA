@@ -15,15 +15,10 @@ namespace ava::provider {
 namespace {
 
 constexpr std::string_view kDefaultGeminiBaseUrl = "https://generativelanguage.googleapis.com";
+constexpr std::size_t kMaxGeminiNativePartsBytes = std::size_t{64} * 1024;
+constexpr std::string_view kGeminiNativeEnvelopePrefix = R"({"type":"reasoning","parts":[)";
 
-struct GeminiParseState
-{
-  std::optional<TokenUsage> usage = std::nullopt;
-  std::optional<ProviderFinishReason> finish_reason = std::nullopt;
-  std::string fallback_tool_call_prefix;
-  bool parsed_content = false;
-  bool error_seen = false;
-};
+using detail::GeminiParseState;
 
 std::string configured_base_url()
 {
@@ -98,6 +93,12 @@ ava::core::Error invalid_content_part_error(std::string message, std::size_t mes
   return error;
 }
 
+bool gemini_thought(std::string_view part)
+{
+  auto const start = ava::core::json::field_value_start(part, "thought");
+  return start && part.substr(*start, 4) == "true";
+}
+
 ava::core::VoidResult validate_gemini_content_parts(ProviderRequest const& request)
 {
   if (auto valid_images = validate_image_content_parts(request, true); !valid_images)
@@ -112,7 +113,10 @@ ava::core::VoidResult validate_gemini_content_parts(ProviderRequest const& reque
       switch (part.type)
       {
         case ContentPartType::Text:
+          break;
         case ContentPartType::Reasoning:
+          if (part.reasoning_format == "gemini" && !part.reasoning_signature.empty() && part.reasoning_native_item_json.empty())
+            return std::unexpected(invalid_content_part_error("Gemini signatures require matching native part replay metadata", message_index, part_index));
           break;
         case ContentPartType::Image:
           if (part.data_base64.empty())
@@ -190,7 +194,141 @@ std::string function_response_part_json(ContentPart const& part)
          "\",\"response\":" + function_response_payload_json(part) + "}}";
 }
 
-std::string gemini_content_json(ChatMessage const& message)
+ava::core::Error invalid_native_parts_error()
+{
+  return {ava::core::ErrorCategory::InvalidArgument, "Gemini native replay metadata is invalid, exceeds its bound, or does not match assistant history"};
+}
+
+void append_json_member(std::string& object, std::string_view member)
+{
+  // Callers pass complete, non-empty objects produced by this module.
+  object.pop_back();
+  object += ',';
+  object += member;
+  object += '}';
+}
+
+std::string thought_signature_member(std::string_view signature)
+{
+  return R"("thoughtSignature":")" + ava::core::json::escape(signature) + '"';
+}
+
+struct ReplayHistory
+{
+  std::string text;
+  std::string thought;
+  // These parts belong to the message used throughout replay canonicalization.
+  std::vector<ContentPart const*> calls;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+struct ReplayCursors
+{
+  std::size_t text_offset = 0;
+  std::size_t thought_offset = 0;
+  std::size_t call_index = 0;
+  bool signed_part_seen = false;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+ava::core::Result<ReplayHistory> collect_replay_history(ChatMessage const& message)
+{
+  ReplayHistory history;
+  for (auto const& part : message.content_parts)
+  {
+    if (part.type == ContentPartType::Text || (part.type == ContentPartType::Reasoning && part.reasoning_format == "gemini" && !part.redacted))
+    {
+      auto& target = part.type == ContentPartType::Text ? history.text : history.thought;
+      if (part.text.size() > kMaxGeminiNativePartsBytes - target.size())
+        return std::unexpected(invalid_native_parts_error());
+      target += part.text;
+    }
+    else if (part.type == ContentPartType::ToolUse)
+      history.calls.push_back(&part);
+    else
+      return std::unexpected(invalid_native_parts_error());
+  }
+  return history;
+}
+
+ava::core::Result<std::string> canonicalize_native_part(std::string_view native_part, ReplayHistory const& history, ReplayCursors& cursors)
+{
+  auto const native_text = ava::core::json::string_field(native_part, "text");
+  auto const function = ava::core::json::object_field(native_part, "functionCall");
+  if (native_text.has_value() == function.has_value())
+    return std::unexpected(invalid_native_parts_error());
+  std::string canonical;
+  if (native_text)
+  {
+    bool const is_thought = gemini_thought(native_part);
+    auto const& expected = is_thought ? history.thought : history.text;
+    auto& offset = is_thought ? cursors.thought_offset : cursors.text_offset;
+    if (std::string_view(expected).substr(offset, native_text->size()) != *native_text)
+      return std::unexpected(invalid_native_parts_error());
+    offset += native_text->size();
+    canonical = text_part_json(*native_text);
+    if (is_thought)
+      append_json_member(canonical, R"("thought":true)");
+  }
+  else
+  {
+    if (cursors.call_index >= history.calls.size())
+      return std::unexpected(invalid_native_parts_error());
+    auto const& call = *history.calls[cursors.call_index++];
+    if (ava::core::json::string_field(*function, "id").value_or("") != call.tool_call_id ||
+        ava::core::json::string_field(*function, "name").value_or("") != call.tool_name)
+      return std::unexpected(invalid_native_parts_error());
+    canonical = function_call_part_json(call);
+  }
+  if (ava::core::json::field_value_start(native_part, "thoughtSignature"))
+  {
+    auto const signature = ava::core::json::string_field(native_part, "thoughtSignature");
+    if (!signature || signature->empty())
+      return std::unexpected(invalid_native_parts_error());
+    append_json_member(canonical, thought_signature_member(*signature));
+    cursors.signed_part_seen = true;
+  }
+  return canonical;
+}
+
+ava::core::Result<std::vector<std::string>> gemini_replay_parts(ChatMessage const& message)
+{
+  std::string_view native_json;
+  for (auto const& part : message.content_parts)
+  {
+    if (part.type == ContentPartType::Reasoning && part.reasoning_format == "gemini" && !part.reasoning_native_item_json.empty())
+    {
+      if (!native_json.empty())
+        return std::unexpected(invalid_native_parts_error());
+      native_json = part.reasoning_native_item_json;
+    }
+  }
+  if (native_json.empty())
+    return std::vector<std::string>{};
+  if (message.role != "assistant" || native_json.size() > kMaxGeminiNativePartsBytes || !ava::core::json::is_valid_object(native_json) ||
+      ava::core::json::string_field(native_json, "type").value_or("") != "reasoning")
+    return std::unexpected(invalid_native_parts_error());
+  auto parts = ava::core::json::strict_objects_in_array_field(native_json, "parts", kMaxProviderParserArrayItems);
+  if (!parts || parts->empty())
+    return std::unexpected(invalid_native_parts_error());
+  auto history = collect_replay_history(message);
+  if (!history)
+    return std::unexpected(std::move(history.error()));
+  ReplayCursors cursors;
+  for (auto& native_part : *parts)
+  {
+    auto canonical = canonicalize_native_part(native_part, *history, cursors);
+    if (!canonical)
+      return std::unexpected(std::move(canonical.error()));
+    native_part = std::move(*canonical);
+  }
+  if (!cursors.signed_part_seen || cursors.text_offset != history->text.size() || cursors.thought_offset != history->thought.size() ||
+      cursors.call_index != history->calls.size())
+    return std::unexpected(invalid_native_parts_error());
+  return std::move(*parts);
+}
+
+ava::core::Result<std::string> gemini_content_json(ChatMessage const& message)
 {
   std::string json = "{\"role\":\"" + gemini_role(message.role) + "\",\"parts\":[";
   bool first = true;
@@ -200,6 +338,16 @@ std::string gemini_content_json(ChatMessage const& message)
     first = false;
     json += std::move(part_json);
   };
+  auto replay = gemini_replay_parts(message);
+  if (!replay)
+    return std::unexpected(std::move(replay.error()));
+  if (!replay->empty())
+  {
+    for (auto& part : *replay)
+      append_part(std::move(part));
+    json += "]}";
+    return json;
+  }
 
   if (message.content_parts.empty())
   {
@@ -292,7 +440,14 @@ ava::core::Result<std::string> gemini_request_body_json(ProviderRequest const& r
   {
     if (index > 0)
       contents += ',';
-    contents += gemini_content_json(request.messages[index]);
+    auto content = gemini_content_json(request.messages[index]);
+    if (!content)
+    {
+      auto error = std::move(content.error());
+      error.with_context("message_index", std::to_string(index));
+      return std::unexpected(std::move(error));
+    }
+    contents += *content;
   }
   contents += ']';
   append_member(std::move(contents));
@@ -363,38 +518,76 @@ void append_error_event(std::vector<StreamEvent>& events, std::string message)
       StreamEvent{.type = StreamEventType::Error, .text = "", .tool_call_id = "", .tool_name = "", .error_message = std::move(message), .usage = std::nullopt});
 }
 
-void append_done_event(std::vector<StreamEvent>& events, std::optional<TokenUsage> usage, std::optional<ProviderFinishReason> finish_reason)
+void append_reasoning_end(std::vector<StreamEvent>& events, GeminiParseState& state)
 {
+  if (!state.reasoning_active)
+    return;
+  events.push_back(StreamEvent{.type = StreamEventType::ReasoningEnd,
+                               .text = "",
+                               .tool_call_id = "",
+                               .tool_name = "",
+                               .error_message = "",
+                               .usage = std::nullopt,
+                               .reasoning_format = "gemini"});
+  state.reasoning_active = false;
+}
+
+void append_done_event(std::vector<StreamEvent>& events, GeminiParseState& state)
+{
+  if (state.has_thought_signature && !state.native_parts_overflowed)
+  {
+    // The session codec accepts provider-private reasoning envelopes. Public
+    // stream bridges clear the envelope before publishing any event.
+    events.push_back(StreamEvent{.type = StreamEventType::ReasoningEnd,
+                                 .text = "",
+                                 .tool_call_id = "",
+                                 .tool_name = "",
+                                 .error_message = "",
+                                 .usage = std::nullopt,
+                                 .reasoning_format = "gemini",
+                                 .reasoning_native_item_json = std::string(kGeminiNativeEnvelopePrefix) + state.native_parts_json + "]}",
+                                 .reasoning_signature_present = true});
+    state.reasoning_active = false;
+  }
+  else
+    append_reasoning_end(events, state);
+  state.native_parts_json.clear();
+  state.native_part_count = 0;
+  state.has_thought_signature = false;
   events.push_back(StreamEvent{.type = StreamEventType::Done,
                                .text = "",
                                .tool_call_id = "",
                                .tool_name = "",
                                .error_message = "",
-                               .usage = std::move(usage),
-                               .finish_reason = finish_reason});
+                               .usage = state.usage,
+                               .finish_reason = state.finish_reason});
 }
 
-void append_function_call_events(std::vector<StreamEvent>& events, std::string_view function_call, std::size_t candidate_index, std::size_t part_index,
-                                 GeminiParseState& state)
+std::string append_function_call_events(std::vector<StreamEvent>& events, std::string_view function_call, GeminiParseState& state)
 {
   auto const name = ava::core::json::string_field(function_call, "name").value_or("");
   if (name.empty())
   {
     state.error_seen = true;
     append_error_event(events, "Gemini functionCall is missing name");
-    return;
+    return {};
   }
   auto id = ava::core::json::string_field(function_call, "id").value_or("");
   if (id.empty())
-    id = state.fallback_tool_call_prefix + "_" + std::to_string(candidate_index) + "_" + std::to_string(part_index);
+    id = state.fallback_tool_call_prefix + "_" + std::to_string(state.next_tool_call_index++);
   auto args = ava::core::json::object_field(function_call, "args").value_or("{}");
   if (!is_valid_json_object(args))
   {
     state.error_seen = true;
     append_error_event(events, "Gemini functionCall args must be a JSON object");
-    return;
+    return {};
   }
 
+  // Arguments already live in the canonical ToolUse history item. Retain only
+  // the logical identity needed to attach its signature during reconstruction.
+  auto native_part = state.native_parts_overflowed
+                         ? std::string{}
+                         : R"({"functionCall":{"id":")" + ava::core::json::escape(id) + R"(","name":")" + ava::core::json::escape(name) + R"("}})";
   state.parsed_content = true;
   events.push_back(
       StreamEvent{.type = StreamEventType::ToolCallStart, .text = "", .tool_call_id = id, .tool_name = name, .error_message = "", .usage = std::nullopt});
@@ -402,20 +595,104 @@ void append_function_call_events(std::vector<StreamEvent>& events, std::string_v
       .type = StreamEventType::ToolCallDelta, .text = std::move(args), .tool_call_id = id, .tool_name = "", .error_message = "", .usage = std::nullopt});
   events.push_back(StreamEvent{
       .type = StreamEventType::ToolCallEnd, .text = "", .tool_call_id = std::move(id), .tool_name = "", .error_message = "", .usage = std::nullopt});
+  return native_part;
 }
 
-void append_part_events(std::vector<StreamEvent>& events, std::string_view part, std::size_t candidate_index, std::size_t part_index, GeminiParseState& state)
+void discard_native_parts(GeminiParseState& state)
 {
-  if (auto text = ava::core::json::string_field(part, "text"); text && !text->empty())
+  state.native_parts_json.clear();
+  state.native_part_count = 0;
+  state.native_parts_overflowed = true;
+  state.has_thought_signature = false;
+}
+
+void retain_native_part(GeminiParseState& state, std::string native_part, std::optional<std::string> const& signature)
+{
+  constexpr auto max_parts_bytes = kMaxGeminiNativePartsBytes - kGeminiNativeEnvelopePrefix.size() - 2;
+  if (native_part.size() > max_parts_bytes || (signature && signature->size() > max_parts_bytes - native_part.size()))
   {
-    state.parsed_content = true;
-    events.push_back(
-        StreamEvent{.type = StreamEventType::TextDelta, .text = *text, .tool_call_id = "", .tool_name = "", .error_message = "", .usage = std::nullopt});
+    discard_native_parts(state);
+    return;
   }
-  if (auto const function_call = ava::core::json::object_field(part, "functionCall"))
+  if (signature)
+    append_json_member(native_part, thought_signature_member(*signature));
+  auto const separator_bytes = state.native_part_count == 0 ? std::size_t{0} : std::size_t{1};
+  if (state.native_parts_overflowed || state.native_part_count >= kMaxProviderParserArrayItems ||
+      native_part.size() + separator_bytes > max_parts_bytes - state.native_parts_json.size())
   {
-    append_function_call_events(events, *function_call, candidate_index, part_index, state);
+    discard_native_parts(state);
+    return;
   }
+  if (separator_bytes != 0)
+    state.native_parts_json += ',';
+  state.native_parts_json += native_part;
+  ++state.native_part_count;
+}
+
+std::string append_text_part_events(std::vector<StreamEvent>& events, std::string_view text, bool thought, GeminiParseState& state)
+{
+  std::string native_part;
+  if (!state.native_parts_overflowed)
+  {
+    native_part = text_part_json(text);
+    if (thought)
+      append_json_member(native_part, R"("thought":true)");
+  }
+  if (!text.empty())
+  {
+    events.push_back(StreamEvent{.type = thought ? StreamEventType::ReasoningDelta : StreamEventType::TextDelta,
+                                 .text = std::string(text),
+                                 .tool_call_id = "",
+                                 .tool_name = "",
+                                 .error_message = "",
+                                 .usage = std::nullopt,
+                                 .reasoning_format = thought ? "gemini" : ""});
+    state.reasoning_active = thought;
+  }
+  return native_part;
+}
+
+void append_part_events(std::vector<StreamEvent>& events, std::string_view part, GeminiParseState& state)
+{
+  if (state.error_seen)
+    return;
+  auto const signature = ava::core::json::string_field(part, "thoughtSignature");
+  if (ava::core::json::field_value_start(part, "thoughtSignature") && (!signature || signature->empty()))
+  {
+    state.error_seen = true;
+    append_error_event(events, "Gemini thoughtSignature must be a non-empty opaque string");
+    return;
+  }
+  auto const text = ava::core::json::string_field(part, "text");
+  auto const function_call = ava::core::json::object_field(part, "functionCall");
+  if ((text && function_call) || (signature && !text && !function_call))
+  {
+    state.error_seen = true;
+    append_error_event(events, "Gemini signed part requires exactly one text or functionCall payload");
+    return;
+  }
+  // Replay metadata has a separate, smaller budget than ordinary model
+  // output. On overflow preserve the response and fall back to unsigned
+  // history, never to a partial signature envelope.
+  if ((text && text->size() > kMaxGeminiNativePartsBytes) || (signature && signature->size() > kMaxGeminiNativePartsBytes))
+    discard_native_parts(state);
+  if (!state.native_parts_overflowed)
+    state.has_thought_signature = state.has_thought_signature || signature.has_value();
+  bool const thought = text && gemini_thought(part);
+  if (!thought)
+    append_reasoning_end(events, state);
+  std::string native_part;
+  if (text)
+  {
+    state.parsed_content = state.parsed_content || !text->empty() || signature.has_value();
+    native_part = append_text_part_events(events, *text, thought, state);
+  }
+  if (function_call)
+    native_part = append_function_call_events(events, *function_call, state);
+  if (state.error_seen || state.native_parts_overflowed)
+    return;
+  if (!native_part.empty())
+    retain_native_part(state, std::move(native_part), signature);
 }
 
 void append_response_events(std::vector<StreamEvent>& events, GeminiParseState& state, std::string_view body)
@@ -470,7 +747,7 @@ void append_response_events(std::vector<StreamEvent>& events, GeminiParseState& 
       }
       for (std::size_t part_index = 0; parts && part_index < parts->size(); ++part_index)
       {
-        append_part_events(events, parts->at(part_index), candidate_index, part_index, state);
+        append_part_events(events, parts->at(part_index), state);
       }
     }
     if (auto const finish_reason = ava::core::json::string_field(candidate, "finishReason"); finish_reason && !finish_reason->empty())
@@ -480,14 +757,14 @@ void append_response_events(std::vector<StreamEvent>& events, GeminiParseState& 
   }
 }
 
-void append_event_for_data(std::vector<StreamEvent>& events, GeminiParseState& state, bool& saw_data, bool& done_seen, bool& error_seen, std::string_view data)
+void append_event_for_data(std::vector<StreamEvent>& events, GeminiParseState& state, bool& saw_data, bool& done_seen, std::string_view data)
 {
-  if (done_seen || error_seen)
+  if (done_seen || state.error_seen)
     return;
   if (data == "[DONE]")
   {
     done_seen = true;
-    append_done_event(events, std::move(state.usage), state.finish_reason);
+    append_done_event(events, state);
     state.usage = std::nullopt;
     state.finish_reason = std::nullopt;
     return;
@@ -495,17 +772,14 @@ void append_event_for_data(std::vector<StreamEvent>& events, GeminiParseState& s
   saw_data = true;
   if (!is_json_object_shape(data))
   {
-    error_seen = true;
+    state.error_seen = true;
     append_error_event(events, "malformed Gemini SSE event");
     return;
   }
   append_response_events(events, state, data);
-  if (state.error_seen)
-    error_seen = true;
 }
 
-void append_events_for_sse_line(std::vector<StreamEvent>& events, GeminiParseState& state, bool& saw_data, bool& done_seen, bool& error_seen, std::string& data,
-                                std::string line)
+void append_events_for_sse_line(std::vector<StreamEvent>& events, GeminiParseState& state, bool& saw_data, bool& done_seen, std::string& data, std::string line)
 {
   if (!line.empty() && line.back() == '\r')
     line.pop_back();
@@ -513,7 +787,7 @@ void append_events_for_sse_line(std::vector<StreamEvent>& events, GeminiParseSta
   {
     if (!data.empty())
     {
-      append_event_for_data(events, state, saw_data, done_seen, error_seen, data);
+      append_event_for_data(events, state, saw_data, done_seen, data);
       data.clear();
     }
     return;
@@ -572,7 +846,7 @@ ava::core::Result<ava::http::HttpRequest> GeminiProvider::build_request(Provider
                                             {"Accept", request.stream ? "text/event-stream" : "application/json"}},
                                 .body = std::move(*body),
                                 .timeout_ms = 60000,
-                                .follow_redirects = true,
+                                .follow_redirects = false,
                                 .include_response_headers = false,
                                 .resolve_hosts = {}};
 }
@@ -587,7 +861,7 @@ ava::core::Result<std::vector<StreamEvent>> GeminiProvider::parse_response(ava::
   return stream ? parse_gemini_sse_response(response) : parse_gemini_response(response);
 }
 
-GeminiStreamParser::GeminiStreamParser() : fallback_tool_call_prefix_(ava::core::make_id("gemini_call"))
+GeminiStreamParser::GeminiStreamParser() : state_{.fallback_tool_call_prefix = ava::core::make_id("gemini_call")}
 {
 }
 
@@ -597,57 +871,44 @@ ava::core::Result<std::vector<StreamEvent>> GeminiStreamParser::append(std::stri
   pending_line_.append(chunk);
   std::size_t line_start = 0;
   std::size_t search_from = scan_offset_;
-  GeminiParseState state{.usage = usage_,
-                         .finish_reason = finish_reason_,
-                         .fallback_tool_call_prefix = fallback_tool_call_prefix_,
-                         .parsed_content = false,
-                         .error_seen = error_seen_};
+  state_.parsed_content = false;
   while (true)
   {
     auto const newline = pending_line_.find('\n', search_from);
     if (newline == std::string::npos)
       break;
-    append_events_for_sse_line(events, state, saw_data_, done_seen_, error_seen_, data_, pending_line_.substr(line_start, newline - line_start));
+    append_events_for_sse_line(events, state_, saw_data_, done_seen_, data_, pending_line_.substr(line_start, newline - line_start));
     line_start = newline + 1;
     search_from = line_start;
   }
   if (line_start > 0)
     pending_line_.erase(0, line_start);
   scan_offset_ = pending_line_.size();
-  usage_ = std::move(state.usage);
-  finish_reason_ = state.finish_reason;
-  error_seen_ = error_seen_ || state.error_seen;
   return events;
 }
 
 ava::core::Result<std::vector<StreamEvent>> GeminiStreamParser::finish()
 {
   std::vector<StreamEvent> events;
-  GeminiParseState state{.usage = usage_,
-                         .finish_reason = finish_reason_,
-                         .fallback_tool_call_prefix = fallback_tool_call_prefix_,
-                         .parsed_content = false,
-                         .error_seen = error_seen_};
+  state_.parsed_content = false;
   if (!pending_line_.empty())
   {
-    append_events_for_sse_line(events, state, saw_data_, done_seen_, error_seen_, data_, std::move(pending_line_));
+    append_events_for_sse_line(events, state_, saw_data_, done_seen_, data_, std::move(pending_line_));
     pending_line_.clear();
   }
   scan_offset_ = 0;
   if (!data_.empty())
   {
-    append_event_for_data(events, state, saw_data_, done_seen_, error_seen_, data_);
+    append_event_for_data(events, state_, saw_data_, done_seen_, data_);
     data_.clear();
   }
-  if (saw_data_ && !done_seen_ && !error_seen_ && !state.error_seen)
+  if (saw_data_ && !done_seen_ && !state_.error_seen)
   {
-    append_done_event(events, std::move(state.usage), state.finish_reason);
+    append_done_event(events, state_);
   }
-  usage_ = std::nullopt;
-  finish_reason_ = std::nullopt;
+  state_.reset_response();
   saw_data_ = false;
   done_seen_ = false;
-  error_seen_ = false;
   return events;
 }
 
@@ -689,7 +950,7 @@ ava::core::Result<std::vector<StreamEvent>> parse_gemini_response(ava::http::Htt
       error.with_context("finish_reason", std::string(to_string(*state.finish_reason)));
     return std::unexpected(std::move(error));
   }
-  append_done_event(events, std::move(state.usage), state.finish_reason);
+  append_done_event(events, state);
   return events;
 }
 

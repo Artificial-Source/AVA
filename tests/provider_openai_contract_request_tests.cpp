@@ -5,6 +5,7 @@
 #include "ava/config/openai_oauth.h"
 #include "ava/provider/provider.h"
 #include "ava/core/error.h"
+#include "ava/core/openai_wire.h"
 #include "ava/core/result.h"
 
 #include <optional>
@@ -14,8 +15,30 @@
 
 namespace ava::tests::provider_openai_suite {
 
+namespace {
+void test_native_reasoning_validation_fails_closed()
+{
+  using ava::core::is_valid_openai_native_reasoning_item_json;
+  static_assert(noexcept(is_valid_openai_native_reasoning_item_json(std::string_view{})));
+  std::string const prefix = R"({"id":"rs_large","type":"reasoning","summary":[{"type":"summary_text","text":")";
+  std::string const suffix = R"("}]})";
+  std::string const at_limit = prefix + std::string(ava::core::kMaxOpenAINativeReasoningItemBytes - prefix.size() - suffix.size(), 'x') + suffix;
+  expect(is_valid_openai_native_reasoning_item_json(at_limit), "native reasoning accepts a well-formed item at the byte ceiling");
+  expect(!is_valid_openai_native_reasoning_item_json(at_limit + " "), "native reasoning fails closed above the byte ceiling");
+  expect(!is_valid_openai_native_reasoning_item_json(std::string_view(at_limit).substr(0, at_limit.size() - 1)),
+         "native reasoning fails closed on a large truncated JSON item without escaping its noexcept boundary");
+  auto const malformed_summary = prefix + std::string(32 * 1024, 'x') + R"("},{"type":"summary_text","text":false}]})";
+  expect(!is_valid_openai_native_reasoning_item_json(malformed_summary),
+         "native reasoning rejects malformed summary fields after allocating and extracting a large preceding summary");
+  expect(!is_valid_openai_native_reasoning_item_json(R"({"id":"rs_invalid","type":"reasoning","summary":[null]})") &&
+             !is_valid_openai_native_reasoning_item_json(R"({"id":"rs_invalid","type":"reasoning","summary":[{"type":"summary_text"}]})"),
+         "native reasoning fails closed for non-object and missing-text summaries");
+}
+}  // namespace
+
 std::optional<ava::http::HttpRequest> exercise_contract_request_serialization(ava::provider::OpenAIProvider const& provider)
 {
+  test_native_reasoning_validation_fails_closed();
   constexpr std::string_view system_prompt_marker = "AVA-ISSUE-54-OPENAI-SYSTEM-PROMPT";
   auto const request =
       provider.build_request(ava::provider::ProviderRequest{.provider_id = "openai",
