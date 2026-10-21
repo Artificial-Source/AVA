@@ -105,9 +105,6 @@ struct TuiActiveRunQueues
 
 struct TuiRuntimeStateSnapshot
 {
-  std::string session_id;
-  std::string session_path;
-  std::string workspace;
   std::string status;
   std::vector<SlashCommandItem> slash_commands = {};
   std::optional<std::size_t> slash_catalog_generation = std::nullopt;
@@ -290,9 +287,6 @@ struct TuiBranchSummarySnapshot
 
 struct TuiRuntimeOptions
 {
-  std::string session_id;
-  std::string session_path;
-  std::string workspace;
   std::string app_version;
   std::string initial_status = "";
   std::vector<TranscriptItem> initial_transcript = {};
@@ -309,6 +303,11 @@ struct TuiRuntimeOptions
   std::optional<StartupOverviewSnapshot> startup_overview = std::nullopt;
   TuiMermaidRenderBridge mermaid_render;
   TuiKeyBindings key_bindings = default_key_bindings();
+  // Reads the backend's currently committed session identity. The application
+  // acquires and releases the backend Session lock inside this callback; the
+  // TUI calls it only at serialized action/completion boundaries and never
+  // while holding its UI lock.
+  std::function<std::string()> read_committed_session_id;
   // Called on the TUI main thread at startup and after a submit worker completes; never from render/spinner loops.
   std::function<void()> refresh_session_statistics;
   std::function<TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;

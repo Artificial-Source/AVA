@@ -44,9 +44,9 @@ void run_tui_selector_tests()
                                                            .supports_reasoning = true,
                                                            .reasoning_levels = std::vector<std::string>{"low", "high"}});
     refresh_frontend.set_reasoning("low");
-    auto initial_model = refresh_frontend.frontend()->model_selection().refresh_model();
-    auto initial_provider = refresh_frontend.frontend()->model_selection().refresh_provider();
-    auto initial_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto initial_model = refresh_frontend.frontend()->model_selection().model_refresh();
+    auto initial_provider = refresh_frontend.frontend()->model_selection().provider_refresh();
+    auto initial_reasoning = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(initial_model.changed && initial_provider.changed && initial_reasoning.changed && initial_reasoning.value == "low",
            "frontend model-selection projections all report their initial state even when model refresh consumes the shared dirty flag first");
 
@@ -56,24 +56,24 @@ void run_tui_selector_tests()
                                 .supports_reasoning = true,
                                 .reasoning_levels = std::vector<std::string>{"low", "high"}});
     refresh_frontend.set_reasoning("high");
-    auto changed_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
-    auto changed_provider = refresh_frontend.frontend()->model_selection().refresh_provider();
-    auto changed_model = refresh_frontend.frontend()->model_selection().refresh_model();
+    auto changed_reasoning = refresh_frontend.frontend()->model_selection().reasoning_refresh();
+    auto changed_provider = refresh_frontend.frontend()->model_selection().provider_refresh();
+    auto changed_model = refresh_frontend.frontend()->model_selection().model_refresh();
     expect(changed_reasoning.changed && changed_reasoning.value == "high" && changed_provider.changed && changed_provider.value == "anthropic" &&
                changed_model.changed && changed_model.value == "Next",
            "reasoning-first refresh preserves pending model and provider changes after one shared canonical refresh");
-    expect(!refresh_frontend.frontend()->model_selection().refresh_model().changed &&
-               !refresh_frontend.frontend()->model_selection().refresh_provider().changed &&
-               !refresh_frontend.frontend()->model_selection().refresh_reasoning().changed,
+    expect(!refresh_frontend.frontend()->model_selection().model_refresh().changed &&
+               !refresh_frontend.frontend()->model_selection().provider_refresh().changed &&
+               !refresh_frontend.frontend()->model_selection().reasoning_refresh().changed,
            "each frontend model-selection pending flag clears independently after delivery");
 
     // Numeric projection changes remain independent, clear after delivery, and preserve optional transitions.
     tui_test_support::TuiFrontEndFixture numeric_frontend;
-    static_cast<void>(numeric_frontend.frontend()->model_selection().refresh_model());
+    static_cast<void>(numeric_frontend.frontend()->model_selection().model_refresh());
     auto const initial_numeric = numeric_frontend.frontend()->model_selection().context_window_tokens_refresh();
     auto const consumed_numeric = numeric_frontend.frontend()->model_selection().context_window_tokens_refresh();
     numeric_frontend.set_context_window_tokens(std::nullopt);
-    static_cast<void>(numeric_frontend.frontend()->model_selection().refresh_model());
+    static_cast<void>(numeric_frontend.frontend()->model_selection().model_refresh());
     auto const unknown_numeric = numeric_frontend.frontend()->model_selection().context_window_tokens_refresh();
     auto const consumed_unknown_numeric = numeric_frontend.frontend()->model_selection().context_window_tokens_refresh();
     expect(initial_numeric.changed && initial_numeric.value.has_value() && !consumed_numeric.changed && consumed_numeric.value == initial_numeric.value &&
@@ -134,7 +134,7 @@ void run_tui_selector_tests()
     percentage_frontend.set_context_window_tokens(100'000);
     percentage_frontend.set_active_token_estimates(50, 0);
     // A string projection refresh must not consume the numeric projection's pending change.
-    static_cast<void>(percentage_frontend.frontend()->model_selection().refresh_model());
+    static_cast<void>(percentage_frontend.frontend()->model_selection().model_refresh());
     auto const initial_window = percentage_frontend.frontend()->model_selection().context_window_tokens_refresh();
     auto const initial_percentage = percentage_frontend.frontend()->session_stats().contex_percentage_refresh();
     std::string const initial_percentage_value = initial_percentage.value;
@@ -177,25 +177,25 @@ void run_tui_selector_tests()
             unknown_percentage_value + "/" + invalid_window_percentage_value + "/" + zero_percentage_value + "/" + overflow_percentage_value);
 
     refresh_frontend.set_reasoning("low");
-    auto unchanged_provider = refresh_frontend.frontend()->model_selection().refresh_provider();
-    auto unchanged_model = refresh_frontend.frontend()->model_selection().refresh_model();
-    auto reasoning_only = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto unchanged_provider = refresh_frontend.frontend()->model_selection().provider_refresh();
+    auto unchanged_model = refresh_frontend.frontend()->model_selection().model_refresh();
+    auto reasoning_only = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(!unchanged_provider.changed && !unchanged_model.changed && reasoning_only.changed && reasoning_only.value == "low",
            "reasoning-only dirty updates do not spuriously change model or provider and survive their earlier refresh order");
 
     refresh_frontend.set_reasoning(std::nullopt);
-    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_model());
-    auto cleared_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    static_cast<void>(refresh_frontend.frontend()->model_selection().model_refresh());
+    auto cleared_reasoning = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     auto default_settings = ava::tui::settings_select_list_view_for_section(refresh_frontend.frontend(), ava::tui::SettingsSection::ModelsAndReasoning,
                                                                             ava::tui::ComposerSnapshot{}, ava::tui::default_key_bindings());
     expect(cleared_reasoning.changed && cleared_reasoning.value == "unknown" && default_settings.items[1].description == "default",
            "clearing canonical reasoning publishes an state \"unknown\" rendered as the Settings default");
 
     refresh_frontend.set_reasoning("high");
-    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_reasoning());
+    static_cast<void>(refresh_frontend.frontend()->model_selection().reasoning_refresh());
     refresh_frontend.set_reasoning_capabilities(false, {"off"});
-    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_provider());
-    auto suppressed_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    static_cast<void>(refresh_frontend.frontend()->model_selection().provider_refresh());
+    auto suppressed_reasoning = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(suppressed_reasoning.changed && suppressed_reasoning.value == "unknown",
            "capability changes atomically clear a selection that would violate the canonical reasoning invariant");
 
@@ -206,8 +206,8 @@ void run_tui_selector_tests()
                                 .reasoning_levels = std::vector<std::string>{},
                                 .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "high"}}});
     refresh_frontend.set_reasoning("high");
-    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_model());
-    auto mapped_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    static_cast<void>(refresh_frontend.frontend()->model_selection().model_refresh());
+    auto mapped_reasoning = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(mapped_reasoning.changed && mapped_reasoning.value == "high",
            "explicit reasoning mappings remain selectable when the model is capable and offers multiple supported levels");
 
@@ -219,7 +219,7 @@ void run_tui_selector_tests()
          .reasoning_levels = std::vector<std::string>{},
          .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "provider-high"}}});
     refresh_frontend.set_reasoning("high");
-    auto mapped_without_choice = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto mapped_without_choice = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(mapped_without_choice.changed && mapped_without_choice.value == "unknown",
            "valid provider mappings normalize to absent when capability metadata does not expose a user choice");
 
@@ -230,7 +230,7 @@ void run_tui_selector_tests()
          .supports_reasoning = true,
          .reasoning_levels = std::vector<std::string>{},
          .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "provider-high"}}});
-    auto rebuilt_capability = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto rebuilt_capability = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(!rebuilt_capability.changed && rebuilt_capability.value == "unknown",
            "rebuilding capable metadata does not restore a reasoning selection discarded by canonical normalization");
 
@@ -241,7 +241,7 @@ void run_tui_selector_tests()
                                 .reasoning_levels = std::vector<std::string>{"off"},
                                 .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{}});
     refresh_frontend.set_reasoning("off");
-    auto singleton_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto singleton_reasoning = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(!singleton_reasoning.changed && singleton_reasoning.value == "unknown",
            "singleton supported-level metadata accepts its provider level while keeping canonical reasoning absent");
 
@@ -253,9 +253,9 @@ void run_tui_selector_tests()
          .reasoning_levels = std::vector<std::string>{},
          .reasoning_level_mappings = std::vector<ava::config::ModelReasoningLevelMapping>{{.level = "high", .provider_level = "provider-high"}}});
     refresh_frontend.set_reasoning("high");
-    static_cast<void>(refresh_frontend.frontend()->model_selection().refresh_reasoning());
+    static_cast<void>(refresh_frontend.frontend()->model_selection().reasoning_refresh());
     refresh_frontend.set_reasoning(std::nullopt);
-    auto null_reasoning = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto null_reasoning = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     bool rejected_empty = false;
     try
     {
@@ -265,7 +265,7 @@ void run_tui_selector_tests()
     {
       rejected_empty = true;
     }
-    auto after_rejected_empty = refresh_frontend.frontend()->model_selection().refresh_reasoning();
+    auto after_rejected_empty = refresh_frontend.frontend()->model_selection().reasoning_refresh();
     expect(null_reasoning.changed && null_reasoning.value == "unknown" && rejected_empty && !after_rejected_empty.changed &&
                after_rejected_empty.value == "unknown",
            "the frontend fixture rejects trim-empty selections without publishing invalid canonical state");
@@ -939,14 +939,11 @@ void run_tui_selector_tests()
                                       .status = "ready",
                                       .transcript = {},
                                       .custom_themes = std::move(custom_themes),
-                                      .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
-                                                                           .mode = "build",
+                                      .sidebar = ava::tui::SidebarSnapshot{.mode = "build",
                                                                            //.provider = "openai",
                                                                            //.model = "gpt-5.5",
-                                                                           .workspace = "/workspace/project",
                                                                            .version = "0.32",
                                                                            .context_source_count = 2,
-                                                                           .session_path = "/tmp/ava/session_test.jsonl",
                                                                            .session_entry_count = 42},
                                       .project_trust = ava::tui::ProjectTrustSnapshot{.decision = "trusted",
                                                                                       .project_resources = "enabled",
@@ -1520,90 +1517,6 @@ void run_tui_selector_tests()
              fork_picker.items[enter_resolve.selected_item_index].value == "entry_user_a",
          "ForkUserTurn Enter resolves the filtered earlier stable entry id");
   auto const selected_entry_id = fork_picker.items[enter_resolve.selected_item_index].value;
-
-  std::string forked_callback_id;
-  auto opened = ava::tui::evaluate_fork_user_turn_selection(selected_entry_id, "session_old", "/tmp/old.jsonl",
-                                                            [&](std::string_view entry_id) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
-                                                              forked_callback_id = std::string(entry_id);
-                                                              ava::tui::TuiRuntimeStateSnapshot state;
-                                                              state.session_id = "session_forked";
-                                                              state.session_path = "/tmp/forked.jsonl";
-                                                              state.status = "forked session session_forked from session_old at entry_user_a";
-                                                              return state;
-                                                            });
-  expect(forked_callback_id == "entry_user_a" && opened.action == ava::tui::UserTurnForkSelectionAction::ApplyOpenedSession && opened.clear_transcript &&
-             opened.opened_snapshot && opened.opened_snapshot->session_id == "session_forked",
-         "fork selection callback receives the stable entry id and apply-opened clears prior transcript");
-
-  auto prior_transcript = std::vector<ava::tui::TranscriptItem>{ava::tui::TranscriptItem{.label = "you", .text = "later turn must clear"},
-                                                                ava::tui::TranscriptItem{.label = "ava", .text = "assistant later"}};
-  auto presentation = ava::tui::ComposerSnapshot{.mode = "build",
-                                                 //.provider = "openai",
-                                                 //.model = "gpt-5.5",
-                                                 .session_id = "session_old",
-                                                 .input = "",
-                                                 .status = "forking session…",
-                                                 .transcript = prior_transcript,
-                                                 .width = 80,
-                                                 .height = 24};
-  expect(!presentation.transcript.empty(), "precondition: prior transcript is present before opened apply");
-  if (opened.action == ava::tui::UserTurnForkSelectionAction::ApplyOpenedSession && opened.opened_snapshot && opened.clear_transcript)
-  {
-    // Mirror the production opened-session transition boundary used by runtime.cpp.
-    auto status = opened.opened_snapshot->status;
-    presentation.transcript.clear();
-    ++presentation.transcript_generation;
-    presentation.session_id = opened.opened_snapshot->session_id;
-    presentation.status = opened.opened_snapshot->status;
-    if (!status.empty())
-      presentation.transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = std::move(status)});
-  }
-  expect(presentation.session_id == "session_forked" && presentation.transcript.size() == 1 &&
-             presentation.transcript.front().text.find("forked session") != std::string::npos &&
-             presentation.transcript.front().text.find("later turn must clear") == std::string::npos,
-         "opened fork snapshot clears the old transcript and announces the new session");
-
-  std::size_t no_transition_calls = 0;
-  auto unchanged = ava::tui::evaluate_fork_user_turn_selection(selected_entry_id, "session_old", "/tmp/old.jsonl",
-                                                               [&](std::string_view) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
-                                                                 ++no_transition_calls;
-                                                                 ava::tui::TuiRuntimeStateSnapshot state;
-                                                                 state.session_id = "session_old";
-                                                                 state.session_path = "/tmp/old.jsonl";
-                                                                 state.status = "Cannot branch a sessionless session.";
-                                                                 return state;
-                                                               });
-  expect(no_transition_calls == 1 && unchanged.action == ava::tui::UserTurnForkSelectionAction::NoSessionTransition && !unchanged.clear_transcript &&
-             unchanged.beep && unchanged.status.find("Cannot branch a sessionless session") != std::string::npos,
-         "unchanged session identity after fork callback does not clear transcript");
-
-  auto kept = presentation;
-  kept.transcript = prior_transcript;
-  kept.session_id = "session_old";
-  if (unchanged.action != ava::tui::UserTurnForkSelectionAction::ApplyOpenedSession)
-  {
-    kept.status = unchanged.status;
-  }
-  expect(kept.session_id == "session_old" && kept.transcript.size() == 2 && kept.transcript.front().text == "later turn must clear",
-         "no-transition fork decision retains prior transcript rows");
-
-  std::size_t failure_calls = 0;
-  auto failed = ava::tui::evaluate_fork_user_turn_selection(
-      selected_entry_id, "session_old", "/tmp/old.jsonl", [&](std::string_view) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
-        ++failure_calls;
-        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "branch source entry not found"));
-      });
-  expect(failure_calls == 1 && failed.action == ava::tui::UserTurnForkSelectionAction::AuthorityFailure && !failed.clear_transcript && failed.beep &&
-             failed.status.find("branch source entry not found") != std::string::npos,
-         "fork callback failure reports authority error without transcript mutation");
-
-  auto missing = ava::tui::evaluate_fork_user_turn_selection(
-      {}, "session_old", "/tmp/old.jsonl", [&](std::string_view) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
-        expect(false, "empty fork selection must not invoke the authority callback");
-        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "unreachable"));
-      });
-  expect(missing.action == ava::tui::UserTurnForkSelectionAction::MissingSelection && !missing.clear_transcript,
-         "empty ForkUserTurn selection fails closed without authority work");
 
   std::string copy_callback_id;
   std::string copied_payload;

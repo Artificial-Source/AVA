@@ -14,6 +14,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include "debug.h"
 
 namespace ava::agent {
 namespace {
@@ -308,6 +309,18 @@ void discover_from_root(std::vector<AgentDefinition>& subagents, std::vector<Age
 
 }  // namespace
 
+std::string_view to_string(AgentToolPreset preset) noexcept
+{
+  switch (preset)
+  {
+    case AgentToolPreset::Inherit:
+      return "inherit";
+    case AgentToolPreset::ReadOnly:
+      return "read-only";
+  }
+  return "inherit";
+}
+
 std::string_view to_string(AgentDefinitionProvenance provenance) noexcept
 {
   switch (provenance)
@@ -355,6 +368,18 @@ std::vector<AgentDefinition> builtin_subagents()
                           .system_prompt = "You are AVA's explore subagent. Read, list, and search files only. Return concise findings to the parent agent.",
                           .tool_preset = AgentToolPreset::ReadOnly,
                           .provenance = AgentDefinitionProvenance::Builtin}};
+}
+
+AgentDefinition builtin_ava_agent()
+{
+  Dout(dc::warning, "CALLING builtin_ava_agent() - THIS MUST BE REPLACED / FIXED.");
+  return AgentDefinition{.name = "none",
+                         .description = "AVA's normal execution policy.",
+                         .system_prompt = {},
+                         .tool_preset = AgentToolPreset::Inherit,
+                         .max_tool_iterations = std::nullopt,
+                         .hidden = false,
+                         .provenance = AgentDefinitionProvenance::Builtin};
 }
 
 std::vector<std::filesystem::path> default_global_agent_dirs()

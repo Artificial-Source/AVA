@@ -1,11 +1,13 @@
 add_library(ava_frontend
+  "AgentSelection.cxx"
   "Data.cxx"
   "Directories.cxx"
   "FeedbackKey.cxx"
   "FrontEnd.cxx"
   "GitBranch.cxx"
   "ModelSelection.cxx"
-  "PromptMetadata.cxx"
+  "PromptModeAndContextSources.cxx"
+  "SessionIdentity.cxx"
   "SessionStats.cxx"
 )
 

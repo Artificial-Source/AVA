@@ -7,17 +7,26 @@
 
 namespace ava::tui {
 
-TuiFrontEnd::TuiFrontEnd() : model_selection_(this), prompt_metadata_(this), session_stats_(this, &model_selection_), directories_(this), git_branch_(this)
+TuiFrontEnd::TuiFrontEnd()
+    : agent_selection_(this),
+      model_selection_(this),
+      prompt_metadata_(this),
+      session_stats_(this, &model_selection_),
+      directories_(this),
+      git_branch_(this),
+      session_identity_(this)
 {
 }
 
 void TuiFrontEnd::initialize_frontend_state(app::runtime::session_ts::crat const& session_r)
 {
+  agent_selection_.initialize(&session_r->agent_selection());
   model_selection_.initialize(&session_r->model_selection());
   prompt_metadata_.initialize(&session_r->prompt_mode_and_context_sources());
   session_stats_.initialize(&session_r->session_stats());
   directories_.initialize(&session_r->directories());
   git_branch_.initialize(&session_r->git_branch());
+  session_identity_.initialize(&session_r->store.options());
 }
 
 int TuiFrontEnd::run(TuiRuntimeOptions options)
@@ -33,7 +42,11 @@ void TuiFrontEnd::data_changed(frontend::DataListIndex index)
   DoutEntering(dc::frontend, "TuiFrontEnd::data_changed(" << index << ")");
   frontend::Data const* data = get_data(index);
 
-  if (dynamic_cast<app::runtime::Directories_ts const*>(data) != nullptr)
+  if (dynamic_cast<app::runtime::AgentSelection_ts const*>(data) != nullptr)
+  {
+    agent_selection_.dirty();
+  }
+  else if (dynamic_cast<app::runtime::Directories_ts const*>(data) != nullptr)
   {
     directories_.dirty();
   }
@@ -52,6 +65,10 @@ void TuiFrontEnd::data_changed(frontend::DataListIndex index)
   else if (dynamic_cast<app::runtime::GitBranch_ts const*>(data) != nullptr)
   {
     git_branch_.dirty();
+  }
+  else if (dynamic_cast<session::SessionStoreOptions_ts const*>(data) != nullptr)
+  {
+    session_identity_.dirty();
   }
 }
 

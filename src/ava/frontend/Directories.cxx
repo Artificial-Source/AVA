@@ -5,7 +5,7 @@ namespace ava::frontend {
 
 // Compare both displayed paths, then retain a full copy including additional writable directories.
 // Only an actual path-text change marks the corresponding display string pending.
-void Directories::refresh_snapshot()
+void Directories::refresh()
 {
   Data const* data = frontend_->get_data(index_);
   // Initialize with a stable registered Directories_ts before refreshing this projection.
@@ -33,7 +33,7 @@ RefreshResult<std::string const&> Directories::workspace_root_refresh()
   // Initialize before requesting the workspace-root display.
   ASSERT(!index_.undefined());
   if (dirty_.exchange(false))
-    refresh_snapshot();
+    refresh();
   bool const changed = workspace_root_.clear_changed();
   if (changed)
     workspace_root_.display_ = directories_snapshot_.workspace_dir.string();
@@ -46,7 +46,7 @@ RefreshResult<std::string const&> Directories::current_directory_refresh()
   // Initialize before requesting the current-directory display.
   ASSERT(!index_.undefined());
   if (dirty_.exchange(false))
-    refresh_snapshot();
+    refresh();
   bool const changed = current_directory_.clear_changed();
   if (changed)
     current_directory_.display_ = directories_snapshot_.current_dir.string();

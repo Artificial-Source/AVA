@@ -3,6 +3,7 @@
 #include "support/test_timeout.h"
 #include "support/tui_test_support.h"
 #include "ava/app/terminal_text.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/keybindings.h"
@@ -120,10 +121,8 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(20, 180));
 
   ava::tui::TuiRuntimeOptions options;
-  options.session_id = "search_tail_direct_refresh";
   //  options.provider = "fake";
   //  options.model = "idle-sidebar-model";
-  options.workspace = "/workspace/search-tail";
   options.initial_transcript.reserve(ava::tui::kMaxTranscriptItems);
   for (std::size_t index = 0; index < ava::tui::kMaxTranscriptItems; ++index)
   {
@@ -191,10 +190,9 @@ bool test_changed_session_snapshot_resets_presentation()
 
   std::size_t job_list_calls = 0;
   ava::tui::TuiRuntimeOptions options;
-  options.session_id = "session_old_presentation";
+  options.read_committed_session_id = [&]() { return frontend.session_store_options().session_id; };
   //  options.provider = "fake";
   //  options.model = "old-model";
-  options.workspace = "/workspace/old";
   options.initial_transcript = {
       ava::tui::TranscriptItem{.label = "you", .text = "OLD-TRANSCRIPT-MARKER"},
       ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "read_file"}},
@@ -227,6 +225,8 @@ bool test_changed_session_snapshot_resets_presentation()
       .origin = ava::tui::TuiToolIndexOrigin::LocalCommand}};
   presentation.snapshot.evicted_tool_index_identities = {"call\nold-evicted-tool"};
   presentation.snapshot.next_tool_index_sequence = 7;
+  presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
+  presentation.snapshot.pending_attachments.push_back(ava::tui::PendingAttachmentItem{});
 
   ava::tui::RuntimeDraftState draft_state;
   draft_state.input_history = {"old session prompt"};
@@ -251,14 +251,13 @@ bool test_changed_session_snapshot_resets_presentation()
   renderer.defer_detached_transcript_update({}, 1);
   renderer.transcript_layout_cache.valid = true;
   auto const previous_generation = presentation.snapshot.transcript_generation;
+  auto const replaced_session = frontend.replace_session_identity();
+  auto const committed_session_id = options.read_committed_session_id();
 
   auto changed = ava::tui::apply_runtime_state_snapshot_with_presentation_transition(
-      options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
+      options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list, committed_session_id,
       ava::tui::TuiRuntimeStateSnapshot{//.provider = "fake-next",
                                         //.model = "new-model",
-                                        .session_id = "session_new_presentation",
-                                        .session_path = "/sessions/new.jsonl",
-                                        .workspace = "/workspace/new",
                                         .status = "new session receipt",
                                         .todos = {{.id = "todo-new", .content = "new todo", .status = ava::tui::TodoStatus::InProgress}}});
 
@@ -268,7 +267,7 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const history_restored =
       ava::tui::browse_composer_input_history(history_probe, draft_state.input_history, history_probe_index, history_probe_scratch, true);
   auto const changed_state_ok =
-      changed && search_opened && presentation.snapshot.session_id == "session_new_presentation" && presentation.snapshot.mode == "build" &&
+      replaced_session && changed && search_opened && presentation.snapshot.session_id == committed_session_id && presentation.snapshot.mode == "build" &&
       // presentation.snapshot.provider == "fake-next" && presentation.snapshot.model == "new-model" &&
       presentation.snapshot.status == "new session receipt" && presentation.snapshot.transcript.empty() &&
       presentation.snapshot.transcript_generation == previous_generation + 1 && presentation.snapshot.queued_messages.empty() &&
@@ -281,9 +280,10 @@ bool test_changed_session_snapshot_resets_presentation()
       presentation.snapshot.transcript_selection_focus_item == std::string::npos && !presentation.snapshot.command_output &&
       !presentation.snapshot.local_command_feedback && presentation.snapshot.tool_index.empty() &&
       presentation.snapshot.evicted_tool_index_identities.empty() && presentation.snapshot.next_tool_index_sequence == 0 &&
-      !presentation.snapshot.sidebar_drawer_visible && presentation.snapshot.sidebar_drawer_scroll_offset == 0 && renderer.transcript_scroll_offset == 0 &&
-      renderer.detached_new_output_count == 0 && !renderer.detached_sidebar_snapshot && !renderer.has_deferred_detached_transcript_update() &&
-      !renderer.transcript_layout_cache.valid && !transcript_search.is_open() && active_select_list == ava::tui::ActiveSelectList::None;
+      presentation.pending_image_attachments.empty() && presentation.snapshot.pending_attachments.empty() && !presentation.snapshot.sidebar_drawer_visible &&
+      presentation.snapshot.sidebar_drawer_scroll_offset == 0 && renderer.transcript_scroll_offset == 0 && renderer.detached_new_output_count == 0 &&
+      !renderer.detached_sidebar_snapshot && !renderer.has_deferred_detached_transcript_update() && !renderer.transcript_layout_cache.valid &&
+      !transcript_search.is_open() && active_select_list == ava::tui::ActiveSelectList::None;
 
   presentation.snapshot.transcript = {{.label = "ava", .text = "new receipt only"}};
   ++presentation.snapshot.transcript_generation;
@@ -291,12 +291,9 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.sidebar.activity = {{.id = "activity-new", .label = "tool", .detail = "new activity"}};
   auto const unchanged_generation = presentation.snapshot.transcript_generation;
   auto unchanged = ava::tui::apply_runtime_state_snapshot_with_presentation_transition(
-      options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
+      options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list, options.read_committed_session_id(),
       ava::tui::TuiRuntimeStateSnapshot{//.provider = "fake-next",
                                         //.model = "same-session-model-update",
-                                        .session_id = "session_new_presentation",
-                                        .session_path = "/sessions/new.jsonl",
-                                        .workspace = "/workspace/new",
                                         .status = "same session update",
                                         .todos = {{.id = "todo-same", .content = "same-session todo"}}});
   auto const unchanged_state_ok = !unchanged && presentation.snapshot.transcript_generation == unchanged_generation &&
@@ -307,7 +304,25 @@ bool test_changed_session_snapshot_resets_presentation()
 
   auto const jobs_still_available = subagent_workspace.open_selector() && subagent_workspace.active() && job_list_calls == 1;
 
-  return changed_state_ok && unchanged_state_ok && jobs_still_available;
+  // Reconcile two backend replacements without an intervening presentation DTO or render.
+  // Display refresh consumption must not be required to reset the newest local state.
+  bool rapid_replacements_ok = true;
+  for (std::size_t index = 0; index < 2; ++index)
+  {
+    presentation.snapshot.input = "draft from previous session";
+    presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
+    auto const before = presentation.snapshot.transcript_generation;
+    auto const replaced = frontend.replace_session_identity();
+    static_cast<void>(frontend.session_id_metadata());
+    auto const committed = options.read_committed_session_id();
+    auto const transitioned =
+        ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list, committed);
+    rapid_replacements_ok = rapid_replacements_ok && replaced && transitioned && presentation.snapshot.session_id == committed &&
+                            presentation.snapshot.input.empty() && presentation.pending_image_attachments.empty() &&
+                            presentation.snapshot.transcript_generation == before + 1;
+  }
+
+  return changed_state_ok && unchanged_state_ok && jobs_still_available && rapid_replacements_ok;
 }
 
 bool test_active_run_session_transition_discards_prior_session_events()
@@ -318,11 +333,11 @@ bool test_active_run_session_transition_discards_prior_session_events()
 
   bool finish_called = false;
   bool initial_identity_forwarded = false;
+  bool backend_session_replaced = false;
   ava::tui::TuiRuntimeOptions options;
-  options.session_id = "session_old_active_run";
+  options.read_committed_session_id = [&]() { return frontend.session_store_options().session_id; };
   //  options.provider = "fake";
   //  options.model = "old-model";
-  options.workspace = "/workspace/old";
   options.initial_transcript = {
       ava::tui::TranscriptItem{.label = "ava", .text = "OLD-INITIAL-TRANSCRIPT"},
       ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "old_initial_tool"}},
@@ -355,7 +370,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
     };
     return queues;
   };
-  options.on_submit = [&initial_identity_forwarded](std::string const&, ava::tui::TuiSubmitContext context) {
+  options.on_submit = [&frontend, &initial_identity_forwarded, &backend_session_replaced](std::string const&, ava::tui::TuiSubmitContext context) {
     initial_identity_forwarded = context.request_id == "old-request" && static_cast<bool>(context.on_subagent_launch);
     context.on_subagent_launch(
         ava::agent::SubagentLaunchNotification{.tool_call_id = "old-tool-call",
@@ -372,12 +387,10 @@ bool test_active_run_session_transition_discards_prior_session_events()
     old_tool.status = "success";
     old_tool.changed_paths = {"old-event.cpp"};
     static_cast<void>(context.event_sink(ava::event::RuntimeEvent{{}, ava::event::ToolResultEvent{.payload = std::move(old_tool)}}));
+    backend_session_replaced = frontend.replace_session_identity();
     auto state = ava::tui::TuiRuntimeStateSnapshot{};
     //    state.provider = "fake-next";
     //    state.model = "new-model";
-    state.session_id = "session_new_active_run";
-    state.session_path = "/sessions/new.jsonl";
-    state.workspace = "/workspace/new";
     state.status = "transition ready";
     state.todos = {{.id = "new-todo", .content = "NEW TODO", .status = ava::tui::TodoStatus::Pending}};
     auto result = ava::tui::TuiSubmitResult{};
@@ -407,13 +420,14 @@ bool test_active_run_session_transition_discards_prior_session_events()
                                                   action_controller, transcript_search, subagent_workspace);
 
   auto const outcome = active_run.run("OLD SUBMITTED PROMPT");
+  auto const committed_session_id = options.read_committed_session_id();
   auto history_probe = ava::tui::ComposerDraftState{};
   auto history_index = std::optional<std::size_t>{};
   auto history_scratch = std::string{};
   auto const history_restored = ava::tui::browse_composer_input_history(history_probe, draft_state.input_history, history_index, history_scratch, true);
   auto const passed =
-      !outcome.break_loop && !outcome.terminal_write_failed && finish_called && initial_identity_forwarded &&
-      presentation.snapshot.session_id == "session_new_active_run" && presentation.snapshot.mode == "build" && presentation.snapshot.transcript.size() == 1 &&
+      !outcome.break_loop && !outcome.terminal_write_failed && finish_called && initial_identity_forwarded && backend_session_replaced &&
+      presentation.snapshot.session_id == committed_session_id && presentation.snapshot.mode == "build" && presentation.snapshot.transcript.size() == 1 &&
       presentation.snapshot.transcript.front().text == "NEW-SESSION-RECEIPT" && !presentation.snapshot.transcript.front().tool &&
       presentation.snapshot.queued_messages.empty() && presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() &&
       presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "new-todo" && presentation.snapshot.status == "done" &&
@@ -429,9 +443,8 @@ bool test_atomic_search_input_prompt_precedence()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(12, 80));
 
   ava::tui::TuiRuntimeOptions options;
-  options.session_id = "search_prompt_race";
   ava::tui::ComposerSnapshot snapshot;
-  snapshot.session_id = options.session_id;
+  snapshot.session_id = "search_prompt_race";
   snapshot.width = 80;
   snapshot.height = 12;
   ava::tui::SidebarSnapshot sidebar;
@@ -539,10 +552,8 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 80));
 
   ava::tui::TuiRuntimeOptions options;
-  options.session_id = "message-boundary-nav";
   //  options.provider = "fake";
   //  options.model = "nav-model";
-  options.workspace = "/workspace/message-boundary";
   options.key_bindings = ava::tui::default_key_bindings();
   auto tall_message = [](std::string_view name, int lines) {
     std::string text(name);
@@ -717,10 +728,8 @@ bool test_detached_completion_publish_preserves_numbered_window()
   };
 
   ava::tui::TuiRuntimeOptions options;
-  options.session_id = "detached-completion-geometry";
   //  options.provider = "fake";
   //  options.model = "geometry-model";
-  options.workspace = "/workspace/detached-completion";
   options.key_bindings = ava::tui::default_key_bindings();
   options.initial_transcript = {ava::tui::TranscriptItem{.label = "ava", .text = build_stream_text(0, 29)}};
 
@@ -792,12 +801,10 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 80));
 
-  auto exercise = [&](std::vector<ava::tui::TranscriptItem> transcript, std::string_view session_id) {
+  auto exercise = [&](std::vector<ava::tui::TranscriptItem> transcript) {
     ava::tui::TuiRuntimeOptions options;
-    options.session_id = std::string(session_id);
     //    options.provider = "fake";
     //    options.model = "nav-model";
-    options.workspace = "/workspace/message-boundary-fit";
     options.key_bindings = ava::tui::default_key_bindings();
     options.initial_transcript = std::move(transcript);
 
@@ -832,12 +839,84 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
     return offset_before == 0 && prev_offset == 0 && next_offset == 0 && prev_status == expected_prev && next_status == expected_next && draft_unchanged;
   };
 
-  bool const empty_ok = exercise({}, "message-boundary-empty");
+  bool const empty_ok = exercise({});
   bool const fitting_ok =
-      exercise({ava::tui::TranscriptItem{.label = "you", .text = "short alpha"}, ava::tui::TranscriptItem{.label = "ava", .text = "short beta"}},
-               "message-boundary-fitting");
+      exercise({ava::tui::TranscriptItem{.label = "you", .text = "short alpha"}, ava::tui::TranscriptItem{.label = "ava", .text = "short beta"}});
 
   return empty_ok && fitting_ok;
+}
+
+// Exercise the guarded selected-agent projection and prove renderers reread canonical authority from an otherwise unchanged snapshot.
+bool test_selected_agent_projection_and_rendering()
+{
+  using ava::agent::AgentDefinitionProvenance;
+  using ava::agent::AgentToolPreset;
+
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto initial_agent = frontend.frontend()->agent_selection().agent_refresh();
+  auto initial_provenance = frontend.frontend()->agent_selection().provenance_refresh();
+  auto initial_tool_preset = frontend.frontend()->agent_selection().tool_preset_refresh();
+  bool const initial = initial_agent.changed && initial_agent.value == "none" && initial_provenance.changed && initial_provenance.value == "builtin" &&
+                       initial_tool_preset.changed && initial_tool_preset.value == "inherit";
+
+  auto clean_agent = frontend.frontend()->agent_selection().agent_refresh();
+  auto clean_provenance = frontend.frontend()->agent_selection().provenance_refresh();
+  auto clean_tool_preset = frontend.frontend()->agent_selection().tool_preset_refresh();
+  frontend.touch_agent_selection();
+  auto noop_agent = frontend.frontend()->agent_selection().agent_refresh();
+  auto noop_provenance = frontend.frontend()->agent_selection().provenance_refresh();
+  auto noop_tool_preset = frontend.frontend()->agent_selection().tool_preset_refresh();
+  bool const clean_and_noop = !clean_agent.changed && !clean_provenance.changed && !clean_tool_preset.changed && !noop_agent.changed &&
+                              !noop_provenance.changed && !noop_tool_preset.changed;
+
+  frontend.set_selected_agent_metadata("reviewer", AgentDefinitionProvenance::Project, AgentToolPreset::ReadOnly);
+  auto changed_agent = frontend.frontend()->agent_selection().agent_refresh();
+  auto consumed_agent = frontend.frontend()->agent_selection().agent_refresh();
+  auto changed_tool_preset = frontend.frontend()->agent_selection().tool_preset_refresh();
+  auto changed_provenance = frontend.frontend()->agent_selection().provenance_refresh();
+  bool const all_metadata_and_independent_flags = changed_agent.changed && changed_agent.value == "reviewer" && !consumed_agent.changed &&
+                                                  changed_tool_preset.changed && changed_tool_preset.value == "read-only" && changed_provenance.changed &&
+                                                  changed_provenance.value == "project";
+
+  tui_test_support::TuiFrontEndFixture detached_fresh;
+  auto detached_agent = detached_fresh.frontend()->agent_selection().agent_refresh();
+  bool const detached_is_fresh = detached_agent.changed && detached_agent.value == "none";
+
+  bool const replaced = frontend.replace_session_with_agent_metadata("replacement", AgentDefinitionProvenance::Global, AgentToolPreset::Inherit);
+  auto replacement_agent = frontend.frontend()->agent_selection().agent_refresh();
+  auto replacement_provenance = frontend.frontend()->agent_selection().provenance_refresh();
+  auto replacement_tool_preset = frontend.frontend()->agent_selection().tool_preset_refresh();
+  bool const replacement_metadata = replaced && replacement_agent.changed && replacement_agent.value == "replacement" && replacement_provenance.changed &&
+                                    replacement_provenance.value == "global" && replacement_tool_preset.changed && replacement_tool_preset.value == "inherit";
+
+  auto snapshot = ava::tui::ComposerSnapshot{.mode = "stale-mode",
+                                             .session_id = "selected-agent-rendering",
+                                             .input = {},
+                                             .status = "ready",
+                                             .transcript = {},
+                                             .width = 176,
+                                             .height = 40,
+                                             .sidebar = ava::tui::SidebarSnapshot{.mode = "stale-mode"}};
+  auto const replacement_frame = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), snapshot));
+  frontend.set_selected_agent_metadata("canonical-next", AgentDefinitionProvenance::Builtin, AgentToolPreset::ReadOnly);
+  auto const refreshed_frame = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), snapshot));
+  snapshot.width = 100;
+  snapshot.sidebar_drawer_visible = true;
+  auto const drawer_frame = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), snapshot));
+  bool const renderer_uses_fresh_projection =
+      replacement_frame.find("agent replacement") != std::string::npos && refreshed_frame.find("agent canonical-next") != std::string::npos &&
+      refreshed_frame.find("agent replacement") == std::string::npos && drawer_frame.find("Agent") != std::string::npos &&
+      drawer_frame.find("agent canonical-next") != std::string::npos && drawer_frame.find("provenance builtin") != std::string::npos &&
+      drawer_frame.find("tool preset read-only") != std::string::npos;
+
+  frontend.set_selected_agent_metadata("unsafe\x1b[31m\nreceiver", AgentDefinitionProvenance::Project, AgentToolPreset::ReadOnly);
+  auto const sanitized_frame = ava::tui::render_composer(frontend.frontend(), snapshot);
+  auto const sanitized_visible = tui_test_support::join_visible_lines(sanitized_frame);
+  bool const terminal_safe = sanitized_visible.find("unsafe") != std::string::npos && sanitized_visible.find("receiver") != std::string::npos &&
+                             std::ranges::none_of(sanitized_frame, [](std::string const& line) { return line.find("unsafe\x1b[31m") != std::string::npos; });
+
+  return initial && clean_and_noop && all_metadata_and_independent_flags && detached_is_fresh && replacement_metadata && renderer_uses_fresh_projection &&
+         terminal_safe;
 }
 
 }  // namespace
@@ -859,9 +938,6 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ava::tui::TuiRuntimeOptions options;
   //  options.provider = "openai";
   //  options.model = "gpt-5.5";
-  options.session_id = "session_display_reload";
-  options.session_path = "/tmp/session_display_reload.jsonl";
-  options.workspace = "/workspace";
   options.show_images = true;
   options.image_width_cells = 60;
   options.custom_themes = {ava::tui::ThemeOptionItem{
@@ -877,9 +953,6 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
     return std::optional<ava::tui::TuiRuntimeStateSnapshot>{ava::tui::TuiRuntimeStateSnapshot{
         //.provider = "openai",
         //.model = "gpt-5.5",
-        .session_id = "session_display_reload",
-        .session_path = "/tmp/session_display_reload.jsonl",
-        .workspace = "/workspace",
         .status = "display theme auto-reloaded",
         .custom_themes = {ava::tui::ThemeOptionItem{
             .name = "sunrise",
@@ -976,18 +1049,12 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   ava::tui::TuiRuntimeOptions options;
   //  options.provider = "openai";
   //  options.model = "gpt-5.5";
-  options.session_id = "session_overview_display_reload";
-  options.session_path = "/tmp/session_overview_display_reload.jsonl";
-  options.workspace = "/workspace";
   options.startup_overview = initial_overview;
   options.on_maybe_reload_display_settings = [&]() -> ava::core::Result<std::optional<ava::tui::TuiRuntimeStateSnapshot>> {
     ++applied_callback_count;
     return std::optional<ava::tui::TuiRuntimeStateSnapshot>{ava::tui::TuiRuntimeStateSnapshot{
         //.provider = "openai",
         //.model = "gpt-5.5",
-        .session_id = "session_overview_display_reload",
-        .session_path = "/tmp/session_overview_display_reload.jsonl",
-        .workspace = "/workspace",
         .status = "display theme auto-reloaded",
         .custom_themes = {ava::tui::ThemeOptionItem{
             .name = "sunrise",
@@ -1041,7 +1108,6 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   int display_reload_calls = 0;
   int keybinding_reload_calls = 0;
   ava::tui::TuiRuntimeOptions options;
-  options.session_id = "session_reload_routing";
   options.on_submit = [&backend_submissions](std::string const& submitted, ava::tui::TuiSubmitContext) {
     backend_submissions.push_back(submitted);
     ava::tui::TuiSubmitResult result;
@@ -1051,14 +1117,12 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   options.on_reload_display_settings = [&display_reload_calls]() -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
     ++display_reload_calls;
     ava::tui::TuiRuntimeStateSnapshot state;
-    state.session_id = "session_reload_routing";
     state.status = "display theme reloaded";
     return state;
   };
   options.on_reload_key_bindings = [&keybinding_reload_calls]() -> ava::core::Result<ava::tui::TuiKeyBindingReloadResult> {
     ++keybinding_reload_calls;
     ava::tui::TuiKeyBindingReloadResult reloaded;
-    reloaded.state.session_id = "session_reload_routing";
     reloaded.state.status = "keybindings reloaded";
     return reloaded;
   };
@@ -1191,6 +1255,9 @@ void run_tui_composer_rendering_tests_part_1()
   auto const [fixture_provider, fixture_model] = frontend.selected_model_metadata();
   expect(fixture_provider == "openai" && fixture_model == "gpt-5.5",
          "TUI frontend fixture registers and initializes canonical session model selection metadata");
+  expect(test_selected_agent_projection_and_rendering(),
+         "selected-agent projection starts nonoptional and dirty, preserves independent field flags across no-op and replacement notifications, remains fresh "
+         "for detached frontends, and drives sanitized composer, sidebar, and drawer metadata from canonical next-turn authority");
   {
     tui_test_support::TuiFrontEndFixture configured_frontend({.provider_id = "anthropic", .model_id = "claude-sonnet-4-5", .display_name = "Fixture Model"});
     auto const [configured_provider, configured_model] = configured_frontend.selected_model_metadata();
@@ -1536,7 +1603,7 @@ void run_tui_composer_rendering_tests_part_1()
     idle_input.pop_back();
   while (!idle_footer.empty() && idle_footer.back() == ' ')
     idle_footer.pop_back();
-  expect(idle_two_row_lines.size() == 10 && idle_input == "│  Type a message..." && idle_footer == "│  GPT-5.5 · ctx 870 (0.3%)" &&
+  expect(idle_two_row_lines.size() == 10 && idle_input == "│  Type a message..." && idle_footer == "│  GPT-5.5 · agent none · ctx 870 (0.3%)" &&
              idle_two_row_lines[8].find("\x1b[49m") != std::string::npos && idle_two_row_lines[9].find("\x1b[49m") != std::string::npos &&
              std::ranges::none_of(idle_two_row_lines, [](std::string const& line) { return line.find("\x1b[48;2;26;31;46m") != std::string::npos; }) &&
              std::ranges::none_of(idle_two_row_lines, [](std::string const& line) { return strip_sgr(line).find("❯") != std::string::npos; }),
@@ -1819,8 +1886,8 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(normal_combined_lines,
                              [&](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-5.5 · ctx 150.3k") != std::string::npos && visible.find(narrow_meter_raw) != std::string::npos &&
-                                      visible_columns(line) == 80;
+                               return visible.find("GPT-5.5 · agent none · ctx 150.3k") != std::string::npos &&
+                                      visible.find(narrow_meter_raw) != std::string::npos && visible_columns(line) == 80;
                              }),
          "tui shows the compact active-context count with the four-cell meter at normal width without overflow");
   {
@@ -2055,17 +2122,15 @@ void run_tui_composer_rendering_tests_part_1()
                                                                                 .transcript = {},
                                                                                 .width = 110,
                                                                                 .height = 10,
-                                                                                .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
-                                                                                                                     .mode = "build",
+                                                                                .sidebar = ava::tui::SidebarSnapshot{.mode = "build",
                                                                                                                      //.provider = "openai",
                                                                                                                      //.model = "gpt-5.5",
-                                                                                                                     .workspace = "/workspace/project",
                                                                                                                      .context_source_count = 2,
                                                                                                                      .session_entry_count = 42}});
   expect(std::ranges::any_of(compact_footer_lines,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-5.5 · ctx 1.3k") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
+                               return visible.find("GPT-5.5 · agent none · ctx 1.3k") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
                                       visible.find("Build") == std::string::npos && visible.find("OpenAI") == std::string::npos &&
                                       visible.find("cwd") == std::string::npos && visible.find("git") == std::string::npos &&
                                       visible.find("entries") == std::string::npos && visible.find("1.3k (0.7%)") == std::string::npos;
@@ -2088,7 +2153,7 @@ void run_tui_composer_rendering_tests_part_1()
   expect(std::ranges::any_of(refreshed_context_lines,
                              [](std::string const& line) {
                                auto const visible = strip_sgr(line);
-                               return visible.find("GPT-5.5 · ctx 1.2k") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
+                               return visible.find("GPT-5.5 · agent none · ctx 1.2k") != std::string::npos && visible.find("ctx 2") == std::string::npos &&
                                       visible.find("ctx 3") == std::string::npos;
                              }),
          "tui composer footer uses refreshed active context usage rather than sidebar source metadata");
@@ -2475,6 +2540,41 @@ void run_tui_composer_rendering_tests_part_3()
 }
 void run_tui_composer_rendering_tests_part_4()
 {
+  tui_test_support::TuiFrontEndFixture identity_frontend;
+  auto const initial_session_id = identity_frontend.session_id_metadata();
+  auto const initial_session_path = identity_frontend.session_path_metadata();
+  auto const clean_session_id = identity_frontend.session_id_metadata();
+  auto const clean_session_path = identity_frontend.session_path_metadata();
+  identity_frontend.touch_session_identity();
+  auto const noop_session_id = identity_frontend.session_id_metadata();
+  auto const noop_session_path = identity_frontend.session_path_metadata();
+  auto const identity_replaced = identity_frontend.replace_session_identity();
+  auto const replacement_identity = identity_frontend.session_store_options();
+  auto const expected_replacement_path = ava::session::session_path_for_options(replacement_identity).string();
+  auto const replacement_session_id = identity_frontend.session_id_metadata();
+  auto const replacement_session_path = identity_frontend.session_path_metadata();
+  auto const identity_drawer = ava::tui::render_composer(identity_frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                                                  .session_id = "stale-composer-id",
+                                                                                                                  .input = "",
+                                                                                                                  .status = "ready",
+                                                                                                                  .transcript = {},
+                                                                                                                  .width = 200,
+                                                                                                                  .height = 40,
+                                                                                                                  .sidebar = ava::tui::SidebarSnapshot{},
+                                                                                                                  .sidebar_drawer_visible = true});
+  auto const identity_drawer_text = tui_test_support::join_visible_lines(identity_drawer);
+  expect(!initial_session_id.first.empty() && initial_session_id.second && !initial_session_path.first.empty() && initial_session_path.second &&
+             clean_session_id == std::pair<std::string, bool>{initial_session_id.first, false} &&
+             clean_session_path == std::pair<std::string, bool>{initial_session_path.first, false} && noop_session_id == clean_session_id &&
+             noop_session_path == clean_session_path && identity_replaced &&
+             replacement_session_id == std::pair<std::string, bool>{replacement_identity.session_id, true} &&
+             replacement_session_path == std::pair<std::string, bool>{expected_replacement_path, true},
+         "session identity projection reports initial, clean, dirty no-op, and registered replacement values");
+  expect(identity_drawer_text.find("session " + replacement_identity.session_id) != std::string::npos &&
+             identity_drawer_text.find("path " + expected_replacement_path) != std::string::npos &&
+             identity_drawer_text.find("stale-sidebar-id") == std::string::npos && identity_drawer_text.find("/stale/sidebar/path") == std::string::npos,
+         "session drawer sources ID and path from the live identity projection rather than sidebar transport values");
+
   tui_test_support::TuiFrontEndFixture prompt_metadata_frontend;
   auto const initial_mode = prompt_metadata_frontend.prompt_mode_metadata();
   auto const initial_context_count = prompt_metadata_frontend.context_source_count_metadata();
@@ -2532,16 +2632,16 @@ void run_tui_composer_rendering_tests_part_4()
          "directories frontend projection preserves distinct workspace-root and current-directory paths");
   expect(!unchanged_workspace.second && !metadata_only_workspace.second && !metadata_only_current.second,
          "directories frontend projection reports clean and dirty-but-display-unchanged state");
-  auto const directories_drawer = ava::tui::render_composer(
-      directories_frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
-                                                                  .session_id = "directories-session",
-                                                                  .input = "",
-                                                                  .status = "ready",
-                                                                  .transcript = {},
-                                                                  .width = 100,
-                                                                  .height = 40,
-                                                                  .sidebar = ava::tui::SidebarSnapshot{.session_id = "directories-session", .mode = "build"},
-                                                                  .sidebar_drawer_visible = true});
+  auto const directories_drawer =
+      ava::tui::render_composer(directories_frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                            .session_id = "directories-session",
+                                                                                            .input = "",
+                                                                                            .status = "ready",
+                                                                                            .transcript = {},
+                                                                                            .width = 100,
+                                                                                            .height = 40,
+                                                                                            .sidebar = ava::tui::SidebarSnapshot{.mode = "build"},
+                                                                                            .sidebar_drawer_visible = true});
   expect(std::ranges::any_of(directories_drawer,
                              [](std::string const& line) { return strip_sgr(line).find("workspace root /workspace/root") != std::string::npos; }) &&
              std::ranges::any_of(directories_drawer,
@@ -2584,11 +2684,9 @@ void run_tui_composer_rendering_tests_part_4()
                                      .activity = {ava::tui::SidebarActivityItem{
                                          .id = "call_1", .label = "bash", .detail = "running tests", .status = ava::tui::ToolTimelineStatus::Running}},
                                      .modified_files = {ava::tui::SidebarModifiedFile{.path = "src/ava/tui/runtime.cpp", .added = 12, .removed = 3}},
-                                     .session_id = "session_test\x1b[31m",
                                      .mode = "build\x1b[31m",
                                      //.provider = "openai\x1b[31m",
                                      //.model = "gpt-5.5\x1b[31m",
-                                     .workspace = "/workspace/project\x1b[31m",
                                      .version = "0.32",
                                      .context_source_count = 2}});
   expect(std::ranges::any_of(sidebar_frame,
@@ -2663,7 +2761,7 @@ void run_tui_composer_rendering_tests_part_4()
                                                .transcript = {},
                                                .width = 176,
                                                .height = 40,
-                                               .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test", .mode = "build"}};
+                                               .sidebar = ava::tui::SidebarSnapshot{.mode = "build"}};
     auto const compact_text = tui_test_support::join_visible_lines(ava::tui::render_composer(frontend.frontend(), snapshot));
     snapshot.width = 100;
     snapshot.sidebar_drawer_visible = true;
@@ -2687,7 +2785,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                                                .width = 176,
                                                                                                                .height = 18,
                                                                                                                .sidebar = ava::tui::SidebarSnapshot{
-                                                                                                                   .session_id = "session_test",
                                                                                                                    .mode = "build",
                                                                                                                    //.provider = "openai",
                                                                                                                }});
@@ -2735,8 +2832,7 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                 .transcript = {},
                                                                                 .width = 176,
                                                                                 .height = 18,
-                                                                                .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
-                                                                                                                     .mode = "build",
+                                                                                .sidebar = ava::tui::SidebarSnapshot{.mode = "build",
                                                                                                                      //.provider = "openai",
                                                                                                                      .context_source_count = 0}});
   expect(
@@ -2745,25 +2841,22 @@ void run_tui_composer_rendering_tests_part_4()
 
   frontend.set_active_token_estimates(170'000, 10'000);
   frontend.set_git_branch("develop");
-  auto const long_session_sidebar_frame = ava::tui::render_composer(
-      frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
-                                                      //.provider = "openai",
-                                                      //.model = "gpt-5.5",
-                                                      .session_id = "session_test",
-                                                      .input = "",
-                                                      .status = "ready",
-                                                      .transcript = {},
-                                                      .width = 176,
-                                                      .height = 20,
-                                                      .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test",
-                                                                                           .mode = "build",
-                                                                                           //.provider = "openai",
-                                                                                           //.model = "gpt-5.5",
-                                                                                           .workspace = "/workspace/project",
-                                                                                           .version = "0.32",
-                                                                                           .context_source_count = 3,
-                                                                                           .session_path = "/tmp/ava/sessions/session_test.jsonl",
-                                                                                           .session_entry_count = 42}});
+  auto const long_session_sidebar_frame =
+      ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
+                                                                                //.provider = "openai",
+                                                                                //.model = "gpt-5.5",
+                                                                                .session_id = "session_test",
+                                                                                .input = "",
+                                                                                .status = "ready",
+                                                                                .transcript = {},
+                                                                                .width = 176,
+                                                                                .height = 20,
+                                                                                .sidebar = ava::tui::SidebarSnapshot{.mode = "build",
+                                                                                                                     //.provider = "openai",
+                                                                                                                     //.model = "gpt-5.5",
+                                                                                                                     .version = "0.32",
+                                                                                                                     .context_source_count = 3,
+                                                                                                                     .session_entry_count = 42}});
   expect(
       std::ranges::none_of(long_session_sidebar_frame,
                            [](std::string const& line) { return strip_sgr(line).find("path /tmp/ava/sessions") != std::string::npos; }) &&
@@ -2790,14 +2883,11 @@ void run_tui_composer_rendering_tests_part_4()
           .sidebar = ava::tui::SidebarSnapshot{
               .activity = {ava::tui::SidebarActivityItem{
                   .id = "completed", .label = "completed-history", .detail = "must stay hidden", .status = ava::tui::ToolTimelineStatus::Success}},
-              .session_id = "raw-session-id-must-stay-hidden",
               .mode = "build",
               //.provider = "openai",
               //.model = "gpt-5.5",
-              .workspace = "/raw/workspace/must/stay/hidden",
               .version = "9.9.9-must-stay-hidden",
               .context_source_count = std::nullopt,
-              .session_path = "/raw/session/path/must/stay/hidden.jsonl",
               .session_entry_count = 999}});
   auto const curated_idle_text = tui_test_support::join_visible_lines(curated_idle_sidebar);
   auto const curated_idle_title_line =
@@ -2819,7 +2909,7 @@ void run_tui_composer_rendering_tests_part_4()
              curated_idle_text.find("no file changes") == std::string::npos && curated_idle_text.find("unknown") == std::string::npos &&
              curated_idle_text.find("raw-session-id") == std::string::npos && curated_idle_text.find("/raw/session/path") == std::string::npos &&
              curated_idle_text.find("/raw/workspace") == std::string::npos && curated_idle_text.find("999") == std::string::npos &&
-             curated_idle_text.find("9.9.9") == std::string::npos && curated_idle_footer == "│  GPT-5.5" &&
+             curated_idle_text.find("9.9.9") == std::string::npos && curated_idle_footer == "│  GPT-5.5 · agent none" &&
              std::ranges::all_of(curated_idle_sidebar,
                                  [](std::string const& line) {
                                    auto const visible = strip_sgr(line);
@@ -2853,14 +2943,11 @@ void run_tui_composer_rendering_tests_part_4()
                            ava::tui::SidebarActivityItem{
                                .id = "completed", .label = "completed-history-must-stay-hidden", .status = ava::tui::ToolTimelineStatus::Success}},
               .modified_files = {ava::tui::SidebarModifiedFile{.path = "src/curated-file.cpp\x1b[31m", .added = 12, .removed = 3}},
-              .session_id = "raw-populated-session-must-stay-hidden",
               .mode = "build\x1b[31m",
               //.provider = "openai\x1b[31m",
               //.model = "gpt-5.5\x1b[31m",
-              .workspace = "/raw/populated/workspace/must/stay/hidden",
               .version = "8.8.8-must-stay-hidden",
               .context_source_count = 7,
-              .session_path = "/raw/populated/session/path.jsonl",
               .session_entry_count = 42}});
   auto const curated_populated_text = tui_test_support::join_visible_lines(curated_populated_sidebar);
   auto const curated_populated_rail_lines = [&]() {
@@ -3128,14 +3215,11 @@ void run_tui_composer_rendering_tests_part_4()
                   .modified_files = {ava::tui::SidebarModifiedFile{.path = "src/ava/tui/a-very-long-modified-file-name-for-responsive-drawer.cpp",
                                                                    .added = 12,
                                                                    .removed = 3}},
-                  .session_id = "session_drawer_with_a_deliberately_long_identifier_that_must_wrap_without_clipping",
                   .mode = "build",
                   //.provider = "openai",
                   //.model = "gpt-5.5",
-                  .workspace = "/workspace/a/very/long/project/path/that/must/wrap/and/remain/reachable/in/the/session/overview",
                   .version = "1.0.0-responsive-sidebar",
                   .context_source_count = 7,
-                  .session_path = "/tmp/ava/sessions/a/very/long/session/path/session_drawer.jsonl",
                   .session_entry_count = 42},
           .sidebar_drawer_visible = true};
   auto wide_drawer_snapshot = drawer_snapshot;
@@ -3340,11 +3424,9 @@ void run_tui_composer_rendering_tests_part_4()
                .id = "running", .label = "compaction", .detail = "compaction started tokens~9000/8000", .status = ava::tui::ToolTimelineStatus::Running},
            ava::tui::SidebarActivityItem{.id = "done", .label = "read_file", .detail = "assistant responded", .status = ava::tui::ToolTimelineStatus::Success}},
       .modified_files = {ava::tui::SidebarModifiedFile{.path = "src/ava/tui/composer.cpp", .added = 3, .removed = 1}},
-      .session_id = "session_resize_stress",
       .mode = "build",
       //.provider = "openai",
       //.model = "gpt-5.5",
-      .workspace = "/workspace",
       .version = "test",
       .context_source_count = 2};
   std::vector<std::size_t> const stress_widths = {1, 20, 28, 40, 72, 111, 112, 160};
@@ -3386,7 +3468,7 @@ void run_tui_composer_rendering_tests_part_4()
                                                             .transcript = {ava::tui::TranscriptItem{.label = "ava", .text = std::string(1200, 'x')}},
                                                             .width = 120,
                                                             .height = 18,
-                                                            .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test"}};
+                                                            .sidebar = ava::tui::SidebarSnapshot{}};
   auto const hidden_rail_feedback_frame = ava::tui::render_composer(frontend.frontend(), cycle_feedback_snapshot);
   auto rail_feedback_snapshot = cycle_feedback_snapshot;
   rail_feedback_snapshot.width = 176;
@@ -3474,7 +3556,7 @@ void run_tui_composer_rendering_tests_part_4()
                !find_visible(transcript_discovery_lines, "/ commands") && !find_visible(processing_discovery_lines, "/ commands") &&
                !find_visible(prompt_discovery_lines, "/ commands") && !find_visible(question_discovery_lines, "/ commands") &&
                !find_visible(select_discovery_lines, "/ commands") && !find_visible(attachment_discovery_lines, "/ commands") &&
-               strip_sgr(idle_discovery_80x24.back()).find("GPT-5.5 · ctx 870 (0.3%)") != std::string::npos &&
+               strip_sgr(idle_discovery_80x24.back()).find("GPT-5.5 · agent none · ctx 870 (0.3%)") != std::string::npos &&
                strip_sgr(idle_discovery_80x24.back()).find("build") == std::string::npos &&
                strip_sgr(idle_discovery_80x24.back()).find("session") == std::string::npos &&
                std::ranges::none_of(idle_discovery_80x24, [](std::string const& line) { return strip_sgr(line).find("AVA") != std::string::npos; }) &&
@@ -3625,7 +3707,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                 .height = 22,
                                                                                 .sidebar = ava::tui::SidebarSnapshot{
                                                                                     .todos = active_todos,
-                                                                                    .session_id = "session_todo_rail",
                                                                                     .mode = "build",
                                                                                     //.provider = "openai",
                                                                                     //.model = "gpt-5.5"
@@ -3651,7 +3732,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                 .height = 24,
                                                                                 .sidebar = ava::tui::SidebarSnapshot{
                                                                                     .todos = active_todos,
-                                                                                    .session_id = "session_todo_dock",
                                                                                     .mode = "build",
                                                                                     //.provider = "openai",
                                                                                     //.model = "gpt-5.5"
@@ -3676,7 +3756,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                       .height = 22,
                                                       .sidebar = ava::tui::SidebarSnapshot{
                                                           .todos = {{.id = "a", .content = "Done", .status = ava::tui::TodoStatus::Completed}},
-                                                          .session_id = "session_todo_done",
                                                           .mode = "build",
                                                           //.provider = "openai",
                                                           //.model = "gpt-5.5"
@@ -3696,7 +3775,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                                 .sidebar =
                                                                                                     ava::tui::SidebarSnapshot{
                                                                                                         .todos = active_todos,
-                                                                                                        .session_id = "session_todo_drawer",
                                                                                                         .mode = "build",
                                                                                                         //.provider = "openai",
                                                                                                         //.model = "gpt-5.5"
@@ -3718,7 +3796,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                                                                     .height = 10,
                                                                                                     .sidebar = ava::tui::SidebarSnapshot{
                                                                                                         .todos = active_todos,
-                                                                                                        .session_id = "session_todo_short",
                                                                                                         .mode = "build",
                                                                                                         //.provider = "openai",
                                                                                                         //.model = "gpt-5.5"
@@ -3755,7 +3832,6 @@ void run_tui_composer_rendering_tests_part_4()
                                                        .height = 24,
                                                        .sidebar = ava::tui::SidebarSnapshot{
                                                            .todos = active_todos,
-                                                           .session_id = "session_todo_geometry_wide",
                                                            .mode = "build",
                                                            //.provider = "openai",
                                                            //.model = "gpt-5.5"
@@ -3786,7 +3862,6 @@ void run_tui_composer_rendering_tests_part_4()
   auto narrow_todo_geometry = wide_todo_geometry;
   narrow_todo_geometry.width = 143;
   narrow_todo_geometry.session_id = "session_todo_geometry_narrow";
-  narrow_todo_geometry.sidebar->session_id = "session_todo_geometry_narrow";
   auto narrow_without_todos = narrow_todo_geometry;
   narrow_without_todos.sidebar->todos.clear();
   auto const narrow_canvas = ava::tui::composer_canvas_layout(narrow_todo_geometry);
@@ -3849,7 +3924,6 @@ void run_tui_composer_rendering_tests_part_4()
     // Shared snapshot sync: open overview rebuilds from a refreshed DTO and preserves query/selection.
     {
       ava::tui::TuiRuntimeOptions options;
-      options.session_id = "session_overview_sync";
       //      options.provider = "fake";
       //      options.model = "m1";
       ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
@@ -3865,9 +3939,6 @@ void run_tui_composer_rendering_tests_part_4()
       ava::tui::apply_runtime_state_snapshot_with_overview_sync(options, presentation, active,
                                                                 ava::tui::TuiRuntimeStateSnapshot{//.provider = "fake",
                                                                                                   //.model = "m2-refreshed",
-                                                                                                  .session_id = "session_overview_sync",
-                                                                                                  .session_path = "/sessions/overview-sync.jsonl",
-                                                                                                  .workspace = "/workspace",
                                                                                                   .status = "overview refreshed",
                                                                                                   .startup_overview = refreshed});
       expect(active == ava::tui::ActiveSelectList::Overview && presentation.snapshot.select_list && presentation.snapshot.select_list->query == "mode" &&
@@ -3891,12 +3962,9 @@ void run_tui_composer_rendering_tests_part_4()
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active);
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(options, presentation.snapshot);
       auto const session_changed = ava::tui::apply_runtime_state_snapshot_with_presentation_transition(
-          options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active,
+          options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active, "session_overview_other",
           ava::tui::TuiRuntimeStateSnapshot{//.provider = "fake",
                                             //.model = "other",
-                                            .session_id = "session_overview_other",
-                                            .session_path = "/sessions/overview-other.jsonl",
-                                            .workspace = "/workspace",
                                             .status = "session switched",
                                             .startup_overview = refreshed});
       expect(session_changed && active == ava::tui::ActiveSelectList::None && !presentation.snapshot.select_list,

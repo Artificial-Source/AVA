@@ -240,20 +240,11 @@ int run_tui(InteractiveState state)
   };
   struct SessionPresentation
   {
-    std::string session_id;
-    std::string session_path;
-    std::string workspace;
-    std::filesystem::path workspace_dir;
     ava::tui::ProjectTrustSnapshot project_trust;
   };
   auto session_presentation = [&unlocked_session]() {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    auto const workspace = session_r->current_dir().empty() ? session_r->workspace_dir() : session_r->current_dir();
-    return SessionPresentation{.session_id = session_r->store.options_session_id_copy(),
-                               .session_path = session_r->store.session_path().string(),
-                               .workspace = workspace.string(),
-                               .workspace_dir = session_r->workspace_dir(),
-                               .project_trust = project_trust_snapshot(session_r->project_trust())};
+    return SessionPresentation{.project_trust = project_trust_snapshot(session_r->project_trust())};
   };
   auto state_snapshot = [&unlocked_session, &application_catalog, &custom_theme_options, &refresh_title_catalog, &session_presentation, &key_bindings,
                          copy_effective_display_presentation, mermaid_bridge](std::string status) {
@@ -267,10 +258,7 @@ int run_tui(InteractiveState state)
     auto const [show_images, image_width_cells, cursor] = copy_effective_display_presentation();
     auto const mermaid_configuration = mermaid_bridge->presentation_configuration();
     auto startup_overview = build_startup_overview_snapshot(unlocked_session, key_bindings, ava::tui::active_tui_theme());
-    return ava::tui::TuiRuntimeStateSnapshot{.session_id = std::move(presentation.session_id),
-                                             .session_path = std::move(presentation.session_path),
-                                             .workspace = std::move(presentation.workspace),
-                                             .status = std::move(status),
+    return ava::tui::TuiRuntimeStateSnapshot{.status = std::move(status),
                                              .slash_commands = project_slash_command_items(std::move(delivery.slash_commands)),
                                              .slash_catalog_generation = delivery.slash_catalog_generation,
                                              .file_references = project_file_reference_items(std::move(delivery.file_references)),
@@ -381,9 +369,6 @@ int run_tui(InteractiveState state)
   ava::tui::TuiFrontEnd frontend;
   frontend.register_frontend_data(unlocked_session);
   auto result = frontend.run(ava::tui::TuiRuntimeOptions{
-      .session_id = std::move(initial_presentation.session_id),
-      .session_path = std::move(initial_presentation.session_path),
-      .workspace = std::move(initial_presentation.workspace),
       .app_version = std::string(version::kDisplayVersion),
       .initial_status = keybind_status,
       .initial_transcript = std::move(initial_transcript),
@@ -400,6 +385,11 @@ int run_tui(InteractiveState state)
       .startup_overview = std::move(initial_startup_overview),
       .mermaid_render = mermaid_bridge->tui_bridge(),
       .key_bindings = key_bindings,
+      .read_committed_session_id =
+          [&unlocked_session]() {
+            SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+            return session_r->store.options_r()->session_id;
+          },
       .refresh_session_statistics = [&unlocked_session]() { refresh_session_statistics(unlocked_session); },
       .create_active_run_queues =
           [&unlocked_session](ava::event::EventEnvelopeSink event_sink) {

@@ -152,7 +152,7 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
       current.run_controller != snapshot.run_controller || current.append_target != snapshot.append_target || current.session_id != snapshot.session_id)
     return std::unexpected(transaction_error("session_changed_before_persistence"));
 
-  std::optional<ava::agent::AgentDefinition> selected_primary_agent;
+  auto selected_primary_agent = ava::agent::builtin_ava_agent();
   runtime::PromptState prompt_state;
   std::optional<ava::core::Error> prompt_warning;
   auto resolved_primary = runtime::resolve_runtime_primary_agent(current.paths, current.workspace_dir, false, current.requested_primary_agent,
@@ -160,6 +160,7 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
   if (!resolved_primary)
   {
     prompt_warning.emplace(std::move(resolved_primary.error()));
+    prompt_state.readiness = runtime::PromptReadiness::Unavailable;
     prompt_state.mode = current.mode;
   }
   else
@@ -170,7 +171,7 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
     if (!loaded_prompt)
     {
       prompt_warning.emplace(std::move(loaded_prompt.error()));
-      selected_primary_agent.reset();
+      prompt_state.readiness = runtime::PromptReadiness::Unavailable;
       prompt_state.mode = current.mode;
     }
     else
@@ -213,18 +214,20 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
                            session_w->store.options_r()->session_id != current.session_id;
     if (!publication_mismatch)
     {
-      bool const selected_primary_is_permitted =
-          selected_primary_agent && (selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Builtin ||
-                                     selected_primary_agent->provenance == ava::agent::AgentDefinitionProvenance::Global);
-      if (selected_primary_agent && !selected_primary_is_permitted)
-        selected_primary_agent.reset();
+      bool const selected_primary_is_permitted = selected_primary_agent.provenance == ava::agent::AgentDefinitionProvenance::Builtin ||
+                                                 selected_primary_agent.provenance == ava::agent::AgentDefinitionProvenance::Global;
+      if (!selected_primary_is_permitted)
+        selected_primary_agent = ava::agent::builtin_ava_agent();
       auto effective_tool_visibility = session_w->tool_visibility();
-      if (selected_primary_agent && selected_primary_agent->tool_preset == ava::agent::AgentToolPreset::ReadOnly)
+      if (selected_primary_agent.tool_preset == ava::agent::AgentToolPreset::ReadOnly)
         effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
 
       session_w->trust_state().project_trust = next_trust;
       session_w->invocation_inputs().tool_visibility = std::move(effective_tool_visibility);
-      session_w->invocation_inputs().selected_primary_agent = std::move(selected_primary_agent);
+      {
+        runtime::AgentSelection_ts::wat agent_selection_w(session_w->agent_selection());
+        agent_selection_w->selected_primary_agent = std::move(selected_primary_agent);
+      }
       static_cast<void>(session_w->apply_prompt_state(std::move(prompt_state)));
       released_controller = std::move(session_w->resources().run_controller);
       session_w->resources().run_controller = *fresh_controller;

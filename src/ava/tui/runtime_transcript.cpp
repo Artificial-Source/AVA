@@ -122,7 +122,7 @@ std::size_t truncate_transcript(std::vector<TranscriptItem>& transcript)
 
 std::string assistant_meta_for_snapshot(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::optional<std::chrono::steady_clock::duration> elapsed)
 {
-  auto model = frontend->model_selection().refresh_model();
+  auto model = frontend->model_selection().model_refresh();
   if (model.value.empty())
     return {};
   auto mode = title_case_ascii(snapshot.mode);

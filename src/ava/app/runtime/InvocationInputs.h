@@ -2,7 +2,7 @@
 
 #include "PromptOverrides.h"
 #include "ava/debug/print_members_on.h"
-#include "ava/agent/agent_config.h"
+#include "ava/agent/tool_visibility.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/session/session_store.h"
 
@@ -22,9 +22,8 @@ struct InvocationInputs
   // Invocation-requested visibility is retained separately so a replacement can re-resolve primary policy from the original CLI boundary.
   ava::agent::ToolVisibilityOptions requested_tool_visibility = {};
   ava::agent::ToolVisibilityOptions tool_visibility = {};
-  // Keep bounded selection intent separately from the currently permitted, provenance-carrying definition.
+  // Keep bounded selection intent separately from the currently permitted, provenance-carrying canonical selection.
   std::optional<std::string> requested_primary_agent = std::nullopt;
-  std::optional<ava::agent::AgentDefinition> selected_primary_agent = std::nullopt;
   ava::config::XdgPaths paths;
   bool sessionless;
   bool is_offline_ = false;

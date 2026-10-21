@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AgentSelection.h"
 #include "Directories.h"
 #include "GitBranch.h"
 #include "InvocationInputs.h"
@@ -20,8 +21,8 @@
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"
-#include "ava/session/session_store.h"
 #include "ava/session/Stats.h"
+#include "ava/session/session_store.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/error.h"
@@ -60,6 +61,7 @@ struct Session_aggregate_base
 {
   // DO NOT USE any of these members outside of this file except with a designated initializer for Session.
   InvocationInputs invocation_inputs_;
+  AgentSelection_ts agent_selection_;
   Directories_ts directories_;
   ResolvedPromptState resolved_prompt_state_;
   ModelSelection_ts model_selection_;
@@ -182,6 +184,9 @@ class Session : protected Session_aggregate_base
   InvocationInputs& invocation_inputs() { return invocation_inputs_; }
   InvocationInputs const& invocation_inputs() const { return invocation_inputs_; }
 
+  AgentSelection_ts& agent_selection() { return agent_selection_; }
+  AgentSelection_ts const& agent_selection() const { return agent_selection_; }
+
   Directories_ts& directories() { return directories_; }
   Directories_ts const& directories() const { return directories_; }
 
@@ -211,11 +216,11 @@ class Session : protected Session_aggregate_base
   std::filesystem::path current_dir() const { return Directories_ts::crat(directories_)->current_dir; }
   ava::agent::ToolVisibilityOptions const& tool_visibility() const { return invocation_inputs_.tool_visibility; }
   std::optional<std::string> const& requested_primary_agent() const { return invocation_inputs_.requested_primary_agent; }
-  std::optional<ava::agent::AgentDefinition> const& selected_primary_agent() const { return invocation_inputs_.selected_primary_agent; }
   ava::config::XdgPaths const& paths() const { return invocation_inputs_.paths; }
   bool sessionless() const { return invocation_inputs_.sessionless; }
 
   // Resolved prompt state.
+  PromptReadiness prompt_readiness() const { return resolved_prompt_state_.readiness; }
   ava::agent::Mode mode() const { return PromptModeAndContextSources_ts::crat(resolved_prompt_state_.mode_and_context_sources)->mode; }
   BasePromptMetadata const& base_prompt() const { return resolved_prompt_state_.base_prompt; }
   std::vector<ContextSourceMetadata> context_sources() const
@@ -233,6 +238,14 @@ class Session : protected Session_aggregate_base
 
   // Return read-access type for the ModelSelection object.
   ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
+
+  // Return read access to the canonical primary-agent definition. References into the definition must not outlive this guard.
+  AgentSelection_ts::crat agent_selection_r() const { return AgentSelection_ts::crat{agent_selection_}; }
+
+  [[nodiscard]] ava::agent::AgentDefinition const& selected_primary_agent(AgentSelection_ts::crat const& agent_selection_r) const
+  {
+    return agent_selection_r->selected_primary_agent;
+  }
 
   // Return read-access type for the canonical session statistics.
   session::Stats_ts::crat session_stats_r() const { return session::Stats_ts::crat{session_stats_}; }
@@ -369,8 +382,7 @@ class Session : protected Session_aggregate_base
   // Atomically publish a trust transition with its permitted primary definition, sticky effective tool visibility, and reconstructed prompt state, then
   // refresh retained parent configuration after releasing the session lock.
   [[nodiscard]] static ava::core::VoidResult apply_trust_prompt_state_and_refresh(session_ts& unlocked_session, ProjectTrustState project_trust,
-                                                                                  std::optional<ava::agent::AgentDefinition> selected_primary_agent,
-                                                                                  PromptState prompt_state);
+                                                                                  ava::agent::AgentDefinition selected_primary_agent, PromptState prompt_state);
 
   // Switch the active model to `model`, re-deriving the prompt state for the
   // current mode and clearing any active reasoning selection.

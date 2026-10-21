@@ -94,8 +94,8 @@ ava::tui::TuiFrontEnd* TuiFrontEndFixture::frontend() noexcept
 
 std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata()
 {
-  auto provider = impl_->frontend.model_selection().refresh_provider();
-  auto model = impl_->frontend.model_selection().refresh_model();
+  auto provider = impl_->frontend.model_selection().provider_refresh();
+  auto model = impl_->frontend.model_selection().model_refresh();
   return {provider.value, model.value};
 }
 
@@ -129,6 +129,25 @@ std::pair<std::string, bool> TuiFrontEndFixture::context_source_count_metadata()
   return {count.value, count.changed};
 }
 
+std::pair<std::string, bool> TuiFrontEndFixture::session_id_metadata()
+{
+  auto session_id = impl_->frontend.session_identity().session_id_refresh();
+  return {session_id.value, session_id.changed};
+}
+
+std::pair<std::string, bool> TuiFrontEndFixture::session_path_metadata()
+{
+  auto session_path = impl_->frontend.session_identity().session_path_refresh();
+  return {session_path.value, session_path.changed};
+}
+
+ava::session::SessionStoreOptions TuiFrontEndFixture::session_store_options()
+{
+  ava::app::runtime::session_ts::crat session_r(impl_->session);
+  auto const options_r = session_r->store.options_r();
+  return *options_r;
+}
+
 void TuiFrontEndFixture::set_model(TuiTestModel model)
 {
   select_frontend_test_model(impl_->session, model);
@@ -158,6 +177,29 @@ void TuiFrontEndFixture::set_prompt_metadata(ava::agent::Mode mode, std::size_t 
     metadata.context_sources.clear();
     metadata.context_sources.resize(context_source_count);
   });
+}
+
+void TuiFrontEndFixture::touch_session_identity()
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->store.options().change([](ava::session::SessionStoreOptions&) { });
+}
+
+void TuiFrontEndFixture::set_selected_agent_metadata(std::string name, ava::agent::AgentDefinitionProvenance provenance,
+                                                     ava::agent::AgentToolPreset tool_preset)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->agent_selection().change([name = std::move(name), provenance, tool_preset](ava::app::runtime::AgentSelection& selection) mutable {
+    selection.selected_primary_agent.name = std::move(name);
+    selection.selected_primary_agent.provenance = provenance;
+    selection.selected_primary_agent.tool_preset = tool_preset;
+  });
+}
+
+void TuiFrontEndFixture::touch_agent_selection()
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->agent_selection().change([](ava::app::runtime::AgentSelection&) { });
 }
 
 // Update only context_window_tokens in the canonical model and notify the frontend numeric projection.
@@ -279,6 +321,41 @@ bool TuiFrontEndFixture::replace_session_with_prompt_metadata(ava::agent::Mode m
       metadata.context_sources.resize(context_source_count);
     });
   }
+  return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
+}
+
+bool TuiFrontEndFixture::replace_session_with_agent_metadata(std::string name, ava::agent::AgentDefinitionProvenance provenance,
+                                                             ava::agent::AgentToolPreset tool_preset)
+{
+  ava::app::runtime::OpenContext replacement_context;
+  {
+    ava::app::runtime::session_ts::crat session_r(impl_->session);
+    replacement_context = session_r->replacement_open_context({});
+  }
+  auto replacement = ava::app::runtime::Session::open(replacement_context, {.sessionless = true});
+  if (!replacement)
+    return false;
+  {
+    ava::app::runtime::session_ts::wat replacement_w(*replacement);
+    replacement_w->agent_selection().change([name = std::move(name), provenance, tool_preset](ava::app::runtime::AgentSelection& selection) mutable {
+      selection.selected_primary_agent.name = std::move(name);
+      selection.selected_primary_agent.provenance = provenance;
+      selection.selected_primary_agent.tool_preset = tool_preset;
+    });
+  }
+  return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
+}
+
+bool TuiFrontEndFixture::replace_session_identity()
+{
+  ava::app::runtime::OpenContext replacement_context;
+  {
+    ava::app::runtime::session_ts::crat session_r(impl_->session);
+    replacement_context = session_r->replacement_open_context({});
+  }
+  auto replacement = ava::app::runtime::Session::open(replacement_context, {.sessionless = true});
+  if (!replacement)
+    return false;
   return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
 }
 

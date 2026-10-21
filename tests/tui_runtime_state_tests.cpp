@@ -2199,7 +2199,6 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
   ava::tui::TuiRuntimeStateSnapshot switched;
   //  switched.provider = "openai";
   //  switched.model = "gpt-5.5";
-  switched.session_id = "session_b";
   switched.todos = {ava::tui::TodoItem{.id = "switched", .content = "After switch", .status = ava::tui::TodoStatus::InProgress}};
   presentation.apply_runtime_state_snapshot(options, std::move(switched));
   expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "switched",

@@ -15,13 +15,14 @@ class GitBranch
 {
  private:
   FrontEnd const* frontend_;
+  // Copy of the entire canonical std::string value protected by ava::app::runtime::GitBranch_ts (no containing value-class member).
   std::string git_branch_snapshot_;
   DisplayString git_branch_;
   std::atomic_bool dirty_;
   DataListIndex index_;
 
   // Copy the registered branch under its read lock and preserve pending display changes.
-  void refresh_snapshot();
+  void refresh();
 
  public:
   // Construct a projection for frontend, which must outlive this object.
@@ -40,7 +41,7 @@ class GitBranch
     // Initialize before requesting the branch display.
     ASSERT(!index_.undefined());
     if (dirty_.exchange(false))
-      refresh_snapshot();
+      refresh();
     bool const changed = git_branch_.clear_changed();
     if (changed)
       git_branch_.display_ = git_branch_snapshot_;

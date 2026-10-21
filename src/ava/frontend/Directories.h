@@ -12,13 +12,15 @@ class Directories
 {
  private:
   FrontEnd const* frontend_;
+  // Copy of the entire canonical ava::app::runtime::Directories value protected by Directories_ts:
+  // workspace_dir, current_dir, and additional_writable_dirs.
   app::runtime::Directories directories_snapshot_;
   DisplayString workspace_root_;
   DisplayString current_directory_;
   std::atomic_bool dirty_;
   DataListIndex index_;
 
-  void refresh_snapshot();
+  void refresh();
 
  public:
   explicit Directories(FrontEnd const* frontend) : frontend_(frontend) { }

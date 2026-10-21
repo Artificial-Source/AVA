@@ -34,6 +34,8 @@ void test_app_runtime_plugin_install_remove_commands();
 void test_runtime_plugin_event_hook_uses_admitted_run_cancellation_scope();
 void test_app_context_reports_lsp_config_load_errors();
 void test_debug_session_mutex_tracks_current_thread();
+void test_default_primary_is_canonical_builtin_ava_without_duplicate_prompt();
+void test_primary_agent_tool_iteration_limit_is_applied_to_runtime_loop();
 void test_app_run_prompt_isolates_ambient_extensions();
 void test_project_primary_revocation_removes_authority_without_broadening_tools();
 void test_clear_trust_retires_only_for_effective_untrusted_state();

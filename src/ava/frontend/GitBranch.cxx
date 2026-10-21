@@ -4,7 +4,7 @@
 namespace ava::frontend {
 
 // Copy the last observed canonical branch without doing Git I/O during rendering.
-void GitBranch::refresh_snapshot()
+void GitBranch::refresh()
 {
   Data const* data = frontend_->get_data(index_);
   // Initialize with a stable registered GitBranch_ts before refreshing this projection.

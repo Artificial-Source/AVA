@@ -2,6 +2,7 @@
 
 #include "FrontEnd.h"
 #include "ava/app/runtime/ModelSelection.h"     // app::runtime::ModelSelection_ts
+#include "utils/macros.h"
 
 #include <atomic>
 #include "debug.h"
@@ -48,28 +49,25 @@ class ModelSelection
   void dirty() { dirty_ = true; }
 
   // Refresh our snapshot of `model_` if necessary. `changed` is set to true iff re-display is necessary.
-  RefreshResult<std::string const&> refresh_model()
+  RefreshResult<std::string const&> model_refresh()
   {
-    // Call initialize first.
-    ASSERT(!index_.undefined());
-
     // Atomically test and set dirty_ to false, otherwise it is possible that a new update is missed
     // if dirty_ is set again inbetween the test and the clear.
     if (dirty_.exchange(false))
       refresh();
     bool model_changed = model_.clear_changed();
-    if (model_changed)
+    if (AI_UNLIKELY(model_changed))
       model_.display_ = model_display_str(model_snapshot_);
     return {model_.display_, model_changed};
   }
 
   // Refresh our snapshot of `provider_` if necessary. `changed` is set to true iff re-display is necessary.
-  RefreshResult<std::string const&> refresh_provider()
+  RefreshResult<std::string const&> provider_refresh()
   {
     if (dirty_.exchange(false))
       refresh();
     bool provider_changed = provider_.clear_changed();
-    if (provider_changed)
+    if (AI_UNLIKELY(provider_changed))
       provider_.display_ = model_snapshot_.provider_id;
     return {provider_.display_, provider_changed};
   }
@@ -78,12 +76,12 @@ class ModelSelection
   //
   // Returns the cached display and whether it needs redisplay, consuming only reasoning's pending change flag.
   // An empty display means no visible reasoning selection.
-  RefreshResult<std::string const&> refresh_reasoning()
+  RefreshResult<std::string const&> reasoning_refresh()
   {
     if (dirty_.exchange(false))
       refresh();
     bool reasoning_changed = reasoning_.clear_changed();
-    if (reasoning_changed)
+    if (AI_UNLIKELY(reasoning_changed))
       reasoning_.display_ = reasoning_display_str(reasoning_snapshot_);
     return {reasoning_.display_, reasoning_changed};
   }
@@ -93,8 +91,6 @@ class ModelSelection
   // SessionStats owns consumption of this notification when the projections are wired together.
   RefreshResult<std::optional<long long>> context_window_tokens_refresh()
   {
-    // Call initialize before requesting a projected context window.
-    ASSERT(!index_.undefined());
     if (dirty_.exchange(false))
       refresh();
     bool const changed = context_window_tokens_changed_;

@@ -171,8 +171,10 @@ void append_input_text(std::string& line, ComposerSnapshot const& snapshot, std:
 
 std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnapshot const& snapshot, std::size_t width)
 {
-  auto model = frontend->model_selection().refresh_model();
+  auto model = frontend->model_selection().model_refresh();
   auto const model_label = detail::model_label(model.value);
+  auto const agent = frontend->agent_selection().agent_refresh();
+  auto const agent_label = sanitize_terminal_text(agent.value);
   auto const token_count = frontend->session_stats().token_count_refresh();
   auto const percentage = frontend->session_stats().contex_percentage_refresh();
 
@@ -186,17 +188,18 @@ std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnap
       return fit_line_preserving_sgr(std::move(line), budget);
     auto const content_budget = budget - bar_columns;
 
-    auto append_fitted_model = [&](std::size_t model_budget) {
-      if (model_label.empty() || model_budget == 0)
+    auto const receiver_label = model_label.empty() ? std::string("agent ") + agent_label : model_label + " · agent " + agent_label;
+    auto append_fitted_receiver = [&](std::size_t receiver_budget) {
+      if (receiver_label.empty() || receiver_budget == 0)
         return;
-      auto styled_model = std::string(kSgrBold) + std::string(kSgrText) + model_label + std::string(kSgrReset);
-      line += fit_line_preserving_sgr(std::move(styled_model), model_budget);
+      auto styled_receiver = std::string(kSgrBold) + std::string(kSgrText) + receiver_label + std::string(kSgrReset);
+      line += fit_line_preserving_sgr(std::move(styled_receiver), receiver_budget);
       line += std::string(kSgrScreenBg);
     };
 
     if (token_count.value == "unknown")
     {
-      append_fitted_model(content_budget);
+      append_fitted_receiver(content_budget);
       return fit_line_preserving_sgr(std::move(line), budget);
     }
 
@@ -208,9 +211,9 @@ std::string render_composer_footer_line_impl(TuiFrontEnd* frontend, ComposerSnap
     constexpr auto kPreferredMinimumModelColumns = std::size_t{8};
     auto const separator_columns =
         content_budget >= context_columns + kSeparatorColumns + kPreferredMinimumModelColumns ? kSeparatorColumns : kCompactSeparatorColumns;
-    if (!model_label.empty() && content_budget > context_columns + separator_columns)
+    if (!receiver_label.empty() && content_budget > context_columns + separator_columns)
     {
-      append_fitted_model(content_budget - context_columns - separator_columns);
+      append_fitted_receiver(content_budget - context_columns - separator_columns);
       if (separator_columns == kSeparatorColumns)
         line += " " + std::string(kSgrMuted) + "·" + std::string(kSgrReset) + std::string(kSgrScreenBg) + " ";
       else

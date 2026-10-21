@@ -259,12 +259,9 @@ struct SidebarSnapshot
   std::vector<SidebarActivityItem> activity = {};
   std::vector<SidebarModifiedFile> modified_files = {};
   std::vector<TodoItem> todos = {};
-  std::string session_id = {};
   std::string mode = {};
-  std::string workspace = {};
   std::string version = {};
   std::optional<std::size_t> context_source_count = std::nullopt;
-  std::string session_path = {};
   std::optional<std::size_t> session_entry_count = std::nullopt;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

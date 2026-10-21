@@ -867,7 +867,7 @@ void test_tui_session_grant_registry()
   ava::tui::TuiSessionGrantRegistry same_session_registry;
   static_cast<void>(same_session_registry.add("session_a", prompt));
   expect(!same_session_registry.clear_for_session_transition("session_a", "session_a") && same_session_registry.matches("session_a", prompt),
-         "applying an unchanged runtime session id preserves grants created in this TUI process");
+         "an unchanged committed session id preserves grants created in this TUI process");
 
   struct SessionTransition
   {
@@ -884,17 +884,11 @@ void test_tui_session_grant_registry()
   {
     ava::tui::TuiSessionGrantRegistry transition_registry;
     static_cast<void>(transition_registry.add("session_a", prompt));
-    ava::tui::TuiRuntimeStateSnapshot post_submit_state;
-    post_submit_state.session_id = transition.session_id;
-    ava::tui::TuiSubmitResult completed_submit;
-    completed_submit.state_snapshot = std::move(post_submit_state);
-    bool const cleared =
-        completed_submit.state_snapshot && transition_registry.clear_for_session_transition("session_a", completed_submit.state_snapshot->session_id);
+    bool const cleared = transition_registry.clear_for_session_transition("session_a", transition.session_id);
     all_submit_transitions_clear =
         all_submit_transitions_clear && cleared && transition_registry.size() == 0 && !transition_registry.matches(transition.session_id, prompt);
   }
-  expect(all_submit_transitions_clear,
-         "post-submit runtime snapshots clear TUI session grants for /new, /resume, /fork, /clone, and confirmed import transitions");
+  expect(all_submit_transitions_clear, "committed session transitions clear TUI grants for /new, /resume, /fork, /clone, and confirmed import transitions");
 
   auto const session_only_permission_modal = ava::tui::render_composer(
       frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",

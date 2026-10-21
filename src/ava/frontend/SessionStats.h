@@ -17,7 +17,7 @@ class SessionStats
  private:
   FrontEnd const* frontend_;
   ModelSelection* model_selection_;
-  // Preserve complete canonical copies for current and future session-stat projections.
+  // Copy of the entire canonical ava::session::Stats value (all members), protected by ava::session::Stats_ts.
   ava::session::Stats stats_snapshot_;
   // Retain the exact saturated total rather than recovering it from compact display text.
   std::optional<long long> active_token_total_;

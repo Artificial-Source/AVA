@@ -1465,7 +1465,7 @@ void test_tui_f5_progressive_tool_details()
                      ava::tui::TranscriptItem{.tool = detail_item}, ava::tui::TranscriptItem{.label = "ava", .text = "tail"}},
       .width = 160,
       .height = 48,
-      .sidebar = ava::tui::SidebarSnapshot{.session_id = "session_hit"}};
+      .sidebar = ava::tui::SidebarSnapshot{}};
   auto const hit_frame = plain_lines(ava::tui::render_composer(frontend.frontend(), hit_snapshot));
   auto const intro_line = std::ranges::find_if(hit_frame, [](std::string const& line) { return line.find("intro") != std::string::npos; });
   auto const glob_line = std::ranges::find_if(hit_frame, [](std::string const& line) { return line.find("+ glob") != std::string::npos; });

@@ -986,10 +986,17 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
       };
       auto apply_opened_session_snapshot = [&](TuiRuntimeStateSnapshot state, bool) {
         auto status = state.status;
+        auto const committed_session_id = options.read_committed_session_id ? options.read_committed_session_id() : std::string{};
         static_cast<void>(apply_runtime_state_snapshot_with_presentation_transition(options, presentation_state, draft_state, renderer, transcript_search,
-                                                                                    subagent_workspace, active_select_list, std::move(state)));
+                                                                                    subagent_workspace, active_select_list, std::move(committed_session_id),
+                                                                                    std::move(state)));
         if (!status.empty())
           settle_local_command_status(snapshot, std::move(status));
+      };
+      auto synchronize_committed_session = [&]() {
+        auto const committed_session_id = options.read_committed_session_id ? options.read_committed_session_id() : std::string{};
+        return apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
+                                                  std::move(committed_session_id));
       };
       if (input_result.action == SelectListInputAction::Redraw && snapshot.select_list)
       {
@@ -1452,6 +1459,7 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           }
           else
           {
+            static_cast<void>(synchronize_committed_session());
             snapshot.status = opened.error().format();
             do_beep(terminal_context);
           }
@@ -1638,19 +1646,17 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           }
           else
           {
+            static_cast<void>(synchronize_committed_session());
             snapshot.status = selected.error().format();
             do_beep(terminal_context);
           }
         }
         else if (resolved_list == ActiveSelectList::ForkUserTurn && options.on_fork_user_turn_selected)
         {
-          auto const presentation_session_id = snapshot.session_id;
-          auto const presentation_session_path = presentation_state.sidebar.session_path;
-          UserTurnForkSelectionDecision decision;
           if (selected_value.empty())
           {
-            decision =
-                evaluate_fork_user_turn_selection(selected_value, presentation_session_id, presentation_session_path, options.on_fork_user_turn_selected);
+            snapshot.status = "selected user turn is unavailable";
+            do_beep(terminal_context);
           }
           else
           {
@@ -1662,20 +1668,21 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
               terminal_write_failed = true;
               break;
             }
-            decision =
-                evaluate_fork_user_turn_selection(selected_value, presentation_session_id, presentation_session_path, options.on_fork_user_turn_selected);
-          }
-          if (decision.action == UserTurnForkSelectionAction::ApplyOpenedSession && decision.opened_snapshot)
-          {
-            // Same transition boundary as session open: clear the prior
-            // transcript only when session identity actually changed.
-            apply_opened_session_snapshot(std::move(*decision.opened_snapshot), true);
-          }
-          else
-          {
-            snapshot.status = std::move(decision.status);
-            if (decision.beep)
+            auto opened = options.on_fork_user_turn_selected(selected_value);
+            if (opened)
+            {
+              // Same transition boundary as session open; transition authority
+              // comes from the committed backend identity callback, not this DTO.
+              apply_opened_session_snapshot(std::move(*opened), true);
+            }
+            else
+            {
+              // A fork may commit before an ancillary catalog refresh reports a
+              // warning/failure. Reconcile committed identity on either result.
+              static_cast<void>(synchronize_committed_session());
+              snapshot.status = opened.error().format();
               do_beep(terminal_context);
+            }
           }
         }
         else if (resolved_list == ActiveSelectList::CopyUserTurn && options.on_read_user_turn_text)
@@ -2623,27 +2630,12 @@ ava::core::Result<TuiRuntimeStateSnapshot> dispatch_tui_selector_authority(Compo
 void TuiRuntimeOptions::print_on(std::ostream& os) const
 {
   LIBCWD_USING_OSTREAM_PRELUDE;
-  os << '{'
-     << "session_id:" << session_id
-     << ", session_path:" << session_path
-     << ", workspace:" << workspace
-     << ", app_version:" << app_version
-     << ", initial_status:" << initial_status
-     << ", initial_transcript:" << initial_transcript
+  os << '{' << "app_version:" << app_version << ", initial_status:" << initial_status << ", initial_transcript:" << initial_transcript
      << ", slash_commands:{...}"
-     << ", slash_catalog_generation:" << slash_catalog_generation
-     << ", file_references:" << file_references
-     << ", workspace_catalog_generation:" << workspace_catalog_generation
-     << ", custom_themes:" << custom_themes
-     << ", project_trust:" << project_trust
-     << ", initial_todos:" << initial_todos
-     << ", show_images:" << show_images
-     << ", image_width_cells:" << image_width_cells
-     << ", cursor:" << cursor
-     << ", startup_overview:" << startup_overview
-     << ", mermaid_render:" << mermaid_render
-     << ", key_bindings:{...}"
-     << '}';
+     << ", slash_catalog_generation:" << slash_catalog_generation << ", file_references:" << file_references
+     << ", workspace_catalog_generation:" << workspace_catalog_generation << ", custom_themes:" << custom_themes << ", project_trust:" << project_trust
+     << ", initial_todos:" << initial_todos << ", show_images:" << show_images << ", image_width_cells:" << image_width_cells << ", cursor:" << cursor
+     << ", startup_overview:" << startup_overview << ", mermaid_render:" << mermaid_render << ", key_bindings:{...}" << '}';
 }
 #endif
 

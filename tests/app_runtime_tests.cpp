@@ -19,6 +19,8 @@ void run_app_event_serialization_tests()
 void run_app_runtime_tests()
 {
   test_debug_session_mutex_tracks_current_thread();
+  test_default_primary_is_canonical_builtin_ava_without_duplicate_prompt();
+  test_primary_agent_tool_iteration_limit_is_applied_to_runtime_loop();
   test_extension_resource_policy_derives_synthetic_paths_and_trust();
   test_app_runtime_open_session_and_context_prompt();
   test_app_runtime_preserves_legacy_subagent_job_tree();

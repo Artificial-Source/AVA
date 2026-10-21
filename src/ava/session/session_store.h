@@ -88,6 +88,10 @@ struct SessionStoreOptions
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+// Derive the JSONL path represented by options without consulting session contents.
+// Runtime workspace paths are absolute, so frontend refresh performs lexical formatting and hashing only.
+[[nodiscard]] std::filesystem::path session_path_for_options(SessionStoreOptions const& options);
+
 // Store options use a separately lockable frontend-data wrapper so future registration can observe
 // options changes without exposing the wrapper's protected value or moving its registered address.
 using SessionStoreOptions_ts = ava::frontend::UnlockedData<SessionStoreOptions>;

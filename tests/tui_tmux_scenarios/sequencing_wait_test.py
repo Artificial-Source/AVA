@@ -341,7 +341,7 @@ def _session_seed_screen(
             )
     if composer:
         composer_text = draft if draft is not None else "Type a message..."
-        lines.extend(["│", f"│  {composer_text}", "│  GPT-5.5 · ctx 518"])
+        lines.extend(["│", f"│  {composer_text}", "│  GPT-5.5 · agent none · ctx 518"])
     return "\n".join(lines)
 
 

@@ -1,10 +1,12 @@
 #pragma once
 
+#include "ava/frontend/AgentSelection.h"
 #include "ava/frontend/Directories.h"
 #include "ava/frontend/FrontEnd.h"
 #include "ava/frontend/GitBranch.h"
 #include "ava/frontend/ModelSelection.h"
-#include "ava/frontend/PromptMetadata.h"
+#include "ava/frontend/PromptModeAndContextSources.h"
+#include "ava/frontend/SessionIdentity.h"
 #include "ava/frontend/SessionStats.h"
 
 // For OLD API
@@ -17,11 +19,13 @@ struct TuiRuntimeOptions;
 class TuiFrontEnd : public frontend::FrontEnd
 {
  private:
+  frontend::AgentSelection agent_selection_;
   frontend::ModelSelection model_selection_;
-  frontend::PromptMetadata prompt_metadata_;
+  frontend::PromptModeAndContextSources prompt_metadata_;
   frontend::SessionStats session_stats_;
   frontend::Directories directories_;
   frontend::GitBranch git_branch_;
+  frontend::SessionIdentity session_identity_;
 
  public:
   // Explicitly connect session percentages to this frontend's model projection.
@@ -42,18 +46,19 @@ class TuiFrontEnd : public frontend::FrontEnd
 
   // Accessors.
 
+  frontend::AgentSelection& agent_selection() { return agent_selection_; }
   frontend::ModelSelection& model_selection() { return model_selection_; }
   frontend::ModelSelection const& model_selection() const { return model_selection_; }
-  frontend::PromptMetadata& prompt_metadata() { return prompt_metadata_; }
+  frontend::PromptModeAndContextSources& prompt_metadata() { return prompt_metadata_; }
   frontend::SessionStats& session_stats() { return session_stats_; }
   frontend::SessionStats const& session_stats() const { return session_stats_; }
   frontend::Directories& directories() { return directories_; }
   frontend::GitBranch& git_branch() { return git_branch_; }
+  frontend::SessionIdentity& session_identity() { return session_identity_; }
 
   // OLD API
   [[nodiscard]] int run_interactive_composer(TuiRuntimeOptions options);
 
-  // No members yet.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

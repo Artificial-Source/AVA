@@ -128,13 +128,23 @@ void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, Activ
 void apply_runtime_state_snapshot_with_overview_sync(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
                                                      ActiveSelectList& active_select_list, TuiRuntimeStateSnapshot state);
 
-// Applies every authoritative runtime snapshot, but clears session-scoped TUI
-// presentation first only when the authoritative session identity changed.
-// Session transitions always close an open overview select-list.
+// Applies the local effects of a committed backend session transition. The
+// committed_session_id parameter must be read through
+// TuiRuntimeOptions::read_committed_session_id before taking the TUI UI lock.
+// Returns true only when the committed identity differs from local control
+// tracking; same-session refreshes preserve session-scoped presentation.
+[[nodiscard]] bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+                                                      TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
+                                                      ActiveSelectList& active_select_list, std::string committed_session_id);
+
+// Applies every authoritative runtime snapshot after synchronizing local state
+// to committed_session_id. The identity parameter is backend-read control data,
+// never an identity copied from the incoming presentation DTO.
 [[nodiscard]] bool apply_runtime_state_snapshot_with_presentation_transition(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
                                                                              RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                                                                              TranscriptSearchController& transcript_search,
                                                                              RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                                             ActiveSelectList& active_select_list, TuiRuntimeStateSnapshot state);
+                                                                             ActiveSelectList& active_select_list, std::string committed_session_id,
+                                                                             TuiRuntimeStateSnapshot state);
 
 }  // namespace ava::tui

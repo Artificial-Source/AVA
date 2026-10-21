@@ -132,6 +132,7 @@ ReloadReportRow reload_prompt_settings(runtime::session_ts& unlocked_session)
 {
   auto snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+    auto agent_selection_r = session_r->agent_selection_r();
     return std::tuple{session_r->paths(),
                       session_r->model_selection_r()->model,
                       session_r->mode(),
@@ -139,7 +140,7 @@ ReloadReportRow reload_prompt_settings(runtime::session_ts& unlocked_session)
                       session_r->current_dir(),
                       project_resources_trusted(session_r->project_trust()),
                       session_r->prompt_overrides(),
-                      session_r->selected_primary_agent()};
+                      session_r->selected_primary_agent(agent_selection_r)};
   }();
   auto& [paths, model, mode, workspace_dir, current_dir, project_trusted, prompt_overrides, selected_primary_agent] = snapshot;
   auto prompt_state =
@@ -188,7 +189,7 @@ ReloadReportRow reload_trust_settings(runtime::session_ts& unlocked_session)
     auto row = reload_error_row("trust", *applied->prompt_warning);
     row.blocks_following_prompt_reload = true;
     append_reload_detail(row, "trust_file", applied->state.trust_file.string());
-    append_reload_detail(row, "authority_state", "project authority removed with fail-closed empty prompt");
+    append_reload_detail(row, "authority_state", "project authority removed with fail-closed unavailable prompt");
     return row;
   }
 
@@ -216,10 +217,9 @@ ReloadReportRow reload_compaction_settings(runtime::session_ts& unlocked_session
   append_reload_detail(row, "model", config->model_id);
   append_reload_detail(row, "auto_threshold_tokens", std::to_string(config->auto_threshold_tokens));
   append_reload_detail(row, "auto_threshold_percent", std::to_string(config->auto_threshold_percent));
-  append_reload_detail(
-      row, "effective_threshold_tokens",
-      std::to_string(ava::session::effective_auto_threshold_tokens(
-          *config, runtime::session_ts::rat(unlocked_session)->model_selection_r()->model.context_window_tokens)));
+  append_reload_detail(row, "effective_threshold_tokens",
+                       std::to_string(ava::session::effective_auto_threshold_tokens(
+                           *config, runtime::session_ts::rat(unlocked_session)->model_selection_r()->model.context_window_tokens)));
   append_reload_detail(row, "keep_recent_tokens", std::to_string(config->keep_recent_tokens));
   append_reload_detail(row, "keep_recent_turns", std::to_string(config->keep_recent_turns));
   append_reload_detail(row, "keep_recent_messages", std::to_string(config->keep_recent_messages));

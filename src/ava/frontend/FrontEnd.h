@@ -73,7 +73,12 @@ class FrontEnd
   virtual void data_changed(DataListIndex index) = 0;
 
   // Obtain Data pointer for index previously returned by register_data.
-  Data const* get_data(DataListIndex index) const { return data_list_[index]; }
+  Data const* get_data(DataListIndex index) const
+  {
+    // Initialize the object that calls this function, before calling its refresh_*() function.
+    ASSERT(!index.undefined());
+    return data_list_[index];
+  }
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

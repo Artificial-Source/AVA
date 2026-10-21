@@ -18,7 +18,7 @@ ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend, TuiRuntimeOptions& opti
 {
   auto const mode = frontend->prompt_metadata().mode_refresh();
   ComposerSnapshot snapshot{.mode = mode.value,
-                            .session_id = options.session_id,
+                            .session_id = {},
                             .input = "",
                             .status = options.initial_status,
                             .transcript = std::move(options.initial_transcript),
@@ -97,13 +97,10 @@ RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend, TuiRun
       frontend_(frontend),
       applied_slash_catalog_generation_(options.slash_catalog_generation),
       applied_workspace_catalog_generation_(options.workspace_catalog_generation),
-      sidebar{.todos = std::move(options.initial_todos),
-              .session_id = options.session_id,
-              .mode = snapshot.mode,
-              .workspace = options.workspace,
-              .version = options.app_version,
-              .session_path = options.session_path}
+      sidebar{.todos = std::move(options.initial_todos), .mode = snapshot.mode, .version = options.app_version}
 {
+  if (options.read_committed_session_id)
+    snapshot.session_id = options.read_committed_session_id();
 }
 
 void RuntimePresentationState::refresh_token_status(TuiRuntimeOptions const& options)
@@ -125,14 +122,7 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
 {
   DoutEntering(dc::notice, "RuntimePresentationState::apply_runtime_state_snapshot(" << options << ", " << state << ")");
 
-  auto const session_changed = command_session_grants.clear_for_session_transition(snapshot.session_id, state.session_id);
-  if (session_changed)
-  {
-    pending_image_attachments.clear();
-    snapshot.pending_attachments.clear();
-  }
   refresh_prompt_metadata();
-  snapshot.session_id = std::move(state.session_id);
   snapshot.status = std::move(state.status);
   bool completion_sources_changed = false;
   if (!state.slash_catalog_generation || !applied_slash_catalog_generation_ || *state.slash_catalog_generation != *applied_slash_catalog_generation_)
@@ -169,9 +159,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
       attachment.preview.reset();
   }
 
-  sidebar.session_id = snapshot.session_id;
-  sidebar.session_path = std::move(state.session_path);
-  sidebar.workspace = std::move(state.workspace);
   sidebar.todos = std::move(state.todos);
   refresh_token_status(options);
 }
@@ -209,17 +196,18 @@ void apply_runtime_state_snapshot_with_overview_sync(TuiRuntimeOptions const& op
   synchronize_startup_overview_presentation(presentation_state.snapshot, active_select_list);
 }
 
-bool apply_runtime_state_snapshot_with_presentation_transition(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
-                                                               RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                                                               TranscriptSearchController& transcript_search,
-                                                               RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
-                                                               TuiRuntimeStateSnapshot state)
+bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+                                        TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
+                                        ActiveSelectList& active_select_list, std::string committed_session_id)
 {
   auto& snapshot = presentation_state.snapshot;
   auto& sidebar = presentation_state.sidebar;
-  auto const session_changed = snapshot.session_id != state.session_id;
+  auto const session_changed = snapshot.session_id != committed_session_id;
   if (session_changed)
   {
+    static_cast<void>(presentation_state.command_session_grants.clear_for_session_transition(snapshot.session_id, committed_session_id));
+    presentation_state.pending_image_attachments.clear();
+    snapshot.pending_attachments.clear();
     transcript_search.reset_for_session_transition();
     subagent_workspace.reset_for_session_transition();
     draft_state.reset_for_session_transition();
@@ -258,7 +246,20 @@ bool apply_runtime_state_snapshot_with_presentation_transition(TuiRuntimeOptions
     sidebar.modified_files.clear();
     sidebar.todos.clear();
     sidebar.session_entry_count.reset();
+    snapshot.session_id = std::move(committed_session_id);
   }
+
+  return session_changed;
+}
+
+bool apply_runtime_state_snapshot_with_presentation_transition(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
+                                                               RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+                                                               TranscriptSearchController& transcript_search,
+                                                               RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
+                                                               std::string committed_session_id, TuiRuntimeStateSnapshot state)
+{
+  auto const session_changed = apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace,
+                                                                  active_select_list, std::move(committed_session_id));
 
   apply_runtime_state_snapshot_with_overview_sync(options, presentation_state, active_select_list, std::move(state));
   return session_changed;

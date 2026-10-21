@@ -80,9 +80,12 @@ void ScopedFd::reset(int fd) noexcept
   fd_ = fd;
 }
 
+// Hash workspace_dir using the historical absolute, lexical normalization semantics.
+// Already-absolute runtime paths need no lookup of the process working directory.
 std::string project_key(std::filesystem::path const& workspace_dir)
 {
-  auto const normalized = std::filesystem::absolute(workspace_dir).lexically_normal().string();
+  auto const normalized_path = workspace_dir.is_absolute() ? workspace_dir.lexically_normal() : std::filesystem::absolute(workspace_dir).lexically_normal();
+  auto const normalized = normalized_path.string();
   std::uint64_t hash = 14695981039346656037ULL;
   for (unsigned char const ch : normalized)
   {
@@ -257,7 +260,11 @@ void SessionLease::swap(SessionLease& other)
   std::swap(created_, other.created_);
 }
 
-using detail::project_key;
+// Share path derivation with display projections without granting access to store contents or authority.
+std::filesystem::path session_path_for_options(SessionStoreOptions const& options)
+{
+  return options.root_dir / detail::project_key(options.workspace_dir) / (options.session_id + ".jsonl");
+}
 
 SessionStore::SessionStore(SessionStoreOptions options) : options_(std::move(options)), observation_attachment_(std::make_shared<ObservationAttachment>())
 {
@@ -342,7 +349,7 @@ SessionStore& SessionStore::operator=(SessionStore&& other)
 std::filesystem::path SessionStore::session_path() const
 {
   auto const options_r = this->options_r();
-  return options_r->root_dir / project_key(options_r->workspace_dir) / (options_r->session_id + ".jsonl");
+  return session_path_for_options(*options_r);
 }
 
 bool SessionStore::is_ephemeral() const noexcept

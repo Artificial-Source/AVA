@@ -44,11 +44,13 @@ void test_session_store_round_trip()
     expect(appended && copied_entries && copied_entries->size() == 1 && copied_entries->front().id == "shared-entry",
            "copy construction retains shared ephemeral state");
     expect(&copied.options() != &copy_source.options(), "copy construction creates a distinct options wrapper");
+    expect(copied.options().index().undefined(), "copy construction leaves detached options unregistered");
     expect(copied.options_r()->session_id == copy_source_session_id, "copy construction snapshots the protected options value");
 
     auto detached = copy_source.detached_copy_for_background_persistence();
     expect(&detached.options() != &copy_source.options() && detached.options_r()->session_id == copy_source_session_id,
            "background persistence copy has a fresh options wrapper with the same value");
+    expect(detached.options().index().undefined(), "background persistence copy leaves detached options unregistered");
 
     ava::session::SessionStore assigned(ava::session::SessionStoreOptions{.root_dir = root, .workspace_dir = root, .session_id = "assignment-destination"});
     auto* assigned_options_address = &assigned.options();

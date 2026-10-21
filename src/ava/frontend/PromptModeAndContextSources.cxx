@@ -1,10 +1,10 @@
 #include "sys.h"
-#include "PromptMetadata.h"
+#include "PromptModeAndContextSources.h"
 
 namespace ava::frontend {
 
 // Read one coherent mode/vector-size pair under the canonical lock without copying the source vector.
-void PromptMetadata::refresh()
+void PromptModeAndContextSources::refresh()
 {
   Data const* data = frontend_->get_data(index_);
   // index_ must identify the PromptModeAndContextSources_ts registered during frontend initialization.
@@ -24,7 +24,7 @@ void PromptMetadata::refresh()
 }
 
 // Store the registered index and ensure the first display refresh sees the canonical value.
-void PromptMetadata::initialize(app::runtime::PromptModeAndContextSources_ts const* unlocked_metadata)
+void PromptModeAndContextSources::initialize(app::runtime::PromptModeAndContextSources_ts const* unlocked_metadata)
 {
   // Only call initialize once.
   ASSERT(index_.undefined());
@@ -32,7 +32,7 @@ void PromptMetadata::initialize(app::runtime::PromptModeAndContextSources_ts con
   dirty_ = true;
 }
 
-RefreshResult<std::string const&> PromptMetadata::mode_refresh()
+RefreshResult<std::string const&> PromptModeAndContextSources::mode_refresh()
 {
   // Call initialize before requesting projected prompt metadata.
   ASSERT(!index_.undefined());
@@ -44,7 +44,7 @@ RefreshResult<std::string const&> PromptMetadata::mode_refresh()
   return {mode_.display_, changed};
 }
 
-RefreshResult<std::string const&> PromptMetadata::context_source_count_refresh()
+RefreshResult<std::string const&> PromptModeAndContextSources::context_source_count_refresh()
 {
   // Call initialize before requesting projected prompt metadata.
   ASSERT(!index_.undefined());

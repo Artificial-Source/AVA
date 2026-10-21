@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from tui_smoke_helpers import (
+    ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN,
     SmokeContext,
     assert_screen_absent_for,
     assert_screen_present_for,
@@ -30,6 +32,35 @@ _AUTH_RECEIPT_MARKER = "slash tool commands still work offline."
 _COMPOSER_EMPTY = re.compile(r"(?m)^\s*│\s+Type a message\.\.\.")
 _NAME_DRAFT = "│  /name TUI smoke"
 _NAME_OR_MODAL = re.compile(r"Command /name|session name set|Enter(?:/Esc)? close")
+_SELECTED_AGENT_NAME = "tmux-selected-primary"
+_SELECTED_AGENT_INSTRUCTION = "SELECTED_PRIMARY_TMUX_INSTRUCTION_05_03"
+
+
+def _normal_request_payload_for_user_text(request_log: str, user_text: str) -> dict[str, object]:
+    """Return the logged provider payload whose messages contain the exact user input.
+
+    ``request_log`` is the fake provider's HTTP request log and ``user_text`` is
+    the submitted terminal prompt. Title-generation requests are thereby
+    excluded by content rather than request ordering.
+    """
+
+    for entry in request_log.split("--- request ")[1:]:
+        _, separator, body = entry.partition("\n\n")
+        if not separator:
+            continue
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        messages = payload.get("messages") if isinstance(payload, dict) else None
+        if isinstance(messages, list) and any(
+            isinstance(message, dict)
+            and message.get("role") == "user"
+            and message.get("content") == user_text
+            for message in messages
+        ):
+            return payload
+    raise RuntimeError(f"fake-provider request log did not contain exact user input {user_text!r}\nrequest log:\n{request_log}")
 
 
 def _ordinary_seed_live_tail_is_settled(screen: str) -> bool:
@@ -476,9 +507,9 @@ def scenario_main_session_mgmt(ctx: SmokeContext) -> None:
 
     _finish_main(tmux_exe, session)
 
-    # Production-path evidence for /fork-from and /copy user over real public turns
-    # using the fake provider (no paid live provider). Two distinct user turns are
-    # required so fork-from can cut before the later transcript.
+    # Production-path evidence for selected primary-agent identity uses a global
+    # definition and the credential-free fake provider. The launch starts at the
+    # workspace root while --cwd selects a real nested current directory.
     fake_models = (
         '{"default_provider":"moonshot","default_model":"ava-tui-fake",'
         '"models":[{"provider":"moonshot","id":"ava-tui-fake","name":"AVA TUI Fake","family":"fake",'
@@ -486,6 +517,123 @@ def scenario_main_session_mgmt(ctx: SmokeContext) -> None:
         '"supports_streaming":false,"supports_reasoning":false,"reports_usage":true}]}\n'
     )
     ctx.ava_config.joinpath("models.json").write_text(fake_models, encoding="utf-8")
+    global_agents = ctx.ava_config / "agents"
+    global_agents.mkdir(parents=True, exist_ok=True)
+    global_agents.joinpath(f"{_SELECTED_AGENT_NAME}.md").write_text(
+        "---\n"
+        f"name: {_SELECTED_AGENT_NAME}\n"
+        "description: Terminal-selected primary regression fixture.\n"
+        "mode: primary\n"
+        "tools: read-only\n"
+        "---\n"
+        f"{_SELECTED_AGENT_INSTRUCTION}\n",
+        encoding="utf-8",
+    )
+    selected_current = workspace / "selected-agent-current"
+    selected_current.mkdir(parents=True, exist_ok=True)
+    selected_provider = ctx.start_fake_provider("selected-primary", delay_ms=0, scenario="text-three")
+    selected_command = ctx.fake_provider_command(
+        selected_provider,
+        home=ctx.home,
+        config=ctx.config,
+        state=ctx.state,
+        data=ctx.data,
+    )
+    selected_command += f" --agent {_SELECTED_AGENT_NAME} --cwd {selected_current.name}"
+    selected_session = ctx.session_name("selected-primary")
+    ctx.launch_ava(selected_session, workspace=workspace, command=selected_command, width=120, height=40)
+
+    selected_footer_frame = wait_for(
+        tmux_exe,
+        selected_session,
+        rf"AVA TUI Fake · agent {_SELECTED_AGENT_NAME} · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}",
+        "selected primary agent footer",
+    )
+    selected_footer_lines = [
+        line.removeprefix("│  ").strip()
+        for line in selected_footer_frame.splitlines()
+        if "AVA TUI Fake" in line and "ctx " in line
+    ]
+    if not selected_footer_lines or re.fullmatch(
+        rf"AVA TUI Fake · agent {_SELECTED_AGENT_NAME} · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}",
+        selected_footer_lines[-1],
+    ) is None:
+        raise RuntimeError(
+            "selected primary footer did not contain exactly model, explicit agent name, and active context usage\n"
+            f"screen:\n{selected_footer_frame}"
+        )
+
+    send_literal(tmux_exe, selected_session, "/sidebar")
+    wait_for(tmux_exe, selected_session, r"│  /sidebar(?:\s|$)", "selected primary sidebar command draft")
+    send_keys(tmux_exe, selected_session, "Enter")
+    selected_drawer = wait_for(
+        tmux_exe,
+        selected_session,
+        rf"(?s)Session overview.*Agent.*agent {_SELECTED_AGENT_NAME}.*provenance global.*tool preset read-only",
+        "selected primary agent session drawer",
+    )
+    # Joining trimmed rows repairs only terminal wrapping, allowing exact path
+    # projections to be checked even when a long isolated build path wraps.
+    selected_drawer_compact = "".join(line.strip() for line in selected_drawer.splitlines())
+    required_drawer_facts = (
+        f"agent {_SELECTED_AGENT_NAME}",
+        "provenance global",
+        "tool preset read-only",
+        f"workspace root {workspace}",
+        f"current directory {selected_current}",
+    )
+    if any(fact not in selected_drawer_compact for fact in required_drawer_facts):
+        raise RuntimeError(
+            "selected primary drawer did not retain exact agent provenance, tool preset, and distinct directories\n"
+            f"screen:\n{selected_drawer}"
+        )
+    # Read the short ID from its own row: concatenating all rows also joins the
+    # following "path" label, which is itself a valid identifier suffix.
+    session_identity = re.search(r"(?m)^\s*session (session_[A-Za-z0-9_-]+)\s*$", selected_drawer)
+    if session_identity is None or re.search(
+        rf"path [^ ]*{re.escape(session_identity.group(1))}\.jsonl", selected_drawer_compact
+    ) is None:
+        raise RuntimeError(
+            "selected primary drawer did not project one coherent session id and backing JSONL path\n"
+            f"screen:\n{selected_drawer}"
+        )
+    save_evidence(root, "selected-primary-footer-and-drawer", selected_drawer)
+    send_keys(tmux_exe, selected_session, "Escape")
+    wait_for_absent(tmux_exe, selected_session, r"Session overview", "selected primary drawer closed")
+
+    selected_user_text = "verify selected primary instruction delivery"
+    send_literal(tmux_exe, selected_session, selected_user_text)
+    send_keys(tmux_exe, selected_session, "Enter")
+    selected_request_log = _wait_for_normal_turn_request_count(
+        selected_provider, 1, "selected primary provider request"
+    )
+    selected_payload = _normal_request_payload_for_user_text(selected_request_log, selected_user_text)
+    selected_messages = selected_payload.get("messages")
+    selected_instruction_count = (
+        sum(
+            message.get("content", "").count(_SELECTED_AGENT_INSTRUCTION)
+            for message in selected_messages
+            if isinstance(message, dict) and isinstance(message.get("content"), str)
+        )
+        if isinstance(selected_messages, list)
+        else 0
+    )
+    if selected_instruction_count != 1:
+        raise RuntimeError(
+            "selected primary instruction was not delivered exactly once in the actual provider request; "
+            f"count={selected_instruction_count}\nrequest log:\n{selected_request_log}"
+        )
+    wait_for(
+        tmux_exe,
+        selected_session,
+        r"headless active prompt complete",
+        "selected primary provider turn completed",
+    )
+    _finish_main(tmux_exe, selected_session)
+
+    # Production-path evidence for /fork-from and /copy user over real public turns
+    # using the fake provider (no paid live provider). Two distinct user turns are
+    # required so fork-from can cut before the later transcript.
     # text-three admits multiple ordinary turns (default "text" stops after one).
     provider = ctx.start_fake_provider("user-turn-pickers", delay_ms=0, scenario="text-three")
     picker_command = ctx.fake_provider_command(

@@ -10,11 +10,14 @@
 namespace ava::frontend {
 
 // Frontend projection of the observable mode and context-source count.
-class PromptMetadata
+class PromptModeAndContextSources
 {
  private:
   FrontEnd const* frontend_;
+  // Copy of canonical ava::app::runtime::PromptModeAndContextSources::mode, protected by PromptModeAndContextSources_ts.
   ava::agent::Mode mode_snapshot_ = ava::agent::Mode::Build;
+  // Exact size of canonical ava::app::runtime::PromptModeAndContextSources::context_sources, read under PromptModeAndContextSources_ts.
+  // Compares vector sizes, not vector contents; the vector itself is not copied.
   std::size_t context_source_count_snapshot_ = 0;
   DataListIndex index_;
   std::atomic_bool dirty_;
@@ -25,7 +28,7 @@ class PromptMetadata
 
  public:
   // Construct a cache attached to frontend, which must outlive this object.
-  explicit PromptMetadata(FrontEnd const* frontend) : frontend_(frontend) { }
+  explicit PromptModeAndContextSources(FrontEnd const* frontend) : frontend_(frontend) { }
 
   // Connect once to the registered backend metadata at unlocked_metadata's stable address.
   void initialize(app::runtime::PromptModeAndContextSources_ts const* unlocked_metadata);
