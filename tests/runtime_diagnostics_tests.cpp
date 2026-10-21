@@ -510,6 +510,114 @@ void test_runtime_failure_boundaries_and_observation_precedence()
   std::filesystem::remove_all(session_root);
 }
 
+void test_long_delta_stream_preserves_boundaries_and_close_flush()
+{
+  using namespace ava::observability;
+  auto const root = diagnostics_root("runtime-diagnostics-deltas");
+  auto const paths = private_paths(root);
+  auto const anchors = private_anchors(paths);
+  auto diagnostics = ava::diagnostics::RuntimeDiagnostics::create(paths, anchors, true);
+  expect(diagnostics.has_value(), "delta aggregation diagnostics starts");
+  if (!diagnostics)
+    return;
+  auto const path = *(*diagnostics)->trace_path();
+  auto observation = (*diagnostics)->observation();
+  TraceContext context{
+      .run_id = "long-run", .turn_id = {}, .session_id = {}, .provider_id = {}, .parent_run_id = {}, .parent_turn_id = {}, .parent_session_id = {}};
+  observation->emit(TraceEventType::AgentRunStart, context);
+  auto delta = [&](TraceOutcome outcome) {
+    observation->emit(TraceEventType::ProviderStreamEvent, context, [outcome](auto& event) {
+      event.phase = TracePhase::Provider;
+      event.outcome = outcome;
+      event.fields = {{.key = "text_bytes", .value = "3"}};
+    });
+  };
+  for (unsigned i = 0; i < 25'000; ++i)
+    delta(TraceOutcome::TextDelta);
+  observation->emit(TraceEventType::ToolDispatchStart, context);
+  observation->emit(TraceEventType::ToolDispatchResult, context);
+  observation->emit(TraceEventType::AgentRunTerminal, context);
+  delta(TraceOutcome::ReasoningDelta);
+  (*diagnostics)->close();
+  (*diagnostics)->close();
+  auto const trace = read_all(path);
+  auto const records = lines(trace);
+  expect(records.size() == 6 && records[1].find("\"delta_count\":\"25000\"") != std::string::npos &&
+             records[1].find("\"text_bytes\":\"75000\"") != std::string::npos && records[2].find("tool.dispatch_start") != std::string::npos &&
+             records[3].find("tool.dispatch_result") != std::string::npos && records[4].find("agent.run_terminal") != std::string::npos &&
+             records[5].find("\"delta_count\":\"1\"") != std::string::npos,
+         "long stream becomes one ordered summary, preserving tool/terminal events and flushing the final segment on close");
+  auto const snapshot = ava::diagnostics::read_trace_counter_snapshot(paths, *anchors);
+  expect(snapshot.record && snapshot.record->writer_health.events_written == 6 && snapshot.record->writer_health.events_dropped == 0,
+         "aggregation is not counted as loss and repeated close does not double-count");
+  std::filesystem::remove_all(root);
+}
+
+void test_external_tool_attribution_survives_completed_dispatches()
+{
+  using namespace ava::observability;
+  auto const root = diagnostics_root("runtime-diagnostics-attribution");
+  auto const paths = private_paths(root);
+  auto const anchors = private_anchors(paths);
+  auto diagnostics = ava::diagnostics::RuntimeDiagnostics::create(paths, anchors, true);
+  expect(diagnostics.has_value(), "attribution diagnostics starts");
+  if (!diagnostics)
+    return;
+  auto observation = (*diagnostics)->observation();
+  TraceContext context;
+  for (unsigned i = 0; i < 20'002; ++i)
+  {
+    auto const call = std::to_string(i);
+    observation->emit(TraceEventType::ToolDispatchStart, context, [&](auto& event) {
+      event.call_id = call;
+      event.fields = {{.key = "tool_name", .value = i == 20'001 ? "plugin_demo_echo" : "mcp_demo_echo"}};
+    });
+    observation->emit(TraceEventType::ToolDispatchResult, context, [&](auto& event) {
+      event.call_id = call;
+      event.outcome = i < 20'000 ? (i % 2 == 0 ? TraceOutcome::Success : TraceOutcome::Canceled) : TraceOutcome::Error;
+    });
+  }
+  (*diagnostics)->close();
+  auto const snapshot = ava::diagnostics::read_trace_counter_snapshot(paths, *anchors);
+  expect(snapshot.record && snapshot.record->mcp_failures == 1 && snapshot.record->plugin_failures == 1,
+         "successful and canceled dispatches release attribution capacity even after trace admission stops");
+  std::filesystem::remove_all(root);
+}
+
+void test_delta_segment_budget_reserves_lifecycle_capacity()
+{
+  using namespace ava::observability;
+  auto const root = diagnostics_root("runtime-diagnostics-segments");
+  auto const paths = private_paths(root);
+  auto const anchors = private_anchors(paths);
+  auto diagnostics = ava::diagnostics::RuntimeDiagnostics::create(paths, anchors, true);
+  expect(diagnostics.has_value(), "segmented stream diagnostics starts");
+  if (!diagnostics)
+    return;
+  auto const path = *(*diagnostics)->trace_path();
+  auto observation = (*diagnostics)->observation();
+  TraceContext context{
+      .run_id = "segmented-run", .turn_id = {}, .session_id = {}, .provider_id = {}, .parent_run_id = {}, .parent_turn_id = {}, .parent_session_id = {}};
+  observation->emit(TraceEventType::AgentRunStart, context);
+  for (unsigned i = 0; i < 20'000; ++i)
+    observation->emit(TraceEventType::ProviderStreamEvent, context, [i](auto& event) {
+      event.outcome = i % 2 == 0 ? TraceOutcome::TextDelta : TraceOutcome::ReasoningDelta;
+      event.fields = {{.key = "text_bytes", .value = "1"}};
+    });
+  observation->emit(TraceEventType::ToolDispatchStart, context);
+  observation->emit(TraceEventType::ToolDispatchResult, context);
+  observation->emit(TraceEventType::AgentRunTerminal, context);
+  (*diagnostics)->close();
+  auto const records = lines(read_all(path));
+  auto const snapshot = ava::diagnostics::read_trace_counter_snapshot(paths, *anchors);
+  expect(records.size() == 1'004 && records.back().find("agent.run_terminal") != std::string::npos &&
+             records[1'001].find("tool.dispatch_start") != std::string::npos && records[1'002].find("tool.dispatch_result") != std::string::npos &&
+             snapshot.record && snapshot.record->writer_health.events_written == 1'004 && snapshot.record->writer_health.events_dropped == 0 &&
+             snapshot.record->writer_health.delta_summaries_refused == 19'000,
+         "delta summaries use only their reserved budget and intentional refusals are distinct from lifecycle event loss");
+  std::filesystem::remove_all(root);
+}
+
 }  // namespace
 
 void run_runtime_diagnostics_tests()
@@ -522,4 +630,7 @@ void run_runtime_diagnostics_tests()
   test_trace_initialization_rejects_unsafe_paths_nonblocking();
   test_last_failure_is_typed_and_message_free();
   test_runtime_failure_boundaries_and_observation_precedence();
+  test_long_delta_stream_preserves_boundaries_and_close_flush();
+  test_external_tool_attribution_survives_completed_dispatches();
+  test_delta_segment_budget_reserves_lifecycle_capacity();
 }

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -238,12 +239,15 @@ struct JsonlObserverCounters
   std::uint64_t written = 0;
   std::uint64_t dropped = 0;
   std::uint64_t failures = 0;
+  // Bytes accepted by write(2), including partial records subsequently rolled back.
   std::size_t bytes_written = 0;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 // Deterministic synchronous JSONL mode, retained for tests and small local runs.
 // It owns one descriptor and nonblocking lifetime lock for its entire lifetime.
+// A write failure rolls back the incomplete record where possible and closes
+// the writer; later records are dropped rather than appended to a partial line.
 class JsonlRunObserver final : public RunObserver
 {
  public:
@@ -259,12 +263,15 @@ class JsonlRunObserver final : public RunObserver
   friend class QueuedJsonlRunObserver;
   void write_record(std::string record);
   void ensure_open();
+  void close_locked() noexcept;
   JsonlObserverOptions options_;
   mutable std::mutex mutex_;
   bool closed_ = false;
   int fd_ = -1;
   std::uint64_t written_ = 0, dropped_ = 0, failures_ = 0;
   std::size_t bytes_written_ = 0;
+
+ public:
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -330,8 +337,13 @@ struct TraceAccounting
 };
 struct TraceValidationResult
 {
+  // Valid means no proven violation; it does not imply complete coverage.
   bool valid = true;
   std::vector<std::string> errors;
+  // Any accounted loss or missing lifecycle/required boundary makes coverage incomplete.
+  bool incomplete_coverage = false;
+  // Missing boundaries that losses could explain, kept separate from errors.
+  std::vector<std::string> coverage_gaps;
   std::uint64_t accounted_failures = 0;
   std::uint64_t accounted_drops = 0;
   unsigned score = 100;
@@ -356,8 +368,10 @@ struct TraceFixturePolicy
 };
 
 // Deterministic evaluation seam: product code supplies ordered trace records
-// plus separately-accounted observer losses. Losses lower score but do not
-// masquerade as lifecycle violations.
+// plus separately-accounted observer losses. Their sum saturates, lowers score,
+// and marks incomplete_coverage. Loss-obscured missing boundaries appear in
+// coverage_gaps, not errors; observed ordering, duplication and invalid outcomes
+// remain errors even with loss. Missing required boundaries never earn weight.
 [[nodiscard]] TraceValidationResult validate_and_score_trace(std::span<TraceEvent const> events, TraceAccounting accounting = {},
                                                              TraceFixturePolicy const* policy = nullptr);
 [[nodiscard]] std::string canonical_json(TraceEvent const& event, std::size_t max_event_bytes = 16 * 1024);
