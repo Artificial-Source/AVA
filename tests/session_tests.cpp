@@ -4,6 +4,8 @@
 void run_session_tests()
 {
   session_tests::test_session_store_round_trip();
+  session_tests::test_session_store_sync_failures_are_not_committed();
+  session_tests::test_session_lease_creation_sync_failures();
   session_tests::test_bounded_session_reads_strictly_classify_framed_records();
   session_tests::test_ephemeral_session_store_stays_in_memory();
   session_tests::test_session_record_round_trip();

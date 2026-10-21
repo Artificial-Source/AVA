@@ -34,7 +34,7 @@ ava::core::Result<std::pair<int, off_t>> open_regular_snapshot(std::filesystem::
 {
   // Inspect the final component with O_PATH first. In particular, never open a
   // pathname replaced by a FIFO through blocking O_RDONLY before classifying it.
-  ScopedFd metadata_fd(::open(path.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW));
+  ava::core::UniqueFd metadata_fd(::open(path.c_str(), O_PATH | O_CLOEXEC | O_NOFOLLOW));
   if (metadata_fd.get() < 0)
   {
     auto category =
@@ -70,7 +70,7 @@ ava::core::Result<std::pair<int, off_t>> open_regular_snapshot(std::filesystem::
     return std::unexpected(std::move(error));
   }
 
-  ScopedFd fd(::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
+  ava::core::UniqueFd fd(::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
   if (fd.get() < 0)
     return std::unexpected(path_io_error("failed to securely open session snapshot", path, errno));
   struct stat status{};
@@ -91,7 +91,6 @@ namespace {
 using detail::open_regular_snapshot;
 using detail::parse_strict_session_record;
 using detail::path_io_error;
-using detail::ScopedFd;
 using detail::strict_session_record_error;
 
 void wipe_bytes(void* data, std::size_t size) noexcept
@@ -391,7 +390,7 @@ ava::core::VoidResult visit_regular_session_snapshot(std::filesystem::path const
   auto opened = open_regular_snapshot(path, limits.max_file_bytes);
   if (!opened)
     return std::unexpected(std::move(opened.error()));
-  ScopedFd fd(opened->first);
+  ava::core::UniqueFd fd(opened->first);
   auto visited = visit_session_snapshot_fd(fd.get(), opened->second, path, limits, visitor, cancel_requested, tolerate_invalid_final_suffix);
   int const close_error = fd.close_checked();
   if (!visited)
@@ -409,7 +408,6 @@ using detail::append_mutex_for_path;
 using detail::path_io_error;
 using detail::same_directory_identity;
 using detail::same_file_identity;
-using detail::ScopedFd;
 using detail::SessionTraceScope;
 using detail::validate_read_limits;
 
@@ -572,7 +570,7 @@ ava::core::VoidResult SessionStore::visit_entries_leased(SessionLease const& lea
   if (session_name.empty())
     return std::unexpected(path_io_error("lease-bound session read target has no basename", path));
 
-  ScopedFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+  ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
   if (parent_fd.get() < 0)
     return std::unexpected(path_io_error("failed to anchor lease-bound session read directory", parent_path, errno));
 
@@ -613,7 +611,7 @@ ava::core::VoidResult SessionStore::visit_entries_leased(SessionLease const& lea
       return std::unexpected(std::move(error));
     }
 
-    ScopedFd publication_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    ava::core::UniqueFd publication_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     if (publication_fd.get() < 0)
       return std::unexpected(path_io_error("failed to re-open session directory publication " + std::string(timing), parent_path, errno));
     struct stat publication_status{};

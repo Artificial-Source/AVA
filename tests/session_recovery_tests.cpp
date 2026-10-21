@@ -1,26 +1,35 @@
 #include "sys.h"
 #include "tests/session_test_declarations.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
+#include "ava/session/assistant_output.h"
 #include "ava/session/record.h"
 #include "ava/session/session_branch.h"
 #include "ava/session/session_store.h"
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace session_tests {
@@ -67,8 +76,140 @@ void test_session_lease_creation_and_link_safety()
          "existing session leases reject multiply-linked files through either name");
 }
 
+namespace {
+
+void check_session_quarantine_publication(int empty_path_error, int descriptor_path_error, bool staged_suffix)
+{
+  auto const case_name = std::string(staged_suffix ? "staged-" : "torn-") + std::to_string(empty_path_error) + "-" + std::to_string(descriptor_path_error);
+  auto const root = create_empty_root("session-quarantine-publication-" + case_name);
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  ava::session::SessionStore store(ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "publication"});
+  auto line = ava::session::serialize_session_entry_line(ava::session::SessionEntry{.id = "publication-prefix",
+                                                                                    .parent_id = "",
+                                                                                    .type = ava::session::EntryType::UserMessage,
+                                                                                    .timestamp = "2026-07-14T00:00:00Z",
+                                                                                    .data_json = "{\"text\":\"retained\"}"});
+  expect(line.has_value(), "quarantine publication fixture serializes its retained prefix");
+  if (!line)
+    return;
+  auto const prefix = *line + "\n";
+  std::string suffix = "{\"version\":4,\"id\":\"torn";
+  if (staged_suffix)
+  {
+    auto data = ava::session::serialize_assistant_output_item_data_json(ava::session::AssistantOutputItem{
+        .assistant_turn_id = "publication-turn",
+        .sequence = 0,
+        .kind = ava::session::AssistantOutputItemKind::Text,
+        .provider_item_id = "publication-item",
+        .provider_output_index = 0,
+        .payload = ava::session::AssistantOutputText{.text = "staged", .assistant_phase = ava::session::AssistantOutputTextPhase::Commentary}});
+    expect(data.has_value(), "quarantine publication fixture serializes its staged output");
+    if (!data)
+      return;
+    auto staged_line = ava::session::serialize_session_entry_line(ava::session::SessionEntry{.id = "publication-staged",
+                                                                                             .parent_id = "publication-prefix",
+                                                                                             .type = ava::session::EntryType::AssistantOutputItem,
+                                                                                             .timestamp = "2026-07-14T00:00:01Z",
+                                                                                             .data_json = std::move(*data)});
+    expect(staged_line.has_value(), "quarantine publication fixture frames its staged output");
+    if (!staged_line)
+      return;
+    suffix = *staged_line + "\n";
+  }
+  auto const original = prefix + suffix;
+  ava::tests::write_session_test_binary_file(store.session_path(), original);
+  auto lease = ava::session::SessionLease::acquire(store.session_path());
+  expect(lease.has_value(), "quarantine publication fixture acquires its exact session lease");
+  if (!lease)
+    return;
+
+  std::array const rules{
+      ava::tests::SyscallErrno{
+          .number = SYS_linkat, .argument = ava::tests::SyscallArgumentFilter{.index = 4, .value = AT_EMPTY_PATH}, .error_number = empty_path_error},
+      ava::tests::SyscallErrno{
+          .number = SYS_linkat, .argument = ava::tests::SyscallArgumentFilter{.index = 4, .value = AT_SYMLINK_FOLLOW}, .error_number = descriptor_path_error}};
+  auto const status = ava::tests::run_in_child_with_syscall_errno(std::span(rules).first(descriptor_path_error == 0 ? 1 : 2), [&] {
+    int const previous_failures = ava::tests::failures();
+    auto recovered = [&]() -> ava::core::Result<std::optional<std::filesystem::path>> {
+      if (!staged_suffix)
+        return store.recover_torn_tail(*lease, ava::session::SessionReadLimits{});
+      auto staged = store.recover_incomplete_assistant_output_suffix(*lease, ava::session::SessionReadLimits{});
+      if (!staged)
+        return std::unexpected(std::move(staged.error()));
+      if (!*staged)
+        return std::optional<std::filesystem::path>{};
+      expect((*staged)->removed_entry_count == 1 && (*staged)->removed_byte_count == suffix.size(),
+             "fallback publication retains exact staged-suffix recovery accounting");
+      return (*staged)->quarantine_path;
+    }();
+    if (descriptor_path_error == 0)
+    {
+      expect(recovered && recovered->has_value(),
+             recovered ? "forced descriptor-path fallback publishes quarantine" : "forced fallback failed: " + recovered.error().format());
+      if (recovered && *recovered)
+      {
+        struct stat status{};
+        expect(::stat((**recovered).c_str(), &status) == 0 && S_ISREG(status.st_mode) && (status.st_mode & 07777) == 0600 && status.st_nlink == 1 &&
+                   ava::tests::read_session_test_binary_file(**recovered) == suffix,
+               "forced fallback publishes the exact quarantine bytes as a mode-0600 single-link regular file");
+        auto loaded = store.load(*lease);
+        expect(loaded && loaded->size() == 1 && loaded->front().id == "publication-prefix",
+               "forced fallback leaves the repaired session resumable through its leased reader");
+      }
+    }
+    else
+    {
+      expect(!recovered, "quarantine publication fails closed when both descriptor-link routes fail");
+      if (!recovered)
+      {
+        auto has_context = [&](std::string const& key, std::string const& value) {
+          return std::ranges::any_of(recovered.error().context(), [&](auto const& context) { return context.key == key && context.value == value; });
+        };
+        expect(recovered.error().message().find("quarantine") != std::string::npos && has_context("session_path", store.session_path().string()) &&
+                   has_context("at_empty_path_cause", std::strerror(empty_path_error)) &&
+                   has_context("proc_self_fd_cause", std::strerror(descriptor_path_error)),
+               "both-route publication failure identifies the session path and preserves both syscall causes");
+      }
+    }
+    return ava::tests::failures() == previous_failures ? 0 : 1;
+  });
+  expect(status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0, "isolated quarantine publication case succeeds: " + case_name);
+  expect(ava::tests::read_session_test_binary_file(store.session_path()) == (descriptor_path_error == 0 ? prefix : original),
+         "publication success repairs only the suffix; both-route failure leaves all original session bytes unchanged");
+  std::size_t artifacts = 0;
+  std::error_code iter_error;
+  for (std::filesystem::directory_iterator iterator(store.session_path().parent_path(), iter_error), end; !iter_error && iterator != end;
+       iterator.increment(iter_error))
+  {
+    if (iterator->path() != store.session_path())
+      ++artifacts;
+  }
+  expect(!iter_error && artifacts == (descriptor_path_error == 0 ? 1U : 0U),
+         "quarantine publication keeps exactly one final artifact on success and cleans temporary names on failure");
+}
+
+}  // namespace
+
+void test_session_recovery_quarantine_publication_fallback()
+{
+  for (int const empty_path_error : {ENOENT, EPERM})
+    for (bool const staged_suffix : {false, true})
+      check_session_quarantine_publication(empty_path_error, 0, staged_suffix);
+}
+
+void test_session_recovery_quarantine_publication_fail_closed()
+{
+  for (auto const& [empty_path_error, descriptor_path_error] : {std::pair{ENOENT, EACCES}, std::pair{EPERM, ENOENT}})
+    for (bool const staged_suffix : {false, true})
+      check_session_quarantine_publication(empty_path_error, descriptor_path_error, staged_suffix);
+}
+
 void test_session_torn_tail_recovery()
 {
+  test_session_recovery_quarantine_publication_fallback();
+  test_session_recovery_quarantine_publication_fail_closed();
+
   auto const root = create_empty_root("session-torn-tail-recovery");
 
   auto const workspace = root / "workspace";

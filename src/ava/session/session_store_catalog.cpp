@@ -19,7 +19,6 @@ namespace ava::session {
 using detail::open_regular_snapshot;
 using detail::path_io_error;
 using detail::project_key;
-using detail::ScopedFd;
 using detail::validate_read_limits;
 
 ava::core::Result<SessionStore> SessionStore::create(std::filesystem::path const& workspace_dir, std::filesystem::path const& root_dir)
@@ -71,7 +70,7 @@ ava::core::Result<SessionStore> SessionStore::open(std::filesystem::path const& 
     error.with_context("session_id", store.session_id());
     return std::unexpected(std::move(error));
   }
-  ScopedFd snapshot_fd(opened->first);
+  ava::core::UniqueFd snapshot_fd(opened->first);
   if (int const close_error = snapshot_fd.close_checked(); close_error != 0)
     return std::unexpected(path_io_error("failed to close session open snapshot", store.session_path(), close_error));
   return store;

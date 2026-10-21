@@ -3,6 +3,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
 #include "ava/session/session_store_internal.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/json.h"
 #include "ava/core/strict_json.h"
 
@@ -31,54 +32,6 @@
 namespace ava::session {
 
 namespace detail {
-
-ScopedFd::ScopedFd(int fd) noexcept : fd_(fd)
-{
-}
-
-ScopedFd::ScopedFd(ScopedFd&& other) noexcept : fd_(std::exchange(other.fd_, -1))
-{
-}
-
-ScopedFd& ScopedFd::operator=(ScopedFd&& other) noexcept
-{
-  if (this != &other)
-  {
-    reset();
-    fd_ = std::exchange(other.fd_, -1);
-  }
-  return *this;
-}
-
-ScopedFd::~ScopedFd()
-{
-  reset();
-}
-
-int ScopedFd::get() const noexcept
-{
-  return fd_;
-}
-
-int ScopedFd::release() noexcept
-{
-  return std::exchange(fd_, -1);
-}
-
-int ScopedFd::close_checked() noexcept
-{
-  if (fd_ < 0)
-    return 0;
-  int const fd = std::exchange(fd_, -1);
-  return ::close(fd) == 0 ? 0 : errno;
-}
-
-void ScopedFd::reset(int fd) noexcept
-{
-  if (fd_ >= 0)
-    static_cast<void>(::close(fd_));
-  fd_ = fd;
-}
 
 std::string project_key(std::filesystem::path const& workspace_dir)
 {
@@ -209,11 +162,8 @@ bool same_directory_identity(struct stat const& left, struct stat const& right)
 
 std::filesystem::path anchored_child_diagnostic_path(int parent_fd, std::string_view name, std::filesystem::path const& fallback_parent)
 {
-  std::error_code link_error;
-  auto parent = std::filesystem::read_symlink("/proc/self/fd/" + std::to_string(parent_fd), link_error);
-  if (link_error || parent.empty())
-    parent = fallback_parent;
-  return parent / std::string(name);
+  auto parent = ava::core::descriptor_physical_path(parent_fd);
+  return (parent ? *parent : fallback_parent) / std::string(name);
 }
 
 SessionTraceScope::SessionTraceScope(std::shared_ptr<ava::observability::RunObservation> observation,

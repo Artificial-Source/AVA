@@ -1,19 +1,26 @@
 #include "sys.h"
 #include "ava/session/attachments.h"
-
 #include "ava/session/session_store.h"
-
+#include "ava/core/UniqueFd.h"
 #include "ava/core/error.h"
+#include "ava/core/fd_io.h"
+#include "ava/core/open_beneath.h"
 
 #include <array>
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <utility>
 #include <vector>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace ava::session {
 namespace {
@@ -95,52 +102,83 @@ std::optional<DetectedImageType> detect_image_type(std::string_view bytes)
   return std::nullopt;
 }
 
+ava::core::Result<ava::core::UniqueFd> open_stored_attachment(SessionStore const& store, std::string_view storage_path)
+{
+  auto const root_path = attachment_storage_root(store);
+  ava::core::UniqueFd root(::open(root_path.c_str(), O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+  if (!root)
+  {
+    int const cause = errno;
+    auto error = attachment_error(cause == ELOOP || cause == ENOTDIR ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::Io,
+                                  "failed to open image attachment storage without following symlinks", storage_path);
+    error.with_context("path", root_path.string()).with_context("cause", std::strerror(cause));
+    return std::unexpected(std::move(error));
+  }
+  ava::core::UniqueFd file(ava::core::open_beneath(root.get(), std::filesystem::path(storage_path), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+  if (!file)
+  {
+    int const cause = errno;
+    auto const category = cause == ELOOP || cause == ENOTDIR || cause == EXDEV ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::Io;
+    auto error = attachment_error(category, "failed to open image attachment beneath storage without following final or escaping symlinks", storage_path);
+    error.with_context("path", (root_path / storage_path).string()).with_context("cause", std::strerror(cause));
+    return std::unexpected(std::move(error));
+  }
+  return file;
+}
+
+ava::core::Result<std::string> read_attachment_snapshot(int fd, std::filesystem::path const& path, std::optional<std::uint64_t> expected_size = std::nullopt)
+{
+  auto prepared = ava::core::prepare_regular_descriptor(fd);
+  if (!prepared)
+  {
+    auto error = ava::core::open_regular_error(prepared.error(), "opened image attachment");
+    error.with_context("path", path.string());
+    return std::unexpected(std::move(error));
+  }
+  auto const& status = *prepared;
+  if (status.st_size <= 0 || static_cast<std::uintmax_t>(status.st_size) > kMaxImageAttachmentBytes)
+  {
+    auto error = source_attachment_error(ava::core::ErrorCategory::InvalidArgument, "image attachment byte size is invalid", path);
+    error.with_context("max_bytes", std::to_string(kMaxImageAttachmentBytes));
+    error.with_context("byte_size", std::to_string(status.st_size));
+    return std::unexpected(std::move(error));
+  }
+  if (expected_size && static_cast<std::uintmax_t>(status.st_size) != *expected_size)
+  {
+    return std::unexpected(source_attachment_error(ava::core::ErrorCategory::InvalidArgument, "image attachment byte size does not match metadata", path));
+  }
+
+  auto bytes = ava::core::read_descriptor_bounded(fd, static_cast<std::size_t>(status.st_size));
+  if (!bytes)
+  {
+    int const cause = bytes.error();
+    auto error = source_attachment_error(cause == EFBIG ? ava::core::ErrorCategory::InvalidArgument : ava::core::ErrorCategory::Io,
+                                         cause == EFBIG ? "image attachment byte size changed while reading" : "failed to read image attachment", path);
+    error.with_context("cause", std::strerror(cause));
+    return std::unexpected(std::move(error));
+  }
+  if (bytes->size() != static_cast<std::size_t>(status.st_size))
+  {
+    auto error = source_attachment_error(ava::core::ErrorCategory::Io, "image attachment ended before its inspected byte size was read", path);
+    error.with_context("expected_bytes", std::to_string(status.st_size));
+    error.with_context("read_bytes", std::to_string(bytes->size()));
+    return std::unexpected(std::move(error));
+  }
+  return std::move(*bytes);
+}
+
 ava::core::Result<std::string> read_import_source(std::filesystem::path const& source_path)
 {
-  std::error_code status_error;
-  auto const status = std::filesystem::symlink_status(source_path, status_error);
-  if (status_error) {
-    auto error = source_attachment_error(ava::core::ErrorCategory::Io, "failed to inspect image attachment source",
-                                         source_path);
-    error.with_context("cause", status_error.message());
+  ava::core::UniqueFd file(::open(source_path.c_str(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+  if (!file)
+  {
+    int const cause = errno;
+    auto error = source_attachment_error(cause == ELOOP ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::Io,
+                                         cause == ELOOP ? "image attachment path must not be a symlink" : "failed to open image attachment", source_path);
+    error.with_context("cause", std::strerror(cause));
     return std::unexpected(std::move(error));
   }
-  if (std::filesystem::is_symlink(status)) {
-    return std::unexpected(source_attachment_error(ava::core::ErrorCategory::PermissionDenied,
-                                                   "image attachment source must not be a symlink", source_path));
-  }
-  if (!std::filesystem::is_regular_file(status)) {
-    return std::unexpected(source_attachment_error(ava::core::ErrorCategory::InvalidArgument,
-                                                   "image attachment source is not a regular file", source_path));
-  }
-
-  auto const size = std::filesystem::file_size(source_path, status_error);
-  if (status_error) {
-    auto error = source_attachment_error(ava::core::ErrorCategory::Io, "failed to stat image attachment source",
-                                         source_path);
-    error.with_context("cause", status_error.message());
-    return std::unexpected(std::move(error));
-  }
-  if (size == 0 || size > kMaxImageAttachmentBytes) {
-    auto error = source_attachment_error(ava::core::ErrorCategory::InvalidArgument,
-                                         "image attachment source byte size is invalid", source_path);
-    error.with_context("max_bytes", std::to_string(kMaxImageAttachmentBytes));
-    error.with_context("byte_size", std::to_string(size));
-    return std::unexpected(std::move(error));
-  }
-
-  std::ifstream file(source_path, std::ios::binary);
-  if (!file) {
-    return std::unexpected(source_attachment_error(ava::core::ErrorCategory::Io,
-                                                   "failed to open image attachment source", source_path));
-  }
-  std::string bytes(static_cast<std::size_t>(size), '\0');
-  file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  if (!file || file.gcount() != static_cast<std::streamsize>(bytes.size())) {
-    return std::unexpected(source_attachment_error(ava::core::ErrorCategory::Io,
-                                                   "failed to read image attachment source", source_path));
-  }
-  return bytes;
+  return read_attachment_snapshot(file.get(), source_path);
 }
 
 ava::core::VoidResult validate_attachment_import_directory(std::filesystem::path const& path,
@@ -476,49 +514,6 @@ ava::core::Result<ImageAttachmentRef> import_image_attachment_bytes(
   return import_detected_image_attachment(store, bytes, *detected);
 }
 
-ava::core::VoidResult validate_attachment_path_components(SessionStore const& store, std::string_view storage_path)
-{
-  auto current = attachment_storage_root(store);
-  std::error_code status_error;
-  auto status = std::filesystem::symlink_status(current, status_error);
-  if (status_error) {
-    auto error = attachment_error(ava::core::ErrorCategory::Io, "failed to inspect image attachment storage",
-                                  storage_path);
-    error.with_context("cause", status_error.message());
-    return std::unexpected(std::move(error));
-  }
-  if (std::filesystem::is_symlink(status)) {
-    return std::unexpected(attachment_error(ava::core::ErrorCategory::PermissionDenied,
-                                            "image attachment storage must not be a symlink", storage_path));
-  }
-  auto const relative = std::filesystem::path(storage_path);
-  auto component = relative.begin();
-  while (component != relative.end()) {
-    auto next = component;
-    ++next;
-    if (next == relative.end()) break;
-    current /= *component;
-    status_error.clear();
-    status = std::filesystem::symlink_status(current, status_error);
-    if (status_error) {
-      auto error = attachment_error(ava::core::ErrorCategory::Io, "failed to inspect image attachment directory",
-                                    storage_path);
-      error.with_context("cause", status_error.message());
-      return std::unexpected(std::move(error));
-    }
-    if (std::filesystem::is_symlink(status)) {
-      return std::unexpected(attachment_error(ava::core::ErrorCategory::PermissionDenied,
-                                              "image attachment directory must not be a symlink", storage_path));
-    }
-    if (!std::filesystem::is_directory(status)) {
-      return std::unexpected(attachment_error(ava::core::ErrorCategory::InvalidArgument,
-                                              "image attachment parent is not a directory", storage_path));
-    }
-    component = next;
-  }
-  return {};
-}
-
 ava::core::Result<LoadedImageAttachment> load_image_attachment(SessionStore const& store,
                                                                ImageAttachmentRef const& attachment)
 {
@@ -532,47 +527,16 @@ ava::core::Result<LoadedImageAttachment> load_image_attachment(SessionStore cons
   }
   auto path = resolve_attachment_storage_path(store, attachment.storage_path);
   if (!path) return std::unexpected(std::move(path.error()));
-  if (auto valid_components = validate_attachment_path_components(store, attachment.storage_path); !valid_components) {
-    return std::unexpected(std::move(valid_components.error()));
+  auto file = open_stored_attachment(store, attachment.storage_path);
+  if (!file)
+    return std::unexpected(std::move(file.error()));
+  auto snapshot = read_attachment_snapshot(file->get(), *path, attachment.byte_size);
+  if (!snapshot)
+  {
+    snapshot.error().with_context("storage_path", attachment.storage_path);
+    return std::unexpected(std::move(snapshot.error()));
   }
-
-  std::error_code status_error;
-  auto const status = std::filesystem::symlink_status(*path, status_error);
-  if (status_error) {
-    auto error = attachment_error(ava::core::ErrorCategory::Io, "failed to inspect image attachment", attachment.storage_path);
-    error.with_context("cause", status_error.message());
-    return std::unexpected(std::move(error));
-  }
-  if (std::filesystem::is_symlink(status)) {
-    return std::unexpected(attachment_error(ava::core::ErrorCategory::PermissionDenied,
-                                            "image attachment path must not be a symlink", attachment.storage_path));
-  }
-  if (!std::filesystem::is_regular_file(status)) {
-    return std::unexpected(attachment_error(ava::core::ErrorCategory::InvalidArgument,
-                                            "image attachment path is not a regular file", attachment.storage_path));
-  }
-  auto const actual_size = std::filesystem::file_size(*path, status_error);
-  if (status_error) {
-    auto error = attachment_error(ava::core::ErrorCategory::Io, "failed to stat image attachment", attachment.storage_path);
-    error.with_context("cause", status_error.message());
-    return std::unexpected(std::move(error));
-  }
-  if (actual_size != attachment.byte_size) {
-    return std::unexpected(attachment_error(ava::core::ErrorCategory::InvalidArgument,
-                                            "image attachment byte size does not match metadata", attachment.storage_path));
-  }
-
-  std::ifstream file(*path, std::ios::binary);
-  if (!file) {
-    return std::unexpected(attachment_error(ava::core::ErrorCategory::Io, "failed to open image attachment",
-                                            attachment.storage_path));
-  }
-  std::string bytes(static_cast<std::size_t>(actual_size), '\0');
-  if (!bytes.empty()) file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  if (!file || file.gcount() != static_cast<std::streamsize>(bytes.size())) {
-    return std::unexpected(attachment_error(ava::core::ErrorCategory::Io, "failed to read image attachment",
-                                            attachment.storage_path));
-  }
+  auto bytes = std::move(*snapshot);
   if (sha256_hex(bytes) != attachment.sha256) {
     return std::unexpected(attachment_error(ava::core::ErrorCategory::InvalidArgument,
                                             "image attachment sha256 does not match metadata", attachment.storage_path));

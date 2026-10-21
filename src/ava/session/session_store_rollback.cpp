@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/session/record.h"
 #include "ava/session/session_store_internal.h"
+#include "ava/core/fd_io.h"
 
 #include <array>
 #include <cerrno>
@@ -13,10 +14,8 @@
 #include <system_error>
 #include <utility>
 #include <fcntl.h>
-#include <linux/fs.h>
 #include <sys/random.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 namespace ava::session {
@@ -54,16 +53,6 @@ ava::core::Result<std::string> rollback_quarantine_name(std::string_view session
     suffix.push_back(hex[byte & 0x0F]);
   }
   return "." + std::string(session_name) + ".rollback." + suffix;
-}
-
-int renameat2_no_replace(int parent_fd, std::string const& source_name, std::string const& destination_name)
-{
-  return static_cast<int>(::syscall(SYS_renameat2, parent_fd, source_name.c_str(), parent_fd, destination_name.c_str(), RENAME_NOREPLACE));
-}
-
-bool renameat2_no_replace_unavailable(int error_number)
-{
-  return error_number == ENOSYS || error_number == EINVAL || error_number == EOPNOTSUPP;
 }
 
 }  // namespace
@@ -114,8 +103,8 @@ ava::core::VoidResult SessionStore::remove_created_file(SessionLease const& leas
   auto finish_error = [&](ava::core::Error error, bool sync_parent) -> ava::core::VoidResult {
     if (parent_fd >= 0)
     {
-      if (sync_parent && fsync(parent_fd) != 0)
-        error.with_context("rollback_directory_sync_cause", std::strerror(errno));
+      if (int const sync_error = sync_parent ? ava::core::fsync_with_restart(parent_fd) : 0; sync_error != 0)
+        error.with_context("rollback_directory_sync_cause", std::strerror(sync_error));
       if (::close(parent_fd) != 0)
         error.with_context("rollback_directory_close_cause", std::strerror(errno));
       parent_fd = -1;
@@ -157,16 +146,16 @@ ava::core::VoidResult SessionStore::remove_created_file(SessionLease const& leas
       return finish_error(std::move(error), false);
     }
     quarantine_name = std::move(*generated_name);
-    if (renameat2_no_replace(parent_fd, session_name, quarantine_name) == 0)
+    int const error_number = ava::core::rename_noreplace(parent_fd, session_name.c_str(), parent_fd, quarantine_name.c_str());
+    if (error_number == 0)
     {
       detached = true;
       break;
     }
 
-    int const error_number = errno;
     if (error_number == EEXIST)
       continue;
-    if (renameat2_no_replace_unavailable(error_number))
+    if (ava::core::rename_noreplace_unavailable(error_number))
     {
       auto error = path_io_error("Linux renameat2 RENAME_NOREPLACE is unavailable for created-session rollback", path, error_number);
       return finish_error(std::move(error), false);
@@ -182,16 +171,16 @@ ava::core::VoidResult SessionStore::remove_created_file(SessionLease const& leas
 
   auto const quarantine_path = anchored_child_diagnostic_path(parent_fd, quarantine_name, parent_path);
   auto restore_or_preserve = [&](ava::core::Error error) -> ava::core::VoidResult {
-    if (renameat2_no_replace(parent_fd, quarantine_name, session_name) == 0)
+    int const restore_error = ava::core::rename_noreplace(parent_fd, quarantine_name.c_str(), parent_fd, session_name.c_str());
+    if (restore_error == 0)
     {
       error.with_context("rollback_restored_path", path.string());
       return finish_error(std::move(error), true);
     }
 
-    int const restore_error = errno;
     error.with_context("quarantine_path", quarantine_path.string());
     error.with_context("rollback_restore_cause", std::strerror(restore_error));
-    if (renameat2_no_replace_unavailable(restore_error))
+    if (ava::core::rename_noreplace_unavailable(restore_error))
       error.with_context("rollback_restore_requirement", "Linux renameat2 RENAME_NOREPLACE");
     return finish_error(std::move(error), true);
   };
@@ -310,9 +299,9 @@ ava::core::VoidResult SessionStore::remove_created_file(SessionLease const& leas
     error.with_context("path", path.string()).with_context("link_count", std::to_string(unlinked_status.st_nlink));
     return finish_error(std::move(error), true);
   }
-  if (fsync(parent_fd) != 0)
+  if (int const sync_error = ava::core::fsync_with_restart(parent_fd); sync_error != 0)
   {
-    auto error = path_io_error("created session was removed but the rollback directory sync failed", parent_path, errno);
+    auto error = path_io_error("created session was removed but the rollback directory sync failed", parent_path, sync_error);
     error.with_context("quarantine_path", quarantine_path.string());
     return finish_error(std::move(error), false);
   }
