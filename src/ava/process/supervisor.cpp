@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/process/supervisor_internal.h"
 #include "ava/process/supervisor_test_support.h"
+#include "ava/core/saturating.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -471,12 +472,12 @@ ava::core::VoidResult Supervisor::account_output(ProcessHandle const& handle, St
     return {};
   if (stream == StreamKindV1::StandardOutput)
   {
-    found->second->stdout_bytes = detail::saturating_add(found->second->stdout_bytes, bytes);
+    found->second->stdout_bytes = ava::core::saturating_add(found->second->stdout_bytes, bytes);
     found->second->stdout_truncated = found->second->stdout_truncated || truncated;
   }
   else
   {
-    found->second->stderr_bytes = detail::saturating_add(found->second->stderr_bytes, bytes);
+    found->second->stderr_bytes = ava::core::saturating_add(found->second->stderr_bytes, bytes);
     found->second->stderr_truncated = found->second->stderr_truncated || truncated;
   }
   return {};

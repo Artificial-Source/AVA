@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -95,12 +94,6 @@ bool requestable_reason(TerminationReasonV1 reason) noexcept
       return false;
   }
   return false;
-}
-
-std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) noexcept
-{
-  constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
-  return right > maximum - left ? maximum : left + right;
 }
 
 std::uint64_t elapsed_milliseconds(Clock::time_point begin, Clock::time_point end) noexcept

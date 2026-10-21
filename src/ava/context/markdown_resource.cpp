@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/context/markdown_resource.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/string_utils.h"
 
 #include <array>
@@ -12,35 +13,6 @@
 
 namespace ava::context {
 namespace {
-
-class UniqueFd
-{
- public:
-  UniqueFd() = default;
-  explicit UniqueFd(int fd) : fd_(fd) { }
-  ~UniqueFd()
-  {
-    if (fd_ >= 0)
-      ::close(fd_);
-  }
-  UniqueFd(UniqueFd const&) = delete;
-  UniqueFd& operator=(UniqueFd const&) = delete;
-  UniqueFd(UniqueFd&& other) noexcept : fd_(std::exchange(other.fd_, -1)) { }
-  UniqueFd& operator=(UniqueFd&& other) noexcept
-  {
-    if (this != &other)
-    {
-      if (fd_ >= 0)
-        ::close(fd_);
-      fd_ = std::exchange(other.fd_, -1);
-    }
-    return *this;
-  }
-  [[nodiscard]] int get() const noexcept { return fd_; }
-
- private:
-  int fd_ = -1;
-};
 
 ava::core::Error resource_io_error(std::string message, std::filesystem::path const& path, int error_number = 0)
 {
@@ -75,7 +47,7 @@ std::string describe_read_failed(std::string_view resource_description)
 
 ava::core::Result<std::string> read_resource_file(std::filesystem::path const& path, ResourceFileReadOptions options)
 {
-  UniqueFd file(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW));
+  ava::core::UniqueFd file(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW));
   if (file.get() < 0)
   {
     if (errno == ELOOP || errno == EISDIR || errno == ENXIO || errno == EOPNOTSUPP)

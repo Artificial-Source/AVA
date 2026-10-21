@@ -16,6 +16,9 @@ inline constexpr std::size_t kMaxNestingDepth = 64;
 [[nodiscard]] bool is_valid_utf8(std::string_view value) noexcept;
 [[nodiscard]] std::string replace_invalid_utf8(std::string_view value);
 [[nodiscard]] std::string escape(std::string_view value);
+// Remove JSON whitespace outside strings, preserving escapes and all string bytes.
+// Reject raw CR/LF inside strings. This is framing compaction, not syntax validation.
+[[nodiscard]] std::optional<std::string> compact(std::string_view value);
 [[nodiscard]] std::optional<std::size_t> field_value_start(std::string_view object, std::string_view key);
 [[nodiscard]] std::optional<std::string> string_field(std::string_view object, std::string_view key);
 [[nodiscard]] std::optional<long long> integer_field(std::string_view object, std::string_view key);

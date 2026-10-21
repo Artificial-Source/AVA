@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/agent/subagent_launch.h"
 #include "ava/core/json.h"
+#include "ava/core/utf8_prefix.h"
 
 #include <algorithm>
 #include <string>
@@ -27,13 +28,6 @@ bool forbidden_terminal_control(std::string_view value) noexcept
   return false;
 }
 
-std::size_t utf8_prefix_size(std::string_view value, std::size_t max_bytes) noexcept
-{
-  auto size = std::min(value.size(), max_bytes);
-  while (size > 0 && size < value.size() && (static_cast<unsigned char>(value[size]) & 0xC0U) == 0x80U) --size;
-  return size;
-}
-
 std::string normalize_display_field(std::string_view raw, std::size_t max_bytes)
 {
   if (!ava::core::json::is_valid_utf8(raw) || forbidden_terminal_control(raw))
@@ -56,7 +50,7 @@ std::string normalize_display_field(std::string_view raw, std::size_t max_bytes)
     }
     normalized.push_back(ch);
   }
-  normalized.resize(utf8_prefix_size(normalized, max_bytes));
+  normalized.resize(ava::core::utf8_prefix_size(normalized, max_bytes));
   while (!normalized.empty() && normalized.back() == ' ') normalized.pop_back();
   return normalized;
 }

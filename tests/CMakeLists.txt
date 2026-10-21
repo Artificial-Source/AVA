@@ -219,6 +219,7 @@ set(AVA_TESTS_SOURCES
   "command_tests.cpp"
   "core_tests.cpp"
   "core_utf8_tests.cpp"
+  "core_fd_helpers_tests.cpp"
   "core_mode_json_permissions_tests.cpp"
   "curl_transport_process_tests.cpp"
   "clipboard_image_process_tests.cpp"
@@ -342,6 +343,7 @@ ava_apply_sanitizers(ava_tests)
 set(AVA_TEST_SUITES
   core_mode
   core_utf8
+  core_fd_helpers
   test_harness
   diagnostics
   acp

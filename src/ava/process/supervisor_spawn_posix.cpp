@@ -55,13 +55,6 @@ int poll_timeout(ProcessDeadline deadline) noexcept
 
 }  // namespace
 
-void UniqueFd::reset(int descriptor) noexcept
-{
-  if (descriptor_ >= 0)
-    static_cast<void>(::close(descriptor_));
-  descriptor_ = descriptor;
-}
-
 ava::core::Result<int> move_above_standard_descriptors(int descriptor)
 {
   if (descriptor > STDERR_FILENO)
@@ -104,7 +97,7 @@ ava::core::Result<Pipe> make_cloexec_pipe()
     static_cast<void>(::close(*read_end));
     return std::unexpected(std::move(write_end.error()));
   }
-  return Pipe{.read_end = UniqueFd(*read_end), .write_end = UniqueFd(*write_end)};
+  return Pipe{.read_end = ava::core::UniqueFd(*read_end), .write_end = ava::core::UniqueFd(*write_end)};
 }
 
 ava::core::VoidResult set_nonblocking(int descriptor)
@@ -316,7 +309,6 @@ namespace {
 
 using detail::Clock;
 using detail::Pipe;
-using detail::UniqueFd;
 using namespace std::chrono_literals;
 
 bool parent_cancel_requested(SpawnSpecV1 const& specification) noexcept
@@ -338,8 +330,8 @@ bool parent_cancel_requested(SpawnSpecV1 const& specification) noexcept
 struct PreparedStream
 {
   StreamModeV1 mode = StreamModeV1::Inherit;
-  UniqueFd child_end;
-  UniqueFd parent_end;
+  ava::core::UniqueFd child_end;
+  ava::core::UniqueFd parent_end;
   bool parent_reads = false;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -352,7 +344,7 @@ struct PreparedSpawn
   std::vector<char*> argv;
   std::vector<std::string> environment_storage;
   std::vector<char*> environment;
-  UniqueFd cwd;
+  ava::core::UniqueFd cwd;
   std::optional<PreopenedExecutableV1> preopened_executable;
   std::optional<AnchoredWorkingDirectoryV1> anchored_cwd;
   PreparedStream standard_input;
@@ -440,7 +432,7 @@ ava::core::Result<PreparedStream> prepare_stream(StreamModeV1 mode, bool input)
     auto moved = detail::move_above_standard_descriptors(descriptor);
     if (!moved)
       return std::unexpected(std::move(moved.error()));
-    result.child_end = UniqueFd(*moved);
+    result.child_end = ava::core::UniqueFd(*moved);
     return result;
   }
 
@@ -526,7 +518,7 @@ ava::core::Result<PreparedSpawn> prepare_spawn(SpawnSpecV1& specification)
     executable = std::move(*resolved);
   }
 
-  UniqueFd cwd;
+  ava::core::UniqueFd cwd;
   if (!specification.anchored_cwd)
   {
     int cwd_descriptor = ::open(specification.cwd.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NONBLOCK);

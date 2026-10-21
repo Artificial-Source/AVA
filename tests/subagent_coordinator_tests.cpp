@@ -1808,6 +1808,26 @@ void test_safe_bounds_attempt_validation_and_shutdown()
   }
 }
 
+void test_summary_utf8_boundary_and_malformed_input()
+{
+  auto coordinator = coordinator_with();
+  if (!coordinator)
+    return;
+  std::string const split_prefix(16U * 1024U - 1, 'a');
+  auto split = complete_background(coordinator, "parent_utf8", "child_split_scalar", split_prefix + "\xe2\x82\xac" + "tail");
+  expect(split.job.summary == split_prefix && split.job.summary_truncated, "bounded summaries omit a valid UTF-8 scalar that would cross the byte limit");
+  auto const exact_prefix = std::string(16U * 1024U - 3, 'b') + "\xe2\x82\xac";
+  auto exact = complete_background(coordinator, "parent_utf8", "child_exact_scalar", exact_prefix + "tail");
+  expect(exact.job.summary == exact_prefix && exact.job.summary_truncated, "bounded summaries retain a complete UTF-8 scalar ending exactly at the byte limit");
+
+  for (auto const& malformed : {std::string("\x80"), std::string(16U * 1024U, 'x') + "\xc2"})
+  {
+    auto rejected = complete_background(coordinator, "parent_utf8", "child_malformed", malformed);
+    expect(rejected.job.summary == "subagent output unavailable" && rejected.job.summary_truncated,
+           "malformed UTF-8 replaces the whole summary even when the invalid bytes would be beyond the retained prefix");
+  }
+}
+
 }  // namespace
 
 void run_subagent_coordinator_tests()
@@ -1835,6 +1855,7 @@ void run_subagent_coordinator_tests()
   test_parent_maintenance_serializes_start_and_live_jobs();
   test_owner_checked_bounded_steering_fifo();
   test_safe_bounds_attempt_validation_and_shutdown();
+  test_summary_utf8_boundary_and_malformed_input();
   test_job_history_start_before_worker_and_immediate_completion_order();
   test_job_history_start_failure_does_not_launch_worker();
   test_job_history_terminal_failure_keeps_worker_outcome();
