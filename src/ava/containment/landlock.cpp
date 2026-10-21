@@ -5,6 +5,7 @@
 #include "ava/core/AnchorSet.h"
 
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -25,7 +26,24 @@ namespace ava::containment {
 #define LANDLOCK_ACCESS_FS_IOCTL_DEV (1ULL << 15)
 #endif
 
+#ifndef LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET
+#define LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0)
+#endif
+#ifndef LANDLOCK_SCOPE_SIGNAL
+#define LANDLOCK_SCOPE_SIGNAL (1ULL << 1)
+#endif
+
 namespace {
+
+// Stable ABI-6 layout, independent of the build host's kernel headers.
+struct LandlockRulesetAttrV6
+{
+  std::uint64_t handled_access_fs = 0;
+  std::uint64_t handled_access_net = 0;
+  std::uint64_t scoped = 0;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
 
 // Rights available at each Landlock ABI version. The handled mask must never
 // include bits the running kernel does not understand, or landlock_create_ruleset
@@ -90,12 +108,17 @@ ava::core::Error landlock_error(std::string message)
   return error;
 }
 
-[[nodiscard]] int landlock_create_ruleset_fd(std::uint64_t handled_access_fs)
+[[nodiscard]] int landlock_create_ruleset_fd(std::uint64_t handled_access_fs, std::uint32_t abi_version)
 {
-  struct landlock_ruleset_attr attr{};
+  LandlockRulesetAttrV6 attr{};
   attr.handled_access_fs = handled_access_fs;
-  attr.handled_access_net = 0;
-  return static_cast<int>(::syscall(SYS_landlock_create_ruleset, &attr, sizeof(attr), 0));
+  if (abi_version >= 6)
+    attr.scoped = LANDLOCK_SCOPE_SIGNAL | LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET;
+  // ABI 1–3 contain only the filesystem mask; ABI 4 adds the network mask.
+  // Do not pass unsupported trailing fields to older kernels.
+  auto const size =
+      abi_version >= 6 ? sizeof(attr) : (abi_version >= 4 ? offsetof(LandlockRulesetAttrV6, scoped) : offsetof(LandlockRulesetAttrV6, handled_access_net));
+  return static_cast<int>(::syscall(SYS_landlock_create_ruleset, &attr, size, 0));
 }
 
 [[nodiscard]] ava::core::VoidResult add_path_rule(int ruleset_fd, ava::core::AnchorSet const& anchors, ContainmentFilesystemRule const& rule)
@@ -131,7 +154,7 @@ ava::core::VoidResult apply_landlock_in_child(DevelopmentContainmentPlan const& 
   if (plan.filesystem_rules.empty())
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "containment plan has no filesystem rules"));
 
-  int const ruleset_fd = landlock_create_ruleset_fd(plan.handled_access_fs);
+  int const ruleset_fd = landlock_create_ruleset_fd(plan.handled_access_fs, plan.landlock_abi_version);
   if (ruleset_fd < 0)
   {
     if (errno == EINVAL)

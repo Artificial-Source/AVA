@@ -1,11 +1,15 @@
 #include "sys.h"
 #include "ava/containment/containment.h"
 
+#include <array>
+#include <bit>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <linux/audit.h>
 #include <linux/filter.h>
+#include <linux/netlink.h>
 #include <linux/seccomp.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -51,143 +55,85 @@ constexpr std::uint32_t kIoUringSetupSyscall = kStableIoUringSetupSyscall;
 // On x86_64, the x32 ABI shares the AUDIT_ARCH_X86_64 architecture but uses
 // syscall numbers with __X32_SYSCALL_BIT (0x40000000) set. Rejecting any
 // syscall number with this bit prevents x32 bypass of the filter.
-#if defined(__x86_64__) && defined(__X32_SYSCALL_BIT)
-constexpr std::uint32_t kX32SyscallBit = __X32_SYSCALL_BIT;
+#if defined(__x86_64__)
+constexpr std::uint32_t kX32SyscallBit = 0x40000000;
+#ifdef __X32_SYSCALL_BIT
+static_assert(static_cast<std::uint32_t>(__X32_SYSCALL_BIT) == kX32SyscallBit, "stable x32 syscall bit must match the kernel header");
+#endif
 #else
 constexpr std::uint32_t kX32SyscallBit = 0;
 #endif
 
-// BPF instruction helpers.
-struct BpfStmt
+[[nodiscard]] constexpr auto build_network_filter(bool network_allowed)
 {
-  std::uint16_t code;
-  std::uint8_t jt;
-  std::uint8_t jf;
-  std::uint32_t k;
-};
+  constexpr auto denied = SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA);
+  auto const network_action = network_allowed ? SECCOMP_RET_ALLOW : denied;
+  // Linux consumes these socket arguments as ints. Inspect their low 32 bits,
+  // including on big-endian AArch64 where those bits occupy the second word.
+  constexpr auto low_word = std::endian::native == std::endian::big ? sizeof(std::uint32_t) : 0;
+  constexpr auto domain_offset = offsetof(struct seccomp_data, args[0]) + low_word;
+  constexpr auto type_offset = offsetof(struct seccomp_data, args[1]) + low_word;
+  constexpr auto protocol_offset = offsetof(struct seccomp_data, args[2]) + low_word;
 
-#define AVA_BPF_STMT(code, k)                 \
-  BpfStmt                                     \
-  {                                           \
-    static_cast<std::uint16_t>(code), 0, 0, k \
-  }
+  // Both modes reject foreign architectures, x32, and io_uring socket bypasses.
+  // Non-stdio inherited descriptors must be closed before exec. Private UNIX
+  // stream/seqpacket pairs cannot address external services, so their send
+  // syscalls remain available even when external networking is denied.
+  return std::to_array<sock_filter>({
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
+      // Native architecture skips the kill; foreign architectures fall through.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, kNativeAuditArch, 1, 0),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+      // x32 falls through to kill; native syscall numbers skip it.
+      BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, kIsX86_64 ? kX32SyscallBit : 0, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+      // io_uring_setup falls through to deny; other syscalls skip it.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, kIoUringSetupSyscall, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, denied),
+      // connect falls through to network_action; other syscalls skip it.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_connect, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, network_action),
 
-#define AVA_BPF_JUMP(code, k, jt, jf)                                                                 \
-  BpfStmt                                                                                             \
-  {                                                                                                   \
-    static_cast<std::uint16_t>(code), static_cast<std::uint8_t>(jt), static_cast<std::uint8_t>(jf), k \
-  }
+      // socket(): IP and route-query sockets only in network-allowed mode.
+      // The route exception supports glibc getaddrinfo/AI_ADDRCONFIG.
+      // Non-socket syscalls skip eight instructions to the socketpair check.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_socket, 0, 8),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, domain_offset),
+      // IPv4 skips four instructions to network_action; otherwise test IPv6.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_INET, 4, 0),
+      // IPv6 skips three instructions to network_action; otherwise test netlink.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_INET6, 3, 0),
+      // Netlink falls through to its protocol check; other domains skip to deny.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_NETLINK, 0, 3),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, protocol_offset),
+      // NETLINK_ROUTE falls through to network_action; other protocols skip to deny.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, NETLINK_ROUTE, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, network_action),
+      BPF_STMT(BPF_RET | BPF_K, denied),
 
-[[nodiscard]] std::vector<sock_filter> build_network_filter()
-{
-  // The filter blocks all network-related syscall paths so no externally
-  // connected descriptor can be acquired or used:
-  //
-  // 1. Kill any process whose architecture is not the native one (fail closed
-  //    against x32 or cross-arch bypasses).
-  // 2. On x86_64, kill any syscall number with __X32_SYSCALL_BIT set.
-  // 3. Block socket(), socketpair(), connect(), sendto(), sendmsg(),
-  //    sendmmsg(), and io_uring_setup() with EPERM.
-  // 4. Allow all other syscalls.
-  //
-  // Blocking socket/socketpair prevents new socket creation (including
-  // AF_UNIX/abstract). Blocking connect/sendto/sendmsg/sendmmsg prevents
-  // using any inherited (though closed) or otherwise acquired descriptor.
-  // Inherited non-stdio FDs are closed before this filter is installed.
+      // socketpair(): only connected UNIX stream/seqpacket peers, in both
+      // modes. Datagram pairs can send to unrelated sockets and are denied.
+      // Non-socketpair syscalls skip eight instructions to the final allow.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_socketpair, 0, 8),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, domain_offset),
+      // UNIX falls through to its type check; other domains skip five to deny.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AF_UNIX, 0, 5),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, type_offset),
+      BPF_STMT(BPF_ALU | BPF_AND | BPF_K, static_cast<std::uint32_t>(~(SOCK_CLOEXEC | SOCK_NONBLOCK))),
+      // Streams skip the seqpacket check to allow; other types fall through.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SOCK_STREAM, 1, 0),
+      // Seqpacket falls through to allow; all other types skip to deny.
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SOCK_SEQPACKET, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+      BPF_STMT(BPF_RET | BPF_K, denied),
 
-  std::vector<BpfStmt> program;
-
-  // [0] Load architecture.
-  program.push_back(AVA_BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)));
-
-  // [1] If arch == native, skip the kill instruction. Otherwise fall through.
-  program.push_back(AVA_BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, kNativeAuditArch, 1, 0));
-
-  // [2] Kill: non-native architecture.
-  program.push_back(AVA_BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS));
-
-  // [3] Load syscall number.
-  program.push_back(AVA_BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)));
-
-  if constexpr (kIsX86_64 && kX32SyscallBit != 0)
-  {
-    // [4] AND syscall number with __X32_SYSCALL_BIT. If the result is
-    //     non-zero, the syscall is an x32 call; kill it.
-    program.push_back(AVA_BPF_STMT(BPF_ALU | BPF_AND | BPF_K, kX32SyscallBit));
-
-    // [5] If result != 0 (x32 bit set), jump to kill. Otherwise fall through.
-    //     The kill target is the last instruction (KILL_PROCESS).
-    program.push_back(AVA_BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, 0));
-
-    // [6] Kill: x32 syscall.
-    program.push_back(AVA_BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS));
-
-    // [7] Reload syscall number (the AND clobbered the accumulator).
-    program.push_back(AVA_BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)));
-  }
-
-  // Blocked syscall numbers. Each check jumps to the EPERM block if matched.
-  // Using the __NR_ constants from headers for fundamental syscalls that have
-  // been stable for decades; io_uring_setup uses the verified stable constant.
-  struct BlockedSyscall
-  {
-    std::uint32_t nr;
-    char const* name;
-  };
-  // The following are fundamental networking syscalls defined on all supported
-  // architectures. They are present in every Linux kernel header set AVA targets.
-  BlockedSyscall const blocked[] = {
-      {static_cast<std::uint32_t>(__NR_socket), "socket"},
-      {static_cast<std::uint32_t>(__NR_socketpair), "socketpair"},
-      {static_cast<std::uint32_t>(__NR_connect), "connect"},
-      {static_cast<std::uint32_t>(__NR_sendto), "sendto"},
-      {static_cast<std::uint32_t>(__NR_sendmsg), "sendmsg"},
-#ifdef __NR_sendmmsg
-      {static_cast<std::uint32_t>(__NR_sendmmsg), "sendmmsg"},
-#endif
-      {kIoUringSetupSyscall, "io_uring_setup"},
-  };
-
-  // Record the index where the EPERM block will be. We'll set the jump
-  // targets after we know the final layout.
-  std::size_t const first_check_index = program.size();
-  for (auto const& entry : blocked)
-  {
-    // JEQ: if nr == blocked_nr, jump to EPERM (we'll fix the target later),
-    // otherwise fall through to next check.
-    program.push_back(AVA_BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, entry.nr, 0, 0));
-    static_cast<void>(entry.name);
-  }
-
-  // Allow-all target: if no blocked syscall matched.
-  std::size_t const allow_index = program.size();
-  program.push_back(AVA_BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
-
-  // EPERM block target.
-  std::size_t const eperm_index = program.size();
-  program.push_back(AVA_BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)));
-
-  // Fix up the jump targets: each blocked-syscall check jumps to EPERM on
-  // match (jt), falls through on no-match (jf=0, next instruction).
-  for (std::size_t i = first_check_index; i < allow_index; ++i)
-  {
-    program[i].jt = static_cast<std::uint8_t>(eperm_index - i - 1);
-  }
-
-  // Convert to sock_filter array.
-  std::vector<sock_filter> filter;
-  filter.reserve(program.size());
-  for (auto const& stmt : program)
-  {
-    sock_filter f{};
-    f.code = stmt.code;
-    f.jt = stmt.jt;
-    f.jf = stmt.jf;
-    f.k = stmt.k;
-    filter.push_back(f);
-  }
-  return filter;
+      // Includes sendto/sendmsg/sendmmsg for the permitted connected pairs.
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+  });
 }
+
+static_assert(build_network_filter(false).size() == 29, "update the documented seccomp jump offsets when changing the filter");
 
 }  // namespace
 
@@ -201,22 +147,12 @@ bool seccomp_network_filter_supported() noexcept
   // silently ignores or rejects at exec time.
   std::uint32_t const action = SECCOMP_RET_ERRNO;
   long const result = ::syscall(SYS_seccomp, SECCOMP_GET_ACTION_AVAIL, 0u, &action);
-  if (result != 0)
-  {
-    // Fallback: check /proc/self/status for seccomp support. If the kernel
-    // doesn't support SECCOMP_GET_ACTION_AVAIL (pre-4.14), we still need to
-    // determine whether seccomp filters are available at all.
-    // PR_GET_SECCOMP returns 0 (disabled), 1 (strict), or 2 (filter).
-    errno = 0;
-    if (::prctl(PR_GET_SECCOMP) < 0 && errno == EINVAL)
-      return false;
-    // The kernel supports seccomp; assume SECCOMP_RET_ERRNO is available
-    // (it has been since seccomp filter mode was introduced in 3.5).
-  }
-  return true;
+  // An outer sandbox may deny this query. Never infer support from a different
+  // probe: the command must downgrade to Ask when the required action is unknown.
+  return result == 0;
 }
 
-ava::core::VoidResult apply_seccomp_network_filter()
+ava::core::VoidResult apply_seccomp_network_filter(bool network_allowed)
 {
   if (!seccomp_network_filter_supported())
     return std::unexpected(
@@ -228,9 +164,7 @@ ava::core::VoidResult apply_seccomp_network_filter()
   if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "failed to set PR_SET_NO_NEW_PRIVS before seccomp"));
 
-  auto filter = build_network_filter();
-  if (filter.empty())
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "seccomp network filter program is empty"));
+  auto filter = build_network_filter(network_allowed);
 
   struct sock_fprog prog{};
   prog.len = static_cast<std::uint16_t>(filter.size());
