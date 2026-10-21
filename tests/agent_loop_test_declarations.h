@@ -39,6 +39,7 @@ void test_agent_loop_dispatcher_steering_reaches_blocked_child_fifo_once();
 void test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint();
 void test_agent_loop_background_task_failure_records_parent_and_child_errors();
 void test_agent_loop_background_task_cancel_requests_child_cancellation();
+void test_agent_loop_provider_native_canceled_tasks();
 void test_agent_loop_background_task_requires_coordinator();
 void test_agent_loop_coordinator_start_failure_rolls_back_child();
 void test_agent_loop_background_task_publishes_inspection_source();

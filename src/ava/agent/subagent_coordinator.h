@@ -25,6 +25,10 @@
 
 namespace ava::agent {
 
+// Foreground and job-tool callers poll their cancellation predicate between
+// bounded wait slices of this length.
+inline constexpr auto kJobWaitCancellationSlice = std::chrono::milliseconds(50);
+
 // Opaque path-free live inspection types. Complete definitions live in
 // subagent_inspector.h so public coordinator fanout never pulls session types.
 class SubagentLiveInspectionSource;

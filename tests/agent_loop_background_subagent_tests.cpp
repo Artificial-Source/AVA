@@ -681,6 +681,100 @@ void test_agent_loop_background_task_cancel_requests_child_cancellation()
   }
 }
 
+void test_agent_loop_provider_native_canceled_tasks()
+{
+  for (int scenario = 0; scenario != 5; ++scenario)
+  {
+    bool const coordinated = scenario != 0;
+    bool const background = scenario == 2 || scenario == 4;
+    bool const provider_error = scenario >= 3;
+    auto const root = create_empty_root("agent-task-native-cancel-" + std::to_string(scenario));
+    auto const workspace = root / "workspace";
+    std::filesystem::create_directories(workspace);
+    ava::session::SessionStore store(
+        ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "native-cancel-parent"});
+    ava::provider::OpenAIProvider const provider("https://api.example.test");
+    auto const native_terminal = sse_response(provider_error ? "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial child output\"}\n\n"
+                                                               "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"failed\"}}\n\n"
+                                                             : "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"cancelled\"}}\n\n");
+    std::vector<ava::http::HttpResponse> responses{
+        sse_response(tool_call_sse("call_native_cancel_task", "task",
+                                   std::string(R"({"description":"Native cancel child","prompt":"Return a child result","subagent_type":"general","mode":")") +
+                                       (background ? "background" : "foreground") + "\"}") +
+                     "data: [DONE]\n\n")};
+    if (!coordinated)
+      responses.push_back(native_terminal);
+    responses.push_back(sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent continues\"}\n\ndata: [DONE]\n\n"));
+    ava::tests::FakeTransport transport(std::move(responses));
+    ava::agent::AgentLoopOptions options{.workspace_dir = workspace,
+                                         .mode = ava::agent::Mode::Build,
+                                         .model = agent_loop_test::model_invocation_options(),
+                                         .access_token = "token",
+                                         .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+                                           return ava::permissions::PermissionResolution::Allow;
+                                         },
+                                         .append_entry = append_route_for_test(store),
+                                         .append_batch = append_batch_route_for_test(store),
+                                         .session_read_authority = read_authority_for_test(store)};
+    if (coordinated)
+    {
+      auto coordinator = ava::agent::SubagentCoordinator::create();
+      expect(coordinator.has_value(), "native-cancel task fixture creates coordinator");
+      if (!coordinator)
+        continue;
+      options.subagent_coordinator = *coordinator;
+      options.background_provider_factory = []() -> ava::core::Result<std::unique_ptr<ava::provider::Provider>> {
+        return std::unique_ptr<ava::provider::Provider>(std::make_unique<ava::provider::OpenAIProvider>("https://api.example.test"));
+      };
+      options.background_transport_factory = [native_terminal]() -> ava::core::Result<std::unique_ptr<ava::http::Transport>> {
+        return std::unique_ptr<ava::http::Transport>(std::make_unique<ava::tests::FakeTransport>(std::vector<ava::http::HttpResponse>{native_terminal}));
+      };
+    }
+    auto coordinator = options.subagent_coordinator;
+    ava::agent::AgentLoop loop(std::move(options));
+    auto result = loop.run_turn("delegate a child with a provider-native terminal outcome", store, provider, transport);
+    expect(result && result->final_text == "parent continues" && transport.requests().size() == (coordinated ? 2U : 3U),
+           "native child terminal outcomes let the parent continue without canceling the parent");
+    if (!background)
+    {
+      auto entries = store.load();
+      bool const expected_result =
+          entries && std::ranges::any_of(*entries, [provider_error](auto const& entry) {
+            if (entry.type != ava::session::EntryType::ToolResult || entry.data_json.find("call_native_cancel_task") == std::string::npos)
+              return false;
+            return provider_error ? entry.data_json.find("\"status\":\"error\"") != std::string::npos &&
+                                        entry.data_json.find("foreground subagent failed") != std::string::npos
+                                  : entry.data_json.find("\"status\":\"canceled\"") != std::string::npos &&
+                                        entry.data_json.find("foreground subagent was canceled") != std::string::npos;
+          });
+      expect(expected_result, provider_error ? "coordinated foreground provider error is a failed task result"
+                              : coordinated  ? "coordinated foreground native cancellation is a typed canceled task result"
+                                             : "direct foreground native cancellation is a typed canceled task result");
+    }
+    if (coordinator)
+    {
+      auto jobs = coordinator->list(store.session_id());
+      expect(jobs.size() == 1, "native-cancel child has exactly one coordinator job");
+      if (jobs.empty())
+        continue;
+      auto terminal = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::seconds(1));
+      if (provider_error)
+      {
+        expect(terminal && terminal->job.execution == ava::agent::SubagentExecutionState::Failed && !terminal->job.cancel_requested &&
+                   terminal->job.error == "subagent job failed" && terminal->job.error_category == "provider" && !terminal->job.summary,
+               "provider-error child attaches a typed provider failure rather than an unknown missing-error fallback, without exposing partial output");
+      }
+      else
+      {
+        expect(terminal && terminal->job.execution == ava::agent::SubagentExecutionState::Canceled && !terminal->job.cancel_requested && !terminal->job.error &&
+                   terminal->job.stop_reason == "cancelled",
+               background ? "background provider-native cancellation is canceled, not completed, without a cooperative stop"
+                          : "foreground provider-native cancellation is canceled, not completed, without a cooperative stop");
+      }
+    }
+  }
+}
+
 void test_agent_loop_background_task_requires_coordinator()
 {
   auto const root = create_empty_root("agent-task-background-no-coordinator");

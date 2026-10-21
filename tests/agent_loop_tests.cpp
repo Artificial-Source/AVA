@@ -41,6 +41,7 @@ void run_agent_loop_tests()
   test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint();
   test_agent_loop_background_task_failure_records_parent_and_child_errors();
   test_agent_loop_background_task_cancel_requests_child_cancellation();
+  test_agent_loop_provider_native_canceled_tasks();
   test_agent_loop_background_task_requires_coordinator();
   test_agent_loop_coordinator_start_failure_rolls_back_child();
   test_agent_loop_background_task_publishes_inspection_source();
