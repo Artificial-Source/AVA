@@ -1,9 +1,12 @@
 #include "sys.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/plugin/enablement.h"
+#include "ava/plugin/tool_broker.h"
 
 #include <algorithm>
+#include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 namespace ava::plugin {
@@ -134,6 +137,36 @@ void apply_enablement(std::filesystem::path const& enablement_file, std::filesys
   }
 }
 
+void collect_model_tool_name_collisions(PluginDiagnostics& diagnostics)
+{
+  // Keys and binding identifiers borrow the stable plugin/contribution storage
+  // for this scan only; reserving each status keeps its model-name strings stable.
+  std::unordered_map<std::string_view, std::pair<std::string_view, std::string_view>> bindings;
+  for (auto& status : diagnostics.plugins)
+  {
+    if (!status.enabled)
+      continue;
+    auto const& manifest = status.plugin.manifest;
+    status.model_tools.reserve(manifest.contributes.tools.size());
+    for (auto const& contribution : manifest.contributes.tools)
+    {
+      auto& tool = status.model_tools.emplace_back(PluginModelToolStatus{.model_tool_name = plugin_model_tool_name(manifest.id, contribution.name)});
+      auto const [existing, inserted] = bindings.try_emplace(tool.model_tool_name, manifest.id, contribution.name);
+      if (inserted)
+        continue;
+      tool.name_collision = true;
+      auto failure = make_failure(status.plugin.scope, manifest.path, ava::core::ErrorCategory::InvalidArgument, PluginFailureKind::ModelToolNameCollision);
+      failure.message = "tool registry collision: later contribution disabled";
+      // Manifest validation limits these ASCII identifiers to 128-byte plugin
+      // ids and 96-byte contribution names; their normalized model name is bounded too.
+      failure.details = "plugin=\"" + manifest.id + "\" contribution=\"" + contribution.name + "\" model_tool=\"" + tool.model_tool_name +
+                        "\" existing_plugin=\"" + std::string(existing->second.first) + "\" existing_contribution=\"" + std::string(existing->second.second) +
+                        "\"";
+      diagnostics.failures.push_back(std::move(failure));
+    }
+  }
+}
+
 }  // namespace
 
 PluginDiagnostics collect_plugin_diagnostics(PluginDiscoveryOptions const& options, std::filesystem::path const& enablement_file,
@@ -144,6 +177,7 @@ PluginDiagnostics collect_plugin_diagnostics(PluginDiscoveryOptions const& optio
   collect_from_dir(options.project_plugins_dir, PluginScope::Project, diagnostics);
   disable_duplicate_ids(diagnostics);
   apply_enablement(enablement_file, workspace_root, diagnostics);
+  collect_model_tool_name_collisions(diagnostics);
   return diagnostics;
 }
 

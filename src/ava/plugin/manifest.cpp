@@ -13,7 +13,6 @@
 namespace ava::plugin {
 namespace {
 
-constexpr std::size_t kMaxManifestBytes = 256 * 1024;
 constexpr std::size_t kMaxManifestJsonDepth = 64;
 
 ava::core::Error manifest_error(std::string message)

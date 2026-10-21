@@ -2,12 +2,15 @@
 
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace ava::plugin {
+
+inline constexpr std::size_t kMaxManifestBytes = 256 * 1024;
 
 inline constexpr std::string_view kPluginApiVersion = "ava.plugin.v1";
 inline constexpr std::string_view kPluginProxyReadCapability = "proxy.read";

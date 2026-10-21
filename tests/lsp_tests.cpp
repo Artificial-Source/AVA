@@ -9,10 +9,12 @@
 #include "ava/lsp/lsp_client.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/json.h"
+#include "ava/core/thread.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -1616,6 +1618,205 @@ void test_lsp_builtin_root_selection()
          "built-in root routing fails closed to the workspace for paths outside its bounded ancestor walk");
 }
 
+ava::core::Result<std::shared_ptr<ava::lsp::DiagnosticsProvider>> make_root_cache_provider_for_test(std::filesystem::path const& root)
+{
+  auto const workspace = root / "workspace";
+  auto const bin = root / "bin";
+  auto const config_path = root / "lsp.json";
+  std::filesystem::create_directories(root / "state");
+  copy_fake_lsp_executable(bin / "clangd");
+  for (int index = 0; index < 10; ++index)
+  {
+    auto const module = workspace / std::to_string(index);
+    std::filesystem::create_directories(module);
+    std::ofstream(module / "compile_flags.txt") << "-Wall\n";
+    std::ofstream(module / "one.cpp") << "int one() { return 1; }\n";
+  }
+  {
+    std::ofstream config(config_path, std::ios::binary | std::ios::trunc);
+    config << "{\"version\":1,\"builtin_servers\":[\"clangd\"]}";
+  }
+  make_owner_safe_config(config_path);
+  return ava::lsp::make_configured_lsp_provider({
+      .global_config_file = config_path,
+      .project_config_file = {},
+      .workspace_root = workspace,
+      .anchor_set = lsp_anchors(workspace),
+      .permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        return ava::permissions::PermissionResolutionDecision{ava::permissions::PermissionResolution::Allow, "test allow"};
+      },
+      .builtin_discovery = builtin_discovery_for_test(bin),
+  });
+}
+
+bool root_cache_process_observation_available_for_test()
+{
+  if (std::ifstream("/proc/self/task/" + std::to_string(getpid()) + "/children").is_open())
+    return true;
+  ava::tests::request_skip("LSP root-cache lifecycle tests require readable /proc/self/task/<pid>/children (CONFIG_PROC_CHILDREN)");
+  return false;
+}
+
+std::optional<pid_t> lsp_process_for_root_for_test(std::filesystem::path const& root)
+{
+  // These clients are launched by this test's main thread; match their actual
+  // cwd rather than depending on a fake-server-only PID protocol.
+  std::ifstream children("/proc/self/task/" + std::to_string(getpid()) + "/children");
+  for (pid_t pid = -1; children >> pid;)
+  {
+    std::error_code error;
+    if (pid > 1 && std::filesystem::equivalent("/proc/" + std::to_string(pid) + "/cwd", root, error) && !error)
+      return pid;
+  }
+  return std::nullopt;
+}
+
+void test_lsp_builtin_root_cache_idle_lru_eviction()
+{
+  if (!root_cache_process_observation_available_for_test())
+    return;
+  constexpr int kExpectedLiveClients = 8;
+  auto const root = create_empty_root("lsp-root-cache-idle");
+  auto const workspace = root / "workspace";
+  ScopedEnvironmentForTest environment;
+  bool const environment_set = environment.set("XDG_STATE_HOME", (root / "state").string());
+  auto provider = make_root_cache_provider_for_test(root);
+  expect(environment_set && provider && *provider, "root-cache LRU fixture creates an enabled lazy built-in provider");
+  if (!environment_set || !provider || !*provider)
+    return;
+  auto query = [&](int index) { return (*provider)->diagnostics(workspace / std::to_string(index) / "one.cpp"); };
+  auto process = [&](int index) { return lsp_process_for_root_for_test(workspace / std::to_string(index)); };
+  std::vector<pid_t> original_processes;
+  for (int index = 0; index < kExpectedLiveClients; ++index)
+  {
+    auto diagnostics = query(index);
+    auto pid = process(index);
+    expect(diagnostics && pid, "each initial root gets one live client within the provider cap");
+    if (!diagnostics || !pid)
+      return;
+    original_processes.push_back(*pid);
+  }
+
+  auto refreshed = query(0);
+  auto ninth = query(8);
+  expect(refreshed && ninth && wait_for_process_group_exit(original_processes[1]) && !process(1) && process(0) == original_processes[0] &&
+             process(2) == original_processes[2],
+         "a ninth root shuts down the idle LRU process, not a recently reused root or the next-oldest root");
+  auto tenth = query(9);
+  expect(tenth && wait_for_process_group_exit(original_processes[2]) && !process(2) && process(0) == original_processes[0],
+         "successive new roots retire idle clients in least-recently-used order");
+  auto retained = query(0);
+  auto revisited = query(1);
+  expect(retained && revisited && process(1) && wait_for_process_group_exit(original_processes[3]) && process(0) == original_processes[0],
+         "an evicted root can launch again while a retained root reuses its original client");
+
+  int live_roots = 0;
+  for (int index = 0; index < 10; ++index)
+    live_roots += process(index).has_value() ? 1 : 0;
+  std::istringstream launches(read_text_file_for_test(root / "state" / "fake-clangd-launches.txt"));
+  std::vector<std::string> launched_roots;
+  for (std::string line; std::getline(launches, line);)
+    launched_roots.push_back(line);
+  expect(live_roots == kExpectedLiveClients && launched_roots.size() == 11 && std::ranges::count(launched_roots, (workspace / "0").string()) == 1 &&
+             std::ranges::count(launched_roots, (workspace / "1").string()) == 2,
+         "cross-root reuse and retirement keep only eight live processes without permanently rejecting evicted keys");
+}
+
+void test_lsp_builtin_root_cache_busy_capacity_recovery()
+{
+  if (!root_cache_process_observation_available_for_test())
+    return;
+  constexpr int kExpectedLiveClients = 8;
+  auto const root = create_empty_root("lsp-root-cache-busy");
+  auto const workspace = root / "workspace";
+  ScopedEnvironmentForTest environment;
+  bool const environment_set = environment.set("XDG_STATE_HOME", (root / "state").string());
+  auto provider = make_root_cache_provider_for_test(root);
+  expect(environment_set && provider && *provider, "root-cache busy fixture creates an enabled lazy built-in provider");
+  if (!environment_set || !provider || !*provider)
+    return;
+  auto query = [&](int index) { return (*provider)->diagnostics(workspace / std::to_string(index) / "one.cpp"); };
+  auto process = [&](int index) { return lsp_process_for_root_for_test(workspace / std::to_string(index)); };
+  std::mutex mutex;
+  std::condition_variable_any condition;
+  std::vector<int> entered(9, 0);
+  std::vector<int> released(9, 0);
+  std::vector<int> succeeded(9, 0);
+  std::vector<ava::core::JoinThread> queries;
+  std::vector<pid_t> busy_processes;
+  auto release_all = [&] {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      std::ranges::fill(released, 1);
+    }
+    condition.notify_all();
+    for (auto& thread : queries)
+      if (thread.joinable())
+        thread.join();
+  };
+  auto pin_client = [&](int index) {
+    queries.push_back(ava::core::JoinThread::create("lsp_root_cache_query", [&, index](std::stop_token stop_token) {
+      auto result = (*provider)->diagnostics(workspace / std::to_string(index) / "one.cpp", [&] {
+        std::unique_lock<std::mutex> lock(mutex);
+        entered[index] = 1;
+        condition.notify_all();
+        return !condition.wait(lock, stop_token, [&] { return released[index] != 0; });
+      });
+      succeeded[index] = result.has_value() ? 1 : 0;
+    }));
+    std::unique_lock<std::mutex> lock(mutex);
+    return condition.wait_for(lock, std::chrono::seconds(2), [&] { return entered[index] != 0; });
+  };
+
+  // Pin the oldest seven roots through the public operation's cancellation
+  // boundary, after cache acquisition and before request timeout accounting.
+  for (int index = 0; index < kExpectedLiveClients; ++index)
+  {
+    auto diagnostics = query(index);
+    auto pid = process(index);
+    bool const pinned = diagnostics && pid && (index == kExpectedLiveClients - 1 || pin_client(index));
+    expect(pinned, "root-cache fixture acquires each client and holds active queries deterministically");
+    if (!pinned)
+    {
+      release_all();
+      return;
+    }
+    busy_processes.push_back(*pid);
+  }
+  auto ninth = query(8);
+  bool const active_preserved = std::ranges::all_of(busy_processes.begin(), busy_processes.end() - 1, [](pid_t pid) { return kill(pid, 0) == 0; });
+  expect(ninth && active_preserved && wait_for_process_group_exit(busy_processes.back()) && !process(7),
+         "new roots skip every older in-use client and shut down the only idle process");
+  auto ninth_pid = process(8);
+  bool const ninth_pinned = ninth && ninth_pid && pin_client(8);
+  expect(ninth_pinned, "the replacement root occupies the eighth active client slot");
+  if (!ninth_pinned)
+  {
+    release_all();
+    return;
+  }
+
+  auto busy = query(9);
+  auto const busy_detail = busy ? std::string{} : busy.error().format();
+  expect(!busy && busy.error().category() == ava::core::ErrorCategory::Tool && busy_detail.find("capacity") != std::string::npos &&
+             busy_detail.find("retry") != std::string::npos && busy_detail.find("server: clangd") != std::string::npos &&
+             busy_detail.find((workspace / "9").string()) != std::string::npos && !process(9),
+         "an all-busy provider returns an actionable recoverable capacity error without launching another process");
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    released[0] = 1;
+  }
+  condition.notify_all();
+  queries.front().join();
+  auto recovered = query(9);
+  bool const others_preserved = std::ranges::all_of(busy_processes.begin() + 1, busy_processes.end() - 1, [](pid_t pid) { return kill(pid, 0) == 0; });
+  expect(recovered && succeeded[0] && wait_for_process_group_exit(busy_processes.front()) && process(9) && others_preserved && process(8) == ninth_pid,
+         "retrying the same rejected key succeeds after a query releases one slot without evicting other active clients");
+  release_all();
+  expect(std::ranges::all_of(succeeded.begin(), succeeded.begin() + 7, [](int value) { return value == 1; }) && succeeded[8] == 1,
+         "all pinned operations complete successfully after cache pressure and recovery");
+}
+
 void test_lsp_builtin_launch_identity_roots_and_deduplication()
 {
   auto const root = create_empty_root("lsp-builtin-launch");
@@ -2178,6 +2379,8 @@ void run_lsp_tests()
   test_lsp_builtin_discovery_safety();
   test_lsp_builtin_root_selection();
   test_lsp_builtin_launch_identity_roots_and_deduplication();
+  test_lsp_builtin_root_cache_idle_lru_eviction();
+  test_lsp_builtin_root_cache_busy_capacity_recovery();
   test_lsp_builtin_explicit_precedence();
   test_lsp_manager_publish_diagnostics_and_capability_bounds();
   test_lsp_notification_dispatch_cache_and_document_sync();

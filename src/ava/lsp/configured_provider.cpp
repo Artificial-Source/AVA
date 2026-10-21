@@ -23,6 +23,7 @@ namespace {
 
 constexpr std::uintmax_t kMaxLspConfigBytes = 64 * 1024;
 constexpr std::size_t kMaxServers = 8;
+constexpr std::size_t kMaxLiveClients = 8;
 constexpr std::size_t kMaxArgv = 32;
 constexpr std::size_t kMaxArgBytes = 4096;
 constexpr std::size_t kMaxIdBytes = 64;
@@ -598,6 +599,16 @@ bool path_matches(ConfiguredServer const& server, std::filesystem::path const& p
   return std::ranges::find(server.file_extensions, extension) != server.file_extensions.end();
 }
 
+struct CachedClient
+{
+  // The cache and active provider operations share ownership; only cache-owned
+  // clients may be retired without interrupting a query.
+  std::shared_ptr<SubprocessLspClient> client;
+  std::uint64_t last_used = 0;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
 class ConfiguredLspProvider final : public DiagnosticsProvider
 {
  public:
@@ -685,9 +696,34 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
     auto const cache_key = server.id + "\n" + root.lexically_normal().generic_string();
     if (auto cached = clients_.find(cache_key); cached != clients_.end())
     {
-      if (cached->second && cached->second->is_alive())
-        return cached->second;
+      if (cached->second.client && cached->second.client->is_alive())
+      {
+        cached->second.last_used = ++client_use_sequence_;
+        return cached->second.client;
+      }
       clients_.erase(cached);
+    }
+    // Enforce the process cap before launch. Erasing an idle entry synchronously
+    // runs the client's existing process teardown before another slot is used.
+    while (clients_.size() >= kMaxLiveClients)
+    {
+      auto oldest = clients_.end();
+      for (auto candidate = clients_.begin(); candidate != clients_.end(); ++candidate)
+      {
+        // Every client copy is acquired under clients_mutex_. While this lock is held,
+        // a sole cache owner cannot gain a borrower, so use_count() == 1 is safely idle.
+        if (candidate->second.client.use_count() == 1 && (oldest == clients_.end() || candidate->second.last_used < oldest->second.last_used))
+          oldest = candidate;
+      }
+      if (oldest == clients_.end())
+      {
+        auto error = ava::core::Error(ava::core::ErrorCategory::Tool, "LSP live client capacity is busy; retry after an active query completes");
+        error.with_context("server", server.id);
+        error.with_context("root", root.string());
+        error.with_context("max_clients", std::to_string(kMaxLiveClients));
+        return std::unexpected(std::move(error));
+      }
+      clients_.erase(oldest);
     }
     auto launch = ensure_launch_permission(server);
     if (!launch)
@@ -706,7 +742,7 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
                                              cancel_requested);
     if (!client)
       return std::unexpected(std::move(client.error()));
-    clients_.emplace(cache_key, *client);
+    clients_.emplace(cache_key, CachedClient{.client = *client, .last_used = ++client_use_sequence_});
     return *client;
   }
 
@@ -773,7 +809,8 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
   ava::permissions::PermissionResolver permission_resolver_ = nullptr;
   std::vector<ConfiguredServer> servers_;
   std::mutex clients_mutex_;
-  std::unordered_map<std::string, std::shared_ptr<SubprocessLspClient>> clients_;
+  std::unordered_map<std::string, CachedClient> clients_;
+  std::uint64_t client_use_sequence_ = 0;
   std::shared_ptr<std::vector<std::string>> permission_request_ids_ = nullptr;
 };
 

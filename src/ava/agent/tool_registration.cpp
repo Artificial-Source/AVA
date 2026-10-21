@@ -14,11 +14,15 @@
 #include "ava/tools/lsp_tools.h"
 #include "ava/plugin/tool_broker.h"
 #include "ava/mcp/tool_broker.h"
+#include "ava/core/json.h"
+#include "ava/core/utf8_prefix.h"
 
 #include <cstdlib>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <utility>
+#include "debug.h"
 
 namespace ava::agent {
 namespace {
@@ -130,11 +134,38 @@ ava::core::Error strict_mcp_model_name_collision(ava::mcp::McpBrokeredTool const
   return error;
 }
 
+#ifdef CWDEBUG
+std::string collision_diagnostic_field(std::string_view value)
+{
+  constexpr std::size_t kMaxFieldBytes = 96;
+  auto const prefix_bytes = ava::core::utf8_prefix_size(value, kMaxFieldBytes);
+  auto field = ava::core::json::escape(value.substr(0, prefix_bytes));
+  if (value.size() > prefix_bytes)
+    field += "...";
+  return field;
+}
+#endif
+
+void report_model_name_collision(ToolSource CWDEBUG_ONLY(source), std::string_view CWDEBUG_ONLY(source_id), std::string_view CWDEBUG_ONLY(contribution),
+                                 std::string_view CWDEBUG_ONLY(model_name), RegisteredTool const& CWDEBUG_ONLY(existing))
+{
+  Dout(dc::agent, "tool registry collision: later contribution disabled; source="
+                      << to_string(source) << ":\"" << collision_diagnostic_field(source_id) << "\" contribution=\"" << collision_diagnostic_field(contribution)
+                      << "\" model_tool=\"" << collision_diagnostic_field(model_name) << "\" existing_binding=" << to_string(existing.source) << ":\""
+                      << collision_diagnostic_field(existing.source_id) << "\"/\"" << collision_diagnostic_field(existing.metadata.name) << "\"");
+}
+
 ava::core::VoidResult register_plugin_brokered_tools(ToolRegistry& registry, ava::tools::ToolContext const& context)
 {
   return ava::plugin::visit_enabled_plugin_tools(context, [&registry](ava::plugin::PluginBrokeredTool const& descriptor) -> ava::core::VoidResult {
-    if (registry.find(descriptor.model_tool_name) != nullptr)
+    if (descriptor.model_name_collision)
+    {
+#ifdef CWDEBUG
+      if (auto const* existing = registry.find(descriptor.model_tool_name); existing != nullptr)
+        report_model_name_collision(ToolSource::Plugin, descriptor.source_id, descriptor.plugin_name, descriptor.model_tool_name, *existing);
+#endif
       return {};
+    }
     auto registered = registry.register_tool(plugin_registered_tool(descriptor));
     (void)registered;
     return {};
@@ -149,6 +180,7 @@ ava::core::VoidResult register_mcp_brokered_tools(ToolRegistry& registry, ava::t
     {
       if (exact_composition)
         return std::unexpected(strict_mcp_model_name_collision(descriptor, *existing));
+      report_model_name_collision(ToolSource::Mcp, descriptor.source_id, descriptor.mcp_name, descriptor.model_tool_name, *existing);
       return {};
     }
     auto registered = registry.register_tool(mcp_registered_tool(descriptor));
