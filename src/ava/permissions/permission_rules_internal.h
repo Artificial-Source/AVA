@@ -1,7 +1,9 @@
 #pragma once
 
 #include "ava/permissions/permission_rules.h"
+#include "ava/core/UniqueFd.h"
 
+#include <cerrno>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -13,30 +15,9 @@
 
 namespace ava::permissions::permission_rules_internal {
 
-class ScopedFd final
-{
- public:
-  ScopedFd();
-  explicit ScopedFd(int fd);
-  ScopedFd(ScopedFd const&) = delete;
-  ScopedFd& operator=(ScopedFd const&) = delete;
-  ScopedFd(ScopedFd&& other) noexcept;
-  ScopedFd& operator=(ScopedFd&& other) noexcept;
-  ~ScopedFd();
-
-  [[nodiscard]] int get() const noexcept;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-
- private:
-  void close_if_open() noexcept;
-
-  int fd_ = -1;
-};
-
 struct RuleDirectory
 {
-  ScopedFd fd;
+  ava::core::UniqueFd fd;
   std::filesystem::path path;
   std::string file_name;
 
@@ -46,12 +27,12 @@ struct RuleDirectory
 struct RuleLock
 {
   RuleDirectory directory;
-  ScopedFd fd;
+  ava::core::UniqueFd fd;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-std::string errno_message();
+std::string errno_message(int error_number = errno);
 ava::core::Error rule_file_error(ava::core::ErrorCategory category, std::string message, std::filesystem::path const& path);
 ava::core::Error rule_parse_error(std::string message, std::filesystem::path const& path, std::string_view field = {},
                                   std::optional<std::size_t> index = std::nullopt);

@@ -26,9 +26,9 @@
 
 namespace ava::permissions::permission_rules_internal {
 
-std::string errno_message()
+std::string errno_message(int error_number)
 {
-  return std::strerror(errno);
+  return std::strerror(error_number);
 }
 
 ava::core::Error rule_file_error(ava::core::ErrorCategory category, std::string message, std::filesystem::path const& path)
@@ -234,7 +234,7 @@ ava::core::Error rule_directory_open_error(std::filesystem::path const& path, in
 
 struct RuleWalkStart
 {
-  ScopedFd fd;
+  ava::core::UniqueFd fd;
   std::filesystem::path component_path;
   std::filesystem::path relative_parent;
 
@@ -256,14 +256,14 @@ ava::core::Result<RuleWalkStart> begin_rule_directory_walk(std::filesystem::path
         error.with_context("cause", errno_message());
         return std::unexpected(std::move(error));
       }
-      ScopedFd fd(duplicate);
+      ava::core::UniqueFd fd(duplicate);
       if (auto safe = validate_rule_ancestor(fd.get(), selected->anchor().root); !safe)
         return std::unexpected(std::move(safe.error()));
       return RuleWalkStart{.fd = std::move(fd), .component_path = selected->anchor().root, .relative_parent = selected->relative().parent_path()};
     }
   }
 
-  ScopedFd fd(::open("/", O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+  ava::core::UniqueFd fd(::open("/", O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
   if (fd.get() < 0)
   {
     auto error = rule_file_error(ava::core::ErrorCategory::Io, "failed to open permission rules filesystem anchor", file_path);
@@ -284,7 +284,7 @@ ava::core::Result<std::optional<RuleDirectory>> open_rule_directory_for_read(std
   auto walk = begin_rule_directory_walk(file_path, anchors);
   if (!walk)
     return std::unexpected(std::move(walk.error()));
-  ScopedFd current = std::move(walk->fd);
+  ava::core::UniqueFd current = std::move(walk->fd);
   auto component_path = std::move(walk->component_path);
 
   auto const parent = file_path.parent_path();
@@ -300,7 +300,7 @@ ava::core::Result<std::optional<RuleDirectory>> open_rule_directory_for_read(std
         return std::optional<RuleDirectory>{};
       return std::unexpected(rule_directory_open_error(component_path, error_number));
     }
-    ScopedFd opened(next);
+    ava::core::UniqueFd opened(next);
     if (auto safe = validate_rule_ancestor(opened.get(), component_path); !safe)
       return std::unexpected(std::move(safe.error()));
     current = std::move(opened);
@@ -318,7 +318,7 @@ ava::core::Result<RuleDirectory> open_rule_directory_for_write(std::filesystem::
   auto walk = begin_rule_directory_walk(file_path, anchors);
   if (!walk)
     return std::unexpected(std::move(walk.error()));
-  ScopedFd current = std::move(walk->fd);
+  ava::core::UniqueFd current = std::move(walk->fd);
   auto component_path = std::move(walk->component_path);
 
   auto const parent = file_path.parent_path();
@@ -344,7 +344,7 @@ ava::core::Result<RuleDirectory> open_rule_directory_for_write(std::filesystem::
     }
     if (next < 0)
       return std::unexpected(rule_directory_open_error(component_path, errno));
-    ScopedFd opened(next);
+    ava::core::UniqueFd opened(next);
     if (auto safe = validate_rule_ancestor(opened.get(), component_path); !safe)
       return std::unexpected(std::move(safe.error()));
     if (created && ::fchmod(opened.get(), S_IRWXU) != 0)
@@ -387,7 +387,7 @@ ava::core::Result<RuleLock> acquire_rule_lock(std::filesystem::path const& file_
     return std::unexpected(std::move(directory.error()));
 
   auto const lock_name = directory->file_name + ".lock";
-  ScopedFd fd(::openat(directory->fd.get(), lock_name.c_str(), O_RDWR | O_CREAT | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR));
+  ava::core::UniqueFd fd(::openat(directory->fd.get(), lock_name.c_str(), O_RDWR | O_CREAT | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR));
   if (fd.get() < 0)
   {
     auto error = rule_file_error(ava::core::ErrorCategory::Io, "failed to open permission rules lock file", directory->path / lock_name);
