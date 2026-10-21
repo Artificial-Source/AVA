@@ -45,8 +45,13 @@ appended as full prompt text.
   `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, then `CLAUDE.MD`.
 - The global instruction file defaults to `$XDG_CONFIG_HOME/ava/AGENTS.md` and
   uses the same sibling fallback names when `AGENTS.md` is absent.
-- These files are bounded, symlink-rejected, and loaded without project trust
+- These files must be regular and byte-bounded, and load without project trust
   because they are treated as visible user-authored instructions.
+- Reads are anchored beneath the selected context root. On Linux's `openat2`
+  path, symlinks that remain within that root may be followed; escapes fail.
+  When `openat2` is unavailable or unsupported, the stricter component-walk
+  fallback rejects symlink components. The selected root's own path may contain
+  symlinks; AVA follows them when opening that trusted anchor.
 
 Use `/context` to see which instruction files were loaded and whether their
 contents have changed since the current prompt state was assembled.
@@ -98,6 +103,28 @@ system prompt, then loads the full skill content only when the model calls the
   loadable instruction content.
 - Loading a skill requires `skill` permission, and `/context` tracks skill file
   freshness.
+
+For an ordinary skill, for example `.ava/skills/review-change/SKILL.md`:
+
+```markdown
+---
+name: review-change
+description: Review a focused code change for correctness.
+---
+Read the changed code and report concrete defects with file references.
+```
+
+The `name` defaults to the containing directory name when omitted. It must be
+1–64 bytes of lowercase letters, digits, and hyphens, with no leading, trailing,
+or doubled hyphens. `description` is required, nonempty after trimming, at most
+1024 bytes, and free of control bytes. Each ordinary `SKILL.md` is capped at
+64 KiB, including frontmatter.
+
+Global roots are processed in the order listed above, then trusted project roots
+in their listed order. A later same-name definition replaces an earlier one, so
+trusted project skills override global skills. Plugin-declared skill names use
+a separate grammar (up to 96 bytes of letters, digits, `.`, `_`, or `-`); do not
+use that grammar for ordinary `SKILL.md` frontmatter.
 
 ## Subagents
 

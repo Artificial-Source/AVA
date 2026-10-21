@@ -55,10 +55,11 @@ Ways to change provider reasoning:
 - `/models [query]` and the model selector expose each model's reasoning
   support, levels, format, and diagnostics.
 
-Unsupported choices fail before a provider request is built: no reasoning
-support, no levels, unknown level, provider-invalid budget/display fields, or an
-incompatible model switch all return local errors instead of silently sending an
-invalid request.
+Unsupported explicit reasoning choices fail before a provider request is built:
+no reasoning support, no levels, an unknown level, or provider-invalid
+budget/display fields return local errors instead of silently sending an invalid
+request. Historical reasoning does not itself prevent a model switch; AVA clears
+the explicit selection and projects history for the new target on later requests.
 
 Current built-in support:
 
@@ -82,6 +83,12 @@ Current built-in support:
 - **OpenRouter**: the built-in OpenRouter model currently has reasoning controls
   disabled. AVA has compatible request/error coverage, but OpenRouter-native
   reasoning remains future provider-breadth work.
+- **Gemini GenerateContent**: explicit AVA reasoning controls remain unsupported,
+  but provider-emitted `thought:true` parts appear as reasoning, not answer text.
+  Private `thoughtSignature` metadata replays only on matching follow-up parts
+  for exact-compatible history; it is never exposed in public events or exports.
+  If replay metadata exceeds 64 KiB or 1,024 parts, AVA drops it without failing
+  the response and sends that history unsigned on the next request.
 
 ## `/thinking` and inline thinking visibility
 
@@ -112,10 +119,14 @@ Reasoning-related session behavior is append-only and provider-aware:
 - Provider-emitted visible or native thinking is saved as `reasoning_block`
   entries before the associated assistant message when there is text, a
   signature, or redacted provider data to preserve.
-- `reasoning_block` entries can participate in provider replay as native content
-  parts when the target model can safely accept that reasoning format. AVA rejects
-  incompatible switches, such as Anthropic thinking replay into a non-Anthropic
-  model or compatible `reasoning_content` replay without matching metadata.
+- `reasoning_block` entries can replay as native content only for an exact
+  source provider/model/API match with matching reasoning metadata. When the
+  target differs or provenance is missing, request-time projection preserves
+  visible assistant text but omits incompatible native reasoning and
+  provider-private content. Switching from Anthropic to another provider is
+  therefore allowed; it does not send Anthropic thinking blocks to that provider.
+  Projection does not rewrite persisted history, and malformed committed
+  assistant-output records can still fail local replay validation.
 - RPC `get_messages` sanitizes reasoning entries: visible non-redacted text may
   be returned, but raw signatures and opaque redacted-thinking payloads are
   replaced by status fields. Markdown/HTML exports report redaction and signature
@@ -169,9 +180,10 @@ AVA tracks Pi-facing ergonomics where they fit AVA's safety boundaries:
 - AVA accepts Pi-style CLI `--thinking off|<level>` as a startup alias for the
   existing reasoning controls. `off` clears explicit reasoning; other values use
   the active model's `reasoning_levels` and provider/API-family validation.
-- AVA diverges by fail-closing on provider/model metadata: unsupported reasoning
-  levels, incompatible replay formats, and provider-invalid parameters are
-  rejected locally rather than guessed or downgraded.
+- AVA rejects unsupported explicit reasoning levels and provider-invalid
+  parameters locally rather than guessing. Model switches are allowed;
+  incompatible historical native/private content is portably projected instead
+  of making the switch fail.
 - AVA persists provider-native reasoning blocks for safe replay and audit while
   sanitizing signatures/redacted payloads in user-facing RPC/export surfaces.
 

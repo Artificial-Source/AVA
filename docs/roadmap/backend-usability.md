@@ -18,10 +18,10 @@ External projects are behavior references only. AVA may adopt useful product beh
 
 | # | Workstream | Status | Implementation |
 | --- | --- | --- | --- |
-| 1 | Normal coding-command permissions and execution | Direction approved 2026-07-19; recorded below | Implemented and validated 2026-07-19 |
+| 1 | Normal coding-command permissions and execution | Direction approved 2026-07-19; recorded below | Sealed-plan execution landed (2026-07-19 record below); public structured argv/cwd input remains open |
 | 2 | Foreground/background subagent execution and job controls | Direction approved 2026-07-20; recorded below | Implemented and validated 2026-07-20 |
 | 3 | Privacy-safe diagnostics and support bundles | Direction approved 2026-07-20; recorded below | Implemented and validated 2026-07-20 |
-| 4 | Context-compaction correctness and configuration | Direction approved 2026-07-20; recorded below | Implemented and validated 2026-07-20 |
+| 4 | Context-compaction correctness and configuration | Direction approved 2026-07-20; recorded below | Core compaction landed (2026-07-20 record below); provider terminal-outcome validation and unknown-key rejection remain open |
 | 5 | Automatic session titles | Direction approved 2026-07-21 | Implemented and validated 2026-07-21 |
 
 ---
@@ -175,11 +175,11 @@ Normal UI flows do not offer a remembered critical grant. The command plan's max
 
 ## Command Representations
 
-AVA will have two explicit execution lanes.
+The sealed-plan subsystem supports argv and raw-shell plans internally. The public model/RPC `bash` tool still requires a `command` string and exposes neither `argv` nor `cwd`; the runtime tool context selects the working directory (`src/ava/agent/tool_metadata.h`, `src/ava/agent/tool_dispatch_bash.cpp`, and `src/ava/agent/agent_turn_executor.cpp`).
 
 ### Structured Command Lane
 
-The preferred model/RPC representation uses exact arguments plus an optional workspace-contained working directory:
+Approved but not implemented at the public tool boundary: the preferred model/RPC representation would use exact arguments plus an optional workspace-contained working directory:
 
 ```json
 {
@@ -188,7 +188,7 @@ The preferred model/RPC representation uses exact arguments plus an optional wor
 }
 ```
 
-The existing command string remains a compatibility input, but it is parsed once into the same immutable plan. Empty arguments and argument boundaries must be preserved exactly.
+Until the schema, argument parser, and invocation wiring land together, the command string is the only public input and is parsed into the immutable plan. Exact preservation of empty arguments and argument boundaries remains an acceptance requirement for the proposed structured lane.
 
 ### Raw Shell Lane
 
@@ -325,14 +325,14 @@ Headless execution remains fail-closed for unresolved prompts. It gains process-
 
 ACP executes in a client-controlled resolution domain. Reusable local recipes cannot apply until the ACP execution contract can carry and enforce the approved executable, cwd, environment profile, plan fingerprint, and capability bounds. Until then ACP command execution is once/session only or fails closed when equivalence cannot be established.
 
-## Implemented Design Phases
+## Design Phase Status
 
-The following phases were the approved planning inputs. The implementation uses these responsibilities with the concrete source layout described in the implementation record above.
+The following phases were the approved planning inputs. The sealed-plan foundation has landed, but the public structured-input item in Phase 1 remains open; the dated implementation and validation records above do not establish that input lane.
 
 ### Phase 1: Identity Foundation
 
 - Add the command-plan subsystem and one parser.
-- Add structured argv and workspace-contained cwd while retaining compatibility inputs.
+- Open: expose structured argv and workspace-contained cwd at the public model/RPC tool boundary while retaining command-string input.
 - Resolve executable/interpreter identities before policy.
 - Route local and injected execution through the exact approved plan.
 - Preserve current behavior behind a rollout switch while proving equivalence.
@@ -604,7 +604,7 @@ Validation used no paid live-provider calls.
 
 AVA retains append-only checkpoint compaction: it summarizes the active provider-visible conversation, persists a compaction boundary plus a bounded recent tail, and reconstructs future context from that checkpoint without rewriting or deleting physical session history.
 
-Manual `/compact`, automatic threshold compaction, and one context-overflow recovery attempt use one shared active-context selection, summarization, retained-tail, metadata, cancellation, and append-authority path. They must not repeatedly summarize raw material already replaced by the latest valid compaction boundary. Failure or cancellation appends no checkpoint and leaves the current context unchanged.
+Manual `/compact`, automatic threshold compaction, and one context-overflow recovery attempt use one shared active-context selection, summarization, retained-tail, metadata, cancellation, and append-authority path. They must not repeatedly summarize raw material already replaced by the latest valid compaction boundary. The approved safety target is that failure or cancellation appends no checkpoint and leaves the current context unchanged. This remains incomplete: `src/ava/agent/context_compaction.cpp` accepts nonempty summary text without requiring an explicit successful provider terminal outcome, so a length-truncated, refused, provider-cancelled, or error-ended summary can still be checkpointed.
 
 ### User Configuration
 
@@ -612,7 +612,7 @@ The existing owner-controlled `$XDG_CONFIG_HOME/ava/compaction.json` remains the
 
 Compaction uses the active provider and model by default. Users may explicitly configure a different summary model. A model-only override uses the active provider; a provider plus model selects that exact configured provider/model, including a different provider. Explicit selections must resolve through AVA's provider/model registry and normal credential path, remain visible in compaction metadata/events, and fail actionably when unavailable or incompatible. AVA never silently falls back to another provider/model.
 
-Known fields reject wrong JSON types, invalid ranges, ambiguous threshold/retention combinations, unknown provider/model selections, and incompatible configuration. `/reload compaction` reports the same semantic diagnostics used by actual compaction instead of declaring a malformed file valid.
+Known fields reject wrong JSON types, invalid ranges, ambiguous threshold/retention combinations, unknown provider/model selections, and incompatible configuration. `/reload compaction` reports the same semantic diagnostics used by actual compaction instead of declaring a malformed file valid. Unknown object keys are currently ignored by `parse_compaction_config` in `src/ava/session/compaction.cpp`; an unknown-only object retains defaults. Allowlist-based unknown-key rejection remains open.
 
 ### Retained Recent Context
 
@@ -625,7 +625,7 @@ Cut points preserve complete record groups and provider semantics. AVA never ret
 - Automatic compaction evaluates the active context after the latest compaction boundary, not full physical history.
 - Manual and overflow compaction use that same active context for summary input, pre-compaction estimates, recent-tail selection, and persisted metadata.
 - A provider context-overflow result may trigger one successful compaction and one replay of the original request. A second overflow is terminal and actionable; compaction never loops.
-- Cancellation before summary completion or before the guarded append produces no compaction entry.
+- Local cancellation checks before summary completion and before the guarded append stop compaction without an entry. Rejecting a provider-reported cancelled terminal outcome is still open; it is not equivalent to the local cancellation callback being set.
 - Current lease-bound `SessionReadAuthority`, controller-owned append routing, stale-snapshot detection, bounded retry, offline guard, and safe turn-boundary behavior remain mandatory.
 - Existing session history is never pruned, rewritten, or destructively compacted. Context projection may omit replaced material without mutating the audit record.
 
@@ -650,13 +650,13 @@ AVA adopts the useful behavior shape, not either project's architecture, source,
 ## Acceptance Criteria
 
 - Default automatic compaction triggers at 80 percent of the active model context window; a valid user percentage or absolute-token threshold is respected exactly, and zero absolute tokens disables it.
-- Malformed, ambiguous, unknown, or incompatible configuration fails with actionable diagnostics and cannot silently default or disable compaction.
+- Malformed, ambiguous, unknown, or incompatible configuration must fail with actionable diagnostics and cannot silently default or disable compaction. **Open:** recognized-field validation is implemented, but unknown-key rejection is not.
 - The active model is used by default; an explicit valid same-provider or cross-provider summary model is honored without silent fallback.
 - Manual, automatic, and overflow compaction summarize only active context and persist equivalent bounded recent-tail semantics.
 - Recent retention keeps complete turn/tool groups, defaults to two turns/20,000 tokens, and safely handles one oversized turn.
 - Token metadata describes the active pre/post-compaction context rather than full physical history.
 - Context overflow can cause at most one compaction-assisted retry.
-- Cancellation, summary failure, stale snapshots beyond the existing bound, or append failure never produce a partial/false successful checkpoint.
+- Cancellation, summary failure, stale snapshots beyond the existing bound, or append failure must never produce a partial/false successful checkpoint. **Open:** summary persistence must require an explicit successful provider terminal outcome, including rejection of length-truncated, refused, provider-cancelled, error-ended, or missing-successful-terminal summaries.
 - Session-v4 physical ordering, tool-result identity, read/append authority, replay, export privacy, and strict validation remain intact.
 - Deterministic fake-provider tests, focused CTest, the full default suite, sanitizer coverage for touched ownership paths, and `git diff --check` pass without paid live-provider calls.
 

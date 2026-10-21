@@ -19,15 +19,25 @@ Some tools have additional gates: LSP tools appear only with valid LSP capabilit
 | Native tool | Purpose and key inputs | Bounds and side effects | Metadata category |
 | --- | --- | --- | --- |
 | `read_file` | Read text at `path`; continue by 1-based `offset` and `limit`. | Defaults to 200 lines and 50 KiB; `limit` ≤ 100,000 and `max_bytes` ≤ 512 KiB. Read-only; outside-workspace paths require applicable authority. | `read` |
-| `list_directory` | List one `path` (workspace root by default). | Defaults to 500 entries; `max_entries` ≤ 5,000. Read-only and omits read-denied paths. | `search` |
+| `list_directory` | List one `path` (workspace root by default). | Defaults to 500 entries; `max_entries` ≤ 5,000. Read-only; includes symlink names, while other read-denied entries are omitted. | `search` |
 | `glob` | Find readable non-symlink workspace files matching `pattern`; bracket classes are unsupported. | Defaults to 2,000 results; `max_results` ≤ 10,000. Read-only. | `search` |
 | `grep` | Search readable non-symlink files for `pattern`, optionally limited by `include`; literal and case-sensitive by default. | Defaults to 2,000 matched lines; `max_matches` ≤ 10,000, with line/output caps. ECMAScript regex is used when `literal=false`. Read-only. | `search` |
 | `write_file` | Write complete `content` to `path`; intended for new files or deliberate full rewrites. | Mutates one file through AVA checks; source writes are denied in plan mode. Returns status/byte count rather than file content. | `edit` |
 | `edit_file` | Replace one exact, unique nonempty `old_text` span with `new_text` in `path`. | Mutates one file only after uniqueness and permission checks; use `apply_patch` for coordinated edits. | `edit` |
-| `apply_patch` | Apply an `edits` array of exact path/old/new replacements. | 1–32 replacements are validated before writes commit. Mutates one or more files through normal edit checks. | `edit` |
-| `bash` | Run a permissioned local argv-style `command` for builds/tests. This model tool does **not** invoke a shell, so pipes, redirects, variables, and subshell syntax are not supported. | Default timeout 30 s, maximum 120 s; default 200-line tail; `max_lines`/alias `limit` ≤ 100,000 and `max_bytes` ≤ 512 KiB. Starts a contained local process and may cause command-defined side effects after approval. | `bash` |
+| `apply_patch` | Apply an `edits` array of exact path/old/new replacements. | 1–32 replacements are validated before writes commit. Mutates one or more files through normal edit checks; refuses final symlink targets. | `edit` |
+| `bash` | Run a permissioned local `command` for builds/tests. Losslessly representable commands execute as direct argv; shell syntax such as pipes, redirects, expansions, and subshells selects raw-shell intent and requires one-shot Critical approval. | Default timeout 30 s, maximum 120 s; default 200-line tail; `max_lines`/alias `limit` ≤ 100,000 and `max_bytes` ≤ 512 KiB. Starts a contained local process and may cause command-defined side effects after approval. | `bash` |
 
 File and process implementations live under [`src/ava/agent/tool_dispatch_file.cpp`](https://github.com/Artificial-Source/AVA/blob/develop/src/ava/agent/tool_dispatch_file.cpp), [`tool_dispatch_search.cpp`](https://github.com/Artificial-Source/AVA/blob/develop/src/ava/agent/tool_dispatch_search.cpp), [`tool_dispatch_patch.cpp`](https://github.com/Artificial-Source/AVA/blob/develop/src/ava/agent/tool_dispatch_patch.cpp), and [`tool_dispatch_bash.cpp`](https://github.com/Artificial-Source/AVA/blob/develop/src/ava/agent/tool_dispatch_bash.cpp). Command containment guarantees and limitations are normative in [security/containment.md](https://github.com/Artificial-Source/AVA/blob/develop/docs/security/containment.md).
+
+### Workspace paths and search results
+
+Across TUI, print, RPC, and ACP, model file tools resolve paths spelled beneath either the logical workspace root or its physical/canonical spelling through the same descriptor-anchored workspace. Symlinks below that root cannot redirect access outside it: lookup fails with a `use the real path` error rather than prompting for the link's target. Absolute symlinks are refused even when they point back inside the workspace. On Linux with `openat2`, contained relative symlinks can be followed; the fallback on systems without it rejects symlink components. `write_file` and `apply_patch` also refuse final symlink targets. FIFOs are rejected as non-regular files without blocking for a writer.
+
+Paths spelled outside the workspace retain normal outside-workspace permission handling in TUI, print, and RPC, including a prompt when required. `read_file` reads through a held descriptor; writes, exact edits, patches, and directory listings retain the existing pathname-based I/O for those outside paths. ACP instead refuses outside-workspace paths entirely; shared path resolution does not expand its launch-approved permission scope.
+
+Workspace `list_directory` results retain symlink names. A contained link can report its descriptor-inspected target's type and size; an escaping, absolute, or dangling link is listed without following its target, with `directory:false` and `size:0`. `glob` and `grep` continue to skip symlink entries.
+
+`glob` and `grep` add a numeric `skipped_paths` result field when entries could not be inspected or read because they were unreadable or vanished; `grep` also skips files larger than 10 MiB instead of failing the search. The field counts these omissions and is omitted when zero. Skipped paths alone do not set `truncated` or trigger a spill file; result, traversal, and output limits still control truncation independently.
 
 ## Network, resources, and delegation
 

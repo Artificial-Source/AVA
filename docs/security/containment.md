@@ -8,8 +8,8 @@ releasing the child process to exec. Containment uses two kernel mechanisms:
 
 1. **Landlock** (filesystem containment): restricts filesystem access to
    explicitly allowed roots.
-2. **seccomp** (network containment): blocks all network-related syscalls when
-   the sealed command does not explicitly require network access.
+2. **seccomp** (socket/network containment): installs a filter in both network
+   modes, restricting external sockets while retaining private pair IPC.
 
 ## Product Contract
 
@@ -34,6 +34,12 @@ metadata and audit must state unavailable/uncontained. No reusable grant is
 issued. This preserves user authority: unavailable containment must never look
 like ordinary Sensitive/Standard containment.
 
+This contract covers contained child execution, not file-tool reads performed
+inside AVA. Those reads use application permissions: `--allow read-only` and
+matching `--allow-tool` flags currently auto-approve otherwise-Ask reads/searches
+outside the workspace, but do not override hard secret-path denies. They are not
+a workspace-only read boundary; see the [file-tool policy](sandboxing.md#secrets-protected-paths-and-destructive-commands).
+
 ## Root Validation
 
 Root validation is split between synthetic and writable roots:
@@ -44,8 +50,9 @@ Root validation is split between synthetic and writable roots:
 - **Writable workspace**: may be current-user-owned 0755 or 0750 (group
   read/execute permitted). Group write is accepted only for the verified
   private-primary-group exception (for example 0770 with a primary group that
-  has no other members); shared-group or world write, symlinks, special file
-  types, and identity mismatches are rejected.
+  has no other members); shared-group or world write, non-directory targets,
+  anchor escapes, and identity mismatches are rejected. A logical workspace
+  symlink is accepted when the selected descriptor anchor safely resolves it.
 
 ## Authority and Trusted-Home Boundaries
 
@@ -58,13 +65,36 @@ At command sealing:
 - Synthetic environment roots must be disjoint from workspace and trusted home.
   An exact synthetic run root may live beneath the pre-opened session/spill
   authority; granting that exact descriptor does not grant its authority parent.
-- PATH entries and executable/interpreter authority must be disjoint from AVA
-  authority roots and exact protected credential files. Exact files allow a
-  sibling AVA installation `bin` directory without exposing credentials.
+- PATH directories and executable/interpreter files must be disjoint from AVA
+  authority roots and exact protected credential files. Executable checks cover
+  both requested and canonical file paths; parent-directory grants are narrowed
+  separately as described below.
 
-Containment never makes AVA authority roots writable or readable through a
-broader workspace, PATH, executable-directory, or system-root rule. Overlapping
-broad rules are rejected or omitted.
+Workspace and PATH authority overlaps are rejected at sealing, and overlapping
+fixed system roots are omitted. Startup PATH entries that are `/`, equal the
+trusted home, or contain it are dropped from discovery, including trailing-slash
+spellings and symlink/device-inode aliases.
+
+Executable/interpreter parents normally receive directory read/execute rules.
+If a parent equals or contains the trusted home, or overlaps an AVA authority
+root, only the exact executable/interpreter file receives READ_FILE and EXECUTE.
+Home checks cover lexical spellings (including trailing slashes) and descriptor
+device/inode aliases; an uninspectable parent does not gain broad authority.
+These file checks and grants are implemented in
+[`command_plan.cpp`](../../src/ava/command/command_plan.cpp) and
+[`containment_plan.cpp`](../../src/ava/containment/containment_plan.cpp).
+
+### Executable and Interpreter Target Admission
+
+The canonical target of the executable and every resolved shebang interpreter
+must be covered by the roots the containment plan grants. Coverage compares
+physical target paths with descriptor-resolved directory identities, so a
+symlinked workspace root is not rejected merely for its logical spelling.
+If a launcher or interpreter resolves outside all granted roots, the plan is
+`Unavailable`; AVA does not add an arbitrary canonical parent to make it fit.
+The command instead requires explicit Critical, one-shot approval to run
+uncontained, rather than auto-running. This can affect nvm, pipx, or Nix
+toolchain symlink layouts when their targets are outside the granted roots.
 
 ## What Containment Provides
 
@@ -78,6 +108,9 @@ Landlock rights are ABI-version-aware:
 - **ABI 3** (minimum required): + `TRUNCATE`
 - **ABI 5**: + `IOCTL_DEV` (included in handled mask when supported; writable
   roots may receive it)
+- **ABI 6**: + signal and abstract UNIX socket scoping; contained commands
+  cannot signal processes or connect to abstract sockets outside their Landlock
+  domain.
 
 - **Handled rights**: every supported Landlock filesystem access right for the
   probed ABI version is handled (denied by default unless explicitly allowed).
@@ -89,8 +122,10 @@ Landlock rights are ABI-version-aware:
   roots receive read/write/create/execute permissions (including IOCTL_DEV when
   ABI >= 5).
 - **Read/execute roots**: system roots (`/usr`, `/lib`, `/lib64`, `/bin`,
-  `/sbin`, `/etc`), sealed PATH/toolchain entries, and the resolved executable
-  directory receive read/execute permissions (READ_FILE, READ_DIR, EXECUTE).
+  `/sbin`, `/etc`), sealed PATH/toolchain entries, and ordinary executable and
+  shebang-interpreter parents receive READ_FILE, READ_DIR, and EXECUTE.
+  Parents covering trusted home or overlapping AVA authority instead receive
+  only exact-file READ_FILE and EXECUTE rules.
 - **Regular-file rules**: file rules use only file-valid rights (READ_FILE and
   EXECUTE as appropriate), never READ_DIR, which Landlock rejects on
   non-directory paths. Redundant recipe-file rules already beneath the writable
@@ -98,20 +133,37 @@ Landlock rights are ABI-version-aware:
 - **Device files**: `/dev/null`, `/dev/zero`, `/dev/urandom`, `/dev/random`
   receive read/write permissions. Device files are deliberate: they do not
   receive IOCTL_DEV automatically.
-- **Explicitly denied**: the real home directory, AVA config/state/session/auth
-  roots, arbitrary `/proc`, external checkout siblings, SSH/cloud/provider
-  secrets, and broad `/tmp` are not in the allow list.
+- **Not granted by default**: arbitrary `/proc`, external checkout siblings,
+  broad `/tmp`, real home, AVA config/state/session/auth, and SSH/cloud/provider
+  secrets. Landlock does not subtract individual secret paths from an otherwise
+  allowed workspace or toolchain root.
 
 ### Network (seccomp)
 
-When `network_enabled=false` (the default for standard mutable commands), a BPF
-seccomp filter is installed after `PR_SET_NO_NEW_PRIVS` that blocks:
+A BPF seccomp filter is installed after `PR_SET_NO_NEW_PRIVS` in **both** network
+modes; networking approval never omits the filter or the filesystem rules.
 
-- `socket()` and `socketpair()`: no new sockets can be created, including
-  AF_UNIX and abstract sockets.
-- `connect()`, `sendto()`, `sendmsg()`, `sendmmsg()`: no data can be sent
-  through any descriptor.
-- `io_uring_setup()`: prevents io_uring bypass of the socket restriction.
+| Mode | `socket()` | `connect()` |
+| --- | --- | --- |
+| `network_enabled=false` (default for Standard mutable commands) | Denied with `EPERM` for every domain | Denied with `EPERM` |
+| `network_enabled=true` (for example `curl`, `git fetch`) | Allowed only for `AF_INET`, `AF_INET6`, and `AF_NETLINK` with protocol `NETLINK_ROUTE`; other domains and non-route netlink protocols return `EPERM` | Allowed by this filter |
+
+In both modes:
+
+- `AF_UNIX` `socket()` is denied, including abstract sockets. Local AF_UNIX
+  services such as session D-Bus, `docker.sock`, ssh-agent, and gpg-agent are
+  unreachable by design, even when IP networking is approved. The route-netlink
+  exception supports address discovery such as `getaddrinfo`/`AI_ADDRCONFIG`.
+- `socketpair()` permits only `AF_UNIX` `SOCK_STREAM` or `SOCK_SEQPACKET`, with
+  optional `SOCK_CLOEXEC`/`SOCK_NONBLOCK`. Datagram pairs and other forms return
+  `EPERM` because datagram pairs can address unrelated sockets.
+- `sendto()`, `sendmsg()`, and `sendmmsg()` remain allowed. Together with private
+  stream/seqpacket pairs, this preserves IPC needed by Python asyncio and Node
+  child-process pipes without permitting new external sockets in denied mode.
+- `io_uring_setup()` returns `EPERM`, preventing an io_uring socket bypass.
+
+The filter is defined in
+[`seccomp_network.cpp`](../../src/ava/containment/seccomp_network.cpp).
 
 On x86_64, the filter rejects every syscall number with `__X32_SYSCALL_BIT` set
 before normal dispatch, preventing x32 ABI bypass. `io_uring_setup` is blocked
@@ -121,16 +173,19 @@ header — no silent header-dependent omission.
 
 Inherited non-stdio file descriptors are closed after containment installation
 and before descriptor exec, using `close_range(2)` with a bounded fallback. No
-user code runs while those parent descriptors remain inherited; seccomp also
-blocks network sends before closure. Only handshake, approved executable, and
-sealed script-source descriptors needed for descriptor execution survive.
+user code runs while those parent descriptors remain inherited. Descriptor
+closure, **not send-syscall blocking**, is the defence against inherited sockets:
+the filter permits sends on an already-open socket. Only handshake, approved
+executable, and sealed script-source descriptors needed for descriptor execution
+survive this closure in [`bash_tool.cpp`](../../src/ava/tools/bash_tool.cpp).
 
-Seccomp action support is probed in the parent via a non-mutating
-`SECCOMP_GET_ACTION_AVAIL` query. If the kernel does not support the required
-action, containment is reported as Unavailable.
+The parent probes seccomp support with a non-mutating
+`SECCOMP_GET_ACTION_AVAIL` query for `SECCOMP_RET_ERRNO`. **Any** failed query,
+including denial by an outer sandbox, makes network seccomp `Unavailable` and
+downgrades the command to Critical, one-shot Ask. There is no `PR_GET_SECCOMP`
+fallback. Actual filter installation in the child remains mandatory and fails
+closed before user code executes.
 
-When `network_enabled=true` (sensitive commands like `curl`, `git fetch`), the
-seccomp network filter is omitted. Filesystem containment is retained.
 Whenever a containment plan is applied, `PR_SET_NO_NEW_PRIVS` is set and
 inherited across descriptor exec, preventing privilege escalation through
 setuid binaries inside that contained execution.
@@ -143,6 +198,10 @@ setuid binaries inside that contained execution.
   otherwise change session/group. A contained child and all its descendants
   remain subject to the filesystem access rules.
 - seccomp filter policy **follows descendants** in the same way.
+- On Landlock ABI >= 6, signal and abstract UNIX socket scoping follow the
+  contained command's domain and its descendants. The command cannot signal
+  AVA or other processes, or connect to abstract sockets, outside that domain.
+  See [`landlock.cpp`](../../src/ava/containment/landlock.cpp).
 - Process-group teardown uses `SIGTERM` → grace period → `SIGKILL` on the
   verified PGID (process group ID), with an AVA-owned sentinel preserving
   the PGID from recycling between leader completion and descendant cleanup.
@@ -155,6 +214,15 @@ setuid binaries inside that contained execution.
 
 ### What is NOT claimed
 
+- **No per-file secret filtering inside allowed roots.** File-tool secret-path
+  denies do not mediate reads made directly by a contained child.
+- **No signal/abstract-socket scoping below ABI 6.** On older supported ABIs,
+  contained code can signal same-UID processes outside its process group,
+  including AVA, subject to ordinary OS permission checks. The seccomp socket
+  restrictions still apply.
+- **No `.git` write protection.** The writable workspace rule includes an
+  in-workspace `.git` directory. Contained code can plant hooks or configuration
+  that affect later Git invocations, including ones run outside containment.
 - **No cgroup containment claim.** AVA does not use cgroups to restrict
   resource usage (CPU, memory, PID namespace, etc.) of contained commands.
   Process cleanup is PGID-only; descendants that call `setsid` to escape the
@@ -165,20 +233,22 @@ setuid binaries inside that contained execution.
   same mount table and PID space as the parent.
 - **External OS sandboxing is required** for full containment of descendants
   that call `setsid` and then attempt to create new process trees that might
-  outlive the AVA session. Landlock and seccomp prevent filesystem and network
-  escapes, but they cannot prevent resource exhaustion or fork bombs.
+  outlive the AVA session. Landlock and seccomp continue enforcing the granted
+  filesystem/socket policy, with the limitations above; they do not prevent
+  resource exhaustion or fork bombs.
 
 ## Fail-Closed Semantics
 
 - If the Landlock ABI is below the required version, containment is reported
   as Unavailable and standard mutable commands downgrade to Critical Ask.
-- If seccomp is not supported or the required action is unavailable,
-  containment is reported as Unavailable.
+- If the parent `SECCOMP_GET_ACTION_AVAIL` probe fails for any reason,
+  containment is reported as Unavailable and the command requires Critical,
+  one-shot Ask.
 - If the child fails to install Landlock or seccomp rules before exec, the
   parent terminates the verified group and returns an actionable error.
   User code does not start. Commands are never auto-run if child install fails.
 - If any allow root fails validation (not owner-only for synthetic, unsafe
-  shared-group/world writable workspace, symlink, or identity mismatch),
+  shared-group/world writable workspace, anchor escape, or identity mismatch),
   containment is reported as Unavailable.
 
 ## Truthful Status

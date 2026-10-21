@@ -62,12 +62,16 @@ routing, commands/catalogs, trust/onboarding/auth connection, TUI integration,
 print mode, and protocol adapters.
 
 **Key entry points:** `app.cpp`, `runtime.h`, `runtime/Session.h`,
-`runtime/OpenOptions.h`, `runtime/RunOptions.h`, `session_run_controller.h`,
+[`runtime/OpenContext.h`](../../src/ava/app/runtime/OpenContext.h) for stable open
+inputs and [`runtime/SessionLifecycleRequest.h`](../../src/ava/app/runtime/SessionLifecycleRequest.h)
+for one-shot selectors, `runtime/RunOptions.h`, `session_run_controller.h`,
 `commands.h`, `command_registry.h`, `print_mode.h`, `rpc_mode.h`, `acp_mode.h`,
-`interactive_tui.cpp`, and `interactive.h`. Protocol implementations live under
-`app/rpc/` and `app/acp/`. `Application.h` currently constructs the
-application-scoped memory page pool and node resource, but no production
-allocation path uses that pool yet.
+`tui/interactive_tui.cpp`, and `interactive.h`. Protocol implementations live under
+`app/rpc/` and `app/acp/`. `app::Application` derives from `core::Application`,
+which owns the application-scoped memory page pool and its `VectorAllocator<char>`.
+`app/frontend/FrontEnd.h` uses that allocator for registered frontend data, and
+`tui/terminal/GraphemeSurface.h` uses its rebound allocator for terminal surface
+vectors; these are production consumers, not a performance claim.
 
 **Belongs here:** composition and lifecycle policy involving several lower
 modules; translation between shared runtime behavior and a frontend contract.
@@ -324,6 +328,37 @@ agent registration, bypassing permissions, or generic MCP behavior.
 `cli_headless_rpc_plugin_commands.cmake`, and
 `cli_headless_rpc_sample_plugin.cmake`.
 
+### `process/`
+
+**Owns:** the Supervisor lifecycle authority for migrated child-process families:
+role reservations, exact launch environments, scoped owner identities, opaque
+process/pipe handles, readiness, deadlines, settlement, and managed-group cleanup.
+`CMakeLists.txt` builds `ava_process` / `AVA::process`, linked down to `AVA::core`.
+
+**Key entry points:** `supervisor.h`, `scope.h`, `owner.h`, `types.h`,
+`environment.h`, and `execution_capability.h`. `ProcessScopeV1` derives session,
+run, and operation authority; `PreopenedExecutableV1` and
+`AnchoredWorkingDirectoryV1` retain descriptor-backed executable/cwd capabilities.
+
+**Belongs here:** reusable process lifecycle mechanisms. `src/main.cpp` creates
+one Supervisor/application scope, injects it into `app::run`, stops admission
+after the frontend returns, and shuts down against one shared two-second deadline.
+Curl, Plugin, clipboard helpers, and MCP use this authority; Bash, LSP, Mermaid,
+external editor, and browser launching remain legacy-local.
+
+**Does not belong here:** command approval or containment policy, plugin/MCP/LSP
+wire protocols, or frontend behavior. Migrated callers must not add a second
+signal/wait/reap authority beside the Supervisor.
+
+**Nearest tests:** `process_supervisor_tests.cpp`,
+`process_supervisor_posix_tests.cpp`, `process_environment_tests.cpp`,
+`process_capability_posix_tests.cpp`, `process_monitor_tests.cpp`,
+`process_deadline_tests.cpp`, `process_readiness_tests.cpp`,
+`process_launch_protocol_posix_tests.cpp`, and `process_adoption_posix_tests.cpp`;
+migrated integrations have `curl_transport_process_tests.cpp`,
+`plugin_runner_process_tests.cpp`, `clipboard_image_process_tests.cpp`, and
+`mcp_tests.cpp`.
+
 ### `provider/`
 
 **Owns:** provider-neutral request/content/stream types; OpenAI, Anthropic,
@@ -381,6 +416,9 @@ mutation-queue mechanics plus shared `ToolContext` and tool-permission helpers.
 supplied, with bounds, descriptors, cancellation, cleanup, and audit facts.
 File-tool mutation protection uses an explicit path-only permission-store
 identity on `ToolContext`, independent of MCP/plugin extension discovery.
+Model-facing reads outside the workspace require the session's shared
+`AnchorSet` in `ToolContext::anchor_set`; custom embeddings that omit it get a
+fail-closed setup error rather than a synthesized fallback anchor set.
 
 **Does not belong here:** model-visible schemas and loop orchestration,
 frontend approval UI, or provider behavior.
@@ -411,12 +449,13 @@ policy, protocol wire contracts, or business state that another frontend needs.
 
 #### `tui/terminal/`
 
-**Owns:** the lower ncurses terminal abstraction: `Session`, `Window`, cells,
+**Owns:** the lower ncurses terminal abstraction: `Context`, `Window`, cells,
 grapheme clusters, attributes/colors/borders, dimensions/positions, and terminal
-lifecycle primitives.
+lifecycle primitives. `core::Application` owns the Context, initializes it before
+terminal access, and retains it for application-owned terminal restoration.
 
-**Key entry points:** `Session.h`, `Window.h`, `GraphemeCluster.h`, and the small
-value-type headers in the directory.
+**Key entry points:** `Context.h`, `Context.cxx`, `Window.h`, `GraphemeCluster.h`,
+and the small value-type headers in the directory.
 
 **Belongs here:** terminal/cell mechanisms reusable by the AVA TUI without app
 semantics.

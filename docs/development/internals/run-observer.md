@@ -15,12 +15,15 @@ M1 emits these non-authoritative boundaries:
 
 ## Safety and defaults
 
-- No observer is constructed by default: no trace file is created and normal runtime/session/RPC output is unchanged. An AgentLoop clears its SessionStore observation at every exit, including disabled and failed runs.
+- No observer is constructed by default: no trace file is created and normal runtime/session/RPC output is unchanged. An enabled AgentLoop cleans up only its own successfully installed SessionStore observation generation on scope exit. Disabled runs, early failures before trace-scope creation, and failed attachments leave an existing attachment alone; cleanup from an older run cannot erase a newer attachment.
 - `RunObservation::emit(...) noexcept` is the only production emission entrypoint. Its lambda covers event construction, clock/ID enrichment, serialization at the writer, and callback delivery; every exception is accounted without changing the observed result. Scope destructors are explicitly `noexcept`.
 - `JsonlRunObserver` remains deterministic synchronous JSONL for tests. `QueuedJsonlRunObserver` is the production writer: it enqueues only already-bounded serialized records in bounded item and byte queues, using a brief normal mutex only for deque bookkeeping (writer I/O is outside that mutex). `queue_dropped` counts only records rejected after closing or at configured item/byte capacity—never producer mutex contention; `queue_failures` and queue high-water counters remain separately accounted. It owns and joins a `jthread`, drains accepted records on normal close, and safely closes with concurrent producers. A regular-file write already in progress is OS-uninterruptible, so close can wait for that one operation but never detaches a thread.
-- Trace paths are walked descriptor-relatively from a stable root using `mkdirat`/`openat` and `O_NOFOLLOW`. Only newly-created directories are chmodded. The retained final fd is opened `O_NONBLOCK`, verified as a private effective-user-owned regular single-link file with no group/other bits, lifetime-locked nonblockingly, and receives each JSONL line plus newline in one write operation. FIFOs, devices, hardlinks, symlinks, and competing writers fail closed.
+- Trace paths are walked descriptor-relatively from a stable root using `mkdirat`/`openat` and `O_NOFOLLOW`. Only newly-created directories are chmodded. The retained final fd is opened `O_NONBLOCK`, verified as a private effective-user-owned regular single-link file with no group/other bits, and lifetime-locked nonblockingly. Writes retry `EINTR` and short writes until the JSONL line and newline are complete. A fatal write attempts rollback to the record boundary and closes the writer; later records are dropped. Byte accounting includes partial bytes subsequently rolled back. FIFOs, devices, hardlinks, symlinks, and competing writers fail closed.
 - Field provenance controls redaction. Secret, authorization-header, and environment values are replaced; prompt/tool/request/output content and paths are omitted. Provenance is primary, with a small exact canonical-key credential allowlist as defense in depth for accidentally public Authorization/API-key/token/secret and recognized credential-environment fields; it is not broad regex redaction. Public metadata is otherwise individually bounded. Duplicate serialized field keys are deterministically omitted rather than producing ambiguous JSON.
 - Q21 default applies: traces stay on the local machine; M1 implements no exporter or egress. Q20 default applies: no paid/live provider run is enabled or required.
+- Production `RuntimeDiagnostics` aggregates consecutive provider stream deltas per segment into `delta_count`/`text_bytes` summaries. At most 1,000 of the 10,000 records are summaries; summary-budget refusals increment `writer_health.delta_summaries_refused`, not `events_dropped`. Lifecycle events retain the remaining record capacity, subject to byte/queue limits. MCP/plugin attribution releases completed call identities rather than exhausting a lifetime 20,000-call budget.
+- `validate_and_score_trace` uses saturating loss accounting. Accounted losses mark `incomplete_coverage`; missing start, terminal, or required fixture boundaries that loss could explain appear in `coverage_gaps`, not `errors`. Proven ordering, duplication, and invalid-outcome violations remain errors. `valid` means no proven violation, not complete coverage.
+- Diagnostic shutdown drains and joins the writer even when summary/counter allocation fails; repeated close is idempotent and cannot change the runtime result.
 
 ## Disabled fast-path timing (non-gating)
 
@@ -28,4 +31,13 @@ The deterministic unit test proves a disabled `emit` does not call its enricher,
 
 To reproduce the method without making it a test gate, compile a small `RunObservation{}` loop with `-O2`, run 10,000,000 `emit(AgentRunStart,{})` calls, and report `steady_clock` elapsed nanoseconds divided by the iteration count. The fixture records the exact local command and result.
 
-To enable locally, construct a `JsonlRunObserver`, wrap it in `RunObservation`, and pass that optional value to the owning `AgentLoopOptions` (or direct test boundary). Production configuration intentionally has no automatic trace path in M1.
+Enable production tracing with `ava --trace` in TUI, print, RPC, or ACP mode.
+CLI dispatch passes the request to `RuntimeDiagnostics`; once shared storage
+anchors are bound, it creates a private trace artifact and a sanitizing production
+observer backed by `QueuedJsonlRunObserver`. See the canonical
+[private runtime trace guide](../../operations/diagnostics.md#private-runtime-trace)
+for artifact location, bounds, redaction, and shutdown counters.
+
+Directly constructing `JsonlRunObserver`, wrapping it in `RunObservation`, and
+injecting it through `AgentLoopOptions` remains the deterministic test/custom
+embedding seam, not the only activation path.

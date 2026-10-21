@@ -36,9 +36,9 @@ Required for the MVP, as implemented and verified for the 1.0 release:
 
 Explicitly post-MVP or current-develop follow-up work still on the product roadmap:
 
-- Landed after the original 1.0 cut-line in current backend/RPC: persistent permission rules, session tree/fork/clone/labels/names/caller-supplied branch-summary APIs, full LSP symbols/definitions/references with bounded on-disk sync and one exact-global-opt-in installed-only `clangd` recipe, backend multimodal/image attachment replay/storage/provider serialization, configurable `task` subagents, the runtime-owned background job registry, and base prompt metadata.
+- Landed after the original 1.0 cut-line in current backend/RPC: persistent permission rules, session tree/fork/clone/labels/names/caller-supplied branch-summary APIs, full LSP symbols/definitions/references with bounded on-disk sync and one exact-global-opt-in installed-only `clangd` recipe, backend multimodal/image attachment replay/storage/provider serialization, configurable `task` subagents, the runtime-owned background job registry, base prompt metadata, and global `providers.json` startup-time custom providers for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
 - 1.1 candidates that remain active: unified settings and reload diagnostics, broader live-provider smoke automation, plugin core-service proxy expansion, frontend/TUI consumption of existing session-tree contracts, unsaved-buffer LSP sync, and attachment UX beyond the implemented RPC path/inline-upload input. The installed-only `clangd` integration remains the sole automatic LSP recipe; every other server requires explicit configuration. Provider-generated branch summaries and Anthropic interactive OAuth are deferred unless their product/API prerequisites become concrete; AVA keeps caller-supplied branch summaries, provider-generated compaction summaries, and API-key plus stored/env OAuth bearer support.
-- 1.2+ candidates: HTTP/server daemon mode, plugin marketplace/package manager/remote install, extension UI bridge, advanced MCP HTTP/OAuth/subscriptions/sampling/elicitation/pagination/resources, public/default parallel ordinary tool execution beyond the current internal read/search opt-in, OS-level plugin/shell sandboxing, dynamic custom-provider registration, and broader chained multi-agent orchestration beyond the native `task` slice.
+- 1.2+ candidates: HTTP/server daemon mode, plugin marketplace/package manager/remote install, extension UI bridge, advanced MCP HTTP/OAuth/subscriptions/sampling/elicitation/pagination/resources, default-on or interactive/ACP parallel execution and broader tool eligibility beyond the shipped print/RPC read/search opt-in, broader OS/container isolation for plugins and unrestricted shell, plugin-defined providers/additional protocol families/hot runtime re-registration beyond the shipped startup-time catalog, and broader chained multi-agent orchestration beyond the native `task` slice.
 - Later research: in-process native plugin ABI only if AVA accepts the crash/memory/C++ ABI support burden.
 
 The current backend-only 1.1 candidate product list lives in `docs/plans/capabilities-1.1.md`.
@@ -67,16 +67,18 @@ The local reference material lives under `docs/reference-code/`. The most releva
 AVA's backend is a version `1.0.0` local coding-agent backend baseline, not a toy prototype. The implemented foundation includes:
 
 - CLI/runtime orchestration in `src/ava/app/`, including TUI, print, and JSONL RPC entry points.
-- OpenAI auth, model config, prompt config, provider profiles, and curl transport.
+- OpenAI auth, model config, prompt config, provider profiles, curl transport, and an application-scoped custom-provider catalog loaded from global `providers.json` at startup (`src/ava/provider/catalog.cpp`).
 - OpenAI Responses, Anthropic Messages, Gemini GenerateContent, DeepSeek/Kimi/Moonshot-compatible, and OpenRouter-compatible provider paths in `src/ava/provider/`.
-- Sequential-by-default agent loop plus configurable task subagents, background job registry, and a backend-only default-off read/search parallel opt-in in `src/ava/agent/`.
+- Sequential-by-default agent loop plus configurable task subagents, background job registry, and a public default-off read/search parallel opt-in for print/RPC: `--parallel-read-search-tools` with optional `--parallel-read-search-max-workers N` (1..4). Only preflight-proven non-interactive builtin `read_file`, `list_directory`, `glob`, and `grep` calls are eligible; see `docs/plans/parallel-tools-plan.md`.
 - Built-in tools for read, write, edit, glob, grep, bash, apply_patch, question, skill, task, webfetch, websearch, and capability-gated LSP diagnostics.
 - Build/plan permission policy, session grants, and permission audit entries in `src/ava/permissions/` and session records.
 - Append-only JSONL sessions, resume/list/export/stats/validation, usage/cost accounting, model/reasoning entries, and compaction entries in `src/ava/session/`.
 - Project/global `AGENTS.md`, prompt command, skill, and subagent loading in `src/ava/context/`, `src/ava/agent/`, and the unified command registry.
 - Out-of-process plugin and stdio MCP foundations with bounded protocols, enablement, diagnostics, permission/audit identity, and sample/fake-server coverage.
 
-The remaining gap is post-1.0 breadth and product depth: richer permission-rule UX/diagnostics, session tree workflow polish over the implemented backend/RPC fork/clone/tree/caller-supplied summary contracts, unified settings/reload, unsaved-buffer LSP sync and separately approved recipes beyond `clangd`, RPC upload/input flows for multimodal attachments, plugin core-service proxy expansion, advanced MCP, plugin marketplace flows, HTTP/server daemon mode, broader live-provider smoke automation, public/default parallel ordinary tool execution beyond the current internal read/search opt-in, and multi-agent orchestration beyond the native `task` subagent/background-job slice.
+The remaining gap is post-1.0 breadth and product depth: richer permission-rule UX/diagnostics, session tree workflow polish over the implemented backend/RPC fork/clone/tree/caller-supplied summary contracts, unified settings/reload, unsaved-buffer LSP sync and separately approved recipes beyond `clangd`, attachment UX beyond the implemented RPC local-path/inline-base64 image input, plugin core-service proxy expansion, advanced MCP, plugin marketplace flows, HTTP/server daemon mode, broader live-provider smoke automation, default-on or interactive/ACP parallel execution and broader tool eligibility beyond the shipped print/RPC read/search opt-in, and multi-agent orchestration beyond the native `task` subagent/background-job slice.
+
+Current mutation-safety limitation: per-path locks coordinate only callers sharing a `MutationQueue`. `ToolDispatcher` creates its own queue when none is supplied, and parent/child agent dispatchers do not receive a common workspace queue (`src/ava/agent/tool_dispatcher.cpp`, `agent_turn_executor.cpp`, and `agent_turn_subagents.cpp`). Cross-dispatcher workspace serialization remains open; historical Phase 4 closure below is not a runtime/session-wide guarantee.
 
 ## Milestone Audit Summary
 
@@ -106,14 +108,14 @@ Missing or incomplete:
 - Interactive frontend consumption of the shared event stream is Carlo-owned; the backend event stream is implemented and replayable.
 - Broader reasoning presentation polish beyond the provider-neutral reasoning lifecycle events already emitted for supported models.
 - Deeper cancellation interruption inside buffered/non-streaming provider calls and individual long-running tools beyond the current cooperative boundaries.
-- Public parallel tool execution controls beyond the current internal read/search opt-in, if the tool and permission model can safely support them.
+- Default-on or interactive/ACP parallel execution and broader tool eligibility beyond the shipped public print/RPC read/search opt-in, subject to separate tool and permission-model review.
 
 1.0 target:
 
 - Every run emits structured lifecycle events.
 - TUI and RPC consume the same event stream.
 - Cancellation is observed promptly at tool and shell boundaries and at safe provider boundaries. Direct interruption of in-flight provider transport calls remains a hardening item unless the transport boundary can support it safely.
-- Tool execution remains sequential by default. Explicit public parallel eligibility is later work; current develop has only an internal read/search opt-in for preflight-proven builtin calls.
+- Tool execution remains sequential by default. Current develop exposes a public print/RPC opt-in only for preflight-proven non-interactive builtin read/search calls; default-on, interactive/ACP exposure, and broader eligibility remain deferred.
 
 ### Providers And Auth
 
@@ -165,7 +167,7 @@ Missing or incomplete:
 - UI-mediated patch preview/approval flow beyond provider-visible bounded unified diffs.
 - Search parity for unsupported `.gitignore` edge syntax such as bracket character classes; current native matcher documents its subset.
 - Broader process-tree cleanup proofs beyond the current bash timeout, plugin, MCP, and LSP process-group coverage.
-- RPC/headless upload plumbing for image attachments; backend replay/storage/provider serialization for existing AVA-managed image attachments is implemented.
+- Broader attachment UX and additional attachment types beyond image input; RPC local-path `attachments` and inline/base64 `images` are already parsed, imported into AVA-managed storage, and passed to prompt execution (`src/ava/app/rpc/protocol.cpp`, `src/ava/app/rpc_mode.cpp`, and `src/ava/app/rpc/prompt_worker.cpp`).
 - LSP pull/publish diagnostics, document/workspace symbols, definitions, references, bounded full-text on-disk sync, explicit `lsp.json`, and one global exact-opt-in installed-only identity-bound `clangd` recipe are implemented. The installed-only `clangd` integration is the sole automatic LSP recipe; every other server requires explicit configuration. Remaining LSP maturity work is unsaved-buffer sync and UI/RPC presentation polish.
 - Delete/move tools, only after audit and permissions are stronger.
 
@@ -362,7 +364,7 @@ Scope:
 
 - Improve `edit_file` and `apply_patch` with unified diff previews, line-ending preservation, BOM handling, Unicode-normalization awareness, fuzzy fallback, and clearer failure messages.
 - Add multi-edit support to `edit_file` if it remains distinct from `apply_patch`, with overlap detection and per-edit diagnostics.
-- Add per-path mutation serialization for writes/edits/patches.
+- Per-path mutation serialization for writes/edits/patches is implemented only for callers sharing a queue; wiring common ownership across independent workspace dispatchers remains open.
 - Respect `.gitignore` by default, prune ignored directories before traversal, and support an explicit `no_ignore` option for search tools.
 - Decide whether search is backed by `rg`, libgit2 ignore parsing, or a small internal ignore matcher, then document the portability tradeoff.
 - Add tool output spill files for truncated shell/search output.
@@ -378,7 +380,7 @@ Acceptance criteria:
 - Search results match developer expectations in common repositories.
 - Web and LSP tools are permissioned, bounded, and covered by tests.
 - Truncated shell/search output points to bounded spill files when full output is useful.
-- Concurrent mutations to the same path are serialized or rejected deterministically.
+- Concurrent mutations to the same path must be serialized or rejected deterministically. This is currently guaranteed only within a shared `MutationQueue`; the cross-dispatcher parent/child workspace criterion remains open.
 - Tool metadata is centralized enough for Phase 6 plugin and MCP tools to reuse the same registry shape.
 
 ### Phase 5: Provider And Model Breadth

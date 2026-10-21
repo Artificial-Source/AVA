@@ -14,7 +14,7 @@ The relevant current surface is:
 - `src/ava/agent/tool_scheduler.{h,cpp}`: builds provider-ordered schedule slots, splits read/search epochs from barriers/deferred calls, runs eligible epochs with bounded `std::jthread` workers, propagates `std::stop_token` cancellation, and returns provider-ordered outcomes.
 - `src/ava/agent/tool_dispatcher.{h,cpp}`: dispatches one `ProviderToolCall` through built-in, plugin, and MCP registry paths; the AgentLoop integration uses copied worker contexts and buffered callbacks for preflight-proven read/search calls.
 - `src/ava/tools/file_tools.cpp` and search helpers: implement the currently eligible builtin read/search tools with bounded output and permission checks.
-- `src/ava/tools/mutation_queue.*`: still serializes mutation tools; mutation tools remain barriers and are not parallelized.
+- `src/ava/tools/mutation_queue.*`: serializes mutation tools sharing the same queue; mutation tools remain barriers and are not parallelized.
 - `src/ava/agent/message_builder.cpp` and `src/ava/session/validation.cpp`: replay still expects provider-order tool call/result pairing, so the internal opt-in commits completed outcomes in that order.
 - `src/ava/agent/background_job_registry.*`: owns the already-shipped `task background=true` subagent path, which remains separate from ordinary tool parallelism.
 
@@ -66,13 +66,13 @@ This preserves the user's mental model: the first prompt shown corresponds to th
 
 ## Mutation queue
 
-The existing mutation queue remains required and shared by the runtime/session, not created per worker.
+The mutation queue coordinates only callers sharing the same `MutationQueue` instance. `ToolDispatcher` creates a fresh queue when its context does not supply one (`src/ava/agent/tool_dispatcher.cpp`); current parent/child agent setup does not inject a common workspace queue (`src/ava/agent/agent_turn_executor.cpp` and `src/ava/agent/agent_turn_subagents.cpp`). Runtime/session-wide cross-dispatcher serialization remains an open ownership gap, not a shipped guarantee. The read/search scheduler does not create per-worker mutation queues or make mutation tools parallel-eligible.
 
 Rules for mutation-capable tools:
 
 - Mutation tools are barriers for the current implementation.
-- Same-path mutations continue through `MutationQueue::lock_path`.
-- Multi-path mutations continue through `MutationQueue::lock_paths`, with paths sorted/deduplicated to avoid deadlock.
+- Same-path mutations sharing a queue continue through `MutationQueue::lock_path`.
+- Multi-path mutations sharing a queue continue through `MutationQueue::lock_paths`, with paths sorted/deduplicated to avoid deadlock.
 - If future non-overlapping mutations are allowed in the same epoch, each call must declare its complete affected path set before execution. Unknown or data-dependent path sets fall back to barrier execution.
 - Reads/searches after any mutation barrier start only after the barrier commits or fails, preserving current sequential visibility.
 

@@ -9,6 +9,8 @@ AVA session JSONL is **not Pi-compatible**. AVA accepts some Pi-compatible CLI/R
 - Persistent sessions are stored under AVA's session root, which defaults to `$XDG_STATE_HOME/ava/sessions` or `~/.local/state/ava/sessions` when `XDG_STATE_HOME` is unset. `--session-dir <dir>` overrides the root for the current process.
 - Session files are grouped by a stable hash of the absolute, normalized workspace path: `<session-root>/<workspace-key>/<session_id>.jsonl`.
 - Session directories are owner-only and session files are owner read/write. AVA rejects session files that are symlinks or not regular files.
+- Persistent appends complete `fdatasync` before AVA reports them committed. A failed data sync is reported as an uncertain append outcome, not a committed entry.
+- New session creation syncs the file with `fdatasync` and its immediate parent directory with `fsync` before succeeding. AVA also syncs newly created ancestor directories; those ancestor barriers are best effort when unsupported by the filesystem or inaccessible.
 - `--no-session` uses an ephemeral in-memory session store. Runtime entries can still be used by in-process commands, but no resumable JSONL file is written and temporary attachment/spill storage may disappear when the process exits.
 - Image bytes live outside the JSONL file under a sibling attachment directory, `<session-root>/<workspace-key>/<session_id>.attachments/...`. See [Attachment caveats](#attachment-caveats).
 
@@ -63,7 +65,7 @@ Current AVA entry type strings are:
 | `assistant_output_item` | Private physical v4 staging record for one ordered assistant output item. |
 | `assistant_turn_commit` | Private physical v4 terminal record that makes a staged assistant turn visible. |
 | `compaction` | Context compaction boundary and summary. |
-| `branch_summary` | Caller-supplied summary of a source session range. |
+| `branch_summary` | Caller-supplied or provider-generated summary of a source session range. |
 | `error` | Runtime/provider/tool error record. |
 | `cancel` | Cooperative cancellation marker. |
 
@@ -88,6 +90,7 @@ Current writers store small session/model metadata such as:
 - `user_message.data.text` contains user text.
 - `user_message.data.attachments[]` may contain image metadata only. Attachments are user-message-only.
 - Internal replay user messages may include `internal_replay:true`, `replay_of`, and `reason`; they are hidden from normal exports/RPC transcript reads.
+- Synthetic subagent deliveries may include backend-owned `user_message.data.provenance`. It is a closed object with exactly three required string fields: `source:"synthetic_subagent_delivery"`, `delivery_id`, and `prompt_fingerprint`. Each identifier is non-empty, at most 96 bytes, and uses only `[A-Za-z0-9_.:-]`. AVA writes this marker explicitly; it is not inferred from user text or unrestricted additive metadata. Malformed provenance and provenance on assistant messages are rejected.
 - `assistant_message.data.text` contains final assistant text. Current writers also include `tool_calls` and a `usage` object when usage/cost data is known or estimated.
 
 ### Ordered assistant output transaction (v4)
@@ -102,11 +105,13 @@ Each item is version `4` and has strict `data.schema_version:1`, a bounded `assi
 
 Optional `provider_item_id` and `provider_output_index` identify native provider output; an index is also in `0..4095`. Integer spellings are strict (for example, `00` is rejected). Unknown, duplicate, and variant-incompatible fields are rejected. During OpenAI Responses replay, a text item with a valid provider item id remains a native message when its phase is `unknown`; AVA omits `phase` rather than collapsing it into an ordinary role message. OpenAI message ids at most 64 bytes are preserved exactly; longer valid opaque ids use a deterministic bounded compatibility id derived only from the opaque id, never message content.
 
-A contiguous item group becomes visible only when its immediately following `assistant_turn_commit` has the same `assistant_turn_id`, dense sequences, matching `item_count`, and strict `schema_version:1`. The commit is the sole owner of `provider`, `model`, `finish_reason`, and the optional established `usage`/cost object; current writers also add `api_family` and `reasoning_format` when known. Item records do not carry response usage or model/provider metadata. A zero-item response is one commit with `item_count:0`.
+A contiguous item group becomes visible only when its immediately following `assistant_turn_commit` has the same `assistant_turn_id`, dense sequences, matching `item_count`, and strict `schema_version:1`. The commit is the sole owner of `provider`, `model`, `finish_reason`, and the optional established `usage`/cost object. Current writers also add `api_family` and `reasoning_format` when the model options state them; for Gemini, missing values are recorded as `gemini_generate_content` and `gemini` so thought signatures can replay natively. Item records do not carry response usage or model/provider metadata. A zero-item response is one commit with `item_count:0`.
 
 Provider request history is a request-owned projection. Native reasoning, provider item identities, assistant phases, and source tool ids survive only when provider, model, API family, reasoning format (when reasoning exists), tool support, and bindings are proven exact-compatible with the request target. Missing, incomplete, unknown, or contradictory target/source provenance forces portable projection: visible user and assistant answer text remains, reasoning and provider-private metadata are dropped, complete tool pairs receive deterministic request-local ids or bounded labelled text, and incompatible historical images become MIME-and-size-only placeholders. Projection never mutates the persisted session.
 
 A final uncommitted item group is an incomplete-turn **warning** and is ignored by the shared logical projection, replay, stats, compaction, Markdown/HTML/JSONL export, transcript, and RPC public history. Opening/resuming a persistent session is the explicit recovery boundary: after torn-tail repair, AVA holds the exact active lease, quarantines the raw complete-line staged suffix in a unique owner-only sibling, syncs, and truncates only that proven suffix. Ephemeral recovery removes only the same proven in-memory tail. No recovery removes a committed turn, an interior group, malformed v4 records, or unrelated entries; those fail closed unchanged. A staged group followed by an unrelated record, an invalid item/commit, duplicate identity, sparse sequence, or bad count is malformed and is a validation error. Import rejects an incomplete final group with recovery guidance. Fork/clone prefixes are classified before copying and reject any v4 diagnostic, so a target cannot end inside a staged or committed group; an explicit earlier target before a later staged suffix remains valid.
+
+Torn-tail and incomplete-assistant-output recovery can publish their exact-descriptor quarantine without `CAP_DAC_READ_SEARCH`: if descriptor linking with `AT_EMPTY_PATH` is unavailable to the user, AVA falls back to `/proc/self/fd`. That fallback requires accessible procfs descriptor links.
 
 Mixed v0–v3/v4 histories are supported. Stats project a valid committed v4 turn as one logical `assistant_message`, plus one logical `reasoning_block` per reasoning item and one logical `tool_call` per function item; usage, cost, and timestamp are read once from its commit. Uncommitted staging is excluded.
 
@@ -137,6 +142,7 @@ Validation checks that policy `allow`/`deny` entries resolve consistently, that 
 
 - `reasoning_block.data` includes `provider`, `model`, `format`, `redacted`, and at least one of `text`, `signature`, or `redacted_data`.
 - OpenAI Responses native replay metadata, when explicitly present on a current-version `openai_responses` block, is a bounded strict JSON object with `type:"reasoning"`, a non-empty opaque `id`, and a present array-valued `summary` (which may be empty). Unknown additive provider fields are retained only in the private session record.
+- Gemini `thought:true` parts are reasoning rather than assistant answer text. Their opaque `thoughtSignature` values are retained only in private native replay metadata and restored on matching parts for exact-compatible history, never in public events or exports. The metadata envelope is capped at 64 KiB and 1,024 parts; overflow drops the entire envelope while preserving the successful response and ordinary output, with unsigned follow-up replay.
 - RPC `get_messages` sanitizes reasoning blocks: non-redacted text may be returned, but raw provider signatures and opaque redacted-thinking payloads are replaced with safe fields such as `signature_present` and `redacted`.
 - `reasoning_change.data` includes `provider`, `model`, `enabled`, `format`, and when enabled a `level`; it may include `budget_tokens` and `display` where the selected model supports those controls.
 - Validation checks reasoning entries against the active provider/model boundary established by `session_start` and `model_change`. Legacy malformed optional native OpenAI metadata may fall back to readable synthetic history; current-version explicitly-present malformed metadata is rejected.
@@ -189,19 +195,21 @@ Forks and clones copy source entries into a new session and append `session_meta
 - `reason`: provenance string, at most 1024 bytes.
 - `actor`: optional string, at most 64 bytes.
 
-Branch summaries are caller-supplied in the current MVP. Provider-generated branch summaries are deferred; provider-generated compaction summaries are a separate `compaction` behavior.
+Branch summaries may be caller-supplied, including through RPC `summarize_branch`, or provider-generated by the confirmed TUI abandoned-parent summary workflow. That workflow records the selected `provider`/`model`, `reason:"abandoned_parent"`, and `actor:"tui"`. Provider-generated compaction summaries remain a separate `compaction` behavior.
 
 ## Attachment Caveats
 
 Persisted image attachments are metadata references, not inline uploads:
 
 - Only `user_message.data.attachments[]` supports attachments.
-- Each attachment object may contain `id`, `type:"image"`, `mime_type`, `byte_size`, `sha256`, `storage_path`, and optional `redacted`.
+- Each attachment object requires `id`, `type:"image"`, `mime_type`, `byte_size`, `sha256`, and `storage_path`; only boolean `redacted` is optional. Unknown fields and duplicate keys are rejected.
+- `id` must be non-empty, at most 128 bytes, and contain no control bytes.
 - Supported MIME types are `image/png`, `image/jpeg`, `image/webp`, and `image/gif`.
 - `byte_size` must be an integer from 1 through 20 MiB, and `sha256` must be a 64-character hex digest.
-- `storage_path` must be a relative `attachments/...` path without absolute roots, `..`, empty segments, backslashes, drive prefixes, or control bytes.
+- `storage_path` must be a relative `attachments/...` path at most 4,096 bytes, without absolute roots, `.`/`..`, empty segments, backslashes, colons (including drive prefixes), or control bytes.
 - AVA imports local RPC `attachments` paths and inline RPC `images` uploads into the session attachment store before writing message metadata. Raw base64 image data is invalid in persisted session JSONL.
 - Replay loads bytes only from the active session's attachment directory and verifies path containment, symlinks, byte size, and SHA-256 before sending image content to providers.
+- Image import and replay inspect size/type and read bytes through one no-follow, non-blocking file descriptor. Replay resolves paths beneath a held attachment-root descriptor and rejects final-component or escaping symlinks. On Linux, `openat2(RESOLVE_BENEATH)` permits contained intermediate relative symlinks; the fallback component walk rejects intermediate symlinks too. FIFOs are rejected without blocking, and replay size and SHA-256 checks apply to the opened snapshot.
 - Portable JSONL export does not bundle attachment bytes. It converts every exported image attachment to the accepted `redacted:true` metadata form, preserves safe audit fields such as id/MIME/size/digest, and replaces the source storage reference with a deterministic portable placeholder. The export therefore re-imports without attachment bytes, but it cannot replay the original image content.
 - Branch/fork/clone code copies non-redacted image attachment bytes for copied entries. Slash `/import <path.jsonl>` accepts portable redacted attachment metadata without reconstructing attachment bytes; directly imported non-redacted attachment references still require an attachment-aware archive because image replay would otherwise be dangling.
 
@@ -212,8 +220,9 @@ Provider replay also has request-level caps, including at most 16 images and agg
 - `/export` writes a Markdown transcript by default.
 - `/export html [path]` writes or returns an HTML rendering.
 - `/export jsonl [path]` or `/export raw [path]` emits a portable sanitized AVA JSONL archive for v0–v4 histories. It preserves every committed v4 `assistant_output_item` and `assistant_turn_commit` in exact order plus exact `assistant_output_entry_id` tool-result bindings, while stripping provider item IDs/output indexes and all native reasoning/signature/redacted payload values. Portable v4 reasoning sets `private_replay_metadata_omitted:true`; request-time replay drops that reasoning item entirely. Text phase/order, functions, commit provider/model/finish/usage, replay-valid parent chains, and redacted attachment metadata remain. The result is validated before return and is importable, but intentionally cannot losslessly replay provider-native data.
-- RPC `export` and `export_html` return Markdown/HTML command output. Dedicated RPC portable JSONL export/import/share commands are deferred; use slash/TUI `/export jsonl` for a portable archive.
-- `/import <path.jsonl> --confirm` is slash/TUI only for the current MVP. It opens one local regular non-symlink descriptor with nonblocking final-component checks, then reads only that descriptor. Imports are capped at 8 MiB per file, less than 1 MiB per JSONL record, and 16,384 entries before replay validation; confirmed valid imports create and switch to a new session.
+- RPC `export` and `export_html` return Markdown/HTML command output. Dedicated RPC portable JSONL export/import/share command types are deferred, but generic `invoke_command` can dispatch slash `/export jsonl` (for example, `name:"export", command_arguments:"jsonl"`).
+- `/import <path.jsonl> --confirm` is available through slash/TUI dispatch and RPC `invoke_command` (for example, `name:"import", command_arguments:"/absolute/archive.jsonl --confirm"`). It opens one local regular non-symlink descriptor with nonblocking final-component checks, then reads only that descriptor. Imports are capped at 8 MiB per file, less than 1 MiB per JSONL record, and 16,384 entries before replay validation; confirmed valid imports create and switch to a new session.
+- Generic RPC command dispatch uses the synchronous headless permission policy, not a `permission_reply` round-trip. Its `success:true` envelope means dispatch returned a command result; operation failures, including import validation errors or denied export writes, may instead appear in result `output`/`text`. See [RPC results](rpc-protocol.md#common-fields-ids-correlation-errors-and-results).
 - Import treats missing-version legacy entries as version `0` while reading and preserves their canonical wire form (the top-level `version` member remains absent) when appending to the new session.
 - Markdown and HTML export, transcript, compaction prompts, and token estimation use the ordered public projection. RPC `get_messages` uses the compatibility projection with additive `ordered_output`; its legacy-compatible message selection and caps run before ordered detail, and an omitted-detail response reports additive `ordered_output_truncated` and `ordered_output_omitted_count`. Portable JSONL uses its physical-order archive projection. Normal AVA startup, resume, list, tree, fork, clone, compact, and export do not rewrite existing session files. Prefer copy-forward import/migration into a new session over editing JSONL in place.
 - Automation should prefer RPC `get_messages`, `get_session_stats`, `validate_session`, `session_metadata`, and `session_tree` for stable views. Direct JSONL readers should tolerate additive fields and ignore non-message bookkeeping entries they do not need, but AVA itself rejects unknown entry type strings when opening/importing a session.
@@ -227,6 +236,7 @@ AVA's parser and replay validator currently enforce these important constraints:
 - `session_id` values must be non-empty safe path segments. Non-empty `parent_id` values must also be safe path segments, with no reserved `.`/`..`, path separators, or control bytes.
 - Entry ids must be unique for replay; `parent_id` should reference an earlier entry.
 - Message payloads must be valid objects; attachment metadata is user-message-only and must match the shape in [Attachment caveats](#attachment-caveats).
+- Optional synthetic-delivery `user_message.data.provenance` must have exactly the supported source and bounded identifier fields described under [Messages](#messages); it is not accepted on assistant messages.
 - Tool calls and results must pair by `call_id`; duplicate call ids, result-without-call, mismatched tool names, duplicate results, and unresolved calls are validation errors.
 - Permission `ask` prompts must be resolved consistently or remain pending only until the end of validation; compaction cannot cross unresolved permission prompts.
 - `session_metadata`, `branch_summary`, `assistant_output_item`, `assistant_turn_commit`, and `structured_result` schema versions must be supported; v4 output records require `schema_version:1` and keep usage only on the commit.

@@ -28,9 +28,12 @@ planning is outside this C++ runtime map; see
 
 ## Processes and frontends
 
-`src/main.cpp` initializes the application and calls `ava::app::run` in
-`src/ava/app/app.cpp`. Argument and terminal detection select one of these
-adapters:
+`src/main.cpp` constructs the application, one `process::Supervisor`, and an
+application `ProcessScopeV1`, then injects that scope into `ava::app::run` in
+`src/ava/app/app.cpp`. After the frontend returns, it stops process admission and
+shuts down the Supervisor against one shared two-second deadline; incomplete
+cleanup makes an otherwise successful exit fail. Argument and terminal detection
+select one of these adapters:
 
 | Adapter | Main implementation | Boundary |
 | --- | --- | --- |
@@ -39,7 +42,7 @@ adapters:
 | RPC | `app/rpc_mode.cpp`, `app/rpc/` | proprietary JSONL protocol, worker/resolver and session commands |
 | ACP | `app/acp_mode.cpp`, `app/acp/` | ACP v1 JSON-RPC 2.0 peer, sessions, permissions, and client capabilities |
 
-The four adapters converge on `app/runtime.*`, an open
+The four adapters converge on `app/runtime.*`, a `runtime::session_ts`-wrapped
 `app::runtime::Session`, and `run_prompt`. Frontends own presentation,
 protocol framing, and how an `Ask` permission or question reaches the user.
 They must not reimplement provider requests, tool policy, or session mutation.
@@ -72,7 +75,7 @@ user/editor/client input
 
 More detail by stage:
 
-1. **Open.** `app/runtime_session.cpp` and `app/runtime_sessions.cpp` resolve the
+1. **Open.** `app/runtime/Session.cpp` resolves the
    workspace, XDG paths, model, credentials, trust, context, anchors, and a
    persistent or ephemeral session. A persistent runtime retains the exact
    `SessionLease` for its lifetime. Torn-tail and incomplete assistant-output
@@ -117,6 +120,7 @@ links in each module's `CMakeLists.txt` and the enforced include policy in
 | Layer/module | Owns | Must not own |
 | --- | --- | --- |
 | `core` | errors/results, IDs, strict JSON helpers, paths, descriptor-safe opens, anchors, process arguments | product policy, UI, provider or protocol behavior |
+| `process` | Supervisor reservations, scoped owner/capability authority, launch, readiness, deadlines, settlement and cleanup | command approval, containment policy, child protocol or UI behavior |
 | `observability` | optional private run observation records | public runtime events, session truth, wire output |
 | `event` | immutable frontend-neutral runtime events, envelopes, serialization | agent/provider/tool behavior or frontend rendering |
 | `http` | transport interfaces, curl implementation, retry/observation decorators | provider-specific payloads or credentials policy |
@@ -132,6 +136,18 @@ links in each module's `CMakeLists.txt` and the enforced include policy in
 | `app` | composition root, runtime session, commands, run lifecycle, frontend adapters, RPC/ACP services | low-level reusable primitives |
 | `tui`, `tui/terminal` | semantic terminal state, composer/input/rendering; ncurses terminal lifecycle and cells | provider/session/tool implementations |
 | `debug` | libcwd-only formatting/debug support | product behavior or required release functionality |
+
+`process/CMakeLists.txt` builds `ava_process` (`AVA::process`) with a downward
+dependency on `AVA::core`. Its `ProcessScopeV1` derives session, run, and operation
+authority from the injected application scope; launchers reserve a role before
+spawning, supply an exact environment, and retain opaque process/pipe handles.
+`PreopenedExecutableV1` and `AnchoredWorkingDirectoryV1` carry descriptor-backed
+execution authority where required. Curl, Plugin, clipboard helpers, and MCP are
+migrated to this Supervisor lifecycle authority. Bash, LSP, Mermaid, external
+editor, and browser launching remain legacy-local; the all-family migration is
+not complete. Nearest coverage is in `tests/process_*_tests.cpp`,
+`tests/curl_transport_process_tests.cpp`, `tests/plugin_runner_process_tests.cpp`,
+`tests/clipboard_image_process_tests.cpp`, and `tests/mcp_tests.cpp`.
 
 Important dependency rules:
 
@@ -213,6 +229,23 @@ Concurrency is deliberately bounded and owned at explicit seams:
 - Event bus subscribers run synchronously in registration order and publishing
   stops at the first error. User observer callbacks are not a place for
   unbounded or reentrant work.
+
+Runtime callers pass `runtime::session_ts`, not an unguarded `Session&`.
+[`app/runtime/session_ts.h`](../../src/ava/app/runtime/session_ts.h) defines
+`SCOPED_CRITICAL_AREA_R`/`W` (and `CR` for const wrappers), plus
+`CRITICAL_AREA_BEGIN_*`, `END_*`, and `CONTINUE_*` for explicit unlock/relock.
+Access the Session only through the matching guarded accessor while locked.
+Copy stable inputs and shared capabilities such as read authority or the
+controller before unlocking for provider I/O, waits, joins, callbacks, or
+destruction. Do not retain Session-owned references across an unlock; reacquire
+and recheck mutable state when continuing.
+
+In debug builds, `core::SessionDebugMutex` tracks every session lock held by the
+current thread. `AVA_ASSERT_NO_SESSION_LOCK_HELD` rejects potentially blocking
+boundaries even for another session; `AVA_ASSERT_SESSION_UNLOCKED` checks a
+specific wrapper. Session destruction also checks this invariant because it can
+join workers. An assertion here requires moving the blocking operation outside
+the critical area, not suppressing the check.
 
 When changing locking, preserve documented local lock orders and never call an
 unknown callback while holding an internal state lock unless that API explicitly

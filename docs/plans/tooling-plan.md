@@ -155,24 +155,26 @@ Current native ignore support intentionally implements a small `.gitignore` subs
 
 ### bash
 
-Executes shell commands.
+Runs permissioned local commands through sealed command plans.
 
 Inputs:
 
-- `command`
-- `workdir`
-- `timeout_ms`
-- `description`
+- `command`: required command string.
+- `timeout_ms`: optional.
+- `max_lines`: optional trailing-output line bound; `limit` is an alias.
+- `max_bytes`: optional retained-output byte bound.
 
 Rules:
 
-- Always require explicit workdir after normalization.
+- Use the runtime-selected `ToolContext::current_dir`, falling back to the workspace directory; the public tool does not accept a working-directory override.
 - Enforce timeout.
 - Enforce output byte limit.
 - Kill process tree on cancellation or timeout.
 - Never run detached by default.
 - Permission scan before execution.
 - Prefer argv-style execution for internal commands; shell string execution is isolated behind this single executor.
+
+The current schema and dispatcher are `src/ava/agent/tool_metadata.h` and `src/ava/agent/tool_dispatch_bash.cpp`; runtime directory selection is in `src/ava/agent/agent_turn_executor.cpp`. Neither `workdir` nor `description` is a current input. A public structured `argv`/`cwd` lane remains unimplemented.
 
 ### webfetch
 
@@ -228,8 +230,9 @@ Inputs:
 
 Rules:
 
-- Only available in interactive mode.
-- In non-interactive mode, returns unavailable with guidance.
+- Availability requires a question resolver, not an interactive-mode flag. The TUI and bidirectional headless RPC install resolvers and can answer questions.
+- Modes without a resolver, including one-shot print mode, return the `question resolver is unavailable` tool error rather than asking.
+- The resolver gate is in `src/ava/agent/tool_dispatch_question.cpp`; RPC installs its resolver in `src/ava/app/rpc/prompt_worker.cpp`.
 
 ### skill
 
