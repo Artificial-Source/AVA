@@ -26,7 +26,79 @@
 #include <vector>
 #include <unistd.h>
 
+namespace ava::app {
+
+// A waiter count cannot keep the original waiter paused across historical
+// eviction. Keep scheduling control local to the test instead of controller state.
+struct SessionRunControllerTestAccess
+{
+  static ava::core::Result<RunOutcome> wait_outcome(SessionRunController& controller, std::string_view correlation_id, std::function<void()> const& before_wait)
+  {
+    return controller.wait_outcome(correlation_id, &before_wait);
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+}  // namespace ava::app
+
 namespace {
+
+struct PausedWaiter
+{
+  explicit PausedWaiter(ava::app::SessionRunController& controller, std::string_view correlation_id)
+      : thread_([this, &controller, correlation_id = std::string(correlation_id)] {
+          std::function<void()> const before_wait = [this] {
+            std::unique_lock lock(mutex_);
+            registered_ = true;
+            changed_.notify_all();
+            changed_.wait(lock, [this] { return released_; });
+          };
+          auto outcome = ava::app::SessionRunControllerTestAccess::wait_outcome(controller, correlation_id, before_wait);
+          std::lock_guard lock(mutex_);
+          joined.emplace(std::move(outcome));
+          returned_ = true;
+          changed_.notify_all();
+        })
+  {
+  }
+
+  ~PausedWaiter() { release(); }
+
+  [[nodiscard]] bool wait_until_registered()
+  {
+    std::unique_lock lock(mutex_);
+    auto const observed = changed_.wait_until(lock, ava::tests::now_plus_seconds(3), [this] { return registered_ || returned_; });
+    return observed && registered_ && !returned_;
+  }
+
+  void release()
+  {
+    std::lock_guard lock(mutex_);
+    released_ = true;
+    changed_.notify_all();
+  }
+
+  [[nodiscard]] bool wait_until_returned()
+  {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_until(lock, ava::tests::now_plus_seconds(3), [this] { return returned_; });
+  }
+
+  void join() { thread_.join(); }
+
+  std::optional<ava::core::Result<ava::app::RunOutcome>> joined;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  bool registered_ = false;
+  bool released_ = false;
+  bool returned_ = false;
+  std::jthread thread_;
+};
 
 class CallbackRunObserver final : public ava::observability::RunObserver
 {
@@ -358,6 +430,83 @@ void test_session_run_controller_stable_join_and_command_kinds()
   auto follow_up = controller.take_commands("B", ava::app::RunCommand::Kind::FollowUp);
   auto wake = controller.take_commands("B", ava::app::RunCommand::Kind::Wake);
   expect(follow_up && follow_up->size() == 1 && wake && wake->size() == 1, "follow-up and wake survive mixed steering consumption");
+}
+
+void test_session_run_controller_join_survives_outcome_eviction()
+{
+  for (bool const release_guard : {false, true})
+  {
+    ava::app::SessionRunController controller(ephemeral_controller_target());
+    auto admitted = controller.admit({.request_id = "evicted"});
+    expect(admitted.has_value(), "outcome eviction fixture admits the original generation");
+    if (!admitted)
+      return;
+    auto guard = std::move(*admitted);
+    PausedWaiter waiter(controller, "evicted");
+    expect(waiter.wait_until_registered(), "original waiter captures its generation before completion");
+
+    if (release_guard)
+      guard = {};
+    else
+      expect(guard.complete({.run_id = {}, .reason = ava::app::StopReason::NoProgress}).has_value(), "original generation explicitly completes");
+    for (std::size_t index = 0; index <= ava::app::kMaxRetainedRunOutcomes; ++index)
+    {
+      auto newer = controller.admit({.request_id = "newer-" + std::to_string(index)});
+      expect(newer.has_value(), "newer generation admits while original waiter is paused");
+      if (newer)
+        expect(newer->complete({.run_id = {}, .reason = ava::app::StopReason::MaxTurns}).has_value(), "newer generation publishes a retained outcome");
+    }
+    expect(!controller.wait_outcome("evicted"), "historical lookup evicts the original outcome even while its waiter retains completion");
+    auto reused = controller.admit({.request_id = "evicted"});
+    expect(reused.has_value(), "evicted request id admits a distinct active generation");
+    waiter.release();
+    bool const returned_before_reused_completion = waiter.wait_until_returned();
+    // Completing the reused generation also releases a regressed map-based
+    // waiter, so a failed assertion cannot strand the test's joining thread.
+    if (reused)
+      expect(reused->complete({.run_id = {}, .reason = ava::app::StopReason::MaxToolCalls}).has_value(), "reused generation completes independently");
+    waiter.join();
+    auto const& joined = waiter.joined;
+    auto const expected_reason = release_guard ? ava::app::StopReason::ProviderError : ava::app::StopReason::NoProgress;
+    expect(returned_before_reused_completion && joined && *joined && (*joined)->run_id == "evicted" && (*joined)->reason == expected_reason &&
+               (*joined)->error.has_value() == release_guard,
+           "explicit and guard-release completion survive historical eviction and never join a reused request id's generation");
+  }
+}
+
+void test_session_run_controller_reused_id_joins_active_generation()
+{
+  for (bool const evict_previous : {false, true})
+  {
+    ava::app::SessionRunController controller(ephemeral_controller_target());
+    auto previous = controller.admit({.request_id = "reused"});
+    expect(previous.has_value(), "reused-id fixture admits the previous generation");
+    if (!previous)
+      return;
+    expect(previous->complete({.run_id = {}, .reason = ava::app::StopReason::NoProgress}).has_value(), "previous generation publishes its outcome");
+    if (evict_previous)
+    {
+      for (std::size_t index = 0; index <= ava::app::kMaxRetainedRunOutcomes; ++index)
+      {
+        auto newer = controller.admit({.request_id = "newer-" + std::to_string(index)});
+        expect(newer.has_value(), "reused-id eviction fixture admits newer generation");
+        if (newer)
+          expect(newer->complete({.run_id = {}, .reason = ava::app::StopReason::MaxTurns}).has_value(), "reused-id fixture evicts previous outcome");
+      }
+    }
+    auto active = controller.admit({.request_id = "reused"});
+    expect(active.has_value(), "same request id admits a new active generation");
+    if (!active)
+      return;
+    PausedWaiter waiter(controller, "reused");
+    expect(waiter.wait_until_registered(), "active generation is joined before any retained previous-generation outcome is considered");
+    expect(active->complete({.run_id = {}, .reason = ava::app::StopReason::MaxToolCalls}).has_value(), "active reused-id generation publishes its own outcome");
+    waiter.release();
+    waiter.join();
+    auto const& joined = waiter.joined;
+    expect(joined && *joined && (*joined)->run_id == "reused" && (*joined)->reason == ava::app::StopReason::MaxToolCalls,
+           "reused-id waiter receives the active generation's result with or without previous-outcome eviction");
+  }
 }
 
 void test_session_run_controller_effective_failure_and_stop_reentry()
@@ -2374,6 +2523,8 @@ void run_session_run_controller_tests()
   test_runtime_session_destruction_does_not_own_background_coordinator();
   test_session_run_controller_admission_inspection_and_join();
   test_session_run_controller_stable_join_and_command_kinds();
+  test_session_run_controller_join_survives_outcome_eviction();
+  test_session_run_controller_reused_id_joins_active_generation();
   test_session_run_controller_effective_failure_and_stop_reentry();
   test_session_run_controller_recovers_persistent_and_ephemeral_targets();
   test_session_run_controller_failed_and_inflight_recovery();

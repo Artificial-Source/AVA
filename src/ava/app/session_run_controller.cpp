@@ -227,9 +227,10 @@ struct ActiveRunGuard::State
   std::string run_id;
   RunPhase phase = RunPhase::Admitted;
   std::optional<StopReason> requested_stop;
-  std::optional<RunOutcome> outcome;
-  // Retain terminal outcomes by correlation so an A waiter cannot observe a
-  // newly admitted B and lose A's result before it wakes.
+  // The generation and its waiters share completion independently of bounded
+  // historical retention. Both publication and observation use mutex.
+  std::shared_ptr<std::optional<RunOutcome>> outcome;
+  // Historical lookups remain bounded even while an older waiter is paused.
   std::unordered_map<std::string, RunOutcome> outcomes;
   std::deque<std::string> outcome_order;
   std::shared_ptr<ava::core::Error const> persistence_failure;
@@ -362,6 +363,8 @@ ava::core::Result<ActiveRunGuard> SessionRunController::admit(RunRequest request
     error.with_context("admission", request.request_id == state_->run_id ? "join_existing_outcome" : "rejected_different_prompt");
     return std::unexpected(std::move(error));
   }
+  // Allocate completion before changing admission state so allocation failure leaves the controller unchanged.
+  auto outcome = std::make_shared<std::optional<RunOutcome>>();
   state_->stop_source = std::stop_source{};
   state_->active = true;
   state_->closing = false;
@@ -369,7 +372,7 @@ ava::core::Result<ActiveRunGuard> SessionRunController::admit(RunRequest request
   state_->run_id = std::move(request.request_id);
   state_->phase = RunPhase::Admitted;
   state_->requested_stop.reset();
-  state_->outcome.reset();
+  state_->outcome = std::move(outcome);
   state_->commands.clear();
   return ActiveRunGuard(state_, state_->generation);
 }
@@ -441,18 +444,29 @@ bool SessionRunController::authority_retired() const noexcept
 
 ava::core::Result<RunOutcome> SessionRunController::wait_outcome(std::string_view correlation_id)
 {
+  return wait_outcome(correlation_id, nullptr);
+}
+
+ava::core::Result<RunOutcome> SessionRunController::wait_outcome(std::string_view correlation_id, std::function<void()> const* before_wait)
+{
   std::unique_lock lock(state_->mutex);
   if (correlation_id.empty())
     return std::unexpected(stale_error());
+  if (state_->active && correlation_id == state_->run_id)
+  {
+    auto outcome = state_->outcome;
+    if (before_wait)
+    {
+      lock.unlock();
+      (*before_wait)();
+      lock.lock();
+    }
+    state_->outcome_changed.wait(lock, [&] { return outcome->has_value(); });
+    return **outcome;
+  }
   if (auto completed = state_->outcomes.find(std::string(correlation_id)); completed != state_->outcomes.end())
     return completed->second;
-  if (!state_->active || correlation_id != state_->run_id)
-    return std::unexpected(stale_error());
-  state_->outcome_changed.wait(lock, [&] { return state_->outcomes.contains(std::string(correlation_id)); });
-  auto completed = state_->outcomes.find(std::string(correlation_id));
-  if (completed == state_->outcomes.end())
-    return std::unexpected(stale_error());
-  return completed->second;
+  return std::unexpected(stale_error());
 }
 
 ava::core::VoidResult SessionRunController::wake(RunCommand command)
@@ -524,7 +538,7 @@ RunSnapshot SessionRunController::snapshot() const
           .queued_commands = state_->commands.size(),
           .queued_appends = state_->appends.size(),
           .queued_append_bytes = state_->append_bytes,
-          .outcome = state_->outcome};
+          .outcome = state_->outcome ? *state_->outcome : std::nullopt};
 }
 
 ava::core::VoidResult SessionRunController::append_for_generation(std::shared_ptr<ActiveRunGuard::State> const& state, std::uint64_t generation,
@@ -1090,7 +1104,7 @@ ava::core::Result<RunOutcome> ActiveRunGuard::complete(RunOutcome outcome)
   if (!state_)
     return std::unexpected(inactive_error());
   std::unique_lock lock(state_->mutex);
-  if (!state_->active || state_->generation != generation_ || state_->outcome)
+  if (!state_->active || state_->generation != generation_ || state_->outcome->has_value())
     return std::unexpected(stale_error());
   if (outcome.run_id.empty())
     outcome.run_id = state_->run_id;
@@ -1118,7 +1132,7 @@ ava::core::Result<RunOutcome> ActiveRunGuard::complete(RunOutcome outcome)
     outcome.error = *state_->persistence_failure;
     state_->phase = RunPhase::Failed;
   }
-  state_->outcome = outcome;
+  *state_->outcome = outcome;
   if (state_->outcomes.emplace(outcome.run_id, outcome).second)
     state_->outcome_order.push_back(outcome.run_id);
   else
@@ -1202,7 +1216,7 @@ void ActiveRunGuard::release() noexcept
       outcome.error = *state_->persistence_failure;
       state_->phase = RunPhase::Failed;
     }
-    state_->outcome = outcome;
+    *state_->outcome = outcome;
     if (state_->outcomes.emplace(outcome.run_id, outcome).second)
       state_->outcome_order.push_back(outcome.run_id);
     else
