@@ -11,6 +11,7 @@
 #include "ResolvedPromptState.h"
 #include "SessionLifecycleRequest.h"
 #include "SessionResources.h"
+#include "SessionStatisticsPublication.h"
 #include "TrustState.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
@@ -66,6 +67,8 @@ struct Session_aggregate_base
   ResolvedPromptState resolved_prompt_state_;
   ModelSelection_ts model_selection_;
   session::Stats_ts session_stats_;
+  // Coalescing and mutation identity for the adjacent canonical statistics.
+  std::shared_ptr<SessionStatisticsPublicationState> session_statistics_publication_;
   GitBranch_ts git_branch_;
   TrustState trust_state_;
   SessionResources resources_;
@@ -198,6 +201,9 @@ class Session : protected Session_aggregate_base
   session::Stats_ts& session_stats() { return session_stats_; }
   session::Stats_ts const& session_stats() const { return session_stats_; }
 
+  // Return the session-owned coordinator used only by the backend statistics publisher.
+  std::shared_ptr<SessionStatisticsPublicationState> const& session_statistics_publication_state() const { return session_statistics_publication_; }
+
   GitBranch_ts& git_branch() { return git_branch_; }
   GitBranch_ts const& git_branch() const { return git_branch_; }
 
@@ -247,6 +253,8 @@ class Session : protected Session_aggregate_base
 
   // Return read-access type for the canonical session statistics.
   session::Stats_ts::crat session_stats_r() const { return session::Stats_ts::crat{session_stats_}; }
+  // Return write-access type for the canonical session statistics.
+  session::Stats_ts::wat session_stats_w() { return session::Stats_ts::wat{session_stats_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }
@@ -374,11 +382,14 @@ class Session : protected Session_aggregate_base
   // `prompt_state` is consumed. This locked mutation primitive always succeeds.
   [[nodiscard]] ava::core::VoidResult apply_prompt_state(PromptState prompt_state);
 
-  // Apply prompt_state to unlocked_session, release its write lock, then synchronously refresh retained parent configuration.
+  // Apply prompt_state to unlocked_session, release its write lock, then refresh
+  // retained parent configuration before statistics. Both refreshes are attempted;
+  // parent authority failure takes precedence over ancillary statistics failure.
   [[nodiscard]] static ava::core::VoidResult apply_prompt_state_and_refresh(session_ts& unlocked_session, PromptState prompt_state);
 
   // Atomically publish a trust transition with its permitted primary definition, sticky effective tool visibility, and reconstructed prompt state, then
-  // refresh retained parent configuration after releasing the session lock.
+  // refresh retained parent configuration and statistics after releasing the
+  // session lock. Both are attempted; parent authority failure takes precedence.
   [[nodiscard]] static ava::core::VoidResult apply_trust_prompt_state_and_refresh(session_ts& unlocked_session, ProjectTrustState project_trust,
                                                                                   ava::agent::AgentDefinition selected_primary_agent, PromptState prompt_state);
 

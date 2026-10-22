@@ -309,7 +309,6 @@ int run_tui(InteractiveState state)
             SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
             return project_trust_snapshot(session_r->project_trust());
           },
-      .refresh_session_statistics = [&unlocked_session]() { refresh_session_statistics(unlocked_session); },
       .create_active_run_queues =
           [&unlocked_session](ava::event::EventEnvelopeSink event_sink) {
             auto jobs_binding = ava::app::capture_jobs_command_binding(unlocked_session);

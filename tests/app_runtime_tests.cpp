@@ -25,6 +25,8 @@ void run_app_runtime_tests()
   test_app_runtime_open_session_and_context_prompt();
   test_app_runtime_preserves_legacy_subagent_job_tree();
   test_app_token_status_tracks_compaction_projection();
+  test_app_statistics_invalidate_partial_append_recovery();
+  test_app_statistics_reject_stale_work_across_session_replacement();
   test_app_runtime_no_session_mode();
   test_app_runtime_replacement_open_context();
   test_app_runtime_process_scope_lifecycle();

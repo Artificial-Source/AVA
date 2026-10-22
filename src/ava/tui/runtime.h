@@ -319,8 +319,6 @@ struct TuiRuntimeOptions
   // never during ordinary snapshot application or rendering.
   std::function<StartupOverviewSnapshot()> read_startup_overview;
   std::function<ProjectTrustSnapshot()> read_project_trust;
-  // Called on the TUI main thread at startup and after a submit worker completes; never from render/spinner loops.
-  std::function<void()> refresh_session_statistics;
   std::function<TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;
   std::function<TuiSubmitResult(std::string const&, TuiSubmitContext)> on_submit;
   std::function<ava::core::Result<ava::session::ImageAttachmentRef>(std::string const&)> on_attach_image;

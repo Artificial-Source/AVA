@@ -8,7 +8,6 @@
 #include "ava/tui/composer.h"
 #include "ava/tui/keybindings.h"
 #include "ava/config/model_config.h"
-#include "ava/session/Stats.h"
 #include "ava/session/compaction.h"
 #include "ava/permissions/permission.h"
 #include "ava/permissions/permission_rules.h"
@@ -177,40 +176,6 @@ std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent
       items[existing->second] = std::move(item);
   }
   return items;
-}
-
-// Capture the history authority before loading and computing outside the Session lock.
-// Publish both estimates under the Session write lock only if the session, append target, and prompt are still current.
-void refresh_session_statistics(ava::app::runtime::session_ts& unlocked_session)
-{
-  DoutEntering(dc::notice, "refresh_session_statistics(unlocked_session)");
-
-  auto snapshot = [&] {
-    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::tuple{session_r->store.options_session_id_copy(), session_r->append_target(), session_r->system_prompt(), session_r->read_authority_1()};
-  }();
-  auto& [session_id, append_target, system_prompt, read_authority] = snapshot;
-  ava::session::Stats updated_stats;
-  if (read_authority)
-  {
-    auto entries = read_authority->load();
-    if (entries)
-    {
-      auto computed = ava::session::compute_session_stats(*entries);
-      if (computed)
-        updated_stats = std::move(*computed);
-      auto active_context_tokens = ava::session::estimate_active_context_tokens(*entries);
-      if (active_context_tokens)
-        updated_stats.active_context_tokens = *active_context_tokens;
-    }
-  }
-  updated_stats.system_prompt_tokens = ava::session::estimate_tokens(system_prompt);
-
-  SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-  if (session_w->store.options_r()->session_id != session_id || session_w->append_target() != append_target || session_w->system_prompt() != system_prompt)
-    return;
-  // Publish the history and prompt estimates as one canonical change so frontend totals use one coherent snapshot.
-  session_w->session_stats().change([&updated_stats](ava::session::Stats& stats) { stats = std::move(updated_stats); });
 }
 
 ava::tui::TodoStatus to_tui_todo_status(ava::agent::TodoStatus status)

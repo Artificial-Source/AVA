@@ -5,6 +5,7 @@
 #include "plugin_event_hooks.h"
 #include "runtime/ExtensionResourcePolicy.h"
 #include "runtime/Session.h"
+#include "runtime/SessionStatisticsPublication.h"
 #include "runtime_compaction.h"
 #include "runtime_event_adapters.h"
 #include "runtime_prompt.h"
@@ -178,6 +179,11 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
         manager->release_parent_if_unused(session_id, *generation);
     }
   } refresh;
+  // Declared before guard so controller completion or abandonment settles every
+  // committed write before statistics inspect the final append generation. The
+  // refresh is best-effort: preserve the primary run result and last valid stats,
+  // then retry failed statistics work at the next relevant backend boundary.
+  auto statistics_refresh = at_scope_end([&unlocked_session] { static_cast<void>(runtime::refresh_session_statistics(unlocked_session)); });
   ActiveRunGuard guard = std::move(incoming_guard);
 
   std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics_copy;

@@ -33,11 +33,6 @@ void append_status_line(std::string& target, std::string line);
 [[nodiscard]] std::vector<CommandHotkey> command_hotkeys_from_key_bindings(ava::tui::TuiKeyBindings const& key_bindings);
 [[nodiscard]] ava::tui::ProjectTrustSnapshot project_trust_snapshot(ProjectTrustState const& state);
 [[nodiscard]] std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent::ToolTimelineEntry> const& entries);
-// Refresh canonical session statistics for unlocked_session when the TUI requests a token-usage update.
-//
-// Read failures leave active history unknown while preserving an independently known system-prompt estimate.
-// A session replacement or prompt change during the read discards both results.
-void refresh_session_statistics(runtime::session_ts& unlocked_session);
 // Fail-closed presentation hydration from the latest successful committed todowrite.
 [[nodiscard]] std::vector<ava::tui::TodoItem> todos_for_session(runtime::session_ts const& unlocked_session);
 [[nodiscard]] std::string session_selector_footer_hint(SessionSelectorSort sort, bool named_only, bool show_paths, bool show_archived, bool show_label_time);

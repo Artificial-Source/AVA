@@ -16,6 +16,7 @@
 #include "ava/app/plugin_event_hooks.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime/SessionStatisticsPublication.h"
 #include "ava/app/tui/configuration_commands.h"
 #include "ava/tools/file_tools.h"
 #include "ava/tools/tool_permission.h"
@@ -28,6 +29,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <utils/at_scope_end.h>
 
 namespace ava::app {
 namespace {
@@ -174,6 +176,11 @@ bool is_backend_command_1(std::string_view line, runtime::session_ts& unlocked_s
 // invoking a session-aware handler that acquires its own access guard.
 ava::core::Result<CommandResult> run_command(runtime::session_ts& unlocked_session, CommandRequest request)
 {
+  // All backend command mutations settle here. Unchanged commands coalesce by
+  // append generation and prompt identity without loading session history. A
+  // statistics failure is best-effort: preserve the command's result and last
+  // valid stats, then retry at the next relevant backend boundary.
+  auto statistics_refresh = at_scope_end([&unlocked_session] { static_cast<void>(runtime::refresh_session_statistics(unlocked_session)); });
   CommandResult result;
   if (request.command.empty())
     return result;

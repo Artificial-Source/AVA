@@ -153,14 +153,6 @@ RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend, TuiRun
     snapshot.session_id = options.read_committed_session_id();
 }
 
-void RuntimePresentationState::refresh_token_status(TuiRuntimeOptions const& options)
-{
-  DoutEntering(dc::notice, "RuntimePresentationState::refresh_token_status(" << options << ")");
-
-  if (options.refresh_session_statistics)
-    options.refresh_session_statistics();
-}
-
 void RuntimePresentationState::refresh_prompt_metadata()
 {
   auto const mode = frontend_->prompt_metadata().mode_refresh();
@@ -194,7 +186,6 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
     ++snapshot.file_references_generation;
   }
   sidebar.todos = std::move(state.todos);
-  refresh_token_status(options);
 }
 
 void RuntimePresentationState::apply_local_key_bindings(TuiRuntimeOptions& options, TuiKeyBindings bindings)

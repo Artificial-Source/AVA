@@ -82,6 +82,7 @@ void run_tui_selector_tests()
            "frontend numeric model projection survives an earlier display refresh, clears independently, and reports a known-to-unknown transition");
 
     tui_test_support::TuiFrontEndFixture stats_frontend;
+    stats_frontend.set_active_token_estimates(std::nullopt, std::nullopt);
     auto default_stats = stats_frontend.frontend()->session_stats().token_count_refresh();
     bool const default_changed = default_stats.changed;
     std::string const default_display = default_stats.value;

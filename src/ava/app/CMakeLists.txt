@@ -115,6 +115,7 @@ target_sources(ava_app
     "tui/startup_overview.cpp"
     "subagent_delivery_manager.cpp"
     "runtime/Session.cpp"
+    "runtime/SessionStatisticsPublication.cpp"
     "runtime/ExtensionResourcePolicy.cpp"
     "runtime/FreshnessSourceMetadata.cpp"
     "runtime/GitBranch.cpp"

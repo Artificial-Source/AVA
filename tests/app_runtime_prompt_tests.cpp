@@ -16,6 +16,7 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/RunOptions.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime/SessionStatisticsPublication.h"
 #include "ava/app/runtime_retry.h"
 #include "ava/app/subagent_delivery_manager.h"
 #include "ava/agent/mode.h"
@@ -1378,6 +1379,8 @@ void test_app_run_prompt_emits_events()
       .status_code = 200,
       .headers = {},
       .body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"runtime answer\"}\n\n"
+              "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,"
+              "\"output_tokens\":3,\"total_tokens\":5}}}\n\n"
               "data: [DONE]\n\n",
   }});
   std::vector<ava::event::RuntimeEvent> events;
@@ -1401,9 +1404,24 @@ void test_app_run_prompt_emits_events()
   expect(transport.requests().size() == 1 && transport.requests()[0].body.find("runtime run context") != std::string::npos,
          "runtime run_prompt sends context-augmented system prompt to provider");
   auto entries = ava::app::runtime::session_ts::rat(*unlocked_session_result)->store.load();
+  auto const canonical_stats = *ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r();
   expect(entries && entries->size() == 4 && (*entries)[1].type == ava::session::EntryType::UserMessage &&
              (*entries)[2].type == ava::session::EntryType::AssistantOutputItem && (*entries)[3].type == ava::session::EntryType::AssistantTurnCommit,
          "runtime run_prompt persists one committed v4 assistant turn in the runtime session");
+  expect(canonical_stats.input_tokens == std::optional<long long>{2} && canonical_stats.output_tokens == std::optional<long long>{3} &&
+             canonical_stats.total_tokens == std::optional<long long>{5},
+         "runtime completion publishes final committed provider usage without a frontend refresh request");
+
+  auto const work_before_unavailable_prompt = ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result);
+  {
+    ava::app::runtime::session_ts::wat session_w(*unlocked_session_result);
+    session_w->resolve_prompt_state().readiness = ava::app::runtime::PromptReadiness::Unavailable;
+  }
+  ava::tests::FakeTransport unavailable_transport({});
+  auto unavailable = ava::app::run_prompt(*unlocked_session_result, "must not run", provider, unavailable_transport, run_options);
+  expect(!unavailable && unavailable_transport.requests().empty() &&
+             ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result) == work_before_unavailable_prompt,
+         "prompt-unavailable rejection performs no generic statistics computation");
 }
 
 void test_app_run_prompt_expands_file_references()
@@ -1904,6 +1922,8 @@ void test_app_run_prompt_event_sink_failure_cancels_before_next_provider_call()
   expect(unlocked_session_result.has_value(), "runtime event sink failure test opens session");
   if (!unlocked_session_result)
     return;
+  auto const initial_statistics_work = ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result);
+  auto const initial_entry_count = ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r()->entry_count;
 
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   ava::tests::FakeTransport transport({ava::http::HttpResponse{
@@ -1938,6 +1958,33 @@ void test_app_run_prompt_event_sink_failure_cancels_before_next_provider_call()
   expect(!result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "event sink failed",
          "runtime returns the event sink write failure");
   expect(transport.requests().size() == 1, "event sink failure cancels before the next provider request");
+  auto const failed_stats = *ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r();
+  expect(failed_stats.entry_count > initial_entry_count &&
+             ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result) == initial_statistics_work + 1,
+         "failed admitted run publishes its committed writes exactly once at terminal settlement");
+
+  ava::tests::FakeTransport cancel_transport({ava::http::HttpResponse{
+      .status_code = 200,
+      .headers = {},
+      .body = "data: {\"type\":\"response.function_call.added\",\"call_id\":\"call_cancel\",\"name\":\"read_file\"}\n\n"
+              "data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"call_cancel\",\"delta\":\"{\\\"path\\\":\\\"note.txt\\\"}\"}\n\n"
+              "data: [DONE]\n\n",
+  }});
+  bool cancel_requested = false;
+  ava::app::runtime::RunOptions cancel_options;
+  cancel_options.access_token = "token";
+  cancel_options.cancel_requested = [&] { return cancel_requested; };
+  cancel_options.event_sink = [&](ava::event::RuntimeEvent const& event) {
+    if (event.type() == ava::event::RuntimeEventType::ToolStart)
+      cancel_requested = true;
+    return ava::core::VoidResult{};
+  };
+  auto const work_before_cancel = ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result);
+  auto canceled = ava::app::run_prompt(*unlocked_session_result, "read then cancel", provider, cancel_transport, cancel_options);
+  auto const canceled_stats = *ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r();
+  expect(!canceled && canceled.error().code() == ava::core::ErrorCode::Canceled && canceled_stats.entry_count > failed_stats.entry_count &&
+             ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result) == work_before_cancel + 1,
+         "canceled admitted run publishes committed writes exactly once at terminal settlement");
 }
 
 }  // namespace ava::tests::app_runtime_tests

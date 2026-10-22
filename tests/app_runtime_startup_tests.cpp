@@ -15,6 +15,7 @@
 #include "ava/app/runtime/GitBranch.h"
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime/SessionStatisticsPublication.h"
 #include "ava/app/subagent_delivery_manager.h"
 #include "ava/app/tui/interactive_tui_internal.h"
 #include "ava/agent/agent_loop_session.h"
@@ -34,16 +35,23 @@
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <sys/stat.h>
@@ -284,28 +292,27 @@ void test_app_token_status_tracks_compaction_projection()
   if (!unlocked_session_result)
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
-  CRITICAL_AREA_BEGIN_W(session);
-  auto const appended_user = session_w->append_target()->append(ava::session::SessionEntry{.id = "active-context-user",
-                                                                                           .parent_id = "",
-                                                                                           .type = ava::session::EntryType::UserMessage,
-                                                                                           .timestamp = "2026-01-01T00:00:00Z",
-                                                                                           .data_json = "{\"text\":\"" + std::string(50'000, 'x') + "\"}"});
+  auto const initial_statistics_work = ava::app::runtime::session_statistics_refresh_work_count(unlocked_session);
+  auto run_controller = ava::app::runtime::session_ts::rat(unlocked_session)->run_controller();
+  auto const appended_user = run_controller->append(ava::session::SessionEntry{.id = "active-context-user",
+                                                                               .parent_id = "",
+                                                                               .type = ava::session::EntryType::UserMessage,
+                                                                               .timestamp = "2026-01-01T00:00:00Z",
+                                                                               .data_json = "{\"text\":\"" + std::string(50'000, 'x') + "\"}"});
   ava::session::ManualCompactionRequest compaction_request;
   compaction_request.summary = "condensed history";
   compaction_request.config = ava::session::default_compaction_config();
   compaction_request.estimated_tokens = 12'500;
   auto compaction = ava::session::make_manual_compaction_entry(std::move(compaction_request));
-  auto const appended_compaction =
-      compaction ? session_w->append_target()->append(std::move(*compaction)) : ava::core::VoidResult(std::unexpected(compaction.error()));
-  auto const appended_recent = appended_compaction ? session_w->append_target()->append(ava::session::SessionEntry{.id = "active-context-recent",
-                                                                                                                   .parent_id = "",
-                                                                                                                   .type = ava::session::EntryType::UserMessage,
-                                                                                                                   .timestamp = "2026-01-01T00:00:01Z",
-                                                                                                                   .data_json = "{\"text\":\"recent\"}"})
+  auto const appended_compaction = compaction ? run_controller->append(std::move(*compaction)) : ava::core::VoidResult(std::unexpected(compaction.error()));
+  auto const appended_recent = appended_compaction ? run_controller->append(ava::session::SessionEntry{.id = "active-context-recent",
+                                                                                                       .parent_id = "",
+                                                                                                       .type = ava::session::EntryType::UserMessage,
+                                                                                                       .timestamp = "2026-01-01T00:00:01Z",
+                                                                                                       .data_json = "{\"text\":\"recent\"}"})
                                                    : ava::core::VoidResult(std::unexpected(appended_compaction.error()));
-  CRITICAL_AREA_END_W(session);
-  ava::app::interactive_internal::refresh_session_statistics(unlocked_session);
-  CRITICAL_AREA_CONTINUE_W(session);
+  auto const refreshed = ava::app::runtime::refresh_session_statistics(unlocked_session);
+  SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
   auto compacted_authority = session_w->read_authority_1();
   auto compacted_entries = compacted_authority ? compacted_authority->load()
                                                : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(compacted_authority.error()));
@@ -317,11 +324,184 @@ void test_app_token_status_tracks_compaction_projection()
   auto const cumulative_tokens = session_w->session_stats_r()->total_tokens;
   auto const canonical_system_prompt_tokens = session_w->session_stats_r()->system_prompt_tokens;
   auto const expected_system_prompt_tokens = ava::session::estimate_tokens(session_w->system_prompt());
-  expect(appended_user && compaction && appended_compaction && appended_recent && compacted_entries && active_tokens && complete_tokens &&
+  expect(appended_user && compaction && appended_compaction && appended_recent && refreshed && compacted_entries && active_tokens && complete_tokens &&
              canonical_active_tokens == std::optional<std::size_t>{*active_tokens} &&
              canonical_system_prompt_tokens == std::optional<std::size_t>{expected_system_prompt_tokens} && *active_tokens < *complete_tokens &&
              !cumulative_tokens,
          "token refresh publishes compaction-aware retained history and the system prompt separately without repurposing cumulative provider usage");
+  auto const published_stats = *session_w->session_stats_r();
+  session_w.unlock();
+
+  auto const work_after_publication = ava::app::runtime::session_statistics_refresh_work_count(unlocked_session);
+  auto exit_result = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/exit"});
+  auto const work_after_exit = ava::app::runtime::session_statistics_refresh_work_count(unlocked_session);
+  expect(initial_statistics_work == 1 && work_after_publication == initial_statistics_work + 1 && exit_result && exit_result->quit &&
+             work_after_exit == work_after_publication,
+         "initial open publishes once, batched mutations recompute once, and unchanged exit does not reload statistics");
+
+  auto final_mutation = run_controller->append(ava::session::SessionEntry{.id = "active-context-final-mutation",
+                                                                          .parent_id = "active-context-recent",
+                                                                          .type = ava::session::EntryType::Cancel,
+                                                                          .timestamp = "2026-01-01T00:00:02Z",
+                                                                          .data_json = "{}"});
+  auto const session_path = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_path();
+  write_app_test_file(session_path, "{malformed session history\n");
+  auto failed_refresh = ava::app::runtime::refresh_session_statistics(unlocked_session);
+  auto const stats_after_failure = *ava::app::runtime::session_ts::rat(unlocked_session)->session_stats_r();
+  expect(final_mutation.has_value(), "statistics failure fixture commits a final mutation before its read failure");
+  expect(!failed_refresh, "statistics publication reports a session read failure");
+  expect(stats_after_failure == published_stats, "statistics read failure preserves the last valid whole value instead of fabricated zeroes");
+}
+
+void test_app_statistics_invalidate_partial_append_recovery()
+{
+  auto const root = create_empty_root("app-statistics-partial-recovery");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+
+  ava::app::runtime::OpenContext options;
+  options.workspace_dir = workspace;
+  options.current_dir = workspace;
+  options.paths = app_test_paths(root);
+  auto store = ava::session::SessionStore::create(workspace, options.paths.sessions_dir);
+  auto lease = store ? ava::session::SessionLease::create_and_acquire(store->session_path())
+                     : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
+  auto seeded = store && lease ? store->append(*lease, ava::session::SessionEntry{.id = "statistics-recovery-seed",
+                                                                                  .parent_id = "",
+                                                                                  .type = ava::session::EntryType::UserMessage,
+                                                                                  .timestamp = "2026-10-22T00:00:00Z",
+                                                                                  .data_json = "{\"text\":\"seed\"}"})
+                               : ava::core::VoidResult(std::unexpected(lease ? store.error() : lease.error()));
+  auto fail_writes = std::make_shared<std::atomic_bool>(true);
+  auto write_calls = std::make_shared<std::atomic_int>(0);
+  if (store)
+  {
+    store->set_append_write_for_test([fail_writes, write_calls](int fd, std::string_view bytes) -> ssize_t {
+      if (!fail_writes->load(std::memory_order_acquire))
+        return ::write(fd, bytes.data(), bytes.size());
+      if (write_calls->fetch_add(1, std::memory_order_acq_rel) == 0)
+        return ::write(fd, bytes.data(), std::min<std::size_t>(1, bytes.size()));
+      errno = EIO;
+      return -1;
+    });
+  }
+  auto session = seeded ? ava::app::runtime::Session::open_owned(options, *store, *lease, false)
+                        : ava::core::Result<ava::app::runtime::session_ts>(std::unexpected(seeded.error()));
+  expect(session.has_value(), session ? "statistics recovery fixture opens a session" : session.error().format());
+  if (!session)
+    return;
+
+  auto const valid_stats = *ava::app::runtime::session_ts::rat(*session)->session_stats_r();
+  auto const initial_work = ava::app::runtime::session_statistics_refresh_work_count(*session);
+  auto controller = ava::app::runtime::session_ts::rat(*session)->run_controller();
+
+  auto failed = controller->append(ava::session::SessionEntry{.id = "statistics-partial",
+                                                              .parent_id = "",
+                                                              .type = ava::session::EntryType::UserMessage,
+                                                              .timestamp = "2026-10-22T00:00:00Z",
+                                                              .data_json = "{\"text\":\"partial\"}"});
+  auto blocked_refresh = ava::app::runtime::refresh_session_statistics(*session);
+  auto const stats_while_broken = *ava::app::runtime::session_ts::rat(*session)->session_stats_r();
+  auto const broken_identity = controller->statistics_mutation_identity();
+  fail_writes->store(false, std::memory_order_release);
+  auto recovered = controller->reset_persistence_failure();
+  auto refreshed = ava::app::runtime::refresh_session_statistics(*session);
+  auto const recovered_stats = *ava::app::runtime::session_ts::rat(*session)->session_stats_r();
+  auto const recovered_identity = controller->statistics_mutation_identity();
+
+  expect(!failed && !blocked_refresh && stats_while_broken == valid_stats && broken_identity.persistence_failure_latched &&
+             broken_identity.persistence_invalidation_generation == 1,
+         "partial append failure rejects publication and preserves the last valid statistics value");
+  expect(recovered && refreshed && !recovered_identity.persistence_failure_latched &&
+             recovered_identity.committed_append_generation == broken_identity.committed_append_generation &&
+             recovered_identity.persistence_invalidation_generation == broken_identity.persistence_invalidation_generation && recovered_stats == valid_stats &&
+             ava::app::runtime::session_statistics_refresh_work_count(*session) == initial_work + 1,
+         "successful recovery invalidates coalescing and recomputes repaired history without mislabeling the failed append as committed");
+}
+
+void test_app_statistics_reject_stale_work_across_session_replacement()
+{
+  using namespace std::chrono_literals;
+  auto const root = create_empty_root("app-statistics-stale-replacement");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = app_test_paths(root);
+  auto current = ava::app::runtime::Session::open(context);
+  expect(current.has_value(), current ? "stale statistics fixture opens current session" : current.error().format());
+  if (!current)
+    return;
+  auto current_controller = ava::app::runtime::session_ts::rat(*current)->run_controller();
+  auto appended = current_controller->append(ava::session::SessionEntry{.id = "stale-statistics-entry",
+                                                                        .parent_id = "",
+                                                                        .type = ava::session::EntryType::UserMessage,
+                                                                        .timestamp = "2026-10-22T00:00:00Z",
+                                                                        .data_json = "{\"text\":\"old session\"}"});
+
+  auto replacement_context = ava::app::runtime::session_ts::rat(*current)->replacement_open_context({});
+  replacement_context.prompt_overrides.system_prompt = "replacement statistics prompt";
+  auto replacement = ava::app::runtime::Session::open(replacement_context);
+  expect(replacement.has_value(), replacement ? "stale statistics fixture opens replacement session" : replacement.error().format());
+  if (!appended || !replacement)
+    return;
+  auto const replacement_id = ava::app::runtime::session_ts::rat(*replacement)->store.options_session_id_copy();
+  auto replacement_controller = ava::app::runtime::session_ts::rat(*replacement)->run_controller();
+  auto replacement_append = replacement_controller->append(ava::session::SessionEntry{.id = "replacement-statistics-entry",
+                                                                                      .parent_id = "",
+                                                                                      .type = ava::session::EntryType::UserMessage,
+                                                                                      .timestamp = "2026-10-22T00:00:01Z",
+                                                                                      .data_json = "{\"text\":\"replacement session\"}"});
+  auto const stale_replacement_stats = *ava::app::runtime::session_ts::rat(*replacement)->session_stats_r();
+
+  std::mutex hook_mutex;
+  std::condition_variable hook_cv;
+  bool read_completed = false;
+  bool release_read = false;
+  {
+    ava::app::runtime::session_ts::wat current_w(*current);
+    current_w->store.set_after_lease_bound_read_for_test([&] {
+      std::unique_lock lock(hook_mutex);
+      read_completed = true;
+      hook_cv.notify_all();
+      static_cast<void>(hook_cv.wait_for(lock, 3s, [&] { return release_read; }));
+    });
+  }
+
+  auto stale_refresh = std::async(std::launch::async, [&] { return ava::app::runtime::refresh_session_statistics(*current); });
+  {
+    std::unique_lock lock(hook_mutex);
+    expect(hook_cv.wait_for(lock, 3s, [&] { return read_completed; }), "stale statistics fixture reaches the post-read publication gate");
+  }
+  auto replacement_future = std::async(std::launch::async, [&] { return ava::app::runtime::Session::replace_with(*current, *replacement); });
+  bool replacement_committed = false;
+  auto const replacement_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < replacement_deadline)
+  {
+    if (ava::app::runtime::session_ts::rat(*current)->store.options_session_id_copy() == replacement_id)
+    {
+      replacement_committed = true;
+      break;
+    }
+    std::this_thread::sleep_for(10ms);
+  }
+  {
+    std::lock_guard lock(hook_mutex);
+    release_read = true;
+  }
+  hook_cv.notify_all();
+  auto replaced = replacement_future.get();
+  auto stale_result = stale_refresh.get();
+
+  auto const installed_id = ava::app::runtime::session_ts::rat(*current)->store.options_session_id_copy();
+  auto const installed_prompt = ava::app::runtime::session_ts::rat(*current)->system_prompt();
+  auto const installed_stats = *ava::app::runtime::session_ts::rat(*current)->session_stats_r();
+  expect(replacement_append && replacement_committed && replaced && stale_result && installed_id == replacement_id &&
+             installed_stats.entry_count > stale_replacement_stats.entry_count &&
+             installed_stats.system_prompt_tokens == std::optional<std::size_t>{ava::session::estimate_tokens(installed_prompt)},
+         "replacement refreshes its canonical statistics while stale old-session work cannot overwrite replacement identity, target, or prompt");
 }
 
 void test_app_runtime_no_session_mode()
@@ -1264,8 +1444,9 @@ void test_app_runtime_cli_prompt_overrides()
     expect(switched_mode && switched_mode->handled && session_w->mode() == ava::agent::Mode::Build &&
                session_w->system_prompt().find("cli system prompt") != std::string::npos &&
                session_w->system_prompt().find("cli append prompt two") != std::string::npos &&
-               session_w->system_prompt().find("Implement changes directly") == std::string::npos,
-           "mode reloads preserve cli system prompt overrides");
+               session_w->system_prompt().find("Implement changes directly") == std::string::npos &&
+               session_w->session_stats_r()->system_prompt_tokens == std::optional<std::size_t>{ava::session::estimate_tokens(session_w->system_prompt())},
+           "mode reloads preserve cli system prompt overrides and publish the replacement prompt estimate");
   }
 }
 

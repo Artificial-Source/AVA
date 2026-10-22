@@ -99,7 +99,6 @@ class RuntimePresentationState final
  public:
   RuntimePresentationState(TuiFrontEnd* frontend, TuiRuntimeOptions& options);
 
-  void refresh_token_status(TuiRuntimeOptions const& options);
   void refresh_prompt_metadata();
   void apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state);
   // Applies TUI-owned bindings and refreshes every local hint projection.

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -18,6 +19,9 @@ using tui_test_support::ScopedTerminalCapabilityProfile;
 void run_tui_markdown_tests()
 {
   tui_test_support::TuiFrontEndFixture frontend;
+  // Markdown layout assertions do not exercise backend statistics; retain the
+  // fixture's historical footer width independently from initial publication.
+  frontend.set_active_token_estimates(std::nullopt, std::nullopt);
   auto const markdown_transcript = ava::tui::render_composer(
       frontend.frontend(),
       ava::tui::ComposerSnapshot{.mode = "build",

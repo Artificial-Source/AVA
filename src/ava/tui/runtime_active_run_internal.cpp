@@ -1045,7 +1045,6 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   }
   snapshot.processing = false;
   presentation_state_.refresh_prompt_metadata();
-  presentation_state_.refresh_token_status(options_);
   if (!service_mermaid_presentation_() || !render())
   {
     active_run_outcome.terminal_write_failed = true;

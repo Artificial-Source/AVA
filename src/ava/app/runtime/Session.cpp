@@ -624,16 +624,18 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   ModelSelection_ts model_selection(
       ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
   session::Stats_ts session_stats;
+  std::shared_ptr<SessionStatisticsPublicationState> session_statistics_publication;
   GitBranch_ts git_branch(observe_git_branch(workspace_dir));
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try
   {
     run_controller = std::make_shared<SessionRunController>(*append_target);
+    session_statistics_publication = std::make_shared<SessionStatisticsPublicationState>();
   }
   catch (...)
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "failed to allocate the runtime session controller"));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "failed to allocate runtime session publication resources"));
   }
   if (auto registered = delivery_manager->register_workspace_controller(workspace_dir, store.options_r()->session_id, run_controller); !registered)
     return std::unexpected(std::move(registered.error()));
@@ -653,6 +655,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
                    .resolved_prompt_state_ = std::move(resolved_prompt_state),
                    .model_selection_ = std::move(model_selection),
                    .session_stats_ = std::move(session_stats),
+                   .session_statistics_publication_ = std::move(session_statistics_publication),
                    .git_branch_ = std::move(git_branch),
                    .trust_state_ = std::move(trust_state),
                    .resources_ = std::move(resources),
@@ -671,7 +674,10 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
   }
   if (!sessionless)
     session.subagent_delivery_manager()->attach_parent(session.store.options_r()->session_id);
-  return session;
+  session_ts unlocked_session(std::move(session));
+  if (auto refreshed = refresh_session_statistics(unlocked_session); !refreshed)
+    return std::unexpected(std::move(refreshed.error()));
+  return unlocked_session;
 }
 
 //static
@@ -730,6 +736,8 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
       .model_selection_ = ModelSelection_ts{*model_selection_r()},
       // Copy statistics, including both context estimates, without inheriting frontend registration.
       .session_stats_ = session::Stats_ts{*session_stats_r()},
+      // Detached sessions coordinate publication independently from the source frontend destination.
+      .session_statistics_publication_ = std::make_shared<SessionStatisticsPublicationState>(),
       // Copy the branch without inheriting the source object's frontend registration.
       .git_branch_ = GitBranch_ts{*GitBranch_ts::crat(git_branch())},
       .trust_state_ = trust_state(),
@@ -889,6 +897,11 @@ ava::core::VoidResult Session::replace_with(session_ts& unlocked_current, sessio
   if (leaves_detached_parent && old_subagent_delivery_manager)
     old_subagent_delivery_manager->release_detached_parent(detached_parent_id);
 
+  // Replacement is already committed. Best-effort publication initializes a
+  // detached replacement's fresh coordinator without turning ancillary read or
+  // estimation failure into a failed navigation result.
+  static_cast<void>(refresh_session_statistics(unlocked_current));
+
   return {};
 }
 
@@ -1032,7 +1045,11 @@ ava::core::VoidResult Session::apply_prompt_state_and_refresh(session_ts& unlock
   CRITICAL_AREA_END_W(session);
   if (!applied)
     return applied;
-  return refresh_parent_configuration(unlocked_session);
+  auto parent = refresh_parent_configuration(unlocked_session);
+  auto statistics = refresh_session_statistics(unlocked_session);
+  if (!parent)
+    return parent;
+  return statistics;
 }
 
 //static
@@ -1059,7 +1076,11 @@ ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& 
   CRITICAL_AREA_END_W(session);
   if (!applied)
     return applied;
-  return refresh_parent_configuration(unlocked_session);
+  auto parent = refresh_parent_configuration(unlocked_session);
+  auto statistics = refresh_session_statistics(unlocked_session);
+  if (!parent)
+    return parent;
+  return statistics;
 }
 
 ava::core::Result<bool> Session::switch_model(ava::config::ModelInfo model)
@@ -1112,8 +1133,12 @@ ava::core::Result<bool> Session::switch_model_and_refresh(session_ts& unlocked_s
   CRITICAL_AREA_END_W(session);
   if (!switched || !*switched)
     return switched;
-  if (auto refreshed = refresh_parent_configuration(unlocked_session); !refreshed)
-    return std::unexpected(std::move(refreshed.error()));
+  auto parent_refreshed = refresh_parent_configuration(unlocked_session);
+  auto statistics_refreshed = refresh_session_statistics(unlocked_session);
+  if (!parent_refreshed)
+    return std::unexpected(std::move(parent_refreshed.error()));
+  if (!statistics_refreshed)
+    return std::unexpected(std::move(statistics_refreshed.error()));
   return switched;
 }
 
@@ -1162,8 +1187,12 @@ ava::core::Result<bool> Session::set_reasoning_and_refresh(session_ts& unlocked_
   CRITICAL_AREA_END_W(session);
   if (!changed || !*changed)
     return changed;
-  if (auto refreshed = refresh_parent_configuration(unlocked_session); !refreshed)
-    return std::unexpected(std::move(refreshed.error()));
+  auto parent_refreshed = refresh_parent_configuration(unlocked_session);
+  auto statistics_refreshed = refresh_session_statistics(unlocked_session);
+  if (!parent_refreshed)
+    return std::unexpected(std::move(parent_refreshed.error()));
+  if (!statistics_refreshed)
+    return std::unexpected(std::move(statistics_refreshed.error()));
   return changed;
 }
 

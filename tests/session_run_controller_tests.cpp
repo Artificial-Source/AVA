@@ -141,6 +141,30 @@ void test_session_run_controller_generation_and_cancel_precedence()
          "an accepted stop remains authoritative over a racing provider terminal error");
 }
 
+void test_session_run_controller_committed_append_generation_rejects_stale_publication()
+{
+  ava::app::SessionRunController controller(ephemeral_controller_target());
+  bool published = false;
+  auto const initial_identity = controller.statistics_mutation_identity();
+  expect(initial_identity.committed_append_generation == 0 && initial_identity.append_order_generation == 0 &&
+             controller.publish_if_statistics_mutation_current(initial_identity, [&] { published = true; }) && published,
+         "controller accepts publication at its exact initial append generation");
+
+  auto appended = controller.append(ava::session::SessionEntry{.id = "statistics-generation-entry",
+                                                               .parent_id = "",
+                                                               .type = ava::session::EntryType::UserMessage,
+                                                               .timestamp = "2026-10-22T00:00:00Z",
+                                                               .data_json = "{\"text\":\"committed\"}"});
+  bool stale_published = false;
+  bool current_published = false;
+  auto const current_identity = controller.statistics_mutation_identity();
+  auto const stale_accepted = controller.publish_if_statistics_mutation_current(initial_identity, [&] { stale_published = true; });
+  auto const current_accepted = controller.publish_if_statistics_mutation_current(current_identity, [&] { current_published = true; });
+  expect(appended && current_identity.committed_append_generation == 1 && current_identity.append_order_generation == 2 && !stale_accepted &&
+             !stale_published && current_accepted && current_published,
+         "actual append advances mutation identity and serialized validation rejects stale statistics work");
+}
+
 ava::session::SessionEntry append_entry(std::string id)
 {
   return ava::session::SessionEntry{
@@ -2370,6 +2394,7 @@ void run_session_run_controller_tests()
   test_session_run_controller_transitions_and_guard_release();
   test_session_run_controller_concurrent_admit_wake_stop();
   test_session_run_controller_generation_and_cancel_precedence();
+  test_session_run_controller_committed_append_generation_rejects_stale_publication();
   test_session_run_controller_owner_and_generation_routes();
   test_runtime_session_destruction_does_not_own_background_coordinator();
   test_session_run_controller_admission_inspection_and_join();

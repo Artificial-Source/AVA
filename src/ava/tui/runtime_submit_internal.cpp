@@ -373,7 +373,6 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       push_history(input_history, submitted);
       if (active_select_list_ == ActiveSelectList::Overview)
         snapshot.startup_overview.reset();
-      presentation_state_.refresh_token_status(options_);
       // Workspace trust is popup-only. Refresh it once at initialization so a
       // close/reopen observes backend changes without ordinary snapshot transport.
       if (options_.read_project_trust)
