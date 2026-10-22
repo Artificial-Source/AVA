@@ -27,6 +27,7 @@
 #include "ava/lsp/configured_provider.h"
 #include "ava/core/error.h"
 #include "ava/core/ids.h"
+#include "utils/at_scope_end.h"
 
 #include <functional>
 #include <memory>

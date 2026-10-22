@@ -49,7 +49,7 @@ void ModelSelection::refresh()
   auto const& new_provider = model_selection_r->model.provider_id;
   bool const provider_changed = old_provider != new_provider;
   Dout(dc::frontend(provider_changed), "provider hanged from " << old_provider << " to " << new_provider);
-  provider_.changed_ = provider_.changed_ || old_provider != new_provider;
+  provider_.changed_ = provider_.changed_ || provider_changed;
 
   auto const& old_reasoning = reasoning_display_str(reasoning_snapshot_);
   // Don't set the optional `reasoning` if the model doesn't support more than one reasoning level.

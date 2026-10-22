@@ -1,7 +1,7 @@
 #include "sys.h"
-// clang-format off
+#ifdef CWDEBUG
 #include "ava/debug/debug_ostream_operators.h"  // Must be included immediately after "sys.h".
-// clang-format on
+#endif
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
