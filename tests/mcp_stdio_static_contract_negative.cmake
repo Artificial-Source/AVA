@@ -1,36 +1,69 @@
 if(NOT DEFINED AVA_MCP_STDIO_SCANNER OR NOT DEFINED AVA_MCP_STDIO_NEGATIVE_ROOT)
-  message(FATAL_ERROR "MCP stdio scanner negative self-test requires scanner and scratch paths")
+  message(FATAL_ERROR "MCP stdio scanner self-test requires scanner and scratch paths")
 endif()
 
-set(AVA_MCP_STDIO_NEGATIVE_CASES
-  "pipe|pipe(nullptr)"
-  "pipe2|pipe2(nullptr, 0)"
-  "dup|dup(0)"
-  "dup2|dup2(0, 1)")
-
-file(REMOVE_RECURSE "${AVA_MCP_STDIO_NEGATIVE_ROOT}")
-foreach(AVA_MCP_STDIO_NEGATIVE_CASE IN LISTS AVA_MCP_STDIO_NEGATIVE_CASES)
-  string(REPLACE "|" ";" AVA_MCP_STDIO_NEGATIVE_FIELDS "${AVA_MCP_STDIO_NEGATIVE_CASE}")
-  list(GET AVA_MCP_STDIO_NEGATIVE_FIELDS 0 AVA_MCP_STDIO_NEGATIVE_NAME)
-  list(GET AVA_MCP_STDIO_NEGATIVE_FIELDS 1 AVA_MCP_STDIO_NEGATIVE_SOURCE)
-  set(AVA_MCP_STDIO_NEGATIVE_DIR "${AVA_MCP_STDIO_NEGATIVE_ROOT}/${AVA_MCP_STDIO_NEGATIVE_NAME}")
-  file(MAKE_DIRECTORY "${AVA_MCP_STDIO_NEGATIVE_DIR}")
-  file(WRITE "${AVA_MCP_STDIO_NEGATIVE_DIR}/stdio_client_negative.cpp" "${AVA_MCP_STDIO_NEGATIVE_SOURCE}\n")
-  file(WRITE "${AVA_MCP_STDIO_NEGATIVE_DIR}/CMakeLists.txt" "# negative scanner fixture\n")
+# Own a per-invocation child: concurrent CTest processes must never remove a peer's fixture.
+string(RANDOM LENGTH 24 ALPHABET 0123456789abcdef invocation)
+set(root "${AVA_MCP_STDIO_NEGATIVE_ROOT}/${invocation}")
+file(MAKE_DIRECTORY "${root}")
+set(cases
+  "fork|::fork()" "vfork|vfork()" "exec|execve(nullptr)"
+  "spawn|posix_spawn(nullptr)" "spawnp|posix_spawnp(nullptr)"
+  "popen|popen(nullptr)" "system|system(nullptr)" "setpgid|setpgid(0, 0)"
+  "kill|::kill(0, 0)" "killpg|killpg(0, 0)"
+  "wait|wait(nullptr)" "waitpid|waitpid(0, nullptr, 0)" "waitid|waitid(0)"
+  "qualified_wait|::wait(nullptr)"
+  "fcntl|fcntl(0)" "pipe|pipe(nullptr)" "pipe2|pipe2(nullptr, 0)"
+  "dup|dup(0)" "dup2|dup2(0, 1)" "dup3|dup3(0, 1, 0)"
+  "poll|poll(nullptr, 0, 0)" "ppoll|ppoll(nullptr, 0, nullptr, nullptr)"
+  "include|#include <sys/wait.h>" "pid|pid_t child"
+  "fd|stdin_fd_" "signal|SIGTERM" "sigaction|sigaction(0)"
+  "signal_call|signal(0)" "ignore|ScopedSignalIgnore" "unique_fd|UniqueFd"
+  "pollfd|pollfd descriptor" "status|child_status_" "group|can_signal_group_")
+foreach(case IN LISTS cases)
+  string(REPLACE "|" ";" fields "${case}")
+  list(GET fields 0 name)
+  list(GET fields 1 source)
+  set(directory "${root}/${name}")
+  file(MAKE_DIRECTORY "${directory}")
+  file(WRITE "${directory}/stdio_client_negative.cpp" "${source}\n")
+  file(WRITE "${directory}/CMakeLists.txt" "# scanner rejection fixture\n")
   execute_process(
-    COMMAND "${CMAKE_COMMAND}"
-      "-DAVA_MCP_STDIO_DIR=${AVA_MCP_STDIO_NEGATIVE_DIR}"
-      "-DAVA_MCP_CMAKE=${AVA_MCP_STDIO_NEGATIVE_DIR}/CMakeLists.txt"
-      -P "${AVA_MCP_STDIO_SCANNER}"
-    RESULT_VARIABLE AVA_MCP_STDIO_NEGATIVE_RESULT
-    OUTPUT_VARIABLE AVA_MCP_STDIO_NEGATIVE_STDOUT
-    ERROR_VARIABLE AVA_MCP_STDIO_NEGATIVE_STDERR)
-  if(AVA_MCP_STDIO_NEGATIVE_RESULT EQUAL 0)
-    message(FATAL_ERROR "MCP stdio scanner failed to reject ${AVA_MCP_STDIO_NEGATIVE_NAME}")
-  endif()
-  string(FIND "${AVA_MCP_STDIO_NEGATIVE_STDOUT}${AVA_MCP_STDIO_NEGATIVE_STDERR}" "forbidden local process authority" AVA_MCP_STDIO_REJECTION)
-  if(AVA_MCP_STDIO_REJECTION EQUAL -1)
-    message(FATAL_ERROR "MCP stdio scanner rejected ${AVA_MCP_STDIO_NEGATIVE_NAME} for the wrong reason")
+    COMMAND "${CMAKE_COMMAND}" "-DAVA_MCP_STDIO_DIR=${directory}"
+      "-DAVA_MCP_CMAKE=${directory}/CMakeLists.txt" -P "${AVA_MCP_STDIO_SCANNER}"
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+  if(result EQUAL 0 OR NOT "${output}${error}" MATCHES "forbidden local process authority")
+    file(REMOVE_RECURSE "${root}")
+    message(FATAL_ERROR "MCP stdio scanner must reject ${name} for process authority: ${result} ${output}${error}")
   endif()
 endforeach()
-file(REMOVE_RECURSE "${AVA_MCP_STDIO_NEGATIVE_ROOT}")
+
+# A negative scanner that rejects every source is not a useful contract.
+set(directory "${root}/allowed")
+file(MAKE_DIRECTORY "${directory}")
+file(WRITE "${directory}/stdio_client.h" [=[
+optional<ava::process::ProcessScopeV1> process_scope
+ava::process::ProcessHandle process_handle_
+ava::process::PipeEndpoint standard_input_
+AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+]=])
+file(WRITE "${directory}/stdio_client.cpp" [=[
+ProcessRoleV1::Mcp
+make_mcp_environment_v1
+.spawn(
+StreamModeV1::Capture
+->operation()
+CleanupStateV1::Complete
+request_kill(); skill(); myfork(); mypoll();
+supervisor.wait(handle, deadline); supervisor->wait(handle, deadline);
+MyUniqueFd scoped_child_status_ SIGTERM_suffix prefix_can_signal_group_
+]=])
+file(WRITE "${directory}/CMakeLists.txt" "target_link_libraries(fixture AVA::process)\n")
+execute_process(
+  COMMAND "${CMAKE_COMMAND}" "-DAVA_MCP_STDIO_DIR=${directory}"
+    "-DAVA_MCP_CMAKE=${directory}/CMakeLists.txt" -P "${AVA_MCP_STDIO_SCANNER}"
+  RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+file(REMOVE_RECURSE "${root}")
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "MCP stdio scanner rejected allowed identifier boundaries: ${output}${error}")
+endif()

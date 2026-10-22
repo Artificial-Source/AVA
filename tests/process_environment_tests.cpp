@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/process/environment.h"
 #include "ava/process/environment_test_support.h"
 #include "ava/process/scope.h"
@@ -611,7 +612,7 @@ void test_common_launch_rejects_mismatched_logical_cwd()
                                    {.executable = "/bin/true", .argv = {"/bin/true"}, .environment = std::move(*environment), .cwd = spawn_cwd.string()});
     if (result)
     {
-      static_cast<void>(supervisor.wait(result->handle, std::chrono::steady_clock::now() + std::chrono::seconds(2)));
+      static_cast<void>(supervisor.wait(result->handle, ava::tests::now_plus_seconds(2)));
       return false;
     }
     errors.push_back(result.error().format());

@@ -1,5 +1,8 @@
 #include "sys.h"
 #include "tests/support/process_group_test_support.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/containment/containment.h"
@@ -32,11 +35,30 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 
 namespace {
+
+using ava::tests::write_executable_for_test;
+
+// Only the isolated subreaper below uses this exact-PID reaper. Bash retains
+// exclusive wait ownership of its own leader and sentinel.
+sig_atomic_t volatile signal_fixture_descendant = -1;
+sig_atomic_t volatile signal_fixture_status = -1;
+
+void reap_signal_fixture_descendant(int) noexcept
+{
+  int const saved_errno = errno;
+  int status = 0;
+  if (signal_fixture_descendant > 0 && ::waitpid(static_cast<pid_t>(signal_fixture_descendant), &status, WNOHANG) == signal_fixture_descendant)
+    signal_fixture_status = status;
+  errno = saved_errno;
+}
 
 std::string read_text_file_for_test(std::filesystem::path const& path)
 {
@@ -59,13 +81,7 @@ std::optional<pid_t> read_pid_file_for_test(std::filesystem::path const& path)
 bool wait_for_process_group_exit(pid_t pgid)
 {
   auto const deadline = ava::tests::now_plus_seconds(5);
-  while (ava::test::process_group_has_live_member(pgid))
-  {
-    if (std::chrono::steady_clock::now() >= deadline)
-      return false;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  return true;
+  return ava::test::wait_for_process_group_exit(pgid, deadline);
 }
 
 ava::core::Result<ava::tools::BashResult> run_bash_for_test(ava::tools::ToolContext context, std::string_view command,
@@ -241,18 +257,6 @@ void test_bash_tool()
            "run_bash rejects an unsafe inherited startup PATH before it can influence a sealed command");
   }
 
-  auto denied = run_bash_for_test(context, "rm -rf important");
-  expect(!denied, "run_bash fails closed for a destructive command without a critical one-shot resolver");
-
-  auto chained = run_bash_for_test(context, "pwd; rm -rf important");
-  expect(!chained, "raw shell syntax fails closed without a critical one-shot resolver");
-  auto allowed_prefix_chain = run_bash_for_test(context, "pwd; whoami");
-  expect(!allowed_prefix_chain, "an otherwise benign raw shell chain still requires critical one-shot approval");
-
-  expect(!run_bash_for_test(context, "cmake -E cat ~/.config/ava/auth.json"), "a critical cmake file helper fails closed without approval");
-  expect(!run_bash_for_test(context, "cmake -P docs/plan.md"), "critical cmake script execution fails closed without approval");
-  expect(!run_bash_for_test(context, "cmake -E copy docs/plan.md src/new.cpp"), "a critical cmake copy helper fails closed without approval");
-
   auto const repository_test_dir = root / "repository-test-fixture";
   auto const repository_test_marker = repository_test_dir / "executed-marker";
   auto const safe_command_bin = root / "sealed-command-bin";
@@ -268,6 +272,24 @@ void test_bash_tool()
     expect(::chmod((safe_command_bin / name).c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0, "repository command fixture can create a sealed executable identity");
   }
   ScopedEnvVar const repository_path("PATH", safe_command_bin.string() + ":/usr/bin:/bin");
+  std::vector<ava::tools::PermissionAuditEvent> critical_audits;
+  auto no_resolver_context = context;
+  no_resolver_context.permission_audit_sink = [&critical_audits](ava::tools::PermissionAuditEvent const& event) -> ava::core::VoidResult {
+    critical_audits.push_back(event);
+    return {};
+  };
+  for (auto const* text : {"rm -rf important", "pwd; rm -rf important", "pwd; whoami", "cmake -E cat ~/.config/ava/auth.json", "cmake -P docs/plan.md",
+                           "cmake -E copy docs/plan.md src/new.cpp"})
+  {
+    critical_audits.clear();
+    auto denied = run_bash_for_test(no_resolver_context, text);
+    ava::tests::expect_all(std::string("critical command fails closed without a resolver: ") + text,
+                           {{"PermissionDenied", !denied && denied.error().category() == ava::core::ErrorCategory::PermissionDenied},
+                            {"no_resolver", !denied && denied.error().format().find("resolution: no_resolver") != std::string::npos},
+                            {"Critical audit", !critical_audits.empty() && critical_audits.front().risk == ava::permissions::PermissionRisk::Critical},
+                            {"Critical classification", !critical_audits.empty() && critical_audits.front().command_metadata &&
+                                                            critical_audits.front().command_metadata->level == ava::command::CommandLevel::Critical}});
+  }
   {
     std::ofstream test_file(repository_test_dir / "CTestTestfile.cmake", std::ios::binary | std::ios::trunc);
     test_file << "add_test(NAME repository_controlled_code COMMAND /usr/bin/touch " << repository_test_marker.generic_string() << ")\n";
@@ -275,12 +297,14 @@ void test_bash_tool()
   auto repository_build = run_bash_for_test(context, "cmake --build " + repository_test_dir.generic_string());
   expect(development_containment_available ? repository_build && repository_build->exit_code == 0 && !std::filesystem::exists(repository_test_marker)
                                            : !repository_build && repository_build.error().format().find("no_resolver") != std::string::npos,
-         "repository builds auto-allow only when verified development containment is available; otherwise they ask and fail closed without a resolver");
+         std::string("repository builds auto-allow only with verified containment; otherwise fail closed without a resolver") +
+             (development_containment_available ? " (containment available)" : " (containment unavailable)"));
 
   auto repository_test = run_bash_for_test(context, "ctest --test-dir " + repository_test_dir.generic_string());
   expect(development_containment_available ? repository_test && repository_test->exit_code == 0 && !std::filesystem::exists(repository_test_marker)
                                            : !repository_test && repository_test.error().format().find("no_resolver") != std::string::npos,
-         "repository tests auto-allow only when verified development containment is available; otherwise they ask and fail closed without a resolver");
+         std::string("repository tests auto-allow only with verified containment; otherwise fail closed without a resolver") +
+             (development_containment_available ? " (containment available)" : " (containment unavailable)"));
 
   ava::tools::ToolContext const timeout_context{
       .workspace_dir = root,
@@ -307,7 +331,8 @@ void test_bash_tool()
   auto timeout_tree = run_bash_for_test(timeout_tree_context, "/bin/sh -c \"sleep 30 & printf $$ > " + timeout_group_file.generic_string() + "; wait\"",
                                         ava::tools::BashOptions{.timeout = std::chrono::milliseconds(4000), .max_bytes = 1024});
   auto const timeout_pgid = read_pid_file_for_test(timeout_group_file);
-  expect(timeout_tree && timeout_tree->timed_out && timeout_tree_prompts == 1 && timeout_pgid && wait_for_process_group_exit(*timeout_pgid),
+  expect(timeout_tree && timeout_tree->timed_out && timeout_tree_prompts == 1 && timeout_pgid &&
+             ava::test::wait_for_process_group_exit(*timeout_pgid, ava::tests::now_plus_seconds(5)),
          "run_bash timeout terminates child processes in the command process group");
 
   int cancel_checks = 0;
@@ -342,9 +367,9 @@ void test_bash_tool()
   auto cancel_tree = run_bash_for_test(cancel_tree_context, "/bin/sh -c \"sleep 30 & printf $$ > " + cancel_group_file.generic_string() + "; wait\"",
                                        ava::tools::BashOptions{.timeout = std::chrono::milliseconds(12000), .max_bytes = 1024});
   auto const cancel_pgid = read_pid_file_for_test(cancel_group_file);
-  expect(
-      cancel_tree && cancel_tree->canceled && !cancel_tree->timed_out && cancel_tree_prompts == 1 && cancel_pgid && wait_for_process_group_exit(*cancel_pgid),
-      "run_bash cancellation terminates child processes in the command process group");
+  expect(cancel_tree && cancel_tree->canceled && !cancel_tree->timed_out && cancel_tree_prompts == 1 && cancel_pgid &&
+             ava::test::wait_for_process_group_exit(*cancel_pgid, ava::tests::now_plus_seconds(5)),
+         "run_bash cancellation terminates child processes in the command process group");
 
   auto ask_without_resolver = run_bash_for_test(context, "true");
   expect(!ask_without_resolver && ask_without_resolver.error().format().find("resolution: no_resolver") != std::string::npos,
@@ -518,23 +543,19 @@ void test_sealed_local_bash_contract()
   expect(::chmod(temp_root().c_str(), S_IRWXU) == 0 && ::chmod(root.c_str(), S_IRWXU) == 0 && ::chmod(workspace.c_str(), S_IRWXU) == 0 &&
              ::chmod(first_bin.c_str(), S_IRWXU) == 0 && ::chmod(second_bin.c_str(), S_IRWXU) == 0,
          "sealed local bash fixture owns every planning root");
-  auto write_executable = [](std::filesystem::path const& path, std::string_view body) {
-    std::ofstream executable(path, std::ios::binary | std::ios::trunc);
-    executable << body;
-    executable.close();
-    return ::chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0;
-  };
-  expect(write_executable(first_bin / "inspect",
-                          "#!/bin/sh\nprintf 'argc=%s first=<%s> second=<%s>\\n' \"$#\" \"$1\" \"$2\"\n"
-                          "if [ -z \"${AVA_BASH_SECRET_SENTINEL+x}\" ]; then printf 'sentinels=absent\\n'; else printf 'sentinels=present\\n'; fi\n"
-                          "if IFS= read -r line; then printf 'stdin=data\\n'; else printf 'stdin=eof\\n'; fi\n") &&
-             write_executable(first_bin / "chosen", "#!/bin/sh\nprintf 'first-choice\\n'\n") &&
-             write_executable(second_bin / "chosen", "#!/bin/sh\nprintf 'second-choice\\n'\n") &&
-             write_executable(first_bin / "stale", "#!/bin/sh\nprintf old-stale\\n") && write_executable(first_bin / "npm", "#!/bin/sh\nprintf npm-ran\\n") &&
-             write_executable(first_bin / "python", "#!/bin/sh\nprintf python-ran\\n") &&
-             write_executable(first_bin / "python3", "#!/bin/sh\nprintf 'env-python-ran\\n'\n") &&
-             write_executable(first_bin / "env-python", "#!/usr/bin/env python3\nprintf 'script-body-should-not-run-directly\\n'\n") &&
-             write_executable(first_bin / "bash", "#!/bin/sh\nprintf bash-ran\\n") && write_executable(first_bin / "rm", "#!/bin/sh\nprintf rm-ran\\n"),
+  expect(write_executable_for_test(first_bin / "inspect",
+                                   "#!/bin/sh\nprintf 'argc=%s first=<%s> second=<%s>\\n' \"$#\" \"$1\" \"$2\"\n"
+                                   "if [ -z \"${AVA_BASH_SECRET_SENTINEL+x}\" ]; then printf 'sentinels=absent\\n'; else printf 'sentinels=present\\n'; fi\n"
+                                   "if IFS= read -r line; then printf 'stdin=data\\n'; else printf 'stdin=eof\\n'; fi\n") &&
+             write_executable_for_test(first_bin / "chosen", "#!/bin/sh\nprintf 'first-choice\\n'\n") &&
+             write_executable_for_test(second_bin / "chosen", "#!/bin/sh\nprintf 'second-choice\\n'\n") &&
+             write_executable_for_test(first_bin / "stale", "#!/bin/sh\nprintf old-stale\\n") &&
+             write_executable_for_test(first_bin / "npm", "#!/bin/sh\nprintf npm-ran\\n") &&
+             write_executable_for_test(first_bin / "python", "#!/bin/sh\nprintf python-ran\\n") &&
+             write_executable_for_test(first_bin / "python3", "#!/bin/sh\nprintf 'env-python-ran\\n'\n") &&
+             write_executable_for_test(first_bin / "env-python", "#!/usr/bin/env python3\nprintf 'script-body-should-not-run-directly\\n'\n") &&
+             write_executable_for_test(first_bin / "bash", "#!/bin/sh\nprintf bash-ran\\n") &&
+             write_executable_for_test(first_bin / "rm", "#!/bin/sh\nprintf rm-ran\\n"),
          "sealed local bash fixture creates executable identities");
 
   ScopedEnvVar const path_guard("PATH", first_bin.string() + ":/usr/bin:/bin");
@@ -603,13 +624,21 @@ void test_sealed_local_bash_contract()
   secret_audit_event.command_metadata->level = ava::command::CommandLevel::Critical;
   auto const secret_audit_json = ava::tools::permission_audit_data_json(secret_audit_event);
   auto env_python = run_bash_for_test(context, "env-python", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(1000)});
-  expect(exact && exact->output.find("argc=2 first=<> second=<second>") != std::string::npos && exact->output.find("sentinels=absent") != std::string::npos &&
-             exact->output.find("stdin=eof") != std::string::npos && env_python && env_python->output == "env-python-ran\n" && prompts.size() == 2 &&
-             prompts.front().command_metadata && !audits.empty() && audits.front().command_metadata &&
-             prompts.front().command_metadata->fingerprint == audits.front().command_metadata->fingerprint && complete_audit_metadata &&
-             audit_json.find("must-not-reach-child") == std::string::npos && audit_json.find("AVA_BASH_SECRET_SENTINEL") == std::string::npos &&
-             secret_audit_json.find("never-persist-this") == std::string::npos && secret_audit_json.find("<redacted one-shot command>") != std::string::npos,
-         "one sealed plan carries exact empty argv, stdin EOF, redacted environment, and the same fingerprint through prompt and audit");
+  if (ava::tests::require(exact.has_value(), "exact-argv command executes"))
+  {
+    ava::tests::expect_eq(exact->output, std::string("argc=2 first=<> second=<second>\nsentinels=absent\nstdin=eof\n"),
+                          "child observes exact empty argv, sanitized environment, and stdin EOF");
+  }
+  ava::tests::expect_all("sealed execution carries permission identity into its audit",
+                         {{"env shebang executes", env_python && env_python->output == "env-python-ran\n"},
+                          {"two prompts", prompts.size() == 2},
+                          {"matching fingerprint", !prompts.empty() && prompts.front().command_metadata && !audits.empty() && audits.front().command_metadata &&
+                                                       prompts.front().command_metadata->fingerprint == audits.front().command_metadata->fingerprint},
+                          {"all metadata fields", complete_audit_metadata},
+                          {"secret value redacted", audit_json.find("must-not-reach-child") == std::string::npos},
+                          {"secret key redacted", audit_json.find("AVA_BASH_SECRET_SENTINEL") == std::string::npos},
+                          {"one-shot value redacted", secret_audit_json.find("never-persist-this") == std::string::npos},
+                          {"one-shot redaction marker", secret_audit_json.find("<redacted one-shot command>") != std::string::npos}});
 
   ava::tools::ToolContext no_relookup_context = context;
   no_relookup_context.permission_resolver =
@@ -623,11 +652,9 @@ void test_sealed_local_bash_contract()
   static_cast<void>(::setenv("PATH", (first_bin.string() + ":/usr/bin:/bin").c_str(), 1));
   ava::tools::ToolContext stale_context = context;
   stale_context.permission_resolver =
-      [&first_bin, &write_executable](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
-    return write_executable(first_bin / "stale", "#!/bin/sh\nprintf replacement\\n")
-               ? ava::core::Result<ava::permissions::PermissionResolutionDecision>(ava::permissions::PermissionResolution::Allow)
-               : ava::core::Result<ava::permissions::PermissionResolutionDecision>(
-                     std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to replace stale executable")));
+      [&first_bin](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    ava::tests::write_test_file(first_bin / "stale", "#!/bin/sh\nprintf replacement\\n", 0700);
+    return ava::permissions::PermissionResolution::Allow;
   };
   auto stale = run_bash_for_test(stale_context, "stale", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(1000)});
   expect(!stale && stale.error().format().find("stale") != std::string::npos, "stale executable identity blocks execution after permission");
@@ -653,11 +680,18 @@ void test_sealed_local_bash_contract()
                             });
   bool const npm_behavior = development_containment_available ? npm && npm->exit_code == 0 && npm->output.find("npm-ran") != std::string::npos
                                                               : !npm && npm.error().format().find("no_resolver") != std::string::npos;
-  expect(npm_behavior && !python_bare && !python_absolute && !bash_inline && !destructive && !raw && all_critical &&
-             critical_prompts[0].command_metadata->family == critical_prompts[1].command_metadata->family &&
-             critical_prompts[0].command_metadata->resolved_executable == critical_prompts[1].command_metadata->resolved_executable,
-         "npm project code auto-allows under verified development containment, while bare/absolute Python, bash, destructive, and raw-shell commands remain "
-         "critical one-shot prompts");
+  ava::tests::expect_all(std::string("project recipes and critical one-shot commands") +
+                             (development_containment_available ? " (containment available)" : " (containment unavailable)"),
+                         {{"npm containment policy", npm_behavior},
+                          {"bare Python denied", !python_bare},
+                          {"absolute Python denied", !python_absolute},
+                          {"inline Bash denied", !bash_inline},
+                          {"destructive command denied", !destructive},
+                          {"raw shell denied", !raw},
+                          {"all prompts Critical", all_critical},
+                          {"same Python family", all_critical && critical_prompts[0].command_metadata->family == critical_prompts[1].command_metadata->family},
+                          {"same Python executable", all_critical && critical_prompts[0].command_metadata->resolved_executable ==
+                                                                         critical_prompts[1].command_metadata->resolved_executable}});
 
   auto const binary_path = first_bin / "descriptor-binary";
   std::error_code copy_error;
@@ -669,8 +703,8 @@ void test_sealed_local_bash_contract()
   auto const bound_script = first_bin / "descriptor-race";
   auto const replacement_script = first_bin / "descriptor-race.replacement";
   bool swapped_after_binding = false;
-  bool const race_script_written = write_executable(bound_script, "#!/bin/sh\nprintf approved-descriptor\n") &&
-                                   write_executable(replacement_script, "#!/bin/sh\nprintf replacement-must-not-run\n");
+  bool const race_script_written = write_executable_for_test(bound_script, "#!/bin/sh\nprintf approved-descriptor\n") &&
+                                   write_executable_for_test(replacement_script, "#!/bin/sh\nprintf replacement-must-not-run\n");
   ava::tools::ToolContext bound_context = context;
   bound_context.announce_execution_after_permission = true;
   bound_context.execution_started = std::make_shared<std::atomic_bool>(false);
@@ -695,11 +729,10 @@ void test_sealed_local_bash_contract()
   std::error_code replacement_copy_error;
   std::filesystem::copy_file("/bin/false", replacement_interpreter, std::filesystem::copy_options::overwrite_existing, replacement_copy_error);
   bool interpreter_swapped_after_binding = false;
-  bool const interpreter_fixture_written = !interpreter_copy_error && !replacement_copy_error &&
-                                           ::chmod(bound_interpreter.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0 &&
-                                           ::chmod(replacement_interpreter.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0 &&
-                                           write_executable(interpreter_script,
-                                                            "#!" + bound_interpreter.string() + "\nprintf approved-interpreter-descriptor\n");
+  bool const interpreter_fixture_written =
+      !interpreter_copy_error && !replacement_copy_error && ::chmod(bound_interpreter.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0 &&
+      ::chmod(replacement_interpreter.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0 &&
+      write_executable_for_test(interpreter_script, "#!" + bound_interpreter.string() + "\nprintf approved-interpreter-descriptor\n");
   ava::tools::ToolContext interpreter_context = context;
   interpreter_context.announce_execution_after_permission = true;
   interpreter_context.execution_started = std::make_shared<std::atomic_bool>(false);
@@ -718,7 +751,7 @@ void test_sealed_local_bash_contract()
       run_bash_for_test(interpreter_context, "descriptor-interpreter-race", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(1000)});
 
   auto const failed_script = first_bin / "descriptor-exec-failure";
-  bool const failure_script_written = write_executable(failed_script, "#!/bin/sh\nprintf must-not-start\n");
+  bool const failure_script_written = write_executable_for_test(failed_script, "#!/bin/sh\nprintf must-not-start\n");
   ava::tools::ToolContext failure_context = context;
   failure_context.announce_execution_after_permission = true;
   failure_context.execution_started = std::make_shared<std::atomic_bool>(false);
@@ -757,8 +790,10 @@ void test_sealed_local_bash_contract()
   auto normal_group = run_bash_for_test(group_context, "sleep 30 & printf $$ > " + normal_group_file.string(),
                                            ava::tools::BashOptions{.timeout = std::chrono::milliseconds(1000)});
   auto const normal_pgid = read_pid_file_for_test(normal_group_file);
-  expect(normal_group && normal_group->exit_code == 0 && normal_pgid && wait_for_process_group_exit(*normal_pgid),
-         "normal leader completion cleans verified background children before returning");
+  ava::tests::expect_all("normal leader completion cleans verified background children before returning",
+                         {{"leader succeeds", normal_group && normal_group->exit_code == 0},
+                          {"group recorded", normal_pgid.has_value()},
+                          {"no live group members", normal_pgid && wait_for_process_group_exit(*normal_pgid)}});
 }
 
 void test_sealed_process_group_sentinel_and_grace()
@@ -773,53 +808,16 @@ void test_sealed_process_group_sentinel_and_grace()
   auto const first_bin = root / "bin";
   std::filesystem::create_directories(first_bin);
   expect(::chmod(first_bin.c_str(), S_IRWXU) == 0, "sentinel/grace fixture bin is owner-only");
-  auto write_executable = [](std::filesystem::path const& path, std::string_view body) {
-    std::ofstream executable(path, std::ios::binary | std::ios::trunc);
-    executable << body;
-    executable.close();
-    return ::chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0;
-  };
 
-  // A fixture that verifies the leader has no unexpected child processes.
-  // If the sentinel were forked by the leader (old design), it would appear
-  // here as an unexpected child. With the AVA-owned sibling design, the
-  // leader's /proc/self/task/$$/children is empty.
-  expect(write_executable(first_bin / "child-check",
-                          "#!/bin/sh\n"
-                          "children=''\n"
-                          "while IFS= read -r line; do\n"
-                          "  children=\"${children}${line} \"\n"
-                          "done < /proc/self/task/$$/children 2>/dev/null\n"
-                          "if [ -n \"$children\" ]; then\n"
-                          "  printf 'unexpected-children: %s\\n' \"$children\"\n"
-                          "else\n"
-                          "  printf 'no-unexpected-children\\n'\n"
-                          "fi\n"),
-         "sentinel/grace fixture creates the child-check executable");
-
-  // A fixture that starts a background subshell with a SIGTERM handler that
-  // writes a marker after a short delay, then the leader exits normally.
-  // The leader must wait for trap readiness before normal-exit group cleanup.
-  auto const grace_marker = workspace / "grace-marker";
-  std::filesystem::remove(grace_marker, cleanup);
-  auto const grace_ready = workspace / "grace-ready";
-  expect(::mkfifo(grace_ready.c_str(), S_IRUSR | S_IWUSR) == 0, "sentinel/grace fixture creates the readiness FIFO");
-  expect(write_executable(first_bin / "grace-leader",
-                          "#!/bin/sh\n"
-                          "(\n"
-                          "  trap 'sleep 0.1; touch " +
-                              grace_marker.string() +
-                              "; exit 0' TERM\n"
-                              "  printf 'ready\\n' > " +
-                              grace_ready.string() +
-                              " || exit 1\n"
-                              "  while true; do sleep 0.05; done\n"
-                              ") &\n"
-                              "IFS= read -r ready < " +
-                              grace_ready.string() +
-                              " && [ \"$ready\" = ready ] || exit 1\n"
-                              "exit 0\n"),
-         "sentinel/grace fixture creates the grace-leader executable");
+  // Build artifacts can inherit a group-writable build-directory umask. Use
+  // an independently owned, restrictive executable identity for command sealing.
+  auto const native_fixture = first_bin / "process-fixture";
+  std::error_code copy_error;
+  std::filesystem::copy_file(AVA_FAKE_PROCESS_CHILD_PATH, native_fixture, std::filesystem::copy_options::none, copy_error);
+  if (!ava::tests::require(!copy_error, "signal fixture copies its native executable: " + copy_error.message()))
+    return;
+  if (!ava::tests::require(::chmod(native_fixture.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0, "signal fixture executable is owner-only"))
+    return;
 
   ScopedEnvVar const path_guard("PATH", first_bin.string() + ":/usr/bin:/bin");
   ava::tools::ToolContext const context{
@@ -829,91 +827,167 @@ void test_sealed_process_group_sentinel_and_grace()
         return ava::permissions::PermissionResolution::Allow;
       }};
 
-  struct sigaction previous_term_action{};
-  struct sigaction ignored_term_action{};
-  ignored_term_action.sa_handler = SIG_IGN;
-  static_cast<void>(::sigemptyset(&ignored_term_action.sa_mask));
-  bool const term_action_installed = ::sigaction(SIGTERM, &ignored_term_action, &previous_term_action) == 0;
-  sigset_t blocked_term{};
-  sigset_t previous_mask{};
-  static_cast<void>(::sigemptyset(&blocked_term));
-  static_cast<void>(::sigaddset(&blocked_term, SIGTERM));
-  bool const term_mask_installed = term_action_installed && ::sigprocmask(SIG_BLOCK, &blocked_term, &previous_mask) == 0;
-  expect(term_mask_installed, "sentinel/grace fixture installs inherited ignored and blocked SIGTERM state");
+  struct ScopedTermState
+  {
+    struct sigaction previous_action{};
+    sigset_t previous_mask{};
+    bool action_installed = false;
+    bool mask_installed = false;
+    ScopedTermState()
+    {
+      struct sigaction ignored{};
+      ignored.sa_handler = SIG_IGN;
+      ::sigemptyset(&ignored.sa_mask);
+      action_installed = ::sigaction(SIGTERM, &ignored, &previous_action) == 0;
+      sigset_t blocked;
+      ::sigemptyset(&blocked);
+      ::sigaddset(&blocked, SIGTERM);
+      mask_installed = action_installed && ::sigprocmask(SIG_BLOCK, &blocked, &previous_mask) == 0;
+    }
+    ~ScopedTermState()
+    {
+      if (mask_installed)
+        ::sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
+      if (action_installed)
+        ::sigaction(SIGTERM, &previous_action, nullptr);
+    }
+  } inherited_term_state;
+  if (!ava::tests::require(inherited_term_state.mask_installed, "sentinel fixture installs inherited ignored and blocked TERM state"))
+    return;
 
-  // Fix 1: the sentinel is an AVA-owned sibling, so the leader (after exec)
-  // has no unexpected child processes.
-  auto child_check = run_bash_for_test(context, "child-check", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(2000)});
-  expect(child_check && child_check->exit_code == 0 && child_check->output.find("no-unexpected-children") != std::string::npos,
-         "the sealed command sentinel is an AVA-owned sibling: a direct command sees no sentinel child");
+  // waitpid observes child ownership directly. A procfs read can be denied by
+  // containment even when access(2) says the children file is readable.
+  auto child_check = run_bash_for_test(context, "process-fixture no-child-processes", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(2000)});
+  if (ava::tests::require(child_check.has_value(), "native child-ownership probe executes"))
+  {
+    ava::tests::expect_eq(child_check->exit_code, 0, "the direct command has no child wait authority over the sibling sentinel");
+    ava::tests::expect_eq(child_check->output, std::string("no-unexpected-children\n"), "native child-ownership probe observes ECHILD");
+  }
 
-  // Fix 2: the verified process group receives a finite SIGTERM grace period
-  // even when the leader has already exited normally. The background child's
-  // TERM handler completes during grace, and no SIGKILL is needed.
-  auto grace = run_bash_for_test(context, "grace-leader", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(2000)});
-  expect(grace && grace->exit_code == 0 && std::filesystem::exists(grace_marker),
-         "background child TERM handler completes during the finite grace period on normal leader exit");
-
-  // Timeout coverage: a long-running command with a background child is
-  // terminated via the timeout path, which also applies the grace period.
-  auto const timeout_marker = workspace / "timeout-marker";
-  std::filesystem::remove(timeout_marker, cleanup);
-  auto const timeout_group_file = workspace / "timeout-child-pgid";
-  std::filesystem::remove(timeout_group_file, cleanup);
-  expect(write_executable(first_bin / "timeout-leader",
-                          "#!/bin/sh\n"
-                          "(\n"
-                          "  trap 'sleep 0.1; touch " +
-                              timeout_marker.string() +
-                              "; exit 0' TERM\n"
-                              "  printf $$ > " +
-                              timeout_group_file.string() +
-                              "\n"
-                              "  while true; do sleep 0.05; done\n"
-                              ") &\n"
-                              "while true; do sleep 1; done\n"),
-         "sentinel/grace fixture creates the timeout-leader executable");
-  auto timeout_result = run_bash_for_test(context, "timeout-leader", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(500), .max_bytes = 1024});
-  auto const timeout_pgid = read_pid_file_for_test(timeout_group_file);
-  expect(timeout_result && timeout_result->timed_out && timeout_pgid && wait_for_process_group_exit(*timeout_pgid) && std::filesystem::exists(timeout_marker),
-         "timeout termination applies the grace period to the verified process group");
-
-  // Cancel coverage: cancellation also applies the grace period.
-  auto const cancel_marker = workspace / "cancel-marker";
-  std::filesystem::remove(cancel_marker, cleanup);
-  auto const cancel_group_file = workspace / "cancel-child-pgid";
-  std::filesystem::remove(cancel_group_file, cleanup);
-  expect(write_executable(first_bin / "cancel-leader",
-                          "#!/bin/sh\n"
-                          "(\n"
-                          "  trap 'sleep 0.1; touch " +
-                              cancel_marker.string() +
-                              "; exit 0' TERM\n"
-                              "  printf $$ > " +
-                              cancel_group_file.string() +
-                              "\n"
-                              "  while true; do sleep 0.05; done\n"
-                              ") &\n"
-                              "while true; do sleep 1; done\n"),
-         "sentinel/grace fixture creates the cancel-leader executable");
+  auto run_signal_case = [&](ava::tools::ToolContext base_context, std::string const& label, bool ignore_term, bool leader_exits, bool cancel) {
+    // A private subreaper owns the orphaned descendant, so final signal status
+    // and cleanup never depend on the host's PID 1 reaping zombies.
+    auto status = ava::tests::run_in_child_with_syscall_errno(
+        std::span<ava::tests::SyscallErrno const>{},
+        [&] {
+          auto const failures_before = ava::tests::failures();
+          if (!ava::tests::require(::prctl(PR_SET_CHILD_SUBREAPER, 1L) == 0, label + ": acquire isolated descendant custody"))
+            return 1;
+          struct sigaction reap{};
+          reap.sa_handler = reap_signal_fixture_descendant;
+          reap.sa_flags = SA_RESTART;
+          ::sigemptyset(&reap.sa_mask);
+          if (!ava::tests::require(::sigaction(SIGCHLD, &reap, nullptr) == 0, label + ": install exact descendant reaper"))
+            return 1;
+          sigset_t unblocked;
+          ::sigemptyset(&unblocked);
+          ::sigaddset(&unblocked, SIGCHLD);
+          if (!ava::tests::require(::sigprocmask(SIG_UNBLOCK, &unblocked, nullptr) == 0, label + ": enable descendant exit notifications"))
+            return 1;
+          auto const state_file = workspace / (label + "-state");
+          auto const receipt_file = workspace / (label + "-term");
+          auto const ready_file = workspace / (label + "-ready");
+          if (!ava::tests::require(::mkfifo(ready_file.c_str(), 0600) == 0, label + ": create readiness FIFO"))
+            return 1;
+          ava::core::UniqueFd ready(::open(ready_file.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC));
+          if (!ava::tests::require(static_cast<bool>(ready), label + ": open readiness FIFO"))
+            return 1;
+          bool execution_announced = false;
+          bool acknowledged = false;
+          bool leader_finished = !leader_exits;
+          std::string captured;
+          base_context.announce_execution_after_permission = true;
+          base_context.execution_started = std::make_shared<std::atomic_bool>(false);
+          base_context.progress_sink = [&](ava::tools::ToolProgressEvent const& event) -> ava::core::VoidResult {
+            if (event.status == "in_progress")
+              execution_announced = true;
+            return {};
+          };
+          base_context.cancel_requested = [&] {
+            if (!execution_announced)
+              return false;
+            if (!acknowledged)
+            {
+              acknowledged = ava::tests::read_until(ready.get(), captured, "READY\n", ava::tests::now_plus_seconds(5));
+              std::ifstream state(state_file);
+              pid_t group = -1;
+              pid_t descendant = -1;
+              if (state >> group >> descendant)
+                signal_fixture_descendant = descendant;
+              if (acknowledged && leader_exits)
+                leader_finished = ava::tests::wait_for_process_absent(group, ava::tests::now_plus_seconds(5));
+            }
+        // Do not select timeout/cancellation until the native child has
+        // acknowledged its installed signal disposition.
+            return !acknowledged || cancel;
+          };
+          auto const command_text = native_fixture.string() + " bash-signal-tree " + (ignore_term ? "ignore " : "handle ") +
+                                    (leader_exits ? "exit " : "wait ") + state_file.string() + " " + receipt_file.string() + " " + ready_file.string();
+          auto result = run_bash_for_test(
+              base_context, command_text,
+              ava::tools::BashOptions{.timeout = leader_exits || cancel ? std::chrono::milliseconds(5000) : std::chrono::milliseconds(1), .max_bytes = 1024});
+          pid_t group = -1;
+          pid_t descendant = -1;
+          std::ifstream state(state_file);
+          state >> group >> descendant;
+          sigset_t blocked;
+          ::sigemptyset(&blocked);
+          ::sigaddset(&blocked, SIGCHLD);
+          ::sigprocmask(SIG_BLOCK, &blocked, nullptr);
+          std::optional<int> descendant_status;
+          if (signal_fixture_status >= 0)
+            descendant_status = static_cast<int>(signal_fixture_status);
+          else
+          {
+            ava::tests::ScopedChild owned_descendant(descendant);
+            descendant_status = owned_descendant.wait_until(ava::tests::now_plus_seconds(5));
+          }
+          ava::tests::expect_all(label, {{"native readiness acknowledged", acknowledged},
+                                         {"normal leader exit observed before cleanup", leader_finished},
+                                         {"state recorded", static_cast<bool>(state) && group > 0 && descendant > 0},
+                                         {"Bash result", result.has_value()},
+                                         {"requested completion", result && (leader_exits ? result->exit_code == 0 && !result->canceled && !result->timed_out
+                                                                             : cancel     ? result->canceled && !result->timed_out
+                                                                                          : result->timed_out && !result->canceled)},
+                                         {"no live group members", group > 0 && ava::test::wait_for_process_group_exit(group, ava::tests::now_plus_seconds(5))},
+                                         {"owned descendant reaped", descendant_status.has_value()}});
+          if (!result)
+            expect(false, label + ": Bash error: " + result.error().format());
+          if (ignore_term)
+          {
+            if (ava::tests::require(descendant_status.has_value(), label + ": descendant status is available"))
+            {
+              expect(WIFSIGNALED(*descendant_status), label + ": descendant was signaled");
+              if (WIFSIGNALED(*descendant_status))
+                ava::tests::expect_eq(WTERMSIG(*descendant_status), SIGKILL, label + ": TERM refusal escalates to SIGKILL");
+            }
+          }
+          else
+          {
+            ava::tests::expect_eq(ava::tests::read_session_test_binary_file(receipt_file), std::string("TERM\n"), label + ": native TERM receipt");
+            if (ava::tests::require(descendant_status.has_value(), label + ": descendant status is available"))
+            {
+              expect(WIFEXITED(*descendant_status), label + ": immediate native handler exits normally");
+              if (WIFEXITED(*descendant_status))
+                ava::tests::expect_eq(WEXITSTATUS(*descendant_status), 0, label + ": native handler exit code");
+            }
+          }
+          return ava::tests::failures() == failures_before ? 0 : 1;
+        },
+        ava::tests::now_plus_seconds(30));
+    ava::tests::expect_child_success(status, label);
+  };
+  run_signal_case(context, "normal-leader-term-receipt", false, true, false);
+  run_signal_case(context, "normal-leader-kill-escalation", true, true, false);
+  run_signal_case(context, "timeout-term-receipt", false, false, false);
   ava::tools::ToolContext const cancel_context{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
       .permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
         return ava::permissions::PermissionResolution::Allow;
-      },
-      .cancel_requested = [&cancel_group_file] { return std::filesystem::exists(cancel_group_file); }};
-  auto cancel_result =
-      run_bash_for_test(cancel_context, "cancel-leader", ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000), .max_bytes = 1024});
-  auto const cancel_pgid = read_pid_file_for_test(cancel_group_file);
-  expect(cancel_result && cancel_result->canceled && !cancel_result->timed_out && cancel_pgid && wait_for_process_group_exit(*cancel_pgid) &&
-             std::filesystem::exists(cancel_marker),
-         "cancellation applies the grace period to the verified process group");
-
-  if (term_mask_installed)
-    static_cast<void>(::sigprocmask(SIG_SETMASK, &previous_mask, nullptr));
-  if (term_action_installed)
-    static_cast<void>(::sigaction(SIGTERM, &previous_term_action, nullptr));
+      }};
+  run_signal_case(cancel_context, "cancel-term-receipt", false, false, true);
+  run_signal_case(cancel_context, "cancel-kill-escalation", true, false, true);
 }
 
 void test_webfetch_tool()
@@ -1093,12 +1167,10 @@ void test_websearch_tool()
 }
 }  // namespace
 
-void test_credential_command_audit_omits_secrets()
+void test_one_shot_audit_serializer_redacts_command()
 {
-  // Local (non-ACP) audit surfaces must never persist unique secret values
-  // from credential-bearing commands. When secret detection refuses recipe
-  // minting, recipe_display is empty and the audit command field is replaced
-  // with a redacted marker.
+  // Serialization only: credential detection and recipe refusal are exercised
+  // by command classification tests. Here the metadata is deliberately supplied.
   struct SecretCase
   {
     std::string_view label;
@@ -1137,8 +1209,8 @@ void test_credential_command_audit_omits_secrets()
     auto const json = ava::tools::permission_audit_data_json(event);
     expect(json.find(test_case.secret) == std::string::npos,
            std::string("local audit JSON must not contain credential secret for: ") + std::string(test_case.label));
-    expect(json.find("<redacted one-shot command>") != std::string::npos || json.find("\"command\":\"\"") != std::string::npos,
-           std::string("local audit JSON must redact credential-bearing one-shot command for: ") + std::string(test_case.label));
+    expect(json.find("\"command\":\"<redacted one-shot command>\"") != std::string::npos,
+           std::string("one-shot serializer uses the exact command redaction form for: ") + std::string(test_case.label));
   }
 }
 
@@ -1210,8 +1282,7 @@ void test_payload_command_audits_persist_no_markers_or_recipes()
 
   ava::session::SessionStore store(ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "payload-audit"});
   auto lease = ava::session::SessionLease::create_and_acquire(store.session_path());
-  expect(lease.has_value(), "payload audit fixture acquires its persistent session lease");
-  if (!lease)
+  if (!ava::tests::require(lease.has_value(), "payload audit fixture acquires its persistent session lease"))
     return;
 
   struct PayloadCase
@@ -1344,7 +1415,7 @@ void run_tools_process_network_tests()
   test_sealed_process_group_sentinel_and_grace();
   test_webfetch_tool();
   test_websearch_tool();
-  test_credential_command_audit_omits_secrets();
+  test_one_shot_audit_serializer_redacts_command();
   test_denied_command_diagnostics_redact_arguments();
   test_payload_command_audits_persist_no_markers_or_recipes();
   test_command_permission_user_guidance_propagation();

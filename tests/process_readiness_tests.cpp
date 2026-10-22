@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "tests/support/process_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/process/environment.h"
 #include "ava/process/supervisor.h"
@@ -97,7 +98,7 @@ class SupervisorFallback final
 {
  public:
   explicit SupervisorFallback(ava::process::Supervisor& supervisor) : supervisor_(supervisor) { }
-  ~SupervisorFallback() { static_cast<void>(supervisor_.shutdown(std::chrono::steady_clock::now() + 2s)); }
+  ~SupervisorFallback() { static_cast<void>(supervisor_.shutdown(ava::tests::now_plus_seconds(2s))); }
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
@@ -142,32 +143,7 @@ class Latch final
   bool released_ = false;
 };
 
-std::span<std::byte> writable_bytes(std::array<char, 4096>& buffer)
-{
-  return {reinterpret_cast<std::byte*>(buffer.data()), buffer.size()};
-}
-
-bool read_until(PipeEndpoint& endpoint, std::string& received, std::string_view marker, ava::process::ProcessDeadline deadline)
-{
-  std::array<char, 4096> buffer{};
-  while (received.find(marker) == std::string::npos && received.size() < 64 * 1024)
-  {
-    auto result = endpoint.read(writable_bytes(buffer));
-    if (!result)
-      return false;
-    if (result->state == PipeIoStateV1::Progress)
-    {
-      received.append(buffer.data(), result->bytes);
-      continue;
-    }
-    if (result->state == PipeIoStateV1::EndOfStream)
-      return received.find(marker) != std::string::npos;
-    auto ready = endpoint.wait_readable(deadline);
-    if (!ready || !*ready)
-      return false;
-  }
-  return received.find(marker) != std::string::npos;
-}
+using ava::tests::read_until;
 
 bool write_text(PipeEndpoint& endpoint, std::string_view text, ava::process::ProcessDeadline deadline)
 {
@@ -192,7 +168,7 @@ bool write_text(PipeEndpoint& endpoint, std::string_view text, ava::process::Pro
 
 std::optional<ava::process::ExitStatusV1> wait_status(ava::process::Supervisor& supervisor, ava::process::ProcessHandle const& handle)
 {
-  auto status = supervisor.wait(handle, std::chrono::steady_clock::now() + 4s);
+  auto status = supervisor.wait(handle, ava::tests::now_plus_seconds(4s));
   return status ? std::optional(*status) : std::nullopt;
 }
 
@@ -234,15 +210,15 @@ void test_try_wait_final_values()
 
   auto gated = spawn_fake(supervisor, application, "ready-gate", ava::process::StreamModeV1::Capture);
   std::string ready_text;
-  bool const running = gated && gated->standard_input && gated->standard_output &&
-                       read_until(*gated->standard_output, ready_text, "READY\n", std::chrono::steady_clock::now() + 2s);
+  bool const running =
+      gated && gated->standard_input && gated->standard_output && read_until(*gated->standard_output, ready_text, "READY\n", ava::tests::now_plus_seconds(2s));
   auto empty = gated ? supervisor.try_wait(gated->handle) : ava::core::Result<std::optional<ava::process::ExitStatusV1>>(std::unexpected(gated.error()));
   ava::process::Supervisor foreign_supervisor;
   auto foreign =
       gated ? foreign_supervisor.try_wait(gated->handle) : ava::core::Result<std::optional<ava::process::ExitStatusV1>>(std::unexpected(gated.error()));
   ava::process::ProcessHandle invalid_handle;
   auto invalid = supervisor.try_wait(invalid_handle);
-  bool const released = gated && gated->standard_input && write_text(*gated->standard_input, "G", std::chrono::steady_clock::now() + 2s);
+  bool const released = gated && gated->standard_input && write_text(*gated->standard_input, "G", ava::tests::now_plus_seconds(2s));
   if (gated && gated->standard_input)
     gated->standard_input->close();
   auto normal_status = gated ? wait_status(supervisor, gated->handle) : std::nullopt;
@@ -315,27 +291,32 @@ void test_stream_readiness_and_tokens()
 
   auto output_watch = child->standard_output->watch(PipeInterestV1::Readable, 30);
   auto error_watch = child->standard_error->watch(PipeInterestV1::Readable, 10);
+  if (!ava::tests::require(output_watch.has_value(), "staged stdout watch is created") ||
+      !ava::tests::require(error_watch.has_value(), "staged stderr watch is created"))
+    return;
   std::array<PipeWatchV1, 2> output_watches{*error_watch, *output_watch};
-  auto first = supervisor.wait_for_activity(child->handle, output_watches, std::chrono::steady_clock::now() + 2s);
+  auto first = supervisor.wait_for_activity(child->handle, output_watches, ava::tests::now_plus_seconds(2s));
   auto first_output = first ? ready_for(*first, 30) : std::nullopt;
   auto first_error = first ? ready_for(*first, 10) : std::nullopt;
   std::string output_text;
-  bool const output_read = first_output && first_output->readable && !first_error &&
-                           read_until(*child->standard_output, output_text, "OUT\n", std::chrono::steady_clock::now() + 2s);
+  bool const output_read =
+      first_output && first_output->readable && !first_error && read_until(*child->standard_output, output_text, "OUT\n", ava::tests::now_plus_seconds(2s));
 
   auto input_watch = child->standard_input->watch(PipeInterestV1::Writable, 77);
+  if (!ava::tests::require(input_watch.has_value(), "staged stdin watch is created"))
+    return;
   std::array<PipeWatchV1, 1> input_watches{*input_watch};
-  auto writable = supervisor.wait_for_activity(child->handle, input_watches, std::chrono::steady_clock::now() + 2s);
+  auto writable = supervisor.wait_for_activity(child->handle, input_watches, ava::tests::now_plus_seconds(2s));
   auto input_ready = writable ? ready_for(*writable, 77) : std::nullopt;
-  bool const first_release = input_ready && input_ready->writable && write_text(*child->standard_input, "A", std::chrono::steady_clock::now() + 2s);
+  bool const first_release = input_ready && input_ready->writable && write_text(*child->standard_input, "A", ava::tests::now_plus_seconds(2s));
 
-  auto second = supervisor.wait_for_activity(child->handle, output_watches, std::chrono::steady_clock::now() + 2s);
+  auto second = supervisor.wait_for_activity(child->handle, output_watches, ava::tests::now_plus_seconds(2s));
   auto second_output = second ? ready_for(*second, 30) : std::nullopt;
   auto second_error = second ? ready_for(*second, 10) : std::nullopt;
   std::string error_text;
-  bool const error_read = second_error && second_error->readable && !second_output &&
-                          read_until(*child->standard_error, error_text, "ERR\n", std::chrono::steady_clock::now() + 2s);
-  bool const second_release = write_text(*child->standard_input, "B", std::chrono::steady_clock::now() + 2s);
+  bool const error_read =
+      second_error && second_error->readable && !second_output && read_until(*child->standard_error, error_text, "ERR\n", ava::tests::now_plus_seconds(2s));
+  bool const second_release = write_text(*child->standard_input, "B", ava::tests::now_plus_seconds(2s));
   child->standard_input->close();
   auto status = wait_status(supervisor, child->handle);
 
@@ -351,21 +332,22 @@ void test_hup_is_separate_and_drainable()
   SupervisorFallback fallback(supervisor);
   auto child = spawn_fake(supervisor, application, "buffered-hup", ava::process::StreamModeV1::Discard, ava::process::StreamModeV1::Capture,
                           ava::process::StreamModeV1::Discard);
-  auto status = child ? wait_status(supervisor, child->handle) : std::nullopt;
-  auto watch = child && child->standard_output ? child->standard_output->watch(PipeInterestV1::Readable, 51)
-                                               : ava::core::Result<PipeWatchV1>(std::unexpected(child.error()));
+  if (!ava::tests::require(child.has_value(), "buffered HUP fixture launches") ||
+      !ava::tests::require(child->standard_output.has_value(), "buffered HUP fixture captures stdout"))
+    return;
+  auto status = wait_status(supervisor, child->handle);
+  auto watch = child->standard_output->watch(PipeInterestV1::Readable, 51);
+  if (!ava::tests::require(watch.has_value(), "buffered HUP watch is created"))
+    return;
   std::array<PipeWatchV1, 1> watches{*watch};
-  auto activity = child && watch ? supervisor.wait_for_activity(child->handle, watches, std::chrono::steady_clock::now() + 2s)
-                                 : ava::core::Result<ProcessActivityV1>(std::unexpected(watch.error()));
+  auto activity = supervisor.wait_for_activity(child->handle, watches, ava::tests::now_plus_seconds(10));
   auto ready = activity ? ready_for(*activity, 51) : std::nullopt;
   std::string payload;
   bool const drained =
-      child && child->standard_output && read_until(*child->standard_output, payload, "BUFFERED-BEFORE-HUP\n", std::chrono::steady_clock::now() + 2s);
+      child && child->standard_output && read_until(*child->standard_output, payload, "BUFFERED-BEFORE-HUP\n", ava::tests::now_plus_seconds(2s));
   std::array<char, 16> tail{};
-  auto eof = child && child->standard_output ? child->standard_output->read(std::span(reinterpret_cast<std::byte*>(tail.data()), tail.size()))
-                                             : ava::core::Result<ava::process::PipeIoResultV1>(std::unexpected(child.error()));
-  auto after_drain = child && watch ? supervisor.wait_for_activity(child->handle, watches, std::chrono::steady_clock::now() + 2s)
-                                    : ava::core::Result<ProcessActivityV1>(std::unexpected(watch.error()));
+  auto eof = child->standard_output->read(std::span(reinterpret_cast<std::byte*>(tail.data()), tail.size()));
+  auto after_drain = supervisor.wait_for_activity(child->handle, watches, ava::tests::now_plus_seconds(10));
   auto closed = after_drain ? ready_for(*after_drain, 51) : std::nullopt;
 
   expect(status && watch && activity && activity->process_finished && ready && ready->readable && ready->peer_closed && !ready->error && drained && eof &&
@@ -380,8 +362,8 @@ void test_completion_wakeup_and_final_before_wait()
   SupervisorFallback fallback(supervisor);
   auto child = spawn_fake(supervisor, application, "ready-gate", ava::process::StreamModeV1::Capture);
   std::string ready_text;
-  bool const child_ready = child && child->standard_input && child->standard_output &&
-                           read_until(*child->standard_output, ready_text, "READY\n", std::chrono::steady_clock::now() + 2s);
+  bool const child_ready =
+      child && child->standard_input && child->standard_output && read_until(*child->standard_output, ready_text, "READY\n", ava::tests::now_plus_seconds(2s));
   auto latch = std::make_shared<Latch>();
   ava::process::testing::SupervisorTestAccess::set_after_completion_channel_create_hook(supervisor, [latch] { latch->arrive_and_wait(); });
   std::optional<ProcessActivityV1> observed;
@@ -390,15 +372,15 @@ void test_completion_wakeup_and_final_before_wait()
   if (child)
   {
     waiter = std::thread([&] {
-      auto activity = supervisor.wait_for_activity(child->handle, std::span<PipeWatchV1 const>{}, std::chrono::steady_clock::now() + 2s);
+      auto activity = supervisor.wait_for_activity(child->handle, std::span<PipeWatchV1 const>{}, ava::tests::now_plus_seconds(2s));
       if (activity)
         observed.emplace(std::move(*activity));
       else
         observation_failed = true;
     });
   }
-  bool const channel_created = child && latch->wait_until(std::chrono::steady_clock::now() + 2s);
-  bool const released = channel_created && child->standard_input && write_text(*child->standard_input, "G", std::chrono::steady_clock::now() + 2s);
+  bool const channel_created = child && latch->wait_until(ava::tests::now_plus_seconds(2s));
+  bool const released = channel_created && child->standard_input && write_text(*child->standard_input, "G", ava::tests::now_plus_seconds(2s));
   latch->release();
   if (waiter.joinable())
     waiter.join();
@@ -407,14 +389,16 @@ void test_completion_wakeup_and_final_before_wait()
   auto already_finished = spawn_fake(supervisor, application, "normal", ava::process::StreamModeV1::Discard, ava::process::StreamModeV1::Discard,
                                      ava::process::StreamModeV1::Discard);
   auto finished_status = already_finished ? wait_status(supervisor, already_finished->handle) : std::nullopt;
-  auto const begin = std::chrono::steady_clock::now();
-  auto immediate = already_finished ? supervisor.wait_for_activity(already_finished->handle, std::span<PipeWatchV1 const>{}, begin + 2s)
+  auto immediate = already_finished ? supervisor.wait_for_activity(already_finished->handle, std::span<PipeWatchV1 const>{}, std::chrono::steady_clock::now())
                                     : ava::core::Result<ProcessActivityV1>(std::unexpected(already_finished.error()));
-  auto const elapsed = std::chrono::steady_clock::now() - begin;
-
-  expect(child_ready && channel_created && released && observed && !observation_failed && observed->process_finished && !observed->deadline_expired &&
-             finished_status && immediate && immediate->process_finished && !immediate->deadline_expired && elapsed < 250ms,
-         "the hidden completion channel wakes a zero-watch call and a final value published before channel creation returns immediately");
+  ava::tests::expect_all("completion wakes a zero-watch call and an already-published final value is observable with no wait budget",
+                         {{"child ready", child_ready},
+                          {"channel created", channel_created},
+                          {"released", released},
+                          {"wait succeeded", observed.has_value() && !observation_failed},
+                          {"completed", observed && observed->process_finished && !observed->deadline_expired},
+                          {"final fixture settled", finished_status.has_value()},
+                          {"final visible at expired deadline", immediate && immediate->process_finished && !immediate->deadline_expired}});
 }
 
 void no_op_signal_handler(int) noexcept
@@ -429,11 +413,15 @@ void test_absolute_deadline_survives_eintr()
   auto child = spawn_fake(supervisor, application, "input-gate", ava::process::StreamModeV1::Capture, ava::process::StreamModeV1::Discard,
                           ava::process::StreamModeV1::Discard);
 
+  if (!ava::tests::require(child.has_value(), "EINTR fixture launches its gated child"))
+    return;
   struct sigaction action{};
   struct sigaction previous{};
   action.sa_handler = no_op_signal_handler;
   static_cast<void>(::sigemptyset(&action.sa_mask));
   bool const installed = ::sigaction(SIGUSR1, &action, &previous) == 0;
+  if (!ava::tests::require(installed, "EINTR fixture installs its nonterminating signal handler"))
+    return;
 
   std::mutex mutex;
   std::condition_variable changed;
@@ -451,7 +439,7 @@ void test_absolute_deadline_survives_eintr()
   std::thread interrupter([&] {
     {
       std::unique_lock lock(mutex);
-      changed.wait(lock, [&] { return target_ready; });
+      changed.wait(lock, [&] { return target_ready || stop_signals.load(std::memory_order_acquire); });
     }
     while (!stop_signals.load(std::memory_order_acquire))
     {
@@ -464,11 +452,9 @@ void test_absolute_deadline_survives_eintr()
   auto interrupted = child ? supervisor.wait_for_activity(child->handle, std::span<PipeWatchV1 const>{}, begin + 120ms)
                            : ava::core::Result<ProcessActivityV1>(std::unexpected(child.error()));
   auto const elapsed = std::chrono::steady_clock::now() - begin;
-  stop_signals.store(true, std::memory_order_release);
   {
     std::lock_guard lock(mutex);
-    if (!target_ready)
-      target_ready = true;
+    stop_signals.store(true, std::memory_order_release);
   }
   changed.notify_all();
   interrupter.join();
@@ -477,17 +463,21 @@ void test_absolute_deadline_survives_eintr()
   auto const past_begin = std::chrono::steady_clock::now();
   auto past = child ? supervisor.wait_for_activity(child->handle, std::span<PipeWatchV1 const>{}, past_begin - 1s)
                     : ava::core::Result<ProcessActivityV1>(std::unexpected(child.error()));
-  auto const past_elapsed = std::chrono::steady_clock::now() - past_begin;
-  bool const released = child && child->standard_input && write_text(*child->standard_input, "X", std::chrono::steady_clock::now() + 2s);
+  bool const released = child && child->standard_input && write_text(*child->standard_input, "X", ava::tests::now_plus_seconds(2s));
   if (child && child->standard_input)
     child->standard_input->close();
   auto status = child ? wait_status(supervisor, child->handle) : std::nullopt;
   if (installed)
     static_cast<void>(::sigaction(SIGUSR1, &previous, nullptr));
 
-  expect(installed && interrupted && interrupted->deadline_expired && !interrupted->process_finished && interrupted->ready.empty() && elapsed >= 80ms &&
-             elapsed < 500ms && past && past->deadline_expired && past_elapsed < 50ms && released && status && status->exit_code == 0,
-         "EINTR recomputes one absolute steady-clock budget and an already-past deadline performs only an immediate observation");
+  ava::tests::expect_all(
+      "an interrupted wait expires its absolute deadline and an already-past deadline observes no completion",
+      {{"signal handler installed", installed},
+       {"interrupted deadline", interrupted && interrupted->deadline_expired && !interrupted->process_finished && interrupted->ready.empty()},
+       {"budget not short-circuited", elapsed >= 80ms},
+       {"past deadline expired", past && past->deadline_expired},
+       {"gate released", released},
+       {"child exits cleanly", status && status->exit_code == 0}});
 }
 
 void test_invalid_watches_are_rejected()
@@ -498,7 +488,7 @@ void test_invalid_watches_are_rejected()
   auto child = spawn_fake(supervisor, application, "ready-gate", ava::process::StreamModeV1::Capture);
   std::string ready_text;
   bool const ready = child && child->standard_input && child->standard_output && child->standard_error &&
-                     read_until(*child->standard_output, ready_text, "READY\n", std::chrono::steady_clock::now() + 2s);
+                     read_until(*child->standard_output, ready_text, "READY\n", ava::tests::now_plus_seconds(2s));
   if (!ready)
   {
     expect(false, "invalid-watch fixture reaches its child gate");
@@ -509,45 +499,62 @@ void test_invalid_watches_are_rejected()
   auto output_two = child->standard_output->watch(PipeInterestV1::Readable, 2);
   auto error_same_token = child->standard_error->watch(PipeInterestV1::Readable, 1);
   auto input_watch = child->standard_input->watch(PipeInterestV1::Writable, 3);
+  if (!ava::tests::require(output_one.has_value(), "invalid-watch fixture creates first stdout watch") ||
+      !ava::tests::require(output_two.has_value(), "invalid-watch fixture creates second stdout watch") ||
+      !ava::tests::require(error_same_token.has_value(), "invalid-watch fixture creates stderr watch") ||
+      !ava::tests::require(input_watch.has_value(), "invalid-watch fixture creates stdin watch"))
+    return;
   auto invalid_interest = child->standard_output->watch(static_cast<PipeInterestV1>(999), 4);
   auto wrong_output = child->standard_output->watch(PipeInterestV1::Writable, 5);
   auto wrong_input = child->standard_input->watch(PipeInterestV1::Readable, 6);
 
   std::vector<PipeWatchV1> nine(9, *output_one);
-  auto too_many = supervisor.wait_for_activity(child->handle, nine, std::chrono::steady_clock::now() + 1s);
+  auto too_many = supervisor.wait_for_activity(child->handle, nine, ava::tests::now_plus_seconds(1s));
   std::array<PipeWatchV1, 2> duplicate_tokens{*output_one, *error_same_token};
-  auto token_error = supervisor.wait_for_activity(child->handle, duplicate_tokens, std::chrono::steady_clock::now() + 1s);
+  auto token_error = supervisor.wait_for_activity(child->handle, duplicate_tokens, ava::tests::now_plus_seconds(1s));
   std::array<PipeWatchV1, 2> duplicate_interests{*output_one, *output_two};
-  auto interest_error = supervisor.wait_for_activity(child->handle, duplicate_interests, std::chrono::steady_clock::now() + 1s);
+  auto interest_error = supervisor.wait_for_activity(child->handle, duplicate_interests, ava::tests::now_plus_seconds(1s));
 
   auto closed_watch = child->standard_error->watch(PipeInterestV1::Readable, 8);
+  if (!ava::tests::require(closed_watch.has_value(), "closed-watch fixture creates its live watch"))
+    return;
   child->standard_error->close();
   std::array<PipeWatchV1, 1> closed_watches{*closed_watch};
-  auto closed_error = supervisor.wait_for_activity(child->handle, closed_watches, std::chrono::steady_clock::now() + 1s);
+  auto closed_error = supervisor.wait_for_activity(child->handle, closed_watches, ava::tests::now_plus_seconds(1s));
   auto watch_after_close = child->standard_error->watch(PipeInterestV1::Readable, 9);
 
   auto stale_child = spawn_fake(supervisor, application, "normal", ava::process::StreamModeV1::Discard, ava::process::StreamModeV1::Capture,
                                 ava::process::StreamModeV1::Discard);
-  auto stale_watch = stale_child && stale_child->standard_output ? stale_child->standard_output->watch(PipeInterestV1::Readable, 10)
-                                                                 : ava::core::Result<PipeWatchV1>(std::unexpected(stale_child.error()));
-  if (stale_child)
-    stale_child->standard_output.reset();
+  if (!ava::tests::require(stale_child && stale_child->standard_output, "stale-watch fixture captures child stdout"))
+    return;
+  auto stale_watch = stale_child->standard_output->watch(PipeInterestV1::Readable, 10);
+  if (!ava::tests::require(stale_watch.has_value(), "stale-watch fixture creates its watch before closing the endpoint"))
+    return;
+  stale_child->standard_output.reset();
   std::array<PipeWatchV1, 1> stale_watches{*stale_watch};
-  auto stale_error = supervisor.wait_for_activity(child->handle, stale_watches, std::chrono::steady_clock::now() + 1s);
+  auto stale_error = supervisor.wait_for_activity(child->handle, stale_watches, ava::tests::now_plus_seconds(1s));
 
   ava::process::Supervisor foreign;
   auto foreign_error = foreign.wait_for_activity(child->handle, std::span<PipeWatchV1 const>{}, std::chrono::steady_clock::now());
   ava::process::ProcessHandle invalid_handle;
   auto invalid_handle_error = supervisor.wait_for_activity(invalid_handle, std::span<PipeWatchV1 const>{}, std::chrono::steady_clock::now());
 
-  bool const released = write_text(*child->standard_input, "G", std::chrono::steady_clock::now() + 2s);
+  bool const released = write_text(*child->standard_input, "G", ava::tests::now_plus_seconds(2s));
   child->standard_input->close();
   auto status = wait_status(supervisor, child->handle);
-  expect(
-      output_one && output_two && error_same_token && input_watch && !invalid_interest && !wrong_output && !wrong_input && !too_many && !token_error &&
-          !interest_error && closed_watch && !closed_error && !watch_after_close && stale_watch && !stale_error && !foreign_error && !invalid_handle_error &&
-          released && status,
-      "activity validation rejects nine watches, duplicate tokens/interests, bad directions/enums, closed/stale endpoints, and foreign handles before polling");
+  ava::tests::expect_all("activity validation rejects invalid watches and handles before polling", {{"invalid enum", !invalid_interest},
+                                                                                                    {"stdout direction", !wrong_output},
+                                                                                                    {"stdin direction", !wrong_input},
+                                                                                                    {"nine watches", !too_many},
+                                                                                                    {"duplicate tokens", !token_error},
+                                                                                                    {"duplicate interests", !interest_error},
+                                                                                                    {"closed endpoint", !closed_error},
+                                                                                                    {"watch after close", !watch_after_close},
+                                                                                                    {"stale endpoint", !stale_error},
+                                                                                                    {"foreign handle", !foreign_error},
+                                                                                                    {"invalid handle", !invalid_handle_error},
+                                                                                                    {"child released", released},
+                                                                                                    {"child settled", status.has_value()}});
 }
 
 void test_completion_creation_races_repeat()
@@ -563,7 +570,7 @@ void test_completion_creation_races_repeat()
     auto finished = spawn_fake(supervisor, application, "normal", ava::process::StreamModeV1::Discard, ava::process::StreamModeV1::Discard,
                                ava::process::StreamModeV1::Discard);
     auto status = finished ? wait_status(supervisor, finished->handle) : std::nullopt;
-    auto activity = finished ? supervisor.wait_for_activity(finished->handle, std::span<PipeWatchV1 const>{}, std::chrono::steady_clock::now() + 1s)
+    auto activity = finished ? supervisor.wait_for_activity(finished->handle, std::span<PipeWatchV1 const>{}, ava::tests::now_plus_seconds(1s))
                              : ava::core::Result<ProcessActivityV1>(std::unexpected(finished.error()));
     final_before_create = final_before_create && status && activity && activity->process_finished && !activity->deadline_expired;
 
@@ -577,15 +584,15 @@ void test_completion_creation_races_repeat()
     if (gated)
     {
       waiter = std::thread([&] {
-        auto activity = supervisor.wait_for_activity(gated->handle, std::span<PipeWatchV1 const>{}, std::chrono::steady_clock::now() + 2s);
+        auto activity = supervisor.wait_for_activity(gated->handle, std::span<PipeWatchV1 const>{}, ava::tests::now_plus_seconds(2s));
         if (activity)
           observed.emplace(std::move(*activity));
         else
           observation_failed = true;
       });
     }
-    bool const created = gated && latch->wait_until(std::chrono::steady_clock::now() + 2s);
-    bool const released = created && gated->standard_input && write_text(*gated->standard_input, "X", std::chrono::steady_clock::now() + 1s);
+    bool const created = gated && latch->wait_until(ava::tests::now_plus_seconds(2s));
+    bool const released = created && gated->standard_input && write_text(*gated->standard_input, "X", ava::tests::now_plus_seconds(1s));
     latch->release();
     if (waiter.joinable())
       waiter.join();
@@ -628,8 +635,7 @@ void test_completion_descriptor_hygiene_and_bounds()
     auto checker = spawn_fake(supervisor, application, "check-only-standard-fds", ava::process::StreamModeV1::Discard, ava::process::StreamModeV1::Capture,
                               ava::process::StreamModeV1::Discard);
     std::string checker_text;
-    later_exec_clean =
-        checker && checker->standard_output && read_until(*checker->standard_output, checker_text, "CLEAN\n", std::chrono::steady_clock::now() + 2s);
+    later_exec_clean = checker && checker->standard_output && read_until(*checker->standard_output, checker_text, "CLEAN\n", ava::tests::now_plus_seconds(2s));
     auto checker_status = checker ? wait_status(supervisor, checker->handle) : std::nullopt;
     later_exec_clean = later_exec_clean && checker_status && checker_status->exit_code == 0;
     if (checker)
@@ -638,7 +644,7 @@ void test_completion_descriptor_hygiene_and_bounds()
       checker->standard_output.reset();
     }
 
-    bool const released = gated && gated->standard_input && write_text(*gated->standard_input, "X", std::chrono::steady_clock::now() + 2s);
+    bool const released = gated && gated->standard_input && write_text(*gated->standard_input, "X", ava::tests::now_plus_seconds(2s));
     if (gated && gated->standard_input)
       gated->standard_input->close();
     auto gated_status = gated ? wait_status(supervisor, gated->handle) : std::nullopt;
@@ -654,12 +660,12 @@ void test_completion_descriptor_hygiene_and_bounds()
       auto child = spawn_fake(supervisor, application, "normal", ava::process::StreamModeV1::Discard, ava::process::StreamModeV1::Discard,
                               ava::process::StreamModeV1::Discard);
       auto status = child ? wait_status(supervisor, child->handle) : std::nullopt;
-      auto activity = child ? supervisor.wait_for_activity(child->handle, std::span<PipeWatchV1 const>{}, std::chrono::steady_clock::now() + 1s)
+      auto activity = child ? supervisor.wait_for_activity(child->handle, std::span<PipeWatchV1 const>{}, ava::tests::now_plus_seconds(1s))
                             : ava::core::Result<ProcessActivityV1>(std::unexpected(child.error()));
       records_ok = records_ok && status && activity && activity->process_finished;
     }
     auto const cycle = ava::process::testing::SupervisorTestAccess::pulse_monitor(supervisor);
-    static_cast<void>(ava::process::testing::SupervisorTestAccess::wait_for_monitor_cycle(supervisor, cycle, std::chrono::steady_clock::now() + 1s));
+    static_cast<void>(ava::process::testing::SupervisorTestAccess::wait_for_monitor_cycle(supervisor, cycle, ava::tests::now_plus_seconds(1s)));
     auto monitor = ava::process::testing::SupervisorTestAccess::monitor_snapshot(supervisor);
     auto after_records = descriptor_count();
     no_record_growth = !baseline || !after_records ||

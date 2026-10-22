@@ -1,5 +1,7 @@
 #include "sys.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/syscall_errno_injection.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/command/command.h"
@@ -122,25 +124,14 @@ struct ContainmentFixture
     ::chmod(secret_file.parent_path().c_str(), S_IRWXU);
     ::chmod(ava_authority_root.c_str(), S_IRWXU);
     ::chmod(spill.c_str(), S_IRWXU);
-    {
-      std::ofstream f(secret_file, std::ios::binary | std::ios::trunc);
-      f << "secret-data\n";
-    }
-    ::chmod(secret_file.c_str(), S_IRUSR | S_IWUSR);
+    ava::tests::write_test_file(secret_file, "secret-data\n");
     auto opened = ava::core::AnchorSet::open({workspace, spill});
     if (!opened)
       throw std::runtime_error("failed to open containment test AnchorSet");
     anchors = *opened;
   }
 
-  bool write_executable(std::string_view name, std::string_view body)
-  {
-    auto path = bin / std::string(name);
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    f << body;
-    f.close();
-    return ::chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) == 0;
-  }
+  bool write_executable(std::string_view name, std::string_view body) { return ava::tests::write_executable_for_test(bin / std::string(name), body); }
 
   ava::tools::ToolContext make_context()
   {
@@ -193,7 +184,7 @@ command::CommandBuildOptions containment_options_for_test(ContainmentFixture con
 }
 
 // ---------------------------------------------------------------------------
-// Unit-level tests: these run without Landlock and are never skipped.
+// Policy tests run without Landlock; individual OS prerequisites are reported.
 // ---------------------------------------------------------------------------
 
 void test_containment_summary_redacts_paths()
@@ -231,6 +222,7 @@ void test_containment_fd_closure_keeps_bound_executable()
     static_cast<void>(::close(report[1]));
     _exit(reported ? 0 : 2);
   }
+  ava::tests::ScopedChild owned_child(child);
   if (report[1] >= 0)
     static_cast<void>(::close(report[1]));
   if (handshake_fd >= 0)
@@ -240,57 +232,64 @@ void test_containment_fd_closure_keeps_bound_executable()
   if (inherited_fd >= 0)
     static_cast<void>(::close(inherited_fd));
 
+  auto const status = owned_child.wait_until(ava::tests::now_plus_seconds(5));
   std::array<int, 4> observed{-1, -1, -1, -1};
   bool const report_read = report_pipe_created && read_exact_from_descriptor_for_test(report[0], observed.data(), sizeof(observed));
   if (report[0] >= 0)
     static_cast<void>(::close(report[0]));
-  int status = 0;
-  if (child > 0)
-    static_cast<void>(::waitpid(child, &status, 0));
-  expect(report_read, "containment fd closure report transfers to the parent");
-  expect(report_pipe_created && child > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0 && observed[0] >= 0 && observed[1] >= 0 && observed[2] >= 0 &&
-             observed[3] == -1,
-         "containment fd closure preserves handshake and approved-executable descriptors while closing inherited descriptors");
+  ava::tests::expect_all("containment fd closure preserves only approved descriptors",
+                         {{"report transferred", report_read},
+                          {"child exits successfully", status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0},
+                          {"report retained", observed[0] >= 0},
+                          {"handshake retained", observed[1] >= 0},
+                          {"executable retained", observed[2] >= 0},
+                          {"inherited fd closed", observed[3] == -1}});
 }
 
 void test_unavailable_probe_forces_ask()
 {
-  ContainmentFixture fix("unavailable-ask");
-  fix.write_executable("cmake", "#!/bin/sh\nexit 0\n");
-  ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
-  int prompts = 0;
-  bool critical_risk = false;
-  ava::tools::ToolContext ctx{
-      .workspace_dir = fix.workspace,
-      .mode = ava::agent::Mode::Build,
-      .permission_resolver = [&prompts, &critical_risk](perms::PermissionPrompt const& p) -> ava::core::Result<perms::PermissionResolutionDecision> {
+  for (auto const syscall_number : {SYS_landlock_create_ruleset, SYS_seccomp})
+  {
+    ContainmentFixture fix("unavailable-ask-" + std::to_string(syscall_number));
+    auto const marker = fix.build_dir / "executed";
+    fix.write_executable("cmake", "#!/bin/sh\nprintf executed > " + marker.string() + "\n");
+    auto const status = ava::tests::run_in_child_with_syscall_errno(syscall_number, std::nullopt, ENOSYS, [&] {
+      auto const failures_before = ava::tests::failures();
+      ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
+      expect(syscall_number == SYS_seccomp ? !containment::seccomp_network_filter_supported() : !landlock_available(),
+             "injected syscall failure makes the selected containment probe unavailable");
+      auto ctx = fix.make_context();
+      std::vector<ava::tools::PermissionAuditEvent> audits;
+      ctx.permission_audit_sink = [&audits](ava::tools::PermissionAuditEvent const& event) -> ava::core::VoidResult {
+        audits.push_back(event);
+        return {};
+      };
+      auto const command_text = "cmake --build " + fix.build_dir.generic_string();
+      auto denied = ava::tools::run_bash(ctx, command_text);
+      ava::tests::expect_all("unavailable containment fails closed without approval",
+                             {{"permission-denied category", !denied && denied.error().category() == ava::core::ErrorCategory::PermissionDenied},
+                              {"no-resolver resolution", !denied && denied.error().format().find("resolution: no_resolver") != std::string::npos},
+                              {"command never ran", !std::filesystem::exists(marker)},
+                              {"Critical audit", !audits.empty() && audits.front().risk == perms::PermissionRisk::Critical}});
+      int prompts = 0;
+      ctx.permission_resolver = [&prompts](perms::PermissionPrompt const& prompt) -> ava::core::Result<perms::PermissionResolutionDecision> {
         ++prompts;
-        if (p.command_metadata && !p.command_metadata->containment_available)
-        {
-          critical_risk = (p.risk == perms::PermissionRisk::Critical);
-          return perms::PermissionResolution::Allow;
-        }
-        return perms::PermissionResolution::Deny;
-      }};
-  ctx.spill_dir = fix.spill;
-  ctx.anchor_set = fix.anchors;
-  auto result =
-      ava::tools::run_bash(ctx, "cmake --build " + fix.build_dir.generic_string(), ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  if (landlock_available())
-  {
-    expect(result && result->exit_code == 0, "when Landlock is available, standard mutable command auto-allows without resolver");
-  }
-  else
-  {
-    // Unavailable containment must downgrade to Critical risk Ask, not
-    // ordinary High risk Ask. After explicit one-shot approval it runs
-    // uncontained, but metadata must state unavailable/uncontained.
-    expect(result && prompts == 1, "when containment is unavailable, standard mutable command downgrades to Ask");
-    expect(critical_risk, "unavailable containment downgrades to Critical risk, not ordinary High");
-    if (result)
-    {
-      expect(!result->containment_applied, "unavailable containment reports not applied in result");
-    }
+        ava::tests::expect_all(
+            "unavailable containment requests explicit Critical one-shot approval",
+            {{"Critical risk", prompt.risk == perms::PermissionRisk::Critical},
+             {"metadata unavailable", prompt.command_metadata && !prompt.command_metadata->containment_available},
+             {"one-shot scope", prompt.command_metadata && prompt.command_metadata->backend_maximum_scope == command::InteractiveScope::Once}});
+        return perms::PermissionResolution::Allow;
+      };
+      auto allowed = ava::tools::run_bash(ctx, command_text);
+      ava::tests::expect_all("one-shot approval executes with honest unavailable-containment metadata",
+                             {{"successful execution", allowed && allowed->exit_code == 0},
+                              {"one prompt", prompts == 1},
+                              {"observable command effect", std::filesystem::exists(marker)},
+                              {"not contained", allowed && !allowed->containment_applied}});
+      return ava::tests::failures() == failures_before ? 0 : 1;
+    });
+    ava::tests::expect_child_success(status, "forced unavailable containment policy for syscall " + std::to_string(syscall_number));
   }
 }
 
@@ -412,8 +411,7 @@ void test_home_as_workspace_rejected()
   }
   command::CommandLimits limits;
   auto home_anchors = ava::core::AnchorSet::open({trusted_home, synth_base});
-  expect(home_anchors.has_value(), "home boundary test opens its shared AnchorSet");
-  if (!home_anchors)
+  if (!ava::tests::require(home_anchors.has_value(), "home boundary test opens its shared AnchorSet"))
     return;
   command::CommandBuildOptions opts{.workspace = trusted_home,
                                     .anchor_set = *home_anchors,
@@ -440,8 +438,7 @@ void test_home_as_workspace_rejected()
 
   // Positive: a project nested under the trusted home is allowed.
   auto project_anchors = ava::core::AnchorSet::open({project_under_home, synth_base});
-  expect(project_anchors.has_value(), "nested project boundary test opens its shared AnchorSet");
-  if (!project_anchors)
+  if (!ava::tests::require(project_anchors.has_value(), "nested project boundary test opens its shared AnchorSet"))
     return;
   opts.workspace = project_under_home;
   opts.anchor_set = *project_anchors;
@@ -461,8 +458,7 @@ void test_authority_overlap_rejected()
   auto opts = containment_options_for_test(fix);
   auto const& synth_root = fix.spill;
   auto anchors = ava::core::AnchorSet::open({fix.ava_authority_root, synth_root});
-  expect(anchors.has_value(), "authority overlap test opens its shared AnchorSet");
-  if (!anchors)
+  if (!ava::tests::require(anchors.has_value(), "authority overlap test opens its shared AnchorSet"))
     return;
   opts.workspace = fix.ava_authority_root;
   opts.anchor_set = *anchors;
@@ -511,8 +507,7 @@ void test_replaced_external_path_rule_fails_child_application()
   auto const& environment = options.environment;
   auto anchors = ava::core::AnchorSet::open({fix.workspace, environment.home, environment.xdg_config_home, environment.xdg_cache_home,
                                              environment.xdg_data_home, environment.xdg_state_home, environment.tmpdir});
-  expect(anchors.has_value() && !(*anchors)->contains_lexical(fix.bin), "replacement-race PATH directory is sealed as an external path");
-  if (!anchors)
+  if (!ava::tests::require(anchors.has_value() && !(*anchors)->contains_lexical(fix.bin), "replacement-race PATH directory is sealed as an external path"))
     return;
 
   options.anchor_set = *anchors;
@@ -520,8 +515,7 @@ void test_replaced_external_path_rule_fails_child_application()
   auto preparation = intent ? command::prepare_command(*intent, options)
                             : ava::core::Result<command::CommandPreparation>{
                                   std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "no contained command intent"))};
-  expect(preparation.has_value(), "replacement-race command preparation succeeds");
-  if (!preparation)
+  if (!ava::tests::require(preparation.has_value(), "replacement-race command preparation succeeds"))
     return;
 
   auto const path_entry = std::ranges::find_if(preparation->plan().path_entries(),
@@ -610,7 +604,10 @@ void test_contained_command_writes_private_primary_group_workspace()
   }
   auto const private_group = private_primary_group_for_test();
   if (!private_group)
+  {
+    ava::tests::request_skip("contained private-group workspace", "current account has no verifiably private primary group");
     return;
+  }
 
   ContainmentFixture fix("writes-private-primary-group", S_IRWXU | S_IRWXG);
   if (::chown(fix.workspace.c_str(), ::geteuid(), *private_group) != 0)
@@ -668,6 +665,24 @@ void test_contained_command_reads_system_libs()
          "contained command can read system files under allowed system roots");
 }
 
+// Only the operation under test may raise the expected denial. Interpreter,
+// import, and positive-control failures propagate as failures, not denials.
+std::string denied_python_probe(std::string_view operation, std::string_view expected_errno, std::string_view setup = {})
+{
+  return "#!/bin/sh\nexec /usr/bin/python3 - <<'PYTHON'\nimport errno, os, socket\n" + std::string(setup) + "\ntry:\n    " + std::string(operation) +
+         "\nexcept OSError as error:\n    assert error.errno == errno." + std::string(expected_errno) +
+         ", error\nelse:\n    raise AssertionError('operation unexpectedly permitted')\nprint('DENIED')\nPYTHON\n";
+}
+
+void expect_contained_denial(ava::core::Result<ava::tools::BashResult> const& result, std::string const& message)
+{
+  if (!ava::tests::require(result.has_value(), message + (result ? "" : ": " + result.error().format())))
+    return;
+  ava::tests::expect_eq(result->exit_code, 0, message + ": probe exits successfully");
+  ava::tests::expect_eq(result->output, std::string("DENIED\n"), message + ": exact errno-checked result");
+  ava::tests::expect_all(message, {{"containment applied", result->containment_applied}, {"network denied", result->containment_network_mode == "denied"}});
+}
+
 void test_contained_command_cannot_read_secret()
 {
   if (!landlock_available())
@@ -675,13 +690,19 @@ void test_contained_command_cannot_read_secret()
     ava::tests::request_skip("Landlock ABI insufficient");
     return;
   }
+  if (!python3_available())
+  {
+    ava::tests::request_skip("secret denial probe requires /usr/bin/python3");
+    return;
+  }
   ContainmentFixture fix("cannot-read-secret");
-  fix.write_executable("cmake", "#!/bin/sh\ncat " + fix.secret_file.string() + " > /dev/null 2>&1 && echo SECRET_READ_BAD || echo SECRET_BLOCKED\nexit 0\n");
+  ava::tests::expect_eq(ava::tests::read_session_test_binary_file(fix.secret_file), std::string("secret-data\n"),
+                        "secret positive control is readable before containment");
+  fix.write_executable("cmake", denied_python_probe("os.open('" + fix.secret_file.string() + "', os.O_RDONLY)", "EACCES"));
   ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
   auto result = ava::tools::run_bash(fix.make_context(), "cmake --build " + fix.build_dir.generic_string(),
                                      ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  expect(result && result->exit_code == 0 && result->output.find("SECRET_BLOCKED") != std::string::npos,
-         "contained command cannot read a test secret file outside the workspace");
+  expect_contained_denial(result, "contained command cannot read a test secret file outside the workspace");
 }
 
 void test_contained_command_cannot_write_ava_authority()
@@ -691,14 +712,21 @@ void test_contained_command_cannot_write_ava_authority()
     ava::tests::request_skip("Landlock ABI insufficient");
     return;
   }
+  if (!python3_available())
+  {
+    ava::tests::request_skip("authority denial probe requires /usr/bin/python3");
+    return;
+  }
   ContainmentFixture fix("cannot-write-authority");
   auto const authority_marker = fix.ava_authority_root / "marker.txt";
-  fix.write_executable("cmake", "#!/bin/sh\necho bad > " + authority_marker.string() + " 2>/dev/null && echo AUTH_WRITE_BAD || echo AUTH_BLOCKED\nexit 0\n");
+  ava::tests::write_test_file(authority_marker, "positive-control");
+  std::filesystem::remove(authority_marker);
+  fix.write_executable("cmake", denied_python_probe("os.open('" + authority_marker.string() + "', os.O_WRONLY | os.O_CREAT, 0o600)", "EACCES"));
   ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
   auto result = ava::tools::run_bash(fix.make_context(), "cmake --build " + fix.build_dir.generic_string(),
                                      ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  expect(result && result->exit_code == 0 && result->output.find("AUTH_BLOCKED") != std::string::npos && !std::filesystem::exists(authority_marker),
-         "contained command cannot write to AVA authority test root");
+  expect_contained_denial(result, "contained command cannot write to AVA authority test root");
+  expect(!std::filesystem::exists(authority_marker), "authority denial leaves no file behind");
 }
 
 void test_contained_command_cannot_open_outbound_network()
@@ -709,16 +737,11 @@ void test_contained_command_cannot_open_outbound_network()
     return;
   }
   ContainmentFixture fix("network-denied");
-  fix.write_executable("cmake",
-                       "#!/bin/sh\n"
-                       "python3 -c 'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)' 2>&1\n"
-                       "if [ $? -ne 0 ]; then echo NETWORK_BLOCKED; else echo NETWORK_OK; fi\n"
-                       "exit 0\n");
+  fix.write_executable("cmake", denied_python_probe("socket.socket(socket.AF_INET, socket.SOCK_STREAM)", "EPERM"));
   ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
   auto result = ava::tools::run_bash(fix.make_context(), "cmake --build " + fix.build_dir.generic_string(),
                                      ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  expect(result && result->exit_code == 0 && result->output.find("NETWORK_BLOCKED") != std::string::npos,
-         "contained command with network denied cannot create outbound IP socket");
+  expect_contained_denial(result, "contained command with network denied cannot create outbound IP socket");
 }
 
 void test_contained_command_cannot_open_unix_socket()
@@ -731,16 +754,11 @@ void test_contained_command_cannot_open_unix_socket()
   // Network-denied profile must block ALL socket creation, including
   // AF_UNIX/abstract sockets, not just AF_INET/AF_INET6.
   ContainmentFixture fix("unix-denied");
-  fix.write_executable("cmake",
-                       "#!/bin/sh\n"
-                       "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)' 2>&1\n"
-                       "if [ $? -ne 0 ]; then echo UNIX_BLOCKED; else echo UNIX_OK; fi\n"
-                       "exit 0\n");
+  fix.write_executable("cmake", denied_python_probe("socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)", "EPERM"));
   ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
   auto result = ava::tools::run_bash(fix.make_context(), "cmake --build " + fix.build_dir.generic_string(),
                                      ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  expect(result && result->exit_code == 0 && result->output.find("UNIX_BLOCKED") != std::string::npos,
-         "contained command with network denied cannot create AF_UNIX socket");
+  expect_contained_denial(result, "contained command with network denied cannot create AF_UNIX socket");
 }
 
 void test_contained_command_cannot_connect_abstract()
@@ -753,16 +771,12 @@ void test_contained_command_cannot_connect_abstract()
   // The seccomp filter blocks connect() so even an abstract socket connect
   // cannot succeed.
   ContainmentFixture fix("abstract-denied");
-  fix.write_executable("cmake",
-                       "#!/bin/sh\n"
-                       "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.connect(\"\\x00ava-test-abstract\")' 2>&1\n"
-                       "if [ $? -ne 0 ]; then echo CONNECT_BLOCKED; else echo CONNECT_OK; fi\n"
-                       "exit 0\n");
+  fix.write_executable("cmake", denied_python_probe("left.connect('\\x00ava-test-abstract')", "EPERM",
+                                                    "left, right = socket.socketpair()\nassert left.send(b'x') == 1\nassert right.recv(1) == b'x'"));
   ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
   auto result = ava::tools::run_bash(fix.make_context(), "cmake --build " + fix.build_dir.generic_string(),
                                      ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  expect(result && result->exit_code == 0 && result->output.find("CONNECT_BLOCKED") != std::string::npos,
-         "contained command with network denied cannot connect to abstract socket");
+  expect_contained_denial(result, "contained command with network denied cannot connect an existing socket to an abstract address");
 }
 
 void test_contained_command_cannot_escape_via_symlink()
@@ -772,17 +786,25 @@ void test_contained_command_cannot_escape_via_symlink()
     ava::tests::request_skip("Landlock ABI insufficient");
     return;
   }
+  if (!python3_available())
+  {
+    ava::tests::request_skip("symlink denial probe requires /usr/bin/python3");
+    return;
+  }
   ContainmentFixture fix("symlink-escape");
   auto const link = fix.workspace / "escape-link";
   std::error_code ec;
   std::filesystem::create_directory_symlink(fix.secret_file.parent_path(), link, ec);
-  fix.write_executable("cmake",
-                       "#!/bin/sh\ncat " + link.string() + "/test-secret > /dev/null 2>&1 && echo SYMLINK_ESCAPE_BAD || echo SYMLINK_BLOCKED\nexit 0\n");
+  if (!ava::tests::require(!ec, "symlink escape fixture creates the directory link: " + ec.message()))
+    return;
+  ava::tests::expect_eq(ava::tests::read_session_test_binary_file(link / "test-secret"), std::string("secret-data\n"),
+                        "symlink positive control resolves the readable secret before containment");
+  fix.write_executable(
+      "cmake", denied_python_probe("os.open('" + link.string() + "/test-secret', os.O_RDONLY)", "EACCES", "assert os.path.islink('" + link.string() + "')"));
   ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
   auto result = ava::tools::run_bash(fix.make_context(), "cmake --build " + fix.build_dir.generic_string(),
                                      ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  expect(result && result->exit_code == 0 && result->output.find("SYMLINK_BLOCKED") != std::string::npos,
-         "contained command cannot escape workspace via symlink to external directory");
+  expect_contained_denial(result, "contained command cannot escape workspace via symlink to external directory");
 }
 
 void test_standard_contained_no_resolver_executes()
@@ -815,24 +837,23 @@ void test_contained_command_cancel()
     return;
   }
   ContainmentFixture fix("cancel");
-  fix.write_executable("cmake", "#!/bin/sh\nwhile true; do sleep 0.1; done\n");
+  auto const ready = fix.workspace / "cancel-ready";
+  fix.write_executable("cmake", "#!/bin/sh\nprintf ready > " + ready.string() + "\nexec /bin/sleep 30\n");
   ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
-  int cancel_checks = 0;
   ava::tools::ToolContext ctx{.workspace_dir = fix.workspace,
                               .mode = ava::agent::Mode::Build,
                               .permission_resolver = [](perms::PermissionPrompt const&) -> ava::core::Result<perms::PermissionResolutionDecision> {
                                 return perms::PermissionResolution::Allow;
                               },
-                              .cancel_requested =
-                                  [&cancel_checks] {
-                                    ++cancel_checks;
-                                    return cancel_checks >= 3;
-                                  }};
+                              .cancel_requested = [&ready] { return std::filesystem::exists(ready); }};
   ctx.spill_dir = fix.spill;
   ctx.anchor_set = fix.anchors;
   auto result =
       ava::tools::run_bash(ctx, "cmake --build " + fix.build_dir.generic_string(), ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
-  expect(result && result->canceled, "contained descriptor-executed command observes cancellation and reports a canceled process result");
+  ava::tests::expect_all("contained descriptor execution is canceled after starting", {{"child acknowledged startup", std::filesystem::exists(ready)},
+                                                                                       {"canceled", result && result->canceled},
+                                                                                       {"not a timeout", result && !result->timed_out},
+                                                                                       {"containment applied", result && result->containment_applied}});
 }
 
 void test_contained_direct_file_recipe()
@@ -1031,17 +1052,14 @@ void test_containment_rejects_external_runtime_symlink_targets()
              "runtime fixture creates a script with a symlinked interpreter");
 
     auto anchors = ava::core::AnchorSet::open({fix.workspace, fix.spill});
-    expect(anchors.has_value(), "external-runtime fixture opens its containment anchors");
-    if (!anchors)
+    if (!ava::tests::require(anchors.has_value(), "external-runtime fixture opens its containment anchors"))
       return;
     options.anchor_set = *anchors;
     auto intent = command::CommandIntent::structured({"cmake", "--build", "build"});
-    expect(intent.has_value(), "external-runtime command intent is valid");
-    if (!intent)
+    if (!ava::tests::require(intent.has_value(), "external-runtime command intent is valid"))
       return;
     auto preparation = command::prepare_command(*intent, options);
-    expect(preparation.has_value(), "external-runtime symlink command seals successfully before containment admission");
-    if (!preparation)
+    if (!ava::tests::require(preparation.has_value(), "external-runtime symlink command seals successfully before containment admission"))
       return;
     for (bool const network_allowed : {false, true})
     {
@@ -1071,8 +1089,7 @@ void test_containment_rejects_external_runtime_symlink_targets()
     std::filesystem::remove(link);
     std::filesystem::create_symlink(fix.bin / "tool", link);
     preparation = command::prepare_command(*intent, options);
-    expect(preparation.has_value(), "same-directory runtime symlink command seals successfully");
-    if (!preparation)
+    if (!ava::tests::require(preparation.has_value(), "same-directory runtime symlink command seals successfully"))
       return;
     for (bool const network_allowed : {false, true})
     {
@@ -1103,8 +1120,7 @@ void test_containment_accepts_symlinked_workspace_roots()
   fix.bin = logical_workspace / "bin";
   fix.build_dir = logical_workspace / "build";
   auto anchors = ava::core::AnchorSet::open({fix.workspace, fix.spill});
-  expect(anchors.has_value(), "logical-workspace fixture opens its symlinked workspace anchor");
-  if (!anchors)
+  if (!ava::tests::require(anchors.has_value(), "logical-workspace fixture opens its symlinked workspace anchor"))
     return;
   fix.anchors = *anchors;
   expect(fix.write_executable("cmake", "#!/bin/sh\nexit 0\n"), "logical-workspace fixture creates a contained script");
@@ -1183,12 +1199,10 @@ void test_containment_limits_protected_executable_parents()
         expect(::chmod(command_path.c_str(), S_IRWXU) == 0, "protected-parent shebang script is executable");
       }
       auto intent = command::CommandIntent::structured({command_path.string()});
-      expect(intent.has_value(), "protected-parent command intent is valid");
-      if (!intent)
+      if (!ava::tests::require(intent.has_value(), "protected-parent command intent is valid"))
         return;
       auto preparation = command::prepare_command(*intent, options);
-      expect(preparation.has_value(), "protected-parent executable or interpreter seals successfully");
-      if (!preparation)
+      if (!ava::tests::require(preparation.has_value(), "protected-parent executable or interpreter seals successfully"))
         return;
       if (!interpreter && std::string_view(location) == "home")
         expect(preparation->plan().resolved_executable()->origin == command::ExecutableOrigin::User, "home executable has user origin");
@@ -1239,12 +1253,10 @@ void test_startup_path_excludes_trusted_home_and_root()
     options.startup_path = entry.string() + ":" + fix.root.string() + ":/:" + fix.bin.string() + ":/usr/bin:/bin";
     expect(fix.write_executable("cmake", "#!/bin/sh\nexit 0\n"), "startup PATH fixture creates its ordinary tool");
     auto intent = command::CommandIntent::structured({"cmake", "--build", "build"});
-    expect(intent.has_value(), "startup PATH command intent is valid");
-    if (!intent)
+    if (!ava::tests::require(intent.has_value(), "startup PATH command intent is valid"))
       return;
     auto preparation = command::prepare_command(*intent, options);
-    expect(preparation.has_value(), "unsafe broad startup PATH entries are omitted without rejecting the command");
-    if (!preparation)
+    if (!ava::tests::require(preparation.has_value(), "unsafe broad startup PATH entries are omitted without rejecting the command"))
       return;
     auto const& entries = preparation->plan().path_entries();
     expect(std::ranges::none_of(entries, [&](auto const& candidate) { return path_covers_for_test(candidate.directory, options.trusted_home); }),
@@ -1272,12 +1284,10 @@ void test_failed_seccomp_action_probe_makes_containment_unavailable()
   auto options = containment_options_for_test(fix);
   expect(fix.write_executable("cmake", "#!/bin/sh\nexit 0\n"), "seccomp probe fixture creates its executable");
   auto intent = command::CommandIntent::structured({(fix.bin / "cmake").string(), "--build", "build"});
-  expect(intent.has_value(), "seccomp probe command intent is valid");
-  if (!intent)
+  if (!ava::tests::require(intent.has_value(), "seccomp probe command intent is valid"))
     return;
   auto preparation = command::prepare_command(*intent, options);
-  expect(preparation.has_value(), "seccomp probe command seals before installing the outer filter");
-  if (!preparation)
+  if (!ava::tests::require(preparation.has_value(), "seccomp probe command seals before installing the outer filter"))
     return;
   for (int const probe_error : {EINVAL, EPERM})
   {
@@ -1297,9 +1307,8 @@ void test_failed_seccomp_action_probe_makes_containment_unavailable()
           }
           return 0;
         });
-    ava::tests::expect_child_success(status, "EINVAL and EPERM action-probe failures make containment unavailable in both network modes",
-                                     "outer seccomp test filter cannot be installed");
-    if (ava::tests::skip_requested())
+    if (ava::tests::expect_child_success(status, "EINVAL and EPERM action-probe failures make containment unavailable in both network modes",
+                                         "outer seccomp test filter cannot be installed") == ava::tests::ChildTestOutcome::Skipped)
       return;
   }
 }
@@ -1313,16 +1322,13 @@ std::optional<containment::DevelopmentContainmentPlan> scoped_containment_plan_f
   }
   auto options = containment_options_for_test(fix);
   auto intent = command::CommandIntent::structured({"/bin/sh"});
-  expect(intent.has_value(), "scope test command intent is valid");
-  if (!intent)
+  if (!ava::tests::require(intent.has_value(), "scope test command intent is valid"))
     return std::nullopt;
   auto preparation = command::prepare_command(*intent, options);
-  expect(preparation.has_value(), "scope test command seals successfully");
-  if (!preparation)
+  if (!ava::tests::require(preparation.has_value(), "scope test command seals successfully"))
     return std::nullopt;
   auto plan = containment::prepare_development_containment(*preparation, true);
-  expect(plan.availability == containment::ContainmentAvailability::Available, "scope test containment is available");
-  if (plan.availability != containment::ContainmentAvailability::Available)
+  if (!ava::tests::require(plan.availability == containment::ContainmentAvailability::Available, "scope test containment is available"))
     return std::nullopt;
   return plan;
 }
@@ -1457,48 +1463,51 @@ void test_landlock_scopes_broadcast_signals()
 
 void run_containment_tests()
 {
-  // Unit-level tests run first and are never skipped, ensuring
-  // unavailable-policy coverage even when Landlock is absent.
+  ava::tests::HermeticTestEnvironment environment("ava-containment-");
+  ScopedEnvVar const path("PATH", "/usr/bin:/bin");
+  // Run policy and path-boundary cases before capability-dependent guards.
   test_containment_summary_redacts_paths();
   test_containment_fd_closure_keeps_bound_executable();
   test_unavailable_probe_forces_ask();
   test_sensitive_network_enabled_remains_ask();
   test_critical_raw_remains_ask_no_containment();
-  test_home_as_workspace_rejected();
-  if (ava::tests::skip_requested())
-    return;
   test_authority_overlap_rejected();
-  if (ava::tests::skip_requested())
-    return;
   test_startup_path_excludes_trusted_home_and_root();
-  if (ava::tests::skip_requested())
-    return;
-
-  // Feature probe: skip remaining Landlock-dependent tests if unavailable.
+  test_home_as_workspace_rejected();
   test_feature_probe();
+  if (landlock_available() && containment::seccomp_network_filter_supported())
+  {
+    test_replaced_external_path_rule_fails_child_application();
+    test_contained_command_writes_workspace();
+    test_contained_command_writes_private_primary_group_workspace();
+    test_contained_command_writes_0755_workspace();
+    test_contained_command_reads_system_libs();
+    test_contained_command_cannot_read_secret();
+    test_contained_command_cannot_write_ava_authority();
+    test_contained_command_cannot_open_outbound_network();
+    test_contained_command_cannot_open_unix_socket();
+    test_contained_command_cannot_connect_abstract();
+    test_contained_command_cannot_escape_via_symlink();
+    test_standard_contained_no_resolver_executes();
+    test_contained_command_cancel();
+    test_contained_direct_file_recipe();
+    test_network_allowed_containment_restricts_socket_domains();
+    test_network_denied_containment_allows_private_socketpairs();
+    test_containment_rejects_external_runtime_symlink_targets();
+    test_containment_accepts_symlinked_workspace_roots();
+    test_containment_limits_protected_executable_parents();
+    test_failed_seccomp_action_probe_makes_containment_unavailable();
+    test_landlock_scopes_parent_signals_and_abstract_sockets();
+    test_landlock_scopes_broadcast_signals();
+  }
+  // Per-case prerequisites above report skips without suppressing later cases.
+  if (ava::tests::skip_requested())
+    return;
+  if (ava::tests::skip_requested())
+    return;
   if (ava::tests::skip_requested())
     return;
 
-  test_replaced_external_path_rule_fails_child_application();
-  test_contained_command_writes_workspace();
-  test_contained_command_writes_private_primary_group_workspace();
-  test_contained_command_writes_0755_workspace();
-  test_contained_command_reads_system_libs();
-  test_contained_command_cannot_read_secret();
-  test_contained_command_cannot_write_ava_authority();
-  test_contained_command_cannot_open_outbound_network();
-  test_contained_command_cannot_open_unix_socket();
-  test_contained_command_cannot_connect_abstract();
-  test_contained_command_cannot_escape_via_symlink();
-  test_standard_contained_no_resolver_executes();
-  test_contained_command_cancel();
-  test_contained_direct_file_recipe();
-  test_network_allowed_containment_restricts_socket_domains();
-  test_network_denied_containment_allows_private_socketpairs();
-  test_containment_rejects_external_runtime_symlink_targets();
-  test_containment_accepts_symlinked_workspace_roots();
-  test_containment_limits_protected_executable_parents();
-  test_failed_seccomp_action_probe_makes_containment_unavailable();
-  test_landlock_scopes_parent_signals_and_abstract_sockets();
-  test_landlock_scopes_broadcast_signals();
+  if (ava::tests::skip_requested())
+    return;
 }

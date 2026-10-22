@@ -1,4 +1,6 @@
 #include "sys.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/process/environment.h"
 #include "ava/process/supervisor.h"
@@ -113,7 +115,7 @@ ava::process::SecureAdoptionSpecV1 mermaid_spec(std::vector<std::string> argv = 
 
 std::optional<ava::process::ExitStatusV1> wait_for(ava::process::Supervisor& supervisor, ava::process::ProcessHandle const& handle)
 {
-  auto status = supervisor.wait(handle, std::chrono::steady_clock::now() + 4s);
+  auto status = supervisor.wait(handle, ava::tests::now_plus_seconds(4s));
   return status ? std::optional(*status) : std::nullopt;
 }
 
@@ -140,28 +142,6 @@ bool read_exact_until(int descriptor, void* buffer, std::size_t size, std::chron
   return offset == size;
 }
 
-bool wait_for_exact_child(pid_t process, int& status, std::chrono::steady_clock::time_point deadline) noexcept
-{
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    pid_t result = -1;
-    do
-      result = ::waitpid(process, &status, WNOHANG);
-    while (result < 0 && errno == EINTR);
-    if (result == process)
-      return true;
-    if (result < 0)
-      return false;
-    static_cast<void>(::poll(nullptr, 0, 10));
-  }
-  static_cast<void>(::kill(process, SIGKILL));
-  pid_t result = -1;
-  do
-    result = ::waitpid(process, &status, 0);
-  while (result < 0 && errno == EINTR);
-  return false;
-}
-
 bool read_byte(int descriptor, char expected, std::chrono::steady_clock::time_point deadline) noexcept
 {
   while (std::chrono::steady_clock::now() < deadline)
@@ -178,32 +158,6 @@ bool read_byte(int descriptor, char expected, std::chrono::steady_clock::time_po
       count = ::read(descriptor, &value, 1);
     while (count < 0 && errno == EINTR);
     return count == 1 && value == expected;
-  }
-  return false;
-}
-
-bool read_until(int descriptor, std::string_view marker, std::chrono::steady_clock::time_point deadline)
-{
-  std::string received;
-  std::array<char, 256> buffer{};
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    auto const count = ::read(descriptor, buffer.data(), buffer.size());
-    if (count > 0)
-    {
-      received.append(buffer.data(), static_cast<std::size_t>(count));
-      if (received.find(marker) != std::string::npos)
-        return true;
-      continue;
-    }
-    if (count == 0)
-      return received.find(marker) != std::string::npos;
-    if (errno == EINTR)
-      continue;
-    if (errno != EAGAIN && errno != EWOULDBLOCK)
-      return false;
-    pollfd item{.fd = descriptor, .events = POLLIN, .revents = 0};
-    static_cast<void>(::poll(&item, 1, 50));
   }
   return false;
 }
@@ -340,7 +294,7 @@ LeaderGroupRaceReport run_leader_group_race_fixture()
   static_cast<void>(::close(leader_pid[1]));
   static_cast<void>(::close(leader_release[0]));
   pid_t held_leader = -1;
-  report.leader_reported = read_exact_until(leader_pid[0], &held_leader, sizeof(held_leader), std::chrono::steady_clock::now() + 2s);
+  report.leader_reported = read_exact_until(leader_pid[0], &held_leader, sizeof(held_leader), ava::tests::now_plus_seconds(2s));
   static_cast<void>(::close(leader_pid[0]));
   pid_t const observed_group = report.leader_reported != 0 ? ::getpgid(held_leader) : -1;
   report.parent_group_created = report.leader_reported != 0 && held_leader > 1 && observed_group == held_leader && observed_group != ::getpgrp();
@@ -366,7 +320,7 @@ LeaderGroupRaceReport run_leader_group_race_fixture()
   if (!adopted)
     diagnostic += (diagnostic.empty() ? "" : "; ") + std::string("adopt: ") + adopted.error().format();
   std::copy_n(diagnostic.data(), std::min(diagnostic.size(), report.diagnostic.size() - 1), report.diagnostic.data());
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
   return report;
 }
 
@@ -383,15 +337,17 @@ void test_parent_establishes_leader_group_before_sentinel_fork()
     static_cast<void>(::close(result_pipe[1]));
     _exit(written ? 0 : 126);
   }
+  ava::tests::ScopedChild fixture_owner(fixture);
 
   LeaderGroupRaceReport report;
   if (pipe_ready)
     static_cast<void>(::close(result_pipe[1]));
-  bool const report_received = fixture > 1 && read_exact_until(result_pipe[0], &report, sizeof(report), std::chrono::steady_clock::now() + 8s);
+  bool const report_received = fixture > 1 && read_exact_until(result_pipe[0], &report, sizeof(report), ava::tests::now_plus_seconds(8s));
   if (pipe_ready)
     static_cast<void>(::close(result_pipe[0]));
-  int fixture_status = 0;
-  bool const reaped = fixture > 1 && wait_for_exact_child(fixture, fixture_status, std::chrono::steady_clock::now() + 8s);
+  auto const status = fixture > 1 ? fixture_owner.wait_until(ava::tests::now_plus_seconds(10)) : std::nullopt;
+  bool const reaped = status.has_value();
+  int const fixture_status = status.value_or(0);
   bool const exact = pipe_ready && report_received && reaped && WIFEXITED(fixture_status) && WEXITSTATUS(fixture_status) == 0 && report.setup != 0 &&
                      report.leader_reported != 0 && report.parent_group_created != 0 && report.sentinel_forked != 0 && report.adopted != 0 &&
                      report.natural_exit != 0;
@@ -438,13 +394,24 @@ void test_adoption_argv_rejected_before_fork()
             record.cleanup == ava::process::CleanupStateV1::NotRequired && record.settlement_count == 1;
   }
   expect(exact, "secure adoption rejects empty, NUL-bearing, aggregate-oversize, and over-count argv before any child fork");
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 void test_eof_child_stages_and_invalid_image()
 {
   auto application = application_owner();
   ava::process::Supervisor supervisor;
+  auto expect_last_launch_error = [](ava::process::ProcessSnapshotV1 const& snapshot, ava::process::TerminationReasonV1 reason, std::string const& label) {
+    if (!ava::tests::require(!snapshot.records.empty(), label + ": terminal record exists"))
+      return;
+    auto const& record = snapshot.records.back();
+    if (ava::tests::require(record.reason.has_value(), label + ": termination reason exists"))
+      ava::tests::expect_eq(*record.reason, reason, label + ": exact termination reason");
+    ava::tests::expect_eq(record.state, ava::process::ProcessStateV1::Finished, label + ": finished state");
+    ava::tests::expect_eq(record.exit_kind, ava::process::ExitKindV1::LaunchError, label + ": exact exit kind");
+    ava::tests::expect_eq(record.cleanup, ava::process::CleanupStateV1::Complete, label + ": complete cleanup");
+    ava::tests::expect_eq(record.settlement_count, 1U, label + ": exactly one settlement");
+  };
 
   auto eof_reservation = supervisor.reserve(operation_owner(application), ava::process::ProcessRoleV1::Bash);
   auto eof_gate = eof_reservation ? supervisor.begin_secure_adoption(std::move(*eof_reservation), bash_spec())
@@ -453,10 +420,18 @@ void test_eof_child_stages_and_invalid_image()
   if (eof_branch && *eof_branch == ava::process::AdoptionForkBranchV1::Child)
     _exit(0);
   auto eof_adopted = eof_gate ? supervisor.adopt(std::move(*eof_gate)) : ava::core::Result<ava::process::ProcessHandle>(std::unexpected(eof_gate.error()));
+  auto const eof_snapshot = supervisor.snapshot();
+  ava::tests::expect_all("EOF before exec attempt is a single exact launch failure",
+                         {{"forked parent", eof_branch && *eof_branch == ava::process::AdoptionForkBranchV1::Parent},
+                          {"adoption rejected", !eof_adopted},
+                          {"one record", eof_snapshot.records.size() == 1}});
+  expect_last_launch_error(eof_snapshot, ava::process::TerminationReasonV1::LaunchFailed, "EOF before exec attempt");
 
-  bool stages_failed = true;
-  for (auto stage : {ava::process::AdoptionChildFailureStageV1::Streams, ava::process::AdoptionChildFailureStageV1::WorkingDirectory,
-                     ava::process::AdoptionChildFailureStageV1::Containment, ava::process::AdoptionChildFailureStageV1::DescriptorValidation})
+  std::size_t expected_records = 1;
+  for (auto const& [stage, name] : {std::pair{ava::process::AdoptionChildFailureStageV1::Streams, "streams"},
+                                    std::pair{ava::process::AdoptionChildFailureStageV1::WorkingDirectory, "working directory"},
+                                    std::pair{ava::process::AdoptionChildFailureStageV1::Containment, "containment"},
+                                    std::pair{ava::process::AdoptionChildFailureStageV1::DescriptorValidation, "descriptor validation"}})
   {
     auto reservation = supervisor.reserve(operation_owner(application), ava::process::ProcessRoleV1::Bash);
     auto gate = reservation ? supervisor.begin_secure_adoption(std::move(*reservation), bash_spec())
@@ -465,16 +440,23 @@ void test_eof_child_stages_and_invalid_image()
     if (branch && *branch == ava::process::AdoptionForkBranchV1::Child)
       gate->child_launch_failed(stage, EACCES);
     auto adopted = gate ? supervisor.adopt(std::move(*gate)) : ava::core::Result<ava::process::ProcessHandle>(std::unexpected(gate.error()));
-    stages_failed = stages_failed && branch && *branch == ava::process::AdoptionForkBranchV1::Parent && !adopted;
+    auto const stage_snapshot = supervisor.snapshot();
+    std::string label = "child setup stage: ";
+    label += name;
+    std::string message = label;
+    message += " rejects adoption with exactly one complete launch-error settlement";
+    ava::tests::expect_all(message,
+                           {{"reservation", reservation.has_value()},
+                            {"gate", gate.has_value()},
+                            {"parent branch", branch && *branch == ava::process::AdoptionForkBranchV1::Parent},
+                            {"adoption rejected", !adopted},
+                            {"one additional record", stage_snapshot.records.size() == ++expected_records}});
+    expect_last_launch_error(stage_snapshot, ava::process::TerminationReasonV1::LaunchFailed, label);
   }
 
   auto const root = create_empty_root("process-adoption-invalid-image");
   auto const invalid_path = root / "invalid-image";
-  {
-    std::ofstream output(invalid_path, std::ios::binary | std::ios::trunc);
-    output << "not an executable image\n";
-  }
-  static_cast<void>(::chmod(invalid_path.c_str(), 0700));
+  ava::tests::write_test_file(invalid_path, "not an executable image\n", 0700);
   int invalid_descriptor = ::open(invalid_path.c_str(), O_RDONLY | O_CLOEXEC);
   auto invalid_reservation = supervisor.reserve(operation_owner(application), ava::process::ProcessRoleV1::Bash);
   auto invalid_gate = invalid_reservation ? supervisor.begin_secure_adoption(std::move(*invalid_reservation),
@@ -491,14 +473,13 @@ void test_eof_child_stages_and_invalid_image()
 
   auto snapshot = supervisor.snapshot();
   bool const invalid_error_content_free = !invalid_adopted && invalid_adopted.error().format().find(invalid_path.string()) == std::string::npos;
-  bool exact_classification = snapshot.records.size() == 6 && !eof_adopted && stages_failed && invalid_error_content_free;
-  for (std::size_t index = 0; index < snapshot.records.size(); ++index)
-  {
-    auto const reason = index + 1 == snapshot.records.size() ? ava::process::TerminationReasonV1::ExecFailed : ava::process::TerminationReasonV1::LaunchFailed;
-    exact_classification = exact_classification && one_launch_error(snapshot.records[index], reason);
-  }
-  expect(exact_classification, "EOF before attempt, every closed child setup stage, and a returned exec syscall settle once as exact launch errors");
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  ava::tests::expect_all("returned exec syscall is content-free ExecFailed, distinct from setup-stage LaunchFailed",
+                         {{"six records", snapshot.records.size() == 6},
+                          {"invalid image opened", invalid_descriptor >= 0},
+                          {"parent branch", invalid_branch && *invalid_branch == ava::process::AdoptionForkBranchV1::Parent},
+                          {"content-free rejection", invalid_error_content_free}});
+  expect_last_launch_error(snapshot, ava::process::TerminationReasonV1::ExecFailed, "invalid executable image");
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 void test_required_containment_exact_environment_sentinel_and_confirmation()
@@ -565,7 +546,7 @@ void test_required_containment_exact_environment_sentinel_and_confirmation()
     adopted.emplace(std::move(result));
     adoption_returned = true;
   });
-  bool const child_released = pipes_ready && read_byte(ready[0], 'R', std::chrono::steady_clock::now() + 2s);
+  bool const child_released = pipes_ready && read_byte(ready[0], 'R', ava::tests::now_plus_seconds(2s));
   bool returned_before_confirmation = false;
   {
     std::lock_guard lock(result_mutex);
@@ -573,7 +554,8 @@ void test_required_containment_exact_environment_sentinel_and_confirmation()
   }
   bool const continued = child_released && write_all_to_descriptor_for_test(proceed[1], "C", 1);
   static_cast<void>(::close(proceed[1]));
-  bool const exact_environment = read_until(output[0], "CLEAN\n", std::chrono::steady_clock::now() + 3s);
+  std::string environment_output;
+  bool const exact_environment = ava::tests::read_until(output[0], environment_output, "CLEAN\n", ava::tests::now_plus_seconds(3s));
   adopter.join();
 
   auto status = adopted && *adopted ? wait_for(supervisor, **adopted) : std::nullopt;
@@ -593,7 +575,7 @@ void test_required_containment_exact_environment_sentinel_and_confirmation()
   expect(exact, message);
   static_cast<void>(::close(ready[0]));
   static_cast<void>(::close(output[0]));
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 void test_containment_order_and_non_bash_rejection()
@@ -644,7 +626,7 @@ void test_containment_order_and_non_bash_rejection()
   }
   expect(exact && snapshot.live_records == 0,
          "skipped and unexpected containment checkpoints prevent an exec marker, while non-Bash Required rejects before fork");
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 void test_cancellation_after_release_before_confirmation()
@@ -674,8 +656,8 @@ void test_cancellation_after_release_before_confirmation()
   static_cast<void>(::close(hold[0]));
   std::optional<ava::core::Result<ava::process::ProcessHandle>> adopted;
   std::thread adopter([&] { adopted.emplace(supervisor.adopt(std::move(*gate))); });
-  bool const after_release = pipes_ready && read_byte(reached[0], 'R', std::chrono::steady_clock::now() + 2s);
-  auto canceled = supervisor.request_stop(application, ava::process::TerminationReasonV1::Canceled, std::chrono::steady_clock::now() + 2s);
+  bool const after_release = pipes_ready && read_byte(reached[0], 'R', ava::tests::now_plus_seconds(2s));
+  auto canceled = supervisor.request_stop(application, ava::process::TerminationReasonV1::Canceled, ava::tests::now_plus_seconds(2s));
   adopter.join();
   static_cast<void>(::close(hold[1]));
   static_cast<void>(::close(reached[0]));
@@ -685,7 +667,7 @@ void test_cancellation_after_release_before_confirmation()
                      snapshot.records.front().settlement_count == 1 && snapshot.records.front().cleanup == ava::process::CleanupStateV1::Complete;
   expect(after_release && canceled && canceled->newly_requested == 1 && adopted && !*adopted && exact,
          "cancellation after physical release but before exec confirmation remains the immutable first reason and cleans exactly once");
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 ava::core::Result<ava::process::ProcessHandle> launch_mermaid(ava::process::Supervisor& supervisor, ava::process::OwnerPathV1 const& application,
@@ -718,11 +700,15 @@ void test_mermaid_expected_stop_and_second_stop()
   auto normal_status = normal ? wait_for(supervisor, *normal) : std::nullopt;
   auto stopped = launch_mermaid(supervisor, application, "stopped");
   auto stopped_status = stopped ? wait_for(supervisor, *stopped) : std::nullopt;
-  expect(normal && normal_status && normal_status->reason == ava::process::TerminationReasonV1::NaturalExit && stopped && stopped_status &&
-             stopped_status->reason == ava::process::TerminationReasonV1::UnsupportedSuspension &&
-             stopped_status->cleanup == ava::process::CleanupStateV1::Complete,
-         "Supervisor consumes Mermaid's role-derived first SIGSTOP, confirms exec, and classifies a post-exec second stop ordinarily");
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  ava::tests::expect_all("Mermaid consumes its role-derived initial stop but rejects a post-exec second stop",
+                         {{"normal launch", normal.has_value()},
+                          {"normal settlement", normal_status.has_value()},
+                          {"natural reason", normal_status && normal_status->reason == ava::process::TerminationReasonV1::NaturalExit},
+                          {"second-stop launch", stopped.has_value()},
+                          {"second-stop settlement", stopped_status.has_value()},
+                          {"unsupported suspension", stopped_status && stopped_status->reason == ava::process::TerminationReasonV1::UnsupportedSuspension},
+                          {"complete cleanup", stopped_status && stopped_status->cleanup == ava::process::CleanupStateV1::Complete}});
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 void test_sentinel_descriptor_hygiene_while_leader_runs()
@@ -752,8 +738,8 @@ void test_sentinel_descriptor_hygiene_while_leader_runs()
   if (executable >= 0)
     static_cast<void>(::close(executable));
   auto adopted = gate ? supervisor.adopt(std::move(*gate)) : ava::core::Result<ava::process::ProcessHandle>(std::unexpected(gate.error()));
-  bool const output_eof = read_eof(output[0], std::chrono::steady_clock::now() + 2s);
-  bool const unrelated_eof = read_eof(unrelated[0], std::chrono::steady_clock::now() + 2s);
+  bool const output_eof = read_eof(output[0], ava::tests::now_plus_seconds(2s));
+  bool const unrelated_eof = read_eof(unrelated[0], ava::tests::now_plus_seconds(2s));
   bool const released = output_eof && write_all_to_descriptor_for_test(control[1], "X", 1);
   static_cast<void>(::close(control[1]));
   auto status = adopted ? wait_for(supervisor, *adopted) : std::nullopt;
@@ -762,7 +748,7 @@ void test_sentinel_descriptor_hygiene_while_leader_runs()
          "the Bash-only sentinel retains no output, executable, protocol, or unrelated anchor-like descriptor while the leader runs");
   static_cast<void>(::close(output[0]));
   static_cast<void>(::close(unrelated[0]));
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 void test_retained_script_descriptor_and_invalid_keep_sets()
@@ -797,7 +783,8 @@ void test_retained_script_descriptor_and_invalid_keep_sets()
   if (output_flags >= 0)
     static_cast<void>(::fcntl(output[0], F_SETFL, output_flags | O_NONBLOCK));
   auto adopted = gate ? supervisor.adopt(std::move(*gate)) : ava::core::Result<ava::process::ProcessHandle>(std::unexpected(gate.error()));
-  bool const descriptor_result = read_until(output[0], "CLEAN\n", std::chrono::steady_clock::now() + 2s);
+  std::string descriptor_output;
+  bool const descriptor_result = ava::tests::read_until(output[0], descriptor_output, "CLEAN\n", ava::tests::now_plus_seconds(2s));
   auto status = adopted ? wait_for(supervisor, *adopted) : std::nullopt;
   static_cast<void>(::close(output[0]));
 
@@ -850,7 +837,40 @@ void test_retained_script_descriptor_and_invalid_keep_sets()
   expect(pipe_ready && adopted && descriptor_result && status && status->reason == ava::process::TerminationReasonV1::NaturalExit && invalid_sets_failed &&
              exact_invalid,
          "one bounded retained script descriptor survives exec while unrelated descriptors close and duplicate, final, or overflow keep sets fail closed");
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
+}
+
+void test_foreign_supervisor_cannot_adopt_gate()
+{
+  auto application = application_owner();
+  ava::process::Supervisor owner;
+  ava::process::Supervisor foreign;
+  auto reservation = owner.reserve(operation_owner(application), ava::process::ProcessRoleV1::Bash);
+  if (!ava::tests::require(reservation.has_value(), "foreign adoption fixture reserves owner authority"))
+    return;
+  auto gate = owner.begin_secure_adoption(std::move(*reservation), bash_spec());
+  if (!ava::tests::require(gate.has_value(), "foreign adoption fixture creates its gate"))
+    return;
+  int const executable = ::open(AVA_FAKE_PROCESS_CHILD_PATH, O_RDONLY | O_CLOEXEC);
+  if (!ava::tests::require(executable >= 0, "foreign adoption fixture opens executable"))
+    return;
+  auto branch = gate->fork_leader();
+  if (branch && *branch == ava::process::AdoptionForkBranchV1::Child)
+    gate->child_exec_descriptor(executable);
+  static_cast<void>(::close(executable));
+  if (!ava::tests::require(branch && *branch == ava::process::AdoptionForkBranchV1::Parent, "foreign adoption fixture owns a gated leader"))
+    return;
+  auto rejected = foreign.adopt(std::move(*gate));
+  auto const foreign_snapshot = foreign.snapshot();
+  auto adopted = owner.adopt(std::move(*gate));
+  auto status = adopted ? wait_for(owner, *adopted) : std::nullopt;
+  ava::tests::expect_all(
+      "foreign supervisor cannot consume or release another supervisor's exact gated child",
+      {{"foreign adoption rejected", !rejected},
+       {"foreign authority unchanged", foreign_snapshot.records.empty() && !foreign_snapshot.monitor_started},
+       {"owner can still adopt", adopted.has_value()},
+       {"owner child exits successfully", status && status->reason == ava::process::TerminationReasonV1::NaturalExit && status->exit_code == 0}});
+  expect(owner.shutdown(ava::tests::now_plus_seconds(10)).complete, "foreign adoption fixture cleans up through its owner");
 }
 
 #endif
@@ -864,6 +884,7 @@ void run_process_adoption_posix_tests()
 #else
   test_parent_establishes_leader_group_before_sentinel_fork();
   test_adoption_argv_rejected_before_fork();
+  test_foreign_supervisor_cannot_adopt_gate();
   test_eof_child_stages_and_invalid_image();
   test_required_containment_exact_environment_sentinel_and_confirmation();
   test_containment_order_and_non_bash_rejection();

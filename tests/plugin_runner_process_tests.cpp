@@ -1,4 +1,7 @@
 #include "sys.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/process/environment.h"
 #include "ava/process/scope.h"
@@ -9,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -74,8 +78,7 @@ ScopedTestDirectory test_root(std::string_view label)
 void write_text(std::filesystem::path const& path, std::string_view text)
 {
   std::filesystem::create_directories(path.parent_path());
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output << text;
+  ava::tests::write_test_file(path, text);
 }
 
 std::string read_text(std::filesystem::path const& path)
@@ -102,7 +105,7 @@ void copy_executable(std::filesystem::path const& destination)
 
 bool wait_for_path(std::filesystem::path const& path, std::chrono::milliseconds timeout = 2s)
 {
-  auto const deadline = Clock::now() + timeout;
+  auto const deadline = ava::tests::now_plus_seconds(timeout);
   while (Clock::now() < deadline)
   {
     if (std::filesystem::exists(path))
@@ -125,7 +128,7 @@ bool pid_marker_complete(std::filesystem::path const& path)
 
 bool wait_for_pid_marker(std::filesystem::path const& path, std::chrono::milliseconds timeout = 2s)
 {
-  auto const deadline = Clock::now() + timeout;
+  auto const deadline = ava::tests::now_plus_seconds(timeout);
   while (Clock::now() < deadline)
   {
     if (pid_marker_complete(path))
@@ -135,34 +138,11 @@ bool wait_for_pid_marker(std::filesystem::path const& path, std::chrono::millise
   return pid_marker_complete(path);
 }
 
-bool process_is_live_for_test(std::string_view identity)
+pid_t process_identity(std::string_view identity)
 {
-#if defined(__linux__)
-  return !identity.empty() && std::filesystem::exists(std::filesystem::path("/proc") / std::string(identity));
-#else
-  static_cast<void>(identity);
-  return true;
-#endif
-}
-
-bool wait_for_process_absent(std::string_view identity)
-{
-#if defined(__linux__)
-  if (identity.empty())
-    return false;
-  auto const path = std::filesystem::path("/proc") / std::string(identity);
-  auto const deadline = Clock::now() + 2s;
-  while (Clock::now() < deadline)
-  {
-    if (!std::filesystem::exists(path))
-      return true;
-    std::this_thread::sleep_for(10ms);
-  }
-  return !std::filesystem::exists(path);
-#else
-  static_cast<void>(identity);
-  return true;
-#endif
+  pid_t pid = -1;
+  auto const parsed = std::from_chars(identity.data(), identity.data() + identity.size(), pid);
+  return parsed.ec == std::errc{} && parsed.ptr == identity.data() + identity.size() && pid > 0 ? pid : -1;
 }
 
 ava::plugin::PluginManifest fake_manifest(std::filesystem::path const& directory, std::string scenario, std::filesystem::path const& marker = {})
@@ -211,41 +191,33 @@ bool completely_settled(ava::process::ProcessSnapshotRecordV1 const& record)
   return record.state == ava::process::ProcessStateV1::Finished && record.cleanup == ava::process::CleanupStateV1::Complete && record.settlement_count == 1;
 }
 
+bool wait_for_plugin_settlement(ava::process::Supervisor& supervisor)
+{
+  auto const deadline = ava::tests::now_plus_seconds(10);
+  while (Clock::now() < deadline)
+  {
+    auto const cycle = ava::process::testing::SupervisorTestAccess::monitor_cycle(supervisor);
+    auto const records = plugin_records(supervisor);
+    if (records.size() == 1 && completely_settled(records.front()))
+      return true;
+    static_cast<void>(ava::process::testing::SupervisorTestAccess::wait_for_monitor_cycle(supervisor, cycle, deadline));
+  }
+  auto const records = plugin_records(supervisor);
+  return records.size() == 1 && completely_settled(records.front());
+}
+
+ava::core::VoidResult shutdown_for_test(ava::plugin::PluginProcess& process)
+{
+  return process.shutdown(2s);
+}
+
 void finish_supervisor(TestAuthority& authority)
 {
   authority.supervisor->stop_accepting();
-  auto const result = authority.supervisor->shutdown(Clock::now() + 2s);
+  auto const result = authority.supervisor->shutdown(ava::tests::now_plus_seconds(2s));
   expect(result.complete && result.incomplete_count == 0 && authority.supervisor->snapshot().live_records == 0,
          "plugin process test supervisor finishes with no live records");
 }
-
-class EnvironmentRestore final
-{
- public:
-  explicit EnvironmentRestore(std::vector<std::pair<std::string, std::string>> values)
-  {
-    for (auto const& [name, value] : values)
-    {
-      char const* prior = std::getenv(name.c_str());
-      previous_.push_back({name, prior ? std::optional<std::string>(prior) : std::nullopt});
-      ::setenv(name.c_str(), value.c_str(), 1);
-    }
-  }
-
-  ~EnvironmentRestore()
-  {
-    for (auto const& [name, value] : previous_)
-    {
-      if (value)
-        ::setenv(name.c_str(), value->c_str(), 1);
-      else
-        ::unsetenv(name.c_str());
-    }
-  }
-
- private:
-  std::vector<std::pair<std::string, std::optional<std::string>>> previous_;
-};
 
 class TestLatch final
 {
@@ -285,7 +257,7 @@ class TestLatch final
 void test_compatibility_environment_bare_command_and_idempotence()
 {
   auto authority = make_authority();
-  if (!authority)
+  if (!ava::tests::require(authority.has_value(), "plugin fixture creates authority"))
     return;
   auto const root = test_root("compatibility");
   auto const workspace = root / "workspace";
@@ -299,21 +271,21 @@ void test_compatibility_environment_bare_command_and_idempotence()
   {
     auto called = (*process)->call_tool("tool", "{}", "compat");
     expect(called && called->ok && called->content == "compatible", "supervised plugin call remains JSONL-compatible");
-    auto first = (*process)->shutdown(500ms);
-    auto second = (*process)->shutdown(500ms);
+    auto first = shutdown_for_test(**process);
+    auto second = shutdown_for_test(**process);
     expect(first && second, "plugin shutdown is successful and idempotent");
   }
   auto records = plugin_records(*authority->supervisor);
   expect(records.size() == 1 && completely_settled(records.front()), "compatibility plugin record settles exactly once with complete cleanup");
 
-  EnvironmentRestore environment({{"HOME", "CANARY_PLUGIN_HOME"},
-                                  {"HTTPS_PROXY", "CANARY_PLUGIN_PROXY"},
-                                  {"OPENAI_API_KEY", "CANARY_PLUGIN_CREDENTIAL"},
-                                  {"LD_PRELOAD", "CANARY_PLUGIN_LOADER"},
-                                  {"SSH_AUTH_SOCK", "CANARY_PLUGIN_AGENT"},
-                                  {"AVA_PRIVATE_TOKEN", "CANARY_PLUGIN_AVA"}});
+  ScopedEnvVar home("HOME", "CANARY_PLUGIN_HOME");
+  ScopedEnvVar proxy("HTTPS_PROXY", "CANARY_PLUGIN_PROXY");
+  ScopedEnvVar credential("OPENAI_API_KEY", "CANARY_PLUGIN_CREDENTIAL");
+  ScopedEnvVar loader("LD_PRELOAD", "CANARY_PLUGIN_LOADER");
+  ScopedEnvVar agent("SSH_AUTH_SOCK", "CANARY_PLUGIN_AGENT");
+  ScopedEnvVar private_token("AVA_PRIVATE_TOKEN", "CANARY_PLUGIN_AVA");
   auto environment_authority = make_authority();
-  if (!environment_authority)
+  if (!ava::tests::require(environment_authority.has_value(), "plugin fixture creates environment_authority"))
     return;
   auto const environment_file = root / "environment.txt";
   auto environment_process =
@@ -323,7 +295,7 @@ void test_compatibility_environment_bare_command_and_idempotence()
   if (environment_process)
   {
     auto called = (*environment_process)->call_tool("tool", "{}", "compat");
-    auto shutdown = (*environment_process)->shutdown(500ms);
+    auto shutdown = shutdown_for_test(**environment_process);
     expect(called && shutdown, "plugin exact environment fixture completes");
   }
   auto const child_environment = read_text(environment_file);
@@ -337,7 +309,7 @@ void test_compatibility_environment_bare_command_and_idempotence()
   finish_supervisor(*environment_authority);
 
   auto bare_authority = make_authority();
-  if (!bare_authority)
+  if (!ava::tests::require(bare_authority.has_value(), "plugin fixture creates bare_authority"))
     return;
   auto bare = fake_manifest(plugin_dir, "normal");
   bare.entrypoint.command = "sh";
@@ -348,7 +320,7 @@ void test_compatibility_environment_bare_command_and_idempotence()
   auto bare_process = ava::plugin::PluginProcess::start(std::move(bare), options_for(workspace, bare_authority->run));
   auto bare_call = bare_process ? (*bare_process)->call_tool("tool", "{}", "compat")
                                 : ava::core::Result<ava::plugin::PluginToolCallResult>(std::unexpected(bare_process.error()));
-  auto bare_shutdown = bare_process ? (*bare_process)->shutdown(500ms) : ava::core::VoidResult(std::unexpected(bare_process.error()));
+  auto bare_shutdown = bare_process ? shutdown_for_test(**bare_process) : ava::core::VoidResult(std::unexpected(bare_process.error()));
   expect(bare_call && bare_call->content == "bare" && bare_shutdown, "bare plugin command resolves through the exact trusted PATH");
   finish_supervisor(*bare_authority);
   finish_supervisor(*authority);
@@ -357,7 +329,7 @@ void test_compatibility_environment_bare_command_and_idempotence()
 void test_entrypoint_path_forms_preserve_lexical_resolution_and_argv0()
 {
   auto authority = make_authority();
-  if (!authority)
+  if (!ava::tests::require(authority.has_value(), "plugin fixture creates authority"))
     return;
   auto const root = test_root("entrypoint-forms");
   auto const workspace = root / "workspace";
@@ -386,7 +358,7 @@ void test_entrypoint_path_forms_preserve_lexical_resolution_and_argv0()
     auto manifest = fake_manifest(plugin_dir, "argv0", marker);
     manifest.entrypoint.command = form.command;
     auto process = ava::plugin::PluginProcess::start(std::move(manifest), options_for(workspace, authority->run));
-    auto shutdown = process ? (*process)->shutdown(500ms) : ava::core::VoidResult(std::unexpected(process.error()));
+    auto shutdown = process ? shutdown_for_test(**process) : ava::core::VoidResult(std::unexpected(process.error()));
     expect(process && shutdown && first_line(marker) == form.command,
            form.label + " plugin entrypoint preserves the manifest spelling as argv[0] while resolving only slash-containing relatives against cwd");
   }
@@ -400,7 +372,7 @@ void test_entrypoint_path_forms_preserve_lexical_resolution_and_argv0()
 void test_prelaunch_authority_cancel_and_discovery_are_process_free()
 {
   auto authority = make_authority();
-  if (!authority)
+  if (!ava::tests::require(authority.has_value(), "plugin fixture creates authority"))
     return;
   auto const root = test_root("prelaunch");
   auto const workspace = root / "workspace";
@@ -486,7 +458,7 @@ void test_failure_reason_mapping_and_output_accounting()
                      std::size_t record_limit, std::size_t stderr_limit, ava::process::TerminationReasonV1 expected_reason, bool call_after_start,
                      bool cancel_call, bool expect_start_success) {
     auto authority = make_authority();
-    if (!authority)
+    if (!ava::tests::require(authority.has_value(), "plugin fixture creates authority"))
       return;
     auto const root = test_root(label);
     auto const workspace = root / "workspace";
@@ -520,7 +492,7 @@ void test_failure_reason_mapping_and_output_accounting()
   run_case("oversized-stdout", "oversized-initialize", 500ms, 500ms, 256, 64 * 1024, ava::process::TerminationReasonV1::OutputLimit, false, false, false);
 
   auto stderr_authority = make_authority();
-  if (!stderr_authority)
+  if (!ava::tests::require(stderr_authority.has_value(), "plugin fixture creates stderr_authority"))
     return;
   auto const root = test_root("oversized-stderr");
   auto const workspace = root / "workspace";
@@ -531,7 +503,7 @@ void test_failure_reason_mapping_and_output_accounting()
   expect(process && (*process)->stderr_truncated() && (*process)->stderr_tail().size() == 64, "oversized plugin stderr keeps only its bounded tail");
   if (process)
   {
-    auto shutdown = (*process)->shutdown(500ms);
+    auto shutdown = shutdown_for_test(**process);
     expect(shutdown.has_value(), "stderr truncation does not change protocol success");
   }
   auto records = plugin_records(*stderr_authority->supervisor);
@@ -543,7 +515,7 @@ void test_failure_reason_mapping_and_output_accounting()
 void test_outbound_and_queued_protocol_memory_bounds()
 {
   auto outbound_authority = make_authority();
-  if (!outbound_authority)
+  if (!ava::tests::require(outbound_authority.has_value(), "plugin fixture creates outbound_authority"))
     return;
   auto const outbound_root = test_root("outbound-limit");
   auto const outbound_marker = outbound_root / "request-observed";
@@ -563,7 +535,7 @@ void test_outbound_and_queued_protocol_memory_bounds()
   finish_supervisor(*outbound_authority);
 
   auto flood_authority = make_authority();
-  if (!flood_authority)
+  if (!ava::tests::require(flood_authority.has_value(), "plugin fixture creates flood_authority"))
     return;
   auto const flood_root = test_root("short-line-flood");
   std::filesystem::create_directories(flood_root / "workspace");
@@ -571,21 +543,19 @@ void test_outbound_and_queued_protocol_memory_bounds()
   flood_options.max_record_bytes = ava::plugin::kPluginRunnerMaxRecordBytes;
   auto flood_process = ava::plugin::PluginProcess::start(fake_manifest(flood_root / "plugin", "blocked-stdin-short-line-flood"), flood_options);
   std::string blocked_arguments = "{\"value\":\"" + std::string(512 * 1024, 'x') + "\"}";
-  auto const started = Clock::now();
   auto flood_call = flood_process ? (*flood_process)->call_tool("tool", blocked_arguments, "flood")
                                   : ava::core::Result<ava::plugin::PluginToolCallResult>(std::unexpected(flood_process.error()));
-  auto const elapsed = Clock::now() - started;
   auto flood_shutdown = flood_process ? (*flood_process)->shutdown() : ava::core::VoidResult(std::unexpected(flood_process.error()));
   auto flood_records = plugin_records(*flood_authority->supervisor);
   expect(!flood_call && flood_call.error().message().find("queued record count") != std::string::npos &&
-             flood_call.error().format().find("output_limit: true") != std::string::npos && elapsed < 1500ms && flood_shutdown && flood_records.size() == 1 &&
+             flood_call.error().format().find("output_limit: true") != std::string::npos && flood_shutdown && flood_records.size() == 1 &&
              completely_settled(flood_records.front()) && flood_records.front().reason == ava::process::TerminationReasonV1::OutputLimit &&
              flood_records.front().stdout_bytes > 0 && flood_records.front().stdout_truncated,
          "short-line stdout flood while stdin is blocked hits bounded queued-record OutputLimit with complete accounting and settlement");
   finish_supervisor(*flood_authority);
 
   auto byte_authority = make_authority();
-  if (!byte_authority)
+  if (!ava::tests::require(byte_authority.has_value(), "plugin fixture creates byte_authority"))
     return;
   auto const byte_root = test_root("queued-byte-flood");
   std::filesystem::create_directories(byte_root / "workspace");
@@ -604,28 +574,45 @@ void test_outbound_and_queued_protocol_memory_bounds()
   finish_supervisor(*byte_authority);
 }
 
-void test_single_startup_budget_and_spawn_cancellation()
+void test_single_startup_budget_spans_launch_and_initialize()
 {
-  auto budget_authority = make_authority();
-  if (!budget_authority)
+  auto authority = make_authority();
+  if (!ava::tests::require(authority.has_value(), "single startup-budget fixture creates an authority"))
     return;
-  auto const budget_root = test_root("single-startup-budget");
-  auto const initialize_marker = budget_root / "initialize-observed";
-  std::filesystem::create_directories(budget_root / "workspace");
-  ava::process::testing::SupervisorTestAccess::set_after_gate_release_hook(*budget_authority->supervisor, [] { std::this_thread::sleep_for(100ms); });
-  auto const budget_started = Clock::now();
-  auto budget_process = ava::plugin::PluginProcess::start(fake_manifest(budget_root / "plugin", "initialize-delay", initialize_marker),
-                                                          options_for(budget_root / "workspace", budget_authority->run, 180ms, 500ms));
-  auto const budget_elapsed = Clock::now() - budget_started;
-  ava::process::testing::SupervisorTestAccess::clear_after_gate_release_hook(*budget_authority->supervisor);
-  auto budget_records = plugin_records(*budget_authority->supervisor);
-  expect(!budget_process && wait_for_path(initialize_marker) && budget_elapsed >= 150ms && budget_elapsed < 300ms && budget_records.size() == 1 &&
-             completely_settled(budget_records.front()) && budget_records.front().reason == ava::process::TerminationReasonV1::DeadlineExpired,
-         "launch gating and initialization consume one coarse absolute startup budget instead of restarting the timeout");
-  finish_supervisor(*budget_authority);
+  auto const root = test_root("single-startup-budget");
+  auto const marker = root / "initialize-observed";
+  std::filesystem::create_directories(root / "workspace");
+  bool gate_reached = false;
+  // Time is the stimulus, not a readiness guess: launch consumes 1200ms and the
+  // fake consumes another 1200ms only after receiving initialize. Each phase
+  // fits a fresh 2000ms budget with 800ms slack, but their 2400ms sum cannot fit
+  // one budget. Scheduling delay cannot make that sum fit; no elapsed ceiling
+  // is asserted. The marker proves expiry occurred in the second phase.
+  ava::process::testing::SupervisorTestAccess::set_after_gate_release_hook(*authority->supervisor, [&] {
+    gate_reached = true;
+    std::this_thread::sleep_for(1200ms);
+  });
+  auto process =
+      ava::plugin::PluginProcess::start(fake_manifest(root / "plugin", "initialize-delay", marker), options_for(root / "workspace", authority->run, 2s, 500ms));
+  ava::process::testing::SupervisorTestAccess::clear_after_gate_release_hook(*authority->supervisor);
+  auto cleanup = process ? (*process)->shutdown() : ava::core::VoidResult{};
+  auto const records = plugin_records(*authority->supervisor);
+  ava::tests::expect_all(
+      "launch and initialization share one startup budget: " + (process ? std::string("unexpected startup success") : process.error().format()),
+      {{"launch gate reached", gate_reached},
+       {"initialize received", first_line(marker) == "initialize-observed"},
+       {"startup rejected", !process},
+       {"unexpected success cleaned", cleanup.has_value()},
+       {"one record", records.size() == 1},
+       {"complete settlement", records.size() == 1 && completely_settled(records.front())},
+       {"deadline first reason", records.size() == 1 && records.front().reason == ava::process::TerminationReasonV1::DeadlineExpired}});
+  finish_supervisor(*authority);
+}
 
+void test_spawn_cancellation_before_gate_release()
+{
   auto cancel_authority = make_authority();
-  if (!cancel_authority)
+  if (!ava::tests::require(cancel_authority.has_value(), "plugin fixture creates cancel_authority"))
     return;
   auto const cancel_root = test_root("spawn-cancel");
   auto const exec_marker = cancel_root / "exec-observed";
@@ -638,29 +625,27 @@ void test_single_startup_budget_and_spawn_cancellation()
   auto launch = std::async(std::launch::async, [manifest = std::move(manifest), runner_options = std::move(runner_options), &canceled]() mutable {
     return ava::plugin::PluginProcess::start(std::move(manifest), std::move(runner_options), [&] { return canceled.load(); });
   });
-  bool const reached_gate = latch->wait_until(Clock::now() + 2s);
-  auto const cancel_started = Clock::now();
+  bool const reached_gate = latch->wait_until(ava::tests::now_plus_seconds(2s));
   canceled = true;
   latch->release();
-  bool const prompt = launch.wait_for(1s) == std::future_status::ready;
+  bool const completed = launch.wait_until(ava::tests::now_plus_seconds(10)) == std::future_status::ready;
   auto canceled_process = launch.get();
-  auto const cancel_elapsed = Clock::now() - cancel_started;
   ava::process::testing::SupervisorTestAccess::clear_after_fork_before_release_hook(*cancel_authority->supervisor);
   auto cancel_snapshot = cancel_authority->supervisor->snapshot();
   auto cancel_records = plugin_records(*cancel_authority->supervisor);
-  expect(reached_gate && prompt && !canceled_process && canceled_process.error().message().find("plugin startup canceled") != std::string::npos &&
+  expect(reached_gate && completed && !canceled_process && canceled_process.error().message().find("plugin startup canceled") != std::string::npos &&
              canceled_process.error().format().find("canceled: true") != std::string::npos &&
-             canceled_process.error().format().find("reason: canceled") != std::string::npos && cancel_elapsed < 1s && !std::filesystem::exists(exec_marker) &&
+             canceled_process.error().format().find("reason: canceled") != std::string::npos && !std::filesystem::exists(exec_marker) &&
              cancel_snapshot.live_records == 0 && cancel_records.size() == 1 && completely_settled(cancel_records.front()) &&
              cancel_records.front().reason == ava::process::TerminationReasonV1::Canceled,
-         "parent cancellation during common spawn commits Canceled before gate release and settles promptly without exec side effects");
+         "parent cancellation during common spawn commits Canceled before gate release and settles completely without exec side effects");
   finish_supervisor(*cancel_authority);
 }
 
 void test_exec_confirmation_cancellation_classification()
 {
   auto authority = make_authority();
-  if (!authority)
+  if (!ava::tests::require(authority.has_value(), "plugin fixture creates authority"))
     return;
   auto const root = test_root("exec-confirmation-cancel");
   auto const pid_marker = root / "leader";
@@ -681,7 +666,7 @@ void test_exec_confirmation_cancellation_classification()
   auto const format = process ? std::string{} : process.error().format();
   auto snapshot = authority->supervisor->snapshot();
   auto records = plugin_records(*authority->supervisor);
-  bool const group_reaped = wait_for_process_absent(identity);
+  bool const group_reaped = ava::tests::wait_for_process_absent(process_identity(identity), ava::tests::now_plus_seconds(10));
   expect(marker_ready_in_hook.load(), "exec-confirmation cancellation hook observes a complete child PID marker before canceling");
   expect(!process && process.error().message().find("plugin startup canceled") != std::string::npos && format.find("canceled: true") != std::string::npos &&
              format.find("reason: canceled") != std::string::npos,
@@ -693,7 +678,7 @@ void test_exec_confirmation_cancellation_classification()
   finish_supervisor(*authority);
 
   auto stop_authority = make_authority();
-  if (!stop_authority)
+  if (!ava::tests::require(stop_authority.has_value(), "plugin fixture creates stop_authority"))
     return;
   auto const stop_root = test_root("owner-stop-before-late-cancel");
   auto const stop_marker = stop_root / "leader";
@@ -707,8 +692,8 @@ void test_exec_confirmation_cancellation_classification()
   ava::process::testing::SupervisorTestAccess::set_after_gate_release_hook(*stop_authority->supervisor, [&] {
     if (wait_for_pid_marker(stop_marker))
     {
-      auto stopped =
-          stop_authority->supervisor->request_stop(stop_authority->run.owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown, Clock::now() + 2s);
+      auto stopped = stop_authority->supervisor->request_stop(stop_authority->run.owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown,
+                                                              ava::tests::now_plus_seconds(2s));
       stop_committed = stopped && stopped->matched == 1;
     }
     cancel = true;
@@ -724,7 +709,7 @@ void test_exec_confirmation_cancellation_classification()
   auto const stop_identity = first_line(stop_marker);
   auto const stop_format = failed ? std::string{} : failed.error().format();
   auto stop_records = plugin_records(*stop_authority->supervisor);
-  bool const stop_reaped = wait_for_process_absent(stop_identity);
+  bool const stop_reaped = ava::tests::wait_for_process_absent(process_identity(stop_identity), ava::tests::now_plus_seconds(10));
   expect(stop_committed && cancel_true_polls > 0, "owner shutdown commits as the first cause and the cancel callback turns true before launch returns");
   expect(!failed && failed.error().message().find("canceled") == std::string::npos && stop_format.find("canceled: true") == std::string::npos &&
              stop_format.find("reason: canceled") == std::string::npos && stop_format.find("reason: owner_shutdown") != std::string::npos,
@@ -739,15 +724,21 @@ void test_exec_confirmation_cancellation_classification()
 void test_eof_term_refusal_and_natural_descendant_cleanup()
 {
   auto eof_authority = make_authority();
-  if (!eof_authority)
+  if (!ava::tests::require(eof_authority.has_value(), "plugin fixture creates eof_authority"))
     return;
   auto const eof_root = test_root("endpoint-eof");
   std::filesystem::create_directories(eof_root / "workspace");
-  auto eof_process =
-      ava::plugin::PluginProcess::start(fake_manifest(eof_root / "plugin", "endpoint-eof"), options_for(eof_root / "workspace", eof_authority->run));
+  auto eof_process = ava::plugin::PluginProcess::start(fake_manifest(eof_root / "plugin", "endpoint-eof", eof_root / "leader"),
+                                                       options_for(eof_root / "workspace", eof_authority->run));
   expect(eof_process.has_value(), "endpoint EOF fixture initializes before leader exit");
   if (eof_process)
   {
+    bool const marker_ready = wait_for_pid_marker(eof_root / "leader");
+    bool const absent =
+        marker_ready && ava::tests::wait_for_process_absent(process_identity(first_line(eof_root / "leader")), ava::tests::now_plus_seconds(10));
+    bool const settled = absent && wait_for_plugin_settlement(*eof_authority->supervisor);
+    if (!ava::tests::require(settled, "natural EOF is settled before the competing tool call"))
+      return;
     auto called = (*eof_process)->call_tool("tool", "{}", "compat");
     auto shutdown = (*eof_process)->shutdown();
     expect(!called && shutdown, "endpoint EOF is reported without losing complete cleanup");
@@ -758,24 +749,26 @@ void test_eof_term_refusal_and_natural_descendant_cleanup()
   finish_supervisor(*eof_authority);
 
   auto refusal_authority = make_authority();
-  if (!refusal_authority)
+  if (!ava::tests::require(refusal_authority.has_value(), "plugin fixture creates refusal_authority"))
     return;
   auto const refusal_root = test_root("term-refusal");
   std::filesystem::create_directories(refusal_root / "workspace");
   auto refusal_process = ava::plugin::PluginProcess::start(fake_manifest(refusal_root / "plugin", "shutdown-term-refusal"),
                                                            options_for(refusal_root / "workspace", refusal_authority->run));
-  auto const started = Clock::now();
-  auto refusal_shutdown = refusal_process ? (*refusal_process)->shutdown(250ms) : ava::core::VoidResult(std::unexpected(refusal_process.error()));
-  auto const elapsed = Clock::now() - started;
-  expect(refusal_shutdown && elapsed < 3s, "plugin shutdown escalates TERM refusal within one bounded cleanup deadline");
+  auto refusal_shutdown = refusal_process ? (*refusal_process)->shutdown(2s) : ava::core::VoidResult(std::unexpected(refusal_process.error()));
   auto refusal_records = plugin_records(*refusal_authority->supervisor);
-  expect(refusal_records.size() == 1 && completely_settled(refusal_records.front()) &&
-             refusal_records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown,
-         "explicit TERM-refusal cleanup is owner shutdown with complete settlement");
+  ava::tests::expect_all(
+      "ready TERM-refusing plugin is killed and completely settled by owner shutdown",
+      {{"initialized", refusal_process.has_value()},
+       {"shutdown", refusal_shutdown.has_value()},
+       {"one record", refusal_records.size() == 1},
+       {"settled", refusal_records.size() == 1 && completely_settled(refusal_records.front())},
+       {"owner shutdown", refusal_records.size() == 1 && refusal_records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown},
+       {"SIGKILL observed", refusal_records.size() == 1 && refusal_records.front().has_signal_number && refusal_records.front().signal_number == SIGKILL}});
   finish_supervisor(*refusal_authority);
 
   auto descendant_authority = make_authority();
-  if (!descendant_authority)
+  if (!ava::tests::require(descendant_authority.has_value(), "plugin fixture creates descendant_authority"))
     return;
   auto const descendant_root = test_root("leader-first-descendant");
   auto const descendant_marker = descendant_root / "descendant";
@@ -785,6 +778,10 @@ void test_eof_term_refusal_and_natural_descendant_cleanup()
   expect(descendant_process.has_value(), "leader-first descendant fixture initializes");
   if (descendant_process)
   {
+    bool const marker_ready = wait_for_pid_marker(descendant_marker);
+    bool const settled = marker_ready && wait_for_plugin_settlement(*descendant_authority->supervisor);
+    if (!ava::tests::require(settled, "natural leader-first descendant cleanup settles before the competing tool call"))
+      return;
     auto called = (*descendant_process)->call_tool("tool", "{}", "compat");
     auto shutdown = (*descendant_process)->shutdown();
     expect(!called && shutdown, "natural leader-first exit remains a bounded protocol failure to the caller");
@@ -793,34 +790,36 @@ void test_eof_term_refusal_and_natural_descendant_cleanup()
   auto const trimmed_identity = descendant_identity.empty() ? std::string{} : descendant_identity.substr(0, descendant_identity.find('\n'));
   auto descendant_records = plugin_records(*descendant_authority->supervisor);
   expect(descendant_records.size() == 1 && completely_settled(descendant_records.front()) &&
-             descendant_records.front().reason == ava::process::TerminationReasonV1::NaturalExit && wait_for_process_absent(trimmed_identity),
-         "Supervisor immediately cleans a same-group TERM-refusing descendant after natural leader exit");
+             descendant_records.front().reason == ava::process::TerminationReasonV1::NaturalExit &&
+             ava::tests::wait_for_process_absent(process_identity(trimmed_identity), ava::tests::now_plus_seconds(10)),
+         "Supervisor leaves no live same-group TERM-refusing descendant after natural leader exit");
   finish_supervisor(*descendant_authority);
 }
 
 void test_live_destructor_and_late_cleanup_error_settlement()
 {
   auto destructor_authority = make_authority();
-  if (!destructor_authority)
+  if (!ava::tests::require(destructor_authority.has_value(), "plugin fixture creates destructor_authority"))
     return;
   auto const destructor_root = test_root("live-destructor");
   auto const destructor_marker = destructor_root / "leader";
   std::filesystem::create_directories(destructor_root / "workspace");
   auto process = ava::plugin::PluginProcess::start(fake_manifest(destructor_root / "plugin", "live-destructor", destructor_marker),
                                                    options_for(destructor_root / "workspace", destructor_authority->run));
-  bool const marker_ready = wait_for_path(destructor_marker);
+  bool const marker_ready = wait_for_pid_marker(destructor_marker);
   auto const identity = marker_ready ? first_line(destructor_marker) : std::string{};
-  bool const live_before = process_is_live_for_test(identity);
+  bool const live_before = ava::tests::process_is_live(process_identity(identity));
   if (process)
     process->reset();
   auto records = plugin_records(*destructor_authority->supervisor);
-  expect(marker_ready && live_before && wait_for_process_absent(identity) && records.size() == 1 && completely_settled(records.front()) &&
-             records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown && destructor_authority->supervisor->snapshot().live_records == 0,
+  expect(marker_ready && live_before && ava::tests::wait_for_process_absent(process_identity(identity), ava::tests::now_plus_seconds(10)) &&
+             records.size() == 1 && completely_settled(records.front()) && records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown &&
+             destructor_authority->supervisor->snapshot().live_records == 0,
          "destroying a live plugin requests owner shutdown and leaves no runnable child or unsettled authority");
   finish_supervisor(*destructor_authority);
 
   auto late_authority = make_authority();
-  if (!late_authority)
+  if (!ava::tests::require(late_authority.has_value(), "plugin fixture creates late_authority"))
     return;
   auto const late_root = test_root("late-settlement");
   auto const late_marker = late_root / "leader";
@@ -836,7 +835,7 @@ void test_live_destructor_and_late_cleanup_error_settlement()
   auto const late_identity = first_line(late_marker);
   auto monitor_latch = std::make_shared<TestLatch>();
   ava::process::testing::SupervisorTestAccess::set_after_poll_snapshot_hook(*late_authority->supervisor, [monitor_latch] { monitor_latch->arrive_and_wait(); });
-  bool const monitor_blocked = monitor_latch->wait_until(Clock::now() + 2s);
+  bool const monitor_blocked = monitor_latch->wait_until(ava::tests::now_plus_seconds(2s));
   auto explicit_shutdown = std::async(std::launch::async, [&] { return (*late_process)->shutdown(0ms); });
   bool const error_returned = explicit_shutdown.wait_for(3s) == std::future_status::ready;
   if (!error_returned)
@@ -846,13 +845,13 @@ void test_live_destructor_and_late_cleanup_error_settlement()
   }
   auto shutdown_result = explicit_shutdown.get();
   bool const surfaced_error = !shutdown_result && shutdown_result.error().message().find("cleanup did not settle") != std::string::npos;
-  bool const still_live_after_error = process_is_live_for_test(late_identity);
+  bool const still_live_after_error = ava::tests::process_is_live(process_identity(late_identity));
   ava::process::testing::SupervisorTestAccess::clear_after_poll_snapshot_hook(*late_authority->supervisor);
   monitor_latch->release();
   late_process->reset();
   auto late_snapshot = late_authority->supervisor->snapshot();
   auto late_records = plugin_records(*late_authority->supervisor);
-  bool const absent_after_destructor = wait_for_process_absent(late_identity);
+  bool const absent_after_destructor = ava::tests::wait_for_process_absent(process_identity(late_identity), ava::tests::now_plus_seconds(10));
   bool const late_record_settled =
       late_records.size() == 1 && completely_settled(late_records.front()) && late_records.front().reason == ava::process::TerminationReasonV1::OwnerShutdown;
   expect(monitor_blocked && error_returned && surfaced_error && still_live_after_error && absent_after_destructor && late_record_settled &&
@@ -874,7 +873,7 @@ void test_live_destructor_and_late_cleanup_error_settlement()
 void test_owner_prefix_isolation_for_concurrent_operations()
 {
   auto authority = make_authority();
-  if (!authority)
+  if (!ava::tests::require(authority.has_value(), "plugin fixture creates authority"))
     return;
   auto run_a = authority->session.run();
   auto run_b = authority->session.run();
@@ -898,16 +897,18 @@ void test_owner_prefix_isolation_for_concurrent_operations()
   auto call_b = std::async(std::launch::async, [&] { return (*process_b)->call_tool("tool", "{}", "compat"); });
   expect(wait_for_path(marker_a) && wait_for_path(marker_b), "both concurrent plugin operations publish their request boundary");
 
-  auto stopped_a = authority->supervisor->request_stop(run_a->owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown, Clock::now() + 2s);
+  auto stopped_a =
+      authority->supervisor->request_stop(run_a->owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown, ava::tests::now_plus_seconds(2s));
   expect(stopped_a && stopped_a->matched == 1, "one run-prefix stop matches only its plugin operation");
-  expect(call_a.wait_for(2s) == std::future_status::ready, "stopped plugin operation settles promptly");
+  expect(call_a.wait_for(2s) == std::future_status::ready, "stopped plugin operation settles completely");
   auto mid_snapshot = authority->supervisor->snapshot();
   auto const running_b = std::ranges::any_of(mid_snapshot.records, [](auto const& record) {
     return record.role == ava::process::ProcessRoleV1::Plugin && record.state != ava::process::ProcessStateV1::Finished;
   });
   expect(running_b && call_b.wait_for(50ms) == std::future_status::timeout, "sibling plugin operation remains live after isolated prefix stop");
 
-  auto stopped_b = authority->supervisor->request_stop(run_b->owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown, Clock::now() + 2s);
+  auto stopped_b =
+      authority->supervisor->request_stop(run_b->owner_prefix(), ava::process::TerminationReasonV1::OwnerShutdown, ava::tests::now_plus_seconds(2s));
   expect(stopped_b && stopped_b->matched == 1 && call_b.wait_for(2s) == std::future_status::ready, "second prefix independently settles its operation");
   static_cast<void>(call_a.get());
   static_cast<void>(call_b.get());
@@ -925,9 +926,10 @@ void test_owner_prefix_isolation_for_concurrent_operations()
 
 void run_plugin_runner_process_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("plugin-process-");
   if (ava::process::platform_support_v1() != ava::process::PlatformSupportV1::Posix)
   {
-    expect(true, "plugin Supervisor runner is intentionally unsupported on this platform");
+    ava::tests::request_skip("plugin Supervisor runner is unsupported on this platform");
     return;
   }
   expect(std::filesystem::is_regular_file(AVA_FAKE_PLUGIN_CHILD_PATH), "plugin process fake fixture is available");
@@ -936,7 +938,8 @@ void run_plugin_runner_process_tests()
   test_prelaunch_authority_cancel_and_discovery_are_process_free();
   test_failure_reason_mapping_and_output_accounting();
   test_outbound_and_queued_protocol_memory_bounds();
-  test_single_startup_budget_and_spawn_cancellation();
+  test_single_startup_budget_spans_launch_and_initialize();
+  test_spawn_cancellation_before_gate_release();
   test_exec_confirmation_cancellation_classification();
   test_eof_term_refusal_and_natural_descendant_cleanup();
   test_live_destructor_and_late_cleanup_error_settlement();

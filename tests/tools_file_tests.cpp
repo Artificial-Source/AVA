@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/agent/mode.h"
 #include "ava/tools/bash_tool.h"
@@ -215,13 +216,7 @@ void test_file_tools()
            "local read_file reports byte-cap truncation with exact full-file totals");
   }
   auto const ranged_path = workspace / "range.txt";
-  {
-    std::ofstream ranged_file(ranged_path, std::ios::binary | std::ios::trunc);
-    ranged_file << "one\n"
-                   "two\n"
-                   "three\n"
-                   "four\n";
-  }
+  ava::tests::write_test_file(ranged_path, "one\ntwo\nthree\nfour\n");
   auto ranged = ava::tools::read_file(build_context, ranged_path, ava::tools::ReadOptions{.max_bytes = 1024, .offset_line = 2, .max_lines = 2});
   expect(ranged && ranged->content == "two\nthree\n" && ranged->start_line == 2 && ranged->end_line == 3 && ranged->output_lines == 2 && ranged->totals_known &&
              ranged->total_bytes == 19 && ranged->total_lines == 4 && ranged->line_limited && !ranged->byte_limited && ranged->next_offset_line == 4,
@@ -234,10 +229,7 @@ void test_file_tools()
   expect(edited && edited->content == "hello ava", "edit_file result is persisted");
 
   auto const overlapping_path = workspace / "overlapping.txt";
-  {
-    std::ofstream overlapping_file(overlapping_path, std::ios::binary | std::ios::trunc);
-    overlapping_file << "aaa";
-  }
+  ava::tests::write_test_file(overlapping_path, "aaa");
   auto overlapping_edit = ava::tools::edit_file(build_context, overlapping_path, "aa", "b");
   auto overlapping_read = ava::tools::read_file(build_context, overlapping_path);
   expect(
@@ -245,20 +237,14 @@ void test_file_tools()
       "edit_file rejects overlapping old_text matches as ambiguous");
 
   auto const atomic_path = workspace / "atomic.txt";
-  {
-    std::ofstream atomic_file(atomic_path, std::ios::binary | std::ios::trunc);
-    atomic_file << "original content";
-  }
+  ava::tests::write_test_file(atomic_path, "original content");
   auto atomic_write = ava::tools::write_file(build_context, atomic_path, "replacement content");
   auto atomic_read = ava::tools::read_file(build_context, atomic_path);
   expect(atomic_write && atomic_read && atomic_read->content == "replacement content" && !has_write_temp(workspace),
          "write_file atomically replaces existing content and cleans the staging file on success");
 
   auto const protected_path = workspace / "protected.txt";
-  {
-    std::ofstream protected_file(protected_path, std::ios::binary | std::ios::trunc);
-    protected_file << "private original";
-  }
+  ava::tests::write_test_file(protected_path, "private original");
   std::error_code chmod_error;
   std::filesystem::permissions(protected_path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, std::filesystem::perm_options::replace,
                                chmod_error);
@@ -270,10 +256,7 @@ void test_file_tools()
          "write_file preserves 0600 permissions when overwriting a file");
 
   auto const edit_private_path = workspace / "edit-private.txt";
-  {
-    std::ofstream edit_private_file(edit_private_path, std::ios::binary | std::ios::trunc);
-    edit_private_file << "alpha beta";
-  }
+  ava::tests::write_test_file(edit_private_path, "alpha beta");
   chmod_error.clear();
   std::filesystem::permissions(edit_private_path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
                                std::filesystem::perm_options::replace, chmod_error);
@@ -285,10 +268,7 @@ void test_file_tools()
          "edit_file preserves 0600 permissions through atomic write_file");
 
   auto const crlf_path = workspace / "crlf.txt";
-  {
-    std::ofstream crlf_file(crlf_path, std::ios::binary | std::ios::trunc);
-    crlf_file << "alpha\r\nbeta\r\n";
-  }
+  ava::tests::write_test_file(crlf_path, "alpha\r\nbeta\r\n");
   auto crlf_lf_only_edit = ava::tools::edit_file(build_context, crlf_path, "alpha\nbeta\n", "gamma\n");
   expect(!crlf_lf_only_edit && crlf_lf_only_edit.error().format().find("CRLF") != std::string::npos, "edit_file explains CRLF-sensitive exact match failures");
   auto crlf_exact_edit = ava::tools::edit_file(build_context, crlf_path, "alpha\r\nbeta\r\n", "gamma\r\ndelta\r\n");
@@ -296,11 +276,9 @@ void test_file_tools()
          "edit_file preserves CRLF bytes when the provider supplies an exact CRLF match");
 
   auto const bom_path = workspace / "bom.txt";
-  {
-    std::ofstream bom_file(bom_path, std::ios::binary | std::ios::trunc);
-    bom_file << "\xEF\xBB\xBF"
-                "alpha\n";
-  }
+  ava::tests::write_test_file(bom_path,
+                              "\xEF\xBB\xBF"
+                              "alpha\n");
   auto bom_edit = ava::tools::edit_file(build_context, bom_path, "alpha\n", "beta\n");
   expect(bom_edit && bom_edit->had_utf8_bom &&
              read_text_file_for_test(bom_path) ==
@@ -702,8 +680,7 @@ void test_permission_audit_persistence()
   expect(::chmod(root.c_str(), S_IRWXU) == 0 && ::chmod(workspace.c_str(), S_IRWXU) == 0 && ::chmod(spill.c_str(), S_IRWXU) == 0,
          "permission audit command workspace is owner-only for sealed planning");
   auto anchors = ava::core::AnchorSet::open({workspace, spill});
-  expect(anchors.has_value(), "permission audit opens its shared command AnchorSet");
-  if (!anchors)
+  if (!ava::tests::require(anchors.has_value(), "permission audit opens its shared command AnchorSet"))
     return;
 
   auto const allowed_path = workspace / "allowed.txt";

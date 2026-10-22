@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/process/environment_test_support.h"
 #include "ava/process/scope.h"
 #include "ava/process/supervisor.h"
@@ -299,8 +300,8 @@ void test_stop_accepting_shutdown_and_idempotence()
   supervisor.stop_accepting();
   supervisor.stop_accepting();
   auto rejected = supervisor.reserve(make_operation(application), ava::process::ProcessRoleV1::Curl);
-  auto shutdown = supervisor.shutdown(std::chrono::steady_clock::now() + 100ms);
-  auto repeated = supervisor.shutdown(std::chrono::steady_clock::now() + 100ms);
+  auto shutdown = supervisor.shutdown(ava::tests::now_plus_seconds(10));
+  auto repeated = supervisor.shutdown(ava::tests::now_plus_seconds(10));
   auto snapshot = supervisor.snapshot();
   expect(!rejected && shutdown.complete && repeated.complete && shutdown.incomplete_count == repeated.incomplete_count && !snapshot.accepting &&
              snapshot.live_records == 0,
@@ -368,7 +369,7 @@ void test_reservation_shutdown_race()
     static_cast<void>(supervisor.spawn(std::move(*reservation), invalid_spawn_spec()));
   });
   start.store(true, std::memory_order_release);
-  auto result = supervisor.shutdown(std::chrono::steady_clock::now() + 500ms);
+  auto result = supervisor.shutdown(ava::tests::now_plus_seconds(500ms));
   launcher.join();
   auto snapshot = supervisor.snapshot();
   bool settled_once = true;

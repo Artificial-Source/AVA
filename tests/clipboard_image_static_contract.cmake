@@ -6,25 +6,58 @@ file(READ "${AVA_CLIPBOARD_IMAGE_SOURCE}" clipboard_source)
 file(READ "${AVA_CLIPBOARD_IMAGE_HEADER}" clipboard_header)
 file(READ "${AVA_INTERACTIVE_TUI_SOURCE}" tui_source)
 
-foreach(forbidden IN ITEMS
-    "fork[ \t\r\n]*\\("
-    "kill[ \t\r\n]*\\("
-    "waitpid[ \t\r\n]*\\("
-    "waitid[ \t\r\n]*\\("
-    "poll[ \t\r\n]*\\("
-    "pollfd"
-    "<poll.h>"
-    "<signal.h>"
-    "<csignal>"
-    "<sys/wait.h>"
-    "<sys/types.h>"
-    "<unistd.h>"
-    "<fcntl.h>")
-  if(clipboard_source MATCHES "${forbidden}")
-    message(FATAL_ERROR "clipboard image helper regained legacy process ownership: ${forbidden}")
+function(_clipboard_static_violation OUT SOURCE)
+  string(REGEX REPLACE "/\\*([^*]|\\*+[^*/])*\\*+/" "" scan_source "${SOURCE}")
+  string(REGEX REPLACE "//[^\r\n]*" "" scan_source "${scan_source}")
+  set(violation "")
+  foreach(api IN ITEMS fork vfork posix_spawn posix_spawnp system popen kill waitpid waitid poll)
+    if(scan_source MATCHES "(^|[^A-Za-z0-9_:])(::)?${api}[ \t\r\n]*\\(")
+      set(violation "${api}")
+      break()
+    endif()
+  endforeach()
+  if(violation STREQUAL "" AND scan_source MATCHES "(^|[^A-Za-z0-9_])pollfd([^A-Za-z0-9_]|$)")
+    set(violation "pollfd")
+  endif()
+  if(violation STREQUAL "")
+    foreach(header IN ITEMS poll\\.h signal\\.h csignal sys/wait\\.h sys/types\\.h unistd\\.h fcntl\\.h)
+      if(scan_source MATCHES "(^|\n)[ \t]*#[ \t]*include[ \t]*[<\"]${header}[>\"][ \t]*(\n|$)")
+        set(violation "${header}")
+        break()
+      endif()
+    endforeach()
+  endif()
+  set(${OUT} "${violation}" PARENT_SCOPE)
+endfunction()
+
+foreach(api IN ITEMS fork vfork posix_spawn posix_spawnp system popen kill waitpid waitid poll)
+  foreach(form IN ITEMS "${api}()" "::${api}()")
+    _clipboard_static_violation(found "${form}")
+    if(found STREQUAL "")
+      message(FATAL_ERROR "clipboard static scanner failed to detect ${form}")
+    endif()
+  endforeach()
+endforeach()
+# Exercise the same scanner on mutations without shared scratch files.
+foreach(banned IN ITEMS "struct pollfd value" "#include <poll.h>" "# include <signal.h>" "#include <csignal>"
+    "#include <sys/wait.h>" "#include <sys/types.h>" "#include <unistd.h>" "#include <fcntl.h>")
+  _clipboard_static_violation(found "${banned}")
+  if(found STREQUAL "")
+    message(FATAL_ERROR "clipboard static scanner failed to detect ${banned}")
+  endif()
+endforeach()
+foreach(clean IN ITEMS "request_kill()" "skill()" "foo::fork()" "foofork()" "killjoy()" "waitpid2()" "pollfd_cache"
+    "// fork() kill()" "/* poll()\n#include <poll.h>\n*/" "// #include <signal.h>" "#include <pollXh>")
+  _clipboard_static_violation(found "${clean}")
+  if(NOT found STREQUAL "")
+    message(FATAL_ERROR "clipboard static scanner falsely detected ${clean}: ${found}")
   endif()
 endforeach()
 
+_clipboard_static_violation(clipboard_violation "${clipboard_source}")
+if(NOT clipboard_violation STREQUAL "")
+  message(FATAL_ERROR "clipboard image helper regained legacy process ownership: ${clipboard_violation}")
+endif()
 foreach(required IN ITEMS
     "session_process_scope.operation()"
     "make_clipboard_desktop_environment_v1"

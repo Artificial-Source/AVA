@@ -1,5 +1,7 @@
 #include "sys.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/agent/mode.h"
 #include "ava/tools/file_tools.h"
 #include "ava/tools/search_tools.h"
@@ -69,7 +71,7 @@ auto run_with_fifo_watchdog(std::vector<std::filesystem::path> const& fifos, Ope
   bool unblocked = false;
   ava::core::JoinThread unblocker = ava::core::JoinThread::create("fifo_unblocker", [&] {
     std::unique_lock lock(mutex);
-    if (changed.wait_for(lock, std::chrono::seconds(3), [&] { return finished; }))
+    if (changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return finished; }))
       return;
     while (!changed.wait_for(lock, std::chrono::milliseconds(50), [&] { return finished; }))
     {
@@ -84,12 +86,23 @@ auto run_with_fifo_watchdog(std::vector<std::filesystem::path> const& fifos, Ope
       }
     }
   });
-  auto result = std::forward<Operation>(operation)();
-  {
-    std::lock_guard lock(mutex);
-    finished = true;
-  }
-  changed.notify_all();
+  auto result = [&] {
+    struct NotifyCompletion
+    {
+      std::mutex& mutex;
+      std::condition_variable& changed;
+      bool& finished;
+      ~NotifyCompletion()
+      {
+        {
+          std::lock_guard lock(mutex);
+          finished = true;
+        }
+        changed.notify_all();
+      }
+    } completion{mutex, changed, finished};
+    return std::forward<Operation>(operation)();
+  }();
   unblocker.join();
   return std::pair{std::move(result), unblocked};
 }
@@ -513,8 +526,7 @@ void test_secure_workspace_search_tools()
   std::filesystem::create_directory_symlink(outside, workspace / "linked-parent", symlink_error);
 
   auto secure = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(workspace));
-  expect(secure.has_value(), "secure search workspace anchors a canonical root descriptor");
-  if (!secure)
+  if (!ava::tests::require(secure.has_value(), "secure search workspace anchors a canonical root descriptor"))
     return;
   ava::tools::ToolContext context{.workspace_dir = ava::core::normalized_absolute_path(workspace), .mode = ava::agent::Mode::Build, .secure_workspace = *secure};
   auto list_link = ava::tools::list_directory(context, workspace / "linked-parent");
@@ -540,19 +552,14 @@ void test_fifos_never_block_secure_reads_or_search()
   auto const root = create_empty_root("fifo-reads-and-search");
   auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
   std::filesystem::create_directories(workspace / "src");
-  {
-    std::ofstream file(workspace / "src" / "real.cpp", std::ios::binary | std::ios::trunc);
-    file << "fifo needle\n";
-  }
+  ava::tests::write_test_file(workspace / "src" / "real.cpp", "fifo needle\n");
   auto const source_fifo = workspace / "src" / "pipe.cpp";
   auto const ignore_fifo = workspace / ".gitignore";
   bool const fifos_created = ::mkfifo(source_fifo.c_str(), 0600) == 0 && ::mkfifo(ignore_fifo.c_str(), 0600) == 0;
-  expect(fifos_created, "FIFO fixture creates a FIFO named like a source file and a FIFO root .gitignore");
-  if (!fifos_created)
+  if (!ava::tests::require(fifos_created, "FIFO fixture creates a FIFO named like a source file and a FIFO root .gitignore"))
     return;
   auto secure = ava::tools::SecureWorkspace::open(workspace);
-  expect(secure.has_value(), "FIFO fixture anchors a secure workspace");
-  if (!secure)
+  if (!ava::tests::require(secure.has_value(), "FIFO fixture anchors a secure workspace"))
     return;
   std::vector<std::filesystem::path> const fifos{source_fifo, ignore_fifo};
   ava::tools::ToolContext const secure_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build, .secure_workspace = *secure};
@@ -584,7 +591,10 @@ void test_search_reports_unreadable_directories_as_skipped()
 {
   // Permission bits do not restrict root, so the unreadable-directory fixture cannot exist for a privileged run.
   if (::geteuid() == 0)
+  {
+    ava::tests::request_skip("unreadable search directories", "permission-bit denial requires an unprivileged effective UID");
     return;
+  }
   auto const root = create_empty_root("search-unreadable-directory");
   auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
   auto const locked = workspace / "locked";
@@ -641,8 +651,7 @@ void test_secure_walk_counts_vanished_entry_without_stale_errno()
     second << "second\n";
   }
   auto secure = ava::tools::SecureWorkspace::open(workspace);
-  expect(secure.has_value(), "vanished-entry fixture anchors a secure workspace");
-  if (!secure)
+  if (!ava::tests::require(secure.has_value(), "vanished-entry fixture anchors a secure workspace"))
     return;
   std::vector<std::string> visited;
   bool removed = false;
@@ -698,19 +707,17 @@ void test_secure_listing_keeps_symlink_names()
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace / "real-dir");
   std::filesystem::create_directories(root / "outside");
-  std::ofstream(workspace / "real.txt") << "abc";
+  ava::tests::write_test_file(workspace / "real.txt", "abc");
   std::filesystem::create_directory_symlink("real-dir", workspace / "dir-link");
   std::filesystem::create_symlink("real.txt", workspace / "file-link");
   std::filesystem::create_directory_symlink(root / "outside", workspace / "escape-link");
   std::filesystem::create_symlink("missing", workspace / "dangling-link");
   auto secure = ava::tools::SecureWorkspace::open(workspace);
-  expect(secure.has_value(), "symlink listing fixture opens its workspace");
-  if (!secure)
+  if (!ava::tests::require(secure.has_value(), "symlink listing fixture opens its workspace"))
     return;
   ava::tools::ToolContext const context{.workspace_dir = workspace, .secure_workspace = *secure};
   auto listing = ava::tools::list_directory(context, workspace);
-  expect(listing.has_value(), "secure directory listing succeeds with contained, escaping, and dangling links");
-  if (!listing)
+  if (!ava::tests::require(listing.has_value(), "secure directory listing succeeds with contained, escaping, and dangling links"))
     return;
   auto const has_entry = [&](std::string_view name, bool directory, std::uintmax_t size) {
     return std::ranges::any_of(listing->entries, [&](auto const& entry) { return entry.name == name && entry.directory == directory && entry.size == size; });
@@ -725,12 +732,11 @@ void test_search_excludes_unapproved_files()
   auto const root = create_empty_root("explicit-search-permissions");
   auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
   std::filesystem::create_directories(workspace);
-  std::ofstream(workspace / "allowed.txt") << "permission needle\n";
-  std::ofstream(workspace / "denied.txt") << "permission needle\n";
-  std::ofstream(workspace / ".env") << "permission needle\n";
+  ava::tests::write_test_file(workspace / "allowed.txt", "permission needle\n");
+  ava::tests::write_test_file(workspace / "denied.txt", "permission needle\n");
+  ava::tests::write_test_file(workspace / ".env", "permission needle\n");
   auto secure = ava::tools::SecureWorkspace::open(workspace);
-  expect(secure.has_value(), "explicit search fixture opens a descriptor workspace");
-  if (!secure)
+  if (!ava::tests::require(secure.has_value(), "explicit search fixture opens a descriptor workspace"))
     return;
 
   ava::tools::ToolContext context{
@@ -764,12 +770,11 @@ void test_gitignored_virtual_environment_is_excluded()
   auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
   std::filesystem::create_directories(workspace / ".venv" / "lib" / "package");
   std::filesystem::create_directories(workspace / "src");
-  std::ofstream(workspace / ".gitignore") << ".venv/\n";
-  std::ofstream(workspace / ".venv" / "lib" / "package" / "hidden.py") << "venv needle\n";
-  std::ofstream(workspace / "src" / "visible.py") << "venv needle\n";
+  ava::tests::write_test_file(workspace / ".gitignore", ".venv/\n");
+  ava::tests::write_test_file(workspace / ".venv" / "lib" / "package" / "hidden.py", "venv needle\n");
+  ava::tests::write_test_file(workspace / "src" / "visible.py", "venv needle\n");
   auto secure = ava::tools::SecureWorkspace::open(workspace);
-  expect(secure.has_value(), "ignored virtual environment fixture opens a descriptor workspace");
-  if (!secure)
+  if (!ava::tests::require(secure.has_value(), "ignored virtual environment fixture opens a descriptor workspace"))
     return;
   for (bool const secure_mode : {false, true})
   {
@@ -787,16 +792,18 @@ void test_nested_fifo_gitignore_does_not_block_search()
   auto const root = create_empty_root("search-nested-fifo-ignore");
   auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
   std::filesystem::create_directories(workspace / "src");
-  std::ofstream(workspace / "src" / "visible.txt") << "nested fifo needle\n";
+  ava::tests::write_test_file(workspace / "src" / "visible.txt", "nested fifo needle\n");
   auto const fifo = workspace / "src" / ".gitignore";
   if (::mkfifo(fifo.c_str(), 0600) != 0)
   {
-    expect(errno == ENOSYS || errno == EOPNOTSUPP, "nested ignore FIFO setup succeeds unless FIFOs are unsupported");
+    if (errno == ENOSYS || errno == EOPNOTSUPP)
+      ava::tests::request_skip("nested ignore FIFO", "filesystem does not support FIFOs");
+    else
+      expect(false, "nested ignore FIFO setup failed: errno=" + std::to_string(errno));
     return;
   }
   auto secure = ava::tools::SecureWorkspace::open(workspace);
-  expect(secure.has_value(), "nested FIFO fixture opens a descriptor workspace");
-  if (!secure)
+  if (!ava::tests::require(secure.has_value(), "nested FIFO fixture opens a descriptor workspace"))
     return;
   std::vector<std::filesystem::path> const fifos{fifo};
   for (bool const secure_mode : {false, true})

@@ -1,4 +1,6 @@
 #include "sys.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/process/environment.h"
 #include "ava/process/execution_capability.h"
@@ -76,15 +78,6 @@ void copy_executable(std::filesystem::path const& source, std::filesystem::path 
   std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
   if (error || ::chmod(destination.c_str(), mode) != 0)
     throw std::runtime_error("failed to prepare executable capability fixture");
-}
-
-void write_file(std::filesystem::path const& path, std::string_view content, mode_t mode)
-{
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output << content;
-  output.close();
-  if (!output || ::chmod(path.c_str(), mode) != 0)
-    throw std::runtime_error("failed to prepare capability file fixture");
 }
 
 ava::process::ExpectedFileIdentityV1 identity_for(std::filesystem::path const& path)
@@ -173,7 +166,7 @@ ava::core::Result<ava::process::SpawnResultV1> spawn_plugin(ava::process::Superv
 
 bool wait_natural(ava::process::Supervisor& supervisor, ava::process::ProcessHandle const& handle)
 {
-  auto status = supervisor.wait(handle, std::chrono::steady_clock::now() + 4s);
+  auto status = supervisor.wait(handle, ava::tests::now_plus_seconds(4s));
   return status && status->reason == ava::process::TerminationReasonV1::NaturalExit && status->kind == ava::process::ExitKindV1::Exited &&
          status->exit_code == 0 && status->cleanup == ava::process::CleanupStateV1::Complete;
 }
@@ -182,7 +175,7 @@ std::string read_endpoint(ava::process::PipeEndpoint& endpoint)
 {
   std::string result;
   std::array<std::byte, 256> buffer{};
-  auto const deadline = std::chrono::steady_clock::now() + 3s;
+  auto const deadline = ava::tests::now_plus_seconds(3s);
   while (std::chrono::steady_clock::now() < deadline)
   {
     auto read = endpoint.read(buffer);
@@ -408,7 +401,7 @@ bool mutation_rejected_before_fork(std::string const& name, auto mutate)
   auto snapshot = supervisor.snapshot();
   bool const exact = !result && !snapshot.monitor_started && snapshot.live_records == 0 && snapshot.records.size() == 1 &&
                      snapshot.records.front().reason == ava::process::TerminationReasonV1::LaunchFailed && !std::filesystem::exists(marker);
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
   return exact;
 }
 
@@ -422,22 +415,32 @@ void test_post_mint_mutations_and_pre_spawn_replacement()
     if (::chmod(executable.c_str(), 0500) != 0)
       throw std::runtime_error("failed to mutate executable mode");
   });
+  bool const setuid = mutation_rejected_before_fork("setuid", [](auto const& executable, auto const&) {
+    if (::chmod(executable.c_str(), 04700) != 0)
+      throw std::runtime_error("failed to mutate executable set-user-ID bit");
+  });
+  bool const setgid = mutation_rejected_before_fork("setgid", [](auto const& executable, auto const&) {
+    if (::chmod(executable.c_str(), 02700) != 0)
+      throw std::runtime_error("failed to mutate executable set-group-ID bit");
+  });
   bool const size = mutation_rejected_before_fork("size", [](auto const& executable, auto const&) {
     std::ofstream output(executable, std::ios::binary | std::ios::app);
     output << 'x';
   });
   bool const ctime = mutation_rejected_before_fork("ctime", [](auto const& executable, auto const&) {
     auto const before = identity_for(executable);
-    for (int attempt = 0; attempt < 128; ++attempt)
+    auto const watchdog = ava::tests::now_plus_seconds(10);
+    while (std::chrono::steady_clock::now() < watchdog)
     {
-      timespec times[2]{{.tv_sec = 0, .tv_nsec = UTIME_OMIT}, {.tv_sec = 100 + attempt, .tv_nsec = attempt}};
+      timespec times[2]{{.tv_sec = 0, .tv_nsec = UTIME_OMIT}, {.tv_sec = 100, .tv_nsec = 0}};
       if (::utimensat(AT_FDCWD, executable.c_str(), times, 0) != 0)
         throw std::runtime_error("failed to mutate executable ctime");
       auto const after = identity_for(executable);
       if (after.ctime_sec != before.ctime_sec || after.ctime_nsec != before.ctime_nsec)
         return;
+      std::this_thread::yield();
     }
-    throw std::runtime_error("filesystem did not expose a ctime transition");
+    throw std::runtime_error("filesystem did not expose a ctime transition before the fixture watchdog");
   });
 
   auto const root = create_empty_root("process-capability-pre-spawn-replacement");
@@ -456,9 +459,14 @@ void test_post_mint_mutations_and_pre_spawn_replacement()
   auto replaced = spawn_plugin(supervisor, application, std::move(specification));
   auto snapshot = supervisor.snapshot();
   bool const replacement = !replaced && !snapshot.monitor_started && snapshot.live_records == 0 && !std::filesystem::exists(marker);
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
-  expect(hardlink && mode && size && ctime && replacement,
-         "hardlink, chmod, size, ctime, and pre-spawn namespace replacement all fail freshness before child or lazy monitor creation");
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
+  ava::tests::expect_all("post-mint identity mutations and pre-spawn replacement fail freshness before fork", {{"hardlink", hardlink},
+                                                                                                               {"mode", mode},
+                                                                                                               {"set-user-ID", setuid},
+                                                                                                               {"set-group-ID", setgid},
+                                                                                                               {"size", size},
+                                                                                                               {"ctime", ctime},
+                                                                                                               {"namespace replacement", replacement}});
 }
 
 void test_post_fork_executable_replacement_uses_inherited_a()
@@ -485,7 +493,7 @@ void test_post_fork_executable_replacement_uses_inherited_a()
       launched.emplace(supervisor.spawn(std::move(ticket), std::move(specification)));
     });
   }
-  bool const reached = reservation && latch->wait_until(std::chrono::steady_clock::now() + 3s);
+  bool const reached = reservation && latch->wait_until(ava::tests::now_plus_seconds(3s));
   if (reached)
   {
     std::filesystem::rename(executable, retained);
@@ -495,9 +503,23 @@ void test_post_fork_executable_replacement_uses_inherited_a()
   if (launcher.joinable())
     launcher.join();
   ava::process::testing::SupervisorTestAccess::clear_after_fork_before_release_hook(supervisor);
-  bool const natural = launched && *launched && wait_natural(supervisor, (*launched)->handle);
-  expect(reached && natural && std::filesystem::exists(marker), "a gate-held child executes inherited executable A after its logical route is replaced by B");
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  auto status = launched && *launched
+                    ? supervisor.wait((*launched)->handle, ava::tests::now_plus_seconds(10))
+                    : ava::core::Result<ava::process::ExitStatusV1>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "launch fixture failed")));
+  ava::tests::expect_all("a gate-held child executes inherited executable A after its logical route is replaced by B",
+                         {{"reservation", reservation.has_value()},
+                          {"gate reached", reached},
+                          {"launch returned", launched.has_value()},
+                          {"launch succeeded", launched && launched->has_value()},
+                          {"status", status.has_value()},
+                          {"natural reason", status && status->reason == ava::process::TerminationReasonV1::NaturalExit},
+                          {"exited normally", status && status->kind == ava::process::ExitKindV1::Exited},
+                          {"exit zero", status && status->has_exit_code && status->exit_code == 0},
+                          {"complete cleanup", status && status->cleanup == ava::process::CleanupStateV1::Complete},
+                          {"A marker exists", std::filesystem::exists(marker)}});
+  if (launched && !*launched)
+    expect(false, "inherited executable A launch error: " + launched->error().format());
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 }
 
 void test_cwd_replacement_common_and_secure()
@@ -520,7 +542,7 @@ void test_cwd_replacement_common_and_secure()
   auto common_snapshot = common_supervisor.snapshot();
   bool const common_rejected = !common && !common_snapshot.monitor_started && !std::filesystem::exists(common_retained / "relative-marker") &&
                                !std::filesystem::exists(common_a / "relative-marker");
-  static_cast<void>(common_supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(common_supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 
   auto secure_pre_a = root / "secure-pre-cwd";
   std::filesystem::create_directory(secure_pre_a);
@@ -543,7 +565,7 @@ void test_cwd_replacement_common_and_secure()
   auto pre_branch = pre_gate ? pre_gate->fork_leader() : ava::core::Result<ava::process::AdoptionForkBranchV1>(std::unexpected(pre_gate.error()));
   auto pre_snapshot = secure_pre_supervisor.snapshot();
   bool const secure_pre_rejected = pre_gate && !pre_branch && !pre_snapshot.monitor_started && pre_snapshot.live_records == 0;
-  static_cast<void>(secure_pre_supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(secure_pre_supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 
   auto secure_post_a = root / "secure-post-cwd";
   std::filesystem::create_directory(secure_post_a);
@@ -574,7 +596,7 @@ void test_cwd_replacement_common_and_secure()
     static_cast<void>(::close(executable_descriptor));
   bool const secure_post = adopted && wait_natural(secure_post_supervisor, *adopted) && caller_still_owns_executable &&
                            std::filesystem::exists(secure_post_retained / "relative-marker") && !std::filesystem::exists(secure_post_a / "relative-marker");
-  static_cast<void>(secure_post_supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(secure_post_supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
   expect(common_rejected && secure_pre_rejected && secure_post,
          "cwd replacement fails before common/secure fork, while a forked secure leader enters retained directory A and leaves B untouched");
 }
@@ -589,7 +611,6 @@ void test_capability_combinations_and_logical_mismatch()
   auto anchors = anchors_for(root);
   auto application = application_owner();
   ava::process::Supervisor supervisor;
-  bool all_natural = true;
   for (int variant = 0; variant < 4; ++variant)
   {
     auto specification = plugin_spec(executable, cwd, "normal");
@@ -598,9 +619,13 @@ void test_capability_combinations_and_logical_mismatch()
     if ((variant & 2) != 0)
       specification.anchored_cwd.emplace(mint_cwd(anchors, cwd));
     auto child = spawn_plugin(supervisor, application, std::move(specification));
-    all_natural = all_natural && child && wait_natural(supervisor, child->handle);
+    bool const natural = child && wait_natural(supervisor, child->handle);
+    ava::tests::expect_all("capability combination " + std::to_string(variant) + " launches its fast-exit child",
+                           {{"launch", child.has_value()}, {"natural successful settlement", natural}});
+    if (!child)
+      expect(false, "capability combination " + std::to_string(variant) + ": " + child.error().format());
   }
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 
   ava::process::Supervisor mismatch_supervisor;
   auto executable_mismatch = plugin_spec(executable.string() + "-MISMATCH_CANARY", "/", "normal");
@@ -619,8 +644,8 @@ void test_capability_combinations_and_logical_mismatch()
   bool const mismatch = !executable_result && !cwd_result && !mismatch_snapshot.monitor_started && mismatch_snapshot.live_records == 0 &&
                         errors.find(executable.string()) == std::string::npos && errors.find(cwd.string()) == std::string::npos &&
                         errors.find(other_cwd.string()) == std::string::npos;
-  static_cast<void>(mismatch_supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
-  expect(all_natural && mismatch, "no-capability, executable-only, cwd-only, and both-capability launches work while logical mismatches stay content-free");
+  static_cast<void>(mismatch_supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
+  expect(mismatch, "executable and cwd logical mismatches fail before fork and remain content-free");
 }
 
 std::size_t open_nonstandard_descriptor_count()
@@ -675,7 +700,7 @@ void test_descriptor_hygiene_and_failure_baselines()
     if (child && child->standard_output)
       output = read_endpoint(*child->standard_output);
     child_clean = child && wait_natural(supervisor, child->handle) && output.find("CLEAN\n") != std::string::npos;
-    static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+    static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
   }
   bool const success_baseline = open_nonstandard_descriptor_count() == baseline;
 
@@ -691,7 +716,7 @@ void test_descriptor_hygiene_and_failure_baselines()
     specification.preopened_executable.emplace(std::move(capability));
     auto failed = spawn_plugin(supervisor, application, std::move(specification));
     expect(!failed && !supervisor.snapshot().monitor_started, "freshness fd baseline fixture fails before fork");
-    static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+    static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
   }
   bool const freshness_failure_baseline = open_nonstandard_descriptor_count() == baseline;
   expect(drop_baseline && factory_failure_baseline && child_clean && success_baseline && freshness_failure_baseline,
@@ -703,7 +728,7 @@ void test_descriptor_script_and_required_secure_cwd()
   auto const root = create_empty_root("process-capability-script");
   auto const script = root / "descriptor-script";
   auto const marker = root / "SCRIPT_FALLBACK_MUST_NOT_RUN";
-  write_file(script, "#!/bin/sh\nprintf fallback > '" + marker.string() + "'\n", 0700);
+  ava::tests::write_test_file(script, "#!/bin/sh\nprintf fallback > '" + marker.string() + "'\n", 0700);
   auto anchors = anchors_for(root);
   auto application = application_owner();
   ava::process::Supervisor supervisor;
@@ -714,7 +739,7 @@ void test_descriptor_script_and_required_secure_cwd()
   auto snapshot = supervisor.snapshot();
   bool const typed_exec_failure = !result && result.error().format().find("exec syscall returned") != std::string::npos && snapshot.records.size() == 1 &&
                                   snapshot.records.front().reason == ava::process::TerminationReasonV1::ExecFailed && !std::filesystem::exists(marker);
-  static_cast<void>(supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
 
   ava::process::Supervisor adoption_supervisor;
   auto reservation = adoption_supervisor.reserve(operation_owner(application), ava::process::ProcessRoleV1::Bash);
@@ -726,7 +751,7 @@ void test_descriptor_script_and_required_secure_cwd()
                      : ava::core::Result<ava::process::AdoptionGate>(std::unexpected(reservation.error()));
   auto adoption_snapshot = adoption_supervisor.snapshot();
   bool const missing_rejected = !missing && !adoption_snapshot.monitor_started && adoption_snapshot.live_records == 0;
-  static_cast<void>(adoption_supervisor.shutdown(std::chrono::steady_clock::now() + 2s));
+  static_cast<void>(adoption_supervisor.shutdown(ava::tests::now_plus_seconds(2s)));
   expect(typed_exec_failure && missing_rejected,
          "a CLOEXEC descriptor script is one typed ExecFailed with no pathname fallback, and secure adoption rejects a missing anchored cwd pre-fork");
 }
@@ -761,8 +786,8 @@ void test_anchor_open_external_hardening_contract()
   auto const external_retained = external / "external-retained-a";
   auto const external_link = external / "external-link";
   auto const anchor_alias = external / "anchor-alias";
-  write_file(contained_target, "contained-a", 0600);
-  write_file(external_target, "external-a", 0600);
+  ava::tests::write_test_file(contained_target, "contained-a", 0600);
+  ava::tests::write_test_file(external_target, "external-a", 0600);
   if (::symlink(contained_target.filename().c_str(), contained_link.c_str()) != 0 ||
       ::symlink(external_target.filename().c_str(), external_link.c_str()) != 0 || ::symlink(contained_target.c_str(), anchor_alias.c_str()) != 0)
   {
@@ -782,11 +807,11 @@ void test_anchor_open_external_hardening_contract()
   ava::core::testing::AnchorOpenTestAccess::set_before_external_reopen_hook([latch] { latch->arrive_and_wait(); });
   std::optional<ava::core::Result<ava::core::AnchorOpen>> raced_open;
   std::thread opener([&] { raced_open.emplace(ava::core::open_readable(*anchors, external_target, O_RDONLY | O_CLOEXEC)); });
-  bool const inspected = latch->wait_until(std::chrono::steady_clock::now() + 2s);
+  bool const inspected = latch->wait_until(ava::tests::now_plus_seconds(2s));
   if (inspected)
   {
     std::filesystem::rename(external_target, external_retained);
-    write_file(external_target, "external-b", 0600);
+    ava::tests::write_test_file(external_target, "external-b", 0600);
   }
   latch->release();
   opener.join();

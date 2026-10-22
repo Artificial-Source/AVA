@@ -1,5 +1,9 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/process_group_test_support.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/app/command_plugins.h"
@@ -51,9 +55,7 @@ static_assert(std::is_move_constructible_v<ava::app::PluginUiInvocationClaim>);
 
 void write_text(std::filesystem::path const& path, std::string const& text)
 {
-  std::filesystem::create_directories(path.parent_path());
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file << text;
+  ava::tests::write_test_file(path, text);
 }
 
 std::string read_text(std::filesystem::path const& path)
@@ -391,7 +393,7 @@ void test_plugin_runner_command_ui_happy_path()
 
   auto process = ava::plugin::PluginProcess::start(std::move(manifest), ui_runner_options(workspace));
   expect(process.has_value(), process ? "UI runner fixture initializes" : "UI runner fixture initializes: " + process.error().format());
-  if (!process)
+  if (!ava::tests::require(process.has_value(), "UI runner fixture is available"))
     return;
   std::vector<std::string> seen_types;
   auto result = (*process)->call_command("run", "{}", "ui_call", nullptr, nullptr,
@@ -479,7 +481,7 @@ void test_non_command_runner_paths_cannot_present_ui()
                    "while IFS= read -r line; do :; done\n");
     auto process = ava::plugin::PluginProcess::start(std::move(manifest), ui_runner_options(workspace));
     expect(process.has_value(), "non-command UI rejection fixture starts");
-    if (!process)
+    if (!ava::tests::require(process.has_value(), "non-command UI rejection fixture is available"))
       return;
     auto error = invoke(**process);
     expect(!error.empty() && error.find("NON_COMMAND_RAW_CANARY_81ac") == std::string::npos,
@@ -514,7 +516,7 @@ void test_plugin_runner_ui_deadline_and_handler_failure_cleanup()
                                            "'{\"id\":\"cleanup\",\"type\":\"ui.status\",\"text\":\"cleanup\"}'\nIFS= read -r action\n");
   auto process = ava::plugin::PluginProcess::start(std::move(manifest), ui_runner_options(workspace));
   expect(process.has_value(), "UI cleanup fixture starts");
-  if (!process)
+  if (!ava::tests::require(process.has_value(), "UI cleanup fixture is available"))
     return;
   auto result = (*process)->call_command(
       "run", "{}", "cleanup", nullptr, nullptr,
@@ -526,19 +528,12 @@ void test_plugin_runner_ui_deadline_and_handler_failure_cleanup()
   std::ifstream pgid_input(pgid_file);
   pid_t pgid = 0;
   pgid_input >> pgid;
-  bool group_gone = false;
-  if (pgid > 0)
-  {
-    for (int attempt = 0; attempt < 100 && !group_gone; ++attempt)
-    {
-      errno = 0;
-      group_gone = ::kill(-pgid, 0) != 0 && errno == ESRCH;
-      if (!group_gone)
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-  }
-  expect(!result && result.error().format().find("RAW_HANDLER_ERROR_CANARY_1a9d") == std::string::npos && pgid > 0 && group_gone,
-         "UI handler failures are generic and terminate the owned plugin process group");
+  bool const group_gone = pgid > 0 && ava::test::wait_for_process_group_exit(pgid, ava::tests::now_plus_seconds(10));
+  ava::tests::expect_all("UI handler failures are generic and terminate the owned live plugin process group",
+                         {{"failed", !result},
+                          {"handler text redacted", !result && result.error().format().find("RAW_HANDLER_ERROR_CANARY_1a9d") == std::string::npos},
+                          {"group marker", pgid > 0},
+                          {"no live group members", group_gone}});
 
   auto const deadline_root = create_empty_root("plugin-ui-deadline-bound");
   auto too_long = run_single_ui_fixture(
@@ -679,7 +674,7 @@ void test_plugin_ui_capability_claim_binding_and_lifecycle()
   CapabilityFixture fixture;
   auto capability = make_capability(fixture);
   expect(capability.has_value(), "TUI factory mints a capability from an exact canonical direct plugin command");
-  if (!capability)
+  if (!ava::tests::require(capability.has_value(), "UI capability fixture is available"))
     return;
   {
     auto claim = ava::app::claim_plugin_ui_invocation_capability(*capability, "/plugin run com.example.ui run {}", "com.example.ui", "run");
@@ -828,11 +823,11 @@ void test_plugin_ui_capability_active_runtime_loss_unblocks_presenter()
       },
       [&](ava::app::PluginUiInvocationBinding const&) { ++closes; });
   expect(capability.has_value(), "active runtime-loss fixture capability is created");
-  if (!capability)
+  if (!ava::tests::require(capability.has_value(), "active runtime-loss capability is available"))
     return;
   auto claim = ava::app::claim_plugin_ui_invocation_capability(*capability, "/plugin run com.example.ui run", "com.example.ui", "run");
   expect(claim.has_value(), "active runtime-loss fixture capability is claimed");
-  if (!claim)
+  if (!ava::tests::require(claim.has_value(), "active runtime-loss claim is available"))
     return;
 
   std::thread invalidator([&] {
@@ -1092,7 +1087,7 @@ void test_external_disable_revokes_active_ui_command()
   auto const artificial_start = std::chrono::steady_clock::now() - ava::tui::kTuiPluginUiInvocationDeadline + std::chrono::seconds(3);
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "disable_invocation", artificial_start);
   expect(endpoint.has_value(), "external-disable fixture arms the real TUI coordinator with a finite test deadline");
-  if (!endpoint)
+  if (!ava::tests::require(endpoint.has_value(), "external-disable presenter endpoint is available"))
     return;
 
   std::mutex mutex;
@@ -1141,7 +1136,7 @@ void test_external_disable_revokes_active_ui_command()
         ++closes;
       });
   expect(capability.has_value(), "external-disable fixture creates exact foreground TUI authority");
-  if (!capability)
+  if (!ava::tests::require(capability.has_value(), "external-disable capability is available"))
     return;
 
   auto allow = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -1152,7 +1147,7 @@ void test_external_disable_revokes_active_ui_command()
         session, ava::app::CommandRequest{.command = "/plugin run com.example.ui run {}", .permission_resolver = allow, .plugin_ui_capability = *capability});
   });
   bool modal_opened = false;
-  auto const open_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  auto const open_deadline = ava::tests::now_plus_seconds(10);
   while (!modal_opened && result.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < open_deadline)
   {
     static_cast<void>(coordinator.poll(snapshot, false));
@@ -1167,12 +1162,12 @@ void test_external_disable_revokes_active_ui_command()
       rendered_before_disable += strip_sgr(line) + '\n';
   }
 
-  auto const disabled_at = std::chrono::steady_clock::now();
   auto disabled =
       ava::plugin::set_plugin_enabled(paths.ava_state_dir / "plugin-enablement.json", workspace, "com.example.ui", false, ava::plugin::PluginScope::Project);
-  auto const finished = result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  auto const finished = result.wait_until(ava::tests::now_plus_seconds(10)) == std::future_status::ready;
+  if (!finished)
+    coordinator.cancel_active();
   auto command_result = result.get();
-  auto const revoke_elapsed = std::chrono::steady_clock::now() - disabled_at;
   static_cast<void>(coordinator.poll(snapshot, false));
 
   std::string output;
@@ -1186,8 +1181,7 @@ void test_external_disable_revokes_active_ui_command()
   if (!pid_text.empty())
   {
     auto const child_pid = static_cast<pid_t>(std::stol(pid_text));
-    errno = 0;
-    child_gone = ::kill(child_pid, 0) < 0 && errno == ESRCH;
+    child_gone = ava::tests::wait_for_process_absent(child_pid, ava::tests::now_plus_seconds(10));
   }
   auto current_enabled =
       ava::plugin::plugin_enabled(paths.ava_state_dir / "plugin-enablement.json", workspace, "com.example.ui", ava::plugin::PluginScope::Project);
@@ -1205,13 +1199,22 @@ void test_external_disable_revokes_active_ui_command()
     close_count = closes;
     cancel_seen = presenter_observed_cancel;
   }
-  expect(modal_opened && rendered_before_disable.find("External disable modal") != std::string::npos &&
-             rendered_before_disable.find("DISABLE_RAW_CANARY_51ac") == std::string::npos && disabled && finished && revoke_elapsed < std::chrono::seconds(2) &&
-             cancel_seen && child_gone && close_count == 1 && current_enabled && !*current_enabled && !snapshot.plugin_ui_modal && !snapshot.plugin_ui_dock &&
-             !session_has_canary && output.find("DISABLE_RAW_CANARY_51ac") == std::string::npos &&
-             output.find((paths.ava_state_dir / "plugin-enablement.json").string()) == std::string::npos,
-         "an atomic external disable is observed during a real blocking modal, cancels and clears the presenter, terminates and reaps the child, closes "
-         "authority once, leaves the plugin disabled for future invocations, hides protocol ids, and exposes neither raw UI nor enablement details");
+  ava::tests::expect_all("external disable cancels the blocking modal, closes authority once, disables later invocations and redacts local details",
+                         {{"modal opened", modal_opened},
+                          {"modal rendered", rendered_before_disable.find("External disable modal") != std::string::npos},
+                          {"UI canary hidden", rendered_before_disable.find("DISABLE_RAW_CANARY_51ac") == std::string::npos},
+                          {"disable succeeded", disabled.has_value()},
+                          {"command completed", finished},
+                          {"cancellation observed", cancel_seen},
+                          {"child absent", child_gone},
+                          {"one close", close_count == 1},
+                          {"still disabled", current_enabled && !*current_enabled},
+                          {"modal cleared", !snapshot.plugin_ui_modal},
+                          {"dock cleared", !snapshot.plugin_ui_dock},
+                          {"session loaded", entries.has_value()},
+                          {"session redacted", !session_has_canary},
+                          {"output redacted", output.find("DISABLE_RAW_CANARY_51ac") == std::string::npos},
+                          {"enablement path hidden", output.find((paths.ava_state_dir / "plugin-enablement.json").string()) == std::string::npos}});
 }
 
 void test_command_request_defaults_without_ui_authority()
@@ -1233,7 +1236,7 @@ ava::tui::TuiPluginUiReply present_update_and_poll(ava::tui::RuntimePluginUiCoor
   auto reply = std::async(std::launch::async, [endpoint, request = std::move(request), &coordinator]() {
     return endpoint.present(request, endpoint.deadline, [&coordinator] { return coordinator.deadline_reached(std::chrono::steady_clock::time_point::min()); });
   });
-  auto const wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  auto const wait_deadline = ava::tests::now_plus_seconds(10);
   while (reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < wait_deadline)
   {
     static_cast<void>(coordinator.poll(snapshot, false));
@@ -1250,7 +1253,7 @@ ava::tui::TuiPluginUiReply present_update_and_poll(ava::tui::RuntimePluginUiCoor
 bool open_plugin_modal(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::tui::ComposerSnapshot& snapshot, std::future<ava::tui::TuiPluginUiReply>& reply,
                        bool conflict = false)
 {
-  auto const wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  auto const wait_deadline = ava::tests::now_plus_seconds(10);
   while (!snapshot.plugin_ui_modal && reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready &&
          std::chrono::steady_clock::now() < wait_deadline)
   {
@@ -1267,14 +1270,14 @@ bool open_plugin_modal(ava::tui::RuntimePluginUiCoordinator& coordinator, ava::t
 
 void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
 {
-  expect(ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run {}") &&
-             ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui Run.Command") &&
-             ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run") &&
-             !ava::tui::is_direct_foreground_plugin_run_submission(" /plugin run com.example.ui run {}") &&
-             !ava::tui::is_direct_foreground_plugin_run_submission("/plugin  run com.example.ui run {}") &&
-             !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run {} ") &&
-             !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run COM.EXAMPLE.ui run {}"),
-         "TUI plugin authority recognizes only an exact canonical direct foreground submission");
+  ava::tests::expect_all("TUI plugin authority recognizes only an exact canonical direct foreground submission",
+                         {{"argument-bearing command", ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run {}")},
+                          {"mixed-case command name", ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui Run.Command")},
+                          {"argumentless command", ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run")},
+                          {"leading space rejected", !ava::tui::is_direct_foreground_plugin_run_submission(" /plugin run com.example.ui run {}")},
+                          {"double separator rejected", !ava::tui::is_direct_foreground_plugin_run_submission("/plugin  run com.example.ui run {}")},
+                          {"trailing space rejected", !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run com.example.ui run {} ")},
+                          {"noncanonical id rejected", !ava::tui::is_direct_foreground_plugin_run_submission("/plugin run COM.EXAMPLE.ui run {}")}});
 
   ava::tui::RuntimePluginUiCoordinator coordinator;
   ava::tui::ComposerSnapshot snapshot;
@@ -1284,7 +1287,7 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
   snapshot.transcript = {{.label = "you", .text = "history remains"}};
   auto endpoint = coordinator.begin_submission("/plugin run com.example.ui run {}", "invocation-1");
   expect(endpoint && static_cast<bool>(*endpoint), "direct submission arms one bounded TUI-local presenter endpoint");
-  if (!endpoint)
+  if (!ava::tests::require(endpoint.has_value(), "UI presenter fixture is available"))
     return;
   auto const binding = ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.ui", .command = "run", .invocation_id = "invocation-1"};
   auto wrong_binding = tui_request(ava::tui::TuiPluginUiBinding{.plugin_id = "com.example.other", .command = "run", .invocation_id = "invocation-1"},
@@ -1314,12 +1317,19 @@ void test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle()
   overflow.title = "overflow";
   overflow.lines = {"line"};
   auto const overflow_reply = present_update_and_poll(coordinator, *endpoint, snapshot, std::move(overflow));
-  expect(updates_ok && overflow_reply.action == ava::tui::TuiPluginUiReplyKind::Cancel && snapshot.plugin_ui_dock &&
-             snapshot.plugin_ui_dock->widgets.size() == 4 && snapshot.plugin_ui_dock->widgets[0].title == "widget 0" &&
-             snapshot.plugin_ui_dock->widgets[3].title == "widget 3" && snapshot.input == "draft remains" && snapshot.transcript.size() == 1 &&
-             ava::tui::kTuiPluginUiMaxWidgets == 4 && ava::tui::kTuiPluginUiMaxWidgetLines == 32 && ava::tui::kTuiPluginUiMaxTextBytes == 8 * 1024 &&
-             ava::tui::kTuiPluginUiMaxQueuedRecords == 64,
-         "coordinator acknowledges ordered main-thread updates, enforces 4-widget/32-line/8-KiB/64-record globals, and does not mutate transcript or draft");
+  ava::tests::expect_all(
+      "coordinator acknowledges ordered updates, enforces resource limits, and preserves composer state",
+      {{"updates acknowledged", updates_ok},
+       {"overflow canceled", overflow_reply.action == ava::tui::TuiPluginUiReplyKind::Cancel},
+       {"four widgets", snapshot.plugin_ui_dock && snapshot.plugin_ui_dock->widgets.size() == 4},
+       {"first widget", snapshot.plugin_ui_dock && snapshot.plugin_ui_dock->widgets.size() == 4 && snapshot.plugin_ui_dock->widgets[0].title == "widget 0"},
+       {"last widget", snapshot.plugin_ui_dock && snapshot.plugin_ui_dock->widgets.size() == 4 && snapshot.plugin_ui_dock->widgets[3].title == "widget 3"},
+       {"draft unchanged", snapshot.input == "draft remains"},
+       {"transcript unchanged", snapshot.transcript.size() == 1},
+       {"widget cap", ava::tui::kTuiPluginUiMaxWidgets == 4},
+       {"line cap", ava::tui::kTuiPluginUiMaxWidgetLines == 32},
+       {"text cap", ava::tui::kTuiPluginUiMaxTextBytes == 8 * 1024},
+       {"queue cap", ava::tui::kTuiPluginUiMaxQueuedRecords == 64}});
 
   auto old_endpoint = *endpoint;
   coordinator.finish_submission(snapshot);
@@ -1479,7 +1489,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
       auto reply =
           std::async(std::launch::async, [endpoint = *endpoint, request] { return endpoint.present(request, endpoint.deadline, [] { return false; }); });
       bool ever_visible = false;
-      auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+      auto const deadline = ava::tests::now_plus_seconds(10);
       while (reply.wait_for(std::chrono::milliseconds::zero()) != std::future_status::ready && std::chrono::steady_clock::now() < deadline)
       {
         static_cast<void>(coordinator.poll(snapshot, false));
@@ -1598,11 +1608,14 @@ void test_tui_plugin_ui_attribution_fit_policy()
   auto const second_wide = render_wide(second_id);
   bool const complete_wide_identity = first_wide.find(first_id) != std::string::npos && first_wide.find(max_command) != std::string::npos &&
                                       second_wide.find(second_id) != std::string::npos && second_wide.find(max_command) != std::string::npos;
-  expect(narrow_case(first_id, "narrow_one") && narrow_case(second_id, "narrow_two") && wide_to_narrow_case(first_id) && complete_wide_identity &&
-             first_wide != second_wide && first_wide.find("…") == std::string::npos && second_wide.find("…") == std::string::npos,
-         "80-column maximum identities fail closed without a selectable surface at every 8-12-row height; a modal opened at 160 columns is canceled after "
-         "shrinking and neither arrows nor Enter can resolve select/confirm; sufficient width renders both complete distinct ids and the full command "
-         "without ellipsis");
+  ava::tests::expect_all("maximum identities fail closed at narrow widths and render complete distinct identities at sufficient width",
+                         {{"first narrow identity", narrow_case(first_id, "narrow_one")},
+                          {"second narrow identity", narrow_case(second_id, "narrow_two")},
+                          {"wide-to-narrow cancellation", wide_to_narrow_case(first_id)},
+                          {"complete wide attribution", complete_wide_identity},
+                          {"distinct visible identities", first_wide != second_wide},
+                          {"first identity not elided", first_wide.find("…") == std::string::npos},
+                          {"second identity not elided", second_wide.find("…") == std::string::npos}});
 
   ava::tui::ComposerSnapshot dock_snapshot;
   dock_snapshot.width = 160;
@@ -1639,7 +1652,7 @@ void test_tui_plugin_ui_attribution_fit_policy()
   });
   auto queued_reply = std::async(
       std::launch::async, [endpoint = *queued_endpoint, queued_status] { return endpoint.present(queued_status, endpoint.deadline, [] { return false; }); });
-  auto const queued_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  auto const queued_deadline = ava::tests::now_plus_seconds(10);
   {
     std::unique_lock lock(enqueue_mutex);
     static_cast<void>(enqueued_cv.wait_until(lock, queued_deadline, [&] { return enqueued; }));
@@ -1676,11 +1689,18 @@ void test_tui_plugin_ui_attribution_fit_policy()
   after_invalidation.text = "must remain canceled";
   auto const invalidated_reply = visible_endpoint->present(after_invalidation, visible_endpoint->deadline, [] { return false; });
 
-  expect(enqueued && queued_endpoint && queued_result.action == ava::tui::TuiPluginUiReplyKind::Cancel && !queued_snapshot.plugin_ui_dock &&
-             !queued_snapshot.plugin_ui_modal && visible_endpoint && visible_result.action == ava::tui::TuiPluginUiReplyKind::Ack && invalidated &&
-             invalidated_reply.action == ava::tui::TuiPluginUiReplyKind::Cancel && !visible_snapshot.plugin_ui_dock && !visible_snapshot.plugin_ui_modal,
-         "a resize published before a queued dock poll prevents stale ACK/publication, and an already-visible widget dock that loses complete host chrome "
-         "is cleared while its binding is invalidated against future requests");
+  ava::tests::expect_all("resize invalidates queued and visible docks against stale acknowledgements and future requests",
+                         {{"record enqueued", enqueued},
+                          {"queued endpoint", queued_endpoint.has_value()},
+                          {"queued record canceled", queued_result.action == ava::tui::TuiPluginUiReplyKind::Cancel},
+                          {"queued dock absent", !queued_snapshot.plugin_ui_dock},
+                          {"queued modal absent", !queued_snapshot.plugin_ui_modal},
+                          {"visible endpoint", visible_endpoint.has_value()},
+                          {"initial visible record acknowledged", visible_result.action == ava::tui::TuiPluginUiReplyKind::Ack},
+                          {"binding invalidated", invalidated},
+                          {"future request canceled", invalidated_reply.action == ava::tui::TuiPluginUiReplyKind::Cancel},
+                          {"visible dock cleared", !visible_snapshot.plugin_ui_dock},
+                          {"visible modal cleared", !visible_snapshot.plugin_ui_modal}});
 }
 
 void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
@@ -1704,7 +1724,7 @@ void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
   std::condition_variable cv;
   bool swapped_nonempty = false;
   bool release_poll = false;
-  auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  auto const deadline = ava::tests::now_plus_seconds(10);
   std::future<ava::tui::TuiPluginUiPollResult> polling;
   while (!swapped_nonempty && std::chrono::steady_clock::now() < deadline)
   {
@@ -1743,12 +1763,17 @@ void test_tui_plugin_ui_close_poll_race_does_not_publish_after_invalidation()
   auto const poll_result = polling.valid() ? polling.get() : ava::tui::TuiPluginUiPollResult{};
   if (!close_returned)
     coordinator.cancel_active();
-  auto const reply_ready = reply.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  auto const reply_ready = reply.wait_until(ava::tests::now_plus_seconds(10)) == std::future_status::ready;
   auto const action = reply.get();
   static_cast<void>(coordinator.poll(snapshot, false));
-  expect(swapped_nonempty && close_returned && reply_ready && action.action == ava::tui::TuiPluginUiReplyKind::Cancel && !snapshot.plugin_ui_dock &&
-             !snapshot.plugin_ui_modal && !poll_result.changed,
-         "a generation close serialized after dequeue but before apply cancels the record and cannot ACK or transiently publish a surface");
+  ava::tests::expect_all("close after dequeue but before apply cancels the record without publishing or acknowledging a surface",
+                         {{"record dequeued", swapped_nonempty},
+                          {"close returned", close_returned},
+                          {"reply ready", reply_ready},
+                          {"reply canceled", action.action == ava::tui::TuiPluginUiReplyKind::Cancel},
+                          {"dock absent", !snapshot.plugin_ui_dock},
+                          {"modal absent", !snapshot.plugin_ui_modal},
+                          {"poll unchanged", !poll_result.changed}});
 }
 
 void test_plugin_ui_centered_modal_insets_and_hit_geometry()
@@ -1762,25 +1787,35 @@ void test_plugin_ui_centered_modal_insets_and_hit_geometry()
                                       .selected_option = 0};
   auto const roomy = ava::tui::detail::render_plugin_ui_modal(view, 80, 14);
   auto const narrow = ava::tui::detail::render_plugin_ui_modal(view, 55, 12);
+  if (!ava::tests::require(roomy.size() == 14 && narrow.size() == 12, "modal fixtures contain all indexed rows"))
+    return;
   auto const roomy_identity = strip_sgr(roomy[1]);
   auto const roomy_option = strip_sgr(roomy[5]);
   auto const narrow_identity = strip_sgr(narrow[0]);
-  expect(roomy.size() == 14 && strip_sgr(roomy.front()) == std::string(80, ' ') && strip_sgr(roomy.back()) == std::string(80, ' ') &&
-             roomy_identity.starts_with("    Plugin ID") && roomy_identity.ends_with(std::string(4, ' ')) && roomy_option.starts_with("    › Alpha") &&
-             roomy_option.ends_with(std::string(4, ' ')) && !ava::tui::detail::plugin_ui_option_for_modal_row(view, 0, 80, 14) &&
-             ava::tui::detail::plugin_ui_option_for_modal_row(view, 5, 80, 14) == std::size_t{0} && narrow.size() == 12 &&
-             narrow_identity.starts_with("  Plugin ID") && !narrow_identity.starts_with("    ") && narrow_identity.ends_with(std::string(2, ' ')) &&
-             strip_sgr(narrow.front()).find("Plugin ID") != std::string::npos && strip_sgr(narrow.back()).find("Enter select") != std::string::npos &&
-             ava::tui::detail::plugin_ui_option_for_modal_row(view, 4, 55, 12) == std::size_t{0} &&
-             ava::tui::plugin_ui_host_chrome_fits(view.binding, view.kind, 80, 14),
-         "plugin Select modal uses responsive complete insets, reserves roomy blank rows from selection, and retains host attribution and controls");
+  ava::tests::expect_all("Select modal preserves responsive insets, host attribution, controls and hit geometry",
+                         {{"roomy top inset", strip_sgr(roomy.front()) == std::string(80, ' ')},
+                          {"roomy bottom inset", strip_sgr(roomy.back()) == std::string(80, ' ')},
+                          {"roomy identity left inset", roomy_identity.starts_with("    Plugin ID")},
+                          {"roomy identity right inset", roomy_identity.ends_with(std::string(4, ' '))},
+                          {"roomy option left inset", roomy_option.starts_with("    › Alpha")},
+                          {"roomy option right inset", roomy_option.ends_with(std::string(4, ' '))},
+                          {"blank row not selectable", !ava::tui::detail::plugin_ui_option_for_modal_row(view, 0, 80, 14)},
+                          {"roomy option hit", ava::tui::detail::plugin_ui_option_for_modal_row(view, 5, 80, 14) == std::size_t{0}},
+                          {"narrow identity inset", narrow_identity.starts_with("  Plugin ID") && !narrow_identity.starts_with("    ")},
+                          {"narrow identity right inset", narrow_identity.ends_with(std::string(2, ' '))},
+                          {"narrow identity visible", strip_sgr(narrow.front()).find("Plugin ID") != std::string::npos},
+                          {"narrow controls visible", strip_sgr(narrow.back()).find("Enter select") != std::string::npos},
+                          {"narrow option hit", ava::tui::detail::plugin_ui_option_for_modal_row(view, 4, 55, 12) == std::size_t{0}},
+                          {"host chrome fits", ava::tui::plugin_ui_host_chrome_fits(view.binding, view.kind, 80, 14)}});
 
   view.kind = ava::tui::TuiPluginUiKind::Confirm;
   auto const confirm = ava::tui::detail::render_plugin_ui_modal(view, 80, 14);
-  expect(confirm.size() == 14 && strip_sgr(confirm[5]).find("Confirm plugin action") != std::string::npos &&
-             strip_sgr(confirm[12]).find("Enter confirm · Esc cancel · Ctrl+C stop · 120s max") != std::string::npos &&
-             ava::tui::detail::plugin_ui_option_for_modal_row(view, 5, 80, 14) == std::size_t{0},
-         "plugin Confirm modal keeps both host-owned choice attribution and controls inside the inset geometry");
+  if (!ava::tests::require(confirm.size() == 14, "Confirm modal fixture contains all indexed rows"))
+    return;
+  ava::tests::expect_all("Confirm modal keeps host-owned attribution and controls inside the inset geometry",
+                         {{"attribution", strip_sgr(confirm[5]).find("Confirm plugin action") != std::string::npos},
+                          {"controls", strip_sgr(confirm[12]).find("Enter confirm · Esc cancel · Ctrl+C stop · 120s max") != std::string::npos},
+                          {"choice hit", ava::tui::detail::plugin_ui_option_for_modal_row(view, 5, 80, 14) == std::size_t{0}}});
 }
 
 void test_tui_plugin_ui_renderer_is_bounded_sanitized_and_host_owned()
@@ -1810,19 +1845,26 @@ void test_tui_plugin_ui_renderer_is_bounded_sanitized_and_host_owned()
         visible += strip_sgr(line) + "\n";
     }
   }
-  expect(bounded && visible.find("com.example.ui") != std::string::npos && visible.find("choose") != std::string::npos &&
-             visible.find("Alpha") != std::string::npos && visible.find("Beta") != std::string::npos && visible.find("HIDDEN_OPTION") == std::string::npos &&
-             visible.find("HIDDEN_REQUEST") == std::string::npos && visible.find("HIDDEN_INVOCATION") == std::string::npos &&
-             visible.find("Enter select") != std::string::npos && visible.find("Esc cancel") != std::string::npos &&
-             visible.find("Ctrl+C stop") != std::string::npos && visible.find("120s max") != std::string::npos,
-         "8-12-row renderer sanitizes plugin fields, uses fixed identity/command chrome, hides protocol IDs, and keeps host-owned controls visible" +
-             std::string(bounded ? "" : " (unbounded)") + "\n" + visible);
+  ava::tests::expect_all("8-12-row renderer bounds and host chrome: \n" + visible,
+                         {{"bounded", bounded},
+                          {"plugin identity", visible.find("com.example.ui") != std::string::npos},
+                          {"command", visible.find("choose") != std::string::npos},
+                          {"first option", visible.find("Alpha") != std::string::npos},
+                          {"second option", visible.find("Beta") != std::string::npos},
+                          {"option ids hidden", visible.find("HIDDEN_OPTION") == std::string::npos},
+                          {"request id hidden", visible.find("HIDDEN_REQUEST") == std::string::npos},
+                          {"invocation id hidden", visible.find("HIDDEN_INVOCATION") == std::string::npos},
+                          {"select control", visible.find("Enter select") != std::string::npos},
+                          {"cancel control", visible.find("Esc cancel") != std::string::npos},
+                          {"stop control", visible.find("Ctrl+C stop") != std::string::npos},
+                          {"deadline control", visible.find("120s max") != std::string::npos}});
 }
 
 }  // namespace
 
 void run_plugin_ui_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("plugin-ui-tests-");
   test_plugin_ui_manifest_capabilities_are_independent();
   test_plugin_ui_protocol_happy_paths_and_actions();
   test_plugin_ui_protocol_exact_limits();

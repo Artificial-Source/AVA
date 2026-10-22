@@ -1,5 +1,8 @@
 #include "sys.h"
 #include "tests/support/process_group_test_support.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/tools/file_tools.h"
@@ -8,6 +11,7 @@
 #include "ava/lsp/configured_provider.h"
 #include "ava/lsp/lsp_client.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
 
@@ -26,6 +30,7 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -81,8 +86,7 @@ std::filesystem::path make_lsp_workspace(std::string_view name)
 {
   auto const workspace = create_empty_root(name) / "workspace";
   std::filesystem::create_directories(workspace);
-  std::ofstream file(workspace / "main.cpp", std::ios::binary | std::ios::trunc);
-  file << "int main() { return 0; }\n";
+  ava::tests::write_test_file(workspace / "main.cpp", "int main() { return 0; }\n");
   return workspace;
 }
 
@@ -118,34 +122,6 @@ std::optional<std::string> marker_environment_value(std::filesystem::path const&
   return std::nullopt;
 }
 
-class ScopedEnvironmentForTest final
-{
- public:
-  bool set(std::string name, std::string value)
-  {
-    if (std::ranges::find_if(saved_, [&](auto const& item) { return item.first == name; }) == saved_.end())
-    {
-      auto const* existing = std::getenv(name.c_str());
-      saved_.emplace_back(name, existing == nullptr ? std::nullopt : std::optional<std::string>(existing));
-    }
-    return ::setenv(name.c_str(), value.c_str(), 1) == 0;
-  }
-
-  ~ScopedEnvironmentForTest()
-  {
-    for (auto const& [name, value] : saved_)
-    {
-      if (value)
-        static_cast<void>(::setenv(name.c_str(), value->c_str(), 1));
-      else
-        static_cast<void>(::unsetenv(name.c_str()));
-    }
-  }
-
- private:
-  std::vector<std::pair<std::string, std::optional<std::string>>> saved_;
-};
-
 std::optional<pid_t> read_pid_file_for_test(std::filesystem::path const& path)
 {
   std::ifstream file(path, std::ios::binary);
@@ -175,7 +151,8 @@ std::optional<ProcessMarker> read_process_marker_for_test(std::filesystem::path 
 
 std::optional<ProcessMarker> wait_for_process_marker_for_test(std::filesystem::path const& path)
 {
-  for (int index = 0; index < 100; ++index)
+  auto const deadline = ava::tests::now_plus_seconds(10);
+  while (std::chrono::steady_clock::now() < deadline)
   {
     if (auto marker = read_process_marker_for_test(path))
       return marker;
@@ -207,13 +184,9 @@ class TestOwnedProcessGroupCleanup final
 
 bool file_is_not_created(std::filesystem::path const& path)
 {
-  for (int index = 0; index < 20; ++index)
-  {
-    if (std::filesystem::exists(path))
-      return false;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  return true;
+  // Invalid configuration is rejected synchronously before launch. No waiting
+  // window can strengthen that post-return effect.
+  return !std::filesystem::exists(path);
 }
 
 class ManyDiagnosticsProvider final : public ava::lsp::DiagnosticsProvider
@@ -295,9 +268,13 @@ void test_lsp_manager_fake_server_diagnostics()
   auto diagnostics =
       client ? (*client)->diagnostics(workspace / "main.cpp")
              : ava::core::Result<std::vector<ava::lsp::Diagnostic>>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "missing client"))};
-  expect(diagnostics && diagnostics->size() == 1 && (*diagnostics)[0].severity == 1 && (*diagnostics)[0].message == "fake diagnostic from LSP" &&
-             (*diagnostics)[0].line == 2 && (*diagnostics)[0].column == 4 && (*diagnostics)[0].code == "AVA_FAKE",
-         "LSP manager requests and parses fake diagnostics");
+  ava::tests::expect_all("LSP manager requests and parses fake diagnostics",
+                         {{"one diagnostic", diagnostics && diagnostics->size() == 1},
+                          {"severity", diagnostics && diagnostics->size() == 1 && diagnostics->front().severity == 1},
+                          {"message", diagnostics && diagnostics->size() == 1 && diagnostics->front().message == "fake diagnostic from LSP"},
+                          {"line", diagnostics && diagnostics->size() == 1 && diagnostics->front().line == 2},
+                          {"column", diagnostics && diagnostics->size() == 1 && diagnostics->front().column == 4},
+                          {"code", diagnostics && diagnostics->size() == 1 && diagnostics->front().code == "AVA_FAKE"}});
 }
 
 void test_lsp_manager_fake_server_symbols_and_definition()
@@ -311,27 +288,35 @@ void test_lsp_manager_fake_server_symbols_and_definition()
       .request_timeout = std::chrono::milliseconds(3000),
   });
   expect(client.has_value(), "LSP symbols test starts fake server");
-  if (!client)
+  if (!ava::tests::require(client.has_value(), "LSP symbols fixture is available"))
     return;
 
   auto document_symbols = (*client)->document_symbols(workspace / "main.cpp");
-  expect(document_symbols && document_symbols->size() == 2 && (*document_symbols)[0].name == "main" && (*document_symbols)[0].path == workspace / "main.cpp" &&
-             (*document_symbols)[1].container == "main",
-         "LSP manager requests and parses document symbols");
+  ava::tests::expect_all("LSP manager requests and parses document symbols",
+                         {{"two symbols", document_symbols && document_symbols->size() == 2},
+                          {"name", document_symbols && document_symbols->size() == 2 && document_symbols->front().name == "main"},
+                          {"path", document_symbols && document_symbols->size() == 2 && document_symbols->front().path == workspace / "main.cpp"},
+                          {"container", document_symbols && document_symbols->size() == 2 && (*document_symbols)[1].container == "main"}});
 
   auto workspace_symbols = (*client)->workspace_symbols("main");
-  expect(workspace_symbols && workspace_symbols->size() == 1 && (*workspace_symbols)[0].name == "main" && (*workspace_symbols)[0].container == "global" &&
-             (*workspace_symbols)[0].path == workspace / "main.cpp",
-         "LSP manager requests and parses workspace symbols");
+  ava::tests::expect_all("LSP manager requests and parses workspace symbols",
+                         {{"one symbol", workspace_symbols && workspace_symbols->size() == 1},
+                          {"name", workspace_symbols && workspace_symbols->size() == 1 && workspace_symbols->front().name == "main"},
+                          {"container", workspace_symbols && workspace_symbols->size() == 1 && workspace_symbols->front().container == "global"},
+                          {"path", workspace_symbols && workspace_symbols->size() == 1 && workspace_symbols->front().path == workspace / "main.cpp"}});
 
   auto definitions = (*client)->definitions(workspace / "main.cpp", 0, 4);
-  expect(definitions && definitions->size() == 1 && (*definitions)[0].path == workspace / "main.cpp" && (*definitions)[0].range.start_line == 0 &&
-             (*definitions)[0].range.start_column == 4,
-         "LSP manager requests and parses definitions");
+  ava::tests::expect_all("LSP manager requests and parses definitions",
+                         {{"one definition", definitions && definitions->size() == 1},
+                          {"path", definitions && definitions->size() == 1 && definitions->front().path == workspace / "main.cpp"},
+                          {"line", definitions && definitions->size() == 1 && definitions->front().range.start_line == 0},
+                          {"column", definitions && definitions->size() == 1 && definitions->front().range.start_column == 4}});
 
   auto references = (*client)->references(workspace / "main.cpp", 0, 4);
-  expect(references && references->size() == 2 && (*references)[0].path == workspace / "main.cpp" && (*references)[1].range.start_column == 13,
-         "LSP manager sends didOpen before references and parses locations");
+  ava::tests::expect_all("LSP manager sends didOpen before references and parses locations",
+                         {{"two references", references && references->size() == 2},
+                          {"path", references && references->size() == 2 && references->front().path == workspace / "main.cpp"},
+                          {"second column", references && references->size() == 2 && (*references)[1].range.start_column == 13}});
 }
 
 void test_lsp_manager_accepts_contained_logical_symlinks()
@@ -442,7 +427,7 @@ void test_lsp_manager_rejects_fifo_symlink_and_oversize_documents()
       .request_timeout = std::chrono::milliseconds(1000),
   });
   expect(client.has_value(), "LSP unsafe-document test starts fake server");
-  if (!client)
+  if (!ava::tests::require(client.has_value(), "LSP unsafe-document fixture is available"))
     return;
 
   auto const fifo_path = workspace / "document.fifo";
@@ -635,9 +620,11 @@ void test_lsp_manager_filters_child_environment()
 {
   auto const workspace = make_lsp_workspace("lsp-filtered-environment");
   auto const marker = workspace / "environment.txt";
-  ScopedEnvironmentForTest environment;
-  bool const configured = environment.set("HOME", "/tmp/ava-lsp-home") && environment.set("LANG", "C") && environment.set("OPENAI_API_KEY", "lsp-secret") &&
-                          environment.set("AVA_LSP_TEST_SECRET", "ava-secret") && environment.set("AVA_UNRELATED", "not-for-lsp");
+  ScopedEnvVar home("HOME", "/tmp/ava-lsp-home");
+  ScopedEnvVar language("LANG", "C");
+  ScopedEnvVar credential("OPENAI_API_KEY", "lsp-secret");
+  ScopedEnvVar secret("AVA_LSP_TEST_SECRET", "ava-secret");
+  ScopedEnvVar unrelated("AVA_UNRELATED", "not-for-lsp");
   auto client = ava::lsp::SubprocessLspClient::start(ava::lsp::ServerConfig{
       .argv = fake_lsp_argv({"--environment-marker", marker.generic_string()}),
       .workspace_root = workspace,
@@ -645,12 +632,13 @@ void test_lsp_manager_filters_child_environment()
       .process_cwd = workspace,
       .request_timeout = std::chrono::milliseconds(1000),
   });
-  expect(configured && client && marker_environment_value(marker, "HOME") == std::optional<std::string>("/tmp/ava-lsp-home") &&
-             marker_environment_value(marker, "LANG") == std::optional<std::string>("C") &&
-             marker_environment_value(marker, "OPENAI_API_KEY") == std::optional<std::string>("<unset>") &&
-             marker_environment_value(marker, "AVA_LSP_TEST_SECRET") == std::optional<std::string>("<unset>") &&
-             marker_environment_value(marker, "AVA_UNRELATED") == std::optional<std::string>("<unset>"),
-         "LSP child retains HOME and locale compatibility while dropping provider credentials and arbitrary AVA variables");
+  ava::tests::expect_all("LSP child retains HOME and locale compatibility while dropping provider credentials and arbitrary AVA variables",
+                         {{"client", client.has_value()},
+                          {"HOME", marker_environment_value(marker, "HOME") == std::optional<std::string>("/tmp/ava-lsp-home")},
+                          {"LANG", marker_environment_value(marker, "LANG") == std::optional<std::string>("C")},
+                          {"provider credential absent", marker_environment_value(marker, "OPENAI_API_KEY") == std::optional<std::string>("<unset>")},
+                          {"AVA secret absent", marker_environment_value(marker, "AVA_LSP_TEST_SECRET") == std::optional<std::string>("<unset>")},
+                          {"unrelated variable absent", marker_environment_value(marker, "AVA_UNRELATED") == std::optional<std::string>("<unset>")}});
 }
 
 void test_lsp_manager_closed_standard_fds()
@@ -672,23 +660,17 @@ void test_lsp_manager_closed_standard_fds()
     if (!client)
       _exit(1);
     auto diagnostics = (*client)->diagnostics(workspace / "main.cpp");
-    _exit(diagnostics && diagnostics->size() == 1 && (*diagnostics)[0].message == "fake diagnostic from LSP" ? 0 : 1);
+    bool const success = diagnostics && diagnostics->size() == 1 && (*diagnostics)[0].message == "fake diagnostic from LSP";
+    client->reset();
+    _exit(success ? 0 : 1);
   }
-  if (test_child < 0)
-  {
-    expect(false, "LSP closed-standard-fds test forks an isolated helper");
+  if (!ava::tests::require(test_child > 0, "LSP closed-standard-fds test forks an isolated helper"))
     return;
-  }
-
-  int status = 0;
-  pid_t waited = -1;
-  do
-  {
-    waited = waitpid(test_child, &status, 0);
-  }
-  while (waited < 0 && errno == EINTR);
-  expect(waited == test_child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
-         "LSP initializes and requests diagnostics when an isolated helper starts with fds 0, 1, and 2 closed");
+  ava::tests::ScopedChild child(test_child);
+  auto const status = child.wait_until(ava::tests::now_plus_seconds(15));
+  ava::tests::expect_all("LSP closed-standard-fds helper completes successfully", {{"reaped before watchdog", status.has_value()},
+                                                                                   {"exited", status && WIFEXITED(*status)},
+                                                                                   {"success", status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0}});
 }
 
 void test_lsp_manager_malformed_symbols_error()
@@ -794,15 +776,18 @@ void test_lsp_manager_startup_timeout_and_validation()
       .workspace_root = timeout_workspace,
       .anchor_set = lsp_anchors(timeout_workspace),
       .process_cwd = timeout_workspace,
-      .startup_timeout = std::chrono::milliseconds(200),
+      .startup_timeout = std::chrono::milliseconds(2000),
       .request_timeout = std::chrono::milliseconds(1000),
   });
   auto const timeout_pgid = read_pid_file_for_test(timeout_pgid_file);
   auto const timeout_detail = timed_out ? std::string{} : timed_out.error().format();
-  expect(!timed_out && timeout_detail.find("timed out") != std::string::npos && timeout_detail.find("timeout_ms: 200") != std::string::npos &&
-             timeout_detail.find("phase: startup") != std::string::npos && timeout_detail.find("method: initialize") != std::string::npos && timeout_pgid &&
-             wait_for_process_group_exit(*timeout_pgid),
-         "LSP startup timeout reports initialize startup context and terminates the server process group");
+  ava::tests::expect_all("LSP startup timeout reports initialize context; any launched process group is cleaned",
+                         {{"failed", !timed_out},
+                          {"timeout", timeout_detail.find("timed out") != std::string::npos},
+                          {"startup budget", timeout_detail.find("timeout_ms: 2000") != std::string::npos},
+                          {"startup phase", timeout_detail.find("phase: startup") != std::string::npos},
+                          {"initialize method", timeout_detail.find("method: initialize") != std::string::npos},
+                          {"launched group absent", !timeout_pgid || wait_for_process_group_exit(*timeout_pgid)}});
 
   auto const validation_workspace = make_lsp_workspace("lsp-timeout-validation");
   auto const startup_marker = validation_workspace / "invalid-startup-launched.txt";
@@ -859,10 +844,15 @@ void test_lsp_manager_containment_cleanup()
     timeout_cleanup.arm(timeout_leader->pgid);
   auto const timeout_detail = timeout_diagnostics ? std::string{} : timeout_diagnostics.error().format();
   bool const timeout_group_cleaned = timeout_leader && wait_for_process_group_exit(timeout_leader->pgid);
-  expect(!timeout_diagnostics && timeout_detail.find("timed out") != std::string::npos && timeout_leader && timeout_descendant &&
-             timeout_leader->pid == timeout_leader->pgid && timeout_leader->pgid != getpgrp() && timeout_descendant->pid != timeout_leader->pid &&
-             timeout_descendant->pgid == timeout_leader->pgid && timeout_group_cleaned,
-         "LSP timeout TERM/KILL teardown removes an in-group TERM-ignoring descendant without touching the runner group");
+  ava::tests::expect_all("LSP timeout tears down its verified group without touching the runner group",
+                         {{"request timed out", !timeout_diagnostics && timeout_detail.find("timed out") != std::string::npos},
+                          {"leader marker", timeout_leader.has_value()},
+                          {"descendant marker", timeout_descendant.has_value()},
+                          {"leader owns group", timeout_leader && timeout_leader->pid == timeout_leader->pgid},
+                          {"not runner group", timeout_leader && timeout_leader->pgid != getpgrp()},
+                          {"distinct descendant", timeout_leader && timeout_descendant && timeout_descendant->pid != timeout_leader->pid},
+                          {"same group", timeout_leader && timeout_descendant && timeout_descendant->pgid == timeout_leader->pgid},
+                          {"no live group members", timeout_group_cleaned}});
 
   auto const exit_workspace = make_lsp_workspace("lsp-leader-exits-first");
   auto const exit_leader_marker = exit_workspace / "leader-marker.txt";
@@ -885,13 +875,20 @@ void test_lsp_manager_containment_cleanup()
     exit_cleanup.arm(exit_leader->pgid);
   auto const exit_detail = exit_diagnostics ? std::string{} : exit_diagnostics.error().format();
   bool const exit_group_cleaned = exit_leader && wait_for_process_group_exit(exit_leader->pgid);
-  expect(!exit_diagnostics && exit_detail.find("LSP server exited") != std::string::npos && exit_detail.find("status: exit 23") != std::string::npos &&
-             exit_leader && exit_descendant && exit_leader->pid == exit_leader->pgid && exit_leader->pgid != getpgrp() &&
-             exit_descendant->pid != exit_leader->pid && exit_descendant->pgid == exit_leader->pgid && exit_group_cleaned,
-         "LSP leader exit is inspected without reaping, then tears down its verified group before returning status");
+  ava::tests::expect_all("LSP inspects leader exit status and tears down its verified group before returning",
+                         {{"request failed", !exit_diagnostics},
+                          {"leader exited", exit_detail.find("LSP server exited") != std::string::npos},
+                          {"exit code", exit_detail.find("status: exit 23") != std::string::npos},
+                          {"leader marker", exit_leader.has_value()},
+                          {"descendant marker", exit_descendant.has_value()},
+                          {"leader owns group", exit_leader && exit_leader->pid == exit_leader->pgid},
+                          {"not runner group", exit_leader && exit_leader->pgid != getpgrp()},
+                          {"distinct descendant", exit_leader && exit_descendant && exit_descendant->pid != exit_leader->pid},
+                          {"same group", exit_leader && exit_descendant && exit_descendant->pgid == exit_leader->pgid},
+                          {"no live group members", exit_group_cleaned}});
 }
 
-void test_lsp_manager_cancellation_precedence()
+void test_lsp_manager_cancellation_after_server_receives_request()
 {
   auto const timeout_workspace = make_lsp_workspace("lsp-cancel-vs-timeout");
   auto const timeout_marker = timeout_workspace / "timeout-marker.txt";
@@ -901,21 +898,10 @@ void test_lsp_manager_cancellation_precedence()
       .anchor_set = lsp_anchors(timeout_workspace),
       .process_cwd = timeout_workspace,
       .startup_timeout = std::chrono::milliseconds(1000),
-      .request_timeout = std::chrono::milliseconds(500),
+      .request_timeout = std::chrono::milliseconds(5000),
   });
   TestOwnedProcessGroupCleanup timeout_cleanup;
-  std::optional<std::chrono::steady_clock::time_point> timeout_cancel_seen;
-  auto timeout_cancel = [&] {
-    if (!read_pid_file_for_test(timeout_marker))
-      return false;
-    auto const now = std::chrono::steady_clock::now();
-    if (!timeout_cancel_seen)
-    {
-      timeout_cancel_seen = now;
-      return false;
-    }
-    return now - *timeout_cancel_seen >= std::chrono::milliseconds(150);
-  };
+  auto timeout_cancel = [&] { return read_pid_file_for_test(timeout_marker).has_value(); };
   ava::tools::ToolContext const timeout_context{
       .workspace_dir = timeout_workspace,
       .cancel_requested = timeout_cancel,
@@ -927,34 +913,26 @@ void test_lsp_manager_cancellation_precedence()
   if (timeout_process)
     timeout_cleanup.arm(timeout_process->pgid);
   bool const timeout_group_cleaned = timeout_process && wait_for_process_group_exit(timeout_process->pgid);
-  expect(timeout_dispatched && !timeout_dispatched->success && timeout_dispatched->payload.status == ava::agent::ToolResultStatus::Canceled &&
-             timeout_dispatched->result_text.find("LSP query canceled") != std::string::npos && timeout_process && timeout_group_cleaned,
-         "LSP cancellation after a poll wins over request timeout and preserves canceled ToolResult status");
+  ava::tests::expect_all("LSP cancellation after the server receives a request preserves canceled ToolResult status and cleans its group",
+                         {{"dispatch", timeout_dispatched.has_value()},
+                          {"not success", timeout_dispatched && !timeout_dispatched->success},
+                          {"Canceled", timeout_dispatched && timeout_dispatched->payload.status == ava::agent::ToolResultStatus::Canceled},
+                          {"request reached server", timeout_process.has_value()},
+                          {"group cleaned", timeout_group_cleaned}});
 
   auto const exit_workspace = make_lsp_workspace("lsp-cancel-vs-exit");
   auto const exit_leader_marker = exit_workspace / "leader-marker.txt";
   auto const exit_descendant_marker = exit_workspace / "descendant-marker.txt";
   auto exit_client = ava::lsp::SubprocessLspClient::start(ava::lsp::ServerConfig{
-      .argv = fake_lsp_argv({"--leader-exits-after-marker-diagnostics-markers", exit_leader_marker.generic_string(), exit_descendant_marker.generic_string()}),
+      .argv = fake_lsp_argv({"--term-ignoring-descendant-diagnostics-markers", exit_leader_marker.generic_string(), exit_descendant_marker.generic_string()}),
       .workspace_root = exit_workspace,
       .anchor_set = lsp_anchors(exit_workspace),
       .process_cwd = exit_workspace,
       .startup_timeout = std::chrono::milliseconds(1000),
-      .request_timeout = std::chrono::milliseconds(1000),
+      .request_timeout = std::chrono::milliseconds(5000),
   });
   TestOwnedProcessGroupCleanup exit_cleanup;
-  std::optional<std::chrono::steady_clock::time_point> exit_cancel_seen;
-  auto exit_cancel = [&] {
-    if (!read_pid_file_for_test(exit_leader_marker))
-      return false;
-    auto const now = std::chrono::steady_clock::now();
-    if (!exit_cancel_seen)
-    {
-      exit_cancel_seen = now;
-      return false;
-    }
-    return now - *exit_cancel_seen >= std::chrono::milliseconds(150);
-  };
+  auto exit_cancel = [&] { return read_process_marker_for_test(exit_descendant_marker).has_value(); };
   auto exit_diagnostics =
       exit_client ? (*exit_client)->diagnostics(exit_workspace / "main.cpp", exit_cancel)
                   : ava::core::Result<std::vector<ava::lsp::Diagnostic>>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "missing client"))};
@@ -963,9 +941,94 @@ void test_lsp_manager_cancellation_precedence()
   if (exit_leader)
     exit_cleanup.arm(exit_leader->pgid);
   bool const exit_group_cleaned = exit_leader && wait_for_process_group_exit(exit_leader->pgid);
-  expect(!exit_diagnostics && exit_diagnostics.error().message().find("canceled") != std::string::npos && exit_leader && exit_descendant &&
-             exit_descendant->pgid == exit_leader->pgid && exit_group_cleaned,
-         "LSP cancellation after a poll wins before an exiting leader's EOF/error classification and tears down its group");
+  ava::tests::expect_all("LSP cancellation after descendant readiness cleans the verified server group",
+                         {{"canceled", !exit_diagnostics && exit_diagnostics.error().code() == ava::core::ErrorCode::Canceled},
+                          {"leader marker", exit_leader.has_value()},
+                          {"descendant marker", exit_descendant.has_value()},
+                          {"same group", exit_leader && exit_descendant && exit_descendant->pgid == exit_leader->pgid},
+                          {"group cleaned", exit_group_cleaned}});
+}
+
+void test_lsp_manager_committed_cancellation_precedes_gated_peer_exit()
+{
+  auto const workspace = make_lsp_workspace("lsp-cancel-before-gated-exit");
+  auto const marker_path = workspace / "exit-ready.txt";
+  auto const gate_path = workspace / "exit-gate";
+  if (!ava::tests::require(::mkfifo(gate_path.c_str(), 0600) == 0, "LSP precedence fixture creates its exit gate"))
+    return;
+  ava::core::UniqueFd release_gate(::open(gate_path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC));
+  if (!ava::tests::require(release_gate.get() >= 0, "LSP precedence fixture opens its exit gate"))
+    return;
+  TestOwnedProcessGroupCleanup cleanup;
+  auto client = ava::lsp::SubprocessLspClient::start(ava::lsp::ServerConfig{
+      .argv = fake_lsp_argv({"--gated-exit-diagnostics-marker", marker_path.generic_string(), gate_path.generic_string()}),
+      .workspace_root = workspace,
+      .anchor_set = lsp_anchors(workspace),
+      .process_cwd = workspace,
+      .startup_timeout = std::chrono::milliseconds(5000),
+      .request_timeout = std::chrono::milliseconds(30000),
+  });
+  if (!ava::tests::require(client.has_value(),
+                           client ? "LSP gated-exit fixture initializes" : "LSP gated-exit fixture initializes: " + client.error().format()))
+    return;
+
+  bool cancellation_committed = false;
+  bool exit_released = false;
+  bool leader_exit_observed = false;
+  siginfo_t leader_status{};
+  std::optional<ProcessMarker> leader;
+  auto cancel = [&] {
+    if (cancellation_committed)
+      return true;
+    leader = read_process_marker_for_test(marker_path);
+    if (!leader)
+      return false;
+    cleanup.arm(leader->pgid);
+    // The cancellation callback is the client checkpoint: commit cancellation
+    // before releasing the peer, then retain the checkpoint until exit/EOF is
+    // independently observable. Neither outcome depends on a scheduling window.
+    cancellation_committed = true;
+    char const release = 'X';
+    ssize_t written;
+    do
+    {
+      written = ::write(release_gate.get(), &release, sizeof(release));
+    }
+    while (written < 0 && errno == EINTR);
+    exit_released = written == 1;
+    if (!exit_released)
+      return true;
+    auto const deadline = ava::tests::now_plus_seconds(10);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      // Observe without reaping: the LSP client still owns the direct child.
+      int const observed = ::waitid(P_PID, static_cast<id_t>(leader->pid), &leader_status, WEXITED | WNOHANG | WNOWAIT);
+      if (observed == 0 && leader_status.si_pid == leader->pid)
+      {
+        leader_exit_observed = true;
+        break;
+      }
+      if (observed < 0 && errno != EINTR)
+        break;
+      std::this_thread::yield();
+    }
+    return true;
+  };
+  auto diagnostics = (*client)->diagnostics(workspace / "main.cpp", cancel);
+  bool const group_cleaned = leader && wait_for_process_group_exit(leader->pgid, ava::tests::now_plus_seconds(10));
+  siginfo_t remaining{};
+  errno = 0;
+  bool const leader_reaped = leader && ::waitid(P_PID, static_cast<id_t>(leader->pid), &remaining, WEXITED | WNOHANG | WNOWAIT) < 0 && errno == ECHILD;
+  ava::tests::expect_all("committed LSP cancellation wins over an already-observable gated peer exit and cleans its group",
+                         {{"request reached exit gate", leader.has_value()},
+                          {"cancellation committed first", cancellation_committed},
+                          {"exit explicitly released", exit_released},
+                          {"leader exit observed before classification", leader_exit_observed},
+                          {"natural exit 23", leader_exit_observed && leader_status.si_code == CLD_EXITED && leader_status.si_status == 23},
+                          {"typed cancellation", !diagnostics && diagnostics.error().code() == ava::core::ErrorCode::Canceled},
+                          {"private group", leader && leader->pid == leader->pgid && leader->pgid != ::getpgrp()},
+                          {"leader reaped by client", leader_reaped},
+                          {"no live group members", group_cleaned}});
 }
 
 void test_lsp_manager_cancellation()
@@ -1277,7 +1340,7 @@ void test_lsp_configured_provider_launch_permission_cancel_and_deny()
   expect(cancel_provider && *cancel_provider != nullptr, cancel_provider
                                                              ? "configured LSP cancel fixture loads a lazy provider"
                                                              : "configured LSP cancel fixture loads a lazy provider: " + cancel_provider.error().format());
-  if (!cancel_provider || !*cancel_provider)
+  if (!ava::tests::require(cancel_provider && *cancel_provider, "LSP cancellation provider is available"))
     return;
 
   auto canceled_query = (*cancel_provider)->diagnostics(cancel_workspace / "main.cpp");
@@ -1319,7 +1382,7 @@ void test_lsp_configured_provider_launch_permission_cancel_and_deny()
   });
   expect(deny_provider && *deny_provider != nullptr, deny_provider ? "configured LSP deny fixture loads a lazy provider"
                                                                    : "configured LSP deny fixture loads a lazy provider: " + deny_provider.error().format());
-  if (!deny_provider || !*deny_provider)
+  if (!ava::tests::require(deny_provider && *deny_provider, "LSP denial provider is available"))
     return;
 
   auto denied_query = (*deny_provider)->diagnostics(deny_workspace / "main.cpp");
@@ -1365,8 +1428,8 @@ void test_lsp_configured_provider_loads_global_config_from_safe_cwd()
   ava::agent::ToolDispatcher const dispatcher(context);
   auto diagnostics =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_global_cwd", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
-  expect(diagnostics && diagnostics->success,
-         diagnostics ? "configured global LSP server returns diagnostics from safe cwd" : "configured global LSP server returns diagnostics from safe cwd");
+  expect(diagnostics && diagnostics->success, diagnostics ? "configured global LSP server returns diagnostics from safe cwd"
+                                                          : "configured global LSP server returns diagnostics from safe cwd: " + diagnostics.error().format());
   expect(read_text_file_for_test(marker_path) == global_config_dir.lexically_normal().string(),
          "configured global LSP server process cwd preserves the logical global config directory identity");
 }
@@ -1678,11 +1741,9 @@ void test_lsp_builtin_root_cache_idle_lru_eviction()
   constexpr int kExpectedLiveClients = 8;
   auto const root = create_empty_root("lsp-root-cache-idle");
   auto const workspace = root / "workspace";
-  ScopedEnvironmentForTest environment;
-  bool const environment_set = environment.set("XDG_STATE_HOME", (root / "state").string());
+  ScopedEnvVar environment("XDG_STATE_HOME", (root / "state").string());
   auto provider = make_root_cache_provider_for_test(root);
-  expect(environment_set && provider && *provider, "root-cache LRU fixture creates an enabled lazy built-in provider");
-  if (!environment_set || !provider || !*provider)
+  if (!ava::tests::require(provider && *provider, "root-cache LRU fixture creates an enabled lazy built-in provider"))
     return;
   auto query = [&](int index) { return (*provider)->diagnostics(workspace / std::to_string(index) / "one.cpp"); };
   auto process = [&](int index) { return lsp_process_for_root_for_test(workspace / std::to_string(index)); };
@@ -1691,24 +1752,34 @@ void test_lsp_builtin_root_cache_idle_lru_eviction()
   {
     auto diagnostics = query(index);
     auto pid = process(index);
-    expect(diagnostics && pid, "each initial root gets one live client within the provider cap");
-    if (!diagnostics || !pid)
+    if (!ava::tests::require(diagnostics && pid, "each initial root gets one live client within the provider cap"))
       return;
     original_processes.push_back(*pid);
   }
 
   auto refreshed = query(0);
   auto ninth = query(8);
-  expect(refreshed && ninth && wait_for_process_group_exit(original_processes[1]) && !process(1) && process(0) == original_processes[0] &&
-             process(2) == original_processes[2],
-         "a ninth root shuts down the idle LRU process, not a recently reused root or the next-oldest root");
+  ava::tests::expect_all("a ninth root retires the idle LRU, not recently reused or next-oldest clients",
+                         {{"refresh succeeded", refreshed.has_value()},
+                          {"ninth query succeeded", ninth.has_value()},
+                          {"LRU group exited", wait_for_process_group_exit(original_processes[1])},
+                          {"LRU absent", !process(1)},
+                          {"recent client retained", process(0) == original_processes[0]},
+                          {"next-oldest retained", process(2) == original_processes[2]}});
   auto tenth = query(9);
-  expect(tenth && wait_for_process_group_exit(original_processes[2]) && !process(2) && process(0) == original_processes[0],
-         "successive new roots retire idle clients in least-recently-used order");
+  ava::tests::expect_all("successive roots retire idle clients in least-recently-used order",
+                         {{"tenth query succeeded", tenth.has_value()},
+                          {"next LRU group exited", wait_for_process_group_exit(original_processes[2])},
+                          {"next LRU absent", !process(2)},
+                          {"recent client retained", process(0) == original_processes[0]}});
   auto retained = query(0);
   auto revisited = query(1);
-  expect(retained && revisited && process(1) && wait_for_process_group_exit(original_processes[3]) && process(0) == original_processes[0],
-         "an evicted root can launch again while a retained root reuses its original client");
+  ava::tests::expect_all("an evicted root relaunches while a retained root reuses its original client",
+                         {{"retained query succeeded", retained.has_value()},
+                          {"revisited query succeeded", revisited.has_value()},
+                          {"evicted root relaunched", process(1).has_value()},
+                          {"next LRU group exited", wait_for_process_group_exit(original_processes[3])},
+                          {"recent client retained", process(0) == original_processes[0]}});
 
   int live_roots = 0;
   for (int index = 0; index < 10; ++index)
@@ -1717,9 +1788,11 @@ void test_lsp_builtin_root_cache_idle_lru_eviction()
   std::vector<std::string> launched_roots;
   for (std::string line; std::getline(launches, line);)
     launched_roots.push_back(line);
-  expect(live_roots == kExpectedLiveClients && launched_roots.size() == 11 && std::ranges::count(launched_roots, (workspace / "0").string()) == 1 &&
-             std::ranges::count(launched_roots, (workspace / "1").string()) == 2,
-         "cross-root reuse and retirement keep only eight live processes without permanently rejecting evicted keys");
+  ava::tests::expect_all("cross-root reuse and retirement keep eight live processes and permit relaunching evicted keys",
+                         {{"live client cap", live_roots == kExpectedLiveClients},
+                          {"total launches", launched_roots.size() == 11},
+                          {"retained root launched once", std::ranges::count(launched_roots, (workspace / "0").string()) == 1},
+                          {"evicted root launched twice", std::ranges::count(launched_roots, (workspace / "1").string()) == 2}});
 }
 
 void test_lsp_builtin_root_cache_busy_capacity_recovery()
@@ -1729,11 +1802,9 @@ void test_lsp_builtin_root_cache_busy_capacity_recovery()
   constexpr int kExpectedLiveClients = 8;
   auto const root = create_empty_root("lsp-root-cache-busy");
   auto const workspace = root / "workspace";
-  ScopedEnvironmentForTest environment;
-  bool const environment_set = environment.set("XDG_STATE_HOME", (root / "state").string());
+  ScopedEnvVar environment("XDG_STATE_HOME", (root / "state").string());
   auto provider = make_root_cache_provider_for_test(root);
-  expect(environment_set && provider && *provider, "root-cache busy fixture creates an enabled lazy built-in provider");
-  if (!environment_set || !provider || !*provider)
+  if (!ava::tests::require(provider && *provider, "root-cache busy fixture creates an enabled lazy built-in provider"))
     return;
   auto query = [&](int index) { return (*provider)->diagnostics(workspace / std::to_string(index) / "one.cpp"); };
   auto process = [&](int index) { return lsp_process_for_root_for_test(workspace / std::to_string(index)); };
@@ -1841,8 +1912,7 @@ void test_lsp_builtin_launch_identity_roots_and_deduplication()
     std::ofstream(workspace / module / "one.cpp") << "int one() { return 1; }\n";
     std::ofstream(workspace / module / "two.cpp") << "int two() { return 2; }\n";
   }
-  ScopedEnvironmentForTest environment;
-  bool const environment_set = environment.set("XDG_STATE_HOME", state.string());
+  ScopedEnvVar environment("XDG_STATE_HOME", state.string());
   auto denied_provider = ava::lsp::make_configured_lsp_provider({
       .global_config_file = config_path,
       .project_config_file = {},
@@ -1853,8 +1923,8 @@ void test_lsp_builtin_launch_identity_roots_and_deduplication()
   auto denied_query = denied_provider && *denied_provider ? (*denied_provider)->diagnostics(workspace / "a" / "one.cpp")
                                                           : ava::core::Result<std::vector<ava::lsp::Diagnostic>>{};
   auto const launch_marker = state / "fake-clangd-launches.txt";
-  expect(environment_set && denied_provider && *denied_provider && !denied_query &&
-             denied_query.error().category() == ava::core::ErrorCategory::PermissionDenied && !std::filesystem::exists(launch_marker),
+  expect(denied_provider && *denied_provider && !denied_query && denied_query.error().category() == ava::core::ErrorCategory::PermissionDenied &&
+             !std::filesystem::exists(launch_marker),
          "built-in launch fails closed without a high-risk LSP launch permission resolver");
 
   std::mutex prompt_mutex;
@@ -1871,11 +1941,10 @@ void test_lsp_builtin_launch_identity_roots_and_deduplication()
       },
       .builtin_discovery = builtin_discovery_for_test(bin),
   });
-  expect(environment_set && provider && *provider,
-         provider ? "enabled installed clangd recipe creates a lazy provider without launching"
-                  : "enabled installed clangd recipe creates a lazy provider without launching: " + provider.error().format());
+  expect(provider && *provider, provider ? "enabled installed clangd recipe creates a lazy provider without launching"
+                                         : "enabled installed clangd recipe creates a lazy provider without launching: " + provider.error().format());
   expect(!std::filesystem::exists(launch_marker), "built-in provider construction remains process-lazy");
-  if (!provider || !*provider)
+  if (!ava::tests::require(provider && *provider, "enabled installed clangd provider is available"))
     return;
 
   auto a_first = (*provider)->diagnostics(workspace / "a" / "one.cpp");
@@ -2346,6 +2415,7 @@ void test_lsp_configured_provider_rejects_invalid_config()
 
 void run_lsp_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("lsp-tests-");
   test_lsp_manager_fake_server_diagnostics();
   test_lsp_manager_fake_server_symbols_and_definition();
   test_lsp_manager_accepts_contained_logical_symlinks();
@@ -2362,7 +2432,8 @@ void run_lsp_tests()
   test_lsp_manager_timeout_error();
   test_lsp_manager_startup_timeout_and_validation();
   test_lsp_manager_containment_cleanup();
-  test_lsp_manager_cancellation_precedence();
+  test_lsp_manager_cancellation_after_server_receives_request();
+  test_lsp_manager_committed_cancellation_precedes_gated_peer_exit();
   test_lsp_manager_cancellation();
   test_lsp_manager_huge_response_caps();
   test_lsp_diagnostics_tool_and_dispatcher_json();

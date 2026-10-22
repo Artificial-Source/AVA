@@ -2,6 +2,8 @@
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/golden.h"
 #include "tests/support/process_group_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/event/RuntimeEvent.h"
 #include "ava/app/command_plugins.h"
@@ -32,6 +34,7 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -90,9 +93,7 @@ std::string valid_manifest_json(std::string id = "com.example.todo")
 
 void write_text(std::filesystem::path const& path, std::string const& text)
 {
-  std::filesystem::create_directories(path.parent_path());
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file << text;
+  ava::tests::write_test_file(path, text);
 }
 
 std::string read_text(std::filesystem::path const& path)
@@ -278,6 +279,8 @@ ava::app::runtime::session_ts plugin_command_test_session(ava::config::XdgPaths 
                                                                             .expected_original_cwd = std::nullopt});
   expect(unlocked_session_result.has_value(),
          unlocked_session_result ? "plugin command test session opens" : "plugin command test session opens: " + unlocked_session_result.error().format());
+  if (!ava::tests::require(unlocked_session_result.has_value(), "plugin command session fixture is available"))
+    throw std::runtime_error("plugin command session fixture could not open");
   return std::move(*unlocked_session_result);
 }
 
@@ -969,9 +972,11 @@ void test_plugin_runner_contained_failures()
   auto exited_options = runner_options(workspace, std::chrono::milliseconds(500));
   auto exited = ava::plugin::PluginProcess::start(runner_manifest(exited_dir, "com.example.exited", "plugin.sh"), exited_options);
   auto const exited_format = exited ? std::string{} : exited.error().format();
-  expect(!exited && exited_format.find("exit 7") != std::string::npos && exited_format.find("CANARY_PLUGIN_STDERR_INIT_2f91") == std::string::npos &&
-             exited_format.find("stderr_bytes") != std::string::npos,
-         "plugin runner reports early process exit status and safe stderr metadata: " + exited_format);
+  ava::tests::expect_all("plugin runner reports startup stdout closure with safe stderr metadata: " + exited_format,
+                         {{"failed", !exited},
+                          {"closed stdout", !exited && exited.error().message() == "plugin process closed stdout before initialization"},
+                          {"stderr redacted", exited_format.find("CANARY_PLUGIN_STDERR_INIT_2f91") == std::string::npos},
+                          {"stderr metadata", exited_format.find("stderr_bytes") != std::string::npos}});
 
   auto const oversized_dir = root / "plugins" / "com.example.oversized";
   write_text(oversized_dir / "plugin.sh", "read line\nprintf '%s\\n' '" + std::string(200, 'x') + "'\n");
@@ -2453,6 +2458,7 @@ void test_plugin_tool_registry_skips_name_collisions()
 
 void run_plugin_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("plugin-tests-");
   test_plugin_manifest_parsing();
   test_static_plugin_resource_loader_is_descriptor_anchored();
   test_sample_todo_plugin_manifest_and_resources();

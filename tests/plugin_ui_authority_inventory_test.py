@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 FACTORY = re.compile(r"\bmake_tui_plugin_ui_invocation_capability\s*\(")
@@ -38,11 +39,12 @@ def source_files(root: Path) -> list[Path]:
 
 def matches(files: list[Path], root: Path, pattern: re.Pattern[str]) -> list[tuple[Path, int]]:
     found: list[tuple[Path, int]] = []
+    pattern = re.compile(pattern.pattern, pattern.flags | re.MULTILINE)
     for path in files:
         relative = path.relative_to(root)
-        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if pattern.search(line):
-                found.append((relative, line_number))
+        text = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            found.append((relative, text.count("\n", 0, match.start()) + 1))
     return found
 
 
@@ -53,10 +55,40 @@ def require_allowlist(name: str, found: list[tuple[Path, int]], allowed: set[Pat
         raise AssertionError(f"{name} escaped its authority allowlist: {details}")
 
 
+def self_test_inventory() -> None:
+    """Prove both violation detection and identifier-boundary acceptance."""
+    cases = (
+        ("factory", FACTORY, "make_tui_plugin_ui_invocation_capability\n(", "prefix_make_tui_plugin_ui_invocation_capability()"),
+        ("claim", CLAIM, "claim_plugin_ui_invocation_capability (", "claim_plugin_ui_invocation_capability_extra()"),
+        ("handler", HANDLER, "PluginUiHandler handler", "MyPluginUiHandler handler"),
+        ("field", CAPABILITY_FIELD, "plugin_ui_capability = nullptr", "plugin_ui_capability_extra = nullptr"),
+        ("include", re.compile(r'^\s*#\s*include\s*[<"]ava/app/private\.h[>"]'), '#include "ava/app/private.h"', '#include "ava/core/error.h"'),
+    )
+    with TemporaryDirectory(prefix="ava-plugin-ui-inventory-") as directory:
+        root = Path(directory)
+        source = root / "escape.cpp"
+        for name, pattern, forbidden, allowed in cases:
+            source.write_text("// fixture\n" + forbidden + "\n", encoding="utf-8")
+            found = matches([source], root, pattern)
+            if found != [(Path("escape.cpp"), 2)]:
+                raise AssertionError(f"{name} scanner missed or mislocated its negative fixture: {found}")
+            try:
+                require_allowlist(name, found, set())
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f"{name} scanner accepted authority outside the allowlist")
+            require_allowlist(name, found, {Path("escape.cpp")})
+            source.write_text(allowed + "\n", encoding="utf-8")
+            if matches([source], root, pattern):
+                raise AssertionError(f"{name} scanner rejected an allowed identifier boundary")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     args = parser.parse_args()
+    self_test_inventory()
 
     root = (args.source / "src" / "ava").resolve()
     files = source_files(root)
