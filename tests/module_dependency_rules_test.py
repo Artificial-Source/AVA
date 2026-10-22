@@ -84,7 +84,7 @@ ALLOWED = {
     "tui": frozenset({"agent", "app_common", "config", "core", "debug", "event", "frontend", "permissions", "session"}),
 }
 APP_COMMON_PATHS = frozenset({"app/terminal_text.cpp", "app/terminal_text.h"})
-SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".cpp"})
+SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".cpp", ".cxx"})
 IGNORED_TREE_NAMES = frozenset({"build", "generated", "reference", "tests", "vendor"})
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:<([^>]+)>|"([^"]+)")')
 
@@ -94,7 +94,7 @@ class PolicyError(ValueError):
 
 
 def source_kind(path: Path) -> str:
-    return "implementation" if path.suffix == ".cpp" else "public"
+    return "implementation" if path.suffix in {".cpp", ".cxx"} else "public"
 
 
 def logical_module(relative_to_ava: PurePosixPath) -> str:

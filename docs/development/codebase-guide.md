@@ -69,6 +69,9 @@ for one-shot selectors, `runtime/RunOptions.h`, `session_run_controller.h`,
 `tui/interactive_tui.cpp`, and `interactive.h`. Protocol implementations live under
 `app/rpc/` and `app/acp/`. `app::Application` derives from `core::Application`,
 which owns the application-scoped memory page pool and its `VectorAllocator<char>`.
+`frontend/Data.h` uses that allocator for the registered-data list, and
+`tui/terminal/GraphemeSurface.h` uses its rebound allocator for terminal surface
+vectors; these are production consumers, not a performance claim.
 
 **Belongs here:** composition and lifecycle policy involving several lower
 modules; translation between shared runtime behavior and a frontend contract.

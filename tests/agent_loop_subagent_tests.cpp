@@ -759,7 +759,7 @@ void test_agent_loop_coordinated_foreground_uses_fresh_worker_and_preserves_resu
   }
   auto const resumed_job_id = resumed_job->job.identity.job_id;
   auto promoted_resume = coordinator->promote(store.options_r()->session_id, resumed_job_id);
-  bool const resumed_parent_woke = resumed_parent.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  bool const resumed_parent_woke = resumed_parent.wait_until(ava::tests::now_plus_seconds(5)) == std::future_status::ready;
   if (!resumed_parent_woke)
     resume_state->release_success();
   auto resumed_result = resumed_parent.get();

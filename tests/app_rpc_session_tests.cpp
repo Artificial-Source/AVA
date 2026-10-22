@@ -227,10 +227,14 @@ void test_app_rpc_state_list_sessions_and_open_session()
 
   auto const jsonl = out.str();
   expect(result.has_value(), "RPC state/list/open loop completes successfully");
-  expect(jsonl.find("\"id\":\"state\"") != std::string::npos && jsonl.find(second_id) != std::string::npos &&
-             jsonl.find("\"id\":\"list\"") != std::string::npos && jsonl.find(first_id) != std::string::npos &&
-             jsonl.find("\"id\":\"open\"") != std::string::npos,
-         "RPC state, list_sessions, and open_session return session metadata");
+  auto const state = rpc_response_line(jsonl, "state").value_or("");
+  auto const listed = rpc_response_line(jsonl, "list").value_or("");
+  auto const opened = rpc_response_line(jsonl, "open").value_or("");
+  expect_all("RPC state, list_sessions, and open_session return their own session metadata",
+             {{"state active session", state.find(second_id) != std::string_view::npos},
+              {"list includes first", listed.find(first_id) != std::string_view::npos},
+              {"list includes second", listed.find(second_id) != std::string_view::npos},
+              {"open requested session", opened.find(first_id) != std::string_view::npos}});
   expect(second_r->store.options_r()->session_id == first_id, "RPC open_session switches the active runtime session");
 }
 
