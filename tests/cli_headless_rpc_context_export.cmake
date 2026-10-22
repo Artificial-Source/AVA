@@ -22,6 +22,9 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   set(AVA_TIMEOUT_15 "${AVA_DEBUG_SECONDS}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(15)
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(CURRENT_DIR "${WORKSPACE}/nested")
@@ -29,6 +32,7 @@ set(INPUT_FILE "${TEST_ROOT}/rpc-input.jsonl")
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${CURRENT_DIR}" "${TEST_ROOT}/home" "${TEST_ROOT}/config" "${TEST_ROOT}/state" "${TEST_ROOT}/data")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
 file(REAL_PATH "${WORKSPACE}" REAL_WORKSPACE)
 file(REAL_PATH "${CURRENT_DIR}" REAL_CURRENT_DIR)
 file(WRITE "${WORKSPACE}/AGENTS.md" "# Headless Context\n\ncontext export smoke marker\n")
@@ -38,12 +42,7 @@ file(WRITE "${INPUT_FILE}"
      "{\"id\":\"exp\",\"type\":\"export\"}\n")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${TEST_ROOT}/home"
-          "XDG_CONFIG_HOME=${TEST_ROOT}/config"
-          "XDG_STATE_HOME=${TEST_ROOT}/state"
-          "XDG_DATA_HOME=${TEST_ROOT}/data"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --cwd nested --rpc
   WORKING_DIRECTORY "${WORKSPACE}"
   INPUT_FILE "${INPUT_FILE}"
@@ -57,26 +56,31 @@ if(NOT AVA_RESULT EQUAL 0)
   message(FATAL_ERROR "ava --rpc exited with ${AVA_RESULT}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
 endif()
 
-foreach(NEEDLE
-        "\"id\":\"state\""
-        "\"success\":true"
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.workspace_dir "\"${REAL_WORKSPACE}\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.current_dir "\"${REAL_CURRENT_DIR}\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.context_source_count "1")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.context_sources.0.source_type "\"workspace\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.context_sources.0.path "\"${REAL_WORKSPACE}/AGENTS.md\"")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "state")
+ava_cli_expect_contains("${RESPONSE}"
         "\"workspace_dir\":\"${REAL_WORKSPACE}\""
         "\"current_dir\":\"${REAL_CURRENT_DIR}\""
-        "\"context_source_count\":1"
-        "\"context_sources\":["
-        "\"source_type\":\"workspace\""
         "\"path\":\"${REAL_WORKSPACE}/AGENTS.md\""
-        "\"id\":\"ctx\""
-        "\"handled\":true"
-        "\"quit\":false"
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "ctx" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "ctx" result.handled "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "ctx" result.quit "false")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "ctx")
+ava_cli_expect_contains("${RESPONSE}"
         "workspace  ${REAL_WORKSPACE}/AGENTS.md"
-        "\"id\":\"exp\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "exp" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "exp")
+ava_cli_expect_contains("${RESPONSE}"
         "# AVA Session Export"
         "## Session Start"
         "Provider"
-        "Model")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+        "Model"
+)
+ava_rpc_forbid("${AVA_OUTPUT}")

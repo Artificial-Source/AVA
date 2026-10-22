@@ -10,19 +10,6 @@ if(NOT DEFINED AVA_CLI_TEST_ROOT)
   message(FATAL_ERROR "AVA_CLI_TEST_ROOT is required")
 endif()
 
-# The fake provider is launched through the shared Python owner/broker so every
-# harness has identical process-gate wiring and process-group cleanup. Direct
-# (non-CTest) invocations fall back to the script directory and PATH python3.
-if(NOT DEFINED AVA_FAKE_PROVIDER_PY OR AVA_FAKE_PROVIDER_PY STREQUAL "")
-  get_filename_component(AVA_FAKE_PROVIDER_PY "${CMAKE_CURRENT_LIST_DIR}/fake_provider.py" ABSOLUTE)
-endif()
-if(NOT DEFINED AVA_FAKE_PROVIDER_SH OR AVA_FAKE_PROVIDER_SH STREQUAL "")
-  get_filename_component(AVA_FAKE_PROVIDER_SH "${CMAKE_CURRENT_LIST_DIR}/fake_provider_shell.sh" ABSOLUTE)
-endif()
-if(NOT DEFINED AVA_PYTHON OR AVA_PYTHON STREQUAL "")
-  find_program(AVA_PYTHON NAMES python3 REQUIRED)
-endif()
-
 # Timeouts for this driver. Honors AVA_DEBUG_NO_TIMEOUT at runtime (this
 # script runs via `cmake -P`, so $ENV{...} is live) so a hung driver is not
 # killed -- and does not kill its `ava` subprocess via the driver's EXIT
@@ -43,6 +30,10 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   math(EXPR AVA_POLL_200 "${AVA_DEBUG_SECONDS} * 20")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(15 30)
+ava_cli_provider_paths()
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(HOME_DIR "${TEST_ROOT}/home")
@@ -61,6 +52,9 @@ set(DRIVER_FILE "${TEST_ROOT}/driver.sh")
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}/src" "${WORKSPACE}/docs" "${HOME_DIR}" "${CONFIG_DIR}/ava" "${STATE_DIR}" "${DATA_DIR}")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
+ava_cli_shell_env(AVA_CLI_ENV_SHELL ${AVA_CLI_ENV})
+ava_cli_driver_support(AVA_CLI_DRIVER_SUPPORT "${TEST_ROOT}")
 file(WRITE "${WORKSPACE}/AGENTS.md" "headless performance smoke project instructions\n")
 file(WRITE "${WORKSPACE}/src/a.txt" "needle alpha\nquiet line\n")
 file(WRITE "${WORKSPACE}/src/b.txt" "quiet line\nneedle beta\n")
@@ -83,22 +77,17 @@ file(WRITE "${DRIVER_FILE}"
 "AVA_FAKE_PROVIDER_SH=\"${AVA_FAKE_PROVIDER_SH}\"\n"
 "AVA_FAKE_PROVIDER_EXE=\"${AVA_FAKE_PROVIDER_EXE}\"\n"
 ". \"${AVA_FAKE_PROVIDER_SH}\"\n"
-"ava_pid=\n"
-"cleanup() {\n"
-"  if [ -n \"$ava_pid\" ]; then kill \"$ava_pid\" 2>/dev/null || true; fi\n"
-"  fake_provider_stop >/dev/null 2>&1 || true\n"
-"}\n"
-"trap cleanup EXIT INT TERM\n"
+". \"${AVA_CLI_DRIVER_SUPPORT}\"\n"
 "rm -f \"${RPC_IN}\" \"${RPC_OUT}\" \"${RPC_ERR}\" \"${PORT_FILE}\" \"${REQUEST_LOG}\" \"${PROVIDER_OUT}\" \"${PROVIDER_ERR}\"\n"
 "fake_provider_start \"${TEST_ROOT}\" provider 0 grep-tool \"src/**/*.txt\" || exit 1\n"
 "port=$FAKE_PROVIDER_PORT\n"
 "mkfifo \"${RPC_IN}\"\n"
-"HOME=\"${HOME_DIR}\" XDG_CONFIG_HOME=\"${CONFIG_DIR}\" XDG_STATE_HOME=\"${STATE_DIR}\" XDG_DATA_HOME=\"${DATA_DIR}\" NO_COLOR=1 MOONSHOT_API_KEY=test-key MOONSHOT_BASE_URL=\"http://127.0.0.1:$port\" \"${AVA_EXE}\" --rpc --allow-tool grep < \"${RPC_IN}\" > \"${RPC_OUT}\" 2> \"${RPC_ERR}\" &\n"
+"setsid env ${AVA_CLI_ENV_SHELL} MOONSHOT_API_KEY=test-key MOONSHOT_BASE_URL=\"http://127.0.0.1:$port\" \"${AVA_EXE}\" --rpc --allow-tool grep < \"${RPC_IN}\" > \"${RPC_OUT}\" 2> \"${RPC_ERR}\" &\n"
 "ava_pid=$!\n"
 "exec 3>\"${RPC_IN}\"\n"
 "printf '%s\\n' '{\"id\":\"prompt\",\"type\":\"prompt\",\"protocol_version\":1,\"message\":\"search for needle through grep\"}' >&3\n"
 "i=0\n"
-"while ! grep -q 'after grep tool' \"${RPC_OUT}\" 2>/dev/null; do\n"
+"while ! grep -q '\"id\":\"prompt\".*\"type\":\"response\".*\"success\":true' \"${RPC_OUT}\" 2>/dev/null; do\n"
 "  if ! kill -0 \"$ava_pid\" 2>/dev/null; then\n"
 "    echo \"ava exited before grep prompt completed\" >&2\n"
 "    cat \"${RPC_OUT}\" >&2 2>/dev/null || true\n"
@@ -118,9 +107,15 @@ file(WRITE "${DRIVER_FILE}"
 "printf '%s\\n' '{\"id\":\"validate-after\",\"type\":\"validate_session\"}' >&3\n"
 "printf '%s\\n' '{\"id\":\"messages-after\",\"type\":\"get_messages\"}' >&3\n"
 "printf '%s\\n' '{\"id\":\"sessions-after\",\"type\":\"list_sessions\"}' >&3\n"
+"ava_wait_response \"${RPC_OUT}\" \"prompt\" 30 || exit 1\n"
+"ava_wait_response \"${RPC_OUT}\" \"stats-after\" 30 || exit 1\n"
+"ava_wait_response \"${RPC_OUT}\" \"validate-after\" 30 || exit 1\n"
+"ava_wait_response \"${RPC_OUT}\" \"messages-after\" 30 || exit 1\n"
+"ava_wait_response \"${RPC_OUT}\" \"sessions-after\" 30 || exit 1\n"
 "exec 3>&-\n"
 "wait \"$ava_pid\"\n"
 "ava_status=$?\n"
+"ava_stop_child \"$ava_pid\"\n"
 "ava_pid=\n"
 "if [ \"$ava_status\" -ne 0 ]; then\n"
 "  echo \"ava --rpc exited with $ava_status\" >&2\n"
@@ -133,7 +128,7 @@ file(WRITE "${DRIVER_FILE}"
 )
 
 execute_process(
-  COMMAND /bin/sh "${DRIVER_FILE}"
+  COMMAND ${AVA_CLI_DRIVER_COMMAND} /bin/sh "${DRIVER_FILE}"
   WORKING_DIRECTORY "${WORKSPACE}"
   OUTPUT_VARIABLE DRIVER_OUTPUT
   ERROR_VARIABLE DRIVER_ERROR
@@ -149,7 +144,7 @@ file(READ "${RPC_OUT}" AVA_OUTPUT)
 file(READ "${RPC_ERR}" AVA_ERROR)
 file(READ "${REQUEST_LOG}" PROVIDER_REQUEST)
 
-foreach(NEEDLE
+ava_cli_expect_contains("${PROVIDER_REQUEST}"
         "--- request 1 ---"
         "--- request 2 ---"
         "\"model\":\"ava-headless-fake\""
@@ -161,41 +156,35 @@ foreach(NEEDLE
         "\\\"ok\\\":true"
         "needle alpha"
         "needle beta")
-  string(FIND "${PROVIDER_REQUEST}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "fake provider request log did not contain ${NEEDLE}\nrequest:\n${PROVIDER_REQUEST}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
 
-foreach(NEEDLE
-        "\"name\":\"tool_start\""
-        "\"call_id\":\"call_grep\""
-        "\"tool\":\"grep\""
-        "\"name\":\"tool_result\""
-        "\"status\":\"success\""
-        "\"structured_result\":{\"schema_version\":1"
-        "\"ok\":true"
-        "\"content_type\":\"application/json\""
-        "needle alpha"
-        "needle beta"
-        "\"id\":\"prompt\""
-        "\"success\":true"
-        "\"final_text\":\"after grep tool\""
-        "\"id\":\"stats-after\""
-        "\"tool_call\":1"
-        "\"tool_result\":1"
-        "\"id\":\"validate-after\""
-        "\"ok\":true"
-        "\"id\":\"messages-after\""
-        "\"name\":\"tool_start\""
+ava_cli_event_line(EVENT "${AVA_OUTPUT}" "tool_start" "call_grep")
+ava_cli_expect_json("${EVENT}" payload.tool "\"grep\"")
+ava_cli_event_line(EVENT "${AVA_OUTPUT}" "tool_result" "call_grep")
+ava_cli_expect_json("${EVENT}" payload.tool "\"grep\"")
+ava_cli_expect_json("${EVENT}" payload.status "\"success\"")
+ava_cli_expect_json("${EVENT}" payload.structured_result.schema_version "1")
+ava_cli_expect_json("${EVENT}" payload.structured_result.ok "true")
+ava_cli_expect_json("${EVENT}" payload.content_type "\"application/json\"")
+ava_cli_expect_contains("${EVENT}" "needle alpha" "needle beta")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompt" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompt" result.final_text "\"after grep tool\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "stats-after" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "stats-after" result.counts.tool_call "1")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "stats-after" result.counts.tool_result "1")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate-after" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate-after" result.ok "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate-after" result.error_count "0")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "messages-after" success "true")
+ava_rpc_response_line(COLLECTION "${AVA_OUTPUT}" "messages-after")
+ava_cli_expect_type("${COLLECTION}" result.messages ARRAY)
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "messages-after")
+ava_cli_expect_contains("${RESPONSE}"
         "\"type\":\"tool_result\""
-        "\"id\":\"sessions-after\""
-        "\"sessions\":[")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "sessions-after" success "true")
+ava_rpc_response_line(COLLECTION "${AVA_OUTPUT}" "sessions-after")
+ava_cli_expect_type("${COLLECTION}" result.sessions ARRAY)
+ava_rpc_forbid("${AVA_OUTPUT}")
 
 file(WRITE "${REPLAY_INPUT}"
      "{\"id\":\"replay-state\",\"type\":\"get_state\"}\n"
@@ -205,12 +194,7 @@ file(WRITE "${REPLAY_INPUT}"
      "{\"id\":\"replay-sessions\",\"type\":\"list_sessions\"}\n")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${HOME_DIR}"
-          "XDG_CONFIG_HOME=${CONFIG_DIR}"
-          "XDG_STATE_HOME=${STATE_DIR}"
-          "XDG_DATA_HOME=${DATA_DIR}"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --rpc --continue
   WORKING_DIRECTORY "${WORKSPACE}"
   INPUT_FILE "${REPLAY_INPUT}"
@@ -224,22 +208,30 @@ if(NOT REPLAY_RESULT EQUAL 0)
   message(FATAL_ERROR "ava --rpc --continue exited with ${REPLAY_RESULT}\nstdout:\n${REPLAY_OUTPUT}\nstderr:\n${REPLAY_ERROR}")
 endif()
 
-foreach(NEEDLE
-        "\"id\":\"replay-state\""
-        "\"id\":\"replay-stats\""
-        "\"tool_call\":1"
-        "\"tool_result\":1"
-        "\"id\":\"replay-validate\""
-        "\"ok\":true"
-        "\"id\":\"replay-messages\""
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-state" success "true")
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-stats" success "true")
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-stats" result.counts.tool_call "1")
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-stats" result.counts.tool_result "1")
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-validate" success "true")
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-validate" result.ok "true")
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-validate" result.error_count "0")
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-messages" success "true")
+ava_rpc_response_line(COLLECTION "${REPLAY_OUTPUT}" "replay-messages")
+ava_cli_expect_type("${COLLECTION}" result.messages ARRAY)
+ava_rpc_response_line(RESPONSE "${REPLAY_OUTPUT}" "replay-messages")
+ava_cli_expect_contains("${RESPONSE}"
+        "\"type\":\"tool_result\""
+)
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-sessions" success "true")
+ava_rpc_response_line(COLLECTION "${REPLAY_OUTPUT}" "replay-sessions")
+ava_cli_expect_type("${COLLECTION}" result.sessions ARRAY)
+ava_rpc_expect_in_line("${REPLAY_OUTPUT}" "replay-messages" success "true")
+ava_rpc_response_line(COLLECTION "${REPLAY_OUTPUT}" "replay-messages")
+ava_cli_expect_type("${COLLECTION}" result.messages ARRAY)
+ava_rpc_response_line(RESPONSE "${REPLAY_OUTPUT}" "replay-messages")
+ava_cli_expect_contains("${RESPONSE}"
         "search for needle through grep"
         "needle alpha"
         "needle beta"
-        "\"type\":\"tool_result\""
-        "\"id\":\"replay-sessions\""
-        "\"sessions\":[")
-  string(FIND "${REPLAY_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc --continue output did not contain ${NEEDLE}\nstdout:\n${REPLAY_OUTPUT}\nstderr:\n${REPLAY_ERROR}")
-  endif()
-endforeach()
+)
+ava_rpc_forbid("${REPLAY_OUTPUT}")

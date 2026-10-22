@@ -14,19 +14,6 @@ if(NOT DEFINED AVA_CLI_TEST_ROOT)
   message(FATAL_ERROR "AVA_CLI_TEST_ROOT is required")
 endif()
 
-# The fake provider is launched through the shared Python owner/broker so every
-# harness has identical process-gate wiring and process-group cleanup. Direct
-# (non-CTest) invocations fall back to the script directory and PATH python3.
-if(NOT DEFINED AVA_FAKE_PROVIDER_PY OR AVA_FAKE_PROVIDER_PY STREQUAL "")
-  get_filename_component(AVA_FAKE_PROVIDER_PY "${CMAKE_CURRENT_LIST_DIR}/fake_provider.py" ABSOLUTE)
-endif()
-if(NOT DEFINED AVA_FAKE_PROVIDER_SH OR AVA_FAKE_PROVIDER_SH STREQUAL "")
-  get_filename_component(AVA_FAKE_PROVIDER_SH "${CMAKE_CURRENT_LIST_DIR}/fake_provider_shell.sh" ABSOLUTE)
-endif()
-if(NOT DEFINED AVA_PYTHON OR AVA_PYTHON STREQUAL "")
-  find_program(AVA_PYTHON NAMES python3 REQUIRED)
-endif()
-
 # Timeouts for this driver. Honors AVA_DEBUG_NO_TIMEOUT at runtime (this
 # script runs via `cmake -P`, so $ENV{...} is live) so a hung driver is not
 # killed -- and does not kill its `ava` subprocess via the driver's EXIT
@@ -44,6 +31,10 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   set(AVA_TIMEOUT_30 "${AVA_DEBUG_SECONDS}")
   math(EXPR AVA_POLL_200 "${AVA_DEBUG_SECONDS} * 20")
 endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(30)
+ava_cli_provider_paths()
 
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 get_filename_component(FAKE_MCP_SERVER "${AVA_FAKE_MCP_SERVER_EXE}" ABSOLUTE)
@@ -67,6 +58,9 @@ string(REPLACE "\"" "\\\"" FAKE_MCP_SERVER_JSON "${FAKE_MCP_SERVER_JSON}")
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}/.ava/commands" "${WORKSPACE}/.ava/skills/release" "${HOME_DIR}"
                     "${CONFIG_DIR}/ava" "${STATE_DIR}/ava" "${DATA_DIR}")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
+ava_cli_shell_env(AVA_CLI_ENV_SHELL ${AVA_CLI_ENV})
+ava_cli_driver_support(AVA_CLI_DRIVER_SUPPORT "${TEST_ROOT}")
 file(CHMOD "${CONFIG_DIR}/ava" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
 file(REAL_PATH "${WORKSPACE}" REAL_WORKSPACE)
 file(WRITE "${STATE_DIR}/ava/project-trust.json"
@@ -92,17 +86,12 @@ file(WRITE "${DRIVER_FILE}"
 "AVA_FAKE_PROVIDER_SH=\"${AVA_FAKE_PROVIDER_SH}\"\n"
 "AVA_FAKE_PROVIDER_EXE=\"${AVA_FAKE_PROVIDER_EXE}\"\n"
 ". \"${AVA_FAKE_PROVIDER_SH}\"\n"
-"ava_pid=\n"
-"cleanup() {\n"
-"  if [ -n \"$ava_pid\" ]; then kill \"$ava_pid\" 2>/dev/null || true; fi\n"
-"  fake_provider_stop >/dev/null 2>&1 || true\n"
-"}\n"
-"trap cleanup EXIT INT TERM\n"
+". \"${AVA_CLI_DRIVER_SUPPORT}\"\n"
 "rm -f \"${RPC_IN}\" \"${RPC_OUT}\" \"${RPC_ERR}\" \"${PORT_FILE}\" \"${REQUEST_LOG}\" \"${PROVIDER_OUT}\" \"${PROVIDER_ERR}\"\n"
 "fake_provider_start \"${TEST_ROOT}\" provider 0 text-three unused || exit 1\n"
 "port=$FAKE_PROVIDER_PORT\n"
 "mkfifo \"${RPC_IN}\"\n"
-"HOME=\"${HOME_DIR}\" XDG_CONFIG_HOME=\"${CONFIG_DIR}\" XDG_STATE_HOME=\"${STATE_DIR}\" XDG_DATA_HOME=\"${DATA_DIR}\" NO_COLOR=1 MOONSHOT_API_KEY=test-key MOONSHOT_BASE_URL=\"http://127.0.0.1:$port\" \"${AVA_EXE}\" --rpc --allow-tool skill,mcp < \"${RPC_IN}\" > \"${RPC_OUT}\" 2> \"${RPC_ERR}\" &\n"
+"setsid env ${AVA_CLI_ENV_SHELL} MOONSHOT_API_KEY=test-key MOONSHOT_BASE_URL=\"http://127.0.0.1:$port\" \"${AVA_EXE}\" --rpc --allow-tool skill,mcp < \"${RPC_IN}\" > \"${RPC_OUT}\" 2> \"${RPC_ERR}\" &\n"
 "ava_pid=$!\n"
 "exec 3>\"${RPC_IN}\"\n"
 "wait_for() {\n"
@@ -134,9 +123,14 @@ file(WRITE "${DRIVER_FILE}"
 "wait_for '\"id\":\"invoke-skill\"' 'skill command invocation'\n"
 "printf '%s\\n' '{\"id\":\"invoke-mcp\",\"type\":\"invoke_command\",\"name\":\"release-notes\",\"command_arguments\":\"AVA\"}' >&3\n"
 "wait_for '\"id\":\"invoke-mcp\"' 'MCP prompt command invocation'\n"
+"ava_wait_response \"${RPC_OUT}\" \"list\" 30 || exit 1\n"
+"ava_wait_response \"${RPC_OUT}\" \"invoke-prompt\" 30 || exit 1\n"
+"ava_wait_response \"${RPC_OUT}\" \"invoke-skill\" 30 || exit 1\n"
+"ava_wait_response \"${RPC_OUT}\" \"invoke-mcp\" 30 || exit 1\n"
 "exec 3>&-\n"
 "wait \"$ava_pid\"\n"
 "ava_status=$?\n"
+"ava_stop_child \"$ava_pid\"\n"
 "ava_pid=\n"
 "if [ \"$ava_status\" -ne 0 ]; then\n"
 "  echo \"ava --rpc exited with $ava_status\" >&2\n"
@@ -149,7 +143,7 @@ file(WRITE "${DRIVER_FILE}"
 )
 
 execute_process(
-  COMMAND /bin/sh "${DRIVER_FILE}"
+  COMMAND ${AVA_CLI_DRIVER_COMMAND} /bin/sh "${DRIVER_FILE}"
   WORKING_DIRECTORY "${WORKSPACE}"
   OUTPUT_VARIABLE DRIVER_OUTPUT
   ERROR_VARIABLE DRIVER_ERROR
@@ -165,33 +159,23 @@ file(READ "${RPC_OUT}" AVA_OUTPUT)
 file(READ "${RPC_ERR}" AVA_ERROR)
 file(READ "${REQUEST_LOG}" PROVIDER_REQUEST)
 
-foreach(NEEDLE
-        "\"id\":\"list\""
-        "\"command\":\"/summarize\""
-        "\"source\":\"prompt_project\""
-        "\"command\":\"/skill:release\""
-        "\"source\":\"skill\""
-        "\"command\":\"/mcp:demo:release-notes\""
-        "\"source\":\"mcp_prompt\""
-        "\"id\":\"invoke-prompt\""
-        "\"id\":\"invoke-skill\""
-        "\"id\":\"invoke-mcp\""
-        "\"success\":true")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "list" success "true")
+ava_rpc_response_line(COMMANDS "${AVA_OUTPUT}" list)
+ava_cli_array_item(COMMAND "${COMMANDS}" result.commands command "/summarize")
+ava_cli_expect_json("${COMMAND}" source "\"prompt_project\"")
+ava_cli_array_item(COMMAND "${COMMANDS}" result.commands command "/skill:release")
+ava_cli_expect_json("${COMMAND}" source "\"skill\"")
+ava_cli_array_item(COMMAND "${COMMANDS}" result.commands command "/mcp:demo:release-notes")
+ava_cli_expect_json("${COMMAND}" source "\"mcp_prompt\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "invoke-prompt" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "invoke-skill" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "invoke-mcp" success "true")
+ava_rpc_forbid("${AVA_OUTPUT}")
 
-foreach(NEEDLE
+ava_cli_expect_contains("${PROVIDER_REQUEST}"
         "--- request 1 ---"
         "--- request 2 ---"
         "--- request 3 ---"
         "Summarize AVA-v1 for AVA command testing."
         "Release skill body for headless command registry."
         "MCP prompt for AVA")
-  string(FIND "${PROVIDER_REQUEST}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "fake provider request log did not contain ${NEEDLE}\nrequest:\n${PROVIDER_REQUEST}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()

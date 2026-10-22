@@ -6,19 +6,6 @@ if(NOT DEFINED AVA_FAKE_PROVIDER_EXE)
   message(FATAL_ERROR "AVA_FAKE_PROVIDER_EXE is required")
 endif()
 
-# The fake provider is launched through the shared Python owner/broker so every
-# harness has identical process-gate wiring and process-group cleanup. Direct
-# (non-CTest) invocations fall back to the script directory and PATH python3.
-if(NOT DEFINED AVA_FAKE_PROVIDER_PY OR AVA_FAKE_PROVIDER_PY STREQUAL "")
-  get_filename_component(AVA_FAKE_PROVIDER_PY "${CMAKE_CURRENT_LIST_DIR}/fake_provider.py" ABSOLUTE)
-endif()
-if(NOT DEFINED AVA_FAKE_PROVIDER_SH OR AVA_FAKE_PROVIDER_SH STREQUAL "")
-  get_filename_component(AVA_FAKE_PROVIDER_SH "${CMAKE_CURRENT_LIST_DIR}/fake_provider_shell.sh" ABSOLUTE)
-endif()
-if(NOT DEFINED AVA_PYTHON OR AVA_PYTHON STREQUAL "")
-  find_program(AVA_PYTHON NAMES python3 REQUIRED)
-endif()
-
 # Timeouts for this driver. Honors AVA_DEBUG_NO_TIMEOUT at runtime (this
 # script runs via `cmake -P`, so $ENV{...} is live) so a hung driver is not
 # killed -- and does not kill its `ava` subprocess via the driver's EXIT
@@ -43,6 +30,10 @@ endif()
 # build tree becomes stale when parallel CTest cases create sibling artifacts.
 # mktemp atomically creates a private root under /tmp's sticky namespace; do
 # not accept a supplied build-tree root or reuse a predictable /tmp path.
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(60)
+ava_cli_provider_paths()
+
 execute_process(COMMAND mktemp -d /tmp/ava-cli-bash-cleanup.XXXXXXXX
                 OUTPUT_VARIABLE TEST_ROOT OUTPUT_STRIP_TRAILING_WHITESPACE
                 ERROR_VARIABLE TEMP_ERROR RESULT_VARIABLE TEMP_RESULT)
@@ -67,6 +58,9 @@ set(RPC_ERR "${TEST_ROOT}/rpc-error.log")
 set(DRIVER_FILE "${TEST_ROOT}/driver.sh")
 
 file(MAKE_DIRECTORY "${WORKSPACE}" "${HOME_DIR}" "${CONFIG_DIR}/ava" "${STATE_DIR}/ava/sessions" "${DATA_DIR}")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
+ava_cli_shell_env(AVA_CLI_ENV_SHELL ${AVA_CLI_ENV})
+ava_cli_driver_support(AVA_CLI_DRIVER_SUPPORT "${TEST_ROOT}")
 # Command planning protects AVA config/session authority roots as well as the
 # workspace; keep this process-cleanup fixture's XDG layout owner-private.
 file(CHMOD "${TEST_ROOT}" "${WORKSPACE}" "${HOME_DIR}" "${CONFIG_DIR}" "${CONFIG_DIR}/ava" "${STATE_DIR}" "${STATE_DIR}/ava" "${STATE_DIR}/ava/sessions" "${DATA_DIR}"
@@ -85,22 +79,14 @@ file(WRITE "${DRIVER_FILE}"
 "AVA_FAKE_PROVIDER_SH=\"${AVA_FAKE_PROVIDER_SH}\"\n"
 "AVA_FAKE_PROVIDER_EXE=\"${AVA_FAKE_PROVIDER_EXE}\"\n"
 ". \"${AVA_FAKE_PROVIDER_SH}\"\n"
-"ava_pid=\n"
-"home_churn=\n"
-"cleanup() {\n"
-"  if [ -n \"$ava_pid\" ]; then kill \"$ava_pid\" 2>/dev/null || true; fi\n"
-"  fake_provider_stop >/dev/null 2>&1 || true\n"
-"  if [ -n \"$home_churn\" ]; then rmdir \"$home_churn\" 2>/dev/null || true; fi\n"
-"  rm -f \"${PGID_FILE}\"\n"
-"}\n"
-"trap cleanup EXIT INT TERM\n"
+". \"${AVA_CLI_DRIVER_SUPPORT}\"\n"
 "rm -f \"${RPC_IN}\" \"${RPC_OUT}\" \"${RPC_ERR}\" \"${PORT_FILE}\" \"${REQUEST_LOG}\" \"${PROVIDER_OUT}\" \"${PROVIDER_ERR}\" \"${MARKER_FILE}\" \"${PGID_FILE}\"\n"
 "fake_provider_start \"${TEST_ROOT}\" provider 0 bash-timeout-tree \"${PGID_FILE}\" || exit 1\n"
 "port=$FAKE_PROVIDER_PORT\n"
 "mkfifo \"${RPC_IN}\"\n"
 # Keep command-freshness inputs deterministic: this fixture validates process
 # cleanup, not unrelated mutations in the invoking user's PATH directories.
-"PATH=/usr/bin:/bin HOME=\"${HOME_DIR}\" XDG_CONFIG_HOME=\"${CONFIG_DIR}\" XDG_STATE_HOME=\"${STATE_DIR}\" XDG_DATA_HOME=\"${DATA_DIR}\" NO_COLOR=1 MOONSHOT_API_KEY=test-key MOONSHOT_BASE_URL=\"http://127.0.0.1:$port\" \"${AVA_EXE}\" --rpc < \"${RPC_IN}\" > \"${RPC_OUT}\" 2> \"${RPC_ERR}\" &\n"
+"setsid env ${AVA_CLI_ENV_SHELL} PATH=/usr/bin:/bin MOONSHOT_API_KEY=test-key MOONSHOT_BASE_URL=\"http://127.0.0.1:$port\" \"${AVA_EXE}\" --rpc < \"${RPC_IN}\" > \"${RPC_OUT}\" 2> \"${RPC_ERR}\" &\n"
 "ava_pid=$!\n"
 "exec 3>\"${RPC_IN}\"\n"
 "printf '%s\\n' '{\"id\":\"prompt\",\"type\":\"prompt\",\"protocol_version\":1,\"message\":\"run timed shell tree\"}' >&3\n"
@@ -153,7 +139,7 @@ file(WRITE "${DRIVER_FILE}"
 "case \"$shell_pgid\" in ''|*[!0-9]*) echo \"bash process-group fixture is not a valid PID\" >&2; exit 1;; esac\n"
 "if [ \"$shell_pgid\" -le 1 ]; then echo \"bash process-group fixture is not a valid positive process group\" >&2; exit 1; fi\n"
 "i=0\n"
-"while ! grep -q 'after bash process cleanup' \"${RPC_OUT}\" 2>/dev/null; do\n"
+"while ! grep -q '\"id\":\"prompt\".*\"type\":\"response\".*\"success\":true' \"${RPC_OUT}\" 2>/dev/null; do\n"
 "  if ! kill -0 \"$ava_pid\" 2>/dev/null; then\n"
 "    echo \"ava exited before bash cleanup prompt completed\" >&2\n"
 "    cat \"${RPC_OUT}\" >&2 2>/dev/null || true\n"
@@ -169,15 +155,17 @@ file(WRITE "${DRIVER_FILE}"
 "  fi\n"
 "  sleep 0.05\n"
 "done\n"
+"ava_wait_response \"${RPC_OUT}\" \"prompt\" 60 || exit 1\n"
 "exec 3>&-\n"
 "wait \"$ava_pid\"\n"
 "ava_status=$?\n"
+"ava_stop_child \"$ava_pid\"\n"
 "ava_pid=\n"
 "i=0\n"
-"while kill -0 \"-$shell_pgid\" 2>/dev/null; do\n"
+"while ava_group_live \"$shell_pgid\"; do\n"
 "  i=$((i + 1))\n"
 "  if [ \"$i\" -gt ${AVA_POLL_100} ]; then\n"
-"    echo \"timed-out bash process group $shell_pgid still exists after cleanup\" >&2\n"
+"    echo \"timed-out bash process group $shell_pgid still has executable members after cleanup\" >&2\n"
 "    cat \"${RPC_OUT}\" >&2 2>/dev/null || true\n"
 "    cat \"${RPC_ERR}\" >&2 2>/dev/null || true\n"
 "    exit 1\n"
@@ -201,7 +189,7 @@ file(WRITE "${DRIVER_FILE}"
 )
 
 execute_process(
-  COMMAND /bin/sh "${DRIVER_FILE}"
+  COMMAND ${AVA_CLI_DRIVER_COMMAND} /bin/sh "${DRIVER_FILE}"
   WORKING_DIRECTORY "${WORKSPACE}"
   OUTPUT_VARIABLE DRIVER_OUTPUT
   ERROR_VARIABLE DRIVER_ERROR
@@ -216,19 +204,20 @@ endif()
 file(READ "${RPC_OUT}" AVA_OUTPUT)
 file(READ "${RPC_ERR}" AVA_ERROR)
 
-foreach(NEEDLE
-        "\"name\":\"permission_requested\""
-        "\"operation\":\"bash\""
-        "\"name\":\"permission_replied\""
-        "\"tool\":\"bash\""
-        "\"timed_out\":true"
-        "\"ok\":false"
-        "after bash process cleanup")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+ava_cli_event_line(EVENT "${AVA_OUTPUT}" "permission_requested")
+ava_cli_expect_json("${EVENT}" payload.operation "\"bash\"")
+ava_cli_event_line(EVENT "${AVA_OUTPUT}" "permission_replied")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "reply" success "true")
+ava_cli_event_line(EVENT "${AVA_OUTPUT}" "tool_start" "call_bash")
+ava_cli_expect_json("${EVENT}" payload.tool "\"bash\"")
+ava_cli_event_line(EVENT "${AVA_OUTPUT}" "tool_result" "call_bash")
+ava_cli_expect_json("${EVENT}" payload.tool "\"bash\"")
+ava_cli_expect_json("${EVENT}" payload.status "\"error\"")
+ava_cli_expect_json("${EVENT}" payload.result.timed_out "true")
+ava_cli_expect_json("${EVENT}" payload.result.ok "false")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompt" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompt" result.final_text "\"after bash process cleanup\"")
+ava_rpc_forbid("${AVA_OUTPUT}")
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
 if(EXISTS "${TEST_ROOT}" OR IS_SYMLINK "${TEST_ROOT}")

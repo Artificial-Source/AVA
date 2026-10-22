@@ -22,6 +22,9 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   set(AVA_TIMEOUT_15 "${AVA_DEBUG_SECONDS}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(15)
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(INPUT_FILE "${TEST_ROOT}/rpc-input.jsonl")
@@ -34,6 +37,7 @@ set(PLUGIN_RAN_FILE "${PLUGIN_DIR}/ran.txt")
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${PLUGIN_DIR}/prompts" "${PLUGIN_DIR}/skills" "${BAD_PLUGIN_DIR}" "${TEST_ROOT}/home"
                     "${TEST_ROOT}/config" "${TEST_ROOT}/state/ava" "${TEST_ROOT}/data")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
 file(REAL_PATH "${WORKSPACE}" REAL_WORKSPACE)
 file(WRITE "${TEST_ROOT}/state/ava/project-trust.json"
      "{\"schema_version\":1,\"decisions\":[{\"path\":\"${REAL_WORKSPACE}\",\"trusted\":true}]}\n")
@@ -76,12 +80,7 @@ file(WRITE "${INPUT_FILE}"
      "{\"id\":\"state\",\"type\":\"get_state\"}\n")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${TEST_ROOT}/home"
-          "XDG_CONFIG_HOME=${TEST_ROOT}/config"
-          "XDG_STATE_HOME=${TEST_ROOT}/state"
-          "XDG_DATA_HOME=${TEST_ROOT}/data"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --rpc
   WORKING_DIRECTORY "${WORKSPACE}"
   INPUT_FILE "${INPUT_FILE}"
@@ -95,46 +94,77 @@ if(NOT AVA_RESULT EQUAL 0)
   message(FATAL_ERROR "ava --rpc exited with ${AVA_RESULT}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
 endif()
 
-foreach(NEEDLE
-        "\"id\":\"plugins\""
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "plugins" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "plugins")
+ava_cli_expect_contains("${RESPONSE}"
         "com.example.rpc"
         "RPC Plugin"
         "0.1.0"
         "Failures: 1"
-        "\"id\":\"failures\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "failures" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "failures")
+ava_cli_expect_contains("${RESPONSE}"
         "Plugin integration request was rejected [invalid_request]."
-        "\"id\":\"inspect\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "inspect" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "inspect")
+ava_cli_expect_contains("${RESPONSE}"
         "entrypoint: /bin/sh plugin.sh (not executed)"
         "no plugin process is started yet"
-        "\"id\":\"validate\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "validate")
+ava_cli_expect_contains("${RESPONSE}"
         "Valid plugin manifest"
         "no entrypoint was executed"
-        "\"id\":\"prompts\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompts" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "prompts")
+ava_cli_expect_contains("${RESPONSE}"
         "review - Review prompt"
-        "\"id\":\"prompt\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompt" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "prompt")
+ava_cli_expect_contains("${RESPONSE}"
         "Prompt body from plugin"
-        "\"id\":\"skills\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "skills" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "skills")
+ava_cli_expect_contains("${RESPONSE}"
         "triage - Triage skill"
-        "\"id\":\"skill\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "skill" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "skill")
+ava_cli_expect_contains("${RESPONSE}"
         "Skill body from plugin"
-        "\"id\":\"enable\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "enable" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "enable")
+ava_cli_expect_contains("${RESPONSE}"
         "Enabled project plugin com.example.rpc."
         "No plugin process was started."
-        "\"id\":\"run\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "run" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "run")
+ava_cli_expect_contains("${RESPONSE}"
         "permission_denied: plugin command requires permission"
         "plugin subprocess execution requires explicit approval"
         "command: com.example.rpc"
         "resolution: deny"
-        "\"id\":\"disable\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "disable" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "disable")
+ava_cli_expect_contains("${RESPONSE}"
         "Disabled project plugin com.example.rpc."
         "No plugin process was stopped."
-        "\"id\":\"state\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.workspace_dir "\"${REAL_WORKSPACE}\"")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "state")
+ava_cli_expect_contains("${RESPONSE}"
         "\"workspace_dir\":\"${REAL_WORKSPACE}\"")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+ava_rpc_forbid("${AVA_OUTPUT}")
 
 foreach(FORBIDDEN
         "plugin manifest must be a valid JSON object"

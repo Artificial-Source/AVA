@@ -22,24 +22,23 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   set(AVA_TIMEOUT_15 "${AVA_DEBUG_SECONDS}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(15)
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(INPUT_FILE "${TEST_ROOT}/rpc-input.jsonl")
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}" "${TEST_ROOT}/home" "${TEST_ROOT}/config" "${TEST_ROOT}/state" "${TEST_ROOT}/data")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
 file(WRITE "${INPUT_FILE}"
      "{\"id\":\"proto\",\"type\":\"get_protocol\",\"protocol_version\":1}\n"
      "{\"id\":\"validate\",\"type\":\"validate_session\"}\n"
      "{\"id\":\"stats\",\"type\":\"get_session_stats\"}\n")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${TEST_ROOT}/home"
-          "XDG_CONFIG_HOME=${TEST_ROOT}/config"
-          "XDG_STATE_HOME=${TEST_ROOT}/state"
-          "XDG_DATA_HOME=${TEST_ROOT}/data"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --rpc
   WORKING_DIRECTORY "${WORKSPACE}"
   INPUT_FILE "${INPUT_FILE}"
@@ -53,17 +52,12 @@ if(NOT AVA_RESULT EQUAL 0)
   message(FATAL_ERROR "ava --rpc exited with ${AVA_RESULT}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
 endif()
 
-foreach(NEEDLE
-        "\"id\":\"proto\""
-        "\"protocol_version\":1"
-        "\"id\":\"validate\""
-        "\"ok\":true"
-        "\"error_count\":0"
-        "\"issues\":[]"
-        "\"id\":\"stats\""
-        "\"entry_count\":1")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "proto" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "proto" result.protocol_version "1")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate" result.ok "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate" result.error_count "0")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate" result.issues "[]")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "stats" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "stats" result.entry_count "1")
+ava_rpc_forbid("${AVA_OUTPUT}")

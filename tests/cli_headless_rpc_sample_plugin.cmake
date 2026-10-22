@@ -26,6 +26,9 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   set(AVA_TIMEOUT_15 "${AVA_DEBUG_SECONDS}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(15)
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 get_filename_component(SAMPLE_TODO_PLUGIN_DIR "${AVA_SAMPLE_TODO_PLUGIN_DIR}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
@@ -45,6 +48,7 @@ endif()
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}/.ava/plugins" "${TEST_ROOT}/home" "${TEST_ROOT}/config" "${TEST_ROOT}/state/ava"
                     "${TEST_ROOT}/data")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
 file(COPY "${SAMPLE_TODO_PLUGIN_DIR}/" DESTINATION "${PLUGIN_DIR}")
 file(READ "${PLUGIN_SCRIPT}" PLUGIN_SCRIPT_ORIGINAL)
 file(WRITE "${PLUGIN_SCRIPT}" "printf '%s\\n' plugin-entrypoint-ran > '${PLUGIN_RAN_FILE}'\n${PLUGIN_SCRIPT_ORIGINAL}")
@@ -67,12 +71,7 @@ file(WRITE "${INPUT_FILE}"
      "{\"id\":\"state\",\"type\":\"get_state\"}\n")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${TEST_ROOT}/home"
-          "XDG_CONFIG_HOME=${TEST_ROOT}/config"
-          "XDG_STATE_HOME=${TEST_ROOT}/state"
-          "XDG_DATA_HOME=${TEST_ROOT}/data"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --rpc
   WORKING_DIRECTORY "${WORKSPACE}"
   INPUT_FILE "${INPUT_FILE}"
@@ -86,12 +85,16 @@ if(NOT AVA_RESULT EQUAL 0)
   message(FATAL_ERROR "ava --rpc exited with ${AVA_RESULT}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
 endif()
 
-foreach(NEEDLE
-        "\"id\":\"plugins\""
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "plugins" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "plugins")
+ava_cli_expect_contains("${RESPONSE}"
         "com.example.todo"
         "Todo Sample Plugin"
         "0.1.0"
-        "\"id\":\"inspect\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "inspect" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "inspect")
+ava_cli_expect_contains("${RESPONSE}"
         "entrypoint: /bin/sh plugin.sh (not executed)"
         "capabilities: tools, commands, prompts, skills, event_hooks"
         "todo_add - Accept one todo item for the current AVA call."
@@ -100,7 +103,10 @@ foreach(NEEDLE
         "todo-triage - Triage a small implementation todo list."
         "event_hooks: 1"
         "no plugin process is started yet"
-        "\"id\":\"validate\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "validate" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "validate")
+ava_cli_expect_contains("${RESPONSE}"
         "Valid plugin manifest"
         "api_version: ava.plugin.v1"
         "tools: 1"
@@ -108,35 +114,56 @@ foreach(NEEDLE
         "prompts: 1"
         "skills: 1"
         "note: validation parsed the manifest only; no entrypoint was executed."
-        "\"id\":\"prompts\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompts" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "prompts")
+ava_cli_expect_contains("${RESPONSE}"
         "Plugin prompts for com.example.todo"
-        "\"id\":\"prompt\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "prompt" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "prompt")
+ava_cli_expect_contains("${RESPONSE}"
         "Plugin prompt com.example.todo/todo-review"
         "# Todo Review Prompt"
         "Identify the next concrete action."
-        "\"id\":\"skills\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "skills" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "skills")
+ava_cli_expect_contains("${RESPONSE}"
         "Plugin skills for com.example.todo"
-        "\"id\":\"skill\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "skill" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "skill")
+ava_cli_expect_contains("${RESPONSE}"
         "Plugin skill com.example.todo/todo-triage"
         "# Todo Triage Skill"
         "Group related todos by outcome."
-        "\"id\":\"enable\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "enable" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "enable")
+ava_cli_expect_contains("${RESPONSE}"
         "Enabled project plugin com.example.todo. No plugin process was started."
-        "\"id\":\"run\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "run" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "run")
+ava_cli_expect_contains("${RESPONSE}"
         "permission_denied: plugin command requires permission"
         "plugin subprocess execution requires explicit approval"
         "command: com.example.todo"
         "resolution: deny"
-        "\"id\":\"disable\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "disable" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "disable")
+ava_cli_expect_contains("${RESPONSE}"
         "Disabled project plugin com.example.todo. No plugin process was stopped."
-        "\"id\":\"state\""
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.workspace_dir "\"${REAL_WORKSPACE}\"")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "state")
+ava_cli_expect_contains("${RESPONSE}"
         "\"workspace_dir\":\"${REAL_WORKSPACE}\""
         "\"current_dir\":\"${REAL_WORKSPACE}\"")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+ava_rpc_forbid("${AVA_OUTPUT}")
 
 if(EXISTS "${PLUGIN_RAN_FILE}")
   message(FATAL_ERROR "fail-closed run_plugin_command executed sample plugin entrypoint unexpectedly\nstdout:\n${AVA_OUTPUT}")

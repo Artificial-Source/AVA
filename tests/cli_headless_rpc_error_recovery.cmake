@@ -22,12 +22,16 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   set(AVA_TIMEOUT_15 "${AVA_DEBUG_SECONDS}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(15)
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(INPUT_FILE "${TEST_ROOT}/rpc-input.jsonl")
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}" "${TEST_ROOT}/home" "${TEST_ROOT}/config" "${TEST_ROOT}/state" "${TEST_ROOT}/data")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
 file(WRITE "${INPUT_FILE}"
      "not json\n"
      "{\"id\":\"badver\",\"type\":\"get_state\",\"protocol_version\":999}\n"
@@ -38,12 +42,7 @@ file(WRITE "${INPUT_FILE}"
      "{\"id\":\"state\",\"type\":\"get_state\",\"protocol_version\":1}\n")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${TEST_ROOT}/home"
-          "XDG_CONFIG_HOME=${TEST_ROOT}/config"
-          "XDG_STATE_HOME=${TEST_ROOT}/state"
-          "XDG_DATA_HOME=${TEST_ROOT}/data"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --rpc
   WORKING_DIRECTORY "${WORKSPACE}"
   INPUT_FILE "${INPUT_FILE}"
@@ -57,25 +56,31 @@ if(NOT AVA_RESULT EQUAL 0)
   message(FATAL_ERROR "ava --rpc exited with ${AVA_RESULT}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
 endif()
 
-foreach(NEEDLE
-        "\"id\":\"\""
-        "malformed RPC JSON object"
-        "\"id\":\"badver\""
-        "unsupported RPC protocol version"
-        "\"id\":\"badver-type\""
-        "RPC protocol_version must be an integer"
-        "\"id\":\"missing-type\""
-        "RPC request requires a non-empty string type"
-        "\"id\":\"unknown\""
-        "unknown RPC command type"
-        "\"id\":\"reply-missing\""
-        "permission_reply requires request_id"
-        "\"id\":\"state\""
-        "\"success\":true"
-        "\"protocol_version\":1"
-        "\"cancel_requested\":false")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "" success "false")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "" error.category "\"invalid_argument\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "" error.code "\"invalid_request\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "" error.message "\"malformed RPC JSON object\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver" success "false")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver" error.category "\"invalid_argument\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver" error.code "\"invalid_request\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver" error.message "\"unsupported RPC protocol version\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver-type" success "false")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver-type" error.category "\"invalid_argument\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver-type" error.code "\"invalid_request\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "badver-type" error.message "\"RPC protocol_version must be an integer\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "missing-type" success "false")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "missing-type" error.category "\"invalid_argument\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "missing-type" error.code "\"invalid_request\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "missing-type" error.message "\"RPC request requires a non-empty string type\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "unknown" success "false")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "unknown" error.category "\"invalid_argument\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "unknown" error.code "\"invalid_request\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "unknown" error.message "\"unknown RPC command type\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "reply-missing" success "false")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "reply-missing" error.category "\"invalid_argument\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "reply-missing" error.code "\"invalid_request\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "reply-missing" error.message "\"permission_reply requires request_id\"")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.protocol_version "1")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.cancel_requested "false")
+ava_rpc_forbid("${AVA_OUTPUT}" "" "badver" "badver-type" "missing-type" "unknown" "reply-missing")

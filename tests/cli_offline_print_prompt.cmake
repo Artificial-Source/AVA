@@ -9,6 +9,8 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/test_timeout.cmake")
 ava_test_timeout(AVA_PROCESS_TIMEOUT 10)
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
 set(HOME_DIR "${TEST_ROOT}/home")
@@ -18,14 +20,10 @@ set(DATA_DIR "${TEST_ROOT}/data")
 
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}" "${HOME_DIR}" "${CONFIG_DIR}/ava" "${STATE_DIR}" "${DATA_DIR}")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${HOME_DIR}"
-          "XDG_CONFIG_HOME=${CONFIG_DIR}"
-          "XDG_STATE_HOME=${STATE_DIR}"
-          "XDG_DATA_HOME=${DATA_DIR}"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --offline --print "hello offline"
   WORKING_DIRECTORY "${WORKSPACE}"
   OUTPUT_VARIABLE AVA_OUTPUT

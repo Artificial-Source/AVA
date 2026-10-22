@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
+from cli_test_support import isolated_environment, run_owned
+from timeout_support import test_timeout
 import json
-import os
 from pathlib import Path
-import shutil
 import socket
 import stat
 import subprocess
@@ -29,17 +29,15 @@ def private_file(path: Path, text: str, mode: int = 0o600) -> None:
 
 
 def run(ava: Path, args: list[str], env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [str(ava), *args],
-        cwd=cwd,
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=10,
-        check=False,
-    )
+    return run_owned([str(ava), *args],
+    cwd=cwd,
+    env=env,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    timeout=test_timeout(10),
+    check=False,)
 
 
 def snapshot(root: Path) -> dict[str, tuple[int, int, str]]:
@@ -180,14 +178,13 @@ def seeded_environment(root: Path) -> tuple[dict[str, str], Path, socket.socket]
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
-    listener.settimeout(0.05)
+    listener.setblocking(False)
     host, port = listener.getsockname()
 
     libcwd_rcfile = root / "libcwdrc"
     private_file(libcwd_rcfile, "silent = on\nchannels_default = off\n")
 
-    env = os.environ.copy()
-    env.pop("LIBCWD_RCFILE_OVERRIDE_NAME", None)
+    env = isolated_environment(root)
     env.update(
         {
             "HOME": str(root / "home"),
@@ -206,88 +203,89 @@ def seeded_environment(root: Path) -> tuple[dict[str, str], Path, socket.socket]
 
 def test_doctor_and_support(ava: Path, root: Path) -> None:
     env, workspace, listener = seeded_environment(root)
-    before = snapshot(root)
+    with listener:
+        before = snapshot(root)
 
-    human = run(ava, ["doctor"], env, workspace)
-    assert human.returncode == 0, human.stderr
-    assert human.stdout.startswith("AVA doctor\n")
-    assert "version_platform" in human.stdout and "summary pass=" in human.stdout
-    assert_clean_output(human)
-    assert snapshot(root) == before, "passive human doctor mutated the filesystem"
+        human = run(ava, ["doctor"], env, workspace)
+        assert human.returncode == 0, human.stderr
+        assert human.stdout.startswith("AVA doctor\n")
+        assert "version_platform" in human.stdout and "summary pass=" in human.stdout
+        assert_clean_output(human)
+        assert snapshot(root) == before, "passive human doctor mutated the filesystem"
 
-    machine = run(ava, ["doctor", "--json"], env, workspace)
-    assert machine.returncode == 0, machine.stderr
-    report = json.loads(machine.stdout)
-    assert set(report) == {"schema_version", "checks", "summary"}
-    assert [check["label"] for check in report["checks"]] == [
-        "version_platform",
-        "config_root",
-        "state_root",
-        "model_registry",
-        "default_model",
-        "auth_metadata",
-        "plugin_configuration",
-        "mcp_configuration",
-        "lsp_configuration",
-        "lsp_builtin_clangd",
-        "permission_rules",
-    ]
-    checks = {check["label"]: check for check in report["checks"]}
-    assert checks["plugin_configuration"]["items"] == 1 and checks["plugin_configuration"]["errors"] == 0
-    assert checks["mcp_configuration"]["items"] == 1 and checks["mcp_configuration"]["enabled"] == 1
-    assert checks["lsp_configuration"]["items"] == 1 and checks["lsp_configuration"]["enabled"] == 1
-    assert checks["lsp_builtin_clangd"]["enabled"] == 1
-    assert checks["lsp_builtin_clangd"]["code"] in {"ready", "missing_optional", "unsafe_metadata"}
-    assert checks["permission_rules"]["items"] == 1
-    assert checks["auth_metadata"]["code"] == "unsafe_metadata"
-    assert_clean_output(machine)
-    assert snapshot(root) == before, "passive JSON doctor mutated the filesystem"
+        machine = run(ava, ["doctor", "--json"], env, workspace)
+        assert machine.returncode == 0, machine.stderr
+        report = json.loads(machine.stdout)
+        assert set(report) == {"schema_version", "checks", "summary"}
+        assert [check["label"] for check in report["checks"]] == [
+            "version_platform",
+            "config_root",
+            "state_root",
+            "model_registry",
+            "default_model",
+            "auth_metadata",
+            "plugin_configuration",
+            "mcp_configuration",
+            "lsp_configuration",
+            "lsp_builtin_clangd",
+            "permission_rules",
+        ]
+        checks = {check["label"]: check for check in report["checks"]}
+        assert checks["plugin_configuration"]["items"] == 1 and checks["plugin_configuration"]["errors"] == 0
+        assert checks["mcp_configuration"]["items"] == 1 and checks["mcp_configuration"]["enabled"] == 1
+        assert checks["lsp_configuration"]["items"] == 1 and checks["lsp_configuration"]["enabled"] == 1
+        assert checks["lsp_builtin_clangd"]["enabled"] == 1
+        assert checks["lsp_builtin_clangd"]["code"] in {"ready", "missing_optional", "unsafe_metadata"}
+        assert checks["permission_rules"]["items"] == 1
+        assert checks["auth_metadata"]["code"] == "unsafe_metadata"
+        assert_clean_output(machine)
+        assert snapshot(root) == before, "passive JSON doctor mutated the filesystem"
 
-    try:
-        listener.accept()
-        raise AssertionError("doctor accessed the provider network endpoint")
-    except TimeoutError:
-        pass
+        try:
+            listener.accept()
+            raise AssertionError("doctor accessed the provider network endpoint")
+        except BlockingIOError:
+            pass
 
-    for marker in ("marker-provider", "marker-plugin", "marker-mcp", "marker-lsp"):
-        assert not (workspace / marker).exists(), f"doctor launched configured process: {marker}"
-    assert not (root / "state" / "ava" / "sessions").exists(), "doctor created a session"
+        for marker in ("marker-provider", "marker-plugin", "marker-mcp", "marker-lsp"):
+            assert not (workspace / marker).exists(), f"doctor launched configured process: {marker}"
+        assert not (root / "state" / "ava" / "sessions").exists(), "doctor created a session"
 
-    first = run(ava, ["support", "export"], env, workspace)
-    second = run(ava, ["support", "export"], env, workspace)
-    assert first.returncode == second.returncode == 0
-    prefix = "Support artifact created: "
-    assert first.stdout.startswith(prefix) and first.stdout.endswith("\n")
-    assert second.stdout.startswith(prefix) and second.stdout.endswith("\n")
-    assert first.stdout != second.stdout
-    assert first.stderr == second.stderr == ""
-    assert_clean_output(first)
-    support_dir = root / "state" / "ava" / "support"
-    artifacts = sorted(support_dir.glob("ava-support-v1-*.json"))
-    reported = {Path(first.stdout[len(prefix):].strip()), Path(second.stdout[len(prefix):].strip())}
-    assert set(artifacts) == reported, "support export did not report its exact unique no-replace files"
-    assert len(artifacts) == 2, "support export did not publish unique no-replace files"
-    for artifact_path in artifacts:
-        metadata = artifact_path.stat()
-        assert stat.S_IMODE(metadata.st_mode) == 0o600 and metadata.st_nlink == 1
-        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-        assert set(artifact) == {"schema_version", "generated_at", "ava", "doctor", "trace", "last_failure"}
-        assert set(artifact["ava"]) == {"version", "os", "arch"}
-        assert artifact["trace"] == {"schema_version": 1, "state": "malformed"}
-        assert artifact["last_failure"] == {"schema_version": 1, "state": "malformed"}
-        text = artifact_path.read_text(encoding="utf-8")
-        assert CANARY not in text and REMOTE not in text
-    assert stat.S_IMODE(support_dir.stat().st_mode) == 0o700
-    assert not list(support_dir.glob(".support-tmp-*")), "partial support publication remained"
-    assert not (root / "state" / "ava" / "sessions").exists(), "support export created a session"
-    for marker in ("marker-provider", "marker-plugin", "marker-mcp", "marker-lsp"):
-        assert not (workspace / marker).exists(), f"support export launched configured process: {marker}"
-    try:
-        listener.accept()
-        raise AssertionError("support export accessed the provider network endpoint")
-    except TimeoutError:
-        pass
-    listener.close()
+        first = run(ava, ["support", "export"], env, workspace)
+        second = run(ava, ["support", "export"], env, workspace)
+        assert first.returncode == second.returncode == 0
+        prefix = "Support artifact created: "
+        assert first.stdout.startswith(prefix) and first.stdout.endswith("\n")
+        assert second.stdout.startswith(prefix) and second.stdout.endswith("\n")
+        assert first.stdout != second.stdout
+        assert first.stderr == second.stderr == ""
+        assert_clean_output(first)
+        support_dir = root / "state" / "ava" / "support"
+        artifacts = sorted(support_dir.glob("ava-support-v1-*.json"))
+        reported = {Path(first.stdout[len(prefix):].strip()), Path(second.stdout[len(prefix):].strip())}
+        assert set(artifacts) == reported, "support export did not report its exact unique no-replace files"
+        assert len(artifacts) == 2, "support export did not publish unique no-replace files"
+        for artifact_path in artifacts:
+            metadata = artifact_path.stat()
+            assert stat.S_IMODE(metadata.st_mode) == 0o600 and metadata.st_nlink == 1
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert set(artifact) == {"schema_version", "generated_at", "ava", "doctor", "trace", "last_failure"}
+            assert set(artifact["ava"]) == {"version", "os", "arch"}
+            assert artifact["trace"] == {"schema_version": 1, "state": "malformed"}
+            assert artifact["last_failure"] == {"schema_version": 1, "state": "malformed"}
+            text = artifact_path.read_text(encoding="utf-8")
+            assert CANARY not in text and REMOTE not in text
+        assert stat.S_IMODE(support_dir.stat().st_mode) == 0o700
+        assert not list(support_dir.glob(".support-tmp-*")), "partial support publication remained"
+        assert not (root / "state" / "ava" / "sessions").exists(), "support export created a session"
+        for marker in ("marker-provider", "marker-plugin", "marker-mcp", "marker-lsp"):
+            assert not (workspace / marker).exists(), f"support export launched configured process: {marker}"
+        try:
+            listener.accept()
+            raise AssertionError("support export accessed the provider network endpoint")
+        except BlockingIOError:
+            pass
+        listener.close()
 
 
 def test_usage_and_required_failure(ava: Path, root: Path) -> None:
@@ -300,8 +298,7 @@ def test_usage_and_required_failure(ava: Path, root: Path) -> None:
     (config_home / "ava").symlink_to(target, target_is_directory=True)
     libcwd_rcfile = root / "libcwdrc"
     private_file(libcwd_rcfile, "silent = on\nchannels_default = off\n")
-    env = os.environ.copy()
-    env.pop("LIBCWD_RCFILE_OVERRIDE_NAME", None)
+    env = isolated_environment(root)
     env.update({
         "HOME": str(root / "bad-home"),
         "XDG_CONFIG_HOME": str(config_home),
@@ -340,21 +337,13 @@ def main() -> int:
     parser.add_argument("--ava", type=Path, required=True)
     parser.add_argument("--root", type=Path)
     args = parser.parse_args()
-    if args.root:
-        root = args.root.resolve()
-        shutil.rmtree(root, ignore_errors=True)
-        private_dir(root)
-        cleanup = False
-    else:
-        root = Path(tempfile.mkdtemp(prefix="ava-doctor-support-"))
-        root.chmod(0o700)
-        cleanup = True
-    try:
+    parent = args.root.resolve() if args.root else None
+    if parent is not None:
+        private_dir(parent)
+    with tempfile.TemporaryDirectory(prefix="ava-doctor-support-", dir=parent) as temporary:
+        root = Path(temporary)
         test_doctor_and_support(args.ava.resolve(), root / "normal")
         test_usage_and_required_failure(args.ava.resolve(), root / "usage")
-    finally:
-        if cleanup:
-            shutil.rmtree(root, ignore_errors=True)
     return 0
 
 

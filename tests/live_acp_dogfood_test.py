@@ -2,6 +2,8 @@
 """Behavioral regressions for the bounded live ACP dogfood launcher."""
 
 import argparse
+from cli_test_support import isolated_environment, run_owned
+from timeout_support import test_timeout
 import os
 from pathlib import Path
 import socket
@@ -20,6 +22,7 @@ def write_executable(path, body):
 
 
 def clean_environment(root):
+    inherited = isolated_environment(root)
     env = {
         "HOME": str(root / "launcher-home"),
         "PATH": "/usr/bin:/bin",
@@ -32,6 +35,7 @@ def clean_environment(root):
         "LIBCWD_NO_STARTUP_MSGS": "1",
         "AVA_NO_DEBUG_OUTPUT": "1",
     }
+    env = {**inherited, **env}
     # Preserve only explicit debug-routing inputs from the parent; all other
     # developer environment remains excluded from this launcher fixture.
     for name in ("AVA_TEST_NAME", "AVA_DEBUG_OUTPUT_DIR", "LIBCWD_RCFILE_NAME", "LIBCWD_RCFILE_OVERRIDE_NAME"):
@@ -43,16 +47,14 @@ def clean_environment(root):
 
 def run_launcher(script, arguments, root, stdin=""):
     (root / "launcher-home").mkdir(exist_ok=True)
-    return subprocess.run(
-        [str(script), *arguments],
-        input=stdin,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=30,
-        check=False,
-        env=clean_environment(root),
-    )
+    return run_owned([str(script), *arguments],
+    input=stdin,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    timeout=test_timeout(30),
+    check=False,
+    env=clean_environment(root),)
 
 
 def common_arguments(ava, provider, zed, root_parent, preflight):
@@ -116,6 +118,8 @@ def assert_display_validation(script, root):
 
 def assert_startup_and_file_limit(script, root):
     ava = Path("/bin/true")
+    provider_release = root / "startup-provider-release"
+    os.mkfifo(provider_release, 0o600)
     provider = root / "fake-provider.py"
     write_executable(
         provider,
@@ -128,11 +132,11 @@ port = Path(sys.argv[1])
 port.write_text("12345\\n", encoding="utf-8")
 port.with_name("provider-pid").write_text(f"{os.getpid()}\\n", encoding="utf-8")
 if len(sys.argv) > 4 and sys.argv[4] == "text-delayed":
-    import time
-    time.sleep(0.2)
+    with Path(RELEASE_FIFO).open("rb", buffering=0) as release:
+        release.read(1)
     raise SystemExit(42)
 signal.pause()
-""",
+""".replace("RELEASE_FIFO", repr(str(provider_release))),
     )
     preflight = root / "preflight.txt"
     preflight.write_text("reviewed test boundary\n", encoding="utf-8")
@@ -165,10 +169,10 @@ raise SystemExit(0)
         limit_zed,
         f"""#!/usr/bin/python3
 from pathlib import Path
+import os
 import resource
 import signal
 import sys
-import time
 if len(sys.argv) > 1 and sys.argv[1] == "--version":
     print("Zed 1.9.0 {ZED_COMMIT}")
     raise SystemExit(0)
@@ -179,7 +183,10 @@ def stop(_signal, _frame):
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, stop)
 print("capture-started", flush=True)
-time.sleep(30)
+if Path(os.environ["AVA_ZED_DOGFOOD_PHASE_ROOT"]).name == "cancellation":
+    with Path({str(provider_release)!r}).open("wb", buffering=0) as release:
+        release.write(b"1")
+signal.pause()
 """,
     )
     limit_root = root / "limit-root"
@@ -209,14 +216,14 @@ time.sleep(30)
     write_executable(
         capped_zed,
         f"""#!/usr/bin/python3
+import signal
 import sys
-import time
 if len(sys.argv) > 1 and sys.argv[1] == "--version":
     print("Zed 1.9.0 {ZED_COMMIT}")
     raise SystemExit(0)
 sys.stdout.write("x" * (17 * 1024 * 1024))
 sys.stdout.flush()
-time.sleep(30)
+signal.pause()
 """,
     )
     capped_root = root / "capped-root"
@@ -306,6 +313,8 @@ def assert_cancellation_waits_for_provider_gate(script, root):
     assert len(reports) == 1
     assert "cancellation\tpass\tcancellation observed after provider gate" in reports[0].read_text(encoding="utf-8")
 
+    missing_release = root / "missing-request-release"
+    os.mkfifo(missing_release, 0o600)
     no_request_provider = root / "no-request-provider.py"
     write_executable(
         no_request_provider,
@@ -316,17 +325,17 @@ def assert_cancellation_waits_for_provider_gate(script, root):
             import signal
             import socket
             import sys
-            import time
 
             server = socket.socket()
             server.bind(("127.0.0.1", 0))
             server.listen(1)
             Path(sys.argv[1]).write_text(f"{server.getsockname()[1]}\\n", encoding="utf-8")
             if sys.argv[4] == "text-delayed":
-                time.sleep(0.2)
+                with Path(RELEASE_FIFO).open("rb", buffering=0) as release:
+                    release.read(1)
                 raise SystemExit(24)
             signal.pause()
-            """
+            """.replace("RELEASE_FIFO", repr(str(missing_release)))
         ),
     )
     idle_zed = root / "idle-zed.py"
@@ -335,11 +344,16 @@ def assert_cancellation_waits_for_provider_gate(script, root):
         textwrap.dedent(
             f"""\
             #!/usr/bin/python3
+            import os
+            from pathlib import Path
             import signal
             import sys
             if len(sys.argv) > 1 and sys.argv[1] == "--version":
                 print("Zed 1.9.0 {ZED_COMMIT}")
                 raise SystemExit(0)
+            if Path(os.environ["AVA_ZED_DOGFOOD_PHASE_ROOT"]).name == "cancellation":
+                with Path({str(missing_release)!r}).open("wb", buffering=0) as release:
+                    release.write(b"1")
             signal.pause()
             """
         ),

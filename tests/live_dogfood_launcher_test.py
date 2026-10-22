@@ -2,12 +2,16 @@
 """Offline destructive-root and privacy regressions for live dogfood launchers."""
 
 import argparse
+from contextlib import ExitStack
+from cli_test_support import isolated_environment, owned_popen, run_owned
+from timeout_support import test_timeout
 import os
 from pathlib import Path
 import shutil
 import stat
 import subprocess
 import tempfile
+import sys
 
 
 DUMMY_CREDENTIAL = "AVA_LIVE_DOGFOOD_DUMMY_KEY_NOT_A_SECRET"
@@ -36,7 +40,8 @@ def make_private_dir(path):
 
 
 def clean_environment(home, temporary, fake_ava, marker):
-    return {
+    env = isolated_environment(home.parent, temporary)
+    env.update({
         "HOME": str(home),
         "PATH": "/usr/bin:/bin",
         "TMPDIR": str(temporary),
@@ -48,20 +53,19 @@ def clean_environment(home, temporary, fake_ava, marker):
         "FAKE_AVA_EXECUTION_MARKER": str(marker),
         "LIBCWD_NO_STARTUP_MSGS": "1",
         "AVA_NO_DEBUG_OUTPUT": "1",
-    }
+    })
+    return env
 
 
 def run_launcher(script, env, cwd):
-    result = subprocess.run(
-        ["/bin/sh", str(script)],
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=15,
-        check=False,
-    )
+    result = run_owned(["/bin/sh", str(script)],
+    cwd=cwd,
+    env=env,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    timeout=test_timeout(15),
+    check=False,)
     combined = result.stdout + result.stderr
     assert DUMMY_CREDENTIAL not in combined
     return result
@@ -174,6 +178,9 @@ def assert_rejections_precede_execution(source, fake_ava, root, launcher):
         assert result.returncode != 0
         assert not marker.exists()
 
+    else:
+        print("SKIP: wrong-owner parent rejection requires root or a visible private directory owned by another uid", file=sys.stderr)
+
     assert (valid.exists() and symlink.is_symlink() and insecure.exists())
 
 
@@ -215,31 +222,32 @@ def assert_matrix_result(result, summary, target, marker):
 def assert_parallel_matrix_integration(source, fake_ava, root):
     matrix = source / "scripts/live-provider-matrix.sh"
     case_root = make_private_dir(root / "matrix")
-    processes = []
-    expectations = []
-    for index, target in enumerate(("model-dogfood", "coding-dogfood")):
-        invocation = make_private_dir(case_root / str(index))
-        home = make_private_dir(invocation / "home")
-        temporary = make_private_dir(invocation / "tmp")
-        marker = invocation / "fake-ava-ran.txt"
-        summary = invocation / "summary.tsv"
-        env = matrix_environment(home, temporary, fake_ava, marker, summary, target)
-        process = subprocess.Popen(
-            ["/bin/sh", str(matrix)],
-            cwd=source,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        processes.append(process)
-        expectations.append((summary, target, marker))
+    with ExitStack() as children:
+        processes = []
+        expectations = []
+        for index, target in enumerate(("model-dogfood", "coding-dogfood")):
+            invocation = make_private_dir(case_root / str(index))
+            home = make_private_dir(invocation / "home")
+            temporary = make_private_dir(invocation / "tmp")
+            marker = invocation / "fake-ava-ran.txt"
+            summary = invocation / "summary.tsv"
+            env = matrix_environment(home, temporary, fake_ava, marker, summary, target)
+            process = children.enter_context(owned_popen(
+                ["/bin/sh", str(matrix)],
+                cwd=source,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ))
+            processes.append(process)
+            expectations.append((summary, target, marker))
 
-    run_roots = [
-        assert_matrix_result(process, summary, target, marker)
-        for process, (summary, target, marker) in zip(processes, expectations)
-    ]
-    assert run_roots[0] != run_roots[1]
+        run_roots = [
+            assert_matrix_result(process, summary, target, marker)
+            for process, (summary, target, marker) in zip(processes, expectations)
+        ]
+        assert run_roots[0] != run_roots[1]
 
 
 def create_fake_ava(path):

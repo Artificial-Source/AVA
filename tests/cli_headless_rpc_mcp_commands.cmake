@@ -26,6 +26,9 @@ if(DEFINED ENV{AVA_DEBUG_NO_TIMEOUT})
   set(AVA_TIMEOUT_15 "${AVA_DEBUG_SECONDS}")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/cli_test_common.cmake")
+ava_cli_timeouts(15)
+
 get_filename_component(TEST_ROOT "${AVA_CLI_TEST_ROOT}" ABSOLUTE)
 get_filename_component(FAKE_MCP_SERVER "${AVA_FAKE_MCP_SERVER_EXE}" ABSOLUTE)
 set(WORKSPACE "${TEST_ROOT}/workspace")
@@ -38,6 +41,7 @@ string(REPLACE "\"" "\\\"" FAKE_MCP_SERVER_JSON "${FAKE_MCP_SERVER_JSON}")
 file(REMOVE_RECURSE "${TEST_ROOT}")
 file(MAKE_DIRECTORY "${WORKSPACE}/.ava" "${TEST_ROOT}/home" "${TEST_ROOT}/config" "${TEST_ROOT}/state/ava"
                     "${TEST_ROOT}/data")
+ava_cli_isolated_env(AVA_CLI_ENV "${TEST_ROOT}")
 file(REAL_PATH "${WORKSPACE}" REAL_WORKSPACE)
 file(WRITE "${TEST_ROOT}/state/ava/project-trust.json"
      "{\"schema_version\":1,\"decisions\":[{\"path\":\"${REAL_WORKSPACE}\",\"trusted\":true}]}\n")
@@ -52,12 +56,7 @@ file(WRITE "${INPUT_FILE}"
      "{\"id\":\"state\",\"type\":\"get_state\"}\n")
 
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -E env
-          "HOME=${TEST_ROOT}/home"
-          "XDG_CONFIG_HOME=${TEST_ROOT}/config"
-          "XDG_STATE_HOME=${TEST_ROOT}/state"
-          "XDG_DATA_HOME=${TEST_ROOT}/data"
-          "NO_COLOR=1"
+  COMMAND "${CMAKE_COMMAND}" -E env ${AVA_CLI_ENV}
           "${AVA_EXE}" --rpc
   WORKING_DIRECTORY "${WORKSPACE}"
   INPUT_FILE "${INPUT_FILE}"
@@ -71,24 +70,33 @@ if(NOT AVA_RESULT EQUAL 0)
   message(FATAL_ERROR "ava --rpc exited with ${AVA_RESULT}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
 endif()
 
-foreach(NEEDLE
-        "\"id\":\"mcp-list\""
-        "\"id\":\"mcp-inspect\""
-        "\"id\":\"mcp-tools\""
-        "\"id\":\"mcp-restart\""
-        "\"id\":\"state\""
-        "\"success\":true"
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "mcp-list" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "mcp-list")
+ava_cli_expect_contains("${RESPONSE}"
         "MCP servers:"
         "demo  enabled  project  Demo MCP"
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "mcp-inspect" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "mcp-inspect")
+ava_cli_expect_contains("${RESPONSE}"
         "MCP server demo"
         "command: ${FAKE_MCP_SERVER}"
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "mcp-tools" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "mcp-tools")
+ava_cli_expect_contains("${RESPONSE}"
         "MCP server launch requires permission"
         "permission_denied"
         "resolution: deny"
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "mcp-restart" success "true")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "mcp-restart")
+ava_cli_expect_contains("${RESPONSE}"
         "MCP server demo uses per-request stdio processes"
+)
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" success "true")
+ava_rpc_expect_in_line("${AVA_OUTPUT}" "state" result.workspace_dir "\"${REAL_WORKSPACE}\"")
+ava_rpc_response_line(RESPONSE "${AVA_OUTPUT}" "state")
+ava_cli_expect_contains("${RESPONSE}"
         "\"workspace_dir\":\"${REAL_WORKSPACE}\"")
-  string(FIND "${AVA_OUTPUT}" "${NEEDLE}" NEEDLE_INDEX)
-  if(NEEDLE_INDEX EQUAL -1)
-    message(FATAL_ERROR "ava --rpc output did not contain ${NEEDLE}\nstdout:\n${AVA_OUTPUT}\nstderr:\n${AVA_ERROR}")
-  endif()
-endforeach()
+ava_rpc_forbid("${AVA_OUTPUT}")
