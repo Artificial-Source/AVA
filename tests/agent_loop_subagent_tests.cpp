@@ -1174,14 +1174,14 @@ void test_agent_loop_task_subagent_does_not_inherit_parallel_read_search_schedul
     bool child_completed = !background;
     if (background)
     {
-      auto jobs = coordinator->list(store.session_id());
+      auto jobs = coordinator->list(store.options_r()->session_id);
       expect(jobs.size() == 1, "background child scheduling fixture publishes exactly one job");
       if (jobs.size() == 1)
       {
         auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         for (;;)
         {
-          auto waited = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::milliseconds(50));
+          auto waited = coordinator->wait(store.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::milliseconds(50));
           if (waited && waited->job.execution != ava::agent::SubagentExecutionState::Starting &&
               waited->job.execution != ava::agent::SubagentExecutionState::Running)
           {
@@ -1197,10 +1197,10 @@ void test_agent_loop_task_subagent_does_not_inherit_parallel_read_search_schedul
 
     auto const events = witness->snapshot();
     auto const parent_run = std::ranges::find_if(events, [&](ChildSchedulingEvent const& event) {
-      return event.kind == ChildSchedulingEvent::Kind::RunStart && event.session_id == store.session_id();
+      return event.kind == ChildSchedulingEvent::Kind::RunStart && event.session_id == store.options_r()->session_id;
     });
     auto const child_run = std::ranges::find_if(events, [&](ChildSchedulingEvent const& event) {
-      return event.kind == ChildSchedulingEvent::Kind::RunStart && event.parent_session_id == store.session_id();
+      return event.kind == ChildSchedulingEvent::Kind::RunStart && event.parent_session_id == store.options_r()->session_id;
     });
     expect(parent_run != events.end() && child_run != events.end(), "child scheduling fixture observes parent and child run lifecycles");
     if (parent_run == events.end() || child_run == events.end())

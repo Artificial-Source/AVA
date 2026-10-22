@@ -753,11 +753,11 @@ void test_agent_loop_provider_native_canceled_tasks()
     }
     if (coordinator)
     {
-      auto jobs = coordinator->list(store.session_id());
+      auto jobs = coordinator->list(store.options_r()->session_id);
       expect(jobs.size() == 1, "native-cancel child has exactly one coordinator job");
       if (jobs.empty())
         continue;
-      auto terminal = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::seconds(1));
+      auto terminal = coordinator->wait(store.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::seconds(1));
       if (provider_error)
       {
         expect(terminal && terminal->job.execution == ava::agent::SubagentExecutionState::Failed && !terminal->job.cancel_requested &&
