@@ -176,12 +176,8 @@ class Session : protected Session_aggregate_base
 
   // Accessors.
 
-  // Base class accessors.
-  //
-  // The non-const overload is used to replace the whole bundle on mode/model changes;
-  // the const overload lets callers copy it out of a const Session without naming the member directly.
-
-  InvocationInputs& invocation_inputs() { return invocation_inputs_; }
+  // Deliberately expose invocation inputs read-only: callers may not mutate these construction-time members.
+  // The sole exception is effective tool visibility, which has its own mutable tool_visibility() accessor.
   InvocationInputs const& invocation_inputs() const { return invocation_inputs_; }
 
   AgentSelection_ts& agent_selection() { return agent_selection_; }
@@ -214,6 +210,8 @@ class Session : protected Session_aggregate_base
   // Invocation inputs.
   std::filesystem::path workspace_dir() const { return Directories_ts::crat(directories_)->workspace_dir; }
   std::filesystem::path current_dir() const { return Directories_ts::crat(directories_)->current_dir; }
+  // Access effective tool visibility; mutation requires the caller to retain Session write access.
+  ava::agent::ToolVisibilityOptions& tool_visibility() { return invocation_inputs_.tool_visibility; }
   ava::agent::ToolVisibilityOptions const& tool_visibility() const { return invocation_inputs_.tool_visibility; }
   std::optional<std::string> const& requested_primary_agent() const { return invocation_inputs_.requested_primary_agent; }
   ava::config::XdgPaths const& paths() const { return invocation_inputs_.paths; }

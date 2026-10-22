@@ -7,10 +7,9 @@
 #include "ava/agent/todo.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/keybindings.h"
-#include "ava/tui/theme.h"
 #include "ava/config/model_config.h"
-#include "ava/session/compaction.h"
 #include "ava/session/Stats.h"
+#include "ava/session/compaction.h"
 #include "ava/permissions/permission.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/mode.h"
@@ -45,12 +44,6 @@ std::vector<ava::app::CommandHotkey> command_hotkeys_from_key_bindings(ava::tui:
     hotkeys.push_back(ava::app::CommandHotkey{.action = item.action, .description = item.label.empty() ? item.action : item.label, .keys = item.keys});
   }
   return hotkeys;
-}
-
-std::string display_theme_status(std::string_view prefix)
-{
-  auto const active = ava::tui::active_tui_theme();
-  return std::string(prefix) + ": " + active.name + " (" + active.badge + ")";
 }
 
 ava::tui::ProjectTrustSnapshot project_trust_snapshot(ava::app::ProjectTrustState const& state)

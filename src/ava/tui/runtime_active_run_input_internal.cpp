@@ -179,6 +179,23 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     static_cast<void>(transcript_search_.open(std::move(*search_query)));
     return renderer_.request_render();
   }
+  if (runtime_commands::local_display_settings_command(submitted_command) && options_.on_local_display_settings_action)
+  {
+    push_history(input_history, submitted_command);
+    clear_local_command_draft();
+    auto applied = options_.on_local_display_settings_action(submitted_command);
+    if (!applied)
+    {
+      open_command_error(snapshot, submitted_command, applied.error().format());
+      ava::core::Application::instance().terminal_context().beep();
+    }
+    else
+    {
+      presentation_state_.apply_local_display_settings(options_, std::move(applied->settings));
+      settle_local_command_completion(snapshot, submitted_command, std::move(applied->output));
+    }
+    return renderer_.request_render();
+  }
   if (submitted_command == "/details" || submitted_command == "/details compact" || submitted_command == "/details rich" ||
       submitted_command == "/details expanded")
   {

@@ -5,7 +5,6 @@
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,12 +14,8 @@
 namespace ava::tui {
 namespace {
 
-std::mutex& config_theme_mutex()
-{
-  static std::mutex mutex;
-  return mutex;
-}
-
+// Theme configuration, previews, and terminal-background observations belong to the TUI thread.
+// Backend command workers may persist settings, but application of those settings happens here only on that thread.
 std::optional<std::string>& config_theme_storage()
 {
   static std::optional<std::string> theme;
@@ -61,7 +56,8 @@ std::string lower_ascii(std::string_view text)
 {
   std::string lowered;
   lowered.reserve(text.size());
-  for (char const ch : text) lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+  for (char const ch : text)
+    lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
   return lowered;
 }
 
@@ -73,8 +69,10 @@ std::string theme_env_value()
 
 std::string_view trim_ascii(std::string_view text)
 {
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) text.remove_prefix(1);
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0) text.remove_suffix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
+    text.remove_prefix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+    text.remove_suffix(1);
   return text;
 }
 
@@ -132,13 +130,11 @@ std::optional<int> xterm_color_luminance(int index)
 
 std::optional<std::string> configured_theme_value()
 {
-  std::lock_guard lock(config_theme_mutex());
   return config_theme_storage();
 }
 
 std::optional<TuiCustomTheme> configured_custom_theme_value()
 {
-  std::lock_guard lock(config_theme_mutex());
   return config_custom_theme_storage();
 }
 
@@ -185,13 +181,9 @@ TuiThemeInfo theme_info_for_custom(TuiCustomTheme const& theme)
                       .revision = theme.revision};
 }
 
-std::optional<TuiThemeInfo> theme_info_for_detected_terminal_background()
+// Interpret the caller's optional terminal-background observation without reading frontend state.
+std::optional<TuiThemeInfo> theme_info_for_detected_terminal_background(std::optional<TerminalBackgroundAppearance> appearance)
 {
-  std::optional<TerminalBackgroundAppearance> appearance;
-  {
-    std::lock_guard lock(config_theme_mutex());
-    appearance = detected_terminal_background_storage();
-  }
   if (!appearance)
     return std::nullopt;
 
@@ -271,14 +263,12 @@ void set_tui_config_theme(std::optional<std::string> theme, std::optional<TuiCus
     *theme = lower_ascii(*theme);
   if (custom_theme)
     theme = custom_theme->name;
-  std::lock_guard lock(config_theme_mutex());
   config_theme_storage() = std::move(theme);
   config_custom_theme_storage() = std::move(custom_theme);
 }
 
 void set_tui_theme_preview(std::optional<TuiThemeInfo> preview)
 {
-  std::lock_guard lock(config_theme_mutex());
   if (preview)
   {
     // Ensure each preview identity invalidates composer style caches even when
@@ -301,13 +291,11 @@ void clear_tui_theme_preview()
 
 bool tui_theme_preview_active()
 {
-  std::lock_guard lock(config_theme_mutex());
   return theme_preview_storage().has_value();
 }
 
 void set_detected_terminal_background_appearance(std::optional<TerminalBackgroundAppearance> appearance)
 {
-  std::lock_guard lock(config_theme_mutex());
   detected_terminal_background_storage() = appearance;
 }
 
@@ -318,7 +306,6 @@ void reset_detected_terminal_background_appearance()
 
 std::optional<TerminalBackgroundAppearance> detected_terminal_background_appearance()
 {
-  std::lock_guard lock(config_theme_mutex());
   return detected_terminal_background_storage();
 }
 
@@ -327,17 +314,14 @@ bool tui_theme_needs_terminal_background_probe()
   return theme_selection_is_automatic();
 }
 
-TuiThemeInfo active_tui_theme()
+// Resolve supplied configuration and optional terminal detection against environment precedence.
+// This never reads or changes the frontend's stored configuration or preview overlay.
+TuiThemeInfo resolve_tui_theme(std::optional<std::string> const& configured, std::optional<TuiCustomTheme> const& custom_theme,
+                               std::optional<TerminalBackgroundAppearance> detected_background)
 {
   if (env_enabled("NO_COLOR"))
   {
     return TuiThemeInfo{.kind = TuiThemeKind::Plain, .name = "plain", .detail = "NO_COLOR disables ANSI styling", .badge = "NO_COLOR"};
-  }
-
-  {
-    std::lock_guard lock(config_theme_mutex());
-    if (theme_preview_storage())
-      return *theme_preview_storage();
   }
 
   auto const requested = theme_env_value();
@@ -346,17 +330,15 @@ TuiThemeInfo active_tui_theme()
     return *env_theme;
   }
 
-  auto const configured = configured_theme_value();
   if (configured)
   {
     if (auto config_theme = theme_info_for_request(*configured, "display.json"))
       return *config_theme;
-    auto const custom_theme = configured_custom_theme_value();
     if (custom_theme && custom_theme->name == *configured)
       return theme_info_for_custom(*custom_theme);
   }
 
-  if (auto detected_theme = theme_info_for_detected_terminal_background())
+  if (auto detected_theme = theme_info_for_detected_terminal_background(detected_background))
     return *detected_theme;
 
   if (auto terminal_theme = theme_info_for_terminal_background())
@@ -368,6 +350,14 @@ TuiThemeInfo active_tui_theme()
                       .badge = requested.empty() ? std::string("built-in") : std::string("built-in fallback"),
                       .palette = std::nullopt,
                       .revision = requested.empty() ? std::string("built-in-dark") : std::string("built-in-dark-fallback")};
+}
+
+// Read the UI-owned preview and effective theme on the TUI thread; NO_COLOR overrides previews too.
+TuiThemeInfo active_tui_theme()
+{
+  if (!env_enabled("NO_COLOR") && theme_preview_storage())
+    return *theme_preview_storage();
+  return resolve_tui_theme(config_theme_storage(), config_custom_theme_storage(), detected_terminal_background_storage());
 }
 
 bool tui_plain_output()

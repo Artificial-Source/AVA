@@ -223,7 +223,7 @@ ava::core::Result<ProjectTrustApplyResult> apply_project_trust_operation(runtime
         effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
 
       session_w->trust_state().project_trust = next_trust;
-      session_w->invocation_inputs().tool_visibility = std::move(effective_tool_visibility);
+      session_w->tool_visibility() = std::move(effective_tool_visibility);
       {
         runtime::AgentSelection_ts::wat agent_selection_w(session_w->agent_selection());
         agent_selection_w->selected_primary_agent = std::move(selected_primary_agent);

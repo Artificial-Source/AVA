@@ -507,14 +507,14 @@ void test_session_specific_catalog_notifications_survive_navigation()
     SCOPED_CRITICAL_AREA_CR(current_r, unlocked_current);
     return ava::session::build_session_tree(current_r->workspace_dir(), current_r->paths().sessions_dir, current_r->store.options_r()->session_id);
   };
-  auto cache = ava::app::build_application_catalog_cache(unlocked_old_session, {}, workspace_walker, tree_builder);
+  auto cache = ava::app::build_application_catalog_cache(unlocked_old_session, workspace_walker, tree_builder);
   ava::app::ApplicationCatalogCoordinator catalog(std::move(cache));
 
   ava::app::runtime::RunOptions options;
   coordinator->schedule(unlocked_old_session, "Fallback Old Session Catalog Title", *committed, options);
   expect(state->wait_started(), "session-specific title refinement blocks after durable fallback notification");
   auto fallback_changes = coordinator->catalog_changes_since(0);
-  auto fallback_refresh = catalog.refresh_title_changes(unlocked_old_session, fallback_changes, {}, tree_builder);
+  auto fallback_refresh = catalog.refresh_title_changes(unlocked_old_session, fallback_changes, tree_builder);
   catalog.retarget_session(new_session_id);
   auto after_fallback = catalog.snapshot();
   auto old_after_fallback =
@@ -527,9 +527,9 @@ void test_session_specific_catalog_notifications_survive_navigation()
   state->allow_completion();
   expect(coordinator->wait_until_idle(3s), "session-specific old-session refinement becomes idle after navigation");
   auto refinement_changes = coordinator->catalog_changes_since(catalog.title_catalog_cursor());
-  auto topology_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_new_session, refinement_changes, {}, tree_builder);
+  auto topology_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_new_session, refinement_changes, tree_builder);
   auto remaining_changes = coordinator->catalog_changes_since(catalog.title_catalog_cursor());
-  auto duplicate_refresh = topology_refresh ? catalog.refresh_title_changes(unlocked_new_session, remaining_changes, {}, tree_builder)
+  auto duplicate_refresh = topology_refresh ? catalog.refresh_title_changes(unlocked_new_session, remaining_changes, tree_builder)
                                             : ava::core::Result<bool>(std::unexpected(topology_refresh.error()));
   auto after_refinement = catalog.snapshot();
   auto selector = ava::app::application_catalog_session_view(catalog, ava::app::SessionSelectorSort::Recent, {});
@@ -547,8 +547,8 @@ void test_session_specific_catalog_notifications_survive_navigation()
   coordinator->schedule(unlocked_late_session, "Late Session Notification Title", *late_committed, options);
   expect(coordinator->wait_until_idle(3s), "late title notification arriving after the topology capture becomes idle");
   auto late_changes = coordinator->catalog_changes_since(catalog.title_catalog_cursor());
-  auto late_refresh = catalog.refresh_title_changes(unlocked_new_session, late_changes, {}, tree_builder);
-  auto late_duplicate = late_refresh ? catalog.refresh_title_changes(unlocked_new_session, late_changes, {}, tree_builder) : late_refresh;
+  auto late_refresh = catalog.refresh_title_changes(unlocked_new_session, late_changes, tree_builder);
+  auto late_duplicate = late_refresh ? catalog.refresh_title_changes(unlocked_new_session, late_changes, tree_builder) : late_refresh;
   auto after_late = catalog.snapshot();
   auto late_node = std::ranges::find_if(after_late.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == late_session_id; });
   expect(late_changes.cursor == 4 && late_changes.dirty_session_ids == std::vector<std::string>{late_session_id} && late_refresh && *late_refresh &&

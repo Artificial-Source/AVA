@@ -112,19 +112,33 @@ struct TuiRuntimeStateSnapshot
   // When present, identical generations let runtime snapshots reuse the
   // existing workspace references without invalidating completion rankings.
   std::optional<std::size_t> workspace_catalog_generation = std::nullopt;
-  std::vector<ThemeOptionItem> custom_themes = {};
-  std::optional<ProjectTrustSnapshot> project_trust = std::nullopt;
   // Presentation hydration for the latest committed todowrite snapshot.
   std::vector<TodoItem> todos = {};
-  // Effective display presentation owned by the application display document.
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
+// TUI-thread-only effective display values. This local presentation is never
+// published by a backend worker or stored in backend runtime state.
+struct TuiLocalDisplaySettings
+{
+  std::vector<ThemeOptionItem> custom_themes = {};
   bool show_images = true;
   std::size_t image_width_cells = 60;
   terminal::CursorSettings cursor{terminal::CursorStyle::Default};
   std::uint64_t mermaid_config_epoch = 0;
   bool mermaid_enabled = false;
-  // Application-owned path-free startup/resources snapshot. Omitted rather than
-  // rebuilt by the TUI. Never contains paths, credentials, or prompt contents.
-  std::optional<StartupOverviewSnapshot> startup_overview = std::nullopt;
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
+// Result of a local display load or persistence action. Applied is represented
+// by the presence of this value even when every effective value is unchanged.
+struct TuiLocalDisplaySettingsResult
+{
+  TuiLocalDisplaySettings settings;
+  std::string status;
+  std::vector<std::string> output;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -160,14 +174,6 @@ struct TuiSubmitResult
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-struct TuiKeyBindingReloadResult
-{
-  TuiKeyBindings key_bindings = default_key_bindings();
-  TuiRuntimeStateSnapshot state;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
 struct TuiSubmitContext
 {
   // One exact identity for this submitted turn. The event envelope and backend
@@ -184,6 +190,10 @@ struct TuiSubmitContext
   ava::agent::SubagentLaunchSink on_subagent_launch;
   std::optional<TuiPluginUiEndpoint> plugin_ui;
   std::vector<ava::session::ImageAttachmentRef> image_attachments;
+  // Immutable presentation bindings captured on the TUI thread before the
+  // submit worker starts. Backend help rendering may derive request-local
+  // labels from this copy but must never retain the mutable UI owner.
+  TuiKeyBindings key_bindings = default_key_bindings();
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -204,8 +214,8 @@ enum class SubagentWorkspacePromoteOutcome
   PromotionUnavailable,
 };
 
-// Narrow TUI outcome for application-owned display settings polls.
-// Applied means the app delivered a fresh authoritative snapshot; callers must not
+// Narrow TUI outcome for frontend-owned display settings polls.
+// Applied means the local owner delivered a fresh effective result; callers must not
 // infer applied/unchanged by comparing presentation values under an active overlay.
 enum class DisplaySettingsReloadPollOutcome
 {
@@ -294,13 +304,8 @@ struct TuiRuntimeOptions
   std::optional<std::size_t> slash_catalog_generation = std::nullopt;
   std::vector<FileReferenceItem> file_references = {};
   std::optional<std::size_t> workspace_catalog_generation = std::nullopt;
-  std::vector<ThemeOptionItem> custom_themes = {};
-  std::optional<ProjectTrustSnapshot> project_trust = std::nullopt;
   std::vector<TodoItem> initial_todos = {};
-  bool show_images = true;
-  std::size_t image_width_cells = 60;
-  terminal::CursorSettings cursor{terminal::CursorStyle::Default};
-  std::optional<StartupOverviewSnapshot> startup_overview = std::nullopt;
+  TuiLocalDisplaySettings initial_display_settings;
   TuiMermaidRenderBridge mermaid_render;
   TuiKeyBindings key_bindings = default_key_bindings();
   // Reads the backend's currently committed session identity. The application
@@ -308,6 +313,12 @@ struct TuiRuntimeOptions
   // TUI calls it only at serialized action/completion boundaries and never
   // while holding its UI lock.
   std::function<std::string()> read_committed_session_id;
+  // UI-thread popup initialization callbacks. Inputs: none. Outputs: owning,
+  // already-filtered DTOs from current in-memory Session state. Side effects:
+  // briefly acquire the backend Session read guard. Call once per popup open,
+  // never during ordinary snapshot application or rendering.
+  std::function<StartupOverviewSnapshot()> read_startup_overview;
+  std::function<ProjectTrustSnapshot()> read_project_trust;
   // Called on the TUI main thread at startup and after a submit worker completes; never from render/spinner loops.
   std::function<void()> refresh_session_statistics;
   std::function<TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;
@@ -319,12 +330,16 @@ struct TuiRuntimeOptions
   std::function<ava::core::Result<std::string>()> on_toggle_mode;
   std::function<ava::core::Result<std::string>()> on_cycle_reasoning;
   std::function<ava::core::Result<TuiRuntimeStateSnapshot>(bool)> on_cycle_model;
-  std::function<ava::core::Result<TuiKeyBindingReloadResult>()> on_reload_key_bindings;
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>()> on_reload_display_settings;
-  // Optional snapshot is the explicit applied/unchanged signal from the application:
-  // nullopt = unchanged, some(snapshot) = applied. unexpected = terminal apply/watch failure.
+  // Loads validated bindings for application by the TUI thread. The callback
+  // must not refresh backend catalogs or return backend runtime snapshots.
+  std::function<ava::core::Result<TuiKeyBindings>()> on_reload_key_bindings;
+  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>()> on_reload_display_settings;
+  // Optional local result is the explicit applied/unchanged signal from the frontend owner:
+  // nullopt = unchanged, some(result) = applied. unexpected = terminal apply/watch failure.
   // The TUI action layer maps this to DisplaySettingsReloadPollOutcome and must not compare values.
-  std::function<ava::core::Result<std::optional<TuiRuntimeStateSnapshot>>()> on_maybe_reload_display_settings;
+  std::function<ava::core::Result<std::optional<TuiLocalDisplaySettingsResult>>()> on_maybe_reload_display_settings;
+  // Persists and applies a recognized display command or settings action on the TUI thread.
+  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>(std::string_view)> on_local_display_settings_action;
   std::function<SelectListView()> model_selector_view;
   // The bool is true for the staged model-selection handoff, allowing an
   // accurate "Esc keep default" footer. No value means no configurable mode.

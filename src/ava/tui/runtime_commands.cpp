@@ -8,16 +8,20 @@ namespace {
 
 bool starts_with_command_submission(std::string_view submitted, std::string_view command)
 {
-  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.front())) != 0) submitted.remove_prefix(1);
-  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.back())) != 0) submitted.remove_suffix(1);
+  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.front())) != 0)
+    submitted.remove_prefix(1);
+  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.back())) != 0)
+    submitted.remove_suffix(1);
   return submitted == command ||
          (submitted.starts_with(command) && submitted.size() > command.size() && std::isspace(static_cast<unsigned char>(submitted[command.size()])) != 0);
 }
 
 std::string trim_view_to_string(std::string_view text)
 {
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) text.remove_prefix(1);
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0) text.remove_suffix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
+    text.remove_prefix(1);
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+    text.remove_suffix(1);
   return std::string(text);
 }
 
@@ -35,8 +39,10 @@ bool shell_helper_submission(std::string_view submitted)
 
 bool exact_command(std::string_view submitted, std::string_view command)
 {
-  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.front())) != 0) submitted.remove_prefix(1);
-  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.back())) != 0) submitted.remove_suffix(1);
+  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.front())) != 0)
+    submitted.remove_prefix(1);
+  while (!submitted.empty() && std::isspace(static_cast<unsigned char>(submitted.back())) != 0)
+    submitted.remove_suffix(1);
   return submitted == command;
 }
 
@@ -45,6 +51,12 @@ bool session_switching_command(std::string_view submitted)
   return starts_with_command_submission(submitted, "/new") || starts_with_command_submission(submitted, "/clear") ||
          starts_with_command_submission(submitted, "/resume") || starts_with_command_submission(submitted, "/fork") ||
          starts_with_command_submission(submitted, "/clone");
+}
+
+bool local_display_settings_command(std::string_view submitted)
+{
+  return starts_with_command_submission(submitted, "/theme") || starts_with_command_submission(submitted, "/images") ||
+         starts_with_command_submission(submitted, "/image-width") || starts_with_command_submission(submitted, "/cursor");
 }
 
 std::optional<std::string> reload_command_argument(std::string_view submitted)

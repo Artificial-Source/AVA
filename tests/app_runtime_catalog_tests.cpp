@@ -89,7 +89,7 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
     return tree;
   };
 
-  auto cache = ava::app::build_application_catalog_cache(unlocked_session, {}, workspace_walker, tree_builder);
+  auto cache = ava::app::build_application_catalog_cache(unlocked_session, workspace_walker, tree_builder);
   auto const session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
   auto const projected_slash_commands = ava::app::project_slash_command_items(cache.slash_commands);
   auto const* read_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/read");
@@ -125,12 +125,12 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
              cache.operations.value_refreshes == operation_counts_before_retarget.value_refreshes,
          "current-session retarget changes only cached tree values and performs no catalog rebuild");
 
-  ava::app::refresh_application_catalog_values(cache, unlocked_session, {});
+  ava::app::refresh_application_catalog_values(cache, unlocked_session);
   expect(workspace_walks == 1 && session_tree_builds == 1, "display and model-equivalent catalog refreshes do not walk workspace or session metadata");
-  ava::app::refresh_application_workspace_catalog(cache, unlocked_session, {}, workspace_walker);
+  ava::app::refresh_application_workspace_catalog(cache, unlocked_session, workspace_walker);
   expect(workspace_walks == 2 && session_tree_builds == 1 && cache.operations.workspace_walks == 2,
          "explicit workspace mutation invalidation performs exactly one fresh walk");
-  ava::app::refresh_application_session_tree(cache, unlocked_session, {}, tree_builder);
+  ava::app::refresh_application_session_tree(cache, unlocked_session, tree_builder);
   expect(workspace_walks == 2 && session_tree_builds == 2 && cache.operations.session_tree_builds == 2,
          "explicit session metadata mutation invalidation performs exactly one fresh tree build");
 
@@ -203,7 +203,7 @@ void test_application_catalog_coordinator_serializes_refresh_and_snapshot()
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
 
-  auto cache = ava::app::build_application_catalog_cache(unlocked_session, {}, [](ava::app::runtime::session_ts const&) {
+  auto cache = ava::app::build_application_catalog_cache(unlocked_session, [](ava::app::runtime::session_ts const&) {
     return std::vector<ava::app::WorkspacePathCandidate>{ava::app::WorkspacePathCandidate{.value = "old.cpp", .description = "old file", .directory = false}};
   });
   ava::app::ApplicationCatalogCoordinator catalog(std::move(cache));
@@ -221,7 +221,7 @@ void test_application_catalog_coordinator_serializes_refresh_and_snapshot()
   bool release_walker = false;
   bool refresh_finished = false;
   std::thread refresh([&]() {
-    catalog.refresh_workspace(unlocked_session, {}, [&](ava::app::runtime::session_ts const&) {
+    catalog.refresh_workspace(unlocked_session, [&](ava::app::runtime::session_ts const&) {
       std::unique_lock lock(mutex);
       walker_started = true;
       changed.notify_all();
@@ -244,7 +244,7 @@ void test_application_catalog_coordinator_serializes_refresh_and_snapshot()
       display_refresh_started = true;
       changed.notify_all();
     }
-    catalog.refresh_values(unlocked_session, {});
+    catalog.refresh_values(unlocked_session);
   });
   {
     std::unique_lock lock(mutex);
@@ -313,7 +313,7 @@ void test_application_catalog_current_session_incremental_refresh()
   auto const append_target = ava::app::runtime::session_ts::rat(unlocked_session)->append_target();
 
   std::size_t workspace_walks = 0;
-  auto cache = ava::app::build_application_catalog_cache(unlocked_session, {}, [&](ava::app::runtime::session_ts const&) {
+  auto cache = ava::app::build_application_catalog_cache(unlocked_session, [&](ava::app::runtime::session_ts const&) {
     ++workspace_walks;
     return std::vector<ava::app::WorkspacePathCandidate>{};
   });
@@ -333,8 +333,7 @@ void test_application_catalog_current_session_incremental_refresh()
                                              .data_json = R"({"text":"ordinary turn"})"};
   auto fallback_appended = fallback ? append_target->append(*fallback) : ava::core::VoidResult(std::unexpected(fallback.error()));
   auto activity_appended = fallback_appended ? append_target->append(activity) : fallback_appended;
-  auto refreshed =
-      activity_appended ? catalog.refresh_current_session(unlocked_session, {}) : ava::core::Result<bool>(std::unexpected(activity_appended.error()));
+  auto refreshed = activity_appended ? catalog.refresh_current_session(unlocked_session) : ava::core::Result<bool>(std::unexpected(activity_appended.error()));
   auto after_fallback = catalog.snapshot();
   auto fallback_view = ava::app::application_catalog_session_view(catalog, ava::app::SessionSelectorSort::Recent, {});
   auto current = std::ranges::find_if(after_fallback.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });
@@ -370,21 +369,21 @@ void test_application_catalog_current_session_incremental_refresh()
     return ava::session::build_session_tree(current_r->workspace_dir(), current_r->paths().sessions_dir, current_r->store.options_r()->session_id);
   };
   auto const captured_before_topology = ava::app::SessionTitleCatalogChanges{.cursor = 8, .dirty_session_ids = {"old_session_dirty_before_switch"}};
-  auto topology_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_session, captured_before_topology, {}, successful_tree_builder);
-  auto duplicate_after_topology = topology_refresh ? catalog.refresh_title_changes(unlocked_session, captured_before_topology, {}, successful_tree_builder)
+  auto topology_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_session, captured_before_topology, successful_tree_builder);
+  auto duplicate_after_topology = topology_refresh ? catalog.refresh_title_changes(unlocked_session, captured_before_topology, successful_tree_builder)
                                                    : ava::core::Result<bool>(std::unexpected(topology_refresh.error()));
   auto const late_notification = ava::app::SessionTitleCatalogChanges{.cursor = 9, .dirty_session_ids = {session_id}};
-  auto late_refresh = duplicate_after_topology ? catalog.refresh_title_changes(unlocked_session, late_notification, {}, successful_tree_builder)
+  auto late_refresh = duplicate_after_topology ? catalog.refresh_title_changes(unlocked_session, late_notification, successful_tree_builder)
                                                : ava::core::Result<bool>(std::unexpected(duplicate_after_topology.error()));
 
   auto const failed_capture = ava::app::SessionTitleCatalogChanges{.cursor = 10, .dirty_session_ids = {"old_session_dirty_before_failed_rebuild"}};
   auto failed_refresh = catalog.refresh_session_tree_and_consume_title_changes(
-      unlocked_session, failed_capture, {}, [&](ava::app::runtime::session_ts const&) -> ava::core::Result<ava::session::SessionTreeIndex> {
+      unlocked_session, failed_capture, [&](ava::app::runtime::session_ts const&) -> ava::core::Result<ava::session::SessionTreeIndex> {
         ++topology_build_calls;
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "deterministic topology rebuild failure"));
       });
   auto const cursor_after_failure = catalog.title_catalog_cursor();
-  auto retry_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_session, failed_capture, {}, successful_tree_builder);
+  auto retry_refresh = catalog.refresh_session_tree_and_consume_title_changes(unlocked_session, failed_capture, successful_tree_builder);
   auto const after_topology_retry = catalog.snapshot();
   auto retry_current =
       std::ranges::find_if(after_topology_retry.session_tree->sessions, [&](auto const& node) { return node.summary.session_id == session_id; });

@@ -229,7 +229,7 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
-  terminal_context.apply_cursor_settings(options.cursor);
+  terminal_context.apply_cursor_settings(options.initial_display_settings.cursor);
   // Probe the direct terminal background once after enter and before first paint.
   // No re-probe on suspend/resume and no late theme flip after presentation starts.
   TerminalBackgroundDetectionGuard terminal_background_detection;
@@ -286,8 +286,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
   } branch_summary_ui;
   bool branch_summary_exit_ready = false;
   auto apply_runtime_state_snapshot = [&](TuiRuntimeStateSnapshot state) {
-    // Shared path with active-run: apply DTO then rebuild any open overview in place.
-    apply_runtime_state_snapshot_with_overview_sync(options, presentation_state, active_select_list, std::move(state));
+    // Shared path with active-run; popup-only facts remain local and untouched.
+    apply_runtime_state_snapshot_preserving_popups(options, presentation_state, std::move(state));
   };
   SettingsNavigationState settings_nav;
   bool settings_session_open = false;
@@ -1102,10 +1102,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
             }
             else
             {
-              options.key_bindings = std::move(reloaded->key_bindings);
-              snapshot.active_run_hint = active_run_hint_for(options.key_bindings);
-              // Success feedback stays on the transient status surface from the applied DTO.
-              apply_runtime_state_snapshot(std::move(reloaded->state));
+              presentation_state.apply_local_key_bindings(options, std::move(*reloaded));
+              snapshot.status = "keybindings reloaded";
             }
           }
         }
@@ -1144,6 +1142,26 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
         {
           snapshot.status = "settings action unavailable from this row";
           do_beep(terminal_context);
+        }
+        else if (settings_nav.in_display() && options.on_local_display_settings_action)
+        {
+          auto const confirm_token = selected_value;
+          clear_settings_preview();
+          auto selected = options.on_local_display_settings_action(confirm_token);
+          if (selected)
+          {
+            auto status = selected->status;
+            presentation_state.apply_local_display_settings(options, std::move(selected->settings));
+            begin_settings_preview_baseline();
+            rebuild_settings_view(settings_nav.section, current_query, current_selected);
+            snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
+          }
+          else
+          {
+            snapshot.status = selected.error().format();
+            begin_settings_preview_baseline();
+            do_beep(terminal_context);
+          }
         }
         else if (options.on_settings_selected)
         {
@@ -1536,6 +1554,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
         }
         auto const resolved_list = active_select_list;
         snapshot.select_list.reset();
+        if (resolved_list == ActiveSelectList::Overview)
+          snapshot.startup_overview.reset();
         active_select_list = ActiveSelectList::None;
         session_archive_confirmation.reset();
         if (input_result.action == SelectListInputAction::Cancel)
@@ -1597,10 +1617,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
             }
             else
             {
-              options.key_bindings = std::move(reloaded->key_bindings);
-              snapshot.active_run_hint = active_run_hint_for(options.key_bindings);
-              // Success feedback stays on the transient status surface from the applied DTO.
-              apply_runtime_state_snapshot(std::move(reloaded->state));
+              presentation_state.apply_local_key_bindings(options, std::move(*reloaded));
+              snapshot.status = "keybindings reloaded";
             }
           }
         }
@@ -1691,6 +1709,25 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           settle_local_command_status(snapshot, decision.status);
           if (decision.beep)
             do_beep(terminal_context);
+        }
+        else if (resolved_list == ActiveSelectList::Settings && settings_nav.in_display() && options.on_local_display_settings_action)
+        {
+          clear_settings_preview();
+          auto selected = options.on_local_display_settings_action(selected_value);
+          if (selected)
+          {
+            auto status = selected->status;
+            presentation_state.apply_local_display_settings(options, std::move(selected->settings));
+            begin_settings_preview_baseline();
+            rebuild_settings_view(settings_nav.section);
+            snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
+          }
+          else
+          {
+            snapshot.status = selected.error().format();
+            begin_settings_preview_baseline();
+            do_beep(terminal_context);
+          }
         }
         else if (resolved_list == ActiveSelectList::Settings && options.on_settings_selected)
         {
@@ -2633,9 +2670,8 @@ void TuiRuntimeOptions::print_on(std::ostream& os) const
   os << '{' << "app_version:" << app_version << ", initial_status:" << initial_status << ", initial_transcript:" << initial_transcript
      << ", slash_commands:{...}"
      << ", slash_catalog_generation:" << slash_catalog_generation << ", file_references:" << file_references
-     << ", workspace_catalog_generation:" << workspace_catalog_generation << ", custom_themes:" << custom_themes << ", project_trust:" << project_trust
-     << ", initial_todos:" << initial_todos << ", show_images:" << show_images << ", image_width_cells:" << image_width_cells << ", cursor:" << cursor
-     << ", startup_overview:" << startup_overview << ", mermaid_render:" << mermaid_render << ", key_bindings:{...}" << '}';
+     << ", workspace_catalog_generation:" << workspace_catalog_generation << ", initial_todos:" << initial_todos
+     << ", initial_display_settings:" << initial_display_settings << ", mermaid_render:" << mermaid_render << ", key_bindings:{...}" << '}';
 }
 #endif
 

@@ -632,7 +632,8 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   {
     permission_resolver = prompt_coordinator_.permission_resolver();
     question_resolver = prompt_coordinator_.question_resolver();
-    auto submit_future = ava::core::make_async("tui_submit", [&]() {
+    auto const request_key_bindings = options_.key_bindings;
+    auto submit_future = ava::core::make_async("tui_submit", [&, request_key_bindings]() {
       auto take_steering_messages = active_queues ? active_queues->take_steering_messages : std::function<ava::core::Result<std::vector<std::string>>()>{};
       auto skip_active_steering = active_queues ? active_queues->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{};
       auto take_next_follow_up = active_queues ? active_queues->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{};
@@ -648,7 +649,8 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
                                                             .mark_follow_up_started = mark_follow_up_started,
                                                             .on_subagent_launch = event_queue.subagent_launch_sink(),
                                                             .plugin_ui = plugin_ui_endpoint,
-                                                            .image_attachments = submit_image_attachments});
+                                                            .image_attachments = submit_image_attachments,
+                                                            .key_bindings = request_key_bindings});
     });
     bool render_failed = false;
     auto fail_active_run = [&]() {

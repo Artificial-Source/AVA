@@ -5,7 +5,6 @@
 #include "ava/app/tui/configuration_commands.h"
 #include "ava/app/tui/tui_display_settings.h"
 #include "ava/tui/keybindings.h"
-#include "ava/tui/theme.h"
 #include "ava/core/atomic_file.h"
 #include "ava/core/json.h"
 
@@ -556,63 +555,56 @@ CommandResult run_keybindings_command(runtime::session_ts& unlocked_session, std
                       "\nEdit it, then run /reload keybindings inside the interactive TUI.");
 }
 
-ava::core::Result<CommandResult> run_theme_command(runtime::session_ts& unlocked_session, std::string_view argument)
+ava::core::Result<CommandResult> run_theme_command(ava::config::XdgPaths const& paths, std::string_view argument)
 {
   auto const args = split_command_arguments(argument);
   if (args.size() > 1)
     return handled_text("unsupported theme options: " + std::string(argument) + "\n" + tui_theme_setting_usage());
 
-  auto&& session_r = [&unlocked_session]() -> runtime::session_ts::crat { return unlocked_session; };
-
-  auto settings = load_tui_display_settings(session_r()->paths());
+  auto settings = load_tui_display_settings(paths);
   if (!settings)
     return std::unexpected(std::move(settings.error()));
 
   if (args.empty())
   {
-    ava::tui::set_tui_config_theme(settings->theme, settings->custom_theme);
+    auto const effective = ava::tui::resolve_tui_theme(settings->theme, settings->custom_theme);
     return handled_text("TUI theme:\n  config: " + settings->path.string() +
-                        "\n  configured: " + (settings->theme ? *settings->theme : std::string("built-in default")) +
-                        "\n  active: " + active_tui_theme_summary() + "\n" + tui_theme_setting_usage());
+                        "\n  configured: " + (settings->theme ? *settings->theme : std::string("built-in default")) + "\n  effective: " + effective.name +
+                        " (" + effective.badge + ")\n" + tui_theme_setting_usage());
   }
 
   if (is_tui_theme_reset_value(args.front()))
   {
-    auto stored = store_tui_theme_setting(session_r()->paths(), std::nullopt);
+    auto stored = store_tui_theme_setting(paths, std::nullopt);
     if (!stored)
       return std::unexpected(std::move(stored.error()));
-    ava::tui::set_tui_config_theme(std::nullopt);
-    return handled_text("Reset TUI theme to the built-in default.\n  config: " + tui_display_settings_file(session_r()->paths()).string() +
-                        "\n  active: " + active_tui_theme_summary());
+    return handled_text("Reset TUI theme to the built-in default.\n  config: " + tui_display_settings_file(paths).string());
   }
 
   if (!normalize_tui_theme_setting(args.front()))
   {
-    auto custom_theme = load_tui_custom_theme(session_r()->paths(), args.front());
+    auto custom_theme = load_tui_custom_theme(paths, args.front());
     if (!custom_theme && custom_theme.error().category() == ava::core::ErrorCategory::NotFound)
       return handled_text("unsupported theme: " + args.front() + "\n" + tui_theme_setting_usage());
     if (!custom_theme)
       return std::unexpected(std::move(custom_theme.error()));
   }
 
-  auto stored = store_tui_theme_setting(session_r()->paths(), args.front());
+  auto stored = store_tui_theme_setting(paths, args.front());
   if (!stored)
     return std::unexpected(std::move(stored.error()));
-  auto settings_after_store = load_tui_display_settings(session_r()->paths());
+  auto settings_after_store = load_tui_display_settings(paths);
   if (!settings_after_store)
     return std::unexpected(std::move(settings_after_store.error()));
-  ava::tui::set_tui_config_theme(settings_after_store->theme, settings_after_store->custom_theme);
-  return handled_text("Stored TUI theme " + *settings_after_store->theme + ".\n  config: " + tui_display_settings_file(session_r()->paths()).string() +
-                      "\n  active: " + active_tui_theme_summary());
+  return handled_text("Stored TUI theme " + *settings_after_store->theme + ".\n  config: " + tui_display_settings_file(paths).string());
 }
 
-ava::core::Result<CommandResult> run_images_command(runtime::session_ts& unlocked_session, std::string_view argument)
+ava::core::Result<CommandResult> run_images_command(ava::config::XdgPaths const& paths, std::string_view argument)
 {
   auto const args = split_command_arguments(argument);
   if (args.size() > 1)
     return handled_text("unsupported images options: " + std::string(argument) + "\n" + tui_show_images_setting_usage());
 
-  auto const paths = runtime::session_ts::crat(unlocked_session)->paths();
   auto settings = load_tui_display_settings(paths);
   if (!settings)
     return std::unexpected(std::move(settings.error()));
@@ -642,7 +634,7 @@ ava::core::Result<CommandResult> run_images_command(runtime::session_ts& unlocke
   return handled_text(std::string("Stored TUI image visibility ") + (*normalized ? "on" : "off") + ".\n  config: " + tui_display_settings_file(paths).string());
 }
 
-ava::core::Result<CommandResult> run_cursor_command(runtime::session_ts& unlocked_session, std::string_view argument)
+ava::core::Result<CommandResult> run_cursor_command(ava::config::XdgPaths const& paths, std::string_view argument)
 {
   auto const args = split_command_arguments(argument);
   if (args.empty() || args.size() > 2)
@@ -660,7 +652,6 @@ ava::core::Result<CommandResult> run_cursor_command(runtime::session_ts& unlocke
       return handled_text("unsupported cursor blink mode: " + args[1] + "\n" + tui_cursor_setting_usage());
   }
 
-  auto const paths = runtime::session_ts::crat(unlocked_session)->paths();
   auto stored = store_tui_cursor_setting(paths, *style, blink);
   if (!stored)
     return std::unexpected(std::move(stored.error()));
@@ -672,13 +663,12 @@ ava::core::Result<CommandResult> run_cursor_command(runtime::session_ts& unlocke
                       ".\n  config: " + tui_display_settings_file(paths).string());
 }
 
-ava::core::Result<CommandResult> run_image_width_command(runtime::session_ts& unlocked_session, std::string_view argument)
+ava::core::Result<CommandResult> run_image_width_command(ava::config::XdgPaths const& paths, std::string_view argument)
 {
   auto const args = split_command_arguments(argument);
   if (args.size() > 1)
     return handled_text("unsupported image-width options: " + std::string(argument) + "\n" + tui_image_width_setting_usage());
 
-  auto const paths = runtime::session_ts::crat(unlocked_session)->paths();
   auto settings = load_tui_display_settings(paths);
   if (!settings)
     return std::unexpected(std::move(settings.error()));
@@ -725,6 +715,25 @@ TuiConfigurationCommand classify_tui_configuration_command(std::string_view norm
 
 }  // namespace
 
+ava::core::Result<CommandResult> run_tui_display_configuration_command(ava::config::XdgPaths const& paths, std::string_view normalized_command)
+{
+  switch (classify_tui_configuration_command(normalized_command))
+  {
+    case TuiConfigurationCommand::Theme:
+      return run_theme_command(paths, command_argument(normalized_command, "/theme"));
+    case TuiConfigurationCommand::Images:
+      return run_images_command(paths, command_argument(normalized_command, "/images"));
+    case TuiConfigurationCommand::ImageWidth:
+      return run_image_width_command(paths, command_argument(normalized_command, "/image-width"));
+    case TuiConfigurationCommand::Cursor:
+      return run_cursor_command(paths, command_argument(normalized_command, "/cursor"));
+    case TuiConfigurationCommand::None:
+    case TuiConfigurationCommand::Keybindings:
+      break;
+  }
+  return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "unsupported local display settings action"));
+}
+
 std::optional<ava::core::Result<CommandResult>> run_tui_configuration_command(runtime::session_ts& unlocked_session, std::string_view normalized_command,
                                                                               std::vector<CommandHotkey> const& hotkeys)
 {
@@ -733,13 +742,14 @@ std::optional<ava::core::Result<CommandResult>> run_tui_configuration_command(ru
     case TuiConfigurationCommand::Keybindings:
       return run_keybindings_command(unlocked_session, command_argument(normalized_command, "/hotkeys"), hotkeys);
     case TuiConfigurationCommand::Theme:
-      return run_theme_command(unlocked_session, command_argument(normalized_command, "/theme"));
     case TuiConfigurationCommand::Images:
-      return run_images_command(unlocked_session, command_argument(normalized_command, "/images"));
     case TuiConfigurationCommand::ImageWidth:
-      return run_image_width_command(unlocked_session, command_argument(normalized_command, "/image-width"));
     case TuiConfigurationCommand::Cursor:
-      return run_cursor_command(unlocked_session, command_argument(normalized_command, "/cursor"));
+    {
+      // Copy invocation paths so the temporary Session guard is released before configuration file I/O.
+      auto const paths = runtime::session_ts::crat(unlocked_session)->paths();
+      return run_tui_display_configuration_command(paths, normalized_command);
+    }
     case TuiConfigurationCommand::None:
       return std::nullopt;
   }

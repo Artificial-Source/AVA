@@ -31,7 +31,6 @@ struct TuiRequestPresentation
 
 void append_status_line(std::string& target, std::string line);
 [[nodiscard]] std::vector<CommandHotkey> command_hotkeys_from_key_bindings(ava::tui::TuiKeyBindings const& key_bindings);
-[[nodiscard]] std::string display_theme_status(std::string_view prefix);
 [[nodiscard]] ava::tui::ProjectTrustSnapshot project_trust_snapshot(ProjectTrustState const& state);
 [[nodiscard]] std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent::ToolTimelineEntry> const& entries);
 // Refresh canonical session statistics for unlocked_session when the TUI requests a token-usage update.

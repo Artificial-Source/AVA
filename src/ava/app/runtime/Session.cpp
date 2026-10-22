@@ -1050,7 +1050,7 @@ ava::core::VoidResult Session::apply_trust_prompt_state_and_refresh(session_ts& 
   if (selected_primary_agent.tool_preset == ava::agent::AgentToolPreset::ReadOnly)
     effective_tool_visibility = ava::agent::narrow_tool_visibility_to_read_only(std::move(effective_tool_visibility));
   session_w->trust_state().project_trust = std::move(project_trust);
-  session_w->invocation_inputs().tool_visibility = std::move(effective_tool_visibility);
+  session_w->tool_visibility() = std::move(effective_tool_visibility);
   {
     AgentSelection_ts::wat agent_selection_w(session_w->agent_selection());
     agent_selection_w->selected_primary_agent = std::move(selected_primary_agent);

@@ -5,6 +5,8 @@
 #include "ava/command/command.h"
 #include "ava/app/commands.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/tui/configuration_commands.h"
+#include "ava/app/tui/display_reload.h"
 #include "ava/app/tui/startup_overview.h"
 #include "ava/app/tui/tui_display_settings.h"
 #include "ava/agent/agent_loop.h"
@@ -256,6 +258,12 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     ScopedEnvVar theme_env_guard("AVA_TUI_THEME", "");
     ScopedEnvVar colorfgbg_guard("COLORFGBG", "");
     ava::tui::set_tui_config_theme(std::nullopt);
+    auto unsupported_display = ava::app::run_tui_display_configuration_command(paths, "/not-a-display-command");
+    auto keybindings_as_display = ava::app::run_tui_display_configuration_command(paths, "/hotkeys");
+    auto unhandled_configuration = ava::app::run_tui_configuration_command(unlocked_session, "/not-a-display-command", {});
+    expect(!unsupported_display && unsupported_display.error().category() == ava::core::ErrorCategory::InvalidArgument && !keybindings_as_display &&
+               keybindings_as_display.error().category() == ava::core::ErrorCategory::InvalidArgument && !unhandled_configuration,
+           "display handler rejects unsupported families while outer configuration dispatcher preserves unhandled fallthrough");
     auto theme_status = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/theme"});
     expect(theme_status && theme_status->handled && !theme_status->output.empty() && theme_status->output[0].find("TUI theme:") != std::string::npos &&
                theme_status->output[0].find("usage: /theme [dark|light|plain|custom-name|reset]") != std::string::npos,
@@ -264,9 +272,94 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     auto loaded_theme = ava::app::load_tui_display_settings(paths);
     auto active_theme = ava::tui::active_tui_theme();
     expect(theme_light && theme_light->handled && !theme_light->output.empty() && theme_light->output[0].find("Stored TUI theme light") != std::string::npos &&
-               loaded_theme && loaded_theme->theme && *loaded_theme->theme == "light" && active_theme.kind == ava::tui::TuiThemeKind::Light &&
-               active_theme.badge == "display.json",
-           "command dispatcher /theme light persists display.json and applies the active TUI theme override");
+               loaded_theme && loaded_theme->theme && *loaded_theme->theme == "light" && active_theme.kind == ava::tui::TuiThemeKind::Dark &&
+               active_theme.badge != "display.json",
+           "worker-safe command dispatcher /theme light persists display.json without applying global TUI theme state");
+
+    {
+      ScopedEnvVar explicit_theme("AVA_TUI_THEME", "plain");
+      auto reported = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/theme"});
+      expect(reported && !reported->output.empty() && reported->output[0].find("configured: light") != std::string::npos &&
+                 reported->output[0].find("effective: plain (AVA_TUI_THEME)") != std::string::npos,
+             "headless theme reporting resolves environment precedence without applying frontend configuration");
+    }
+    expect(ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Dark, "querying configured theme leaves the frontend's last applied theme unchanged");
+
+    auto local_display_created = ava::app::LocalTuiDisplaySettings::create(unlocked_session);
+    expect(local_display_created.has_value(), "local TUI display owner is created without Session authority");
+    if (local_display_created)
+    {
+      auto local_display = std::move(*local_display_created);
+      auto initial_local = local_display.reload();
+      expect(initial_local && initial_local->settings.show_images, "local TUI display owner loads and applies the persisted presentation on its caller thread");
+      auto const same_effective_document = "{\n  \"theme\": \"light\",\n  \"show_images\": true\n}\n";
+      write_app_test_file(paths.ava_config_dir / "display.json", same_effective_document);
+      auto same_value_reload = local_display.maybe_reload();
+      expect(same_value_reload && same_value_reload->has_value() && (**same_value_reload).settings.show_images,
+             "display watch reports Applied for a changed document even when effective values remain equal");
+      write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\":");
+      auto invalid_reload = local_display.maybe_reload();
+      expect(!invalid_reload && local_display.presentation().show_images && ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Light,
+             "failed display reload preserves the local owner's last-known-good presentation and theme");
+      write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\": \"dark\",\n  \"show_images\": false\n}\n");
+      auto corrected_reload = local_display.maybe_reload();
+      expect(corrected_reload && corrected_reload->has_value() && !(**corrected_reload).settings.show_images &&
+                 ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Dark,
+             "display owner retains its prior watch on error and applies the corrected document on the next poll");
+      local_display.shutdown();
+      ava::tui::set_tui_config_theme(std::nullopt);
+    }
+
+    // Keep one local display owner across replacement of its live Session with different XDG roots.
+    // All later discovery, reads, and writes must use the replacement's paths, not those captured at startup.
+    {
+      auto const root = create_empty_root("local-display-replacement-paths");
+      auto const first_paths = app_test_paths(root / "first");
+      auto const second_paths = app_test_paths(root / "second");
+      write_app_test_file(first_paths.ava_config_dir / "display.json", "{\"show_images\":true}\n");
+      write_app_test_file(second_paths.ava_config_dir / "display.json", "{\"show_images\":false}\n");
+      write_app_test_file(second_paths.ava_config_dir / "themes" / "replacement-theme.json",
+                          "{\"name\":\"replacement-theme\",\"colors\":{\"text\":\"\",\"muted\":242,\"success\":34,\"warning\":220,"
+                          "\"error\":196,\"accent\":39,\"screenBg\":235,\"composerBg\":236}}\n");
+      ava::app::runtime::OpenContext context;
+      context.workspace_dir = workspace;
+      context.current_dir = workspace;
+      context.paths = first_paths;
+      auto first_session = ava::app::runtime::Session::open(context);
+      context.paths = second_paths;
+      auto second_session = ava::app::runtime::Session::open(context);
+      expect(first_session && second_session, "display path regression opens sessions with distinct XDG configuration roots");
+      if (first_session && second_session)
+      {
+        auto display_owner = ava::app::LocalTuiDisplaySettings::create(*first_session);
+        expect(display_owner.has_value(), "display path regression creates a local owner bound to the stable Session wrapper");
+        if (display_owner)
+        {
+          auto initial = display_owner->reload();
+          auto replaced = ava::app::runtime::Session::replace_with(*first_session, *second_session);
+          expect(initial && initial->settings.show_images && replaced, "display owner survives replacement after loading the original settings");
+          if (replaced)
+          {
+            auto polled = display_owner->maybe_reload();
+            auto choices = display_owner->presentation();
+            expect(polled && polled->has_value() && !(**polled).settings.show_images &&
+                       std::ranges::any_of(choices.custom_themes, [](auto const& theme) { return theme.name == "replacement-theme"; }),
+                   "display polling and theme discovery use the replacement Session's paths");
+            auto saved = display_owner->apply_action("/image-width 73");
+            auto original = ava::app::load_tui_display_settings(first_paths);
+            auto replacement = ava::app::load_tui_display_settings(second_paths);
+            expect(
+                saved && original && replacement && original->image_width_cells == ava::app::kDefaultTuiImageWidthCells && replacement->image_width_cells == 73,
+                "local display actions write only to the replacement Session's configuration directory");
+            write_app_test_file(second_paths.ava_config_dir / "display.json", "{\"show_images\":true}\n");
+            auto reloaded = display_owner->reload();
+            expect(reloaded && reloaded->settings.show_images, "explicit display reload also reads current Session paths after replacement");
+          }
+          display_owner->shutdown();
+        }
+      }
+      ava::tui::set_tui_config_theme(std::nullopt);
+    }
     write_app_test_file(paths.ava_config_dir / "themes" / "sunrise.json",
                         "{\n"
                         "  \"name\": \"sunrise\",\n"
@@ -308,10 +401,9 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     active_theme = ava::tui::active_tui_theme();
     expect(theme_custom && theme_custom->handled && !theme_custom->output.empty() &&
                theme_custom->output[0].find("Stored TUI theme sunrise") != std::string::npos && loaded_theme && loaded_theme->theme &&
-               *loaded_theme->theme == "sunrise" && loaded_theme->custom_theme && active_theme.kind == ava::tui::TuiThemeKind::Custom &&
-               active_theme.name == "sunrise" && active_theme.badge == "display.json" && active_theme.palette && active_theme.palette->composer_bg == 236 &&
-               active_theme.palette->tool_bg == 235 && active_theme.palette->question_bg == 234,
-           "command dispatcher /theme <custom> persists display.json and applies a valid custom TUI theme");
+               *loaded_theme->theme == "sunrise" && loaded_theme->custom_theme && active_theme.kind == ava::tui::TuiThemeKind::Dark &&
+               active_theme.badge != "display.json",
+           "command dispatcher /theme <custom> validates and persists without applying global TUI theme state");
     auto custom_watch = ava::app::load_tui_display_settings_watch_state(paths);
     expect(custom_watch && custom_watch->theme && *custom_watch->theme == "sunrise" && custom_watch->custom_theme_revision,
            "display settings watch state records the selected custom theme revision");
@@ -678,7 +770,7 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     active_theme = ava::tui::active_tui_theme();
     expect(reset_theme && reset_theme->handled && !reset_theme->output.empty() && reset_theme->output[0].find("Reset TUI theme") != std::string::npos &&
                reset_loaded_theme && !reset_loaded_theme->theme && active_theme.kind == ava::tui::TuiThemeKind::Dark && active_theme.badge == "built-in",
-           "command dispatcher /theme reset clears the persisted TUI theme and returns to the built-in default");
+           "command dispatcher /theme reset clears the persisted TUI theme without touching the current terminal theme");
 
     // Wave 1 display document: theme-only legacy files keep image defaults.
     write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\": \"light\"\n}\n");
@@ -870,8 +962,8 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     auto active_theme = ava::tui::active_tui_theme();
     expect(reload_theme && reload_theme->handled && !reload_theme->output.empty() && reload_theme->output[0].find("Reload report:") != std::string::npos &&
                reload_theme->output[0].find("display: loaded") != std::string::npos && reload_theme->output[0].find("configured: plain") != std::string::npos &&
-               active_theme.kind == ava::tui::TuiThemeKind::Plain && active_theme.badge == "display.json",
-           "command dispatcher /reload theme applies externally edited display.json without restarting");
+               active_theme.kind == ava::tui::TuiThemeKind::Dark && active_theme.badge != "display.json",
+           "headless command dispatcher /reload theme validates externally edited display.json without applying terminal theme state");
     ava::tui::set_tui_config_theme(std::nullopt);
   }
   auto unsupported_reload = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/reload no-such"});
@@ -970,6 +1062,9 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
              plugins_after_enable->output[0].find("com.example.project  enabled") != std::string::npos,
          "command dispatcher /plugins list reflects enablement state");
 
+  auto const backend_overview = ava::app::build_startup_overview_snapshot(unlocked_session);
+  expect(backend_overview.theme_name.empty() && backend_overview.theme_badge.empty() && backend_overview.compact_line.find("ava-dark") == std::string::npos,
+         "backend-only startup overview snapshots do not inject the default TUI theme");
   auto overview_cmd = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/overview"});
   expect(overview_cmd && overview_cmd->handled && !overview_cmd->output.empty() && overview_cmd->output[0].find("/overview") != std::string::npos &&
              overview_cmd->output[0].find("interactive TUI") != std::string::npos,
@@ -1042,7 +1137,7 @@ void test_startup_overview_snapshot_bounds_order_redaction()
   expect(first.compact_line == second.compact_line && first.detail_line == second.detail_line && first.skill_names == second.skill_names &&
              first.plugin_ids == second.plugin_ids && first.resource_groups.size() == second.resource_groups.size(),
          "startup overview builder is deterministic for identical inputs");
-//  expect(first.model.empty(), "path-like model labels are redacted from the overview snapshot");
+  //  expect(first.model.empty(), "path-like model labels are redacted from the overview snapshot");
   expect(first.compact_line.find("/secret") == std::string::npos && first.compact_line.find("api_key") == std::string::npos &&
              first.compact_line.find("AGENTS.md") == std::string::npos && first.compact_line.find("/private") == std::string::npos &&
              first.compact_line.find("\x1b") == std::string::npos,

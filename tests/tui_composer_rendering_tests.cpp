@@ -938,31 +938,33 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ava::tui::TuiRuntimeOptions options;
   //  options.provider = "openai";
   //  options.model = "gpt-5.5";
-  options.show_images = true;
-  options.image_width_cells = 60;
-  options.custom_themes = {ava::tui::ThemeOptionItem{
+  options.initial_display_settings.show_images = true;
+  options.initial_display_settings.image_width_cells = 60;
+  options.initial_display_settings.custom_themes = {ava::tui::ThemeOptionItem{
       .name = "sunrise",
       .detail = "/tmp/ava/sunrise.json",
       .palette =
           ava::tui::TuiThemePalette{.text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 255, .composer_bg = 236},
       .revision = "sunrise-v1"}};
-  options.on_maybe_reload_display_settings = [&]() -> ava::core::Result<std::optional<ava::tui::TuiRuntimeStateSnapshot>> {
+  options.on_maybe_reload_display_settings = [&]() -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
     ++applied_callback_count;
     // Authoritative reload to show_images=false while an images-off overlay is already active
     // (presentation already false). Applied must come from the optional snapshot, not value diffs.
-    return std::optional<ava::tui::TuiRuntimeStateSnapshot>{ava::tui::TuiRuntimeStateSnapshot{
-        //.provider = "openai",
-        //.model = "gpt-5.5",
-        .status = "display theme auto-reloaded",
-        .custom_themes = {ava::tui::ThemeOptionItem{
-            .name = "sunrise",
-            .detail = "/tmp/ava/sunrise.json",
-            .palette =
-                ava::tui::TuiThemePalette{
-                    .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 254, .composer_bg = 237},
-            .revision = "sunrise-v2"}},
-        .show_images = false,
-        .image_width_cells = 60}};
+    return std::optional<ava::tui::TuiLocalDisplaySettingsResult>{
+        ava::tui::TuiLocalDisplaySettingsResult{
+            .settings =
+                ava::tui::TuiLocalDisplaySettings{
+                    .custom_themes = {ava::tui::ThemeOptionItem{
+                        .name = "sunrise",
+                        .detail = "/tmp/ava/sunrise.json",
+                        .palette =
+                            ava::tui::TuiThemePalette{
+                                .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 254, .composer_bg = 237},
+                        .revision = "sunrise-v2"}},
+                    .show_images = false,
+                    .image_width_cells = 60},
+            .status = "display theme auto-reloaded",
+            .output = {}}};
   };
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
@@ -1010,8 +1012,8 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   bool const esc_restores_new_authority = !preview.active() && !presentation.snapshot.show_images && !ava::tui::tui_theme_preview_active();
 
   // Unchanged poll uses explicit nullopt signal.
-  options.on_maybe_reload_display_settings = []() -> ava::core::Result<std::optional<ava::tui::TuiRuntimeStateSnapshot>> {
-    return std::optional<ava::tui::TuiRuntimeStateSnapshot>{};
+  options.on_maybe_reload_display_settings = []() -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
+    return std::optional<ava::tui::TuiLocalDisplaySettingsResult>{};
   };
   // Force the rate limit open for a second poll.
   std::this_thread::sleep_for(std::chrono::milliseconds(510));
@@ -1040,62 +1042,134 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
       .theme_badge = "built-in",
       .compact_line = "build · openai/gpt-5.5 · dark · /overview",
   };
-  ava::tui::StartupOverviewSnapshot refreshed_overview = initial_overview;
-  refreshed_overview.theme_name = "sunrise";
-  refreshed_overview.theme_badge = "custom";
-  refreshed_overview.compact_line = "build · openai/gpt-5.5 · sunrise · /overview";
-
   int applied_callback_count = 0;
+  int overview_read_count = 0;
   ava::tui::TuiRuntimeOptions options;
   //  options.provider = "openai";
   //  options.model = "gpt-5.5";
-  options.startup_overview = initial_overview;
-  options.on_maybe_reload_display_settings = [&]() -> ava::core::Result<std::optional<ava::tui::TuiRuntimeStateSnapshot>> {
+  options.read_startup_overview = [&]() {
+    ++overview_read_count;
+    return initial_overview;
+  };
+  options.on_maybe_reload_display_settings = [&]() -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
     ++applied_callback_count;
-    return std::optional<ava::tui::TuiRuntimeStateSnapshot>{ava::tui::TuiRuntimeStateSnapshot{
-        //.provider = "openai",
-        //.model = "gpt-5.5",
+    ava::tui::set_tui_config_theme(
+        "sunrise", ava::tui::TuiCustomTheme{
+                       .name = "sunrise",
+                       .path = "/tmp/ava/sunrise.json",
+                       .palette =
+                           ava::tui::TuiThemePalette{
+                               .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 254, .composer_bg = 237},
+                       .revision = "sunrise-v2"});
+    return std::optional<ava::tui::TuiLocalDisplaySettingsResult>{ava::tui::TuiLocalDisplaySettingsResult{
+        .settings =
+            ava::tui::TuiLocalDisplaySettings{
+                .custom_themes = {ava::tui::ThemeOptionItem{
+                    .name = "sunrise",
+                    .detail = "/tmp/ava/sunrise.json",
+                    .palette =
+                        ava::tui::TuiThemePalette{
+                            .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 254, .composer_bg = 237},
+                    .revision = "sunrise-v2"}}},
         .status = "display theme auto-reloaded",
-        .custom_themes = {ava::tui::ThemeOptionItem{
-            .name = "sunrise",
-            .detail = "/tmp/ava/sunrise.json",
-            .palette =
-                ava::tui::TuiThemePalette{
-                    .text = -1, .muted = 242, .success = 34, .warning = 220, .error = 196, .accent = 39, .screen_bg = 254, .composer_bg = 237},
-            .revision = "sunrise-v2"}},
-        .startup_overview = refreshed_overview,
-    }};
+        .output = {}}};
   };
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
-  presentation.snapshot.startup_overview = initial_overview;
-  presentation.snapshot.select_list = ava::tui::overview_select_list_view(initial_overview);
-  presentation.snapshot.select_list->query = "theme";
-  presentation.snapshot.select_list->selected_item_index = 0;
+  presentation.apply_runtime_state_snapshot(options, ava::tui::TuiRuntimeStateSnapshot{.status = "ordinary update"});
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  auto active_select_list = ava::tui::ActiveSelectList::Overview;
+  auto active_select_list = ava::tui::ActiveSelectList::None;
   std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
   ava::tui::RuntimeActionController action_controller(options, presentation, draft_state, renderer, active_select_list, session_archive_confirmation);
 
+  bool const no_read_during_snapshot_apply = overview_read_count == 0;
+  bool const opened = action_controller.toggle_startup_overview();
+  presentation.snapshot.select_list->query = "theme";
+  presentation.snapshot.select_list->selected_item_index = 0;
+
   auto const outcome = action_controller.maybe_reload_display_settings();
-  bool const rebuilt = outcome == ava::tui::DisplaySettingsReloadPollOutcome::Applied && applied_callback_count == 1 &&
+  bool const rebuilt = opened && overview_read_count == 1 && outcome == ava::tui::DisplaySettingsReloadPollOutcome::Applied && applied_callback_count == 1 &&
                        active_select_list == ava::tui::ActiveSelectList::Overview && presentation.snapshot.startup_overview &&
                        presentation.snapshot.startup_overview->theme_name == "sunrise" && presentation.snapshot.select_list &&
                        presentation.snapshot.select_list->query == "theme" &&
                        std::ranges::any_of(presentation.snapshot.select_list->items,
                                            [](auto const& item) { return item.group == "Display" && item.label == "Theme" && item.detail == "sunrise"; }) &&
                        // Open overview suppresses the idle transcript receipt; status still updates.
-                       presentation.snapshot.status == "display theme auto-reloaded" &&
+                       presentation.snapshot.status.starts_with("display theme auto-reloaded") &&
                        std::ranges::none_of(presentation.snapshot.transcript,
                                             [](auto const& item) { return item.text.find("display theme auto-reloaded") != std::string::npos; });
 
   // Outer idle path still owns settings-preview rebase + single final paint after Applied.
   bool const rendered = renderer.render();
 
+  bool const closed = action_controller.toggle_startup_overview();
+  initial_overview.model = "gpt-fresh";
+  initial_overview.compact_line = "build · openai/gpt-fresh · /overview";
+  bool const reopened = action_controller.toggle_startup_overview();
+  bool const fresh_reopen =
+      closed && reopened && overview_read_count == 2 && presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->model == "gpt-fresh";
+
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme(std::nullopt);
-  return rebuilt && rendered;
+  return no_read_during_snapshot_apply && rebuilt && rendered && fresh_reopen;
+}
+
+bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
+{
+  tui_test_support::TuiFrontEndFixture frontend;
+  ScopedEnvVar theme_override("AVA_TUI_THEME", "");
+  ScopedEnvVar no_color("NO_COLOR", "");
+  ava::tui::clear_tui_theme_preview();
+  ava::tui::set_tui_config_theme("dark");
+
+  ava::tui::TuiRuntimeOptions options;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  presentation.initialize_startup_overview(
+      options, ava::tui::StartupOverviewSnapshot{
+                   .theme_name = "ava-dark", .theme_badge = "display.json", .compact_line = "build · provider/model · ava-dark · /overview"});
+  bool const initial_ok =
+      presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->compact_line == "build · provider/model · ava-dark · /overview";
+
+  ava::tui::set_tui_config_theme("light");
+  presentation.apply_local_display_settings(options, {});
+  presentation.apply_local_display_settings(options, {});
+  bool const theme_switch_ok =
+      presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->compact_line == "build · provider/model · ava-light · /overview";
+
+  auto bindings = ava::tui::parse_key_bindings_json(R"({"app.overview.toggle":"F6"})");
+  if (!bindings)
+  {
+    ava::tui::clear_tui_theme_preview();
+    ava::tui::set_tui_config_theme(std::nullopt);
+    return false;
+  }
+  presentation.apply_local_key_bindings(options, *bindings);
+  presentation.apply_local_key_bindings(options, *bindings);
+  bool const binding_refresh_ok =
+      presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->compact_line == "build · provider/model · ava-light · F6 · /overview";
+
+  ava::tui::set_tui_config_theme("dark");
+  presentation.apply_local_display_settings(options, {});
+  bool const stale_theme_removed =
+      presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->compact_line == "build · provider/model · ava-dark · F6 · /overview";
+
+  auto const factual_suffix = std::string(" · 12 ctx · 2 skills");
+  auto const capped_factual_line = std::string(160 - factual_suffix.size(), 'x') + factual_suffix;
+  ava::tui::TuiRuntimeOptions capped_options;
+  capped_options.key_bindings = *bindings;
+  ava::tui::RuntimePresentationState capped(frontend.frontend(), capped_options);
+  capped.initialize_startup_overview(
+      capped_options, ava::tui::StartupOverviewSnapshot{
+                          .theme_name = "ava-light", .theme_badge = "display.json", .overview_toggle_keys = "F6", .compact_line = capped_factual_line});
+  capped.apply_local_display_settings(capped_options, {});
+  capped.apply_local_key_bindings(capped_options, *bindings);
+  bool const bounded_omission_ok = capped.snapshot.startup_overview && capped.snapshot.startup_overview->compact_line == capped_factual_line &&
+                                   capped.snapshot.startup_overview->compact_line.size() <= 160;
+
+  ava::tui::clear_tui_theme_preview();
+  ava::tui::set_tui_config_theme(std::nullopt);
+  return initial_ok && theme_switch_ok && binding_refresh_ok && stale_theme_removed && bounded_omission_ok;
 }
 
 bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
@@ -1105,26 +1179,54 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
   std::vector<std::string> backend_submissions;
+  std::vector<std::string> submitted_request_mode_keys;
   int display_reload_calls = 0;
+  int local_display_calls = 0;
   int keybinding_reload_calls = 0;
+  int project_trust_reads = 0;
+  ava::tui::ProjectTrustSnapshot current_project_trust{
+      .decision = "trusted", .project_resources = "enabled", .workspace = "workspace", .matched_path = {}, .trust_file = {}};
   ava::tui::TuiRuntimeOptions options;
-  options.on_submit = [&backend_submissions](std::string const& submitted, ava::tui::TuiSubmitContext) {
+  options.slash_commands = {
+      ava::tui::SlashCommandItem{.command = "/mode", .description = "toggle mode"},
+      ava::tui::SlashCommandItem{.command = "/hotkeys",
+                                 .description = "manage keybindings",
+                                 .argument_completions = {ava::tui::SlashCommandArgumentCompletion{
+                                     .value = "init", .description = "initialize keybindings", .category = "General", .argument_index = 0}}}};
+  options.slash_catalog_generation = 1;
+  options.read_startup_overview = [] {
+    return ava::tui::StartupOverviewSnapshot{.theme_name = "dark", .theme_badge = "built-in", .compact_line = "build · provider/model · /overview"};
+  };
+  options.read_project_trust = [&]() {
+    ++project_trust_reads;
+    return current_project_trust;
+  };
+  options.on_submit = [&backend_submissions, &submitted_request_mode_keys](std::string const& submitted, ava::tui::TuiSubmitContext context) {
     backend_submissions.push_back(submitted);
+    submitted_request_mode_keys.push_back(ava::tui::keys_display(context.key_bindings, ava::tui::TuiAction::ModeToggle));
     ava::tui::TuiSubmitResult result;
     result.output = {"backend handled " + submitted};
     return result;
   };
-  options.on_reload_display_settings = [&display_reload_calls]() -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+  options.on_reload_display_settings = [&display_reload_calls]() -> ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult> {
     ++display_reload_calls;
-    ava::tui::TuiRuntimeStateSnapshot state;
-    state.status = "display theme reloaded";
-    return state;
+    return ava::tui::TuiLocalDisplaySettingsResult{.settings = {}, .status = "display theme reloaded", .output = {}};
   };
-  options.on_reload_key_bindings = [&keybinding_reload_calls]() -> ava::core::Result<ava::tui::TuiKeyBindingReloadResult> {
+  options.on_local_display_settings_action = [&local_display_calls](std::string_view action) {
+    ++local_display_calls;
+    return ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult>(ava::tui::TuiLocalDisplaySettingsResult{
+        .settings = ava::tui::TuiLocalDisplaySettings{.custom_themes = {},
+                                                      .show_images = action != "/images off",
+                                                      .image_width_cells = 60,
+                                                      .cursor = ava::tui::terminal::CursorSettings{ava::tui::terminal::CursorStyle::Default},
+                                                      .mermaid_config_epoch = 0,
+                                                      .mermaid_enabled = false},
+        .status = "display setting saved",
+        .output = {"display persisted locally"}});
+  };
+  options.on_reload_key_bindings = [&keybinding_reload_calls]() -> ava::core::Result<ava::tui::TuiKeyBindings> {
     ++keybinding_reload_calls;
-    ava::tui::TuiKeyBindingReloadResult reloaded;
-    reloaded.state.status = "keybindings reloaded";
-    return reloaded;
+    return ava::tui::parse_key_bindings_json(R"({"mode_toggle":"Alt+Y","app.overview.toggle":"F6"})");
   };
 
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
@@ -1148,6 +1250,28 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
     return outcome.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && !outcome.terminal_write_failed;
   };
 
+  presentation.apply_runtime_state_snapshot(
+      options, ava::tui::TuiRuntimeStateSnapshot{.status = "ordinary snapshot", .slash_catalog_generation = options.slash_catalog_generation});
+  bool const settings_not_read_by_snapshot = project_trust_reads == 0;
+  auto const first_settings = submit_controller.submit(std::string("/settings"));
+  auto const first_workspace = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::SessionsAndWorkspace,
+                                                                               presentation.snapshot, options.key_bindings);
+  bool const first_settings_trust = continued(first_settings) && project_trust_reads == 1 && presentation.snapshot.project_trust &&
+                                    presentation.snapshot.project_trust->decision == "trusted" && first_workspace.subtitle.find("trusted") != std::string::npos;
+  current_project_trust.decision = "denied";
+  current_project_trust.project_resources = "skipped";
+  auto const reopened_settings = submit_controller.submit(std::string("/settings"));
+  auto const reopened_workspace = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::SessionsAndWorkspace,
+                                                                                  presentation.snapshot, options.key_bindings);
+  bool const fresh_settings_trust = continued(reopened_settings) && project_trust_reads == 2 && presentation.snapshot.project_trust &&
+                                    presentation.snapshot.project_trust->decision == "denied" &&
+                                    reopened_workspace.subtitle.find("denied") != std::string::npos;
+  presentation.snapshot.select_list.reset();
+  active_select_list = ava::tui::ActiveSelectList::None;
+  bool const settings_popup_ok = settings_not_read_by_snapshot && first_settings_trust && fresh_settings_trust;
+
+  presentation.initialize_startup_overview(options, options.read_startup_overview());
+
   auto const models = submit_controller.submit(std::string("/reload models"));
   bool const models_ok =
       continued(models) && backend_submissions == std::vector<std::string>{"/reload models"} && display_reload_calls == 0 && keybinding_reload_calls == 0;
@@ -1160,15 +1284,36 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   bool const theme_ok = continued(theme) && backend_submissions.size() == 2 && display_reload_calls == 1 && keybinding_reload_calls == 0 &&
                         presentation.snapshot.status == "display theme reloaded";
 
+  auto const local_theme = submit_controller.submit(std::string("/theme light"));
+  bool const local_theme_ok = continued(local_theme) && backend_submissions.size() == 2 && local_display_calls == 1 && display_reload_calls == 1 &&
+                              presentation.snapshot.status == "command output" && presentation.snapshot.command_output &&
+                              !presentation.snapshot.local_command_feedback;
+
   auto const keybindings = submit_controller.submit(std::string("/reload keybindings"));
+  auto const mode_command = std::ranges::find_if(presentation.snapshot.slash_commands, [](auto const& item) { return item.command == "/mode"; });
+  auto const hotkeys_command = std::ranges::find_if(presentation.snapshot.slash_commands, [](auto const& item) { return item.command == "/hotkeys"; });
+  auto const help_view = ava::tui::hotkeys_select_list_view(options.key_bindings);
+  auto const mode_help = std::ranges::find_if(help_view.items, [](auto const& item) { return item.value == "mode_toggle"; });
+  bool const palette_hints_updated =
+      mode_command != presentation.snapshot.slash_commands.end() && mode_command->key_display == "Alt+Y" &&
+      hotkeys_command != presentation.snapshot.slash_commands.end() && std::ranges::any_of(hotkeys_command->argument_completions, [](auto const& completion) {
+        return completion.category == "Keybindings" && completion.value == "mode_toggle" && completion.description.starts_with("Alt+Y");
+      });
+  bool const local_help_updated = mode_help != help_view.items.end() && mode_help->badge.find("Alt+Y") != std::string::npos;
+  bool const overview_hint_updated = presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->overview_toggle_keys == "F6" &&
+                                     presentation.snapshot.startup_overview->compact_line.ends_with("F6 · /overview");
   bool const keybindings_ok = continued(keybindings) && backend_submissions.size() == 2 && display_reload_calls == 1 && keybinding_reload_calls == 1 &&
-                              presentation.snapshot.status == "keybindings reloaded";
+                              presentation.snapshot.status == "keybindings reloaded" && palette_hints_updated && local_help_updated && overview_hint_updated;
+
+  auto const help = submit_controller.submit(std::string("/help"));
+  bool const backend_help_uses_request_copy =
+      continued(help) && backend_submissions.size() == 3 && backend_submissions.back() == "/help" && submitted_request_mode_keys.back() == "Alt+Y";
 
   auto const bare = submit_controller.submit(std::string("/reload"));
-  bool const bare_ok = continued(bare) && backend_submissions.size() == 2 && display_reload_calls == 1 && keybinding_reload_calls == 2 &&
+  bool const bare_ok = continued(bare) && backend_submissions.size() == 3 && display_reload_calls == 1 && keybinding_reload_calls == 2 &&
                        presentation.snapshot.status == "keybindings reloaded";
 
-  return models_ok && malformed_ok && theme_ok && keybindings_ok && bare_ok;
+  return settings_popup_ok && models_ok && malformed_ok && theme_ok && local_theme_ok && keybindings_ok && backend_help_uses_request_copy && bare_ok;
 }
 
 // Exercise one rendering case on the runner-initialized application screen and report its original expectation.
@@ -1240,8 +1385,8 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   else if (test_case == "display_reload_overview")
   {
     expect(test_display_settings_reload_rebuilds_open_startup_overview(),
-           "applied periodic display reload rebuilds an open startup overview from the refreshed DTO while preserving query/selection and skipping the idle "
-           "transcript receipt");
+           "overview facts are not read by ordinary snapshots, are read once per open with a fresh value on reopen, and an applied local display reload "
+           "rebuilds the open popup while preserving query/selection and skipping the idle transcript receipt");
   }
   else
   {
@@ -1265,8 +1410,12 @@ void run_tui_composer_rendering_tests_part_1()
            "TUI frontend fixture projects explicitly configured backend model metadata");
   }
   expect(test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload(),
-         "TUI /reload keeps theme and keybinding (including bare /reload) on the local hot-reload path while supported backend targets and malformed "
-         "targets reach ordinary backend submission");
+         "TUI /reload keeps theme and keybinding (including bare /reload) on the local hot-reload path without backend submission/catalog refresh, updates "
+         "help, palette, and overview hints, initializes fresh Workspace trust once per /settings open but not on ordinary snapshots, captures refreshed "
+         "bindings for backend /help, and still routes supported backend targets and malformed targets to ordinary backend submission");
+  expect(test_local_overview_hint_refresh_is_idempotent_and_bounded(),
+         "repeated display and keybinding refreshes replace only exact local overview suffixes, remove stale themes without duplication, and preserve a "
+         "full 160-byte factual compact line when local theme and open hints were omitted by the budget");
   {
     auto const started_at = std::chrono::steady_clock::time_point{};
     ava::tui::detail::ActiveRunCadence cadence(started_at);
@@ -3921,7 +4070,7 @@ void run_tui_composer_rendering_tests_part_4()
            "/overview opens the read-only select-list explicitly");
     snap.select_list.reset();
 
-    // Shared snapshot sync: open overview rebuilds from a refreshed DTO and preserves query/selection.
+    // Ordinary snapshots preserve popup-local overview facts and the open list.
     {
       ava::tui::TuiRuntimeOptions options;
       //      options.provider = "fake";
@@ -3933,19 +4082,12 @@ void run_tui_composer_rendering_tests_part_4()
       presentation.snapshot.select_list->selected_item_index = 0;
       auto active = ava::tui::ActiveSelectList::Overview;
 
-      ava::tui::StartupOverviewSnapshot refreshed = overview;
-      refreshed.model = "m2-refreshed";
-      refreshed.compact_line = "build · fake/m2-refreshed · /overview";
-      ava::tui::apply_runtime_state_snapshot_with_overview_sync(options, presentation, active,
-                                                                ava::tui::TuiRuntimeStateSnapshot{//.provider = "fake",
-                                                                                                  //.model = "m2-refreshed",
-                                                                                                  .status = "overview refreshed",
-                                                                                                  .startup_overview = refreshed});
+      ava::tui::apply_runtime_state_snapshot_preserving_popups(options, presentation, ava::tui::TuiRuntimeStateSnapshot{.status = "unrelated refresh"});
       expect(active == ava::tui::ActiveSelectList::Overview && presentation.snapshot.select_list && presentation.snapshot.select_list->query == "mode" &&
-                 presentation.snapshot.startup_overview && // presentation.snapshot.startup_overview->model == "m2-refreshed" &&
+                 presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->model == "gpt-test" &&
                  std::ranges::any_of(presentation.snapshot.select_list->items,
-                                     [](auto const& item) { return item.label == "Model" && item.detail == "m2-refreshed"; }),
-             "shared overview snapshot sync rebuilds an open list from the new DTO while preserving local query identity");
+                                     [](auto const& item) { return item.label == "Model" && item.detail == "gpt-test"; }),
+             "ordinary runtime snapshots preserve an open popup-local overview and its query identity");
 
       // Competing authority / explicit close.
       ava::tui::close_startup_overview_presentation(presentation.snapshot, active);
@@ -3953,8 +4095,8 @@ void run_tui_composer_rendering_tests_part_4()
              "prompt/competing authority closes ActiveSelectList::Overview and clears the select-list");
 
       // Re-open then session transition must close overview.
-      presentation.snapshot.startup_overview = refreshed;
-      presentation.snapshot.select_list = ava::tui::overview_select_list_view(refreshed);
+      presentation.snapshot.startup_overview = overview;
+      presentation.snapshot.select_list = ava::tui::overview_select_list_view(overview);
       active = ava::tui::ActiveSelectList::Overview;
       ava::tui::RuntimeDraftState draft_state;
       ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
@@ -3963,10 +4105,7 @@ void run_tui_composer_rendering_tests_part_4()
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(options, presentation.snapshot);
       auto const session_changed = ava::tui::apply_runtime_state_snapshot_with_presentation_transition(
           options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active, "session_overview_other",
-          ava::tui::TuiRuntimeStateSnapshot{//.provider = "fake",
-                                            //.model = "other",
-                                            .status = "session switched",
-                                            .startup_overview = refreshed});
+          ava::tui::TuiRuntimeStateSnapshot{.status = "session switched"});
       expect(session_changed && active == ava::tui::ActiveSelectList::None && !presentation.snapshot.select_list,
              "session transition closes an open startup overview through the shared presentation path");
     }

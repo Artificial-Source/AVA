@@ -20,6 +20,7 @@ namespace ava::tui {
 struct RuntimeDraftState;
 struct TuiRuntimeOptions;
 struct TuiRuntimeStateSnapshot;
+struct TuiLocalDisplaySettings;
 class RuntimeRenderer;
 class RuntimeSubagentWorkspaceController;
 class TranscriptSearchController;
@@ -101,6 +102,14 @@ class RuntimePresentationState final
   void refresh_token_status(TuiRuntimeOptions const& options);
   void refresh_prompt_metadata();
   void apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state);
+  // Applies TUI-owned bindings and refreshes every local hint projection.
+  // This never changes backend catalog generations or applies a backend snapshot.
+  void apply_local_key_bindings(TuiRuntimeOptions& options, TuiKeyBindings bindings);
+  // Applies TUI-owned display values without changing backend runtime state.
+  void apply_local_display_settings(TuiRuntimeOptions const& options, TuiLocalDisplaySettings settings);
+  // Starts one popup-local overview lifetime from fresh backend facts, then
+  // composes current UI-owned theme and keybinding hints.
+  void initialize_startup_overview(TuiRuntimeOptions const& options, StartupOverviewSnapshot overview);
 
   ComposerSnapshot snapshot;
 
@@ -118,15 +127,14 @@ class RuntimePresentationState final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-// Shared overview presentation helpers. Normal and active-run snapshot application
-// both route through these so an open overview rebuilds from the new DTO while
-// preserving local query/selection identity, and competing authority closes it.
+// Shared overview presentation helpers for popup-local display/keybinding changes
+// and competing presentation authority.
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list);
 void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list);
 
-// Applies an authoritative runtime snapshot and synchronizes any open overview list.
-void apply_runtime_state_snapshot_with_overview_sync(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
-                                                     ActiveSelectList& active_select_list, TuiRuntimeStateSnapshot state);
+// Applies an authoritative runtime snapshot without reading or replacing popup-only facts.
+void apply_runtime_state_snapshot_preserving_popups(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
+                                                    TuiRuntimeStateSnapshot state);
 
 // Applies the local effects of a committed backend session transition. The
 // committed_session_id parameter must be read through
