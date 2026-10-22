@@ -2528,7 +2528,11 @@ def execute_process(args: argparse.Namespace) -> dict[str, Any]:
             run_application_startup_v3(args, root, project, driver_commands),
             run_application_idle_rss_v3(args, root, project, driver_commands),
         ]
-        common = ["--deadline-ms", "2000", "--grace-ms", "75"]
+        # The CTest smoke checks correctness, not speed, and may share the host with other
+        # work, so give 64 TERM-refusing children a generous shared shutdown deadline there.
+        # Speed is judged separately by the measured thresholds.
+        shutdown_deadline_milliseconds = 10000 if args.suite == "process-smoke" else 2000
+        common = ["--deadline-ms", str(shutdown_deadline_milliseconds), "--grace-ms", "75"]
         results.append(run_process_helper(args, root, project, "supervisor_idle_scope_startup", common, driver_commands))
         results.append(run_process_helper(args, root, project, "supervisor_first_spawn_commit", common, driver_commands))
         sequential_iterations = 1 if args.suite == "process-smoke" else 20
@@ -2629,7 +2633,7 @@ def execute_process(args: argparse.Namespace) -> dict[str, Any]:
             "iterations": {"warm_sequential": sequential_iterations},
             "hold_milliseconds": hold_milliseconds,
             "termination_grace_milliseconds": 75,
-            "shutdown_deadline_milliseconds": 2000,
+            "shutdown_deadline_milliseconds": shutdown_deadline_milliseconds,
             "measured_repetitions": args.runs,
             "clock": "monotonic_ns_and_steady_clock",
             "environment_policy": "fixed_allowlist_no_host_environment_inheritance",
@@ -2965,7 +2969,7 @@ def validate_process_document(document: dict[str, Any]) -> None:
                 )
             ]
             if failed_checks:
-                raise ValueError(f"process result {result_id} contains a failed correctness check")
+                raise ValueError(f"process result {result_id} contains a failed correctness check: {', '.join(failed_checks)}")
             ordinals_by_run.setdefault(sample["run"], []).append(sample["observation"])
         if sorted(ordinals_by_run) != list(range(1, result["repetitions"] + 1)):
             raise ValueError(f"process result {result_id} lost run correlation")
