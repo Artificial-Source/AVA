@@ -433,7 +433,7 @@ def scenario_main_permission_flow(ctx: SmokeContext) -> None:
     seq_result = wait_for(
         tmux_exe,
         session,
-        r"(?s)Command /bash.*exit: 0",
+        r"(?s)Command /bash.*exit: 0.*\d+-\d+/\d+.*Enter(?:/Esc)? close",
         "allowed bounded local bash spill modal",
         timeout=30.0,
     )
@@ -442,12 +442,19 @@ def scenario_main_permission_flow(ctx: SmokeContext) -> None:
         raise RuntimeError(f"bounded local spill modal did not expose only its retained tail with truthful summary\nscreen:\n{seq_result}")
 
     initial_footer = re.search(r"(\d+)-(\d+)/(\d+)", seq_result)
+    if not initial_footer:
+        raise RuntimeError(f"bounded local bash modal lacked its initial viewport footer\nscreen:\n{seq_result}")
+    initial_start = int(initial_footer.group(1))
+
+    def wheel_viewport_advanced(screen: str) -> bool:
+        """Accept screen only when the bash modal's viewport starts after the initial row."""
+        footer = re.search(r"(\d+)-(\d+)/(\d+).*Enter(?:/Esc)? close", screen)
+        return "Command /bash" in screen and footer is not None and int(footer.group(1)) > initial_start
+
     send_literal(tmux_exe, session, "\x1b[<65;4;6M" * 8)
-    wait_for_screen_change(tmux_exe, session, seq_result, "bounded local bash modal wheel scroll redraw")
-    wheel_scrolled = capture(tmux_exe, session)
-    wheel_footer = re.search(r"(\d+)-(\d+)/(\d+)", wheel_scrolled)
-    if not initial_footer or not wheel_footer or int(wheel_footer.group(1)) <= int(initial_footer.group(1)):
-        raise RuntimeError(f"command-output mouse wheel did not advance the bounded viewport\nscreen:\n{wheel_scrolled}")
+    # Status updates and partial modal paints can change the screen before the
+    # wheel is handled. Wait for scrolling itself, without resending input.
+    wait_for_screen_state(tmux_exe, session, wheel_viewport_advanced, "bounded local bash modal wheel viewport advance")
     send_keys(tmux_exe, session, "End")
     seq_expanded = wait_for(
         tmux_exe,
