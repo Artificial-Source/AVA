@@ -2297,6 +2297,16 @@ class BenchmarkHarnessTests(unittest.TestCase):
         self.module.validate_document(document)
 
 
+# Partition from actual fixture dependencies rather than test-name order. Explicit
+# unittest method selectors remain available for focused local reruns.
+LIVE_GIT_TESTS = frozenset(
+    name for name, method in BenchmarkHarnessTests.__dict__.items()
+    if name.startswith("test_") and callable(method)
+    and "live_plugin_comparison_documents" in method.__code__.co_names
+)
+OPTIONAL_ARTIFACT_TEST = "test_historical_v2_artifact_still_validates"
+
+
 class BenchmarkTestLoader(unittest.TestLoader):
     """Discover exactly one benchmark family selected by process_tests.
 
@@ -2304,12 +2314,17 @@ class BenchmarkTestLoader(unittest.TestLoader):
     methods belong to the original backend harness partition.
     """
 
+    live_git_tests = False
+
     def __init__(self, process_tests: bool) -> None:
         super().__init__()
         self.process_tests = process_tests
 
     def getTestCaseNames(self, test_case_class: type[unittest.TestCase]) -> list[str]:
         names = super().getTestCaseNames(test_case_class)
+        if self.live_git_tests:
+            return [name for name in names if name in LIVE_GIT_TESTS]
+        names = [name for name in names if name not in LIVE_GIT_TESTS and name != OPTIONAL_ARTIFACT_TEST]
         return [name for name in names if self.is_process_test(name) == self.process_tests]
 
     @staticmethod
@@ -2322,14 +2337,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--script", required=True)
     parser.add_argument("--process-tests", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--live-git-tests", action="store_true", help="run historical Git fixture cases only")
     arguments, remaining = parser.parse_known_args()
     BenchmarkHarnessTests.script = arguments.script
+    BenchmarkTestLoader.live_git_tests = arguments.live_git_tests
     program = unittest.main(
         argv=[sys.argv[0], *remaining],
         exit=False,
         testLoader=BenchmarkTestLoader(arguments.process_tests),
     )
-    return 0 if program.result.wasSuccessful() else 1
+    return 1 if not program.result.wasSuccessful() else 77 if program.result.skipped else 0
 
 
 if __name__ == "__main__":

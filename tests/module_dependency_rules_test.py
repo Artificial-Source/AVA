@@ -227,6 +227,16 @@ def load_policy(path: Path) -> set[tuple[str, str, str]]:
 
 def check(source: Path, policy: Path) -> list[str]:
     exceptions = load_policy(policy)
+    # New module roots must be deliberately classified before they can bypass
+    # the include-direction policy by falling outside its source inventory.
+    ava_root = source / "src" / "ava"
+    unknown = sorted(
+        directory.name for directory in ava_root.iterdir()
+        if directory.is_dir() and directory.name not in RECOGNIZED_FIRST_PARTY_ROOTS
+        and directory.name not in IGNORED_TREE_NAMES
+    )
+    if unknown:
+        raise PolicyError(f"unclassified module roots: {', '.join(unknown)}")
     forbidden = collect_edges(source)
     scanned = {(path, include, kind) for path, _, kind, _, _, include in forbidden}
     diagnostics = [
@@ -251,6 +261,10 @@ class ModuleDependencyRulesSelfTest(unittest.TestCase):
             policy = root / "policy.json"
             policy.write_text(json.dumps({"exceptions": exceptions}), encoding="utf-8")
             return check(root, policy)
+
+    def test_new_module_root_requires_classification(self) -> None:
+        with self.assertRaisesRegex(PolicyError, "unclassified module roots: new_backend"):
+            self.run_check('#include "ava/provider/provider.h"\n', [], module="new_backend")
 
     def test_allowed_edge(self) -> None:
         self.assertEqual(self.run_check('#include "ava/config/model_config.h"\n', [], module="provider"), [])

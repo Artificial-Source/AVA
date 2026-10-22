@@ -843,6 +843,56 @@ def run_harness_signal_cleanup_regression(
         )
 
 
+def run_ctest_timeout_cleanup_regression() -> int:
+    """Exercise CTest's SIGTERM/grace path, not just a manually sent signal."""
+    ctest = shutil.which("ctest")
+    if ctest is None or platform.system() != "Linux":
+        print("skipping package timeout cleanup: Linux and CTest are required")
+        return 77
+    owner_path = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "benchmark-backend.py"
+    spec = importlib.util.spec_from_file_location("ava_package_timeout_owner", owner_path)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+    with tempfile.TemporaryDirectory(prefix="ava-package-ctest-timeout-") as temporary:
+        root = pathlib.Path(temporary)
+        fixture = root / "fixture.py"
+        write_process_cleanup_fixture(fixture)
+        ready, descendant, leader = (root / name for name in ("ready", "descendant", "leader"))
+        sentinel = root / "unrelated"
+        sentinel.write_text("preserve me", encoding="utf-8")
+        script = str(pathlib.Path(__file__).resolve())
+        command = [
+            sys.executable, script, "--script", script, "--ava", str(fixture),
+            "--fake-provider", str(fixture), "--repo", str(root), "--build-dir", str(root),
+            "--signal-cleanup-regression-child", "--signal-cleanup-fixture", str(fixture),
+            "--signal-cleanup-descendant-ready", str(descendant), "--signal-cleanup-leader", str(leader),
+            "--signal-cleanup-ready", str(ready),
+        ]
+        quoted = " ".join(f"[==[{argument}]==]" for argument in command)
+        (root / "CTestTestfile.cmake").write_text(
+            f"add_test(package.timeout {quoted})\n"
+            'set_tests_properties(package.timeout PROPERTIES TIMEOUT 15 '
+            'TIMEOUT_AFTER_MATCH "1;PACKAGE_TIMEOUT_READY" '
+            'TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10)\n',
+            encoding="utf-8",
+        )
+        _, result = owner.run_process(
+            [ctest, "--test-dir", str(root), "--output-on-failure"],
+            root, os.environ.copy(), 30,
+        )
+        if result.returncode == 0 or "Timeout" not in result.stdout:
+            raise RuntimeError(f"nested CTest did not report timeout:\n{result.stdout}\n{result.stderr}")
+        if not ready.is_file() or not leader.is_file() or not descendant.is_file():
+            raise RuntimeError("nested CTest timed out before the package fixture became ready")
+        workspace = pathlib.Path(ready.read_text(encoding="utf-8"))
+        if workspace.exists() or workspace.parent.exists():
+            raise RuntimeError(f"CTest timeout left package workspace: {workspace}")
+        assert_owned_group_disappeared(int(leader.read_text()), "CTest package timeout")
+        if sentinel.read_text(encoding="utf-8") != "preserve me":
+            raise RuntimeError("CTest timeout cleanup changed an unrelated sentinel")
+    return 0
+
+
 def run_signal_cleanup_regression_child(args: argparse.Namespace) -> int:
     fixture = args.signal_cleanup_fixture
     descendant_ready = args.signal_cleanup_descendant_ready
@@ -851,8 +901,12 @@ def run_signal_cleanup_regression_child(args: argparse.Namespace) -> int:
     if fixture is None or descendant_ready is None or leader is None or ready is None:
         raise RuntimeError("signal-cleanup regression child is missing its synchronization paths")
 
+    workspace = None
     with PackageTestTerminationHandlers():
         try:
+            with PackageTestTerminationDeferral():
+                workspace = prepare_private_workspace()
+            raise_deferred_package_test_termination()
             process = start(
                 [sys.executable, str(fixture), "stall", str(descendant_ready), str(leader)],
                 env=os.environ.copy(),
@@ -860,11 +914,15 @@ def run_signal_cleanup_regression_child(args: argparse.Namespace) -> int:
             wait_for_path(descendant_ready, process, timeout=5.0)
             if owned_group_id(process) != int(leader.read_text(encoding="utf-8")):
                 raise RuntimeError("signal-cleanup child did not verify the fixture process group")
-            ready.write_text("ready\n", encoding="utf-8")
+            ready.write_text(str(workspace.root), encoding="utf-8")
+            print("PACKAGE_TIMEOUT_READY", flush=True)
             signal.pause()
             raise RuntimeError("signal-cleanup child resumed without a terminal signal")
         finally:
-            cleanup_verified_owned_processes()
+            if workspace is None:
+                cleanup_verified_owned_processes()
+            else:
+                cleanup_main_resources(workspace)
 
 
 def write_elf_shell_fixture(path: pathlib.Path, shell_script: str) -> None:
@@ -2621,6 +2679,10 @@ def run_main_package_tests(args: argparse.Namespace) -> int:
     if platform.system() != "Linux":
         print("skipping Linux package tests on non-Linux host")
         return 77
+    cache = (args.build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    if re.search(r"^OptionEnableLibcwd:[^=]+=ON$", cache, re.MULTILINE):
+        print("skipping Linux package tests: libcwd-enabled builds are not distributable; use a Release build")
+        return 77
 
     workspace: PackageTestWorkspace | None = None
     with PackageTestTerminationHandlers():
@@ -2657,9 +2719,12 @@ def main() -> int:
     parser.add_argument("--signal-cleanup-descendant-ready", type=pathlib.Path)
     parser.add_argument("--signal-cleanup-leader", type=pathlib.Path)
     parser.add_argument("--signal-cleanup-ready", type=pathlib.Path)
+    parser.add_argument("--timeout-cleanup-self-test", action="store_true")
     args = parser.parse_args()
 
     try:
+        if args.timeout_cleanup_self_test:
+            return run_ctest_timeout_cleanup_regression()
         if args.signal_cleanup_regression_child:
             return run_signal_cleanup_regression_child(args)
         return run_main_package_tests(args)

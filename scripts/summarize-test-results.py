@@ -8,8 +8,8 @@ stderr, and failure body content are never printed; test names are escaped
 and length-limited.
 
 Exit status is 0 when every file exists, parses, and contains at least one
-test case, and all strict gate options below are satisfied; 1 otherwise
-(argparse usage errors exit 2). Strict options turn the summary into a gate:
+test case, no test was unable to run, and all strict gate options below are
+satisfied; 1 otherwise (argparse usage errors exit 2). Strict options turn the summary into a gate:
 `--require` names a test that must be present exactly once, executed (not
 skipped), and passed; `--require-count` pins the exact total number of test
 cases; `--require-no-skips` rejects any skipped test. When any strict option
@@ -42,11 +42,12 @@ def sanitize_name(name: str) -> str:
 
 
 class TestCase:
-    def __init__(self, name: str, time: float | None, failed: bool, skipped: bool) -> None:
+    def __init__(self, name: str, time: float | None, failed: bool, skipped: bool, not_run: bool = False) -> None:
         self.name = name
         self.time = time
         self.failed = failed
         self.skipped = skipped
+        self.not_run = not_run
 
 
 def parse_time(raw: str | None) -> float | None:
@@ -82,12 +83,18 @@ def load_cases(path: str) -> tuple[list[TestCase], float | None]:
             name = case.get("name")
             if not name:
                 raise SummaryError(f"malformed JUnit XML in {path}: testcase without a name")
+            skip = case.find("skipped")
+            intentional_skip = skip is not None and skip.get("message", "") == "SKIP_RETURN_CODE=77"
+            not_run = (skip is not None and not intentional_skip) or (
+                case.get("status", "").lower() in ("notrun", "not run", "disabled") and not intentional_skip
+            )
             cases.append(
                 TestCase(
                     name=name,
                     time=parse_time(case.get("time")),
-                    failed=case.find("failure") is not None or case.find("error") is not None,
-                    skipped=case.find("skipped") is not None,
+                    failed=not_run or case.find("failure") is not None or case.find("error") is not None,
+                    skipped=intentional_skip,
+                    not_run=not_run,
                 )
             )
     return cases, suite_time if have_suite_time else None
@@ -132,7 +139,9 @@ def enforce_strict(
     required_count: int | None,
     no_skips: bool,
 ) -> list[str]:
-    problems: list[str] = []
+    problems: list[str] = [
+        f"test could not run: {sanitize_name(case.name)}" for case in cases if case.not_run
+    ]
     by_name: dict[str, int] = {}
     for case in cases:
         by_name[case.name] = by_name.get(case.name, 0) + 1

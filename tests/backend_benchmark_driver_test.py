@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import re
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -23,6 +26,7 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 import backend_benchmark_test as harness  # noqa: E402
+from timeout_support import test_timeout
 
 
 def discovered_method_names() -> list[str]:
@@ -47,7 +51,7 @@ def suite_case_names(suite) -> set[str]:
 
 def expected_general_method_names() -> frozenset[str]:
     names = discovered_method_names()
-    return frozenset([*names[:13], "test_historical_v2_artifact_still_validates"])
+    return frozenset(names[:13])
 
 
 def ran_count(completed: subprocess.CompletedProcess[str]) -> int | None:
@@ -186,8 +190,10 @@ class BenchmarkDriverTests(unittest.TestCase):
         process_tests: bool,
         patterns: list[str] | None = None,
         selector: str | None = None,
+        live_git_tests: bool = False,
     ):
         loader = harness.BenchmarkTestLoader(process_tests)
+        loader.live_git_tests = live_git_tests
         if patterns is not None:
             loader.testNamePatterns = patterns
         if selector is not None:
@@ -209,58 +215,56 @@ class BenchmarkDriverTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            timeout=test_timeout(timeout),
             env=environment,
             check=False,
         )
 
-    def test_loader_classification_matches_first_thirteen_plus_historical_v2(self) -> None:
-        names = discovered_method_names()
-        expected_general = expected_general_method_names()
-        classified_general = frozenset(
-            name for name in names if not harness.BenchmarkTestLoader.is_process_test(name)
-        )
-        process_names = frozenset(names) - classified_general
-        self.assertEqual(len(names), 70)
-        self.assertEqual(classified_general, expected_general)
-        self.assertEqual(len(classified_general), 14)
-        self.assertEqual(len(process_names), 56)
-        self.assertTrue(classified_general.isdisjoint(process_names))
-        self.assertEqual(classified_general | process_names, frozenset(names))
+    def test_loader_classification_matches_fixture_dependencies(self) -> None:
+        names = frozenset(discovered_method_names())
+        self.assertTrue(harness.LIVE_GIT_TESTS)
+        self.assertLess(harness.LIVE_GIT_TESTS, names)
+        self.assertTrue(all(harness.BenchmarkTestLoader.is_process_test(name) for name in harness.LIVE_GIT_TESTS))
+        self.assertTrue(expected_general_method_names().isdisjoint(harness.LIVE_GIT_TESTS))
 
-    def test_ctest_entries_preserve_both_names_and_timeouts(self) -> None:
-        cmake = (TESTS_DIR / "CMakeLists.txt").read_text(encoding="utf-8")
-        self.assertIn("NAME ava_benchmark.harness_self_test", cmake)
-        self.assertIn("NAME ava_benchmark.process_harness_self_test", cmake)
-        self.assertIn("--process-tests", cmake)
-        self.assertRegex(
-            cmake,
-            r"set_tests_properties\(ava_benchmark\.harness_self_test PROPERTIES\s+TIMEOUT 30",
+    def test_ctest_entries_preserve_scheduling_contract(self) -> None:
+        build = os.environ.get("AVA_TEST_BUILD_DIR")
+        if build is None:
+            self.skipTest("effective registration checks require AVA_TEST_BUILD_DIR")
+        completed = subprocess.run(
+            ["ctest", "--test-dir", build, "--show-only=json-v1"],
+            check=True, capture_output=True, text=True, timeout=test_timeout(15),
         )
-        self.assertRegex(
-            cmake,
-            r"set_tests_properties\(ava_benchmark\.process_harness_self_test PROPERTIES\s+TIMEOUT 30",
-        )
-        self.assertRegex(
-            cmake,
-            r"set_tests_properties\(ava_tests\.model_selector_wait PROPERTIES TIMEOUT 15",
-        )
-        self.assertRegex(
-            cmake,
-            r"set_tests_properties\(ava_tests\.benchmark_driver PROPERTIES TIMEOUT 15",
-        )
+        tests = {
+            test["name"]: {prop["name"]: prop["value"] for prop in test["properties"]}
+            for test in json.loads(completed.stdout)["tests"]
+        }
+        for name in ("ava_benchmark.harness_self_test", "ava_benchmark.process_harness_self_test", "ava_tests.benchmark_driver"):
+            properties = tests[name]
+            self.assertGreater(properties["TIMEOUT"], 0, name)
+            self.assertTrue({"benchmark", "offline", "self-test"} <= set(properties["LABELS"]), name)
+        live = tests["ava_benchmark.live_git_self_test"]
+        self.assertGreaterEqual(live["TIMEOUT"], 120)
+        self.assertTrue(live["RUN_SERIAL"])
+        self.assertIn("ava_benchmark_git_fixture", live["RESOURCE_LOCK"])
+        for name in ("ava_benchmark.smoke", "ava_benchmark.process_smoke"):
+            self.assertTrue(tests[name]["RUN_SERIAL"], name)
+        for name, properties in tests.items():
+            if name.startswith("ava_tests."):
+                self.assertEqual(properties["SKIP_RETURN_CODE"], 77, name)
 
     def test_loader_groups_are_disjoint_and_complete(self) -> None:
         names = frozenset(discovered_method_names())
         expected_general = expected_general_method_names()
         general = suite_case_names(self.load_group(False))
         process = suite_case_names(self.load_group(True))
+        live = suite_case_names(self.load_group(True, live_git_tests=True))
+        optional = {harness.OPTIONAL_ARTIFACT_TEST}
         self.assertEqual(general, expected_general)
-        self.assertEqual(process, names - expected_general)
-        self.assertEqual(len(general), 14)
-        self.assertEqual(len(process), 56)
-        self.assertFalse(general & process)
-        self.assertEqual(general | process, names)
+        self.assertEqual(live, harness.LIVE_GIT_TESTS)
+        self.assertEqual(process, names - general - live - optional)
+        self.assertFalse(general & process or live & process or live & general)
+        self.assertEqual(general | process | live | optional, names)
 
     def test_k_filter_stays_inside_selected_group(self) -> None:
         general_k = suite_case_names(self.load_group(False, ["*statistics_use_nearest*"]))
@@ -313,8 +317,9 @@ class BenchmarkDriverTests(unittest.TestCase):
         process_class = suite_case_names(
             self.load_group(True, selector="BenchmarkHarnessTests")
         )
-        self.assertEqual(len(general_class), 14)
-        self.assertEqual(len(process_class), 56)
+        self.assertEqual(general_class, expected_general_method_names())
+        self.assertEqual(process_class, frozenset(discovered_method_names()) - general_class
+                         - harness.LIVE_GIT_TESTS - {harness.OPTIONAL_ARTIFACT_TEST})
 
         process_without_flag = self.run_harness(
             "-v",
@@ -523,5 +528,97 @@ class BenchmarkDriverTests(unittest.TestCase):
             self.assertFalse((decoy_work / "README").exists())
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "descendant custody requires Linux procfs")
+class OwnedProcessTests(unittest.TestCase):
+    def run_owned_fixture(self, boundary: str) -> None:
+        module = harness.load_module(SCRIPT_PATH)
+        with tempfile.TemporaryDirectory(prefix="ava-bench-owner-") as temporary:
+            root = pathlib.Path(temporary)
+            marker = root / "descendant"
+            child = (
+                "import os,pathlib,signal,sys,time; "
+                "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)"
+            )
+            leader = (
+                "import pathlib,subprocess,sys,time; "
+                "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]],start_new_session=True); "
+                "marker=pathlib.Path(sys.argv[2]); "
+                "exec('while not marker.exists(): time.sleep(0.001)'); "
+                "time.sleep(60 if sys.argv[3]!='normal' else 0)"
+            )
+            command = [sys.executable, "-c", leader, child, str(marker), boundary]
+            original = subprocess.Popen.communicate
+            first = True
+
+            def communicate(process, *args, **kwargs):
+                nonlocal first
+                if first and boundary != "normal":
+                    first = False
+                    deadline = time.monotonic() + test_timeout(5)
+                    while not marker.exists():
+                        if process.poll() is not None or time.monotonic() >= deadline:
+                            raise AssertionError("owned descendant did not publish readiness")
+                        time.sleep(0.005)
+                    if boundary == "cancel":
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    if boundary == "exception":
+                        raise RuntimeError("injected collection failure")
+                    kwargs["timeout"] = 0.02
+                return original(process, *args, **kwargs)
+
+            with mock.patch.object(subprocess.Popen, "communicate", communicate):
+                if boundary == "timeout":
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        module.run_process(command, root, os.environ.copy(), test_timeout(5))
+                elif boundary == "cancel":
+                    with self.assertRaises(SystemExit) as raised:
+                        module.run_process(command, root, os.environ.copy(), test_timeout(5))
+                    self.assertEqual(raised.exception.code, 143)
+                elif boundary == "exception":
+                    with self.assertRaisesRegex(RuntimeError, "injected collection failure"):
+                        module.run_process(command, root, os.environ.copy(), test_timeout(5))
+                else:
+                    elapsed, completed = module.run_process(command, root, os.environ.copy(), test_timeout(5))
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                    self.assertGreater(elapsed, 0)
+            pid = int(marker.read_text())
+            with self.assertRaises(ProcessLookupError, msg=f"owned descendant {pid} survived {boundary}"):
+                os.kill(pid, 0)
+
+    def test_timeout_reaps_detached_term_refusing_descendant(self) -> None:
+        self.run_owned_fixture("timeout")
+
+    def test_cancel_reaps_detached_term_refusing_descendant(self) -> None:
+        self.run_owned_fixture("cancel")
+
+    def test_collection_failure_reaps_detached_descendant(self) -> None:
+        self.run_owned_fixture("exception")
+
+    def test_success_reaps_unfinished_descendant(self) -> None:
+        self.run_owned_fixture("normal")
+
+
+def main() -> int:
+    live = "--live-git-tests" in sys.argv
+    if live:
+        sys.argv.remove("--live-git-tests")
+    loader = unittest.defaultTestLoader
+    names = loader.getTestCaseNames(BenchmarkDriverTests)
+    live_driver = "test_live_comparison_reuses_private_seed_but_isolates_worktrees"
+    suite = unittest.TestSuite(
+        BenchmarkDriverTests(name) for name in names if (name == live_driver) == live
+    )
+    if not live:
+        suite.addTests(loader.loadTestsFromTestCase(OwnedProcessTests))
+    if live:
+        harness.BenchmarkHarnessTests.script = SCRIPT_PATH
+        live_loader = harness.BenchmarkTestLoader(True)
+        live_loader.live_git_tests = True
+        suite.addTests(live_loader.loadTestsFromTestCase(harness.BenchmarkHarnessTests))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    return 1 if not result.wasSuccessful() else 77 if result.skipped else 0
+
+
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(main())

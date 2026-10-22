@@ -659,7 +659,9 @@ void benchmark_shared_shutdown(BackendBenchmarkOptions const& options)
     children.push_back(spawn_fixture(*supervisor, application, options, "ignore-term", StreamModeV1::Discard, StreamModeV1::Capture,
                                      std::chrono::milliseconds(options.grace_milliseconds)));
     std::string received;
-    ready = ready && children.back().standard_output && read_until(*children.back().standard_output, received, "READY\n", Clock::now() + 2s);
+    bool const child_ready = children.back().standard_output && read_until(*children.back().standard_output, received, "READY\n",
+                                                                           Clock::now() + std::chrono::milliseconds(options.deadline_milliseconds));
+    ready = child_ready && ready;
   }
   auto const started = Clock::now();
   auto const shutdown = supervisor->shutdown(Clock::now() + std::chrono::milliseconds(options.deadline_milliseconds));

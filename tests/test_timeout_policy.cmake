@@ -4,7 +4,7 @@
 # the given registered test names:
 #
 # 1. Finite default: every test that did not set an explicit TIMEOUT property
-#    receives AVA_DEFAULT_TEST_TIMEOUT_SECONDS (120s), so no suite can hang
+#    receives AVA_DEFAULT_TEST_TIMEOUT_SECONDS (60s), so no suite can hang
 #    CTest forever. Explicit narrower or longer limits are preserved.
 # 2. Debug override: when AVA_DEBUG_NO_TIMEOUT is present in the environment
 #    at *configure* time (e.g. `AVA_DEBUG_NO_TIMEOUT=1 aap-configure`), every
@@ -22,7 +22,7 @@
 # waits, execute_process TIMEOUTs, futures) are intentionally left as-authored:
 # many of them encode negative assertions ("this must not happen") and
 # inflating them blindly would turn green tests into multi-hour hangs.
-set(AVA_DEFAULT_TEST_TIMEOUT_SECONDS 120)
+set(AVA_DEFAULT_TEST_TIMEOUT_SECONDS 60)
 
 function(ava_apply_test_timeout_policy)
   # Fill only unset per-test TIMEOUT properties with the finite default.

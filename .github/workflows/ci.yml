@@ -96,7 +96,13 @@ jobs:
 
       - name: Summarize test results
         if: always()
-        run: python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-${{ matrix.build_type }}.xml"
+        run: |
+          python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-${{ matrix.build_type }}.xml" \
+            --require ava_tests.containment --require ava_tests.tools --require ava_tests.session \
+            --require ava_tests.process_monitor --require ava_tests.process_adoption_posix \
+            --require ava_tests.process_capability_posix --require ava_tests.process_deadline \
+            --require ava_tests.process_launch_protocol_posix --require ava_tests.process_readiness \
+            --require ava_tests.process_supervisor_posix --require ava_release.provenance
 
       - name: Run required real-terminal checks
         if: matrix.build_type == 'Release' && env.AVA_FULL_TERMINAL != 'true'
@@ -239,7 +245,13 @@ jobs:
 
       - name: Summarize test results
         if: always()
-        run: python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-arm64-release.xml"
+        run: |
+          python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-arm64-release.xml" \
+            --require ava_tests.containment --require ava_tests.tools --require ava_tests.session \
+            --require ava_tests.process_monitor --require ava_tests.process_adoption_posix \
+            --require ava_tests.process_capability_posix --require ava_tests.process_deadline \
+            --require ava_tests.process_launch_protocol_posix --require ava_tests.process_readiness \
+            --require ava_tests.process_supervisor_posix --require ava_release.provenance
 
       - name: Build strict release package
         run: |
@@ -357,7 +369,13 @@ jobs:
 
       - name: Summarize test results
         if: always() && steps.sanitizer-test.outcome != 'skipped'
-        run: python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-sanitize.xml"
+        run: |
+          python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-sanitize.xml" \
+            --require ava_tests.containment --require ava_tests.tools --require ava_tests.session \
+            --require ava_tests.process_monitor --require ava_tests.process_adoption_posix \
+            --require ava_tests.process_capability_posix --require ava_tests.process_deadline \
+            --require ava_tests.process_launch_protocol_posix --require ava_tests.process_readiness \
+            --require ava_tests.process_supervisor_posix --require ava_release.provenance
 
   acp-sdk-interop:
     name: Official ACP SDK interoperability (Release)

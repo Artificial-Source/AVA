@@ -91,6 +91,16 @@ class SummarizeTestResultsTests(unittest.TestCase):
         self.assertNotIn(SECRET, result.stderr)
         self.assertIn("required test failed: suite.fail", result.stderr)
 
+    def test_not_run_is_not_an_intentional_skip(self) -> None:
+        for message in ("Not Run", "Unable to find executable", "", "Disabled"):
+            with self.subTest(message=message):
+                case = f'<testcase name="suite.missing" status="notrun"><skipped message="{message}"/></testcase>'
+                path = self.write("not-run.xml", junit_document(case))
+                result = self.run_summary(str(path))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("1 failed, 0 skipped", result.stdout)
+                self.assertIn("test could not run: suite.missing", result.stderr)
+
     def test_names_are_escaped(self) -> None:
         path = self.write("control.xml", junit_document(CONTROL_CASE))
 

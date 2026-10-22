@@ -444,4 +444,5 @@ class ReleaseProvenanceTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    program = unittest.main(exit=False)
+    raise SystemExit(1 if not program.result.wasSuccessful() else 77 if program.result.skipped else 0)

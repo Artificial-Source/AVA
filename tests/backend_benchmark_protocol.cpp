@@ -107,7 +107,9 @@ void emit_helper_measurement(std::string_view benchmark_case, std::string_view p
     if (!first)
       std::cout << ',';
     first = false;
-    std::cout << "{\"ordinal\":" << observation.ordinal << ",\"value\":" << std::setprecision(17) << observation.value << ",\"metrics\":";
+    std::cout << "{\"ordinal\":" << observation.ordinal << ",\"value\":";
+    emit_scalar(observation.value);
+    std::cout << ",\"metrics\":";
     emit_fields(observation.metrics);
     std::cout << ",\"checks\":";
     emit_fields(observation.checks);

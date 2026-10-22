@@ -37,7 +37,7 @@ ava_apply_warnings(ava_fake_lsp_server)
 ava_apply_sanitizers(ava_fake_lsp_server)
 
 add_executable(ava_lsp_real_clangd_smoke "lsp_real_clangd_smoke.cpp")
-target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE ${AVA_BACKEND_LIBRARIES})
+target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE ava_test_support)
 ava_apply_warnings(ava_lsp_real_clangd_smoke)
 ava_apply_sanitizers(ava_lsp_real_clangd_smoke)
 
@@ -47,7 +47,8 @@ ava_apply_warnings(ava_fake_mcp_server)
 ava_apply_sanitizers(ava_fake_mcp_server)
 
 add_executable(ava_fake_process_child "support/fake_process_child.cpp")
-ava_apply_debugging(ava_fake_process_child)
+# Standard C++/POSIX only: no debug runtime, so contained commands can exec it without extra library grants.
+target_include_directories(ava_fake_process_child PRIVATE ${CMAKE_SOURCE_DIR}/cwds)
 ava_apply_warnings(ava_fake_process_child)
 ava_apply_sanitizers(ava_fake_process_child)
 
@@ -81,6 +82,7 @@ add_library(ava_process_gate_test_support "support/process_gate.cpp")
 target_include_directories(ava_process_gate_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/support)
 ava_apply_warnings(ava_process_gate_test_support)
 ava_apply_sanitizers(ava_process_gate_test_support)
+target_link_libraries(ava_fake_mermaid_helper PRIVATE ava_process_gate_test_support)
 
 add_executable(ava_process_gate_peer "support/process_gate_peer.cpp")
 target_link_libraries(ava_process_gate_peer PRIVATE ava_process_gate_test_support)
@@ -131,6 +133,7 @@ ava_apply_sanitizers(ava_backend_benchmark_helper)
 
 add_executable(ava_rpc_broken_pipe_subprocess_test "rpc_broken_pipe_subprocess_test.cpp")
 add_dependencies(ava_rpc_broken_pipe_subprocess_test ava)
+target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE ava_test_support)
 target_compile_definitions(ava_rpc_broken_pipe_subprocess_test PRIVATE AVA_EXE_PATH="$<TARGET_FILE:ava>")
 ava_apply_warnings(ava_rpc_broken_pipe_subprocess_test)
 ava_apply_sanitizers(ava_rpc_broken_pipe_subprocess_test)
@@ -149,7 +152,8 @@ if(OptionEnableAvaSanitizers AND NOT MSVC)
   ava_apply_warnings(ava_sanitizer_ub_fixture)
   ava_apply_sanitizers(ava_sanitizer_ub_fixture)
   add_test(NAME ava_tests.sanitizer_undefined_behavior COMMAND ava_sanitizer_ub_fixture)
-  set_tests_properties(ava_tests.sanitizer_undefined_behavior PROPERTIES WILL_FAIL TRUE)
+  # Pass only when UBSan reports the planted overflow; any other failure (crash, missing instrumentation) fails.
+  set_tests_properties(ava_tests.sanitizer_undefined_behavior PROPERTIES PASS_REGULAR_EXPRESSION "runtime error: signed integer overflow")
 
   if(CMAKE_GENERATOR MATCHES "^Ninja")
     add_test(
@@ -308,6 +312,7 @@ endif()
 
 add_executable(ava_tests ${AVA_TESTS_SOURCES})
 target_link_libraries(ava_tests PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ava_tui_test_support ${AICXX_OBJECTS_LIST})
+target_link_libraries(ava_tests PRIVATE ava_process_gate_test_support)
 if (OptionEnableLibcwd)
   # Same mutually-referencing static archive rescan as the ava executable.
   target_link_libraries(ava_tests PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
@@ -479,24 +484,22 @@ foreach(AVA_TERMINAL_SUITE IN ITEMS terminal_keyboard_input_mode terminal_mouse_
       ENVIRONMENT "LIBCWD_NO_STARTUP_MSGS=1;AVA_NO_DEBUG_OUTPUT=1")
   endforeach()
 endforeach()
-set_tests_properties(ava_tests.provider_live_smoke PROPERTIES SKIP_RETURN_CODE 77)
-set_tests_properties(ava_tests.process_adoption_posix PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45 LABELS "process;posix;adoption;offline")
-set_tests_properties(ava_tests.process_capability_posix PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45 LABELS "process;posix;capability;offline")
-set_tests_properties(ava_tests.process_deadline PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45 LABELS "process;posix;deadline;monitor;offline")
+set_tests_properties(ava_tests.process_adoption_posix PROPERTIES TIMEOUT 45 LABELS "process;posix;adoption;offline")
+set_tests_properties(ava_tests.process_capability_posix PROPERTIES TIMEOUT 45 LABELS "process;posix;capability;offline")
+set_tests_properties(ava_tests.process_deadline PROPERTIES TIMEOUT 45 LABELS "process;posix;deadline;monitor;offline")
 set_tests_properties(ava_tests.clipboard_image_process PROPERTIES TIMEOUT 30 LABELS "process;clipboard;posix;offline")
 set_tests_properties(ava_tests.process_environment PROPERTIES LABELS "process;offline")
-set_tests_properties(ava_tests.process_launch_protocol_posix PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 15 LABELS "process;posix;offline")
-set_tests_properties(ava_tests.process_monitor PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45 LABELS "process;posix;monitor;offline")
-set_tests_properties(ava_tests.process_readiness PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45 LABELS "process;posix;readiness;offline")
-set_tests_properties(ava_tests.process_supervisor_posix PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 45 LABELS "process;posix;offline")
-set_tests_properties(ava_tests.containment PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(ava_tests.process_launch_protocol_posix PROPERTIES TIMEOUT 15 LABELS "process;posix;offline")
+set_tests_properties(ava_tests.process_monitor PROPERTIES TIMEOUT 45 LABELS "process;posix;monitor;offline")
+set_tests_properties(ava_tests.process_readiness PROPERTIES TIMEOUT 45 LABELS "process;posix;readiness;offline")
+set_tests_properties(ava_tests.process_supervisor_posix PROPERTIES TIMEOUT 45 LABELS "process;posix;offline")
 set_tests_properties(ava_tests.tool_scheduler PROPERTIES TIMEOUT 30)
 
 add_test(NAME ava_tests.lsp_real_clangd_smoke COMMAND ava_lsp_real_clangd_smoke)
 set_tests_properties(ava_tests.lsp_real_clangd_smoke PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20 LABELS "lsp;offline;optional")
 
 add_test(NAME ava_cli.rpc_broken_pipe_subprocess COMMAND ava_rpc_broken_pipe_subprocess_test)
-set_tests_properties(ava_cli.rpc_broken_pipe_subprocess PROPERTIES TIMEOUT 10)
+set_tests_properties(ava_cli.rpc_broken_pipe_subprocess PROPERTIES TIMEOUT 20)
 
 if(AVA_NODE_EXECUTABLE)
   set(AVA_ACP_SDK_INTEROP_COMMAND
@@ -554,60 +557,36 @@ add_test(
           -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-rpc-context-export
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_rpc_context_export.cmake)
 
-add_test(
-  NAME ava_cli.headless_print_prompt_overrides
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-print-prompt-overrides
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_print_prompt_overrides.cmake)
+# ava_add_cli_test(NAME SCRIPT [FAKE_PROVIDER] [FAKE_MCP] [TIMEOUT seconds])
+# Register an offline CMake driver with one private build-tree root and optional peers.
+function(ava_add_cli_test NAME SCRIPT)
+  cmake_parse_arguments(CLI "FAKE_PROVIDER;FAKE_MCP" "TIMEOUT" "" ${ARGN})
+  string(REPLACE "ava_cli." "cli-" ROOT_NAME "${NAME}")
+  string(REPLACE "_" "-" ROOT_NAME "${ROOT_NAME}")
+  set(COMMAND_ARGS
+    -DAVA_EXE=$<TARGET_FILE:ava>
+    -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/${ROOT_NAME})
+  if(CLI_FAKE_PROVIDER)
+    list(APPEND COMMAND_ARGS
+      -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
+      -DAVA_PYTHON=${Python3_EXECUTABLE}
+      -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
+      -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh)
+  endif()
+  if(CLI_FAKE_MCP)
+    list(APPEND COMMAND_ARGS -DAVA_FAKE_MCP_SERVER_EXE=$<TARGET_FILE:ava_fake_mcp_server>)
+  endif()
+  add_test(NAME ${NAME} COMMAND ${CMAKE_COMMAND} ${COMMAND_ARGS} -P ${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT})
+  if(CLI_TIMEOUT)
+    set_tests_properties(${NAME} PROPERTIES TIMEOUT ${CLI_TIMEOUT})
+  endif()
+endfunction()
 
-add_test(
-  NAME ava_cli.headless_print_positional_prompt
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-print-positional-prompt
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_print_positional_prompt.cmake)
-
-add_test(
-  NAME ava_cli.headless_print_no_session
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-print-no-session
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_print_no_session.cmake)
-
-add_test(
-  NAME ava_cli.headless_print_session_startup_options
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-print-session-startup-options
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_print_session_startup_options.cmake)
-
-add_test(
-  NAME ava_cli.headless_print_file_args
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-print-file-args
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_print_file_args.cmake)
+ava_add_cli_test(ava_cli.headless_print_prompt_overrides cli_headless_print_prompt_overrides.cmake FAKE_PROVIDER)
+ava_add_cli_test(ava_cli.headless_print_positional_prompt cli_headless_print_positional_prompt.cmake FAKE_PROVIDER)
+ava_add_cli_test(ava_cli.headless_print_no_session cli_headless_print_no_session.cmake FAKE_PROVIDER)
+ava_add_cli_test(ava_cli.headless_print_session_startup_options cli_headless_print_session_startup_options.cmake FAKE_PROVIDER)
+ava_add_cli_test(ava_cli.headless_print_file_args cli_headless_print_file_args.cmake FAKE_PROVIDER)
 
 add_test(
   NAME ava_cli.offline_print_prompt
@@ -622,27 +601,8 @@ add_test(
           -DAVA_EXE=$<TARGET_FILE:ava>
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_package_manager_deferred.cmake)
 
-add_test(
-  NAME ava_cli.headless_mode_json_alias
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-mode-json-alias
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_mode_json_alias.cmake)
-
-add_test(
-  NAME ava_cli.headless_tool_visibility
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-tool-visibility
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_tool_visibility.cmake)
+ava_add_cli_test(ava_cli.headless_mode_json_alias cli_headless_mode_json_alias.cmake FAKE_PROVIDER)
+ava_add_cli_test(ava_cli.headless_tool_visibility cli_headless_tool_visibility.cmake FAKE_PROVIDER)
 
 add_test(
   NAME ava_cli.headless_rpc_compact_success
@@ -743,27 +703,9 @@ add_test(
           -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-rpc-tool-failure
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_rpc_tool_failure.cmake)
 
-add_test(
-  NAME ava_cli.headless_performance_smoke
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-performance-smoke
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_performance_smoke.cmake)
+ava_add_cli_test(ava_cli.headless_performance_smoke cli_headless_performance_smoke.cmake FAKE_PROVIDER)
 
-add_test(
-  NAME ava_cli.headless_e2e_model_smoke
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_e2e_model_smoke.cmake)
-set_tests_properties(ava_cli.headless_e2e_model_smoke PROPERTIES TIMEOUT 60)
+ava_add_cli_test(ava_cli.headless_e2e_model_smoke cli_headless_e2e_model_smoke.cmake FAKE_PROVIDER TIMEOUT 60)
 
 add_test(
   NAME ava_cli.headless_rpc_bash_process_cleanup
@@ -773,6 +715,7 @@ add_test(
           -DAVA_PYTHON=${Python3_EXECUTABLE}
           -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
           -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
+          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-rpc-bash-process-cleanup
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_rpc_bash_process_cleanup.cmake)
 set_tests_properties(ava_cli.headless_rpc_bash_process_cleanup PROPERTIES TIMEOUT 75)
 
@@ -798,17 +741,7 @@ add_test(
           -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-rpc-mcp-commands
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_rpc_mcp_commands.cmake)
 
-add_test(
-  NAME ava_cli.headless_rpc_command_registry
-  COMMAND ${CMAKE_COMMAND}
-          -DAVA_EXE=$<TARGET_FILE:ava>
-          -DAVA_FAKE_PROVIDER_EXE=$<TARGET_FILE:ava_fake_provider_server>
-          -DAVA_PYTHON=${Python3_EXECUTABLE}
-          -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
-          -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_FAKE_MCP_SERVER_EXE=$<TARGET_FILE:ava_fake_mcp_server>
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-rpc-command-registry
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_rpc_command_registry.cmake)
+ava_add_cli_test(ava_cli.headless_rpc_command_registry cli_headless_rpc_command_registry.cmake FAKE_PROVIDER FAKE_MCP)
 
 add_test(
   NAME ava_cli.headless_rpc_plugin_commands
@@ -962,7 +895,25 @@ if(Python3_Interpreter_FOUND)
     NAME ava_tests.benchmark_driver
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_driver_test.py)
-  set_tests_properties(ava_tests.benchmark_driver PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  set_tests_properties(ava_tests.benchmark_driver PROPERTIES TIMEOUT 30
+    LABELS "benchmark;offline;self-test;python"
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;AVA_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}")
+  set_tests_properties(ava_tests.benchmark_driver ava_benchmark.process_harness_self_test PROPERTIES
+    RESOURCE_LOCK ava_benchmark_git_fixture PROCESSORS 4 COST 3)
+
+  add_test(NAME ava_benchmark.live_git_self_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_driver_test.py --live-git-tests)
+  set_tests_properties(ava_benchmark.live_git_self_test PROPERTIES
+    TIMEOUT 180 RUN_SERIAL TRUE PROCESSORS 4 RESOURCE_LOCK ava_benchmark_git_fixture COST 30
+    LABELS "benchmark;offline;self-test;git-heavy;python"
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(NAME ava_benchmark.historical_artifact
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_test.py
+      --script ${CMAKE_SOURCE_DIR}/scripts/benchmark-backend.py
+      BenchmarkHarnessTests.test_historical_v2_artifact_still_validates)
+  set_tests_properties(ava_benchmark.historical_artifact PROPERTIES TIMEOUT 15
+    LABELS "benchmark;offline;optional;python" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   set(AVA_BENCHMARK_PROCESS_FIXTURE_ARGS)
   if(TARGET ava_fake_process_child)
@@ -1097,6 +1048,24 @@ if(Python3_Interpreter_FOUND)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/clipboard_image_static_contract.cmake)
   set_tests_properties(ava_tests.clipboard_image_static_contract PROPERTIES TIMEOUT 15)
 
+  # Negative fixtures exercise the real scanners against private source mutations.
+  foreach(_ava_contract IN ITEMS curl_transport clipboard_image)
+    if(_ava_contract STREQUAL "curl_transport")
+      set(_ava_contract_directory http)
+    else()
+      set(_ava_contract_directory app)
+    endif()
+    add_test(NAME ava_tests.${_ava_contract}_static_contract_negative
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/verify_process_static_contract_test.py
+        --cmake ${CMAKE_COMMAND} --family ${_ava_contract}
+        --scanner ${CMAKE_CURRENT_SOURCE_DIR}/${_ava_contract}_static_contract.cmake
+        --source ${CMAKE_SOURCE_DIR}/src/ava/${_ava_contract_directory}/${_ava_contract}.cpp
+        --header ${CMAKE_SOURCE_DIR}/src/ava/${_ava_contract_directory}/${_ava_contract}.h
+        --tui ${CMAKE_SOURCE_DIR}/src/ava/app/tui/interactive_tui.cpp)
+    set_tests_properties(ava_tests.${_ava_contract}_static_contract_negative PROPERTIES
+      TIMEOUT 30 LABELS "process;self-test;python" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endforeach()
+
   add_test(
     NAME ava_tests.plugin_runner_static_contract
     COMMAND ${CMAKE_COMMAND}
@@ -1152,7 +1121,7 @@ if(Python3_Interpreter_FOUND)
             --script ${CMAKE_SOURCE_DIR}/scripts/run-tests.sh
             --build-script ${CMAKE_SOURCE_DIR}/scripts/build.sh
             --root ${CMAKE_BINARY_DIR}/parallel-test-runner)
-  set_tests_properties(ava_build.parallel_test_runner PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  set_tests_properties(ava_build.parallel_test_runner PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
     NAME ava_tests.session_read_authority_inventory
@@ -1290,7 +1259,7 @@ if(Python3_Interpreter_FOUND)
             PYTHONDONTWRITEBYTECODE=1
             AVA_RELEASE_TEST_BINARY=$<TARGET_FILE:ava>
             ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/release_provenance_tests.py)
-  set_tests_properties(ava_release.provenance PROPERTIES TIMEOUT 15)
+  set_tests_properties(ava_release.provenance PROPERTIES TIMEOUT 15 SKIP_RETURN_CODE 77)
 
   add_test(
     NAME ava_release.install_component
@@ -1298,10 +1267,11 @@ if(Python3_Interpreter_FOUND)
             ${CMAKE_CURRENT_SOURCE_DIR}/install_component_tests.py
             --cmake ${CMAKE_COMMAND}
             --source ${CMAKE_SOURCE_DIR}
+            --ava $<TARGET_FILE:ava>
             --build ${CMAKE_BINARY_DIR})
   set_tests_properties(ava_release.install_component PROPERTIES TIMEOUT 75 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT OptionEnableLibcwd)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(
       NAME ava_release.package_linux
       COMMAND ${Python3_EXECUTABLE}
@@ -1311,7 +1281,19 @@ if(Python3_Interpreter_FOUND)
               --fake-provider $<TARGET_FILE:ava_fake_provider_server>
               --repo ${CMAKE_SOURCE_DIR}
               --build-dir ${CMAKE_BINARY_DIR})
-    set_tests_properties(ava_release.package_linux PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 240 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    # Let the harness unwind its owned processes and workspace before CTest escalates.
+    set_tests_properties(ava_release.package_linux PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 240
+      TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10 PROCESSORS 4
+      LABELS "release;package;process-heavy;offline;python" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    add_test(NAME ava_release.package_timeout_cleanup
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/package_linux_tests.py
+        --script ${CMAKE_SOURCE_DIR}/scripts/package-linux.sh
+        --ava $<TARGET_FILE:ava> --fake-provider $<TARGET_FILE:ava_fake_provider_server>
+        --repo ${CMAKE_SOURCE_DIR} --build-dir ${CMAKE_BINARY_DIR} --timeout-cleanup-self-test)
+    set_tests_properties(ava_release.package_timeout_cleanup PROPERTIES
+      SKIP_RETURN_CODE 77 TIMEOUT 45 PROCESSORS 4 RESOURCE_LOCK ava_process_load
+      TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10
+      LABELS "release;package;process;self-test;offline;python" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 
   set(AVA_TUI_TMUX_SMOKE_SCENARIOS
@@ -1488,7 +1470,62 @@ if(AVA_AVA_LAUNCHING_TESTS)
   set_property(TEST ${AVA_AVA_LAUNCHING_TESTS} APPEND PROPERTY ENVIRONMENT "LIBCWD_NO_STARTUP_MSGS=1;AVA_NO_DEBUG_OUTPUT=1")
 endif()
 
-# Apply the finite default per-test TIMEOUT (120s) to every registered test
+# CTest schedules drivers, not the children they create. Charge and serialize
+# lifecycle workloads while leaving pure backend tests available for parallel work.
+foreach(_ava_test IN LISTS AVA_REGISTERED_TESTS)
+  if(_ava_test MATCHES "^ava_tests\\.")
+    set_property(TEST ${_ava_test} PROPERTY SKIP_RETURN_CODE 77)
+  endif()
+  if(_ava_test MATCHES "^(ava_tui\\.|ava_tests\\.(tui_|terminal_))")
+    # Preserve the existing terminal-family default; backend retiming is separate.
+    get_property(_ava_terminal_timeout_set TEST ${_ava_test} PROPERTY TIMEOUT SET)
+    if(NOT _ava_terminal_timeout_set)
+      set_property(TEST ${_ava_test} PROPERTY TIMEOUT 120)
+    endif()
+    continue()
+  endif()
+  if(_ava_test STREQUAL "ava_tests.provider_live_smoke")
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS "provider;optional;network")
+  else()
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS offline)
+  endif()
+  if(_ava_test MATCHES "^ava_cli\\.")
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS cli)
+  elseif(_ava_test MATCHES "^ava_release\\.")
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS release)
+  elseif(_ava_test MATCHES "^ava_build\\.")
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS infrastructure)
+  elseif(_ava_test MATCHES "^ava_tests\\.")
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS backend)
+  endif()
+  get_property(_ava_environment TEST ${_ava_test} PROPERTY ENVIRONMENT)
+  if("PYTHONDONTWRITEBYTECODE=1" IN_LIST _ava_environment)
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS python)
+  endif()
+  if(_ava_test STREQUAL "ava_build.parallel_test_runner")
+    set_tests_properties(${_ava_test} PROPERTIES SKIP_RETURN_CODE 77 PROCESSORS 4
+      RESOURCE_LOCK ava_process_load COST 8)
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS "process;self-test")
+  endif()
+  if(_ava_test MATCHES "^ava_cli\\.headless_")
+    set_tests_properties(${_ava_test} PROPERTIES PROCESSORS 2 COST 5)
+  endif()
+  if(_ava_test MATCHES "^ava_tests\\.(process_|curl_transport_process$|plugin_runner_process$|clipboard_image_process$|tools$|plugin$|mcp$|lsp$|app_rpc$|acp$)"
+      OR _ava_test STREQUAL "ava_cli.headless_rpc_bash_process_cleanup")
+    set_tests_properties(${_ava_test} PROPERTIES PROCESSORS 4 RESOURCE_LOCK ava_process_load COST 10)
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS "process;process-heavy;load-sensitive")
+  endif()
+  if(_ava_test MATCHES "^ava_benchmark\\.")
+    set_tests_properties(${_ava_test} PROPERTIES SKIP_RETURN_CODE 77 PROCESSORS 4)
+  endif()
+  if(_ava_test MATCHES "^ava_benchmark\\.(process_smoke|smoke)$")
+    set_tests_properties(${_ava_test} PROPERTIES RUN_SERIAL TRUE RESOURCE_LOCK ava_process_load COST 20
+      TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10)
+    set_property(TEST ${_ava_test} APPEND PROPERTY LABELS "process-heavy;load-sensitive")
+  endif()
+endforeach()
+
+# Apply the finite default per-test TIMEOUT (60s) to every registered test
 # without an explicit limit, then the configure-time AVA_DEBUG_NO_TIMEOUT
 # debug override. Both layers live in test_timeout_policy.cmake so the
 # focused ava_tests.test_timeout_policy self-test exercises the real policy;

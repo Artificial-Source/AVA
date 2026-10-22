@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import subprocess
 import tempfile
+
+from timeout_support import test_timeout
 
 
 COMPONENT_FILES = {
@@ -67,12 +70,15 @@ def main() -> int:
     parser.add_argument("--cmake", required=True)
     parser.add_argument("--source", type=pathlib.Path, required=True)
     parser.add_argument("--build", type=pathlib.Path, required=True)
+    parser.add_argument("--ava", type=pathlib.Path, required=True)
     args = parser.parse_args()
 
     source = args.source.resolve()
     build = args.build.resolve()
     if not (source / "CMakeLists.txt").is_file() or not (build / "CMakeCache.txt").is_file():
         raise RuntimeError("install-component test requires configured source and build directories")
+    cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
+    uses_libcwd = re.search(r"^OptionEnableLibcwd:[^=]+=ON$", cache, re.MULTILINE) is not None
 
     with tempfile.TemporaryDirectory(prefix="ava-install-component-") as directory:
         prefix = pathlib.Path(directory) / "prefix"
@@ -81,7 +87,7 @@ def main() -> int:
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=60,
+            timeout=test_timeout(60),
             check=False,
         )
         if result.returncode != 0:
@@ -90,6 +96,23 @@ def main() -> int:
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         actual = installed_regular_files(prefix)
+        if uses_libcwd:
+            # Installing removes the build RPATH to the private debug library;
+            # these builds still exercise the component's complete file allowlist.
+            print("skipping installed AVA version probe: libcwd-enabled builds are not distributable; "
+                  "the probe requires a non-libcwd build (including Release)")
+        else:
+            versions = []
+            for binary in (args.ava.resolve(), prefix / "bin" / "ava"):
+                version = subprocess.run(
+                    [str(binary), "--version"], capture_output=True, text=True,
+                    timeout=test_timeout(10), check=False,
+                )
+                if version.returncode != 0 or not version.stdout.strip():
+                    raise RuntimeError(f"installed/build version probe failed for {binary}: {version.stderr}")
+                versions.append(version.stdout.strip())
+            if versions[0] != versions[1]:
+                raise RuntimeError(f"installed AVA version differs from the build: {versions!r}")
     if actual != COMPONENT_FILES:
         raise RuntimeError(
             "CMake ava component allowlist mismatch\n"
