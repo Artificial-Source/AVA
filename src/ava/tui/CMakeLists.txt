@@ -1,4 +1,5 @@
 add_library(ava_tui
+  "command_completions.cpp"
   "command_output.cpp"
   "composer.cpp"
   "composer_diff.cpp"

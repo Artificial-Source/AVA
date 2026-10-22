@@ -9,8 +9,6 @@
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/session_title_coordinator.h"
-#include "ava/app/tui/command_hotkeys.h"
-#include "ava/app/tui/tui_display_settings.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
@@ -59,16 +57,6 @@ std::string hotkeys_for_action(std::vector<CommandHotkey> const& hotkeys, std::s
       return hotkey.keys;
   }
   return "";
-}
-
-// Completion secondary text prioritizes effective keys, then the canonical machine id.
-std::string keybinding_action_completion_description(CommandHotkey const& hotkey)
-{
-  if (!hotkey.keys.empty() && !hotkey.action.empty() && hotkey.keys != hotkey.action)
-    return hotkey.keys + " · " + hotkey.action;
-  if (!hotkey.keys.empty())
-    return hotkey.keys;
-  return hotkey.action;
 }
 
 std::string_view human_job_execution_label(ava::agent::SubagentExecutionState state) noexcept
@@ -451,61 +439,6 @@ void add_backend_argument_completions(std::vector<SlashCommandCatalogItem>& item
                        registered ? "" : "provider is not registered", model.display_name.empty() ? model.model_id : model.display_name);
       }
     }
-  }
-
-  if (auto index = find_item_index(items, "/hotkeys"))
-  {
-    auto& item = items[*index];
-    add_completion(item, 0, "init", "Create $XDG_CONFIG_HOME/ava/keybinds.json from AVA defaults", "General");
-    add_completion(item, 0, "import", "Import a validated keybindings JSON file", "General", {}, false);
-    add_completion(item, 0, "set", "Set one keybinding action in keybinds.json", "General");
-    add_completion(item, 0, "reset", "Remove one action override from keybinds.json", "General");
-    add_completion(item, 0, "unset", "Alias for reset", "General");
-    add_completion(item, 0, "validate", "Validate $XDG_CONFIG_HOME/ava/keybinds.json without reloading", "General", {}, false);
-    add_completion(item, 1, "--force", "Replace an existing keybinds.json starter file", "General", {"init"}, false);
-    add_completion(item, 2, "--force", "Replace the existing keybinds.json with the imported file", "General", {"import"}, false);
-  }
-
-  if (auto index = find_item_index(items, "/details"))
-  {
-    auto& item = items[*index];
-    add_completion(item, 0, "compact", "Use one fitted summary row per tool", "General", {}, false);
-    add_completion(item, 0, "rich", "Use human calls with bounded useful output", "General", {}, false);
-    add_completion(item, 0, "expanded", "Show all retained output within the defensive display cap", "General", {}, false);
-  }
-
-  if (auto index = find_item_index(items, "/cursor"))
-  {
-    auto& item = items[*index];
-    add_completion(item, 0, "default", "Do not override the shell cursor", "General", {}, false);
-    add_completion(item, 0, "block", "Use a block cursor", "General", {}, false);
-    add_completion(item, 0, "underline", "Use an underline cursor", "General", {}, false);
-    add_completion(item, 0, "bar", "Use a bar cursor", "General", {}, false);
-    for (auto const& style : {std::string("default"), std::string("block"), std::string("underline"), std::string("bar")})
-    {
-      add_completion(item, 1, "blink", "Use the blinking variant", "General", {style}, false);
-      add_completion(item, 1, "steady", "Use the steady variant", "General", {style}, false);
-    }
-  }
-
-  if (auto index = find_item_index(items, "/theme"))
-  {
-    auto& item = items[*index];
-    add_completion(item, 0, "dark", "Persist the built-in dark palette", "General", {}, false);
-    add_completion(item, 0, "light", "Persist the built-in light palette", "General", {}, false);
-    add_completion(item, 0, "plain", "Persist no-ANSI output", "General", {}, false);
-    add_completion(item, 0, "reset", "Use the built-in default unless an environment override is set", "General", {}, false);
-    for (auto const& theme : available_tui_custom_themes(paths))
-    {
-      add_completion(item, 0, theme.name, "Persist custom theme from " + theme.path.string(), "Themes", {}, false);
-    }
-  }
-
-  if (auto index = find_item_index(items, "/reload"))
-  {
-    auto& item = items[*index];
-    add_completion(item, 0, "keybindings", "Reload $XDG_CONFIG_HOME/ava/keybinds.json inside the TUI", "General", {}, false);
-    add_completion(item, 0, "theme", "Reload $XDG_CONFIG_HOME/ava/display.json and repaint the TUI", "General", {}, false);
   }
 
   if (auto index = find_item_index(items, "/export"))
@@ -1059,29 +992,11 @@ ava::core::Result<std::optional<std::string>> ApplicationCatalogCoordinator::chi
   return session_selector_child_target(*cache_.session_tree, session_id, sort, include_archived);
 }
 
-std::vector<SlashCommandCatalogItem> command_catalog_records_1(runtime::session_ts const& unlocked_session, std::vector<CommandHotkey> const& hotkeys)
+// Build only backend-discovered completion facts for noncached adapters. TUI-local
+// choices and effective bindings are composed after projection at the frontend boundary.
+std::vector<SlashCommandCatalogItem> command_catalog_records_1(runtime::session_ts const& unlocked_session, std::vector<CommandHotkey> const&)
 {
   auto cache = build_application_catalog_cache(unlocked_session);
-  for (auto& item : cache.slash_commands)
-  {
-    if (item.command == "/mode")
-      item.key_display = hotkeys_for_action(hotkeys, "mode_toggle");
-    else if (item.command == "/details")
-      item.key_display = hotkeys_for_action(hotkeys, "details_toggle");
-    else if (item.command == "/quit")
-      item.key_display = hotkeys_for_action(hotkeys, "exit");
-    else if (item.command == "/hotkeys")
-    {
-      for (auto const& hotkey : hotkeys)
-      {
-        auto const label = command_hotkey_primary_label(hotkey);
-        auto const description = keybinding_action_completion_description(hotkey);
-        add_completion(item, 1, hotkey.action, description, "Keybindings", {"set"}, true, true, {}, label);
-        add_completion(item, 1, hotkey.action, description, "Keybindings", {"reset"}, true, true, {}, label);
-        add_completion(item, 1, hotkey.action, description, "Keybindings", {"unset"}, true, true, {}, label);
-      }
-    }
-  }
   return std::move(cache.slash_commands);
 }
 

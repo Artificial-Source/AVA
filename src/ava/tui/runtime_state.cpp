@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/command_completions.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_draft_internal.h"
@@ -10,58 +11,16 @@
 #include "ava/tui/runtime_views_internal.h"
 #include "ava/tui/theme.h"
 
-#include <algorithm>
 #include <utility>
 
 namespace ava::tui {
 namespace {
 
-std::string keys_for_action(TuiKeyBindings const& bindings, std::string_view action)
-{
-  for (auto const& item : key_binding_help_items(bindings))
-  {
-    if (item.action == action)
-      return item.keys;
-  }
-  return {};
-}
-
+// Recompose current key displays and all TUI-local argument choices from the
+// retained display/keybinding facts; no filesystem discovery occurs here.
 void refresh_local_palette_hints(ComposerSnapshot& snapshot, TuiKeyBindings const& bindings)
 {
-  auto const help_items = key_binding_help_items(bindings);
-  for (auto& command : snapshot.slash_commands)
-  {
-    if (command.command == "/mode")
-      command.key_display = keys_for_action(bindings, "mode_toggle");
-    else if (command.command == "/details")
-      command.key_display = keys_for_action(bindings, "details_toggle");
-    else if (command.command == "/quit")
-      command.key_display = keys_for_action(bindings, "exit");
-
-    if (command.command != "/hotkeys")
-      continue;
-    std::erase_if(command.argument_completions, [](SlashCommandArgumentCompletion const& completion) { return completion.category == "Keybindings"; });
-    for (auto const& item : help_items)
-    {
-      auto description = item.keys;
-      if (!description.empty() && description != item.action)
-        description += " · " + item.action;
-      else if (description.empty())
-        description = item.action;
-      command.argument_completions.push_back(SlashCommandArgumentCompletion{.value = item.action,
-                                                                            .display_label = item.label.empty() ? item.action : item.label,
-                                                                            .description = std::move(description),
-                                                                            .category = "Keybindings",
-                                                                            .required_previous_args = {"set"},
-                                                                            .argument_index = 1});
-      auto reset = command.argument_completions.back();
-      reset.required_previous_args = {"reset"};
-      command.argument_completions.push_back(std::move(reset));
-      auto unset = command.argument_completions.back();
-      unset.required_previous_args = {"unset"};
-      command.argument_completions.push_back(std::move(unset));
-    }
-  }
+  compose_tui_slash_command_items(snapshot.slash_commands, snapshot.custom_themes, key_binding_help_items(bindings));
 }
 
 void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiRuntimeOptions const& options)
@@ -264,6 +223,7 @@ void RuntimePresentationState::apply_local_display_settings(TuiRuntimeOptions co
     for (auto& attachment : snapshot.pending_attachments)
       attachment.preview.reset();
   }
+  refresh_local_palette_hints(snapshot, options.key_bindings);
   refresh_local_overview_hints(snapshot, options);
 }
 

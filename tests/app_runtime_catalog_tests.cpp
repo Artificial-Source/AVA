@@ -95,13 +95,23 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
   auto const* read_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/read");
   auto const* sessions_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/sessions");
   auto const* resume_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/resume");
+  auto const* theme_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/theme");
+  auto const* cursor_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/cursor");
+  auto const* details_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/details");
+  auto const* reload_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/reload");
+  auto const* hotkeys_item = tui_test_support::find_slash_command_item(projected_slash_commands, "/hotkeys");
   expect(workspace_walks == 1 && session_tree_builds == 1 && cache.operations.workspace_walks == 1 && cache.operations.session_tree_builds == 1 &&
              tui_test_support::has_slash_argument_completion(read_item, 0, "src/main.cpp") &&
              !tui_test_support::has_slash_argument_completion(read_item, 0, "my folder/space file.txt") &&
              std::ranges::any_of(cache.file_references, [](auto const& item) { return item.value == "my folder/space file.txt"; }) &&
              tui_test_support::has_slash_argument_completion(sessions_item, 0, session_id) &&
-             tui_test_support::has_slash_argument_completion(resume_item, 0, session_id),
-         "one application catalog build walks the workspace and session tree once while feeding both completion surfaces");
+             tui_test_support::has_slash_argument_completion(resume_item, 0, session_id) &&
+             !tui_test_support::has_slash_argument_completion(theme_item, 0, "dark") &&
+             !tui_test_support::has_slash_argument_completion(cursor_item, 0, "block") &&
+             !tui_test_support::has_slash_argument_completion(details_item, 0, "compact") &&
+             !tui_test_support::has_slash_argument_completion(reload_item, 0, "theme") &&
+             !tui_test_support::has_slash_argument_completion(hotkeys_item, 0, "set"),
+         "one application catalog build feeds backend completion surfaces without caching TUI-only argument choices");
 
   for (int pass = 0; pass < 100; ++pass)
   {

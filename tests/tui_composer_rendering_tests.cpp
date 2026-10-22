@@ -921,6 +921,89 @@ bool test_selected_agent_projection_and_rendering()
 
 }  // namespace
 
+// Verify the combined vector adapter across every local recomposition trigger:
+// backend values survive, stale local themes disappear, and records stay unique.
+bool test_local_slash_completion_composition_tracks_current_ui_facts()
+{
+  tui_test_support::TuiFrontEndFixture frontend;
+  auto bindings = ava::tui::default_key_bindings();
+  auto const initial_mode_keys = ava::tui::keys_display(bindings, ava::tui::TuiAction::ModeToggle);
+
+  auto backend_commands = [] {
+    std::vector<ava::tui::SlashCommandItem> commands;
+    for (auto const& name : {"/theme", "/cursor", "/details", "/reload", "/hotkeys", "/mode", "/quit"})
+    {
+      ava::tui::SlashCommandItem command;
+      command.command = name;
+      commands.push_back(std::move(command));
+    }
+    ava::tui::SlashCommandArgumentCompletion backend_fact;
+    backend_fact.value = "backend-theme-fact";
+    backend_fact.description = "retained backend fact";
+    backend_fact.category = "Backend";
+    commands.front().argument_completions.push_back(std::move(backend_fact));
+    return commands;
+  };
+  auto count_completion = [](ava::tui::ComposerSnapshot const& snapshot, std::string_view command, std::size_t argument_index, std::string_view value,
+                             std::vector<std::string> const& previous_args = std::vector<std::string>{}) {
+    auto const found = std::ranges::find_if(snapshot.slash_commands, [&](auto const& item) { return item.command == command; });
+    if (found == snapshot.slash_commands.end())
+      return std::size_t{0};
+    return static_cast<std::size_t>(std::ranges::count_if(found->argument_completions, [&](auto const& completion) {
+      return completion.argument_index == argument_index && completion.value == value && completion.required_previous_args == previous_args;
+    }));
+  };
+  auto key_display = [](ava::tui::ComposerSnapshot const& snapshot, std::string_view command) {
+    auto const found = std::ranges::find_if(snapshot.slash_commands, [&](auto const& item) { return item.command == command; });
+    return found == snapshot.slash_commands.end() ? std::string{} : found->key_display;
+  };
+
+  ava::tui::TuiRuntimeOptions options;
+  options.slash_commands = backend_commands();
+  options.slash_catalog_generation = 1;
+  options.initial_display_settings.custom_themes = {ava::tui::ThemeOptionItem{.name = "sunrise", .detail = "/themes/sunrise.json"}};
+  options.key_bindings = bindings;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  bool const initial =
+      count_completion(presentation.snapshot, "/theme", 0, "sunrise") == 1 && count_completion(presentation.snapshot, "/theme", 0, "backend-theme-fact") == 1 &&
+      count_completion(presentation.snapshot, "/cursor", 1, "steady", {"bar"}) == 1 && count_completion(presentation.snapshot, "/details", 0, "compact") == 1 &&
+      count_completion(presentation.snapshot, "/reload", 0, "theme") == 1 &&
+      count_completion(presentation.snapshot, "/hotkeys", 1, "mode_toggle", {"set"}) == 1 && key_display(presentation.snapshot, "/mode") == initial_mode_keys;
+
+  ava::tui::TuiRuntimeStateSnapshot second_catalog;
+  second_catalog.slash_commands = backend_commands();
+  second_catalog.slash_catalog_generation = 2;
+  presentation.apply_runtime_state_snapshot(options, std::move(second_catalog));
+  ava::tui::TuiRuntimeStateSnapshot third_catalog;
+  third_catalog.slash_commands = backend_commands();
+  third_catalog.slash_catalog_generation = 3;
+  presentation.apply_runtime_state_snapshot(options, std::move(third_catalog));
+  bool const backend_refresh = count_completion(presentation.snapshot, "/theme", 0, "sunrise") == 1 &&
+                               count_completion(presentation.snapshot, "/theme", 0, "backend-theme-fact") == 1 &&
+                               count_completion(presentation.snapshot, "/reload", 0, "keybindings") == 1;
+
+  presentation.apply_local_display_settings(
+      options, ava::tui::TuiLocalDisplaySettings{.custom_themes = {ava::tui::ThemeOptionItem{.name = "midnight", .detail = "/themes/midnight.json"}}});
+  presentation.apply_local_display_settings(
+      options, ava::tui::TuiLocalDisplaySettings{.custom_themes = {ava::tui::ThemeOptionItem{.name = "midnight", .detail = "/themes/midnight.json"}}});
+  auto refreshed_bindings = ava::tui::parse_key_bindings_json(R"({"mode_toggle":"Alt+Y","app.overview.toggle":"F6"})");
+  if (!refreshed_bindings)
+  {
+    expect(false, "local slash composition fixture parses refreshed bindings");
+    return false;
+  }
+  presentation.apply_local_key_bindings(options, *refreshed_bindings);
+  presentation.apply_local_key_bindings(options, *refreshed_bindings);
+  bool const local_refresh =
+      count_completion(presentation.snapshot, "/theme", 0, "sunrise") == 0 && count_completion(presentation.snapshot, "/theme", 0, "midnight") == 1 &&
+      count_completion(presentation.snapshot, "/theme", 0, "backend-theme-fact") == 1 &&
+      count_completion(presentation.snapshot, "/hotkeys", 1, "mode_toggle", {"set"}) == 1 && key_display(presentation.snapshot, "/mode") == "Alt+Y";
+  expect(initial, "initial TUI slash composition includes retained backend facts, local choices, and effective binding hints once");
+  expect(backend_refresh, "backend slash replacements recompose retained local facts without duplicates");
+  expect(local_refresh, "local display and keybinding reloads replace stale choices and hints without backend refresh");
+  return initial && backend_refresh && local_refresh;
+}
+
 bool test_display_settings_reload_poll_outcome_and_preview_staging()
 {
   tui_test_support::TuiFrontEndFixture frontend;
@@ -1416,6 +1499,9 @@ void run_tui_composer_rendering_tests_part_1()
   expect(test_local_overview_hint_refresh_is_idempotent_and_bounded(),
          "repeated display and keybinding refreshes replace only exact local overview suffixes, remove stale themes without duplication, and preserve a "
          "full 160-byte factual compact line when local theme and open hints were omitted by the budget");
+  expect(test_local_slash_completion_composition_tracks_current_ui_facts(),
+         "TUI initial hydration, backend catalog replacement, display reload, and keybinding reload compose local slash choices once while retaining backend "
+         "facts and current key hints without backend generation changes");
   {
     auto const started_at = std::chrono::steady_clock::time_point{};
     ava::tui::detail::ActiveRunCadence cadence(started_at);
