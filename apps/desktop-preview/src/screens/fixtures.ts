@@ -1,4 +1,5 @@
 import type { PermissionView, QuestionView, RequestState, RunView, ToolView } from '../chat/contracts';
+import type { GettingStartedState } from '../components/GettingStarted';
 import type { BranchPoint, FinderItem, ListState, ModelChoice, ResourceInspections } from './contracts';
 import { modelChoices } from './screenExamples';
 import { shortcutHint, type ShortcutAction, type ShortcutPreferences } from './shortcuts';
@@ -13,6 +14,7 @@ export const reviewFamilies = {
   providers: { label: 'Providers & connect', cases: ['directory', 'method', 'key', 'browser', 'device', 'waiting', 'success', 'error', 'canceled', 'disconnect', 'externally-managed', 'directory-error'] },
   sessions: { label: 'Find a chat', cases: ['ready', 'loading', 'empty', 'no-match', 'error', 'disabled', 'unknown'] },
   commands: { label: 'Command palette', cases: ['ready', 'loading', 'empty', 'no-match', 'error', 'disabled', 'unknown'] },
+  help: { label: 'Help', cases: ['default', 'topic', 'shortcuts', 'no-match', 'all-to-do', 'all-done'] },
   rename: { label: 'Rename chat', cases: ['ready', 'empty', 'too-long', 'busy', 'stale', 'error'] },
   archive: { label: 'Archive chat', cases: ['ready', 'busy', 'stale', 'error', 'unavailable'] },
   branch: { label: 'Branch from a message', cases: ['ready', 'busy', 'stale', 'error', 'empty'] },
@@ -40,6 +42,11 @@ export function modelCase(scenario: string): readonly ModelChoice[] {
 export function listState(scenario: string): ListState {
   return ['loading', 'empty', 'error', 'stale', 'unavailable', 'busy', 'disabled'].includes(scenario) ? scenario as ListState : 'ready';
 }
+// Getting started per Help case: partway through (provider and project done) unless the case says otherwise.
+export function helpCase(scenario: string): GettingStartedState {
+  if (scenario === 'all-to-do') return { providerConnected: false, projectOpened: false, firstMessageSent: false };
+  return { providerConnected: true, projectOpened: true, firstMessageSent: scenario === 'all-done' };
+}
 export const projects = [{ id: 'atlas', label: 'Atlas' }, { id: 'notebook', label: 'Notebook' }] as const;
 // `searchText` stands in for each chat's messages, so Find a chat can show a matched snippet.
 export const sessions: readonly FinderItem[] = [
@@ -59,7 +66,8 @@ const commandList: readonly FinderItem[] = [
   { id: 'sessions', command: 'sessions', label: 'Find a chat', detail: 'Search every project', group: 'Go to' },
   { id: 'workspace', command: 'workspace', label: 'Open a project…', detail: '', group: 'Go to' },
   { id: 'settings', command: 'settings', label: 'Open settings', detail: '', group: 'App' },
-  { id: 'shortcuts', command: 'shortcuts', label: 'Keyboard shortcuts', detail: 'Settings → Shortcuts', group: 'App' },
+  { id: 'help', command: 'help', label: 'Help', detail: 'Getting started, how AVA works and shortcuts', group: 'App', shortcut: 'F1' },
+  { id: 'shortcuts', command: 'shortcuts', label: 'Keyboard shortcuts', detail: 'Help → Keyboard shortcuts', group: 'App' },
   { id: 'providers', command: 'providers', label: 'Connect a provider', detail: 'API key or sign-in', group: 'App' },
 ];
 export function commandItems(preferences?: ShortcutPreferences): readonly FinderItem[] {

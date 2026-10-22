@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import { CheckIcon } from '@phosphor-icons/react/dist/csr/Check';
+import { LearnMoreLink } from '../../components/LearnMoreLink';
 import { Button } from '../../ui/Button';
 import { Status, type StatusValue } from '../../ui/Status';
 import { Surface } from '../../ui/Surface';
@@ -38,6 +39,7 @@ function outcome(valid: boolean, request: PermissionView, chosen: PermissionDeci
 // so the first choice keyboard focus reaches (inline or in the dialog) is the one that allows
 // nothing. The result is a receipt naming the choice: `decided` is the host's stored decision for
 // this request, so the receipt survives a remount; the mounted gate sends at most one per version.
+// The help link comes last, after the receipt, so it never stands between the request and Deny.
 export function PermissionCard({ request, decided, onDecide, titled = true }: { request: PermissionView; decided?: PermissionDecision; onDecide?: (intent: PermissionIntent) => void; titled?: boolean }) {
   const id = useId();
   const gate = useRequestIntent(request);
@@ -79,6 +81,7 @@ export function PermissionCard({ request, decided, onDecide, titled = true }: { 
         {allows.map(choice)}
       </div> : null}
       <p className={styles.outcome} role="status">{chosen ? <CheckIcon size={14} aria-hidden="true" /> : null}{outcome(valid, request, chosen)}</p>
+      <LearnMoreLink topic="permissions" className={styles.requestHelp}>About permissions</LearnMoreLink>
     </Surface>
   );
 }

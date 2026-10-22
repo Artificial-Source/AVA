@@ -1,3 +1,4 @@
+import type { Preferences } from './contracts';
 import { applePlatform, defaultBindings, defaultShortcuts, effectiveBinding, safeBinding, type ShortcutAction, type ShortcutPreferences } from './shortcutBindings';
 export { appChord, defaultShortcuts, effectiveBinding, recordedBinding, shortcutForEvent, type ShortcutAction, type ShortcutPreferences } from './shortcutBindings';
 
@@ -19,6 +20,26 @@ const actions: readonly Readonly<{ id: ShortcutAction; label: string; group: Sho
   { id: 'inspector', label: 'Show or hide the inspector', group: 'Panels', detail: 'Reopen the last panel you used' },
 ];
 export const shortcutActions = actions.map((action) => ({ ...action, binding: defaultBindings[action.id] as string | null }));
+
+// Built-in keys: always on, whatever App shortcuts says, and never remapped. Each row mirrors a
+// handler: F1 in the app shell and on the Settings page, F6 in the app shell, F2 on sidebar rows
+// and the chat title, Escape in dialogs, menus, panels, Settings and subagent views, and Enter in
+// the message box. Given the user's Enter setting, the Send row lists the keys that send for
+// them; without it, only Ctrl/Cmd+Enter, which sends whatever the setting.
+export function navigationKeys(enter?: Preferences['enter']): readonly Readonly<{ id: string; label: string; detail: string; keys: readonly string[] }>[] {
+  const apple = applePlatform();
+  const always = apple ? '⌘Return' : 'Ctrl+Enter';
+  const send = enter === 'send' ? { detail: `From the message box. ${apple ? '⇧Return' : 'Shift+Enter'} adds a new line.`, keys: [apple ? 'Return' : 'Enter', always] }
+    : enter === 'newline' ? { detail: 'From the message box. Enter adds a new line.', keys: [always] }
+    : { detail: 'From the message box, even when Enter adds a new line.', keys: [always] };
+  return [
+    { id: 'help', label: 'Open Help', detail: 'Getting started, how AVA works and every shortcut.', keys: ['F1'] },
+    { id: 'regions', label: 'Move between areas', detail: 'Steps through the sidebar, conversation, message box and open panel. Add Shift to go back.', keys: ['F6', apple ? '⇧F6' : 'Shift+F6'] },
+    { id: 'rename', label: 'Rename chat', detail: 'When a chat in the sidebar or the chat title has focus.', keys: ['F2'] },
+    { id: 'escape', label: 'Close or go back', detail: 'Closes a dialog, menu or panel, or leaves Settings or a subagent. In a search, clears it first.', keys: ['Esc'] },
+    { id: 'send', label: 'Send message', ...send },
+  ];
+}
 
 // Platform-native chord text: “⌘⇧9” on Apple platforms, “Ctrl+Shift+9” elsewhere.
 export function bindingLabel(binding: string | null) {

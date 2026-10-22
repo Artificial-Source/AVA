@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { PermissionView, QuestionAnswer, QuestionView, RequestState } from '../contracts';
 import { PermissionCard } from './PermissionCard';
+import { HelpContext } from '../../components/helpContext';
 import { QuestionCard } from './QuestionCard';
 
 const permission: PermissionView = { kind: 'permission', id: 'opaque-request', version: 4, state: 'ready', title: 'Example action', summary: 'No execution authority.', decisions: ['allow', 'deny'], sessionAllowed: false };
@@ -99,6 +100,23 @@ describe('permission decision boundary', () => {
     expect(screen.getByText('<script>example</script>')).toBeInTheDocument();
     expect(container.querySelector('script, img')).toBeNull();
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeDisabled();
+  });
+
+  it('links to About permissions after the decision, only where Help exists, without touching the decision', async () => {
+    const user = userEvent.setup(); const onDecide = vi.fn(); const openHelp = vi.fn();
+    const { unmount } = render(<PermissionCard request={permission} onDecide={onDecide} />);
+    expect(screen.queryByRole('button', { name: 'About permissions' })).not.toBeInTheDocument();
+    unmount();
+    render(<HelpContext.Provider value={openHelp}><PermissionCard request={{ ...permission, sessionAllowed: true, decisions: ['allow', 'allow_session', 'deny'] }} onDecide={onDecide} /></HelpContext.Provider>);
+    const link = screen.getByRole('button', { name: 'About permissions' });
+    // Deny stays the first control keyboard focus reaches; the link comes after every choice.
+    await user.tab(); expect(screen.getByRole('button', { name: 'Deny' })).toHaveFocus();
+    const order = screen.getAllByRole('button').map((button) => button.textContent);
+    expect(order).toEqual(['Deny', 'Allow once', 'Allow for this session', 'About permissions']);
+    expect(within(screen.getByRole('group', { name: 'Your decision' })).queryByRole('button', { name: 'About permissions' })).not.toBeInTheDocument();
+    await user.click(link);
+    expect(openHelp).toHaveBeenCalledExactlyOnceWith('permissions'); expect(onDecide).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement(); expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
   });
 });
 

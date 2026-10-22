@@ -110,6 +110,12 @@
 .projectAction { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; transition: opacity var(--motion-feedback-duration) var(--motion-ease-out); }
 .projectAction:hover { color: var(--text); background: var(--hover-strong); }
 .emptyProject { margin: 2px 0 0; padding: var(--space-2) var(--space-3) var(--space-2) 37px; color: var(--quiet); font-size: var(--type-meta); }
+/* No projects yet: what will be here, and the one way to fill it. */
+.emptyLibrary { padding: var(--space-1) var(--space-3) var(--space-2); }
+.emptyLibrary p { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--type-meta); line-height: 1.5; }
+.openProject { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 5px 11px 5px 9px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: transparent; color: var(--body); font-size: var(--type-control); }
+.openProject:hover { background: var(--hover-strong); color: var(--text); }
+.openProject > svg { flex-shrink: 0; color: var(--muted); }
 
 .chatList { display: grid; gap: 2px; margin: 2px 0 0; padding: 0; list-style: none; }
 .chatEntry { position: relative; display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-control); transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), box-shadow var(--motion-feedback-duration) var(--motion-ease-out); }
@@ -149,10 +155,11 @@
 .rowAction:hover, .rowAction[aria-pressed='true'], .rowAction[aria-expanded='true'] { color: var(--text); }
 .rowAction:hover, .rowAction[aria-expanded='true'] { background: var(--hover-strong); }
 
-.settings { flex-shrink: 0; padding: var(--space-2) 14px 14px; }
-.settings button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 7px 11px; border-radius: var(--radius-control); background: transparent; color: var(--muted); font-size: var(--type-control); text-align: left; }
-.settings button:hover, .settings button[aria-current='page'] { background: var(--hover); color: var(--text); }
-.settings button > svg { flex-shrink: 0; }
+.settings { display: flex; flex-shrink: 0; align-items: center; gap: var(--space-1); padding: var(--space-2) 14px 14px; }
+.settingsButton { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; min-height: 36px; padding: 7px 11px; border-radius: var(--radius-control); background: transparent; color: var(--muted); font-size: var(--type-control); text-align: left; }
+.settingsButton:hover, .settingsButton[aria-current='page'] { background: var(--hover); color: var(--text); }
+.settingsButton > svg { flex-shrink: 0; }
+.settings > .help[data-variant] { width: 36px; height: 36px; min-height: 36px; }
 .shortcuts { margin-top: var(--space-3); }
 .shortcuts .sectionLabel { padding-top: var(--space-3); }
 
@@ -162,9 +169,9 @@
 .sidebar[data-collapsed='true'] .collapseToggle { margin: 0; }
 .sidebar[data-collapsed='true'] .actions,
 .sidebar[data-collapsed='true'] .settings { display: flex; justify-content: center; padding-inline: 0; }
-.sidebar[data-collapsed='true'] .settings { margin-top: auto; }
+.sidebar[data-collapsed='true'] .settings { flex-direction: column; margin-top: auto; }
 .sidebar[data-collapsed='true'] .newChat,
-.sidebar[data-collapsed='true'] .settings button { justify-content: center; width: 36px; padding: 0; }
+.sidebar[data-collapsed='true'] .settingsButton { flex: none; justify-content: center; width: 36px; padding: 0; }
 .sidebar[data-collapsed='true'] .actions { flex-direction: column; align-items: center; gap: var(--space-1); }
 .sidebar[data-collapsed='true'] .find { flex-direction: column; gap: var(--space-1); margin-top: 0; }
 .sidebar[data-collapsed='true'] .find > button { flex: none; justify-content: center; width: 36px; height: 36px; min-height: 36px; padding: 0; }

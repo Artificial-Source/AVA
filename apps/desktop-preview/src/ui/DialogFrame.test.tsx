@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { StrictMode, useRef, useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import userEvent, { type UserEvent } from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installDialogTestSupport } from '../screens/dialogTestSupport';
 import { useViewGuard } from '../screens/useViewGuard';
@@ -17,6 +17,40 @@ function Host({ back }: { back?: () => void }) {
 function Preferred() {
   const target = useRef<HTMLButtonElement>(null);
   return <DialogFrame title="Preferred" initialFocus={target} onDismiss={vi.fn()}><input aria-label="Earlier field" /><button ref={target}>Chosen action</button></DialogFrame>;
+}
+// A message box that opens a dialog from the keyboard, as F1 does in the app.
+function MessageBox() {
+  const [open, setOpen] = useState(false);
+  return <>
+    <textarea aria-label="Message" onKeyDown={(event) => { if (event.key === 'F1') setOpen(true); }} />
+    <input aria-label="Other field" />
+    <button>Elsewhere</button>
+    {open ? <DialogFrame title="Help" onDismiss={() => setOpen(false)}><input aria-label="Search help" /></DialogFrame> : null}
+  </>;
+}
+// Frames run only when a case says so.
+const frames = new Map<number, FrameRequestCallback>();
+let frameId = 1;
+function holdFrames() {
+  frames.clear();
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { const id = frameId++; frames.set(id, callback); return id; }));
+}
+function nextFrame() {
+  const pending = [...frames.values()]; frames.clear();
+  for (const callback of pending) callback(performance.now());
+}
+function focusEvents(element: HTMLElement) {
+  const events: string[] = [];
+  element.addEventListener('blur', () => events.push('blur')); element.addEventListener('focus', () => events.push('focus'));
+  return events;
+}
+async function openAndEscape(user: UserEvent) {
+  const message = screen.getByLabelText('Message'); message.focus();
+  await user.keyboard('{F1}');
+  expect(screen.getByLabelText('Search help')).toHaveFocus();
+  await user.keyboard('{Escape}');
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(message).toHaveFocus();
+  return message;
 }
 describe('native dialog lifetime', () => {
   it('shows a visible title and subtitle, keeps the description screen-reader-only, and closes from a quiet X', () => {
@@ -77,6 +111,52 @@ describe('native dialog lifetime', () => {
     result.rerender(<Probe scope="b" />); expect(first.claim()).toBe(false);
     const second = gate!; expect(second.claim()).toBe(true); expect(second.claim()).toBe(false); second.invalidate(); expect(second.valid()).toBe(false);
     result.rerender(<Probe scope="c" />); const last = gate!; result.unmount(); expect(last.claim()).toBe(false);
+  });
+});
+
+// Chromium can leave a returned text field focused but deaf to typing until it is focused again
+// after the dialog leaves the page; jsdom only shows the next-frame settle that fixes it.
+describe('focus after close', () => {
+  it('focuses the returned text field again on the next frame, once the dialog is gone', async () => {
+    holdFrames(); const user = userEvent.setup(); render(<MessageBox />);
+    const message = await openAndEscape(user); const events = focusEvents(message);
+    expect(frames.size).toBe(1);
+    nextFrame();
+    expect(events).toEqual(['blur', 'focus']); expect(message).toHaveFocus();
+  });
+  it('re-seats a text field the host focused after the close, and never moves focus off a control', async () => {
+    holdFrames(); const user = userEvent.setup(); render(<MessageBox />);
+    await openAndEscape(user);
+    const other = screen.getByLabelText('Other field'); other.focus(); const events = focusEvents(other);
+    nextFrame();
+    expect(events).toEqual(['blur', 'focus']); expect(other).toHaveFocus();
+    await openAndEscape(user);
+    const elsewhere = screen.getByRole('button', { name: 'Elsewhere' }); elsewhere.focus(); const untouched = focusEvents(elsewhere);
+    nextFrame();
+    expect(untouched).toEqual([]); expect(elsewhere).toHaveFocus();
+  });
+  it('returns focus that fell to the page, and leaves a returned button as it is', async () => {
+    holdFrames(); const user = userEvent.setup(); const { unmount } = render(<MessageBox />);
+    const message = await openAndEscape(user);
+    message.blur(); expect(document.activeElement).toBe(document.body);
+    nextFrame();
+    expect(message).toHaveFocus();
+    unmount();
+    render(<Host />); const opener = screen.getByRole('button', { name: 'Open' }); await user.click(opener);
+    await user.click(screen.getByRole('button', { name: 'Close' })); expect(opener).toHaveFocus();
+    const events = focusEvents(opener);
+    nextFrame();
+    expect(events).toEqual([]); expect(opener).toHaveFocus();
+  });
+  it('voids the settle when another dialog opens first, leaving the new dialog’s focus alone', async () => {
+    holdFrames(); const user = userEvent.setup(); render(<MessageBox />);
+    const message = await openAndEscape(user);
+    expect(frames.size).toBe(1);
+    await user.keyboard('{F1}');
+    const search = screen.getByLabelText('Search help'); expect(search).toHaveFocus();
+    const events = focusEvents(search); const returned = focusEvents(message);
+    nextFrame();
+    expect(events).toEqual([]); expect(returned).toEqual([]); expect(search).toHaveFocus();
   });
 });
 

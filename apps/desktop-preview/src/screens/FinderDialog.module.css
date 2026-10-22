@@ -4,6 +4,10 @@
 .search::placeholder { color: var(--quiet); opacity: 1; }
 .search:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 
+/* The empty list's next step sits under its message, where a notice keeps its Retry: past the
+   16px icon and its gap, one gap below the text. */
+.next { display: flex; margin-block-start: calc(var(--space-3) - var(--space-4)); padding-inline-start: calc(16px + var(--space-3)); padding-block-end: var(--space-4); }
+
 .scope { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--canvas); }
 .scope button { min-height: 34px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-chip); background: transparent; color: var(--muted); font: inherit; font-size: var(--type-control); cursor: pointer; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
 .scope button:hover { color: var(--text); }

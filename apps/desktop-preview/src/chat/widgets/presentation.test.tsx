@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChangeEntryView, ChangeReviewState, ComposerView, MessageTurnView, ToolView } from '../contracts';
+import { HelpContext } from '../../components/helpContext';
 import { MessageTurn } from './MessageTurn';
 import { ToolActivityGroup } from './ToolActivityGroup';
 import { ChangeReviewView } from './ChangeReviewView';
@@ -11,6 +12,7 @@ import { ChatComposer } from './ChatComposer';
 
 const composer: ComposerView = { title: 'Controlled draft', draft: 'Draft', expanded: false, runState: 'idle', contextOptions: [{ id: 'note', label: 'Notes', kind: 'context' }], selectedContextIds: [], modelOptions: [{ id: 'sample', label: 'Sample' }], modelId: 'sample', modeOptions: [{ id: 'build', label: 'Build' }, { id: 'plan', label: 'Plan' }], modeId: 'build' };
 function callbacks() { return { onDraftChange: vi.fn(), onModelChange: vi.fn(), onModeChange: vi.fn(), onExpandedChange: vi.fn(), onAddReference: vi.fn(), onRemoveReference: vi.fn(), onSend: vi.fn(), onStop: vi.fn() }; }
+const unavailable = { status: 'Not connected', detail: 'Sample Lab isn’t connected.', sendReason: 'Connect Sample Lab to send with Sample', message: 'Sample Lab isn’t connected, so this chat can’t send.' };
 
 describe('controlled turn/tool/change/run presentation', () => {
   it('shows only supplied model and thinking facts, with no guessed attribution for missing or blank values', () => {
@@ -145,6 +147,23 @@ describe('controlled turn/tool/change/run presentation', () => {
     expect(screen.queryByRole('navigation', { name: 'Changed files' })).not.toBeInTheDocument(); expect(screen.getByText('1 file changed, 2 lines added, 1 removed')).toBeInTheDocument();
   });
 
+  it('puts About changes in the totals row, or after the notice when nothing is listed, only where Help exists', async () => {
+    const user = userEvent.setup(); const openHelp = vi.fn();
+    const change: ChangeEntryView = { id: 'file', path: 'src/a.ts', status: 'modified', added: 2, removed: 1, diff: { state: 'text', truncated: false, text: '+a' } };
+    const ready: ChangeReviewState = { state: 'ready', changes: [change] };
+    const bare = render(<ChangeReviewView view={ready} />);
+    expect(screen.queryByRole('button', { name: 'About changes' })).not.toBeInTheDocument();
+    bare.unmount();
+    const { rerender } = render(<HelpContext.Provider value={openHelp}><ChangeReviewView view={ready} /></HelpContext.Provider>);
+    const link = screen.getByRole('button', { name: 'About changes' });
+    expect(link.parentElement).toContainElement(screen.getByText('1 file changed, 2 lines added, 1 removed'));
+    await user.click(link); expect(openHelp).toHaveBeenCalledExactlyOnceWith('changes');
+    rerender(<HelpContext.Provider value={openHelp}><ChangeReviewView view={{ state: 'empty', message: 'No changes in this chat.' }} /></HelpContext.Provider>);
+    expect(screen.getByRole('status')).toHaveTextContent('No changes in this chat.');
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['About changes']);
+    await user.click(screen.getByRole('button', { name: 'About changes' })); expect(openHelp).toHaveBeenLastCalledWith('changes');
+  });
+
   it('keeps retry capability explicit, unknown errors generic, and supplied retry/cancel/terminal states static', () => {
     vi.useFakeTimers();
     try {
@@ -260,6 +279,101 @@ describe('controlled composer without preview-state imports', () => {
     expect(screen.getByRole('button', { name: 'Request stop' })).toBeDisabled();
     rerender(<ChatComposer view={composer} {...cb} onSend={undefined} />);
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+  });
+
+  it('blocks Send with a stated reason while the model is unavailable, keeps the model control usable, and recovers', async () => {
+    const user = userEvent.setup(); const cb = callbacks(); const onOpenModel = vi.fn();
+    const { rerender } = render(<ChatComposer view={composer} {...cb} onOpenModel={onOpenModel} modelUnavailable={unavailable} />);
+    const send = screen.getByRole('button', { name: 'Send' }); const draft = screen.getByRole('textbox');
+    // Reachable and explained rather than silently inert.
+    expect(send).toBeEnabled(); expect(send).toHaveAttribute('aria-disabled', 'true');
+    expect(send).toHaveAccessibleDescription('Connect Sample Lab to send with Sample'); expect(send).toHaveAttribute('title', 'Connect Sample Lab to send with Sample');
+    expect(screen.getByRole('status')).toHaveTextContent(/^Sample Lab isn’t connected, so this chat can’t send\.$/); expect(screen.getByRole('status')).toBeVisible();
+    fireEvent.keyDown(draft, { key: 'Enter', ctrlKey: true }); fireEvent.submit(screen.getByRole('form')); await user.click(send);
+    expect(cb.onSend).not.toHaveBeenCalled();
+    const model = screen.getByRole('button', { name: 'Model for this chat' });
+    expect(model).toHaveTextContent('SampleNot connected'); expect(model).toHaveAccessibleDescription('Sample Lab isn’t connected.');
+    expect(model).toHaveAttribute('title', 'Sample Lab isn’t connected. Choose model');
+    await user.click(model); expect(onOpenModel).toHaveBeenCalledTimes(1);
+    // A run in progress still offers Stop, with no Send reason and no blocked line.
+    rerender(<ChatComposer view={{ ...composer, runState: 'running' }} {...cb} onOpenModel={onOpenModel} modelUnavailable={unavailable} />);
+    expect(screen.getByRole('button', { name: 'Request stop' })).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument(); expect(screen.queryByRole('button', { name: 'Choose a model' })).not.toBeInTheDocument();
+    rerender(<ChatComposer view={composer} {...cb} onOpenModel={onOpenModel} />);
+    expect(send).not.toHaveAttribute('aria-disabled'); expect(send).not.toHaveAttribute('aria-describedby'); expect(send).toHaveAttribute('title', 'Send message · Ctrl/Cmd+Enter');
+    expect(model).not.toHaveTextContent('Not connected'); expect(model).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument(); expect(screen.queryByRole('button', { name: 'Choose a model' })).not.toBeInTheDocument();
+    fireEvent.keyDown(draft, { key: 'Enter', ctrlKey: true }); expect(cb.onSend).toHaveBeenCalledTimes(1);
+    // The catalog select fallback states it too.
+    rerender(<ChatComposer view={composer} {...cb} modelUnavailable={unavailable} />);
+    expect(screen.getByRole('combobox', { name: 'Model for this chat' })).toHaveAccessibleDescription('Sample Lab isn’t connected.');
+    expect(screen.getByText('Not connected')).toBeInTheDocument(); expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('Sample Lab isn’t connected, so this chat can’t send.');
+  });
+
+  it('offers one way forward while blocked: Choose a model opens the picker from the model control, or focuses the fallback select', async () => {
+    const user = userEvent.setup(); const cb = callbacks();
+    // The picker opens with focus already on the model control, so it hands focus back there even after this line is gone.
+    const onOpenModel = vi.fn(() => { expect(screen.getByRole('button', { name: 'Model for this chat' })).toHaveFocus(); });
+    const { rerender } = render(<ChatComposer view={composer} {...cb} onOpenModel={onOpenModel} modelUnavailable={unavailable} />);
+    const choose = screen.getByRole('button', { name: 'Choose a model' });
+    expect(choose).toHaveAttribute('type', 'button');
+    await user.click(choose);
+    expect(onOpenModel).toHaveBeenCalledTimes(1); expect(screen.getByRole('button', { name: 'Model for this chat' })).toHaveFocus();
+    expect(cb.onSend).not.toHaveBeenCalled(); expect(cb.onModelChange).not.toHaveBeenCalled();
+    // Keyboard reaches it too.
+    choose.focus(); await user.keyboard('{Enter}'); expect(onOpenModel).toHaveBeenCalledTimes(2);
+    rerender(<ChatComposer view={composer} {...cb} modelUnavailable={unavailable} />);
+    await user.click(screen.getByRole('button', { name: 'Choose a model' }));
+    expect(screen.getByRole('combobox', { name: 'Model for this chat' })).toHaveFocus();
+    expect(cb.onModelChange).not.toHaveBeenCalled(); expect(cb.onSend).not.toHaveBeenCalled();
+  });
+
+  it('restates the blocked line on each fresh send attempt, never on a held key, and starts quiet when a block returns', async () => {
+    const user = userEvent.setup(); const cb = callbacks();
+    const { rerender } = render(<ChatComposer view={composer} {...cb} enterBehavior="send" modelUnavailable={unavailable} />);
+    const status = screen.getByRole('status'); const draft = screen.getByRole('textbox');
+    const text = () => status.firstElementChild!;
+    expect(status).toHaveAttribute('aria-atomic', 'true');
+    const first = text(); expect(first).not.toHaveAttribute('data-restated');
+    // A fresh text node inside the same polite region re-announces the same words.
+    fireEvent.keyDown(draft, { key: 'Enter' });
+    const second = text(); expect(second).not.toBe(first); expect(second).toHaveAttribute('data-restated', 'true');
+    expect(screen.getByRole('status')).toBe(status); expect(status).toHaveTextContent(/^Sample Lab isn’t connected, so this chat can’t send\.$/);
+    fireEvent.keyDown(draft, { key: 'Enter', repeat: true }); expect(text()).toBe(second);
+    fireEvent.keyDown(draft, { key: 'Enter', shiftKey: true }); expect(text()).toBe(second);
+    fireEvent.keyDown(draft, { key: 'Enter', ctrlKey: true }); const third = text(); expect(third).not.toBe(second);
+    await user.click(screen.getByRole('button', { name: 'Send' })); expect(text()).not.toBe(third);
+    expect(cb.onSend).not.toHaveBeenCalled(); expect(cb.onDraftChange).not.toHaveBeenCalled();
+    rerender(<ChatComposer view={composer} {...cb} enterBehavior="send" />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    rerender(<ChatComposer view={composer} {...cb} enterBehavior="send" modelUnavailable={unavailable} />);
+    expect(screen.getByRole('status').firstElementChild).not.toHaveAttribute('data-restated');
+  });
+
+  it('makes the send key inert while blocked, held or not, without touching the draft; Shift+Enter and IME Enter still type', async () => {
+    const user = userEvent.setup(); const cb = callbacks();
+    const { rerender } = render(<ChatComposer view={composer} {...cb} enterBehavior="send" modelUnavailable={unavailable} />);
+    const draft = screen.getByRole('textbox');
+    // fireEvent returns false when the default (inserting a newline) was prevented.
+    expect(fireEvent.keyDown(draft, { key: 'Enter' })).toBe(false);
+    expect(fireEvent.keyDown(draft, { key: 'Enter', repeat: true })).toBe(false);
+    expect(fireEvent.keyDown(draft, { key: 'Enter', ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(draft, { key: 'Enter', shiftKey: true })).toBe(true);
+    expect(fireEvent.keyDown(draft, { key: 'Enter', isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(draft, { key: 'Enter', keyCode: 229 })).toBe(true);
+    await user.click(draft); await user.keyboard('{Enter}');
+    expect(cb.onDraftChange).not.toHaveBeenCalled(); expect(cb.onSend).not.toHaveBeenCalled();
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    expect(cb.onDraftChange).toHaveBeenCalledTimes(1); expect(cb.onDraftChange).toHaveBeenLastCalledWith(expect.stringContaining('\n'));
+    // Newline mode: plain Enter types as always; the modifier chord is the inert one.
+    rerender(<ChatComposer view={composer} {...cb} enterBehavior="newline" modelUnavailable={unavailable} />);
+    expect(fireEvent.keyDown(draft, { key: 'Enter' })).toBe(true);
+    expect(fireEvent.keyDown(draft, { key: 'Enter', metaKey: true })).toBe(false);
+    // Unblocked, nothing changes: a held send key still neither sends again nor is swallowed.
+    rerender(<ChatComposer view={composer} {...cb} enterBehavior="send" />);
+    expect(fireEvent.keyDown(draft, { key: 'Enter', repeat: true })).toBe(true); expect(cb.onSend).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(draft, { key: 'Enter' })).toBe(false); expect(cb.onSend).toHaveBeenCalledTimes(1);
   });
 
   it('filters unknown/duplicate references and invalid model/mode events before callbacks', () => {

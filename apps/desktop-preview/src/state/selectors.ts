@@ -1,5 +1,16 @@
 import type { ChatSummary } from '../screens/contracts';
-import type { ChildAgent, PreviewState } from './types';
+import { openableProjects } from './fixtures';
+import type { Chat, ChildAgent, PreviewState, Project } from './types';
+
+// The viewed parent chat. Undefined only while nothing is open (after Start fresh).
+export function activeChat(state: PreviewState): Chat | undefined {
+  return state.chats.find((chat) => chat.id === state.activeChatId);
+}
+
+// Projects the project picker can still open: not in the sidebar yet.
+export function projectsToOpen(state: PreviewState): readonly Project[] {
+  return openableProjects.filter((project) => !state.projects.some((entry) => entry.id === project.id));
+}
 
 export function selectedParentChildren(state: PreviewState): ChildAgent[] {
   return state.childAgents

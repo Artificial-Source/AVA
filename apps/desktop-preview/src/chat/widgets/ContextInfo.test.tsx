@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { HelpContext } from '../../components/helpContext';
 import { ContextInfo, type ContextInfoView } from './ContextInfo';
 
 const view: ContextInfoView = {
@@ -131,5 +132,18 @@ describe('controlled Context presentation', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(focus).not.toHaveBeenCalled();
     focus.mockRestore();
+  });
+
+  it('offers About context under the window summary only when Help exists', async () => {
+    const user = userEvent.setup(); const openHelp = vi.fn();
+    const { unmount } = render(<ContextInfo view={view} />);
+    expect(screen.queryByRole('button', { name: 'About context' })).not.toBeInTheDocument();
+    unmount();
+    render(<HelpContext.Provider value={openHelp}><ContextInfo view={{ ...view, usage: { ...view.usage, snapshot: null } }} /></HelpContext.Provider>);
+    const link = within(summary()).getByRole('button', { name: 'About context' });
+    expect(summary().lastElementChild).toBe(link);
+    await user.click(link);
+    expect(openHelp).toHaveBeenCalledExactlyOnceWith('context');
+    expect(screen.getByRole('button', { name: 'Raw messages' })).toHaveAttribute('aria-expanded', 'false');
   });
 });

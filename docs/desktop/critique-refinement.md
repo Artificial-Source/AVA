@@ -243,3 +243,108 @@ separately above and do not imply full accessibility or native-host qualificatio
 - The test suite is sensitive to heavy machine load. On the loaded 20-core
   machine, lazy-load tests could time out even though every file passes in
   isolation; the recorded full-suite pass uses **`--maxWorkers=6`**.
+
+## Revision 22 — Help & first-time use
+
+This follow-up adds in-app help and a complete browser-local first-run path. It
+supersedes revision 21's limited-help note; the scores and acceptance above remain
+revision 21 history. The preview stays visit-local, with no real backend, provider
+authentication, host execution or durable persistence.
+
+### Help and keyboard references
+
+- `screens/HelpDialog.tsx` and `helpTopics.ts` provide one searchable Help dialog.
+  Entry points are fixed **F1** (also over Settings), the sidebar footer's **Help**
+  button beside Settings, palette **Help** and **Keyboard shortcuts** commands,
+  Welcome's **Help F1** link, and contextual **About permissions**, **About context**
+  and **About changes** links.
+- Search matches word starts across topic text and current shortcut rows. When
+  nothing matches, it can offer **Search Settings for “…”** if Settings has a
+  matching row and **Open Commands** where that destination is available. Escape
+  clears the search before closing Help.
+- **Getting started** shows the live Connect a provider, Open a project and Ask
+  AVA for a change checklist. In Help it folds to one line after setup is complete;
+  Welcome keeps the checklist visible.
+- **How AVA works** covers Chats and projects, Build and Plan, Permissions, Changes,
+  Subagents, Context, Tool details, Providers and API keys, Extensions and
+  Appearance. **Go to** links appear only where a real destination exists. There
+  is no About modes link beside the native Build/Plan select; its explanation is
+  available in Help without replacing the native control.
+- **Keyboard shortcuts** reflects current bindings, including **Unassigned**, the
+  user's Enter setting and fixed navigation keys such as F1. **Change shortcuts**
+  opens Settings rather than maintaining another shortcut editor.
+
+### First-time use and honest Send states
+
+- The Preview banner's **Start fresh / Restore sample data** switches between an
+  empty first-run workspace and the supplied examples. Welcome uses the AVA mark,
+  a one-line purpose and the three-step Getting started checklist; the sidebar
+  has a matching empty state.
+- New chat with no projects opens the project picker. Opening a project creates
+  one empty, logo-only chat, not a second setup screen inside the transcript.
+  If the default model's provider is disconnected, new chats choose a model from
+  a connected provider.
+- A chat whose model's provider is disconnected cannot Send. The action explains
+  **Connect [provider] to send with [model]**; a visible composer line says
+  **[provider] isn’t connected, so this chat can’t send.** and offers **Choose a
+  model**. Each send attempt re-announces the line, and Enter does not insert a
+  newline while blocked by that connection state. Connected Send still adds only
+  a local user message; it does not call a model.
+- Empty chats' context meter reads **No usage yet**, distinguishing an unused chat
+  from a model whose usage is unknown.
+
+### Follow-up fixes found during verification
+
+- The lost-typing issue after closing dialogs was reproduced in headed Chromium.
+  Focus is now re-seated on the next frame so typing intended for the message box
+  lands there after dialog close.
+- The shell no longer shrinks behind dialogs. Startup no longer loads the
+  Appearance Settings page merely for its defaults; those defaults live in
+  `behaviorPreferences.ts`.
+- Disconnect consequences explicitly say that chats using the provider's models
+  cannot send until reconnection. **Done** leads after connecting during setup.
+- An empty Find a chat offers **New chat** when a project is open, otherwise
+  **Open a project**, so the empty state has a usable next action.
+
+### Independent re-score
+
+These scores were recorded after the Help/first-run round and **before** the
+follow-up fixes above; no further re-score of those fixes is claimed.
+
+| Surface | Score |
+| --- | --- |
+| Help & shortcuts | **29/40** |
+| First-time use | **28/40** |
+| Whole product | **31/40**, previously 30/40 |
+
+The **Help and documentation** heuristic improved **2 → 3**.
+
+### Recorded verification
+
+| Check | Result |
+| --- | --- |
+| Typecheck | Passed |
+| Full test suite | **73 test files / 1,064 tests passed**, with `--maxWorkers=6` |
+| Production build | Passed |
+| Entry budget | **463.91 kB raw / 141.57 kB gzip**, below the unchanged **500,000-byte raw cap** |
+| Browser checks | Headed and headless Chromium at **1440×900 and 1024×700**: full first-run journey, Help entry points, topic deep links, typing after dialog close and the blocked-Send line |
+
+These are the supplied implementation checks, not checks run by this
+documentation pass. No real screen-reader session or live provider behavior is
+claimed.
+
+### Open items and deliberate limits
+
+- Getting started is not inserted into empty chats: the brief keeps their
+  transcript logo-only. Welcome and Help own setup guidance.
+- Which providers to suggest to first-time users remains a product decision.
+- Restore sample data has no confirmation; it is an explicit preview control.
+- Following Help's **Go to** into Settings and then pressing Escape returns focus
+  to the sidebar Settings button, not the original Help opener.
+- Recent can repeat a project's only chat as a shortcut.
+- Help does not describe undo/revert behavior because its real behavior is not
+  defined.
+- There was no real screen-reader session; the earlier accessibility-tree checks
+  are not NVDA or VoiceOver evidence.
+- The existing no-real-backend/provider/auth, dark-only, unbundled-Geist and
+  machine-load-sensitive test limits continue to apply.

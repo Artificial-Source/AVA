@@ -3,11 +3,13 @@ import { createPortal } from 'react-dom';
 import { CaretDownIcon } from '@phosphor-icons/react/dist/csr/CaretDown';
 import { CommandIcon } from '@phosphor-icons/react/dist/csr/Command';
 import { DotsThreeIcon } from '@phosphor-icons/react/dist/csr/DotsThree';
+import { FolderOpenIcon } from '@phosphor-icons/react/dist/csr/FolderOpen';
 import { FolderSimpleIcon } from '@phosphor-icons/react/dist/csr/FolderSimple';
 import { GearFineIcon } from '@phosphor-icons/react/dist/csr/GearFine';
 import { MagnifyingGlassIcon } from '@phosphor-icons/react/dist/csr/MagnifyingGlass';
 import { PlusIcon } from '@phosphor-icons/react/dist/csr/Plus';
 import { PushPinIcon } from '@phosphor-icons/react/dist/csr/PushPin';
+import { QuestionIcon } from '@phosphor-icons/react/dist/csr/Question';
 import { SidebarSimpleIcon } from '@phosphor-icons/react/dist/csr/SidebarSimple';
 import { XIcon } from '@phosphor-icons/react/dist/csr/X';
 import { shortcutHint, type ShortcutPreferences } from '../screens/shortcuts';
@@ -43,12 +45,16 @@ interface ProjectSidebarProps {
   /** Opens the command palette. */
   onOpenCommands?: () => void;
   onChatAction?: (chatId: string, action: ChatAction) => void;
+  /** Opens the project picker: the empty library's one action. */
+  onOpenProject?: () => void;
+  /** Opens Help. F1 reaches it from anywhere; it is not a remappable shortcut. */
+  onOpenHelp?: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   shortcuts?: ShortcutPreferences;
 }
 
-export function ProjectSidebar({ state, dispatch, onOpenSettings, settingsActive = false, settingsRef, onNewChat, onFindChat, onOpenCommands, onChatAction, collapsed = false, onToggleCollapsed, shortcuts }: ProjectSidebarProps) {
+export function ProjectSidebar({ state, dispatch, onOpenSettings, settingsActive = false, settingsRef, onNewChat, onFindChat, onOpenCommands, onChatAction, onOpenProject, onOpenHelp, collapsed = false, onToggleCollapsed, shortcuts }: ProjectSidebarProps) {
   const libraryRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
   const asideRef = useRef<HTMLElement>(null);
@@ -259,8 +265,19 @@ export function ProjectSidebar({ state, dispatch, onOpenSettings, settingsActive
         <nav aria-label="All project chats">
           <div className={styles.sectionLabel}>
             <h2>Projects</h2>
-            <span>{state.projects.length}</span>
+            {state.projects.length > 0 ? <span>{state.projects.length}</span> : null}
           </div>
+          {state.projects.length === 0 ? (
+            <div className={styles.emptyLibrary}>
+              <p>Projects you open appear here.</p>
+              {onOpenProject ? (
+                <button className={styles.openProject} type="button" onClick={onOpenProject}>
+                  <FolderOpenIcon size={16} aria-hidden="true" />
+                  Open a project
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {state.projects.map((project) => {
             const expanded = !state.collapsedProjectIds.includes(project.id);
             const projectChats = state.chats.filter((chat) => chat.projectId === project.id && chats.has(chat.id));
@@ -330,19 +347,38 @@ export function ProjectSidebar({ state, dispatch, onOpenSettings, settingsActive
           </nav>
         ) : null}
       </div>
-      {onOpenSettings ? (
+      {onOpenSettings || onOpenHelp ? (
+        // Settings and its quiet companion, Help: the footer's only controls.
         <div className={styles.settings}>
-          <button
-            ref={settingsRef}
-            type="button"
-            onClick={onOpenSettings}
-            aria-current={settingsActive ? 'page' : undefined}
-            title={settingsHint ? `Settings · ${settingsHint.label}` : 'Settings'}
-            aria-keyshortcuts={settingsHint?.aria}
-          >
-            <GearFineIcon size={18} aria-hidden="true" />
-            <span className={collapsed ? 'srOnly' : undefined}>Settings</span>
-          </button>
+          {onOpenSettings ? (
+            <button
+              ref={settingsRef}
+              className={styles.settingsButton}
+              type="button"
+              onClick={onOpenSettings}
+              aria-current={settingsActive ? 'page' : undefined}
+              title={settingsHint ? `Settings · ${settingsHint.label}` : 'Settings'}
+              aria-keyshortcuts={settingsHint?.aria}
+            >
+              <GearFineIcon size={18} aria-hidden="true" />
+              <span className={collapsed ? 'srOnly' : undefined}>Settings</span>
+            </button>
+          ) : null}
+          {onOpenHelp ? (
+            <IconButton
+              className={styles.help}
+              variant="quiet"
+              label="Help"
+              title="Help · F1"
+              aria-keyshortcuts="F1"
+              onClick={() => {
+                setMenu(null);
+                onOpenHelp();
+              }}
+            >
+              <QuestionIcon size={18} aria-hidden="true" />
+            </IconButton>
+          ) : null}
         </div>
       ) : null}
       {menu && menuChat ? createPortal(

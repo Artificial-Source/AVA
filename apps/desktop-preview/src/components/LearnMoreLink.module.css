@@ -1,0 +1,26 @@
+/* Quiet help link: muted caption text with the Help glyph; underline arrives on hover. It sizes to
+   its text in any parent (block, flex or grid). The negative inline margin keeps the text on its
+   column's edge while the hit area stays 24px tall. */
+.link {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  margin-inline: calc(var(--space-1) * -1);
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--type-caption);
+  line-height: 1.4;
+  text-align: start;
+  cursor: pointer;
+  transition: color var(--motion-feedback-duration) var(--motion-ease-out);
+}
+
+.link > svg { color: var(--quiet); transition: color var(--motion-feedback-duration) var(--motion-ease-out); }
+.link:hover, .link:focus-visible { color: var(--text); }
+.link:hover > span { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.link:hover > svg, .link:focus-visible > svg { color: var(--text); }

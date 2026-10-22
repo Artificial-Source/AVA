@@ -3,9 +3,8 @@ import type { ModelId } from '../state/types';
 import { providerIdentities } from '../ui/providerIdentity';
 import type { ModelChoice, Preferences, Provider, ResourceInspections, SubagentDefinition } from './contracts';
 
-import { defaultGeneral, defaultConversation, defaultNotifications, defaultContextPolicy } from './behaviorPreferences';
+import { defaultAppearance, defaultGeneral, defaultConversation, defaultNotifications, defaultContextPolicy } from './behaviorPreferences';
 import { defaultShortcuts } from './shortcuts';
-import { defaultAppearance } from './AppearanceSettings';
 
 // Shared local screen examples, separate from the standalone scenario index.
 export const defaultPreferences: Preferences = { ...defaultAppearance, help: true, enter: 'send', notifications: 'off', general: defaultGeneral, conversation: defaultConversation, notificationPolicy: defaultNotifications, contextPolicy: defaultContextPolicy, shortcuts: defaultShortcuts };

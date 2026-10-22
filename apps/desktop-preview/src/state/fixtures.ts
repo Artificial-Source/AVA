@@ -1,5 +1,5 @@
 import type { TurnAttribution } from '../chat/contracts';
-import type { ContextReference, ModelId, PreviewState } from './types';
+import type { ContextReference, ModelId, PreviewState, Project } from './types';
 
 // Invented examples only. These are not sessions, files, models, or live runs.
 export const modelOptions: { id: ModelId; label: string }[] = [
@@ -14,17 +14,41 @@ export const contextReferences: ContextReference[] = [
   { id: 'navigation-notes', kind: 'context', label: 'Navigation notes' },
 ];
 
+// The projects AVA can open in this visit. The sample data starts with all of them open.
+export const openableProjects: readonly Project[] = [
+  { id: 'wayfinder', name: 'Wayfinder' },
+  { id: 'papertrail', name: 'Papertrail' },
+  { id: 'relay', name: 'Relay' },
+];
+
+// A new user's app: nothing open yet. Appearance (`opaque`) is a preference, so it carries over.
+export function createFreshState(opaque: boolean): PreviewState {
+  return {
+    projects: [],
+    chats: [],
+    activeChatId: '',
+    pinnedChatIds: [],
+    recentChatIds: [],
+    collapsedProjectIds: [],
+    childAgents: [],
+    inspectedChildId: null,
+    inspector: null,
+    lastInspectorModule: 'agents',
+    opaque,
+    nextChatNumber: 1,
+    nextMessageNumber: 1,
+    announcement: 'Started fresh. No projects, chats or connected providers.',
+    fresh: true,
+  };
+}
+
 const asterAttribution: TurnAttribution = { modelLabel: 'Aster' };
 const miniAttribution: TurnAttribution = { modelLabel: 'Aster Mini' };
 const orionAttribution: TurnAttribution = { modelLabel: 'Orion' };
 
 export function createInitialState(): PreviewState {
   return {
-    projects: [
-      { id: 'wayfinder', name: 'Wayfinder' },
-      { id: 'papertrail', name: 'Papertrail' },
-      { id: 'relay', name: 'Relay' },
-    ],
+    projects: openableProjects.map((project) => ({ ...project })),
     chats: [
       {
         id: 'search-filters',

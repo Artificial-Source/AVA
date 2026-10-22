@@ -1,7 +1,11 @@
 .review { position: relative; min-width: 0; }
 
-/* Totals, then a compact index that jumps to each file, then the files themselves. */
-.totals { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+/* Totals and the help link share one row, then a compact index that jumps to each file, then the files themselves. */
+.head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-4); margin: 0 0 var(--space-3); }
+.totals { margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+/* With nothing listed, the link follows the notice. */
+.help { margin-top: var(--space-3); }
+.head > .help { margin-top: 0; }
 .figures { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); font-variant-numeric: tabular-nums; }
 .dot { color: var(--quiet); }
 .added { color: var(--text); }

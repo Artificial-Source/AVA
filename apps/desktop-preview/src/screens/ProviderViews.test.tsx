@@ -269,6 +269,16 @@ describe('connect flow', () => {
     expect(screen.getByRole('button', { name: 'Choose a model' })).toHaveFocus();
     await user.click(screen.getByRole('button', { name: 'Choose a model' })); expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'connect', version: 1, action: 'choose-model' });
   });
+  it('leads with Done while Getting started has steps left, keeping Choose a model beside it', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn(); const onDismiss = vi.fn();
+    render(<ProviderConnectDialog onDismiss={onDismiss} view={at('success', 'key')} onIntent={onIntent} settingUp />);
+    const done = screen.getByRole('button', { name: 'Done' });
+    expect(done).toHaveFocus(); expect(done).toHaveAttribute('data-tone', 'primary');
+    expect(screen.getByRole('button', { name: 'Choose a model' })).toHaveAttribute('data-tone', 'quiet');
+    // The primary action sits last, at the bar's end.
+    expect(done.compareDocumentPosition(screen.getByRole('button', { name: 'Choose a model' })) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Choose a model' })); expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'connect', version: 1, action: 'choose-model' });
+  });
   it('names the cause of a failed connection and offers Try again', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn(); const harbor = byId('harbor');
     const result = render(<ProviderConnectDialog {...chrome} view={at('error', 'key', harbor)} onIntent={onIntent} />);
@@ -285,7 +295,7 @@ describe('connect flow', () => {
   it('states what a disconnect changes, opens on Cancel, and uses the destructive tone', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn(); const onDismiss = vi.fn();
     const view = render(<ProviderConnectDialog onDismiss={onDismiss} view={at('disconnect', null, byId('orion-lab'))} onIntent={onIntent} />);
-    expect(screen.getByRole('dialog', { name: 'Disconnect Orion Lab?' })).toHaveTextContent('Orion models will be unavailable for new chats.');
+    expect(screen.getByRole('dialog', { name: 'Disconnect Orion Lab?' })).toHaveTextContent('Chats using Orion models can’t send until you reconnect.');
     expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
     const disconnect = screen.getByRole('button', { name: 'Disconnect' }); expect(disconnect).toHaveAttribute('data-tone', 'destructive');
     await user.click(screen.getByRole('button', { name: 'Cancel' })); expect(onDismiss).toHaveBeenCalledTimes(1); expect(onIntent).not.toHaveBeenCalled();

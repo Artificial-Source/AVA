@@ -1,18 +1,21 @@
 import { Fragment, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { ContextUsageView } from '../chat/contextUsage';
+import type { GettingStartedState } from '../components/GettingStarted';
 import type { ModelId, Project } from '../state/types';
 import { canFocus, DialogFrame } from '../ui/DialogFrame';
 import { BackButton, Button } from '../ui/Button';
 import { ChatActionDialog, RenameDialog, validRename, validWorkspaceIntent, WorkspaceDialog } from './ChatDialogs';
-import type { ActionView, ChatActionIntent, ChatSummary, ConnectIntent, ConnectView, FinderItem, FinderScope, FinderView, MainScreenRequest, ModelPickerView, ModelScope, ModelSelection, Preferences, SettingsSection, UICommand, WorkspaceIntent, WorkspaceView } from './contracts';
+import type { ActionView, ChatActionIntent, ChatSummary, ConnectIntent, ConnectView, FinderItem, FinderScope, FinderView, HelpTopicId, MainScreenRequest, ModelPickerView, ModelScope, ModelSelection, Preferences, SettingsSection, UICommand, WorkspaceIntent, WorkspaceView } from './contracts';
 import { FinderDialog, validFinderIntent } from './FinderDialog';
+import { HelpDialog } from './HelpDialog';
 import { ModelDialog, validModelSelection } from './ModelDialog';
 import { changedPreferenceAreas } from './preferenceDiff';
 import { connectStart, ProviderConnectDialog, ProviderDirectory, validConnectIntent } from './ProviderViews';
-import { setProviderState, useProviderList } from './providerState';
+import { providerConnected, setProviderState, useProviderList } from './providerState';
 import { defaultPreferences, modelChoices, resourceInspections } from './screenExamples';
 import { Confirmation } from './ScreenPrimitives';
-import { SettingsScreen } from './SettingsScreen';
+import { SettingsScreen, settingsSections } from './SettingsScreen';
+import { matchSettings } from './settingsIndex';
 import { shortcutActions, shortcutHint, type ShortcutAction } from './shortcuts';
 import { useSubagentWorkspace } from './subagentWorkspace';
 import { useViewGuard } from './useViewGuard';
@@ -45,25 +48,37 @@ export interface MainScreensProps {
   onBranchChat?: (chatId: string, messageId: string) => void;
   onAppAction?: (action: ShortcutAction) => void;
   onOpenSettingsSection?: (section: SettingsSection) => void;
+  // Opens Settings with its search filled in: Help's no-match next step, from a dialog.
+  onSearchSettings?: (query: string) => void;
+  // Projects that can be opened but aren't in the sidebar yet; the project picker lists them after
+  // the open ones. Choosing one runs onOpenProject while this request is current.
+  projectsToOpen?: readonly Project[];
+  onOpenProject?: (projectId: string) => void;
 }
 type ChatTask = 'rename' | 'archive' | 'branch';
 type Overlay =
   | { kind: 'models'; scope: ModelScope; version: number }
   | { kind: 'provider'; view: ConnectView; back: boolean }
   | { kind: 'providers' | 'reset' | 'commands' | 'workspace'; version: number }
+  // Help, optionally opened expanded on one topic.
+  | { kind: 'help'; version: number; topic?: HelpTopicId }
   // Find a chat, optionally opened on one filter (Archived, from the archive dialog).
   | { kind: 'sessions'; version: number; scope?: FinderScope }
   | { kind: ChatTask; chatId: string; version: number };
 type Receipt = Readonly<{ text: string; undo?: Readonly<{ preferences: Preferences; opaque: boolean; defaultModel: ModelId; reset: Preferences }> }>;
 
 const readOnlyReason = 'You’re viewing a subagent. Go back to the parent chat to change its model.';
+// With no chat open (a new user with no projects), chat commands wait for one.
+const chatCommands: Partial<Record<UICommand, true>> = { models: true, composer: true, agents: true, changes: true, context: true, inspector: true };
 // Run by the shell after this screen closes; everything else opens inside MainScreens.
 const hostCommands: Partial<Record<UICommand, true>> = { settings: true, newChat: true, composer: true, tools: true, stop: true, agents: true, changes: true, context: true, inspector: true };
 const parentCommands: Partial<Record<UICommand, true>> = { models: true, composer: true, tools: true, stop: true };
-const paletteOrder: readonly UICommand[] = ['sessions', 'newChat', 'workspace', 'settings', 'shortcuts', 'providers', 'models', 'composer', 'tools', 'stop', 'rename', 'branch', 'archive', 'agents', 'changes', 'context', 'inspector'];
-const paletteOnly: Readonly<Record<'providers' | 'workspace' | 'shortcuts' | ChatTask, Readonly<{ label: string; detail: string; group: string }>>> = {
+// Keyboard shortcuts precedes Help, whose detail also mentions keyboard shortcuts, so typing the command's name finds it first.
+const paletteOrder: readonly UICommand[] = ['sessions', 'newChat', 'workspace', 'settings', 'shortcuts', 'help', 'providers', 'models', 'composer', 'tools', 'stop', 'rename', 'branch', 'archive', 'agents', 'changes', 'context', 'inspector'];
+const paletteOnly: Readonly<Record<'providers' | 'workspace' | 'help' | 'shortcuts' | ChatTask, Readonly<{ label: string; detail: string; group: string }>>> = {
   providers: { label: 'Connect a provider', detail: 'Sign in to a model provider', group: 'General' },
-  workspace: { label: 'Open a project', detail: 'Go to a chat in another project', group: 'General' },
+  workspace: { label: 'Open a project', detail: 'Switch projects or open another one', group: 'General' },
+  help: { label: 'Help', detail: 'Getting started, how AVA works and keyboard shortcuts', group: 'General' },
   shortcuts: { label: 'Keyboard shortcuts', detail: 'See and change every shortcut', group: 'General' },
   rename: { label: 'Rename chat', detail: '', group: 'Chat' },
   branch: { label: 'Branch from a message', detail: 'Start a new chat from an earlier message', group: 'Chat' },
@@ -74,14 +89,15 @@ function initialOverlay(request: MainScreenRequest): Overlay | null {
   const chatId = request.targetChatId ?? request.parentChatId;
   if (request.kind === 'models') return { kind: 'models', scope: 'current-chat', version: 1 };
   if (request.kind === 'providers' || request.kind === 'commands' || request.kind === 'sessions' || request.kind === 'workspace') return { kind: request.kind, version: 1 };
+  if (request.kind === 'help') return { kind: 'help', version: 1, topic: request.helpTopic };
   if (request.kind === 'rename' || request.kind === 'archive' || request.kind === 'branch') return { kind: request.kind, chatId, version: 1 };
   return null;
 }
 
 // A lazy, local presentation host. No ScreenReview controller, routing or RPC. Provider
 // connections live in the visit-wide store, so they outlast this host.
-export default function MainScreens({ request, parent, defaultModel, preferences, opaque, onOpaqueChange, section, onSectionChange, onPreferencesChange, onSelectModel, onDismiss, returnFocus, workspaceSeed, onWorkspaceSnapshot, projects, contextUsage, chats, onOpenChat, onRenameChat, onArchiveChat, onBranchChat, onAppAction, onOpenSettingsSection }: MainScreensProps) {
-  const [settingsQuery, setSettingsQuery] = useState('');
+export default function MainScreens({ request, parent, defaultModel, preferences, opaque, onOpaqueChange, section, onSectionChange, onPreferencesChange, onSelectModel, onDismiss, returnFocus, workspaceSeed, onWorkspaceSnapshot, projects, contextUsage, chats, onOpenChat, onRenameChat, onArchiveChat, onBranchChat, onAppAction, onOpenSettingsSection, onSearchSettings, projectsToOpen, onOpenProject }: MainScreensProps) {
+  const [settingsQuery, setSettingsQuery] = useState(request.kind === 'settings' ? request.settingsQuery ?? '' : '');
   const [query, setQuery] = useState('');
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const providerList = useProviderList();
@@ -91,14 +107,16 @@ export default function MainScreens({ request, parent, defaultModel, preferences
   const revision = useRef(1);
   const composing = useRef(false);
   // Some closes remove their own opener: reset disables it, Undo removes itself and a connected
-  // provider swaps Connect for Disconnect. Focus then lands on what replaced the opener.
-  const landing = useRef<{ kind: 'receipt' } | { kind: 'provider'; id: string } | null>(null);
+  // provider swaps Connect for Disconnect. Focus then lands on what replaced the opener. Help
+  // closing over Settings onto search results or another page lands on the search or the page.
+  const landing = useRef<{ kind: 'receipt' } | { kind: 'provider'; id: string } | { kind: 'settings'; to: 'search' | 'page' } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const receiptBox = useRef<HTMLDivElement>(null);
   const undoButton = useRef<HTMLButtonElement>(null);
   const rootGate = useViewGuard(JSON.stringify(request));
   const overlayGate = useViewGuard(JSON.stringify(overlay));
   const readOnly = request.inspectedChildId !== null;
+  const chatless = request.parentChatId === '';
   const settings = request.kind === 'settings';
   const parentChat = chats?.find((chat) => chat.id === request.parentChatId);
   const definitions = useSubagentWorkspace(workspaceSeed, settings && section === 'subagents' && !overlay, (snapshot) => { if (rootGate.valid()) onWorkspaceSnapshot?.(snapshot); });
@@ -109,6 +127,12 @@ export default function MainScreens({ request, parent, defaultModel, preferences
     landing.current = null;
     if (next.kind === 'receipt') {
       const target = canFocus(undoButton.current) ? undoButton.current : receiptBox.current;
+      if (canFocus(target)) target.focus({ preventScroll: true });
+      return;
+    }
+    if (next.kind === 'settings') {
+      const page = root.current?.querySelector<HTMLElement>('section[aria-label="Settings"]');
+      const target = page?.querySelector<HTMLElement>(next.to === 'search' ? 'input[type="search"]' : '[role="region"]') ?? null;
       if (canFocus(target)) target.focus({ preventScroll: true });
       return;
     }
@@ -157,22 +181,21 @@ export default function MainScreens({ request, parent, defaultModel, preferences
     if (hostCommands[command]) {
       onAppAction?.(command as ShortcutAction);
       dismissRoot();
-    } else if (command === 'shortcuts') {
-      onOpenSettingsSection?.('shortcuts');
-      dismissRoot();
-    } else if (command === 'models') switchTo({ kind: 'models', scope: 'current-chat', version: ++revision.current });
+    } else if (command === 'help' || command === 'shortcuts') switchTo({ kind: 'help', version: ++revision.current, topic: command === 'shortcuts' ? 'shortcuts' : undefined });
+    else if (command === 'models') switchTo({ kind: 'models', scope: 'current-chat', version: ++revision.current });
     else if (command === 'sessions' || command === 'providers' || command === 'workspace') switchTo({ kind: command, version: ++revision.current });
     else if (command === 'rename' || command === 'archive' || command === 'branch') switchTo({ kind: command, chatId: request.parentChatId, version: ++revision.current });
   }
 
   function paletteItems(): FinderItem[] {
     const offered = (command: UICommand) => hostCommands[command] ? Boolean(onAppAction)
-      : command === 'sessions' || command === 'workspace' ? Boolean(chats && onOpenChat)
-      : command === 'shortcuts' ? Boolean(onOpenSettingsSection)
+      : command === 'sessions' ? Boolean(chats && onOpenChat)
+      : command === 'workspace' ? Boolean(chats && onOpenChat || onOpenProject && projectsToOpen?.length)
       : command === 'rename' ? Boolean(parentChat && onRenameChat)
       : command === 'archive' ? Boolean(parentChat && onArchiveChat)
       : command === 'branch' ? Boolean(parentChat && onBranchChat) : true;
     const reason = (command: UICommand) => readOnly && parentCommands[command] ? 'Parent chat only'
+      : chatless && chatCommands[command] ? 'Open a project first'
       : command === 'stop' && parentChat?.status !== 'working' ? 'Nothing running'
       : command === 'tools' && !toolsAvailable ? 'No tool activity'
       : command === 'archive' && parentChat?.archived ? 'Already archived'
@@ -181,13 +204,17 @@ export default function MainScreens({ request, parent, defaultModel, preferences
       const action = shortcutActions.find((entry) => entry.id === command);
       const copy = action ?? paletteOnly[command as keyof typeof paletteOnly];
       const detail = command === 'rename' || command === 'archive' ? parentChat?.title ?? '' : copy.detail;
-      return { id: command, command, label: copy.label, detail, group: copy.group, shortcut: action ? shortcutHint(preferences.shortcuts, action.id)?.label : undefined, disabledReason: reason(command) };
+      return { id: command, command, label: copy.label, detail, group: copy.group, shortcut: action ? shortcutHint(preferences.shortcuts, action.id)?.label : command === 'help' ? 'F1' : undefined, disabledReason: reason(command) };
     });
   }
   function chatProjects() {
     const list = (projects ?? []).map((project) => ({ id: project.id, label: project.name }));
     for (const chat of chats ?? []) if (!list.some((project) => project.id === chat.projectId)) list.push({ id: chat.projectId, label: chat.projectLabel });
     return list;
+  }
+  // Getting started's checklist: Help shows it, and connecting a provider reads whether it's done.
+  function setupState(): GettingStartedState {
+    return { providerConnected: providerList.some(providerConnected), projectOpened: chatProjects().length > 0, firstMessageSent: (chats ?? []).some((chat) => chat.branchPoints.length > 0) };
   }
 
   function renderOverlay() {
@@ -222,7 +249,7 @@ export default function MainScreens({ request, parent, defaultModel, preferences
         }
         if (intent.action === 'choose-model') {
           // Open the picker on this provider's models when it has any.
-          const scope: ModelScope = settings || readOnly ? 'new-chat-default' : 'current-chat';
+          const scope: ModelScope = settings || readOnly || chatless ? 'new-chat-default' : 'current-chat';
           switchTo({ kind: 'models', scope, version: ++revision.current });
           if (modelChoices.some((choice) => choice.providerId === provider.id)) setQuery(provider.label);
           return;
@@ -238,7 +265,7 @@ export default function MainScreens({ request, parent, defaultModel, preferences
         overlayGate.invalidate();
         setOverlay({ kind: 'provider', back, view: { ...view, provider: next, step, method, version: ++revision.current } });
       }
-      return <ProviderConnectDialog key={key} {...chrome} view={view} onIntent={connect} />;
+      return <ProviderConnectDialog key={key} {...chrome} view={view} onIntent={connect} settingUp={!Object.values(setupState()).every(Boolean)} />;
     }
     if (overlay.kind === 'providers') {
       const pick = (id: string, disconnect: boolean) => {
@@ -255,7 +282,13 @@ export default function MainScreens({ request, parent, defaultModel, preferences
         ? { id: `${request.id}:commands`, version: overlay.version, kind: 'commands', state: 'ready', items: paletteItems(), projects: [] }
         : { id: `${request.id}:sessions`, version: overlay.version, kind: 'sessions', state: chats ? 'ready' : 'unavailable', projects: chatProjects(),
           items: (chats ?? []).map((chat) => ({ id: chat.id, label: chat.title, detail: '', projectId: chat.projectId, status: chat.status, archived: chat.archived, current: chat.current, searchText: chat.searchText })) };
-      return <FinderDialog key={key} {...chrome} view={view} initialScope={overlay.kind === 'sessions' ? overlay.scope : undefined} query={query} onQueryChange={(value) => { if (overlayGate.valid()) setQuery(value); }} onRetry={() => {}} onSelect={(intent) => {
+      // With no chats at all, Find a chat offers the way to a first one: New chat in an open
+      // project, else Open a project.
+      const emptyAction = overlay.kind !== 'sessions' || !chats || chats.length ? undefined
+        : projects?.length && onAppAction ? { label: 'New chat', run: () => { if (rootGate.valid() && overlayGate.claim()) { onAppAction?.('newChat'); dismissRoot(); } } }
+        : onOpenProject && projectsToOpen?.length ? { label: 'Open a project', run: () => { if (rootGate.valid() && overlayGate.claim()) switchTo({ kind: 'workspace', version: ++revision.current }); } }
+        : undefined;
+      return <FinderDialog key={key} {...chrome} view={view} initialScope={overlay.kind === 'sessions' ? overlay.scope : undefined} emptyAction={emptyAction} query={query} onQueryChange={(value) => { if (overlayGate.valid()) setQuery(value); }} onRetry={() => {}} onSelect={(intent) => {
         if (!rootGate.valid() || !validFinderIntent(view, intent) || !overlayGate.claim()) return;
         const item = view.items.find((entry) => entry.id === intent.itemId)!;
         if (view.kind === 'commands') { runCommand(item.command!); return; }
@@ -288,19 +321,56 @@ export default function MainScreens({ request, parent, defaultModel, preferences
           finishOverlay();
         }} />;
     }
+    if (overlay.kind === 'help') {
+      // Getting started, Find a chat and Commands replace Help. From a dialog, a Settings page or
+      // search replaces the whole request; over Settings, Help closes onto that page or search.
+      // Commands over the Settings page isn't a place the app has, so there only Settings search leads on.
+      const replace = (next: Overlay) => { if (rootGate.valid() && overlayGate.claim()) switchTo(next); };
+      const settingsFinds = (settings || Boolean(onSearchSettings)) && matchSettings(query, settingsSections).length > 0;
+      return <HelpDialog key={key} {...chrome} topic={overlay.topic} query={query} onQueryChange={(value) => { if (overlayGate.valid()) setQuery(value); }} shortcuts={preferences.shortcuts} enter={preferences.enter}
+        gettingStarted={setupState()}
+        onConnectProvider={() => replace({ kind: 'providers', version: ++revision.current })}
+        onOpenProject={() => replace({ kind: 'workspace', version: ++revision.current })}
+        canGo={(to) => to === 'sessions' ? Boolean(chats && onOpenChat) : settings || Boolean(onOpenSettingsSection)}
+        onGo={(to) => {
+          if (to === 'sessions') { replace({ kind: 'sessions', version: ++revision.current }); return; }
+          if (!rootGate.valid() || !overlayGate.claim()) return;
+          if (settings) {
+            onSectionChange(to); setSettingsQuery('');
+            landing.current = { kind: 'settings', to: 'page' };
+            finishOverlay(); return;
+          }
+          onOpenSettingsSection?.(to);
+          dismissRoot();
+        }}
+        onSearchSettings={settingsFinds ? (text) => {
+          if (!rootGate.valid() || !overlayGate.claim()) return;
+          if (settings) {
+            setSettingsQuery(text);
+            landing.current = { kind: 'settings', to: 'search' };
+            finishOverlay(); return;
+          }
+          onSearchSettings?.(text);
+          dismissRoot();
+        } : undefined}
+        onOpenCommands={settings ? undefined : () => replace({ kind: 'commands', version: ++revision.current })} />;
+    }
     if (overlay.kind === 'workspace') {
       const list = chats ?? [];
       const currentProject = parentChat?.projectId ?? '';
-      const choices = chats && onOpenChat ? chatProjects().filter((project) => list.some((chat) => chat.projectId === project.id)).map((project) => {
+      const opened = chats && onOpenChat ? chatProjects().filter((project) => list.some((chat) => chat.projectId === project.id)).map((project) => {
         const active = list.filter((chat) => chat.projectId === project.id && !chat.archived).length;
         return { id: project.id, label: project.label, detail: active ? `${active} ${active === 1 ? 'chat' : 'chats'}` : 'Only archived chats' };
       }) : [];
-      const view: WorkspaceView = { id: `${request.id}:workspace`, version: overlay.version, state: 'choice', selectedId: currentProject, choices };
+      // Projects not in the sidebar yet follow the open ones; choosing one opens it on a new chat.
+      const unopened = onOpenProject ? (projectsToOpen ?? []).filter((project) => !opened.some((choice) => choice.id === project.id)).map((project) => ({ id: project.id, label: project.name, detail: 'Not opened yet' })) : [];
+      const view: WorkspaceView = { id: `${request.id}:workspace`, version: overlay.version, state: 'choice', selectedId: currentProject, choices: [...opened, ...unopened] };
       return <WorkspaceDialog key={key} {...chrome} view={view} onIntent={(intent: WorkspaceIntent) => {
         if (!rootGate.valid() || !validWorkspaceIntent(view, intent) || !overlayGate.claim()) return;
         // Choosing opens the project straight away, on its latest active chat (else its latest
         // archived one). The project already open needs nothing, so choosing it only closes.
-        if (intent.workspaceId !== currentProject) {
+        if (unopened.some((choice) => choice.id === intent.workspaceId)) onOpenProject?.(intent.workspaceId!);
+        else if (intent.workspaceId !== currentProject) {
           const inProject = list.filter((chat) => chat.projectId === intent.workspaceId);
           const target = inProject.find((chat) => !chat.archived) ?? inProject[0];
           if (target) onOpenChat?.(target.id);
@@ -327,9 +397,19 @@ export default function MainScreens({ request, parent, defaultModel, preferences
   }
 
   return <div ref={root} className={styles.mainScreens} data-page={request.kind} data-density={preferences.density} data-motion={preferences.motion} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => {
-    if (event.defaultPrevented || event.key !== 'Escape' || !settings || overlay || !rootGate.valid() || event.target instanceof Element && event.target.closest('dialog')) return;
+    if (event.defaultPrevented || !settings || !rootGate.valid()) return;
+    const composingKey = composing.current || event.nativeEvent.isComposing || event.keyCode === 229;
+    // F1 opens Help over Settings, and closing Help returns here. In Help it only keeps the
+    // browser's own help away; over any other dialog it does nothing.
+    if (event.key === 'F1' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      if (composingKey || overlay && overlay.kind !== 'help') return;
+      event.preventDefault();
+      if (!overlay && !event.repeat && overlayGate.claim()) switchTo({ kind: 'help', version: ++revision.current });
+      return;
+    }
+    if (event.key !== 'Escape' || overlay || event.target instanceof Element && event.target.closest('dialog')) return;
     event.preventDefault(); event.stopPropagation();
-    if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (composingKey) return;
     if (settingsQuery) setSettingsQuery(''); else dismissRoot();
   }}>
     {settings ? <div className={styles.settingsPage}>

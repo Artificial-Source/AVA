@@ -303,7 +303,7 @@ describe('monochrome sidebar-only UI preview', () => {
     expect(transcript.textContent).toBe('');
     expect(transcript.querySelector('h2, p, span, button, input')).toBeNull();
     expect(screen.getByRole('form', { name: 'Message composer' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Open Context · Context unknown' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open Context · No usage yet' })).toBeVisible();
     expect(screen.getByRole('navigation', { name: 'Inspectors' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-disabled', 'true');
     await user.keyboard('<script>alert("preview")</script>');

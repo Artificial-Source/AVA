@@ -1,5 +1,6 @@
-import { contextReferences, modelOptions } from './fixtures';
-import type { Chat, ChatMode, Message, ModelId, PreviewAction, PreviewState } from './types';
+import { contextReferences, createFreshState, createInitialState, modelOptions, openableProjects } from './fixtures';
+import { activeChat } from './selectors';
+import type { Chat, ChatMode, InspectorModule, Message, ModelId, PreviewAction, PreviewState } from './types';
 import { plain, receiveSuppliedRun, sameRun, stopSuppliedRun, validId } from './suppliedRun';
 
 function recordRecent(recentChatIds: string[], chatId: string): string[] {
@@ -19,6 +20,12 @@ export function chatTitle(value: string, limit = 80) {
 }
 
 type NewChatOptions = { model?: ModelId; mode?: ChatMode; projectId?: string; titleFromFirstMessage?: boolean };
+type InspectorIntent = 'remember' | 'closed' | InspectorModule | undefined;
+
+// New chats may close the inspector or open it on a module; 'remember' and unknown values keep it as is.
+function inspectorFor(intent: InspectorIntent): Partial<PreviewState> {
+  return intent === 'closed' ? { inspector: null } : intent === 'agents' || intent === 'changes' || intent === 'context' ? { inspector: intent, lastInspectorModule: intent } : {};
+}
 
 // Appends and views a chat. The caller stops any run first.
 function appendChat(state: PreviewState, chat: Chat): PreviewState {
@@ -121,13 +128,31 @@ function reduce(state: PreviewState, action: PreviewAction): PreviewState {
       };
     case 'newChat': {
       const stopped = stopSuppliedRun(state);
-      const viewedChat = stopped.chats.find((chat) => chat.id === stopped.activeChatId)!;
-      const inspector = action.inspector;
+      // Without a viewed chat, the first project; without any project there is nowhere to start one.
+      const fallbackProjectId = activeChat(stopped)?.projectId ?? stopped.projects[0]?.id;
+      if (fallbackProjectId === undefined) return state;
       return {
-        ...createChat(stopped, action, viewedChat.projectId),
-        ...(inspector === 'closed' ? { inspector: null } : inspector === 'agents' || inspector === 'changes' || inspector === 'context' ? { inspector, lastInspectorModule: inspector } : {}),
+        ...createChat(stopped, action, fallbackProjectId),
+        ...inspectorFor(action.inspector),
         announcement: 'New chat created.',
       };
+    }
+    case 'openProject': {
+      const project = state.projects.find((entry) => entry.id === action.projectId) ?? openableProjects.find((entry) => entry.id === action.projectId);
+      if (!project) return state;
+      const stopped = stopSuppliedRun(state);
+      const withProject = stopped.projects.some((entry) => entry.id === project.id) ? stopped : { ...stopped, projects: [...stopped.projects, { id: project.id, name: project.name }] };
+      return {
+        ...createChat(withProject, { ...action, projectId: project.id }, project.id),
+        ...inspectorFor(action.inspector),
+        announcement: `Opened ${project.name}.`,
+      };
+    }
+    case 'startFresh':
+      return createFreshState(state.opaque);
+    case 'restoreSampleData': {
+      const sample = createInitialState();
+      return { ...sample, opaque: state.opaque, ...(action.inspector === 'closed' ? { inspector: null } : {}), announcement: 'Sample data restored.' };
     }
     case 'renameChat': {
       const chat = state.chats.find((entry) => entry.id === action.chatId);
@@ -252,7 +277,8 @@ function reduce(state: PreviewState, action: PreviewAction): PreviewState {
       return state.inspectedChildId ? { ...state, inspectedChildId: null, announcement: 'Back to the parent chat. Its draft and settings are unchanged.' } : state;
     case 'sendLocalMessage': {
       if (state.inspectedChildId) return state;
-      const chat = state.chats.find((entry) => entry.id === state.activeChatId)!;
+      const chat = activeChat(state);
+      if (!chat) return state;
       const text = chat.draft.trim();
       const selectedModel = modelOptions.find((model) => model.id === chat.model);
       if (!text || chat.status === 'working' || !selectedModel) return state;
@@ -274,7 +300,8 @@ function reduce(state: PreviewState, action: PreviewAction): PreviewState {
     case 'stopViewedMock': {
       if (state.inspectedChildId) return state;
       if (state.suppliedRun?.state === 'streaming' && state.suppliedRun.chatId === state.activeChatId) return stopSuppliedRun(state);
-      const chat = state.chats.find((entry) => entry.id === state.activeChatId)!;
+      const chat = activeChat(state);
+      if (!chat) return state;
       if (chat.status !== 'working') return state;
       return {
         ...updateChat(state, chat.id, (entry) => ({ ...entry, status: 'stopped' })),

@@ -4,6 +4,10 @@
   --rail-width: 44px;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  /* One row that always takes the full height. The dialog host adds no box (display: contents), so its
+     screen wrapper lands in an implicit row; it holds only top-layer dialogs, so that row stays 0px and
+     the sidebar and workspace never shrink behind a dialog. */
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
   overflow: hidden;
@@ -51,7 +55,7 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* The sidebar's collapsed rail keeps only its toggle, New chat, Find a chat, Commands and Settings. */
+/* The sidebar's collapsed rail keeps only its toggle, New chat, Find a chat, Commands, Settings and Help. */
 .app[data-sidebar='collapsed'] { --sidebar-width: 56px; }
 
 @media (max-width: 1200px) {
@@ -79,3 +83,7 @@
   .settingsLoading { padding: var(--space-5) var(--space-4) var(--space-8); }
   .settingsLoading > header { margin-bottom: var(--space-6); }
 }
+
+/* Nothing open yet (after Start fresh): the Welcome takes the whole workspace; there is no inspector or rail to show.
+   Last in the file so it wins over every breakpoint's inspector columns. */
+.workspace[data-canvas='welcome'], .workspace[data-canvas='welcome'][data-inspector='open'] { grid-template-columns: minmax(0, 1fr); }

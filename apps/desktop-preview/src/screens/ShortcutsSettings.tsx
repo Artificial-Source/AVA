@@ -6,8 +6,7 @@ import feedback from '../ui/feedback.module.css';
 import type { BehaviorSettingsProps } from './GeneralSettings';
 import { PreferenceRow } from './ScreenPrimitives';
 import { anchor } from './settingsIndex';
-import { bindingLabel, bindingProblem, defaultShortcuts, effectiveBinding, recordedBinding, shortcutActions, shortcutGroups, type ShortcutAction, type ShortcutPreferences } from './shortcuts';
-import { applePlatform } from './shortcutBindings';
+import { bindingLabel, bindingProblem, defaultShortcuts, effectiveBinding, navigationKeys, recordedBinding, shortcutActions, shortcutGroups, type ShortcutAction, type ShortcutPreferences } from './shortcuts';
 import { useViewGuard } from './useViewGuard';
 import styles from './BehaviorSettings.module.css';
 import controls from './screens.module.css';
@@ -19,18 +18,6 @@ type Overrides = Partial<Record<ShortcutAction, string | null>>;
 function normalized(overrides: Overrides): ShortcutPreferences['overrides'] {
   for (const action of shortcutActions) if (Object.hasOwn(overrides, action.id) && overrides[action.id] === action.binding) delete overrides[action.id];
   return overrides;
-}
-// Built-in keys: always on, whatever App shortcuts says, and never remapped. Each row mirrors a
-// handler: F6 in the app shell, F2 on sidebar rows and the chat title, Escape in dialogs, menus,
-// panels, Settings and subagent views, and Ctrl/Cmd+Enter in the message box.
-function navigationKeys(): readonly Readonly<{ id: string; label: string; detail: string; keys: readonly string[] }>[] {
-  const apple = applePlatform();
-  return [
-    { id: 'regions', label: 'Move between areas', detail: 'Steps through the sidebar, conversation, message box and open panel. Add Shift to go back.', keys: ['F6', apple ? '⇧F6' : 'Shift+F6'] },
-    { id: 'rename', label: 'Rename chat', detail: 'When a chat in the sidebar or the chat title has focus.', keys: ['F2'] },
-    { id: 'escape', label: 'Close or go back', detail: 'Closes a dialog, menu or panel, or leaves Settings or a subagent. In a search, clears it first.', keys: ['Esc'] },
-    { id: 'send', label: 'Send message', detail: 'From the message box, even when Enter adds a new line.', keys: [apple ? '⌘Return' : 'Ctrl+Enter'] },
-  ];
 }
 
 export function ShortcutsSettings({ preferences, active, allowed, update }: BehaviorSettingsProps) {

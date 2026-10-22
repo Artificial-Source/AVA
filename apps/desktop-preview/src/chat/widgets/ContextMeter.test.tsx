@@ -50,6 +50,30 @@ describe('composer context meter', () => {
     expect(meter).not.toHaveTextContent('81');
   });
 
+  it('reads as no usage yet, not unknown, for a chat with no messages, while a supplied measurement still wins', () => {
+    const unmeasured: ContextUsageView = { ...usage, snapshot: null };
+    const { rerender } = render(<ContextMeter view={unmeasured} emptyChat onOpen={vi.fn()} />);
+    const meter = screen.getByRole('button', { name: 'Open Context · No usage yet' });
+    expect(meter).toHaveTextContent(/^No usage yet$/);
+    expect(meter).toHaveAttribute('data-level', 'empty');
+    expect(meter).toHaveAttribute('title', 'Usage appears after the first message');
+    expect(meter.querySelector('svg')).toBeNull();
+    // Once the chat has messages, the same missing measurement is genuinely unknown.
+    rerender(<ContextMeter view={unmeasured} onOpen={vi.fn()} />);
+    expect(meter).toHaveAccessibleName('Open Context · Context unknown');
+    expect(meter).toHaveAttribute('data-level', 'unknown');
+    rerender(<ContextMeter view={usage} emptyChat onOpen={vi.fn()} />);
+    expect(meter).toHaveAccessibleName('Open Context · 81% used');
+  });
+
+  it('passes the empty chat through the composer, including after a model change it has no usage for', () => {
+    const cb = callbacks();
+    render(<ChatComposer view={{ ...composer, modelId: 'other', modelOptions: [{ id: 'other', label: 'Other model' }], contextUsage: usage }} {...cb} emptyChat />);
+    const meter = screen.getByRole('button', { name: 'Open Context · No usage yet' });
+    expect(meter).toHaveAttribute('data-level', 'empty');
+    expect(meter).not.toHaveTextContent('81');
+  });
+
   it.each(['idle', 'running'] as const)('emits only explicit open requests from the native meter while %s, never Send or Stop', async (runState) => {
     const user = userEvent.setup();
     const cb = callbacks();

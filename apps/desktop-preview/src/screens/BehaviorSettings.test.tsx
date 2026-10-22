@@ -108,8 +108,8 @@ describe('independent Settings bodies', () => {
     const navigation = screen.getByRole('group', { name: 'Navigation' });
     const keys = within(navigation).getByRole('table', { name: 'Navigation keys' });
     expect(keys).toHaveAccessibleDescription('Always on. These keys can’t be changed.');
-    expect(within(keys).getAllByRole('rowheader').map((cell) => cell.querySelector('span')!.textContent)).toEqual(['Move between areas', 'Rename chat', 'Close or go back', 'Send message']);
-    expect(Array.from(keys.querySelectorAll('tbody tr'), (row) => Array.from(row.querySelectorAll('kbd'), (key) => key.textContent))).toEqual([['F6', 'Shift+F6'], ['F2'], ['Esc'], ['Ctrl+Enter']]);
+    expect(within(keys).getAllByRole('rowheader').map((cell) => cell.querySelector('span')!.textContent)).toEqual(['Open Help', 'Move between areas', 'Rename chat', 'Close or go back', 'Send message']);
+    expect(Array.from(keys.querySelectorAll('tbody tr'), (row) => Array.from(row.querySelectorAll('kbd'), (key) => key.textContent))).toEqual([['F1'], ['F6', 'Shift+F6'], ['F2'], ['Esc'], ['Ctrl+Enter']]);
     expect(within(navigation).queryByRole('button')).not.toBeInTheDocument();
   });
   it('offers an inline move when a shortcut conflicts, including when a reset default is taken', () => {

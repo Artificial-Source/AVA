@@ -1,11 +1,12 @@
 import type { Dispatch } from 'react';
 import { ChatComposer } from '../chat/widgets/ChatComposer';
+import { providerConnected, useProviderList } from '../screens/providerState';
 import { applePlatform } from '../screens/shortcutBindings';
 import { shortcutHint, type ShortcutPreferences } from '../screens/shortcuts';
 import { contextReferences, modelOptions } from '../state/fixtures';
 import type { Chat, PreviewAction } from '../state/types';
 import { ModelMark } from './ModelMark';
-import { previewContextUsage } from './contextPreview';
+import { previewContextUsage, previewModelProfile } from './contextPreview';
 
 const modeOptions = [{ id: 'build', label: 'Build' }, { id: 'plan', label: 'Plan' }] as const;
 const modeDescriptions = {
@@ -22,6 +23,10 @@ export function Composer({ chat, dispatch, contextOpen, onOpenContext, onOpenMod
   const stopHint = shortcutHint(shortcuts, 'stop');
   const apple = applePlatform();
   const sendKeys = enterBehavior === 'send' ? apple ? '↩' : 'Enter' : apple ? '⌘↩' : 'Ctrl+Enter';
+  // Same rule as the model picker: a provider this visit lists but hasn't connected blocks its models.
+  const profile = previewModelProfile(chat.model);
+  const provider = useProviderList().find((entry) => entry.id === profile.providerId);
+  const offline = provider !== undefined && !providerConnected(provider);
   return <ChatComposer
     key={chat.id}
     idPrefix=""
@@ -34,9 +39,11 @@ export function Composer({ chat, dispatch, contextOpen, onOpenContext, onOpenMod
     }}
     modeDescriptions={modeDescriptions}
     keyShortcuts={{ model: modelHint?.aria, stop: stopHint?.aria }}
+    modelUnavailable={offline ? { status: 'Not connected', detail: `${profile.providerLabel} isn’t connected.`, sendReason: `Connect ${profile.providerLabel} to send with ${profile.modelLabel}`, message: `${profile.providerLabel} isn’t connected, so this chat can’t send.` } : undefined}
     enterBehavior={enterBehavior}
     modelMark={<ModelMark model={chat.model} />}
     contextTarget={{ id: 'context-inspector', open: contextOpen }}
+    emptyChat={chat.messages.length === 0}
     onOpenContext={onOpenContext}
     onOpenModel={onOpenModel}
     onDraftChange={(draft) => dispatch({ type: 'setDraft', chatId: chat.id, draft })}

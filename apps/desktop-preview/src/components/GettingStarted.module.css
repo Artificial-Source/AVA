@@ -1,0 +1,43 @@
+.root { container-type: inline-size; min-width: 0; }
+.heading { margin: 0 0 var(--space-2); color: var(--text); font-size: var(--type-ui); font-weight: 550; line-height: 22px; letter-spacing: -.01em; }
+/* Focusable only as a landing spot (tabindex -1): a ring for keyboard arrival, none for clicks. */
+.heading:focus { outline: none; }
+.heading:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; border-radius: var(--radius-chip); }
+
+/* Folded (all done, in Help): one line of heading, the set-up state and Show steps. Unfolded, the
+   same row keeps Hide steps beside the heading, above the checklist. */
+.head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); margin-bottom: var(--space-2); }
+.head[data-folded='true'] { margin-bottom: 0; }
+.head > .heading { margin: 0; }
+.setUp { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--body); font-size: var(--type-meta); line-height: 20px; }
+.setUp > svg { flex-shrink: 0; color: var(--status-completed); }
+.toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; margin-inline-start: auto; padding: 5px 7px; border-radius: var(--radius-control); background: transparent; color: var(--muted); font-size: var(--type-meta); line-height: 20px; white-space: nowrap; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
+.toggle:hover { background: var(--hover); color: var(--text); }
+.toggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.toggle > svg { transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.toggle[aria-expanded='true'] > svg { transform: rotate(180deg); }
+
+/* A checklist, not cards: one rule between steps, a fixed status column so every title starts on one edge. */
+.steps { margin: 0; padding: 0; list-style: none; }
+.step { display: grid; grid-template-columns: 4.25rem minmax(0, 1fr) auto; align-items: start; column-gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--separator); }
+.step:last-child { border-bottom: 1px solid var(--separator); }
+.status { display: inline-flex; align-items: center; gap: 6px; color: var(--quiet); font-size: var(--type-caption); line-height: 20px; white-space: nowrap; }
+.step[data-done='true'] .status { color: var(--status-completed); }
+.text { display: grid; gap: 2px; min-width: 0; }
+.title { color: var(--text); font-size: var(--type-control); font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.step[data-done='true'] .title { color: var(--muted); font-weight: 400; }
+.detail { color: var(--muted); font-size: var(--type-meta); line-height: 1.5; overflow-wrap: anywhere; }
+/* Compound selector: the shared Button base must not win on load order. */
+.step .action { align-self: center; min-height: 30px; padding-block: 4px; }
+.progress { margin: var(--space-3) 0 0; color: var(--quiet); font-size: var(--type-meta); line-height: 20px; font-variant-numeric: tabular-nums; }
+.progress[data-complete='true'] { color: var(--text); }
+
+/* Narrow hosts: the action drops under its step's text instead of squeezing it. */
+@container (max-width: 26rem) {
+  .step { grid-template-columns: 4.25rem minmax(0, 1fr); row-gap: var(--space-2); }
+  .step .action { grid-column: 2; justify-self: start; }
+}
+
+@media (forced-colors: active) { .toggle:focus-visible { outline-color: Highlight; } }
+@media (prefers-reduced-motion: reduce) { .toggle, .toggle > svg { transition: none; } }
+:global([data-motion='reduced']) .toggle, :global([data-motion='reduced']) .toggle > svg { transition: none; }

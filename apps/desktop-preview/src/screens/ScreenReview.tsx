@@ -10,6 +10,7 @@ import appearance from '../styles/appearance.module.css';
 import type { ActionView, ConnectIntent, ConnectMethod, ConnectView, FinderView, ModelPickerView, ModelScope, Preferences, RequestReceipt, SettingsSection, WorkspaceState, WorkspaceView } from './contracts';
 import { ChatActionDialog, MessageDialog, PermissionDialog, QuestionDialog, RenameDialog, RunDialog, ToolDialog, validRename, validWorkspaceIntent, WorkspaceDialog } from './ChatDialogs';
 import { FinderDialog, validFinderIntent } from './FinderDialog';
+import { HelpDialog } from './HelpDialog';
 import { ModelDialog, validModelSelection } from './ModelDialog';
 import { ProviderConnectDialog, ProviderDirectory, connectStart, validConnectIntent } from './ProviderViews';
 import { changedPreferenceAreas } from './preferenceDiff';
@@ -17,7 +18,7 @@ import { Confirmation, ListNotice } from './ScreenPrimitives';
 import { SettingsScreen, settingsSections } from './SettingsScreen';
 import { resourceInspections } from './screenExamples';
 import { useSubagentWorkspace } from './subagentWorkspace';
-import { branchPoints, commandItems, defaultPreferences, familyIds, inspectionErrorSections, isFamily, isScenario, listState, modelCase, modelChoices, permissionCase, projects, providers, questionCase, reviewFamilies, runCase, sessions, toolCase, workspaceChoices, type ReviewFamily } from './fixtures';
+import { branchPoints, commandItems, defaultPreferences, familyIds, helpCase, inspectionErrorSections, isFamily, isScenario, listState, modelCase, modelChoices, permissionCase, projects, providers, questionCase, reviewFamilies, runCase, sessions, toolCase, workspaceChoices, type ReviewFamily } from './fixtures';
 import { useViewGuard } from './useViewGuard';
 import styles from './screens.module.css';
 
@@ -33,6 +34,7 @@ const familyDescriptions: Record<ReviewFamily, string> = {
   providers: 'The provider list and each way to connect: API key, browser sign-in and a device code, through success, failure and disconnect.',
   sessions: 'Search chat titles and messages across projects, with active and archived chats kept apart.',
   commands: 'Every action in one searchable list, with its keyboard shortcut.',
+  help: 'Getting started, short explanations of how AVA works, and every keyboard shortcut with your current keys.',
   rename: 'A single title field, up to 256 characters.',
   archive: 'What archiving does before you confirm it, and what happens while the chat is still running.',
   branch: 'Pick one of your messages to start a new chat from. The original chat stays as it is.',
@@ -209,10 +211,20 @@ export default function ScreenReview() {
         if (!validFinderIntent(view, intent) || !hostGate.claim()) return;
         const item = view.items.find((entry) => entry.id === intent.itemId)!;
         if (active.kind === 'sessions') { setSelectedSession(item.id); finish(`opened “${item.label}”`); }
-        else if (item.command === 'shortcuts') navigate('settings', 'Shortcuts');
+        else if (item.command === 'shortcuts') navigate('help', 'shortcuts');
         else if (item.command && isFamily(item.command)) navigate(item.command);
         else finish(`ran “${item.label.replace(/…$/, '')}”`);
       }} />;
+    }
+    if (active.kind === 'help') {
+      return <HelpDialog key={active.version} {...chrome} topic={active.scenario === 'topic' ? 'permissions' : active.scenario === 'shortcuts' ? 'shortcuts' : undefined} query={query} onQueryChange={setQuery}
+        shortcuts={preferences.shortcuts} gettingStarted={helpCase(active.scenario)}
+        onConnectProvider={() => { if (hostGate.claim()) navigate('providers'); }} onOpenProject={() => { if (hostGate.claim()) navigate('workspace'); }}
+        onGo={(to) => {
+          if (!hostGate.claim()) return;
+          if (to === 'sessions') navigate('sessions');
+          else navigate('settings', settingsSections.find((entry) => entry.id === to)?.label);
+        }} />;
     }
     const actionView: ActionView = { ...identity, title, state: listState(active.scenario) };
     if (active.kind === 'rename') {

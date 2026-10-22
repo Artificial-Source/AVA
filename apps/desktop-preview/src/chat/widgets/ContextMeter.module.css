@@ -1,6 +1,6 @@
 .meter { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; max-width: 100%; min-height: 32px; padding: 6px var(--space-2); border-radius: var(--radius-control); color: var(--muted); background: transparent; font-size: var(--type-caption); line-height: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .meter:hover, .meter[aria-expanded='true'] { color: var(--text); background: var(--hover); }
-/* Unknown is a quiet fact, not a warning. */
-.meter[data-level='unknown'] { color: var(--quiet); }
+/* Unknown and not-yet-used are quiet facts, not warnings. */
+.meter:is([data-level='unknown'], [data-level='empty']) { color: var(--quiet); }
 .meter[data-level='high'] { color: var(--text); font-weight: 550; }
 .meter[data-level='critical'], .meter[data-level='critical']:hover, .meter[data-level='critical'][aria-expanded='true'] { color: var(--status-attention); font-weight: 550; }

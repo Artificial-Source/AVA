@@ -44,6 +44,37 @@ function focusInitial(task: readonly (HTMLElement | null)[], toolbar: HTMLElemen
   }
 }
 
+// Input types that take typed text; an invalid `type` reads back as 'text'.
+const textTypes: Readonly<Partial<Record<string, true>>> = { text: true, search: true, email: true, url: true, tel: true, password: true, number: true };
+function takesText(node: Element): node is HTMLElement {
+  return node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement && textTypes[node.type] === true || node instanceof HTMLElement && node.isContentEditable;
+}
+
+// Chromium can leave a text field deaf after a modal dialog closes: focus that arrives while the
+// closed dialog is still in the page, or in the same task it leaves, reports the field as focused,
+// yet typing inserts nothing until the field is focused again. So on the next frame, once the dialog
+// is gone, a focused text field (the one focus returned to, or one the host focused after the close)
+// is blurred and focused again in place, and focus that fell to the page goes to the return target.
+// Focus is never moved off an element. Only the latest close's frame acts: every open and close bumps
+// the generation, so a dialog that opens before the frame voids it (no frame ids to cancel or outlive).
+let settleGeneration = 0;
+function settleFocus(returnTarget: () => HTMLElement | null | undefined) {
+  const generation = ++settleGeneration;
+  if (typeof requestAnimationFrame !== 'function') return;
+  requestAnimationFrame(() => {
+    if (generation !== settleGeneration) return;
+    const focused = document.activeElement;
+    if (focused && focused !== document.body) {
+      if (!takesText(focused) || !canFocus(focused)) return;
+      focused.blur();
+      focused.focus({ preventScroll: true });
+      return;
+    }
+    const target = returnTarget();
+    if (target && target !== document.body && canFocus(target)) target.focus({ preventScroll: true });
+  });
+}
+
 // Mount only while logically open. Native dialog owns modal focus and Tab; no retained exit.
 // Layout is a column: header, the body that scrolls, then the footer, which always
 // sits at the dialog's bottom edge and never covers the body. The top anchor is the
@@ -79,14 +110,18 @@ export function DialogFrame({ title, subtitle, description, children, footer, co
     const node = dialog.current!;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     active.current = true;
+    // A dialog that opens owns focus: a settle still pending from the last close must not touch it.
+    settleGeneration += 1;
     node.showModal();
     // Native showModal lands on the first control, which is Close; move to the task.
     focusInitial([body.current, actions.current], bar.current, preferred.current?.current, close.current);
     return () => {
       active.current = false;
       node.close();
-      const target = canFocus(opener) ? opener : fallback.current?.current;
+      const returnTarget = () => canFocus(opener) ? opener : fallback.current?.current;
+      const target = returnTarget();
       if (target && canFocus(target)) target.focus({ preventScroll: true });
+      settleFocus(returnTarget);
     };
   }, []);
   function dismiss() {

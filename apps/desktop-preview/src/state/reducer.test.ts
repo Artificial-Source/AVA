@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createInitialState } from './fixtures';
+import { createFreshState, createInitialState, openableProjects } from './fixtures';
 import { previewReducer } from './reducer';
-import { chatSummaries, inspectedChild, selectedParentChildren } from './selectors';
+import { activeChat, chatSummaries, inspectedChild, projectsToOpen, selectedParentChildren } from './selectors';
 import type { ContextId, ModelId, PreviewAction, PreviewState } from './types';
 import { previewContextInfo } from '../components/DetailInspector';
 
@@ -639,5 +639,72 @@ describe('permission answers, branches and chat summaries', () => {
     const retry = summaries.find((entry) => entry.id === 'retry-behavior')!;
     expect(retry.searchText).toContain('Temporary unavailable Retry with backoff');
     expect(retry.searchText).not.toMatch(/\||---/);
+  });
+});
+
+describe('first run: start fresh, open a project, restore sample data', () => {
+  it('starts fresh with nothing open, keeping only the appearance preference', () => {
+    const before = deepFreeze(previewReducer(previewReducer(createInitialState(), { type: 'setOpaque', opaque: true }), { type: 'archiveChat', chatId: 'route-config' }));
+    expect(before.archiveNotice).toBeDefined();
+    const fresh = previewReducer(before, { type: 'startFresh' });
+    expect(fresh).toEqual(createFreshState(true));
+    expect(fresh).toMatchObject({ projects: [], chats: [], activeChatId: '', pinnedChatIds: [], recentChatIds: [], childAgents: [], inspectedChildId: null, inspector: null, fresh: true });
+    expect(fresh.archiveNotice).toBeUndefined();
+    expect(fresh.suppliedRun).toBeUndefined();
+    expect(activeChat(fresh)).toBeUndefined();
+    expect(projectsToOpen(fresh)).toEqual(openableProjects);
+  });
+
+  it('accepts chat actions with no chat open without inventing one', () => {
+    const fresh = deepFreeze(createFreshState(false));
+    for (const action of [
+      { type: 'newChat' },
+      { type: 'sendLocalMessage' },
+      { type: 'stopViewedMock' },
+      { type: 'viewChat', chatId: '' },
+      { type: 'setDraft', chatId: '', draft: 'Hello' },
+      { type: 'archiveChat', chatId: '' },
+      { type: 'inspectChild', childId: 'search-return' },
+      { type: 'openProject', projectId: 'missing' },
+    ] satisfies PreviewAction[]) expect(previewReducer(fresh, action)).toBe(fresh);
+    expect(selectedParentChildren(fresh)).toEqual([]);
+    expect(chatSummaries(fresh)).toEqual([]);
+  });
+
+  it('opens a project with one empty chat and lands there; opening another adds it beside the first', () => {
+    const fresh = deepFreeze(createFreshState(false));
+    const opened = previewReducer(fresh, { type: 'openProject', projectId: 'papertrail', model: 'orion', mode: 'plan', inspector: 'closed' });
+    expect(opened.projects).toEqual([{ id: 'papertrail', name: 'Papertrail' }]);
+    expect(opened.chats).toHaveLength(1);
+    expect(current(opened)).toMatchObject({ projectId: 'papertrail', title: 'New chat 1', status: 'idle', draft: '', model: 'orion', mode: 'plan', messages: [], changes: [] });
+    expect(opened.recentChatIds).toEqual([opened.activeChatId]);
+    expect(opened.inspector).toBeNull();
+    expect(opened.fresh).toBe(true);
+    expect(opened.announcement).toBe('Opened Papertrail.');
+    expect(projectsToOpen(opened).map((project) => project.id)).toEqual(['wayfinder', 'relay']);
+
+    const second = previewReducer(deepFreeze(opened), { type: 'openProject', projectId: 'wayfinder' });
+    expect(second.projects.map((project) => project.id)).toEqual(['papertrail', 'wayfinder']);
+    expect(current(second)).toMatchObject({ projectId: 'wayfinder', title: 'New chat 2', messages: [] });
+    // New chat now has a project to start in: the viewed chat's.
+    expect(current(previewReducer(second, { type: 'newChat' }))).toMatchObject({ projectId: 'wayfinder', title: 'New chat 3' });
+  });
+
+  it('sends a first message in an opened project like any other chat', () => {
+    let state = previewReducer(createFreshState(false), { type: 'openProject', projectId: 'relay' });
+    state = previewReducer(state, { type: 'setDraft', chatId: state.activeChatId, draft: 'Add a retry button' });
+    state = previewReducer(state, { type: 'sendLocalMessage' });
+    expect(current(state).messages).toEqual([expect.objectContaining({ role: 'user', origin: 'local', text: 'Add a retry button' })]);
+    expect(chatSummaries(state)[0].branchPoints).toHaveLength(1);
+  });
+
+  it('restores the seeded sample data exactly, keeping appearance and honoring a closed inspector', () => {
+    let state = previewReducer(createFreshState(true), { type: 'openProject', projectId: 'relay' });
+    state = deepFreeze(state);
+    const restored = previewReducer(state, { type: 'restoreSampleData' });
+    expect(restored).toEqual({ ...createInitialState(), opaque: true, announcement: 'Sample data restored.' });
+    expect(restored.fresh).toBeUndefined();
+    expect(projectsToOpen(restored)).toEqual([]);
+    expect(previewReducer(state, { type: 'restoreSampleData', inspector: 'closed' }).inspector).toBeNull();
   });
 });

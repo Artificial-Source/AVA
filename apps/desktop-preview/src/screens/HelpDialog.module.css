@@ -1,0 +1,67 @@
+/* Holds the visually hidden status and table headers. Absolutely positioned, they would
+   otherwise size the dialog's own scroll area instead of the body's. */
+.help { position: relative; }
+
+/* The search stays pinned while sections scroll beneath it, as in Commands and Find a chat. */
+.bar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; padding-bottom: var(--space-3); background: var(--surface-panel); }
+.bar > svg { position: absolute; inset-inline-start: var(--space-3); top: 20px; transform: translateY(-50%); color: var(--quiet); pointer-events: none; }
+.search { flex: 1; min-width: 0; height: 40px; padding: 0 var(--space-3) 0 calc(var(--space-3) + 16px + var(--space-2)); border: 1px solid var(--edge-input); border-radius: var(--radius-control); background: var(--canvas); color: var(--text); font: inherit; font-size: var(--type-ui); }
+.search::placeholder { color: var(--quiet); opacity: 1; }
+.search:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.noMatch { margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--type-control); line-height: 20px; overflow-wrap: anywhere; }
+/* Nothing matched: where to look next, as quiet forward links under the message. */
+.next { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); margin-block-start: var(--space-2); margin-inline-start: -7px; }
+.next .go { max-width: 100%; white-space: normal; text-align: start; }
+.next .go > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* Sections share one rhythm: a hairline, then more room above each heading than below it.
+   Scroll margin keeps a section opened by topic clear of the pinned search. */
+.section { scroll-margin-top: 60px; }
+.section + .section { margin-top: var(--space-6); padding-top: var(--space-5); border-top: 1px solid var(--edge); }
+.sectionHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); margin-bottom: var(--space-2); }
+.sectionTitle { margin: 0 0 var(--space-2); color: var(--text); font-size: var(--type-ui); font-weight: 550; line-height: 22px; letter-spacing: -.01em; }
+.sectionHead > .sectionTitle { margin: 0; }
+.sectionTitle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; border-radius: var(--radius-chip); }
+
+/* Topics: one row per question. The list bleeds by the trigger's inset so titles align with
+   the section heading while the hover wash still has room. */
+.topics { margin: 0 calc(-1 * var(--space-2)); padding: 0; list-style: none; }
+.topic + .topic { border-top: 1px solid var(--separator); }
+.topic { scroll-margin-top: 60px; }
+.topicHeading { margin: 0; font: inherit; }
+.trigger { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 40px; padding: var(--space-2); border-radius: var(--radius-control); background: transparent; color: var(--text); font-size: var(--type-control); font-weight: 500; line-height: 20px; text-align: start; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out); }
+.trigger:hover { background: var(--hover); }
+.trigger:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+.trigger > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.trigger > svg { color: var(--quiet); transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.trigger[aria-expanded='true'] > svg { transform: rotate(180deg); }
+.body { padding: 0 var(--space-2) var(--space-4); }
+.body p { max-width: 64ch; margin: 0; color: var(--body); font-size: var(--type-control); line-height: 1.6; overflow-wrap: anywhere; }
+.body p + p { margin-top: var(--space-2); }
+
+/* Go to and Change shortcuts: quiet forward links into the real place, never a second primary. */
+.go { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 5px 7px; border-radius: var(--radius-control); background: transparent; color: var(--text); font-size: var(--type-meta); line-height: 20px; white-space: nowrap; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out); }
+.body .go { margin: var(--space-2) 0 0 -7px; }
+.go:hover { background: var(--hover); }
+.go:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.go > svg { color: var(--muted); }
+
+/* Shortcut reference: two columns where the dialog is wide enough, one below that. */
+.note { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+.keyGroups { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: var(--space-5) var(--space-6); align-items: start; }
+.keys { width: 100%; border-collapse: collapse; }
+.keys caption { padding: 0 0 var(--space-1); color: var(--quiet); font-size: var(--type-caption); font-weight: 500; letter-spacing: .02em; text-align: start; }
+.keys th, .keys td { padding: 6px 0; border-bottom: 1px solid var(--separator); vertical-align: middle; }
+.keys th { padding-inline-end: var(--space-3); color: var(--body); font-size: var(--type-control); font-weight: 400; line-height: 20px; text-align: start; overflow-wrap: anywhere; }
+.keys td { text-align: end; white-space: nowrap; }
+.key { display: inline-flex; align-items: center; min-height: 22px; padding: 0 6px; border: 1px solid var(--edge); border-radius: var(--radius-chip); background: var(--fill-subtle); color: var(--body); font: var(--type-meta)/1 var(--mono); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.key + .key { margin-inline-start: var(--space-1); }
+.unassigned { color: var(--quiet); font-size: var(--type-meta); }
+.keys[data-off='true'] .key { background: transparent; color: var(--quiet); }
+
+@media (forced-colors: active) {
+  .trigger:focus-visible, .go:focus-visible { outline-color: Highlight; }
+  .key { border-color: CanvasText; }
+}
+@media (prefers-reduced-motion: reduce) { .trigger, .trigger > svg, .go { transition: none; } }
+:global([data-motion='reduced']) .trigger, :global([data-motion='reduced']) .trigger > svg, :global([data-motion='reduced']) .go { transition: none; }

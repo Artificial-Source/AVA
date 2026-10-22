@@ -55,6 +55,14 @@ describe('complete root-scoped application command owner', () => {
     host.current = () => false; expect(runAppAction('settings', host)).toBe(false);
     expect(host.open).toHaveBeenCalledTimes(1); expect(host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: 'toggleInspector', module: 'agents' });
   });
+  it('with no chat open (after Start fresh), keeps only Settings, Find a chat, Commands and New chat', () => {
+    const { root, host } = setup(); const draft = document.createElement('textarea'); root.append(draft);
+    const empty = { ...host, empty: true, working: true };
+    for (const action of ['models', 'composer', 'tools', 'stop', 'agents', 'changes', 'context', 'inspector'] as const) expect(runAppAction(action, empty)).toBe(false);
+    expect(document.activeElement).not.toBe(draft); expect(host.dispatch).not.toHaveBeenCalled(); expect(host.open).not.toHaveBeenCalled();
+    for (const action of ['settings', 'sessions', 'palette', 'newChat'] as const) expect(runAppAction(action, empty)).toBe(true);
+    expect(host.open.mock.calls).toEqual([['settings'], ['sessions'], ['commands']]); expect(host.newChat).toHaveBeenCalledTimes(1);
+  });
   it.each(['dialog', 'menu', 'listbox', 'hidden', 'inert', 'disconnected', 'outside', 'prevented', 'stale'])('ignores %s keyboard context', (context) => {
     const { host, root, target, press } = setup(); let node: HTMLElement = target;
     if (context === 'dialog') { node = document.createElement('input'); const dialog = document.createElement('dialog'); dialog.setAttribute('open', ''); dialog.append(node); root.append(dialog); }

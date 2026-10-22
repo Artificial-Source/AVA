@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ChatStatus } from '../components/ChatStatus';
 import { validChoices, validIdentity } from '../chat/requestValidation';
+import { Button } from '../ui/Button';
 import { DialogFrame, type DialogChrome } from '../ui/DialogFrame';
 import type { FinderIntent, FinderItem, FinderScope, FinderView, UICommand } from './contracts';
 import { ListNotice } from './ScreenPrimitives';
@@ -8,7 +9,7 @@ import { defaultBindings } from './shortcutBindings';
 import { useViewGuard } from './useViewGuard';
 import styles from './FinderDialog.module.css';
 
-const paletteCommands: readonly string[] = ['providers', 'workspace', 'rename', 'archive', 'branch', 'shortcuts'];
+const paletteCommands: readonly string[] = ['providers', 'workspace', 'rename', 'archive', 'branch', 'shortcuts', 'help'];
 export function knownCommand(value: string): value is UICommand { return Object.hasOwn(defaultBindings, value) || paletteCommands.includes(value); }
 export function validFinder(view: FinderView) {
   return validIdentity(view) && ['sessions', 'commands'].includes(view.kind) && validChoices(view.items) && validChoices(view.projects);
@@ -88,8 +89,11 @@ function groupItems(view: FinderView, items: readonly FinderItem[]) {
 // listbox (aria-activedescendant); Enter opens it; Escape clears the search, then closes.
 // Chats also match their message text; a chat found only by its messages shows where.
 // `initialScope` opens chats on one filter (All when omitted); the filter buttons still change it.
-export function FinderDialog({ view, query, initialScope, onQueryChange, onSelect, onRetry, ...chrome }: DialogChrome & {
-  view: FinderView; query: string; initialScope?: FinderScope; onQueryChange: (value: string) => void; onSelect: (intent: FinderIntent) => void; onRetry: () => void;
+// `emptyAction` is the next step offered while there are no chats at all (New chat, or Open a
+// project before any is open); without it the empty list only says so.
+export function FinderDialog({ view, query, initialScope, emptyAction, onQueryChange, onSelect, onRetry, ...chrome }: DialogChrome & {
+  view: FinderView; query: string; initialScope?: FinderScope; emptyAction?: Readonly<{ label: string; run: () => void }>;
+  onQueryChange: (value: string) => void; onSelect: (intent: FinderIntent) => void; onRetry: () => void;
 }) {
   const id = useId();
   const search = useRef<HTMLInputElement>(null);
@@ -169,6 +173,7 @@ export function FinderDialog({ view, query, initialScope, onQueryChange, onSelec
     {valid && view.state === 'ready' && blocked ? <ListNotice state="disabled" message={reasons.size === 1 && [...reasons][0] || `None of these ${noun} can be used right now.`} /> : null}
     {valid && view.state === 'ready' && !ordered.length ? <ListNotice state="empty" message={
       terms.length ? `No ${noun} match “${query.trim()}”.` : !view.items.length ? chats ? 'No chats yet.' : 'No commands available.' : scope === 'archived' ? 'No archived chats.' : 'No active chats.'} /> : null}
+    {chats && valid && view.state === 'ready' && !view.items.length && emptyAction ? <div className={styles.next}><Button onClick={() => { if (gate.valid()) emptyAction.run(); }}>{emptyAction.label}</Button></div> : null}
     {ordered.length ? <div id={listId} role="listbox" aria-label={chats ? 'Chats' : 'Commands'}>
       {groups.map((group, groupIndex) => <div key={group.key} className={styles.group} role="group" aria-labelledby={group.label ? `${id}-group-${groupIndex}` : undefined}>
         {group.label ? <div id={`${id}-group-${groupIndex}`} className={styles.groupLabel} role="presentation">{group.label}</div> : null}

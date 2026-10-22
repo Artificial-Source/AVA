@@ -15,9 +15,9 @@ const sections = () => within(screen.getByRole('navigation', { name: 'Settings s
 const chatTitle = () => screen.getByText('Chat title', { selector: 'dt' }).nextElementSibling;
 
 describe('complete screen review host', () => {
-  it('indexes the eleven settings pages, all 14 families and the expanded case matrix', () => {
-    expect(familyIds).toHaveLength(14); expect(reviewFamilies.settings.cases).toHaveLength(23);
-    expect(familyIds.reduce((count, id) => count + reviewFamilies[id].cases.length, 0)).toBe(122 + Object.keys(toolChangeCases).length);
+  it('indexes the eleven settings pages, all 15 families and the expanded case matrix', () => {
+    expect(familyIds).toHaveLength(15); expect(reviewFamilies.settings.cases).toHaveLength(23);
+    expect(familyIds.reduce((count, id) => count + reviewFamilies[id].cases.length, 0)).toBe(128 + Object.keys(toolChangeCases).length);
     expect(reviewFamilies.settings.cases.slice(0, 11)).toEqual(['General', 'Appearance', 'Shortcuts', 'Notifications & sounds', 'Models & providers', 'Conversation behavior', 'Context management', 'Permissions & trust', 'Subagents', 'Extensions', 'About']);
   });
   it('routes each extension error to Extensions with a working Retry, and keeps every rules state', async () => {
@@ -179,14 +179,47 @@ describe('complete screen review host', () => {
     expect(screen.getAllByRole<HTMLInputElement>('radio')[0]).toBeChecked(); await user.keyboard('{Enter}'); expect(screen.getByRole('dialog', { name: 'Branch from a message' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Create branch' })); expect(screen.getByText(/^Last action:/)).toHaveTextContent('branch created');
   });
-  it('opens Settings at Shortcuts from the palette and closes the project picker when the open project is chosen', async () => {
+  it('opens Help on its shortcuts from the palette and closes the project picker when the open project is chosen', async () => {
     const user = userEvent.setup(); render(<ScreenReview />); await family(user, 'Command palette');
+    expect(screen.getByRole('option', { name: 'Help' })).toHaveTextContent('F1');
     await user.click(screen.getByRole('option', { name: 'Keyboard shortcuts' }));
+    const help = screen.getByRole('dialog', { name: 'Help' });
+    expect(within(help).getByRole('heading', { name: 'Keyboard shortcuts', level: 3 })).toHaveFocus();
+    expect(scenarioSelect()).toHaveValue('shortcuts');
+    await user.click(within(help).getByRole('button', { name: 'Change shortcuts' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(sections().getByRole('button', { name: 'Shortcuts' })).toHaveAttribute('aria-current', 'page');
     await family(user, 'Open a project');
     await user.click(within(screen.getByRole('list', { name: 'Projects' })).getByRole('button', { name: /^Atlas/ }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(screen.getByText(/^Last action:/)).toHaveTextContent('stayed in Atlas');
+  });
+  it('shows Help with the current keys, opened on a topic, with no match, and with Getting started to do or done', async () => {
+    const user = userEvent.setup(); render(<ScreenReview />);
+    await user.click(sections().getByRole('button', { name: 'Shortcuts' }));
+    await user.click(screen.getByRole('button', { name: 'Unassign New chat' }));
+    await family(user, 'Help');
+    let help = screen.getByRole('dialog', { name: 'Help' });
+    expect(within(help).getByRole('searchbox', { name: 'Search help' })).toHaveFocus();
+    expect(within(within(help).getByRole('table', { name: 'General' })).getByRole('rowheader', { name: 'New chat' }).closest('tr')).toHaveTextContent('Unassigned');
+    expect(within(help).getByText('To do')).toBeVisible();
+    await user.selectOptions(scenarioSelect(), 'topic');
+    help = screen.getByRole('dialog', { name: 'Help' });
+    expect(within(help).getByRole('button', { name: 'Permissions' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(help).getByRole('button', { name: 'Permissions' })).toHaveFocus();
+    await user.click(within(help).getByRole('button', { name: 'Go to Permissions & trust' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(sections().getByRole('button', { name: 'Permissions & trust' })).toHaveAttribute('aria-current', 'page');
+    await family(user, 'Help'); await user.selectOptions(scenarioSelect(), 'no-match');
+    help = screen.getByRole('dialog', { name: 'Help' });
+    expect(within(help).getByText('No topics or shortcuts match “no matching chat”.')).toBeVisible();
+    expect(within(help).queryByRole('heading', { level: 3 })).not.toBeInTheDocument();
+    await user.selectOptions(scenarioSelect(), 'all-done');
+    expect(within(screen.getByRole('dialog', { name: 'Help' })).getByText('You’re set up.')).toBeVisible();
+    await user.selectOptions(scenarioSelect(), 'all-to-do');
+    help = screen.getByRole('dialog', { name: 'Help' });
+    expect(within(help).getAllByText('To do')).toHaveLength(3);
+    await user.click(within(help).getByRole('button', { name: 'Open a project' }));
+    expect(screen.getByRole('dialog', { name: 'Open a project' })).toBeVisible();
   });
   it('reloads a question that failed to load from its own Retry', async () => {
     const user = userEvent.setup(); render(<ScreenReview />); await family(user, 'Question');

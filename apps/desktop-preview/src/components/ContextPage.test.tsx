@@ -210,7 +210,7 @@ describe('dedicated parent Context page', () => {
     expect(fact('You / AVA')).toHaveTextContent('0 / 0');
     expect(fact('Active estimate')).toHaveTextContent('Unknown');
     expect(fact('Reported total')).toHaveTextContent('Unknown');
-    expect(meter()).toHaveTextContent('Context unknown');
+    expect(meter()).toHaveTextContent('No usage yet');
     await user.click(screen.getByRole('button', { name: 'Raw messages' }));
     expect(screen.getByRole('region', { name: 'Raw message JSON' }).textContent).toBe('[]');
     await user.click(projects().getByRole('button', { name: 'Remember search filters' }));

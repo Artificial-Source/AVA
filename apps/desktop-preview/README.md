@@ -1,6 +1,20 @@
 # AVA desktop UI preview
 
-## Revision 21: critique refinement (current)
+## Revision 22: Help & first-time use (current)
+
+[Help & first-time use](../../docs/desktop/critique-refinement.md) adds searchable
+Help, current keyboard references, a Start fresh/Restore sample data preview path,
+a Welcome checklist and explicit recovery when a chat's provider is disconnected.
+Independent re-score before the follow-up fixes: Help & shortcuts **29/40**,
+First-time use **28/40**, whole product **31/40** (was 30); Help and documentation
+improved **2 → 3**. Typecheck, **1,064 tests / 73 files** (`--maxWorkers=6`) and
+the build passed, with a **463.91 kB raw / 141.57 kB gzip** entry under the unchanged
+500,000-byte cap. Headed/headless Chromium at **1440×900 and 1024×700** covered the
+first-run journey, Help entry points/topic links, typing after dialog close and
+the blocked-Send line. Browser-only, visit-local, no real backend/provider/auth;
+the scope records follow-up fixes and open decisions. Earlier acceptances are history.
+
+## Revision 21: critique refinement (dated history)
 
 [Critique refinement](../../docs/desktop/critique-refinement.md) fixes all P1 and P2
 findings with trust moments first, the familiar monochrome look and one preview
@@ -666,6 +680,18 @@ rather than bypassing a failed install or launch.
   **F6 / Shift+F6** cycles regions forward/backward. Panel shortcuts move focus to
   the opened panel. Settings → Shortcuts lists navigation keys and how to remap
   app shortcuts.
+- **Help** opens with fixed **F1**, including over Settings; it also opens from the
+  footer button beside Settings, the palette's **Help** / **Keyboard shortcuts**
+  commands, the Welcome **Help F1** link and **About permissions / About context /
+  About changes** links. Search matches word starts across topics and current
+  shortcuts. No matches offer Settings search where a matching setting exists,
+  or **Open Commands** where available. Escape clears the search, then closes Help.
+- **Start fresh** in the Preview banner switches to an empty workspace and a
+  Welcome with the AVA mark, one-line purpose and **Getting started** checklist:
+  Connect a provider, Open a project, Ask AVA for a change. **Restore sample data**
+  returns to the supplied examples without confirmation. The sidebar's empty
+  state offers Open a project; an opened project's empty chat stays logo-only.
+  Getting started remains available in Help and folds to one line once set up.
 - **Projects** is the complete unarchived chat library. Expand/collapse projects
   and switch chats without pinning them or changing their mock status. Collapsed
   headings retain glyph-and-count rollups for chats needing attention, failed or
@@ -695,12 +721,18 @@ rather than bypassing a failed install or launch.
   removal, project collapse and child inspection. These choices do not configure
   a provider or grant any permission.
 - **New chat** creates an in-memory chat in the viewed project without pinning it
-  and focuses the composer. Each project heading also has a **New chat in …**
-  button on hover or keyboard focus.
-- **Send** (Ctrl+Enter, ⌘↩ on Mac) adds one escaped local user message. It does not
-  generate a response, start a timer, run a model or simulate successful work.
-  Send and **Stop** share one stable button so keyboard focus survives a change
-  of action. An empty draft leaves Send focusable but unavailable.
+  and focuses the composer; with no projects it opens the project picker instead.
+  Opening a project creates one empty, logo-only chat. Each project heading has a
+  **New chat in …** button on hover or keyboard focus. New chats use a connected
+  provider's model when the default model's provider is disconnected.
+- **Send** (Ctrl+Enter, ⌘↩ on Mac) adds one escaped local user message only when its
+  model's provider is connected. It does not generate a response, start a timer,
+  run a model or simulate successful work. Send and **Stop** share one stable
+  button; an empty draft leaves Send focusable but unavailable.
+- A disconnected provider blocks Send with **Connect [provider] to send with
+  [model]** and a visible **[provider] isn’t connected, so this chat can’t send.**
+  line beside **Choose a model**. Each send attempt re-announces that explanation;
+  Enter does not add a newline while Send is blocked by the connection.
 - **Stop** (default **Mod+Shift+.**, where Mod is Ctrl on Windows/Linux and ⌘ on
   Mac) affects only the viewed parent's supplied run or Working fixture, never a
   background child or another parent. Navigation, unpinning and recent removal
@@ -734,7 +766,8 @@ rather than bypassing a failed install or launch.
   the palette. **Mod+K** and **Mod+P** reach the same palette and finder, including
   from the composer. Type to filter, use arrow keys to move and Enter to choose.
   Finder searches message text as well as titles and shows matching snippets.
-  Escape closes the picker.
+  With no chats it offers **New chat** when a project is open, otherwise
+  **Open a project**. Escape closes the picker.
 - The rail's first **Show inspector** / **Hide inspector** button restores the last
   selected module without changing parent/child selection, drafts, settings,
   shortcuts or statuses. **Widen / Narrow** changes the inspector's width.
@@ -745,11 +778,11 @@ rather than bypassing a failed install or launch.
 - **Context** is a dedicated rail page with a window-usage summary and grouped
   facts. The composer's context button opens it: below 80% it shows tokens and
   percentage, from 80% it leads with **81% used**, and from 90% it adds the Attention
-  color and warning glyph. Unknown usage stays neutral. Choose Aster Mini for a
-  different snapshot, Orion for unknown active usage, or New chat for unavailable
-  usage/cost and zero local messages. System prompt and Raw messages are read-only
-  disclosures with escaped text. Model changes, typing and local Send keep them
-  stable; only committed raw messages/counts change on Send, not token/cost samples.
+  color and warning glyph. Unknown usage stays neutral; an empty chat's meter
+  reads **No usage yet**. Choose Aster Mini for a different snapshot or Orion for
+  unknown active usage. System prompt and Raw messages are read-only disclosures
+  with escaped text. Model changes, typing and local Send keep them stable; only
+  committed raw messages/counts change on Send, not token/cost samples.
 - Context and Changes follow the selected parent during child inspection. Context
   has no Send/Stop, export, upload, clipboard or file operation. Close/Escape
   returns to its rail icon; Escape inside expanded raw/prompt text closes that
@@ -761,16 +794,18 @@ rather than bypassing a failed install or launch.
   file paths and has a summary, file list and per-file collapse. Close or Escape
   inside any inspector returns focus to its rail icon. The rail remains present
   when both panels are closed. All activity/file/code/change records are invented.
-- **Provider connections** persist for the visit; Aster Lab and Orion Lab start
-  connected. Models from unconnected providers say so. The provider directory can
-  be filtered, and API-key guidance explains the local check: at least 20
-  characters, without spaces. Browser/device steps settle without preview-only
-  advance controls; single-method providers skip the method list. These are local
-  connection states, not real provider authentication.
-- The icon beside AVA collapses the sidebar to a **56px rail** with New chat and
-  Settings; expand it to restore the library. **Sidebar material** lives only in
-  Settings → Appearance. Reduced motion, reduced transparency, higher contrast
-  and unsupported-blur fallbacks remain.
+- **Provider connections** persist for the visit; in the sample data Aster Lab and
+  Orion Lab start connected. Models from unconnected providers say so, and chats
+  using a disconnected provider's models cannot send until it is reconnected or
+  another model is chosen. The provider directory can be filtered; API-key guidance
+  explains the local check of at least 20 characters without spaces. Browser/device
+  steps settle without preview-only advance controls; single-method providers skip
+  the method list. **Done** is the leading action after connecting during setup.
+  These are local connection states, not real provider authentication.
+- The icon beside AVA collapses the sidebar to a **56px rail** with New chat,
+  Find a chat, Commands, Settings and Help; expand it to restore the library.
+  **Sidebar material** lives only in Settings → Appearance. Reduced motion,
+  reduced transparency, higher contrast and unsupported-blur fallbacks remain.
 - One **Preview** banner carries the invented-data/no-save/no-send/no-run boundary
   and **Run preview** controls. Run preview explicitly plays supplied scenes,
   separate from Send; Pause/Resume, Next snapshot and Stop/Retry affect only their

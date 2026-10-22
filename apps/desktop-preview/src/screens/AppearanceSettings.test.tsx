@@ -2,7 +2,8 @@ import { type ChangeEvent, type ReactElement, useState } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
-import { AppearanceSettings, defaultAppearance } from './AppearanceSettings';
+import { AppearanceSettings } from './AppearanceSettings';
+import { defaultAppearance } from './behaviorPreferences';
 import type { Preferences } from './contracts';
 
 const captured = vi.hoisted(() => ({ controls: new Map<string, (event: ChangeEvent<HTMLSelectElement>) => void>(), reset: () => {} }));

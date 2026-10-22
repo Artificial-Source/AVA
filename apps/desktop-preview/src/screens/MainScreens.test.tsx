@@ -3,9 +3,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent, { type UserEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from '../components/AppShell';
+import type { MainScreenRequest } from './contracts';
 import { chooseMainModel, installDialogTestSupport } from './dialogTestSupport';
+import MainScreens, { type MainScreensProps } from './MainScreens';
 import { connectDelays } from './ProviderViews';
-import { resetProviderState, setProviderState } from './providerState';
+import { clearProviderConnections, resetProviderState, setProviderState } from './providerState';
+import { defaultPreferences } from './screenExamples';
 
 beforeEach(installDialogTestSupport);
 // Provider connections last for the whole visit, so each case starts from the visit's start.
@@ -257,7 +260,7 @@ describe('main-chat lazy screen integration', () => {
     await user.click(screen.getByRole('button', { name: 'New chat' }));
     expect(screen.getByRole('button', { name: 'Model for this chat' })).toHaveTextContent(model);
     expect(screen.getByRole('combobox', { name: 'Mode for this chat' })).toHaveValue('build');
-    expect(screen.getByRole('button', { name: /^Open Context/ })).toHaveTextContent('Context unknown');
+    expect(screen.getByRole('button', { name: /^Open Context/ })).toHaveTextContent('No usage yet');
     await user.click(screen.getByRole('button', { name: /^Open Context/ }));
     const context = screen.getByRole('region', { name: 'Context information' });
     for (const fact of ['Active estimate', 'Reported total', 'Cost estimate · USD']) expect(within(context).getByText(fact, { selector: 'dt' }).nextElementSibling).toHaveTextContent('Unknown');
@@ -564,15 +567,87 @@ describe('main-chat lazy screen integration', () => {
     await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Export date range'));
   });
 
-  it('opens Settings at Shortcuts from the palette and lists Stop with its default keys', async () => {
+  it('opens Help on Keyboard shortcuts from the palette, with the current keys, and changes them in Settings', async () => {
     const user = start();
+    let page = await settings(user);
+    await user.click(within(page).getByRole('button', { name: 'Shortcuts' }));
+    await user.click(within(page).getByRole('button', { name: 'Unassign New chat' }));
+    await user.click(within(page).getByRole('button', { name: 'Back to chat' }));
     const palette = await command(user, 'k');
     const stop = within(palette).getByRole('option', { name: 'Stop the run' });
     expect(stop).toHaveAttribute('aria-disabled', 'true'); expect(stop).toHaveTextContent('Nothing running'); expect(stop).toHaveTextContent('Ctrl+Shift+.');
     await user.type(within(palette).getByRole('combobox'), 'keyboard shortcuts'); await user.keyboard('{Enter}');
-    const page = await screen.findByRole('region', { name: 'Settings page' });
+    const help = await screen.findByRole('dialog', { name: 'Help' });
+    expect(within(help).getByRole('heading', { name: 'Keyboard shortcuts', level: 3 })).toHaveFocus();
+    const keys = (group: string, action: string) => within(within(help).getByRole('table', { name: group })).getByRole('rowheader', { name: action }).closest('tr');
+    expect(keys('General', 'New chat')).toHaveTextContent('Unassigned');
+    expect(keys('Chat', 'Stop the run')).toHaveTextContent('Ctrl+Shift+.');
+    expect(keys('Panels', 'Show or hide the inspector')).toHaveTextContent('Unassigned');
+    expect(keys('Navigation', 'Open Help')).toHaveTextContent('F1');
+    await user.click(within(help).getByRole('button', { name: 'Change shortcuts' }));
+    page = await screen.findByRole('region', { name: 'Settings page' });
     expect(within(page).getByRole('button', { name: 'Shortcuts' })).toHaveAttribute('aria-current', 'page');
     expect(within(page).getByRole('heading', { name: 'Shortcuts', level: 2 })).toBeVisible();
+  });
+
+  it('opens Help from the palette, filters it as you type, clears then closes on Escape and goes to a topic’s settings', async () => {
+    const user = start();
+    let palette = await command(user, 'k');
+    expect(within(palette).getByRole('option', { name: 'Help' })).toHaveTextContent('F1');
+    await user.type(within(palette).getByRole('combobox'), 'help'); await user.keyboard('{Enter}');
+    let help = await screen.findByRole('dialog', { name: 'Help' });
+    const search = within(help).getByRole('searchbox', { name: 'Search help' });
+    expect(search).toHaveFocus();
+    expect(help).toHaveTextContent('You’re set up.');
+    // Set up, Getting started folds to one line, so the topics come first.
+    expect(within(help).getAllByRole('button', { expanded: false }).map((button) => button.textContent)).toEqual(['Show steps', 'Providers and API keys', 'Chats and projects', 'Build and Plan', 'Permissions', 'Changes', 'Subagents', 'Context', 'Tool details', 'Extensions', 'Appearance']);
+    await user.type(search, 'allow once');
+    expect(within(help).getByRole('button', { name: 'Permissions' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(help).queryByRole('button', { name: 'Build and Plan' })).not.toBeInTheDocument();
+    expect(within(help).queryByRole('table')).not.toBeInTheDocument();
+    await user.clear(search); await user.type(search, 'zebra');
+    expect(within(help).getByText('No topics or shortcuts match “zebra”.')).toBeVisible();
+    await user.keyboard('{Escape}'); expect(search).toHaveValue(''); expect(help).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('textbox')).toHaveFocus();
+
+    palette = await command(user, 'k');
+    await user.type(within(palette).getByRole('combobox'), 'help'); await user.keyboard('{Enter}');
+    help = await screen.findByRole('dialog', { name: 'Help' });
+    await user.click(within(help).getByRole('button', { name: 'Context' }));
+    await user.click(within(help).getByRole('button', { name: 'Go to Context management' }));
+    const page = await screen.findByRole('region', { name: 'Settings page' });
+    expect(within(page).getByRole('button', { name: 'Context management' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('starts Getting started from Help: Connect a provider replaces Help with the providers dialog', async () => {
+    clearProviderConnections();
+    const user = start();
+    const palette = await command(user, 'k');
+    await user.type(within(palette).getByRole('combobox'), 'help'); await user.keyboard('{Enter}');
+    const help = await screen.findByRole('dialog', { name: 'Help' });
+    await user.click(within(help).getByRole('button', { name: 'Connect a provider' }));
+    const providers = await screen.findByRole('dialog', { name: 'Connect a provider' });
+    expect(help).not.toBeInTheDocument();
+    expect(within(providers).queryByRole('button', { name: /^Disconnect/ })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('textbox')).toHaveFocus();
+  });
+
+  it('opens Help on the topic a contextual link names and returns focus to the link', async () => {
+    const user = start();
+    await user.click(projects().getByRole('button', { name: 'Export date range Attention' }));
+    const [link] = await screen.findAllByRole('button', { name: 'About permissions' });
+    await user.click(link);
+    const help = await screen.findByRole('dialog', { name: 'Help' });
+    const topic = within(help).getByRole('button', { name: 'Permissions' });
+    expect(topic).toHaveAttribute('aria-expanded', 'true'); expect(topic).toHaveFocus();
+    expect(help).toHaveTextContent('Allow for this session covers this kind of action in this chat until AVA restarts');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(link).toHaveFocus();
   });
 
   it('opens another project straight from the list, and simply closes when the open project is chosen', async () => {
@@ -592,5 +667,146 @@ describe('main-chat lazy screen integration', () => {
     await user.keyboard('{Enter}');
     await waitFor(() => expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Export date range'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('main screens host without a chat', () => {
+  function host(request: Partial<MainScreenRequest>, props: Partial<MainScreensProps> = {}) {
+    const onDismiss = vi.fn();
+    render(<MainScreens request={{ id: 'main-screens', version: 1, kind: 'help', parentChatId: '', inspectedChildId: null, ...request }} parent={{ title: '', model: 'aster' }} defaultModel="aster"
+      preferences={defaultPreferences} opaque={false} onOpaqueChange={vi.fn()} section="general" onSectionChange={vi.fn()} onPreferencesChange={vi.fn()} onSelectModel={vi.fn()}
+      onDismiss={onDismiss} returnFocus={{ current: null }} chats={[]} projects={[]} onOpenChat={vi.fn()} {...props} />);
+    return onDismiss;
+  }
+  const catalog = [{ id: 'wayfinder', name: 'Wayfinder' }, { id: 'papertrail', name: 'Papertrail' }];
+
+  it('opens Help expanded on the requested topic and goes to its settings page', async () => {
+    const onOpenSettingsSection = vi.fn();
+    const onDismiss = host({ helpTopic: 'context' }, { onOpenSettingsSection });
+    const help = screen.getByRole('dialog', { name: 'Help' });
+    const topic = within(help).getByRole('button', { name: 'Context' });
+    expect(topic).toHaveAttribute('aria-expanded', 'true'); expect(topic).toHaveFocus();
+    expect(within(help).getByRole('button', { name: 'Build and Plan' })).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.setup().click(within(help).getByRole('button', { name: 'Go to Context management' }));
+    expect(onOpenSettingsSection).toHaveBeenCalledExactlyOnceWith('context'); expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers projects a new user can open from Getting started and opens the chosen one', async () => {
+    const onOpenProject = vi.fn();
+    const onDismiss = host({}, { projectsToOpen: catalog, onOpenProject });
+    const user = userEvent.setup();
+    const help = screen.getByRole('dialog', { name: 'Help' });
+    await user.click(within(help).getByRole('button', { name: 'Open a project' }));
+    const picker = screen.getByRole('dialog', { name: 'Open a project' });
+    expect(within(picker).getByRole('button', { name: /^Wayfinder/ })).toHaveTextContent('Not opened yet');
+    expect(within(picker).getByRole('button', { name: /^Wayfinder/ })).toHaveFocus();
+    await user.click(within(picker).getByRole('button', { name: /^Papertrail/ }));
+    expect(onOpenProject).toHaveBeenCalledExactlyOnceWith('papertrail'); expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds chat commands until a project is open', () => {
+    host({ kind: 'commands' }, { onAppAction: vi.fn(), projectsToOpen: catalog, onOpenProject: vi.fn() });
+    const palette = screen.getByRole('dialog', { name: 'Commands' });
+    for (const name of ['Choose model', 'Focus composer', 'Toggle Agents', 'Toggle Changes', 'Toggle Context', 'Show or hide the inspector']) expect(within(palette).getByRole('option', { name })).toHaveTextContent('Open a project first');
+    expect(within(palette).getByRole('option', { name: 'Open a project' })).not.toHaveAttribute('aria-disabled');
+    expect(within(palette).getByRole('option', { name: 'Open a project' })).toHaveAccessibleDescription(/^Switch projects or open another one/);
+    expect(within(palette).getByRole('option', { name: 'Help' })).not.toHaveAttribute('aria-disabled');
+  });
+
+  it('leads with Done after connecting a provider while Getting started has steps left', async () => {
+    clearProviderConnections();
+    host({ kind: 'providers' });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Connect Aster Lab' }));
+    const aster = screen.getByRole('dialog', { name: 'Connect Aster Lab' });
+    await user.click(within(aster).getByRole('button', { name: /API key/ }));
+    await user.type(within(aster).getByLabelText('API key'), validKey); await user.click(within(aster).getByRole('button', { name: 'Verify key' }));
+    const done = await within(aster).findByRole('button', { name: 'Done' }, { timeout: 2500 });
+    expect(done).toHaveAttribute('data-tone', 'primary');
+    expect(within(aster).getByRole('button', { name: 'Choose a model' })).toHaveAttribute('data-tone', 'quiet');
+  });
+
+  it('offers Open a project from an empty Find a chat before any project is open', async () => {
+    host({ kind: 'sessions' }, { projectsToOpen: catalog, onOpenProject: vi.fn() });
+    const finder = screen.getByRole('dialog', { name: 'Find a chat' });
+    expect(finder).toHaveTextContent('No chats yet.');
+    await userEvent.setup().click(within(finder).getByRole('button', { name: 'Open a project' }));
+    expect(finder).not.toBeInTheDocument();
+    expect(within(screen.getByRole('dialog', { name: 'Open a project' })).getByRole('button', { name: /^Wayfinder/ })).toHaveTextContent('Not opened yet');
+  });
+
+  it('offers New chat from an empty Find a chat when a project is open', async () => {
+    const onAppAction = vi.fn();
+    const onDismiss = host({ kind: 'sessions' }, { projects: [catalog[0]], onAppAction });
+    await userEvent.setup().click(within(screen.getByRole('dialog', { name: 'Find a chat' })).getByRole('button', { name: 'New chat' }));
+    expect(onAppAction).toHaveBeenCalledExactlyOnceWith('newChat'); expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no first-chat step from Find a chat when the host can open nothing', () => {
+    host({ kind: 'sessions' });
+    const finder = screen.getByRole('dialog', { name: 'Find a chat' });
+    expect(finder).toHaveTextContent('No chats yet.');
+    expect(within(finder).queryByRole('button', { name: /^(New chat|Open a project)$/ })).not.toBeInTheDocument();
+  });
+
+  it('offers Search Settings, only when Settings would find the words, when Help finds nothing', async () => {
+    const onSearchSettings = vi.fn();
+    const onDismiss = host({}, { onSearchSettings });
+    const user = userEvent.setup();
+    const help = screen.getByRole('dialog', { name: 'Help' });
+    const search = within(help).getByRole('searchbox', { name: 'Search help' });
+    await user.type(search, 'zebra');
+    expect(within(help).queryByRole('button', { name: /^Search Settings/ })).not.toBeInTheDocument();
+    await user.clear(search); await user.type(search, 'sound');
+    expect(within(help).getByText('No topics or shortcuts match “sound”.')).toBeVisible();
+    await user.click(within(help).getByRole('button', { name: 'Search Settings for “sound”' }));
+    expect(onSearchSettings).toHaveBeenCalledExactlyOnceWith('sound'); expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens Commands from Help’s no-match next steps', async () => {
+    host({});
+    const user = userEvent.setup();
+    const help = screen.getByRole('dialog', { name: 'Help' });
+    await user.type(within(help).getByRole('searchbox', { name: 'Search help' }), 'zebra');
+    await user.click(within(help).getByRole('button', { name: 'Open Commands' }));
+    expect(help).not.toBeInTheDocument();
+    expect(within(screen.getByRole('dialog', { name: 'Commands' })).getByRole('combobox', { name: 'Search commands' })).toHaveValue('');
+  });
+
+  it('opens Help over Settings with F1, and Help closes back onto the page, its search or another section', async () => {
+    const onSectionChange = vi.fn();
+    const onDismiss = host({ kind: 'settings' }, { onSectionChange });
+    const user = userEvent.setup();
+    const settingsSearch = screen.getByRole('searchbox', { name: 'Search settings' });
+    settingsSearch.focus();
+    await user.keyboard('{F1}');
+    let help = screen.getByRole('dialog', { name: 'Help' });
+    const helpSearch = within(help).getByRole('searchbox', { name: 'Search help' });
+    expect(helpSearch).toHaveFocus();
+    // Inside Help, F1 only keeps the browser's own help away.
+    expect(fireEvent.keyDown(helpSearch, { key: 'F1' })).toBe(false);
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await user.keyboard('{Escape}');
+    expect(help).not.toBeInTheDocument(); expect(settingsSearch).toHaveFocus(); expect(onDismiss).not.toHaveBeenCalled();
+
+    // Over Settings, its own search is the next step; Commands isn't offered.
+    await user.keyboard('{F1}');
+    help = screen.getByRole('dialog', { name: 'Help' });
+    await user.type(within(help).getByRole('searchbox', { name: 'Search help' }), 'sound');
+    expect(within(help).queryByRole('button', { name: 'Open Commands' })).not.toBeInTheDocument();
+    await user.click(within(help).getByRole('button', { name: 'Search Settings for “sound”' }));
+    expect(help).not.toBeInTheDocument();
+    expect(settingsSearch).toHaveValue('sound'); expect(settingsSearch).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Search results', level: 2 })).toBeVisible();
+
+    await user.keyboard('{F1}');
+    help = screen.getByRole('dialog', { name: 'Help' });
+    await user.click(within(help).getByRole('button', { name: 'Appearance' }));
+    await user.click(within(help).getByRole('button', { name: 'Go to Appearance' }));
+    expect(help).not.toBeInTheDocument();
+    expect(onSectionChange).toHaveBeenCalledExactlyOnceWith('appearance');
+    expect(settingsSearch).toHaveValue('');
+    expect(screen.getByRole('region', { name: 'General' })).toHaveFocus();
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 });

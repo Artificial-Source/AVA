@@ -6,6 +6,8 @@ import { canFocus } from '../ui/DialogFrame';
 export type AppActionHost = {
   root: HTMLElement;
   child: boolean;
+  // No chat is open (after Start fresh, before a project): only actions that need no chat have a target.
+  empty?: boolean;
   working: boolean;
   current: () => boolean;
   open: (kind: MainScreenRequest['kind'], targetChatId?: string) => void;
@@ -14,8 +16,10 @@ export type AppActionHost = {
 };
 // Read-only child inspection never targets the hidden parent's model, draft, tools or run.
 const parentOnly: readonly ShortcutAction[] = ['models', 'composer', 'tools', 'stop'];
+// With no chat, New chat opens the project picker instead.
+const withoutChat: readonly ShortcutAction[] = ['settings', 'sessions', 'palette', 'newChat'];
 function allowed(action: ShortcutAction, host: AppActionHost) {
-  return host.current() && !(host.child && parentOnly.includes(action)) && (action !== 'stop' || host.working);
+  return host.current() && !(host.child && parentOnly.includes(action)) && !(host.empty && !withoutChat.includes(action)) && (action !== 'stop' || host.working);
 }
 
 // One executor for keyboard chords and the command palette. Returns whether the action ran.

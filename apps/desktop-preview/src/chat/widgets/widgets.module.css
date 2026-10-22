@@ -21,6 +21,7 @@
 .outcome { display: flex; align-items: center; gap: 6px; margin: var(--space-4) 0 0; color: var(--body); font-size: var(--type-meta); line-height: 1.6; overflow-wrap: anywhere; }
 .outcome:empty { margin: 0; }
 .outcome > svg { flex-shrink: 0; }
+.requestHelp { margin-top: var(--space-4); }
 
 .fields { display: grid; gap: 10px; min-width: 0; margin: var(--space-4) 0 0; padding: 0; border: 0; }
 .fields legend { padding: 0 0 var(--space-2); color: var(--muted); font-size: var(--type-meta); }

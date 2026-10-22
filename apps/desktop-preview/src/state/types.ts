@@ -84,6 +84,7 @@ export interface Chat {
 export interface PreviewState {
   projects: Project[];
   chats: Chat[];
+  // '' only while there are no chats: after Start fresh, until a project is opened.
   activeChatId: string;
   pinnedChatIds: string[];
   recentChatIds: string[];
@@ -99,6 +100,8 @@ export interface PreviewState {
   // Undo target for the most recent archive; cleared by the next accepted action.
   archiveNotice?: ArchiveNotice;
   suppliedRun?: SuppliedRun;
+  // Set by Start fresh: the visit is a new user's until Restore sample data.
+  fresh?: true;
 }
 
 // Undo is offered only until the next accepted action, so the pre-archive view can be restored exactly.
@@ -135,4 +138,9 @@ export type PreviewAction =
   | { type: 'showInspector'; module: InspectorModule }
   | { type: 'closeInspector' }
   | { type: 'toggleOpaque' }
-  | { type: 'setOpaque'; opaque: boolean };
+  | { type: 'setOpaque'; opaque: boolean }
+  // Preview banner: a new user's empty app, or the seeded sample data back.
+  | { type: 'startFresh' }
+  | { type: 'restoreSampleData'; inspector?: 'closed' }
+  // Adds a project from the openable list if it isn't open yet, then starts one empty chat in it.
+  | { type: 'openProject'; projectId: string; model?: ModelId; mode?: ChatMode; titleFromFirstMessage?: boolean; inspector?: 'remember' | 'closed' | InspectorModule };

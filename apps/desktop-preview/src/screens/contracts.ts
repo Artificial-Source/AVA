@@ -20,12 +20,18 @@ export type ModelPickerView = RequestIdentity & Readonly<{
   choices: readonly ModelChoice[];
 }>;
 export type ModelSelection = RequestIdentity & Readonly<{ modelId: ModelId; scope: ModelScope; reasoning: string | null }>;
+// Help topics, in the order the Help dialog lists them.
+export type HelpTopicId = 'getting-started' | 'providers' | 'chats' | 'modes' | 'permissions' | 'changes' | 'agents' | 'context' | 'tool-details' | 'extensions' | 'appearance' | 'shortcuts';
 // Captured main-view identity; this is UI scope, not a backend request or session lease.
 export type MainScreenRequest = RequestIdentity & Readonly<{
-  kind: 'settings' | 'models' | 'sessions' | 'commands' | 'rename' | 'archive' | 'branch' | 'workspace' | 'providers';
+  kind: 'settings' | 'models' | 'sessions' | 'commands' | 'rename' | 'archive' | 'branch' | 'workspace' | 'providers' | 'help';
   parentChatId: string; inspectedChildId: string | null;
   // Rename/archive/branch target; defaults to parentChatId.
   targetChatId?: string;
+  // Help opens expanded and scrolled to this topic.
+  helpTopic?: HelpTopicId;
+  // Settings opens with its search filled in (Help's no-match “Search Settings for …”).
+  settingsQuery?: string;
 }>;
 // `id` is the message id: a branch keeps the chat up to and including that message.
 // `label` is a one-line preview; `text`, when present, is the whole message.
@@ -50,7 +56,7 @@ export type ConnectAction =
   | Readonly<{ action: 'submit-demo-key' | 'show-waiting' | 'show-success' | 'show-error' | 'retry' | 'back' | 'disconnect' | 'choose-model' }>;
 export type ConnectIntent = RequestIdentity & ConnectAction;
 
-export type UICommand = ShortcutAction | 'providers' | 'workspace' | 'rename' | 'archive' | 'branch' | 'shortcuts';
+export type UICommand = ShortcutAction | 'providers' | 'workspace' | 'rename' | 'archive' | 'branch' | 'shortcuts' | 'help';
 export type FinderItem = Readonly<{
   id: string; label: string; detail: string; projectId?: string; command?: UICommand; disabledReason?: string;
   status?: StatusValue; archived?: boolean; current?: boolean; shortcut?: string; group?: string;

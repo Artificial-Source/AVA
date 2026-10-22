@@ -21,6 +21,18 @@
 .action[data-mode='stop']:hover:not(:disabled) { background: var(--hover-strong); }
 .action[data-mode='stop']:disabled { color: var(--quiet); cursor: not-allowed; }
 
+/* Only while the chat's model blocks Send: why, then the one way forward, read as a sentence. A blocked
+   attempt replays the attention hue on the words, so the line answers the key press that met it. */
+.blocked { display: flex; align-items: flex-start; gap: var(--space-2); margin: var(--space-2) 0 0; padding-inline: var(--space-1); color: var(--body); font-size: var(--type-meta); line-height: 20px; }
+.blocked > svg { margin-top: 3px; color: var(--status-attention); }
+.blocked > span { min-width: 0; overflow-wrap: anywhere; }
+.blocked [data-restated] { animation: blockedRestated 900ms var(--motion-ease-out); }
+@keyframes blockedRestated { from { color: var(--status-attention); } }
+.blockedAction { display: inline; padding: 0; background: transparent; color: var(--text); font: inherit; text-decoration: underline; text-decoration-color: var(--edge-bright); text-underline-offset: 3px; white-space: nowrap; }
+.blockedAction:hover { text-decoration-color: currentColor; }
+@media (prefers-reduced-motion: reduce) { .blocked [data-restated] { animation: none; } }
+:global([data-motion='reduced']) .blocked [data-restated] { animation: none; }
+
 @media (max-width: 800px) {
   .canvas { padding-bottom: 18px; }
   .modelPicker select { max-width: 140px; }

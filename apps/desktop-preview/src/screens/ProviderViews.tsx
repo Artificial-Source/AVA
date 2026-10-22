@@ -202,7 +202,9 @@ function DeviceCode() {
 }
 
 // `autoAdvance` off holds each step still for hosts that drive outcomes themselves.
-export function ProviderConnectDialog({ view, onIntent, autoAdvance = true, ...chrome }: DialogChrome & { view: ConnectView; onIntent: (intent: ConnectIntent) => void; autoAdvance?: boolean }) {
+// `settingUp`: Getting started still has steps left, so after connecting Done leads toward them
+// and Choose a model stays beside it.
+export function ProviderConnectDialog({ view, onIntent, autoAdvance = true, settingUp = false, ...chrome }: DialogChrome & { view: ConnectView; onIntent: (intent: ConnectIntent) => void; autoAdvance?: boolean; settingUp?: boolean }) {
   const viewKey = JSON.stringify(view);
   const gate = useViewGuard(viewKey);
   const focus = useDialogTransitionFocus(chrome.onDismiss);
@@ -280,8 +282,9 @@ export function ProviderConnectDialog({ view, onIntent, autoAdvance = true, ...c
       };
       case 'success': return {
         content: <p className={styles.lead}>{label} is connected.{families.length ? ` ${families.join(' and ')} models are ready to use.` : ''}</p>,
-        actions: <ActionBar>{providerModels.length ? <><Button onClick={focus.dismiss}>Done</Button><Button tone="primary" data-autofocus onClick={() => emit({ action: 'choose-model' })}>Choose a model</Button></>
-          : <Button tone="primary" data-autofocus onClick={focus.dismiss}>Done</Button>}</ActionBar>,
+        actions: <ActionBar>{!providerModels.length ? <Button tone="primary" data-autofocus onClick={focus.dismiss}>Done</Button>
+          : settingUp ? <><Button onClick={() => emit({ action: 'choose-model' })}>Choose a model</Button><Button tone="primary" data-autofocus onClick={focus.dismiss}>Done</Button></>
+          : <><Button onClick={focus.dismiss}>Done</Button><Button tone="primary" data-autofocus onClick={() => emit({ action: 'choose-model' })}>Choose a model</Button></>}</ActionBar>,
       };
       case 'error': return {
         content: <p className={styles.lead}>{cause ? `${label} couldn’t connect. ${cause} ${view.method === 'key' ? 'Enter a new key to reconnect.' : 'Sign in again to reconnect.'}`
@@ -293,10 +296,7 @@ export function ProviderConnectDialog({ view, onIntent, autoAdvance = true, ...c
         actions: <ActionBar onBack={back}>{cancel()}<Button tone="primary" data-autofocus disabled={!methodValid} onClick={() => emit({ action: 'retry' })}>Try again</Button></ActionBar>,
       };
       case 'disconnect': return {
-        content: <>
-          <p className={styles.lead}>{families.length ? `${families.join(' and ')} models` : `Models from ${label}`} will be unavailable for new chats.</p>
-          <p className={styles.note}>You can connect {label} again at any time.</p>
-        </>,
+        content: <p className={styles.lead}>Chats using {families.length ? families.join(' and ') : label} models can’t send until you reconnect.</p>,
         actions: <ActionBar>{cancel()}<Button tone="destructive" disabled={provider.source !== 'stored-example' || provider.state !== 'connected-example'} onClick={() => emit({ action: 'disconnect' })}>Disconnect</Button></ActionBar>,
       };
     }

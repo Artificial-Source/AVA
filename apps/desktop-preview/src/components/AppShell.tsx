@@ -1,4 +1,4 @@
-import { Component, lazy, Suspense, useLayoutEffect, useReducer, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { Component, lazy, Suspense, useLayoutEffect, useReducer, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { ArchiveIcon } from '@phosphor-icons/react/dist/csr/Archive';
 import { ArrowCounterClockwiseIcon } from '@phosphor-icons/react/dist/csr/ArrowCounterClockwise';
 import { CircleNotchIcon } from '@phosphor-icons/react/dist/csr/CircleNotch';
@@ -8,7 +8,8 @@ import { XIcon } from '@phosphor-icons/react/dist/csr/X';
 import { previewContextUsage } from './contextPreview';
 import { createInitialState, modelOptions } from '../state/fixtures';
 import type { InspectorModule, ModelId, PreviewAction, PreviewState } from '../state/types';
-import type { MainScreenRequest, ModelSelection, Preferences, SettingsSection } from '../screens/contracts';
+import type { HelpTopicId, MainScreenRequest, ModelSelection, Preferences, SettingsSection } from '../screens/contracts';
+import { clearProviderConnections, newChatModel, resetProviderState, useAnyProviderConnected } from '../screens/providerState';
 import { appChord, type ShortcutAction } from '../screens/shortcutBindings';
 import { canFocus, DialogFrame } from '../ui/DialogFrame';
 import { BackButton, IconButton } from '../ui/Button';
@@ -20,7 +21,7 @@ import { prepareAssistantContent } from '../chat/widgets/AssistantContentHost';
 import type { RunDriver } from '../chat/suppliedRunDriver';
 import type { PreviewExample } from '../chat/suppliedRunFixture';
 import type * as SuppliedRunPreviewModule from './SuppliedRunPreview';
-import { chatSummaries, inspectedChild, selectedParentChildren } from '../state/selectors';
+import { activeChat, chatSummaries, inspectedChild, projectsToOpen, selectedParentChildren } from '../state/selectors';
 import { Presence } from '../ui/Presence';
 import { ReducedMotionContext } from '../ui/useReducedMotion';
 import appearance from '../styles/appearance.module.css';
@@ -31,10 +32,12 @@ import { Conversation } from './Conversation';
 import { defaultConversation } from '../screens/behaviorPreferences';
 import { isToolDisplay, type ToolDisplay } from '../chat/toolDisplay';
 import { ConversationIdentity } from './ConversationIdentity';
+import { HelpContext } from './helpContext';
 import { Inspector } from './Inspector';
 import { InspectorRail } from './InspectorRail';
 import { PreviewBanner, PreviewChip } from './PreviewBanner';
 import { ProjectSidebar } from './ProjectSidebar';
+import { Welcome } from './Welcome';
 import banner from './PreviewBanner.module.css';
 import styles from './AppShell.module.css';
 
@@ -99,6 +102,7 @@ export function AppShell() {
   const contextButtonRef = useRef<HTMLButtonElement>(null);
   const inspectorPanelRef = useRef<HTMLElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const welcomeHeadingRef = useRef<HTMLHeadingElement>(null);
   const parentChatRef = useRef<HTMLElement>(null);
   const previewToggleRef = useRef<HTMLButtonElement>(null);
   const bannerDismissRef = useRef<HTMLButtonElement>(null);
@@ -116,32 +120,51 @@ export function AppShell() {
   // Last focused banner control: if a commit removes it (Pause/Next end with the run), focus stays in the banner.
   const bannerControl = useRef<HTMLElement | null>(null);
   const pendingAppAction = useRef<ShortcutAction | null>(null);
-  const chat = state.chats.find((entry) => entry.id === state.activeChatId)!;
+  // Undefined only while nothing is open (after Start fresh): the Welcome stands in for the chat.
+  const chat = activeChat(state);
+  const providerConnected = useAnyProviderConnected();
   const children = selectedParentChildren(state);
   const child = inspectedChild(state);
-  const changes = chatChanges(chat);
+  const changes = chat ? chatChanges(chat) : [];
   const activeCount = children.filter((entry) => entry.status === 'working').length;
   const inspectorModule = state.inspector ?? state.lastInspectorModule;
   const settingsOpen = screenRequest?.kind === 'settings';
-  const runningPreview = state.suppliedRun?.chatId === chat.id && state.suppliedRun.state === 'streaming';
-  const previewEnded = state.suppliedRun?.chatId === chat.id && ['failed', 'canceled'].includes(state.suppliedRun.state);
+  const runningPreview = chat !== undefined && state.suppliedRun?.chatId === chat.id && state.suppliedRun.state === 'streaming';
+  const previewEnded = chat !== undefined && state.suppliedRun?.chatId === chat.id && ['failed', 'canceled'].includes(state.suppliedRun.state);
   const displayOwner = latest.current;
   // A focus request for Changes belongs to one chat and lives only while Changes is open.
-  if ((changeFocus.path !== null || changeFocus.pending !== null) && (state.inspector !== 'changes' || changeFocus.chatId !== chat.id)) setChangeFocus({ chatId: '', path: null, pending: null });
+  if ((changeFocus.path !== null || changeFocus.pending !== null) && (state.inspector !== 'changes' || changeFocus.chatId !== chat?.id)) setChangeFocus({ chatId: '', path: null, pending: null });
   const reviewChangeOwner = useRef<(path: string) => void>(() => {});
   reviewChangeOwner.current = (path) => {
     const current = latest.current;
-    if (!mounted.current || current.request || current.state !== state || current.state.inspectedChildId || typeof path !== 'string' || !path) return;
+    if (!chat || !mounted.current || current.request || current.state !== state || current.state.inspectedChildId || typeof path !== 'string' || !path) return;
     // Null first, then the path: a second request for the same file still moves focus to it.
     setChangeFocus({ chatId: chat.id, path: null, pending: path });
     dispatch({ type: 'showInspector', module: 'changes' });
   };
   const [reviewChange] = useState(() => (path: string) => reviewChangeOwner.current(path));
+  // Contextual help links and Help's own entry points: one stable opener for the visit.
+  const openHelpOwner = useRef<(topic: HelpTopicId) => void>(() => {});
+  openHelpOwner.current = (topic) => openScreen('help', undefined, { helpTopic: topic });
+  const [openHelp] = useState(() => (topic: HelpTopicId) => openHelpOwner.current(topic));
+  // A dialog opened from the Welcome can lose its opener (the step it opened just completed): focus then
+  // goes to the next step's action, else (all done) the Getting started heading, else the Welcome heading.
+  // Read when the dialog closes, never cached.
+  const [welcomeReturn] = useState<RefObject<HTMLElement | null>>(() => ({
+    get current() {
+      const welcome = parentChatRef.current?.querySelector<HTMLElement>('[data-welcome]');
+      return welcome?.querySelector<HTMLElement>('[data-next-step]') ?? welcome?.querySelector<HTMLElement>('[data-steps-heading]') ?? welcomeHeadingRef.current;
+    },
+  }));
+  const shownRequest = useRef<MainScreenRequest | null>(null);
+  const welcomeFrame = useRef(0);
 
   useLayoutEffect(() => {
     // Only explicit page/Inspect/Back/New/Archive intents request focus, after visibility commits.
     if (settingsFocus.current) {
-      const target = settingsFocus.current === 'entry' ? settingsPageRef.current : canFocus(settingsButtonRef.current) ? settingsButtonRef.current : titleRef.current;
+      // Settings opened on a search (Help's "Search Settings for …") lands in that search, under its results.
+      const search = screenRequest?.settingsQuery ? settingsPageRef.current?.querySelector<HTMLElement>('input[type="search"]') ?? null : null;
+      const target = settingsFocus.current === 'return' ? canFocus(settingsButtonRef.current) ? settingsButtonRef.current : titleRef.current : canFocus(search) ? search : settingsPageRef.current;
       settingsFocus.current = null;
       if (canFocus(target)) target.focus({ preventScroll: true });
     }
@@ -170,8 +193,23 @@ export function AppShell() {
       bannerControl.current = null;
       if (canFocus(previewToggleRef.current)) previewToggleRef.current.focus();
     }
+    const closedScreen = shownRequest.current !== null && screenRequest === null;
+    shownRequest.current = screenRequest;
     // Composer, Archive and palette intents wait until any page or dialog has closed and returned focus.
     if (latest.current.request) return;
+    if (closedScreen && !chat) {
+      // Closing over the Welcome must never strand focus, whatever path the dialogs took (a step that
+      // completed, a dialog swapped for another). The browser may still move focus once the native
+      // dialog has closed, so check once more on the next frame.
+      landInWelcome();
+      if (typeof requestAnimationFrame === 'function') {
+        cancelAnimationFrame(welcomeFrame.current);
+        welcomeFrame.current = requestAnimationFrame(() => {
+          welcomeFrame.current = 0;
+          if (mounted.current && !latest.current.request && !activeChat(latest.current.state)) landInWelcome();
+        });
+      }
+    }
     if (focusComposerAfterCommit.current) {
       focusComposerAfterCommit.current = false;
       const input = parentChatRef.current?.querySelector<HTMLTextAreaElement>('textarea') ?? null;
@@ -195,7 +233,10 @@ export function AppShell() {
     mounted.current = true;
     // Stored replies need the formatting chunk: request it with the first paint, not after each turn mounts.
     if (latest.current.state.chats.some((entry) => entry.messages.some((message) => message.role === 'assistant'))) void prepareAssistantContent().catch(() => undefined);
-    return () => { mounted.current = false; ++previewVersion.current; previewDriver.current?.cancel(); previewDriver.current = null; };
+    return () => {
+      mounted.current = false; ++previewVersion.current; previewDriver.current?.cancel(); previewDriver.current = null;
+      if (welcomeFrame.current && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(welcomeFrame.current);
+    };
   }, []);
   useLayoutEffect(() => {
     if (screenRequest && (screenRequest.parentChatId !== state.activeChatId || screenRequest.inspectedChildId !== state.inspectedChildId)) {
@@ -206,7 +247,7 @@ export function AppShell() {
   // Opening a chat that is waiting on you lands on the request, not above it.
   useLayoutEffect(() => {
     if (!child) parentChatRef.current?.querySelector<HTMLElement>('[data-permission-pending]')?.scrollIntoView?.({ block: 'nearest' });
-  }, [chat.id, child?.id]);
+  }, [chat?.id, child?.id]);
 
   function cancelPreviewTransport() {
     ++previewVersion.current;
@@ -217,7 +258,7 @@ export function AppShell() {
   function cancelFor(action: PreviewAction) {
     const current = latest.current.state;
     const run = current.suppliedRun;
-    const leaves = action.type === 'newChat' || action.type === 'branchChat'
+    const leaves = action.type === 'newChat' || action.type === 'branchChat' || action.type === 'openProject' || action.type === 'startFresh' || action.type === 'restoreSampleData'
       || action.type === 'viewChat' && action.chatId !== current.activeChatId && current.chats.some((entry) => entry.id === action.chatId && !entry.archived)
       || action.type === 'inspectChild' && current.childAgents.some((entry) => entry.id === action.childId && entry.parentChatId === current.activeChatId)
       || action.type === 'archiveChat' && run?.chatId === action.chatId
@@ -227,7 +268,7 @@ export function AppShell() {
   }
   async function startPreview() {
     const captured = latest.current;
-    if (!mounted.current || captured.request || captured.state !== state || captured.state.inspectedChildId || chat.status === 'working' || previewLoading) return;
+    if (!chat || !mounted.current || captured.request || captured.state !== state || captured.state.inspectedChildId || chat.status === 'working' || previewLoading) return;
     const version = ++previewVersion.current;
     setPreviewLoading(true); setPreviewNotice('');
     try {
@@ -251,7 +292,7 @@ export function AppShell() {
   }
   function stopPreview() {
     const run = latest.current.state.suppliedRun;
-    if (run?.state === 'streaming' && run.chatId === chat.id) dispatch({ type: 'stopSuppliedRun', identity: { chatId: run.chatId, runId: run.runId, generation: run.generation } });
+    if (chat && run?.state === 'streaming' && run.chatId === chat.id) dispatch({ type: 'stopSuppliedRun', identity: { chatId: run.chatId, runId: run.runId, generation: run.generation } });
   }
 
   // A page is not modal, but hidden chat callbacks still have no authority.
@@ -282,13 +323,16 @@ export function AppShell() {
     if (opens) focusInspectorAfterCommit.current = focus;
     else if (holdsFocus && shown) railButtons[shown].current?.focus();
   }
-  function openScreen(kind: MainScreenRequest['kind'], targetChatId?: string) {
+  function openScreen(kind: MainScreenRequest['kind'], targetChatId?: string, options?: Readonly<{ helpTopic?: HelpTopicId; settingsQuery?: string }>) {
     const current = latest.current;
-    if (!mounted.current || current.request || kind === 'models' && current.state.inspectedChildId) return;
+    // The model picker targets the viewed parent chat: never from a child, and not while nothing is open.
+    if (!mounted.current || current.request || kind === 'models' && (current.state.inspectedChildId || !activeChat(current.state))) return;
     const target = typeof targetChatId === 'string' && current.state.chats.some((entry) => entry.id === targetChatId) ? targetChatId : undefined;
+    const helpTopic = kind === 'help' && typeof options?.helpTopic === 'string' ? options.helpTopic : undefined;
+    const settingsQuery = kind === 'settings' && typeof options?.settingsQuery === 'string' && options.settingsQuery.trim() ? options.settingsQuery : undefined;
     cancelPreviewTransport();
     if (current.state.suppliedRun?.state === 'streaming') reduce({ type: 'stopSuppliedRun', identity: current.state.suppliedRun });
-    const request: MainScreenRequest = { id: 'main-screens', version: ++screenVersion.current, kind, parentChatId: current.state.activeChatId, inspectedChildId: current.state.inspectedChildId, ...(target ? { targetChatId: target } : {}) };
+    const request: MainScreenRequest = { id: 'main-screens', version: ++screenVersion.current, kind, parentChatId: current.state.activeChatId, inspectedChildId: current.state.inspectedChildId, ...(target ? { targetChatId: target } : {}), ...(helpTopic ? { helpTopic } : {}), ...(settingsQuery ? { settingsQuery } : {}) };
     current.request = request;
     if (kind === 'settings') settingsFocus.current = 'entry';
     setScreenRequest(request);
@@ -302,6 +346,14 @@ export function AppShell() {
     latest.current.request = null;
     if (request.kind === 'settings') settingsFocus.current = 'return';
     setScreenRequest(null);
+  }
+  // Focus that landed nowhere (the page, the app root, a removed or hidden control) moves to the Welcome's
+  // next step. Focus a dialog already returned to a real control stays put.
+  function landInWelcome() {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && active !== appRef.current && canFocus(active)) return;
+    const target = welcomeReturn.current;
+    if (canFocus(target)) target.focus({ preventScroll: true });
   }
   function selectModel(request: MainScreenRequest, intent: ModelSelection) {
     if (!currentScreen(request) || intent.id !== request.id || intent.version !== request.version || intent.reasoning !== null) return;
@@ -325,6 +377,26 @@ export function AppShell() {
     if (target.archived) reduce({ type: 'unarchiveChat', chatId });
     if (screenAction(request, { type: 'viewChat', chatId })) focusComposerAfterCommit.current = true;
   }
+  // A project from the picker that isn't open yet: add it with one empty chat and land in that chat.
+  function openProjectFromScreen(request: MainScreenRequest, projectId: string) {
+    if (typeof projectId !== 'string' || !currentScreen(request)) return;
+    const opened = screenAction(request, { type: 'openProject', model: newChatModel(defaultModel), ...latest.current.preferences.general, projectId, ...(narrowWindow() ? { inspector: 'closed' as const } : {}) });
+    if (opened) focusComposerAfterCommit.current = true;
+  }
+  // Preview banner: switch the visit to a new user's empty app, or back to the sample data.
+  // Provider connections follow, so a fresh start has nothing connected and Restore brings the seeded ones back.
+  function toggleSampleData() {
+    const current = latest.current;
+    if (!mounted.current || current.request || current.state !== state) return;
+    setPreviewNotice('');
+    if (current.state.fresh) {
+      resetProviderState();
+      dispatch({ type: 'restoreSampleData', ...(narrowWindow() ? { inspector: 'closed' as const } : {}) });
+    } else {
+      clearProviderConnections();
+      dispatch({ type: 'startFresh' });
+    }
+  }
   // Settings at a named section, from Settings itself or from a dialog it replaces.
   function openSettingsSection(request: MainScreenRequest, section: SettingsSection) {
     if (!currentScreen(request)) return;
@@ -333,15 +405,21 @@ export function AppShell() {
     latest.current.request = null;
     openScreen('settings');
   }
+  // Help's "Search Settings for …": the Settings page, opened on that search in place of Help.
+  function searchSettings(request: MainScreenRequest, query: string) {
+    if (!currentScreen(request)) return;
+    latest.current.request = null;
+    openScreen('settings', undefined, { settingsQuery: query });
+  }
 
   function appHost(root: HTMLElement, current: () => boolean) {
     const now = latest.current.state;
-    return { root, child: Boolean(now.inspectedChildId), working: now.chats.find((entry) => entry.id === now.activeChatId)?.status === 'working', current, open: openScreen, newChat: () => newChat(), dispatch: (action: PreviewAction) => inspectorDispatch(action, 'panel') };
+    return { root, child: Boolean(now.inspectedChildId), empty: !activeChat(now), working: activeChat(now)?.status === 'working', current, open: openScreen, newChat: () => newChat(), dispatch: (action: PreviewAction) => inspectorDispatch(action, 'panel') };
   }
 
   function changeDisplay(toolDisplay: ToolDisplay, control: HTMLSelectElement) {
     const current = latest.current;
-    if (!mounted.current || current !== displayOwner || current.request || current.state !== state || current.preferences !== preferences || current.state.inspectedChildId || current.state.activeChatId !== chat.id || control !== parentChatRef.current?.querySelector('select[data-tool-display]') || !canFocus(control) || document.hidden || document.querySelector('dialog[open]') || !isToolDisplay(toolDisplay)) return;
+    if (!chat || !mounted.current || current !== displayOwner || current.request || current.state !== state || current.preferences !== preferences || current.state.inspectedChildId || current.state.activeChatId !== chat.id || control !== parentChatRef.current?.querySelector('select[data-tool-display]') || !canFocus(control) || document.hidden || document.querySelector('dialog[open]') || !isToolDisplay(toolDisplay)) return;
     const conversation = preferences.conversation ?? defaultConversation;
     if (conversation.toolDisplay === toolDisplay && conversation.showCompletedOutput) return;
     const next = { ...preferences, conversation: { ...conversation, toolDisplay, showCompletedOutput: true } };
@@ -351,8 +429,13 @@ export function AppShell() {
 
   function newChat(projectId?: string) {
     if (!mounted.current || latest.current.request) return;
+    // A chat lives in a project: with none open yet, New chat asks which project to open first.
+    if (latest.current.state.projects.length === 0) {
+      openScreen('workspace');
+      return;
+    }
     focusComposerAfterCommit.current = true;
-    sidebarDispatch({ type: 'newChat', model: defaultModel, ...latest.current.preferences.general, ...(typeof projectId === 'string' ? { projectId } : {}), ...(narrowWindow() ? { inspector: 'closed' as const } : {}) });
+    sidebarDispatch({ type: 'newChat', model: newChatModel(defaultModel), ...latest.current.preferences.general, ...(typeof projectId === 'string' ? { projectId } : {}), ...(narrowWindow() ? { inspector: 'closed' as const } : {}) });
   }
 
   function backToParent() {
@@ -369,19 +452,21 @@ export function AppShell() {
 
   // A failed step with nothing else to offer: ask AVA again from the message box, never discarding a draft.
   function askRetry() {
+    if (!chat) return;
     const request = 'Retry the last step.';
     const draft = chat.draft.trim() === '' ? request : chat.draft.includes(request) ? chat.draft : `${chat.draft.trimEnd()}\n${request}`;
     if (!child && dispatch({ type: 'setDraft', chatId: chat.id, draft })) focusComposerAfterCommit.current = true;
   }
 
-  // Keyboard regions for the skip links and F6, in order: sidebar, transcript, message box, open panel.
+  // Keyboard regions for the skip links and F6, in order: sidebar, transcript (the Welcome heading while
+  // nothing is open), message box, open panel.
   function regionTargets(root: HTMLElement): (HTMLElement | null)[] {
     const sidebar = root.querySelector<HTMLElement>(':scope > aside');
     const canvas = parentChatRef.current;
     const sidebarTargets = [sidebar?.querySelector<HTMLElement>('[aria-current="page"]'), sidebar?.querySelector<HTMLElement>('[role="region"]'), sidebar?.querySelector<HTMLElement>('button')];
     return [
       sidebarTargets.find((element) => canFocus(element ?? null)) ?? null,
-      canvas?.querySelector<HTMLElement>('[role="region"][tabindex="0"]') ?? null,
+      canvas?.querySelector<HTMLElement>('[role="region"][tabindex="0"]') ?? welcomeHeadingRef.current,
       canvas?.querySelector<HTMLElement>('textarea') ?? null,
       state.inspector ? inspectorPanelRef.current : null,
     ];
@@ -423,14 +508,14 @@ export function AppShell() {
   }
 
   const previewLabel = previewLoading ? 'Loading preview…' : runningPreview ? 'Stop preview' : previewEnded ? 'Retry preview' : 'Run preview';
-  const workingFixture = chat.status === 'working' && !runningPreview && !previewLoading;
+  const workingFixture = chat?.status === 'working' && !runningPreview && !previewLoading;
   const previewControls = child ? undefined : <>
     {/* One stable element for Run, Loading, Stop and Retry: keyboard focus never falls to the page. */}
     <button ref={previewToggleRef} className={banner.control} type="button"
-      disabled={workingFixture}
+      disabled={!chat || workingFixture}
       aria-disabled={previewLoading || undefined}
       data-busy={previewLoading || undefined}
-      title={workingFixture ? 'Available when this chat isn’t working' : runningPreview ? 'Stop the example reply; the partial reply is kept' : 'Play an example reply in this chat'}
+      title={!chat ? 'Available once a chat is open' : workingFixture ? 'Available when this chat isn’t working' : runningPreview ? 'Stop the example reply; the partial reply is kept' : 'Play an example reply in this chat'}
       onClick={(event) => {
         if (!canFocus(event.currentTarget) || previewLoading) return;
         if (runningPreview) stopPreview(); else void startPreview();
@@ -444,11 +529,23 @@ export function AppShell() {
       onStep={() => { if (mounted.current && !latest.current.request && latest.current.state === state && runningPreview && previewPaused) previewDriver.current?.step(); }} /> : null}
   </>;
   const notice = state.archiveNotice;
+  const previewChip = bannerOpen ? undefined : <PreviewChip chipRef={previewChipRef} onOpen={() => { bannerFocus.current = 'banner'; setBannerOpen(true); }} />;
 
   return (
     <ReducedMotionContext.Provider value={preferences.motion === 'reduced'}>
+    <HelpContext.Provider value={openHelp}>
     <main ref={appRef} className={`${styles.app} ${appearance.scope}`} data-code-wrap={preferences.conversation?.wrapCode ?? false} data-diff-wrap={preferences.conversation?.wrapDiff ?? true} data-palette={preferences.palette} data-ui-font={preferences.uiFont} data-prose-size={preferences.proseSize} data-prose-spacing={preferences.proseSpacing} data-reading-width={preferences.readingWidth} data-contrast={preferences.contrast} data-motion={preferences.motion} data-page={settingsOpen ? 'settings' : 'chat'} data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'} data-material={state.opaque ? 'opaque' : 'glass'} aria-label="AVA UI preview" aria-describedby="app-description"
       onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={(event) => {
+        if (event.key === 'F1' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+          // F1 opens Help from anywhere in the app, the message box included: a fixed key like F6, never a remappable chord.
+          // The Settings page opens Help over itself (MainScreens claims the key first), so closing Help lands back in Settings.
+          // Another dialog keeps the key, a shortcut being recorded swallows it, and with Help open it only keeps browser help away.
+          const open = latest.current.request;
+          if (event.defaultPrevented || composing.current || event.nativeEvent.isComposing || !mounted.current || open && open.kind !== 'help') return;
+          event.preventDefault();
+          if (!open && !event.repeat) openScreen('help');
+          return;
+        }
         if (event.key === 'F6' && !event.ctrlKey && !event.metaKey && !event.altKey) {
           // F6 / Shift+F6 step between the sidebar, transcript, message box and open panel; never out of a dialog, menu or picker.
           if (event.defaultPrevented || event.nativeEvent.isComposing || latest.current.request || !mounted.current || !(event.target instanceof Element) || event.target.closest('dialog, [role="menu"], [role="listbox"]') || document.querySelector('dialog[open], [role="menu"]')) return;
@@ -472,14 +569,14 @@ export function AppShell() {
         }, () => { if (current()) setCommandNotice('Keyboard actions could not load. Use the visible controls or try again.'); }).finally(() => { commandPending.current = false; });
       }}>
       {settingsOpen ? null : <>
-        <a className={styles.skipLink} href="#conversation-canvas" onClick={(event) => skipTo(event, 1)}>Skip to conversation</a>
-        {child ? null : <a className={styles.skipLink} href="#conversation-canvas" onClick={(event) => skipTo(event, 2)}>Skip to message box</a>}
+        <a className={styles.skipLink} href="#conversation-canvas" onClick={(event) => skipTo(event, 1)}>{chat ? 'Skip to conversation' : 'Skip to main content'}</a>
+        {child || !chat ? null : <a className={styles.skipLink} href="#conversation-canvas" onClick={(event) => skipTo(event, 2)}>Skip to message box</a>}
       </>}
       <p id="app-description" className="srOnly">Browser-only UI preview with invented chats, child agents, models, context and changes. Nothing is saved, sent or run. No backend or model is connected. Run preview plays an example reply in this browser; pausing only pauses that playback.</p>
       <ProjectSidebar state={state} dispatch={sidebarDispatch} settingsActive={settingsOpen} settingsRef={settingsButtonRef} onOpenSettings={() => openScreen('settings')} onNewChat={newChat}
-        onFindChat={() => openScreen('sessions')} onOpenCommands={() => openScreen('commands')}
+        onFindChat={() => openScreen('sessions')} onOpenCommands={() => openScreen('commands')} onOpenProject={() => openScreen('workspace')} onOpenHelp={() => openScreen('help')}
         onChatAction={(chatId, action) => openScreen(action, chatId)} collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((value) => !value)} shortcuts={preferences.shortcuts} />
-      <div className={styles.workspace} hidden={settingsOpen} inert={settingsOpen} data-inspector={state.inspector ? 'open' : 'closed'} data-inspector-size={inspectorWide ? 'wide' : undefined}>
+      <div className={styles.workspace} hidden={settingsOpen} inert={settingsOpen} data-canvas={chat ? undefined : 'welcome'} data-inspector={state.inspector ? 'open' : 'closed'} data-inspector-size={inspectorWide ? 'wide' : undefined}>
         <ChangeNavigationContext.Provider value={child ? null : reviewChange}>
         <section ref={parentChatRef} id="conversation-canvas" className={styles.chat} aria-labelledby="conversation-title" onFocus={() => {
           // Small windows: the inspector is a sheet over this column. Focus arriving here by any route (Tab, Shift+Tab,
@@ -492,15 +589,16 @@ export function AppShell() {
           if (backToParent()) childRowAfterCommit.current = child.id;
         }}>
           {bannerOpen ? (
-            <PreviewBanner notice={child ? undefined : previewNotice || undefined} dismissRef={bannerDismissRef} onFocusControl={(control) => { bannerControl.current = control; }} onDismiss={() => { bannerFocus.current = 'chip'; setBannerOpen(false); }}>{previewControls}</PreviewBanner>
+            <PreviewBanner notice={child ? undefined : previewNotice || undefined} sampleData={{ fresh: state.fresh === true, onToggle: toggleSampleData }} dismissRef={bannerDismissRef} onFocusControl={(control) => { bannerControl.current = control; }} onDismiss={() => { bannerFocus.current = 'chip'; setBannerOpen(false); }}>{previewControls}</PreviewBanner>
           ) : null}
+          {chat ? <>
           <ConversationIdentity
             title={child ? child.title : chat.title}
             titleRef={titleRef}
             backDescription={child ? `Back to ${chat.title} · Esc. Its draft and settings are unchanged.` : undefined}
             onBack={child ? () => { backToParent(); } : undefined}
             onChatAction={child ? undefined : (action) => openScreen(action, chat.id)}
-            aside={bannerOpen ? undefined : <PreviewChip chipRef={previewChipRef} onOpen={() => { bannerFocus.current = 'banner'; setBannerOpen(true); }} />}
+            aside={previewChip}
           />
           {notice ? (
             <div className={styles.archived} role="group" aria-label="Archived chat">
@@ -517,8 +615,13 @@ export function AppShell() {
               <Composer chat={chat} enterBehavior={preferences.enter} dispatch={dispatch} shortcuts={preferences.shortcuts} onOpenModel={() => openScreen('models')} contextOpen={state.inspector === 'context'} onOpenContext={() => inspectorDispatch({ type: 'showInspector', module: 'context' })} />
             </>
           )}
+          </> : (
+            <Welcome headingRef={welcomeHeadingRef} aside={previewChip} onConnectProvider={() => openScreen('providers')} onOpenProject={() => openScreen('workspace')} onOpenHelp={() => openScreen('help')}
+              state={{ providerConnected, projectOpened: state.projects.length > 0, firstMessageSent: state.chats.some((entry) => entry.messages.some((message) => message.role === 'user')) }} />
+          )}
         </section>
         </ChangeNavigationContext.Provider>
+        {chat ? <>
         <Presence open={state.inspector !== null} className={styles.inspectorTrack}>
           <Inspector
             module={inspectorModule}
@@ -556,6 +659,7 @@ export function AppShell() {
           contextRef={contextButtonRef}
           onToggle={(module) => inspectorDispatch({ type: 'toggleInspector', module })}
         />
+        </> : null}
       </div>
       {screenRequest ? <section ref={settingsPageRef} className={styles.screenHost} aria-label={settingsOpen ? 'Settings page' : undefined} tabIndex={settingsOpen ? -1 : undefined} onKeyDown={(event) => {
         if (settingsOpen && event.target === event.currentTarget && event.key === 'Escape' && currentScreen(screenRequest)) {
@@ -564,22 +668,25 @@ export function AppShell() {
           closeScreen(screenRequest);
         }
       }}>
-        <Suspense fallback={settingsOpen ? <div className={styles.settingsLoading}><header><h1>Settings</h1><BackButton onClick={() => closeScreen(screenRequest)}>Back to chat</BackButton></header><p role="status">Loading…</p></div> : <DialogFrame title={screenRequest.kind === 'models' ? 'Loading models' : 'Loading'} onDismiss={() => closeScreen(screenRequest)} returnFocus={settingsButtonRef}><p role="status">Loading…</p></DialogFrame>}>
-          <MainScreens projects={state.projects} contextUsage={previewContextUsage(chat)} key={screenRequest.version} request={screenRequest} parent={{ title: chat.title, model: chat.model }} defaultModel={defaultModel} preferences={preferences} opaque={state.opaque} onOpaqueChange={(value) => { if (currentScreen(screenRequest) && settingsOpen && latest.current.state === state) reduce({ type: 'setOpaque', opaque: value }); }} returnFocus={settingsButtonRef}
+        <Suspense fallback={settingsOpen ? <div className={styles.settingsLoading}><header><h1>Settings</h1><BackButton onClick={() => closeScreen(screenRequest)}>Back to chat</BackButton></header><p role="status">Loading…</p></div> : <DialogFrame title={screenRequest.kind === 'models' ? 'Loading models' : 'Loading'} onDismiss={() => closeScreen(screenRequest)} returnFocus={chat ? settingsButtonRef : welcomeReturn}><p role="status">Loading…</p></DialogFrame>}>
+          <MainScreens projects={state.projects} projectsToOpen={projectsToOpen(state)} contextUsage={chat ? previewContextUsage(chat) : undefined} key={screenRequest.version} request={screenRequest} parent={{ title: chat?.title ?? '', model: chat?.model ?? defaultModel }} defaultModel={defaultModel} preferences={preferences} opaque={state.opaque} onOpaqueChange={(value) => { if (currentScreen(screenRequest) && settingsOpen && latest.current.state === state) reduce({ type: 'setOpaque', opaque: value }); }} returnFocus={chat ? settingsButtonRef : welcomeReturn}
             workspaceSeed={settingsWorkspace.current} onWorkspaceSnapshot={(snapshot) => { if (currentScreen(screenRequest) && settingsOpen) settingsWorkspace.current = snapshot; }}
             section={settingsSection} onSectionChange={(value) => { if (currentScreen(screenRequest)) setSettingsSection(value); }}
             chats={chatSummaries(state)}
             onOpenChat={(chatId) => openChatFromScreen(screenRequest, chatId)}
+            onOpenProject={(projectId) => openProjectFromScreen(screenRequest, projectId)}
             onRenameChat={(chatId, title) => { screenAction(screenRequest, { type: 'renameChat', chatId, title }); }}
             onArchiveChat={(chatId) => { if (screenAction(screenRequest, { type: 'archiveChat', chatId })) focusArchiveAfterCommit.current = true; }}
             onAppAction={(action) => { if (!currentScreen(screenRequest)) return; pendingAppAction.current = action; closeScreen(screenRequest); }}
             onBranchChat={(chatId, messageId) => { if (screenAction(screenRequest, { type: 'branchChat', chatId, messageId })) focusComposerAfterCommit.current = true; }}
             onOpenSettingsSection={(section) => openSettingsSection(screenRequest, section)}
+            onSearchSettings={(query) => searchSettings(screenRequest, query)}
             onDismiss={() => closeScreen(screenRequest)} onPreferencesChange={(value) => { if (currentScreen(screenRequest) && settingsOpen && latest.current.preferences === preferences) { latest.current.preferences = value; setPreferences(value); } }} onSelectModel={(intent) => selectModel(screenRequest, intent)} />
         </Suspense>
       </section> : null}
       <span className="srOnly" role="status" aria-live="polite">{commandNotice || state.announcement}</span>
     </main>
+    </HelpContext.Provider>
     </ReducedMotionContext.Provider>
   );
 }

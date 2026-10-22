@@ -1,6 +1,18 @@
 # AVA Desktop
 
-**Current mock revision 21:** [critique refinement](critique-refinement.md) fixes all
+**Current mock revision 22:** [Help & first-time use](critique-refinement.md) adds
+searchable in-app Help and live keyboard references, a Start fresh/Restore sample
+data preview path, a Welcome checklist and truthful provider-blocked Send states.
+Independent re-score before the follow-up fixes: Help & shortcuts **29/40**,
+First-time use **28/40**, whole product **31/40** (was 30); Help and documentation
+improved **2 → 3**. Typecheck, **1,064 tests / 73 files** (`--maxWorkers=6`) and
+the build passed; the entry is **463.91 kB raw / 141.57 kB gzip** under the unchanged
+500,000-byte cap. Headed and headless Chromium checks at **1440×900 and 1024×700**
+covered setup, Help/deep links, typing after dialog close and the blocked-Send line.
+Browser-only and visit-local, with no real backend/provider/auth. The scope records
+the follow-up fixes, open decisions and limits; earlier acceptances remain history.
+
+**Earlier mock revision 21:** [critique refinement](critique-refinement.md) fixes all
 P1 and P2 findings with trust moments first, the familiar monochrome look and one
 preview banner. Independent reviewer scores (baseline → after round 1 → final,
 out of 40): main chat **24 → 28 → 30**, in-chat widgets **24 → 28 → 33**,

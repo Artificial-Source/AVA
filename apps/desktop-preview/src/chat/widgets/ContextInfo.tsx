@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { CaretDownIcon } from '@phosphor-icons/react/dist/csr/CaretDown';
 import { ChatStatus } from '../../components/ChatStatus';
+import { LearnMoreLink } from '../../components/LearnMoreLink';
 import { Disclosure } from '../../ui/Disclosure';
 import { ProviderMark } from '../../ui/ProviderMark';
 import { contextUsage, formatTokenCount, type ContextUsageView, type CumulativeUsageView } from '../contextUsage';
@@ -80,6 +81,7 @@ export function ContextInfo({ view, active = true }: { view: ContextInfoView; ac
           </div>
         ) : <div className={styles.meter} aria-hidden="true" />}
         <p className={styles.detail}>{known ? `${formatTokenCount(usage.activeTokens)} of ${formatTokenCount(usage.windowTokens)} tokens` : unknownReasons[usage.reason ?? 'Unknown'] ?? unknownReasons.Unknown}</p>
+        <LearnMoreLink topic="context">About context</LearnMoreLink>
       </section>
 
       <h3 className={styles.section}>Window</h3>

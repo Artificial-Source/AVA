@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { createInitialState } from '../state/fixtures';
+import { createFreshState, createInitialState } from '../state/fixtures';
 import type { PreviewState } from '../state/types';
 import { ProjectSidebar } from './ProjectSidebar';
 
@@ -142,5 +142,43 @@ describe('project sidebar', () => {
     expect(find).not.toHaveAttribute('aria-keyshortcuts');
     expect(find).not.toHaveTextContent('Ctrl');
     expect(commands).toHaveAttribute('title', 'Commands');
+  });
+
+  it('puts a quiet Help button beside Settings with its fixed key, kept in the collapsed rail', async () => {
+    const user = userEvent.setup();
+    const onOpenHelp = vi.fn();
+    const { rerender } = sidebar(undefined, { onOpenSettings: vi.fn(), onOpenHelp, shortcuts: { enabled: false, overrides: {} } });
+    const help = screen.getByRole('button', { name: 'Help' });
+    const settings = screen.getByRole('button', { name: 'Settings' });
+    expect(help.parentElement).toBe(settings.parentElement);
+    expect(settings.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // F1 is a fixed key, not a remappable shortcut: it is advertised even with shortcuts off.
+    expect(help).toHaveAttribute('title', 'Help · F1');
+    expect(help).toHaveAttribute('aria-keyshortcuts', 'F1');
+    await user.click(help);
+    expect(onOpenHelp).toHaveBeenCalledTimes(1);
+
+    rerender(<ProjectSidebar state={createInitialState()} dispatch={vi.fn()} collapsed onOpenSettings={vi.fn()} onOpenHelp={onOpenHelp} />);
+    expect(screen.getByRole('button', { name: 'Help' })).toBe(help);
+    expect(help).toBeVisible();
+  });
+
+  it('shows an empty library that says what goes there, with one way to open a project', async () => {
+    const user = userEvent.setup();
+    const onOpenProject = vi.fn();
+    sidebar(createFreshState(false), { onOpenProject });
+    const projects = nav('All project chats');
+    expect(projects.getByRole('heading', { name: 'Projects' }).parentElement).toHaveTextContent(/^Projects$/);
+    expect(projects.getByText('Projects you open appear here.')).toBeVisible();
+    expect(screen.queryByText('No chats yet')).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Recent chats' })).not.toBeInTheDocument();
+    await user.click(projects.getByRole('button', { name: 'Open a project' }));
+    expect(onOpenProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the empty library without an action when nothing can open a project', () => {
+    sidebar(createFreshState(false));
+    expect(screen.getByText('Projects you open appear here.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Open a project' })).not.toBeInTheDocument();
   });
 });

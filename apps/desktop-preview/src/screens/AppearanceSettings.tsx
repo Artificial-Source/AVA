@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { TextAaIcon } from '@phosphor-icons/react/dist/csr/TextAa';
 import { Button } from '../ui/Button';
+import { defaultAppearance, type AppearanceKey } from './behaviorPreferences';
 import type { Preferences } from './contracts';
 import { PreferenceRow } from './ScreenPrimitives';
 import { anchor } from './settingsIndex';
@@ -8,10 +9,6 @@ import { useViewGuard } from './useViewGuard';
 import styles from './AppearanceSettings.module.css';
 import controls from './screens.module.css';
 
-type AppearanceKey = 'palette' | 'uiFont' | 'proseSize' | 'proseSpacing' | 'readingWidth' | 'contrast' | 'density' | 'motion';
-export const defaultAppearance: Required<Pick<Preferences, AppearanceKey>> = {
-  palette: 'default', uiFont: 'geist', proseSize: 'normal', proseSpacing: 'normal', readingWidth: 'wide', contrast: 'system', density: 'comfortable', motion: 'system',
-};
 const options = {
   palette: [['default', 'Default'], ['charcoal', 'Charcoal'], ['midnight', 'Midnight']],
   uiFont: [['geist', 'Geist'], ['system', 'System sans']],

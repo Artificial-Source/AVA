@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { appChord, bindingConflict, bindingLabel, bindingProblem, defaultShortcuts, effectiveBinding, recordedBinding, shortcutActions, shortcutForEvent, shortcutGroups, shortcutHint } from './shortcuts';
+import { appChord, bindingConflict, bindingLabel, bindingProblem, defaultShortcuts, effectiveBinding, navigationKeys, recordedBinding, shortcutActions, shortcutForEvent, shortcutGroups, shortcutHint } from './shortcuts';
 
 function key(init: KeyboardEventInit) { return new KeyboardEvent('keydown', init); }
 afterEach(() => { vi.unstubAllGlobals(); document.body.replaceChildren(); });
@@ -41,6 +41,14 @@ describe('browser-only shortcut contracts', () => {
     expect(shortcutHint({ enabled: true, overrides: { newChat: null } }, 'newChat')).toBeNull();
     expect(shortcutHint({ enabled: false, overrides: {} }, 'newChat')).toBeNull();
     expect(bindingLabel(null)).toBe('Unassigned');
+  });
+  it('lists the keys that send for the Enter setting, or only the chord that always sends', () => {
+    const send = (enter?: 'send' | 'newline') => navigationKeys(enter).find((entry) => entry.id === 'send')!;
+    expect(send('send')).toMatchObject({ keys: ['Enter', 'Ctrl+Enter'], detail: 'From the message box. Shift+Enter adds a new line.' });
+    expect(send('newline')).toMatchObject({ keys: ['Ctrl+Enter'], detail: 'From the message box. Enter adds a new line.' });
+    expect(send()).toMatchObject({ keys: ['Ctrl+Enter'], detail: 'From the message box, even when Enter adds a new line.' });
+    vi.stubGlobal('navigator', { platform: 'MacIntel' });
+    expect(send('send')).toMatchObject({ keys: ['Return', '⌘Return'], detail: 'From the message box. ⇧Return adds a new line.' });
   });
   it.each(['Enter', 'Shift+Enter', 'Mod+Enter', 'Escape', 'Space', 'Tab', 'A', 'F5', 'Alt+F4', 'Mod+L', 'Mod+Shift+T', 'Mod+Shift+I', 'Mod+Shift+K', 'Mod+C', 'Mod+1', 'Mod+Shift+P', 'Mod+,', 'Mod+Shift+3', 'Mod+Shift+4', 'Mod+Shift+5', 'Mod+A', 'Mod+Z'])('reserves editing, system and browser binding %s', (binding) => {
     expect(bindingProblem(binding)).toMatch(/Reserved/);

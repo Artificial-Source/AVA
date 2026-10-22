@@ -8,14 +8,16 @@ export type ContextTarget = Readonly<{ id: string; open: boolean }>;
 const HIGH_USAGE = 80;
 const CRITICAL_USAGE = 90;
 
-export function ContextMeter({ view, target, onOpen }: { view?: ContextUsageView; target?: ContextTarget; onOpen: () => void }) {
+export function ContextMeter({ view, target, emptyChat = false, onOpen }: { view?: ContextUsageView; target?: ContextTarget; emptyChat?: boolean; onOpen: () => void }) {
   const usage = view ? contextUsage(view) : null;
   const percentage = usage && usage.activeTokens !== null ? usage.percentage : null;
-  const level = percentage === null ? 'unknown' : percentage >= CRITICAL_USAGE ? 'critical' : percentage >= HIGH_USAGE ? 'high' : 'normal';
-  const text = level === 'unknown' || !view ? 'Context unknown' : level === 'normal' ? formatContextMeter(view) : `${percentage}% used`;
+  // Nothing sent yet means nothing to measure; "unknown" is kept for usage that can't be read.
+  const unmeasured = emptyChat ? 'empty' : 'unknown';
+  const level = percentage === null ? unmeasured : percentage >= CRITICAL_USAGE ? 'critical' : percentage >= HIGH_USAGE ? 'high' : 'normal';
+  const text = level === 'empty' ? 'No usage yet' : level === 'unknown' || !view ? 'Context unknown' : level === 'normal' ? formatContextMeter(view) : `${percentage}% used`;
   const detail = usage && percentage !== null
     ? `${formatTokenCount(usage.activeTokens)} of ${formatTokenCount(usage.windowTokens)} tokens in context`
-    : 'Context usage isn’t available for this model';
+    : level === 'empty' ? 'Usage appears after the first message' : 'Context usage isn’t available for this model';
   return (
     <button
       className={styles.meter}
