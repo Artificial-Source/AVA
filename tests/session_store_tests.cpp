@@ -488,17 +488,17 @@ void test_session_store_sync_failures_are_not_committed()
 
     auto candidate = ordinary;
     candidate.id = "sync-failed-user";
-    auto appended = batch ? (*target)->append_batch({ava::session::SessionEntry{.id = "sync-output",
-                                                                                .parent_id = "",
-                                                                                .type = ava::session::EntryType::AssistantOutputItem,
-                                                                                .timestamp = "2026-10-19T00:00:00Z",
-                                                                                .data_json = *item_data},
-                                                     ava::session::SessionEntry{.id = "sync-commit",
-                                                                                .parent_id = "",
-                                                                                .type = ava::session::EntryType::AssistantTurnCommit,
-                                                                                .timestamp = "2026-10-19T00:00:00Z",
-                                                                                .data_json = *commit_data}})
-                          : (*target)->append(candidate);
+    std::vector<ava::session::SessionEntry> const batch_entries{ava::session::SessionEntry{.id = "sync-output",
+                                                                                           .parent_id = "",
+                                                                                           .type = ava::session::EntryType::AssistantOutputItem,
+                                                                                           .timestamp = "2026-10-19T00:00:00Z",
+                                                                                           .data_json = *item_data},
+                                                                ava::session::SessionEntry{.id = "sync-commit",
+                                                                                           .parent_id = "",
+                                                                                           .type = ava::session::EntryType::AssistantTurnCommit,
+                                                                                           .timestamp = "2026-10-19T00:00:00Z",
+                                                                                           .data_json = *commit_data}};
+    auto appended = batch ? (*target)->append_batch(batch_entries) : (*target)->append(candidate);
     auto blocked = (*target)->append(candidate);
     auto entries = store->load();
     expect(closed_for_sync_failure && !appended && appended.error().message().find("sync") != std::string::npos &&
