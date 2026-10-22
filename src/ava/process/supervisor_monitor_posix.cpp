@@ -382,7 +382,13 @@ void process_record_locked(SupervisorState& state, Record& record, Clock::time_p
 
   static_cast<void>(commit_due_execution_deadline_locked(record, now));
 
-  if (record.leader_observed && !record.pre_kill_group_observation_started && !record.post_kill_group_observation_started)
+  // A fast leader can exit while the launcher is still classifying its status
+  // pipe. Starting quiet-group observations here could finalize that record
+  // before exec success or the exact launch error is known. Use the same gate
+  // as NaturalExit above; an already committed stop/deadline reason must still
+  // permit cleanup while confirmation is pending, without replacing its reason.
+  if ((record.startup_handshake_complete || record.reason) && record.leader_observed && !record.pre_kill_group_observation_started &&
+      !record.post_kill_group_observation_started)
   {
     record.pre_kill_group_observation_started = true;
     process_natural_group_observation_locked(state, record, now);

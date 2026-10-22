@@ -1,6 +1,10 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
+#include "ava/process/environment.h"
 #include "ava/process/launch_protocol_posix.h"
+#include "ava/process/supervisor.h"
+#include "ava/process/supervisor_test_support.h"
+#include "ava/core/AnchorSet.h"
 
 #include <array>
 #include <cerrno>
@@ -8,13 +12,24 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
+#include <utility>
 #if !defined(_WIN32)
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#endif
+
+#ifndef AVA_FAKE_PROCESS_CHILD_PATH
+#define AVA_FAKE_PROCESS_CHILD_PATH ""
 #endif
 
 namespace {
@@ -304,6 +319,252 @@ void test_containment_checkpoint_sequence()
       "a Bash containment checkpoint is a protocol failure when the closed specification selected None");
 }
 
+// Releasing a copied monitor callback must precede Supervisor destruction, even
+// when a launch or snapshot throws. The latch itself outlives the supervisor.
+struct ReleaseMonitorHook final
+{
+  ava::process::Supervisor& supervisor;
+  CallbackLatch& observed;
+
+  ~ReleaseMonitorHook()
+  {
+    ava::process::testing::SupervisorTestAccess::clear_after_poll_snapshot_hook(supervisor);
+    observed.release();
+  }
+};
+
+std::string describe_launch_snapshot(ava::process::ProcessSnapshotV1 const& snapshot)
+{
+  std::string description = " records=" + std::to_string(snapshot.records.size()) + " live=" + std::to_string(snapshot.live_records);
+  for (auto const& record : snapshot.records)
+  {
+    description += " state=" + std::string(ava::process::to_string(record.state)) +
+                   " reason=" + (record.reason ? std::string(ava::process::to_string(*record.reason)) : "unset") +
+                   " kind=" + std::string(ava::process::to_string(record.exit_kind)) + " cleanup=" + std::string(ava::process::to_string(record.cleanup)) +
+                   " settlements=" + std::to_string(record.settlement_count) + " has_exit=" + std::to_string(record.has_exit_code) +
+                   " exit=" + std::to_string(record.exit_code);
+  }
+  return description;
+}
+
+template <typename Launch>
+void check_exit_before_launch_confirmation(std::string const& label, ava::process::ProcessRoleV1 role, ava::process::TerminationReasonV1 expected_reason,
+                                           std::string_view expected_protocol, std::string_view expected_stage, std::filesystem::path const& marker,
+                                           Launch launch)
+{
+  using namespace ava::process;
+  using testing::SupervisorTestAccess;
+  auto application = OwnerPathV1::application();
+  expect(application.has_value(), label + ": create application owner");
+  if (!application)
+    return;
+  auto operation = application->operation();
+  expect(operation.has_value(), label + ": create operation owner");
+  if (!operation)
+    return;
+
+  CallbackLatch observed;
+  Supervisor supervisor;
+  ReleaseMonitorHook release_on_exit{supervisor, observed};
+  auto reservation = supervisor.reserve(*operation, role, {.startup_timeout = 30s, .execution_deadline = std::nullopt});
+  expect(reservation.has_value(), label + ": reserve launch" + (reservation ? "" : ": " + reservation.error().format()));
+  if (!reservation)
+    return;
+
+  bool gate_released = false;
+  bool exit_observed = false;
+  ProcessSnapshotV1 held;
+  testing::ProcessMonitorSnapshot monitor;
+  bool const stop_before_confirmation = expected_reason == TerminationReasonV1::Canceled || expected_reason == TerminationReasonV1::DeadlineExpired;
+  SupervisorTestAccess::set_after_poll_snapshot_hook(supervisor, [&] {
+    auto const snapshot = supervisor.snapshot();
+    if (snapshot.records.size() == 1 && snapshot.records.front().has_exit_code)
+      observed.arrive_and_wait();
+  });
+  SupervisorTestAccess::set_after_gate_release_hook(supervisor, [&] {
+    ReleaseMonitorHook release_after_observation{supervisor, observed};
+    gate_released = true;
+    exit_observed = observed.wait_until(std::chrono::steady_clock::now() + 10s);
+    held = supervisor.snapshot();
+    monitor = SupervisorTestAccess::monitor_snapshot(supervisor);
+    if (stop_before_confirmation)
+    {
+      auto const stopped = supervisor.request_stop(*application, expected_reason, std::chrono::steady_clock::now() + 10s);
+      expect(stopped && stopped->newly_requested == 1, label + ": commit the competing stop before classifying exec");
+    }
+  });
+
+  // The monitor hook runs after process_record_locked, outside its mutex.
+  // has_exit_code proves an exact leader-exit observation, not merely a cycle
+  // count or a poll-set installation. Freezing that turn also makes an early
+  // natural group observation a deterministic failure, without a child sleep.
+  auto result = launch(supervisor, std::move(*reservation));
+  SupervisorTestAccess::clear_after_gate_release_hook(supervisor);
+  SupervisorTestAccess::clear_after_poll_snapshot_hook(supervisor);
+  observed.release();
+  expect(gate_released && exit_observed, label + ": gate released and leader exit observed before confirmation" + describe_launch_snapshot(held));
+  expect(held.records.size() == 1 && held.records.front().state != ProcessStateV1::Finished && !held.records.front().reason &&
+             held.records.front().settlement_count == 0 && monitor.counters.group_observations == 0,
+         label + ": unclassified launch cannot start natural finalization; group_observations=" + std::to_string(monitor.counters.group_observations) +
+             " quiet_proofs=" + std::to_string(monitor.counters.quiet_group_proofs) + describe_launch_snapshot(held));
+
+  bool const successful_exec = expected_reason == TerminationReasonV1::NaturalExit || stop_before_confirmation;
+  expect(result.has_value() == (successful_exec && !stop_before_confirmation),
+         label + ": exact launch result" + (result ? ": accepted" : ": " + result.error().format()));
+  if (result)
+  {
+    auto const status = supervisor.wait(*result, std::chrono::steady_clock::now() + 10s);
+    expect(status && status->reason == expected_reason && status->kind == ExitKindV1::Exited && status->has_exit_code && status->exit_code == 0,
+           label + ": successful fast exec publishes its exact final status" + (status ? "" : ": " + status.error().format()));
+  }
+  else
+  {
+    auto context_value = [&](std::string_view key) -> std::string_view {
+      for (auto const& context : result.error().context())
+        if (context.key == key)
+          return context.value;
+      return {};
+    };
+    if (stop_before_confirmation)
+      expect(context_value("reason") == to_string(expected_reason), label + ": the earlier stop remains authoritative: " + result.error().format());
+    else
+      expect(context_value("protocol") == expected_protocol && context_value("stage") == expected_stage,
+             label + ": exact child-error protocol/stage: " + result.error().format());
+  }
+
+  auto const settled = supervisor.snapshot();
+  auto const expected_kind = successful_exec ? ExitKindV1::Exited : ExitKindV1::LaunchError;
+  expect(settled.live_records == 0 && settled.records.size() == 1 && settled.records.front().state == ProcessStateV1::Finished &&
+             settled.records.front().reason == expected_reason && settled.records.front().exit_kind == expected_kind &&
+             settled.records.front().cleanup == CleanupStateV1::Complete && settled.records.front().settlement_count == 1 &&
+             settled.records.front().has_exit_code == successful_exec && !settled.records.front().has_signal_number,
+         label + ": one settlement with exact reason, exit kind and cleanup" + describe_launch_snapshot(settled));
+
+  bool const marker_exists = std::filesystem::exists(marker);
+  std::ifstream input(marker, std::ios::binary);
+  std::string const marker_text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+  expect(marker_exists == successful_exec && marker_text == (successful_exec ? "EXECUTED\n" : ""),
+         label + ": expected exec marker; exists=" + std::to_string(marker_exists) + " contents=" + marker_text);
+  expect(supervisor.shutdown(std::chrono::steady_clock::now() + 10s).complete, label + ": supervisor cleanup completes");
+}
+
+void test_exit_before_launch_confirmation()
+{
+  using namespace ava::process;
+  auto root = ScopedTestDirectory::create_unique(temp_root(), "launch-confirmation-race");
+  auto const invalid_image = root / "invalid-image";
+  {
+    std::ofstream output(invalid_image, std::ios::binary);
+    output << "not an executable image\n";
+    output.close();
+    expect(!output.fail(), "launch confirmation race: write invalid executable image");
+    if (output.fail())
+      return;
+  }
+  bool const executable = ::chmod(invalid_image.c_str(), 0700) == 0;
+  expect(executable, "launch confirmation race: make invalid image executable");
+  if (!executable)
+    return;
+
+  struct AdoptionCase
+  {
+    char const* name;
+    std::optional<AdoptionChildFailureStageV1> stage;
+    TerminationReasonV1 reason;
+    char const* protocol;
+    char const* protocol_stage;
+    bool eof = false;
+  };
+  std::array const cases{
+      AdoptionCase{"success", {}, TerminationReasonV1::NaturalExit, "", ""},
+      AdoptionCase{"eof", {}, TerminationReasonV1::LaunchFailed, "eof_before_exec_attempt", "", true},
+      AdoptionCase{"streams", AdoptionChildFailureStageV1::Streams, TerminationReasonV1::LaunchFailed, "child_reported", "streams"},
+      AdoptionCase{"working-directory", AdoptionChildFailureStageV1::WorkingDirectory, TerminationReasonV1::LaunchFailed, "child_reported",
+                   "working_directory"},
+      AdoptionCase{"containment", AdoptionChildFailureStageV1::Containment, TerminationReasonV1::LaunchFailed, "child_reported", "containment"},
+      AdoptionCase{"descriptor-validation", AdoptionChildFailureStageV1::DescriptorValidation, TerminationReasonV1::LaunchFailed, "child_reported",
+                   "descriptor_validation"},
+      AdoptionCase{"exec-failed", {}, TerminationReasonV1::ExecFailed, "child_reported", ""},
+  };
+  for (auto const& item : cases)
+  {
+    auto const marker = root / (std::string("adopt-") + item.name);
+    check_exit_before_launch_confirmation(
+        std::string("adopt/") + item.name, ProcessRoleV1::Bash, item.reason, item.protocol, item.protocol_stage, marker,
+        [&](Supervisor& supervisor, Reservation&& reservation) -> ava::core::Result<ProcessHandle> {
+          auto environment = validate_bash_environment_v1(kBashEnvironmentProfileIdV1, "/",
+                                                          {{"LANG", "C.UTF-8"},
+                                                           {"LC_ALL", "C.UTF-8"},
+                                                           {"LC_CTYPE", "C.UTF-8"},
+                                                           {"TZ", "UTC"},
+                                                           {"USER", "ava-test"},
+                                                           {"LOGNAME", "ava-test"},
+                                                           {"PWD", "/"},
+                                                           {"PATH", "/usr/bin:/bin"},
+                                                           {"HOME", root.path().string()},
+                                                           {"XDG_CONFIG_HOME", root.path().string()},
+                                                           {"XDG_CACHE_HOME", root.path().string()},
+                                                           {"XDG_DATA_HOME", root.path().string()},
+                                                           {"XDG_STATE_HOME", root.path().string()},
+                                                           {"TMPDIR", root.path().string()}});
+          if (!environment)
+            return std::unexpected(environment.error());
+          auto anchors = ava::core::AnchorSet::open({"/"});
+          if (!anchors)
+            return std::unexpected(anchors.error());
+          auto cwd = mint_anchored_working_directory(std::move(*anchors), "/");
+          if (!cwd)
+            return std::unexpected(cwd.error());
+          auto const image = item.reason == TerminationReasonV1::ExecFailed ? invalid_image : std::filesystem::path(AVA_FAKE_PROCESS_CHILD_PATH);
+          auto gate = supervisor.begin_secure_adoption(
+              std::move(reservation),
+              {.environment = std::move(*environment), .argv = {image.string(), "exec-marker", marker.string()}, .cwd = "/", .anchored_cwd = std::move(*cwd)});
+          if (!gate)
+            return std::unexpected(gate.error());
+          int const descriptor = ::open(image.c_str(), O_RDONLY | O_CLOEXEC);
+          if (descriptor < 0)
+            return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "cannot open race fixture executable"));
+          auto branch = gate->fork_leader();
+          if (branch && *branch == AdoptionForkBranchV1::Child)
+          {
+            if (item.eof)
+              _exit(0);
+            if (item.stage)
+              gate->child_launch_failed(*item.stage, EACCES);
+            gate->child_exec_descriptor(descriptor);
+          }
+          static_cast<void>(::close(descriptor));
+          if (!branch)
+            return std::unexpected(branch.error());
+          return supervisor.adopt(std::move(*gate));
+        });
+  }
+
+  for (auto reason : {TerminationReasonV1::NaturalExit, TerminationReasonV1::LaunchFailed, TerminationReasonV1::ExecFailed, TerminationReasonV1::Canceled,
+                      TerminationReasonV1::DeadlineExpired})
+  {
+    auto const name = std::string(to_string(reason));
+    auto const marker = root / ("spawn-" + name);
+    check_exit_before_launch_confirmation(
+        "spawn/" + name, ProcessRoleV1::Plugin, reason, reason == TerminationReasonV1::NaturalExit ? "" : "child_reported",
+        reason == TerminationReasonV1::LaunchFailed ? "working_directory" : "", marker,
+        [&](Supervisor& supervisor, Reservation&& reservation) -> ava::core::Result<ProcessHandle> {
+          auto environment = make_plugin_environment_v1("/");
+          if (!environment)
+            return std::unexpected(environment.error());
+          if (reason == TerminationReasonV1::LaunchFailed)
+            testing::SupervisorTestAccess::fail_next_common_child_working_directory(supervisor);
+          auto const image = reason == TerminationReasonV1::ExecFailed ? invalid_image.string() : std::string(AVA_FAKE_PROCESS_CHILD_PATH);
+          auto child =
+              supervisor.spawn(std::move(reservation),
+                               {.executable = image, .argv = {image, "exec-marker", marker.string()}, .environment = std::move(*environment), .cwd = "/"});
+          if (!child)
+            return std::unexpected(child.error());
+          return std::move(child->handle);
+        });
+  }
+}
+
 #endif
 
 }  // namespace
@@ -320,5 +581,6 @@ void run_process_launch_protocol_posix_tests()
   test_deadline_crossing_during_parent_cancellation_callback();
   test_malformed_truncated_and_out_of_order_protocol();
   test_containment_checkpoint_sequence();
+  test_exit_before_launch_confirmation();
 #endif
 }

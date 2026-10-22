@@ -92,6 +92,9 @@ class SupervisorTestAccess final
  public:
   static void set_after_fork_before_release_hook(Supervisor& supervisor, std::function<void()> hook);
   static void clear_after_fork_before_release_hook(Supervisor& supervisor) noexcept;
+  // Runs on the launching thread after releasing the child, before classifying
+  // exec confirmation, and without the supervisor mutex. May block the launcher
+  // while the monitor independently observes the child.
   static void set_after_gate_release_hook(Supervisor& supervisor, std::function<void()> hook);
   static void clear_after_gate_release_hook(Supervisor& supervisor) noexcept;
   static void set_after_completion_channel_create_hook(Supervisor& supervisor, std::function<void()> hook);
@@ -105,6 +108,11 @@ class SupervisorTestAccess final
   [[nodiscard]] static bool wait_for_monitor_cycle(Supervisor& supervisor, std::uint64_t previous_cycle, ProcessDeadline deadline) noexcept;
   [[nodiscard]] static std::size_t retained_native_child_count(Supervisor const& supervisor) noexcept;
   static void interrupt_next_monitor_poll(Supervisor& supervisor) noexcept;
+  // Runs on the monitor thread after processing records and constructing its
+  // next poll batch, outside the supervisor mutex and before entering poll.
+  // A snapshot taken here can acknowledge an observed record predicate; this
+  // hook does not acknowledge that the next poll has been entered. Clearing a
+  // hook does not release an invocation already blocked in the callback.
   static void set_after_poll_snapshot_hook(Supervisor& supervisor, std::function<void()> hook);
   static void clear_after_poll_snapshot_hook(Supervisor& supervisor) noexcept;
 
