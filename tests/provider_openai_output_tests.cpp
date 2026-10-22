@@ -647,6 +647,53 @@ void test_openai_incremental_sse_parser()
            "incremental OpenAI SSE replaces provider error messages with fixed local diagnostics");
     expect(events[5].type == ava::provider::StreamEventType::Done, "incremental OpenAI SSE emits done on finish");
   }
+
+  // Byte-sized chunks split CRLF pairs and UTF-8 code points as well as JSON.
+  // Comments and multi-line data fields must not change the emitted content.
+  std::string const framed =
+      ": keepalive\r\n"
+      "data:{\"type\":\"response.output_text.delta\",\"delta\":\"café 🌍\"}\r\n\r\n"
+      ": another comment\r\n"
+      "data: {\"type\":\"response.output_text.delta\",\r\n"
+      "data: \"delta\":\"!\"}\r\n\r\n"
+      "data:[DONE]\r\n\r\n"
+      "data: [DONE]\r\n\r\n";
+  auto const whole = ava::provider::parse_openai_sse(framed);
+  if (!ava::tests::require(whole.has_value() && whole->size() == 3, "OpenAI framing fixture emits exactly two text deltas and one terminal"))
+    return;
+  ava::tests::expect_all("OpenAI framing semantics are independent of chunking",
+                         {{"UTF-8 text", (*whole)[0].type == ava::provider::StreamEventType::TextDelta && (*whole)[0].text == "café 🌍"},
+                          {"multiline data", (*whole)[1].type == ava::provider::StreamEventType::TextDelta && (*whole)[1].text == "!"},
+                          {"sentinel terminal", whole->back().type == ava::provider::StreamEventType::Done}});
+  for (std::size_t const chunk_size : {1U, 2U, 3U, 7U})
+  {
+    ava::provider::OpenAIStreamParser fragmented;
+    std::vector<ava::provider::StreamEvent> actual;
+    auto const label = "OpenAI SSE chunk size " + std::to_string(chunk_size);
+    for (std::size_t offset = 0; offset < framed.size(); offset += chunk_size)
+    {
+      auto const parsed = fragmented.append(std::string_view(framed).substr(offset, chunk_size));
+      if (!ava::tests::require(parsed.has_value(), label + " parses each fragment"))
+        return;
+      actual.insert(actual.end(), parsed->begin(), parsed->end());
+    }
+    auto const final = fragmented.finish();
+    if (!ava::tests::require(final.has_value(), label + " finishes"))
+      return;
+    actual.insert(actual.end(), final->begin(), final->end());
+    ava::tests::expect_eq(actual.size(), whole->size(), label + " preserves the exact event count");
+    for (std::size_t index = 0; index < std::min(actual.size(), whole->size()); ++index)
+    {
+      auto const& expected = (*whole)[index];
+      auto const& observed = actual[index];
+      ava::tests::expect_all(label + " preserves event " + std::to_string(index), {{"type", observed.type == expected.type},
+                                                                                   {"text", observed.text == expected.text},
+                                                                                   {"terminal reason", observed.finish_reason == expected.finish_reason},
+                                                                                   {"no tool id", observed.tool_call_id.empty()},
+                                                                                   {"no tool name", observed.tool_name.empty()},
+                                                                                   {"no error", observed.error_message.empty()}});
+    }
+  }
 }
 
 }  // namespace ava::tests::provider_openai_suite

@@ -252,6 +252,13 @@ void send_callback_response(int fd, std::string_view body)
 
 ava::core::Result<OAuthCallbackResult> wait_for_oauth_callback(std::string_view expected_state, std::function<bool()> const& cancel_requested)
 {
+  return detail::wait_for_oauth_callback(expected_state, cancel_requested, {});
+}
+
+namespace detail {
+ava::core::Result<OAuthCallbackResult> wait_for_oauth_callback(std::string_view expected_state, std::function<bool()> const& cancel_requested,
+                                                               OAuthCallbackOptions const& options)
+{
   ScopedSocket const server(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
   if (server.get() < 0)
   {
@@ -265,11 +272,11 @@ ava::core::Result<OAuthCallbackResult> wait_for_oauth_callback(std::string_view 
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  address.sin_port = htons(1455);
+  address.sin_port = htons(options.port);
   if (::bind(server.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
   {
     auto error = connect_error(ava::core::ErrorCategory::Io, "failed to bind OAuth callback server");
-    error.with_context("address", "127.0.0.1:1455");
+    error.with_context("address", "127.0.0.1:" + std::to_string(options.port));
     error.with_context("cause", errno_message());
     return std::unexpected(std::move(error));
   }
@@ -279,10 +286,23 @@ ava::core::Result<OAuthCallbackResult> wait_for_oauth_callback(std::string_view 
     error.with_context("cause", errno_message());
     return std::unexpected(std::move(error));
   }
+  if (options.listener_ready)
+  {
+    socklen_t length = sizeof(address);
+    if (::getsockname(server.get(), reinterpret_cast<sockaddr*>(&address), &length) != 0)
+    {
+      auto error = connect_error(ava::core::ErrorCategory::Io, "failed to inspect OAuth callback server");
+      error.with_context("cause", errno_message());
+      return std::unexpected(std::move(error));
+    }
+    options.listener_ready(ntohs(address.sin_port));
+  }
 
   auto const deadline = std::chrono::steady_clock::now() + std::chrono::minutes(5);
   while (std::chrono::steady_clock::now() < deadline)
   {
+    if (options.deadline && std::chrono::steady_clock::now() >= *options.deadline)
+      break;
     if (cancel_requested && cancel_requested())
     {
       return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "OpenAI OAuth login cancelled"));
@@ -312,7 +332,7 @@ ava::core::Result<OAuthCallbackResult> wait_for_oauth_callback(std::string_view 
     }
 
     auto const client_deadline = std::min(deadline, std::chrono::steady_clock::now() + std::chrono::seconds(5));
-    auto request = read_http_request_with_deadline(client.get(), client_deadline);
+    auto request = read_http_request_with_deadline(client.get(), options.deadline ? std::min(client_deadline, *options.deadline) : client_deadline);
     if (!request)
     {
       send_callback_response(client.get(), "AVA could not read this OAuth callback. Return to the terminal.\n");
@@ -343,5 +363,6 @@ ava::core::Result<OAuthCallbackResult> wait_for_oauth_callback(std::string_view 
   }
   return std::unexpected(connect_error(ava::core::ErrorCategory::Io, "timed out waiting for OAuth callback"));
 }
+}  // namespace detail
 
 }  // namespace ava::app

@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/app/runtime_model.h"
 #include "ava/config/builtin_generic_providers.h"
@@ -248,9 +249,11 @@ void test_request_body_and_auth_contracts()
   }
 }
 
+ava::config::XdgPaths empty_catalog_paths(std::filesystem::path const& root);
+
 void test_model_resolution_and_selector_visibility()
 {
-  auto paths = ava::config::xdg_paths();
+  auto const paths = empty_catalog_paths(create_empty_root("builtin-model-resolution"));
   auto catalog = ava::provider::ProviderCatalog::build_builtins_only();
   for (auto const& model_spec : ava::config::builtin_generic_model_specs())
   {
@@ -387,6 +390,7 @@ void test_generic_base_url_override_validation_and_pinning()
 
 void run_provider_builtin_generic_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("builtin-generic-suite-");
   test_six_providers_unique_and_registered();
   test_endpoints_env_and_protocol_metadata();
   test_model_metadata_contracts();

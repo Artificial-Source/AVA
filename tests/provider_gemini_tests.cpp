@@ -1,4 +1,7 @@
+#include "tests/support/agent_loop_test_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/agent/agent_loop_session.h"
@@ -12,7 +15,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -223,6 +225,50 @@ void test_gemini_response_parsing()
              error_text.find("GEMINI_HTTP_KEY_CANARY") == std::string::npos && error_text.find("GEMINI_HTTP_NESTED_CANARY") == std::string::npos &&
              error_text.find("GEMINI_HTTP_OUTER_CANARY") == std::string::npos,
          "Gemini HTTP errors expose only fixed local status and classification diagnostics");
+  // Prompt-level blocks carry no content; candidate-level refusals can carry a
+  // visible refusal. Both must remain semantic refusals, never successful work.
+  struct RefusalCase
+  {
+    char const* name;
+    char const* body;
+    char const* text;
+  };
+  for (
+      auto const& refusal :
+      {RefusalCase{"prompt SAFETY", R"({"promptFeedback":{"blockReason":"SAFETY"}})", ""},
+       RefusalCase{
+           "prompt SAFETY suppresses candidate tools",
+           R"({"promptFeedback":{"blockReason":"SAFETY"},"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"blocked.txt"}}}]}}]})",
+           ""},
+       RefusalCase{"candidate SAFETY", R"({"candidates":[{"content":{"parts":[{"text":"Cannot comply."}]},"finishReason":"SAFETY"}]})", "Cannot comply."},
+       RefusalCase{"candidate RECITATION", R"({"candidates":[{"content":{"parts":[{"text":"Cannot comply."}]},"finishReason":"RECITATION"}]})",
+                   "Cannot comply."}})
+  {
+    for (bool const stream : {false, true})
+    {
+      auto const body = std::string(refusal.body);
+      auto const blocked = provider.parse_response({.status_code = 200, .headers = {}, .body = stream ? "data: " + body + "\n\n" : body}, stream);
+      auto const label = std::string("Gemini ") + (stream ? "SSE " : "non-stream ") + refusal.name;
+      if (!ava::tests::require(blocked.has_value(), label + " parses"))
+        continue;
+      auto const turn = ava::agent::parse_assistant_turn(*blocked, {});
+      ava::tests::expect_all(
+          label + " cannot become an empty completed answer or a partial tool call",
+          {{"one terminal", std::ranges::count_if(*blocked, [](auto const& event) { return event.type == ava::provider::StreamEventType::Done; }) == 1},
+           {"refusal terminal", !blocked->empty() && blocked->back().type == ava::provider::StreamEventType::Done &&
+                                    blocked->back().finish_reason == ava::provider::ProviderFinishReason::Refusal},
+           {"no tool lifecycle", std::ranges::none_of(*blocked,
+                                                      [](auto const& event) {
+                                                        return event.type == ava::provider::StreamEventType::ToolCallStart ||
+                                                               event.type == ava::provider::StreamEventType::ToolCallDelta ||
+                                                               event.type == ava::provider::StreamEventType::ToolCallEnd;
+                                                      })},
+           {"assistant turn refusal", turn && turn->finish_reason == ava::provider::ProviderFinishReason::Refusal},
+           {"no dispatchable tools", turn && turn->tool_calls.empty()}});
+      if (turn)
+        ava::tests::expect_eq(turn->text, std::string(refusal.text), label + " preserves only the visible refusal content");
+    }
+  }
 }
 
 void test_gemini_sse_parsing_and_fake_transport()
@@ -636,32 +682,28 @@ void test_gemini_default_model_signature_history_roundtrip()
 {
   auto const registry = ava::config::builtin_model_registry();
   auto const model = ava::config::find_model(registry, "gemini", "gemini-2.5-pro");
-  expect(model.has_value(), "Gemini default-model replay fixture uses the real builtin model");
-  if (!model)
+  if (!ava::tests::require(model.has_value(), "Gemini default-model replay fixture uses the real builtin model"))
     return;
-  auto const root = create_empty_root("gemini-default-model-signature-replay");
-  auto const workspace = root / "workspace";
-  std::filesystem::create_directories(workspace);
-  {
-    std::ofstream note(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-    note << "signed tool content";
-  }
-  ava::session::SessionStore store({.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "gemini-default"});
-  auto options_for = [&](ava::session::SessionStore const& session) {
-    return ava::agent::AgentLoopOptions{.workspace_dir = workspace,
-                                        .model = {.provider_id = model->provider_id,
-                                                  .model_id = model->model_id,
-                                                  .system_prompt = "system",
-                                                  .supports_tools = model->supports_tools.value_or(false),
-                                                  .supports_streaming = model->supports_streaming.value_or(false),
-                                                  .input_modalities = model->input_modalities,
-                                                  .api_family = model->api_family,
-                                                  .reasoning_format = model->reasoning_format,
-                                                  .compatibility_quirks = model->compatibility_quirks},
-                                        .access_token = "gemini-key",
-                                        .append_entry = append_route_for_test(session),
-                                        .append_batch = append_batch_route_for_test(session),
-                                        .session_read_authority = read_authority_for_test(session)};
+  agent_loop_test::AgentLoopFixture fixture("gemini-default");
+  auto const& workspace = fixture.workspace;
+  auto& store = fixture.store;
+  ava::tests::write_test_file(workspace / "note.txt", "signed tool content");
+  auto options_for = [&] {
+    auto options = fixture.options({.provider_id = model->provider_id,
+                                    .model_id = model->model_id,
+                                    .system_prompt = "system",
+                                    .stream = true,
+                                    .supports_tools = model->supports_tools.value_or(false),
+                                    .supports_streaming = model->supports_streaming.value_or(false),
+                                    .input_modalities = model->input_modalities,
+                                    .max_output_tokens = std::nullopt,
+                                    .reasoning = std::nullopt,
+                                    .pricing = std::nullopt,
+                                    .api_family = model->api_family,
+                                    .reasoning_format = model->reasoning_format,
+                                    .compatibility_quirks = model->compatibility_quirks});
+    options.access_token = "gemini-key";
+    return options;
   };
   ava::provider::GeminiProvider const provider("https://gemini.example.test");
   ava::tests::FakeTransport transport({{.status_code = 200,
@@ -675,12 +717,16 @@ void test_gemini_default_model_signature_history_roundtrip()
   {
     // Release the first runtime's exclusive session lease before reopening it
     // with a fresh loop and fresh append/read authorities.
-    ava::agent::AgentLoop loop(options_for(store));
+    ava::agent::AgentLoop loop(options_for());
     auto const result = loop.run_turn("Read note.txt", store, provider, transport);
-    expect(result && result->final_text == "Read it." && result->tool_calls == 1 && result->provider_iterations == 2,
-           "Gemini builtin model completes a signed tool continuation using runtime provenance defaults");
-    expect(transport.requests().size() == 2, "Gemini builtin model makes both initial and history-backed continuation requests");
-    if (!result || transport.requests().size() != 2)
+    if (!ava::tests::require(result.has_value(), result ? "Gemini signed tool continuation runs" : result.error().format()))
+      return;
+    ava::tests::expect_all("Gemini builtin model completes a signed tool continuation using runtime provenance defaults",
+                           {{"final text", result->final_text == "Read it."},
+                            {"one tool call", result->tool_calls == 1},
+                            {"two provider iterations", result->provider_iterations == 2}});
+    ava::tests::expect_eq(transport.requests().size(), std::size_t{2}, "Gemini builtin model makes both initial and history-backed continuation requests");
+    if (transport.requests().size() != 2)
       return;
     auto const& continuation = transport.requests()[1].body;
     expect(continuation.find(
@@ -690,7 +736,7 @@ void test_gemini_default_model_signature_history_roundtrip()
            "Gemini builtin-model continuation replays the matching signature after real assistant persistence, tool dispatch, and history reconstruction");
   }
 
-  auto restarted = ava::session::SessionStore::open(workspace, "gemini-default", root / "sessions");
+  auto restarted = ava::session::SessionStore::open(workspace, store.session_id(), fixture.root / "sessions");
   expect(restarted.has_value(), "Gemini signed default-model history reopens from disk");
   if (!restarted)
     return;
@@ -698,7 +744,7 @@ void test_gemini_default_model_signature_history_roundtrip()
       {{.status_code = 200,
         .headers = {},
         .body = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Remembered.\"}]},\"finishReason\":\"STOP\"}]}\n\n"}});
-  ava::agent::AgentLoop resumed_loop(options_for(*restarted));
+  ava::agent::AgentLoop resumed_loop(options_for());
   auto const resumed = resumed_loop.run_turn("What did you read?", *restarted, provider, resumed_transport);
   expect(resumed && resumed->final_text == "Remembered." && resumed_transport.requests().size() == 1 &&
              resumed_transport.requests().front().body.find("\"thoughtSignature\":\"PRIVATE_DEFAULT_SIGNATURE\"") != std::string::npos &&
@@ -790,6 +836,7 @@ void test_gemini_stream_parser_error_reset()
 
 void run_provider_gemini_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("gemini-suite-");
   test_gemini_profiles_and_registry();
   test_gemini_provider_contract();
   test_gemini_requests_disable_redirects();

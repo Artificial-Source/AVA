@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/provider_openai_test_suite.h"
+#include "tests/support/test_env.h"
 
 namespace ava::tests::provider_openai_suite {
 
@@ -17,6 +18,7 @@ void test_openai_provider_contract()
 
 void run_provider_openai_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("openai-suite-");
   using namespace ava::tests::provider_openai_suite;
 
   test_openai_provider_contract();

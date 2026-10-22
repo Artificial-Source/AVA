@@ -1,4 +1,7 @@
 #include "sys.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/diagnostics/artifact_store.h"
 #include "ava/diagnostics/records.h"
@@ -26,6 +29,7 @@
 #include "debug.h"
 
 namespace {
+using ava::tests::write_test_file;
 
 void test_closed_failure_serializers()
 {
@@ -200,12 +204,14 @@ std::shared_ptr<ava::core::AnchorSet> diagnostic_anchors(ava::config::XdgPaths c
   return anchors ? std::move(*anchors) : nullptr;
 }
 
-void write_test_file(std::filesystem::path const& path, std::string_view body)
+std::vector<std::optional<int>> collect_diagnostic_children(std::vector<ava::tests::ScopedChild>& children)
 {
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file.write(body.data(), static_cast<std::streamsize>(body.size()));
-  file.close();
-  static_cast<void>(::chmod(path.c_str(), 0600));
+  std::vector<std::optional<int>> statuses;
+  statuses.reserve(children.size());
+  auto const deadline = ava::tests::now_plus_seconds(4);
+  for (auto& child : children)
+    statuses.push_back(child.wait_until(deadline));
+  return statuses;
 }
 
 ava::diagnostics::DoctorReport sample_doctor_report()
@@ -417,7 +423,8 @@ void test_trace_counter_writes_aggregate_sequentially_concurrently_and_saturate(
   auto const concurrent_paths = diagnostic_paths(concurrent_root);
   auto const concurrent_anchors = diagnostic_anchors(concurrent_paths);
   constexpr unsigned kProcesses = 8;
-  std::array<pid_t, kProcesses> children{};
+  std::vector<ava::tests::ScopedChild> children;
+  children.reserve(kProcesses);
   for (unsigned index = 0; index < kProcesses; ++index)
   {
     auto const child = ::fork();
@@ -438,13 +445,15 @@ void test_trace_counter_writes_aggregate_sequentially_concurrently_and_saturate(
       auto const status = ava::diagnostics::write_trace_counter_snapshot(concurrent_paths, *concurrent_anchors, contribution);
       ::_exit(status == ava::diagnostics::ArtifactWriteStatus::Success ? 0 : 1);
     }
-    children[index] = child;
+    if (child > 0)
+      children.emplace_back(child);
   }
-  bool children_succeeded = true;
-  for (auto const child : children)
+  bool children_succeeded = children.size() == kProcesses;
+  for (auto const& status : collect_diagnostic_children(children))
   {
-    int status = 0;
-    children_succeeded = children_succeeded && ::waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    bool const succeeded = status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0;
+    expect(succeeded, "concurrent trace-counter child contributes and is reaped");
+    children_succeeded = succeeded && children_succeeded;
   }
   auto concurrent = ava::diagnostics::read_trace_counter_snapshot(concurrent_paths, *concurrent_anchors);
   expect(children_succeeded && concurrent.record && concurrent.record->captured_at == 8 && concurrent.record->runtime_starts == 36 &&
@@ -454,6 +463,39 @@ void test_trace_counter_writes_aggregate_sequentially_concurrently_and_saturate(
              concurrent.record->writer_health.writer_failures == 324 && concurrent.record->writer_health.bytes_written == 360,
          "blocking interprocess lock preserves every concurrent process contribution exactly once");
   std::filesystem::remove_all(concurrent_root);
+}
+
+void test_failed_diagnostic_child_does_not_prevent_sibling_reaping()
+{
+  std::vector<ava::tests::ScopedChild> children;
+  children.reserve(3);
+  std::array<pid_t, 3> pids{};
+  for (int index = 0; index < 3; ++index)
+  {
+    auto const pid = ::fork();
+    if (!ava::tests::require(pid >= 0, "diagnostic cleanup regression child starts"))
+      return;
+    if (pid == 0)
+      ::_exit(index == 0 ? 1 : 0);
+    children.emplace_back(pid);
+    pids[index] = pid;
+  }
+  unsigned failures_seen = 0;
+  unsigned successes_seen = 0;
+  auto const statuses = collect_diagnostic_children(children);
+  for (std::size_t index = 0; index < statuses.size(); ++index)
+  {
+    auto const& status = statuses[index];
+    auto const pid = pids[index];
+    if (!ava::tests::require(status && WIFEXITED(*status), "every diagnostic sibling is collected despite the first failure"))
+      continue;
+    failures_seen += WEXITSTATUS(*status) == 1;
+    successes_seen += WEXITSTATUS(*status) == 0;
+    errno = 0;
+    expect(::waitpid(pid, nullptr, WNOHANG) == -1 && errno == ECHILD, "diagnostic sibling is no longer waitable after collection");
+  }
+  ava::tests::expect_all("diagnostic child collection retains every outcome",
+                         {{"one intended failure", failures_seen == 1}, {"two successful siblings", successes_seen == 2}});
 }
 
 void test_trace_counter_lock_rejects_unsafe_targets_without_erasing_evidence()
@@ -496,16 +538,18 @@ void test_trace_counter_lock_rejects_unsafe_targets_without_erasing_evidence()
       write_test_file(lock, "lock");
       static_cast<void>(::chmod(lock.c_str(), 0644));
     }
-    auto const started = std::chrono::steady_clock::now();
-    auto const status = ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, baseline);
-    auto const elapsed = std::chrono::steady_clock::now() - started;
+    auto const child_status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+      auto const status = ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, baseline);
+      return status == ava::diagnostics::ArtifactWriteStatus::UnsafeStorage ? 0 : 1;
+    });
+    ava::tests::expect_child_success(child_status, "unsafe counter-lock " + fixture + " is rejected under a parent watchdog");
     std::ifstream input(evidence, std::ios::binary);
     std::string const after((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     bool temporary_found = false;
     for (auto const& entry : std::filesystem::directory_iterator(diagnostics))
       temporary_found = temporary_found || entry.path().filename().string().starts_with(".diagnostic-tmp-");
-    expect(status == ava::diagnostics::ArtifactWriteStatus::UnsafeStorage && elapsed < std::chrono::seconds(1) && after == original && !temporary_found,
-           "unsafe counter-lock " + fixture + " fails nonblockingly without erasing evidence or leaving a partial temporary");
+    ava::tests::expect_all("unsafe counter-lock " + fixture + " preserves evidence without leaving partial temporaries",
+                           {{"original evidence", after == original}, {"no partial temporary", !temporary_found}});
     std::filesystem::remove_all(root);
   }
 }
@@ -850,6 +894,70 @@ void test_summary_refusal_counter_merges_without_event_loss()
   std::filesystem::remove_all(root);
 }
 
+void test_diagnostic_disk_full_preserves_previous_record()
+{
+  auto const root = unique_diagnostic_root("diagnostic_disk_full");
+  auto const paths = diagnostic_paths(root);
+  auto const anchors = diagnostic_anchors(paths);
+  if (!ava::tests::require(static_cast<bool>(anchors), "disk-full fixture opens diagnostic anchors"))
+    return;
+  ava::diagnostics::LastFailureRecord const initial{
+      .recorded_at = 1, .failure = ava::diagnostics::external_failure(ava::diagnostics::ComponentClass::Provider), .occurrences = 1};
+  if (!ava::tests::require(ava::diagnostics::write_last_failure_record(paths, *anchors, initial) == ava::diagnostics::ArtifactWriteStatus::Success,
+                           "disk-full fixture persists the initial record"))
+    return;
+  auto replacement = initial;
+  replacement.recorded_at = 2;
+  auto const file = paths.ava_state_dir / "diagnostics" / "last-failure-v1.json";
+  auto const before = ava::tests::read_session_test_binary_file(file);
+  auto const status = ava::tests::run_in_child_with_syscall_errno(SYS_write, std::nullopt, ENOSPC, [&] {
+    auto const result = ava::diagnostics::write_last_failure_record(paths, *anchors, replacement);
+    return result == ava::diagnostics::ArtifactWriteStatus::IoFailure ? 0 : 1;
+  });
+  if (ava::tests::expect_child_success(status, "diagnostic artifact writer reports ENOSPC as I/O failure") != ava::tests::ChildTestOutcome::Passed)
+    return;
+  ava::tests::expect_eq(ava::tests::read_session_test_binary_file(file), before, "disk-full replacement leaves previous diagnostic bytes intact");
+  bool temporary_found = false;
+  for (auto const& entry : std::filesystem::directory_iterator(file.parent_path()))
+    temporary_found = temporary_found || entry.path().filename().string().starts_with(".diagnostic-tmp-");
+  expect(!temporary_found, "disk-full diagnostic replacement removes its unpublished temporary");
+}
+
+void test_diagnostic_creation_and_replacement_ignore_ambient_umask()
+{
+  for (mode_t const mask : {mode_t{0000}, mode_t{0077}})
+  {
+    auto const root = unique_diagnostic_root("diagnostic_umask_" + std::to_string(mask));
+    auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+      static_cast<void>(::umask(mask));
+      auto const paths = diagnostic_paths(root);
+      auto const anchors = diagnostic_anchors(paths);
+      if (!anchors)
+        return 1;
+      ava::diagnostics::LastFailureRecord record{
+          .recorded_at = 1, .failure = ava::diagnostics::external_failure(ava::diagnostics::ComponentClass::Provider), .occurrences = 1};
+      auto const file = paths.ava_state_dir / "diagnostics" / "last-failure-v1.json";
+      for (int pass = 0; pass < 2; ++pass)
+      {
+        record.recorded_at = pass + 1;
+        if (ava::diagnostics::write_last_failure_record(paths, *anchors, record) != ava::diagnostics::ArtifactWriteStatus::Success)
+          return 2;
+        struct stat file_status{};
+        struct stat directory_status{};
+        if (::stat(file.c_str(), &file_status) != 0 || ::stat(file.parent_path().c_str(), &directory_status) != 0 || (file_status.st_mode & 0777) != 0600 ||
+            (directory_status.st_mode & 0777) != 0700 || file_status.st_nlink != 1)
+          return 3;
+        auto const loaded = ava::diagnostics::read_last_failure_record(paths, *anchors);
+        if (!loaded.record || loaded.record->recorded_at != pass + 1)
+          return 4;
+      }
+      return 0;
+    });
+    ava::tests::expect_child_success(status, "diagnostic creation and replacement stay private under umask " + std::to_string(mask));
+    std::filesystem::remove_all(root);
+  }
+}
+
 }  // namespace
 
 void run_diagnostics_tests()
@@ -860,7 +968,10 @@ void run_diagnostics_tests()
   test_historical_external_failure_projection_is_safe();
   test_phase2_typed_serialization_and_strict_parsing();
   test_private_artifact_storage_and_atomic_replacement();
+  test_diagnostic_disk_full_preserves_previous_record();
+  test_diagnostic_creation_and_replacement_ignore_ambient_umask();
   test_trace_counter_writes_aggregate_sequentially_concurrently_and_saturate();
+  test_failed_diagnostic_child_does_not_prevent_sibling_reaping();
   test_trace_counter_lock_rejects_unsafe_targets_without_erasing_evidence();
   test_private_artifact_reader_rejects_unsafe_and_malformed_files();
   test_support_publication_is_unique_private_and_concurrent();

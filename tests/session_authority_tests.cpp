@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/session_test_declarations.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/record.h"
@@ -21,6 +22,7 @@
 #include <new>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -92,6 +94,9 @@ void test_assistant_output_append_target_state_and_batches()
     auto persistent_lease = persistent ? ava::session::SessionLease::create_and_acquire(persistent->session_path())
                                        : ava::core::Result<ava::session::SessionLease>(std::unexpected(persistent.error()));
     auto ephemeral = ava::session::SessionStore::create_ephemeral(workspace / "raw-v4");
+    if (!ava::tests::require(persistent.has_value() && persistent_lease.has_value() && ephemeral.has_value(),
+                             "raw append fixture creates persistent and ephemeral stores with a lease"))
+      return;
     auto persistent_raw = persistent && persistent_lease ? persistent->append(*persistent_lease, item("raw-persistent", "raw-turn", 0, "raw-item", 0))
                                                          : ava::core::VoidResult(std::unexpected(persistent.error()));
     auto ephemeral_raw = ephemeral ? ephemeral->append_ephemeral(item("raw-ephemeral", "raw-ephemeral-turn", 0, "raw-ephemeral-item", 0))
@@ -106,7 +111,7 @@ void test_assistant_output_append_target_state_and_batches()
     auto destination = ava::session::SessionStore::create(workspace, sessions);
     auto lease = destination ? ava::session::SessionLease::create_and_acquire(destination->session_path())
                              : ava::core::Result<ava::session::SessionLease>(std::unexpected(destination.error()));
-    if (destination && lease)
+    if (ava::tests::require(destination.has_value() && lease.has_value(), "validated-copy fixture creates its leased destination"))
     {
       std::vector<ava::session::SessionEntry> copied{ordinary("copy-user"), item("copy-output", "copy-turn", 0, "copy-provider-item", 0),
                                                      commit("copy-commit", "copy-turn", 1)};
@@ -122,11 +127,11 @@ void test_assistant_output_append_target_state_and_batches()
     auto store = ava::session::SessionStore::create(workspace, sessions);
     auto lease = store ? ava::session::SessionLease::create_and_acquire(store->session_path())
                        : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
-    if (store && lease)
+    if (ava::tests::require(store.has_value() && lease.has_value(), "stale-target fixture creates its leased store"))
     {
       auto first_target = ava::session::SessionAppendTarget::create_persistent(*store, *lease, ava::session::SessionReadLimits{});
       auto stale_target = ava::session::SessionAppendTarget::create_persistent(*store, *lease, ava::session::SessionReadLimits{});
-      if (first_target && stale_target)
+      if (ava::tests::require(first_target.has_value() && stale_target.has_value(), "stale-target fixture creates both append targets"))
       {
         auto first = (*first_target)->append_batch({commit("stale-first", "stale-turn", 0)});
         auto stale = (*stale_target)->append_batch({commit("stale-duplicate", "stale-turn", 0)});
@@ -150,7 +155,7 @@ void test_assistant_output_append_target_state_and_batches()
     auto store = ava::session::SessionStore::create(workspace, sessions);
     auto lease = store ? ava::session::SessionLease::create_and_acquire(store->session_path())
                        : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
-    if (store && lease)
+    if (ava::tests::require(store.has_value() && lease.has_value(), "partial-target fixture creates its leased store"))
     {
       bool fail_first_write = true;
       std::size_t writes = 0;
@@ -178,12 +183,12 @@ void test_assistant_output_append_target_state_and_batches()
     auto store = ava::session::SessionStore::create(workspace, sessions);
     auto lease = store ? ava::session::SessionLease::create_and_acquire(store->session_path())
                        : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
-    if (store && lease)
+    if (ava::tests::require(store.has_value() && lease.has_value(), "staged-target fixture creates its leased store"))
     {
       auto target = ava::session::SessionAppendTarget::create_persistent(*store, *lease, ava::session::SessionReadLimits{});
       auto staged = item("persistent-staged-0", "persistent-turn", 0, "persistent-item-0", 0);
       auto seeded = target ? (*target)->append(staged) : ava::core::VoidResult(std::unexpected(target.error()));
-      if (target && seeded)
+      if (ava::tests::require(target.has_value() && seeded.has_value(), "staged-target fixture seeds its pending output"))
       {
         auto unrelated = (*target)->append(ordinary("persistent-unrelated"));
         auto raw_unrelated = store->append(*lease, ordinary("persistent-raw-unrelated"));
@@ -205,48 +210,47 @@ void test_assistant_output_append_target_state_and_batches()
   }
 
   {
-    auto store = ava::session::SessionStore::create_ephemeral(workspace / "ephemeral-racing-targets");
-    if (store)
-    {
+    auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+      auto const previous_failures = ava::tests::failures();
+      auto store = ava::session::SessionStore::create_ephemeral(workspace / "ephemeral-racing-targets");
+      if (!ava::tests::require(store.has_value(), "ephemeral racing-target fixture creates its store"))
+        return 1;
       auto first_target = ava::session::SessionAppendTarget::create_ephemeral(*store);
       auto second_target = ava::session::SessionAppendTarget::create_ephemeral(*store);
-      if (first_target && second_target)
-      {
-        std::barrier start(2);
-        auto first_append = std::async(std::launch::async, [target = *first_target, &start, &commit] {
-          start.arrive_and_wait();
-          return target->append_batch({commit("ephemeral-race-first", "ephemeral-race-turn", 0)});
-        });
-        auto second_append = std::async(std::launch::async, [target = *second_target, &start, &commit] {
-          start.arrive_and_wait();
-          return target->append_batch({commit("ephemeral-race-second", "ephemeral-race-turn", 0)});
-        });
-        bool const completed = first_append.wait_for(std::chrono::seconds(2)) == std::future_status::ready &&
-                               second_append.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
-        bool one_committed = false;
-        if (completed)
-        {
-          auto first = first_append.get();
-          auto second = second_append.get();
-          one_committed = static_cast<bool>(first) != static_cast<bool>(second);
-        }
-        auto entries = completed ? store->load()
-                                 : ava::core::Result<std::vector<ava::session::SessionEntry>>(
-                                       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "append targets did not complete")));
-        expect(completed && one_committed && entries && entries->size() == 1,
-               "independent ephemeral targets serialize stale v4 batches through one shared mutation lock without deadlocking");
-      }
-    }
+      if (!ava::tests::require(first_target.has_value() && second_target.has_value(), "ephemeral racing-target fixture creates both append targets"))
+        return 1;
+      std::barrier start(2);
+      auto first_append = std::async(std::launch::async, [target = *first_target, &start, &commit] {
+        start.arrive_and_wait();
+        return target->append_batch({commit("ephemeral-race-first", "ephemeral-race-turn", 0)});
+      });
+      auto second_append = std::async(std::launch::async, [target = *second_target, &start, &commit] {
+        start.arrive_and_wait();
+        return target->append_batch({commit("ephemeral-race-second", "ephemeral-race-turn", 0)});
+      });
+      // Blocking gets and future destruction stay in this watchdog-owned child.
+      auto first = first_append.get();
+      auto second = second_append.get();
+      auto entries = store->load();
+      ava::tests::expect_all(
+          "independent ephemeral targets serialize stale batches through one mutation lock",
+          {{"one committed", first.has_value() != second.has_value()},
+           {"loaded", entries.has_value()},
+           {"one record", entries && entries->size() == 1},
+           {"winning record", entries && entries->size() == 1 && entries->front().id == (first ? "ephemeral-race-first" : "ephemeral-race-second")}});
+      return ava::tests::failures() == previous_failures ? 0 : 1;
+    });
+    ava::tests::expect_child_success(status, "ephemeral append-target race completes without deadlock");
   }
 
   {
     auto store = ava::session::SessionStore::create_ephemeral(workspace / "ephemeral");
-    if (store)
+    if (ava::tests::require(store.has_value(), "ephemeral staged-target fixture creates its store"))
     {
       auto target = ava::session::SessionAppendTarget::create_ephemeral(*store);
       auto seeded = target ? (*target)->append(item("ephemeral-staged-0", "ephemeral-turn", 0, "ephemeral-item-0", 0))
                            : ava::core::VoidResult(std::unexpected(target.error()));
-      if (target && seeded)
+      if (ava::tests::require(target.has_value() && seeded.has_value(), "ephemeral staged-target fixture seeds its pending output"))
       {
         auto unrelated = (*target)->append(ordinary("ephemeral-unrelated"));
         auto raw_unrelated = store->append_ephemeral(ordinary("ephemeral-raw-unrelated"));

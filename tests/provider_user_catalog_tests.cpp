@@ -1,4 +1,6 @@
 #include "sys.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/app/connect_openai.h"
@@ -12,7 +14,6 @@
 
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -49,12 +50,7 @@ ava::config::XdgPaths test_paths(std::filesystem::path const& root)
 
 void write_file(std::filesystem::path const& path, std::string_view body, mode_t mode = 0600)
 {
-  std::filesystem::create_directories(path.parent_path());
-  {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file.write(body.data(), static_cast<std::streamsize>(body.size()));
-  }
-  ::chmod(path.c_str(), mode);
+  ava::tests::write_test_file(path, body, mode);
 }
 
 std::string providers_json_three_protocols()
@@ -194,7 +190,7 @@ void test_user_api_key_precedence_and_isolation()
 {
   auto const root = create_empty_root("user-catalog-auth-prec");
   auto paths = test_paths(root);
-  write_file(paths.providers_file, providers_json_three_protocols());
+  ava::tests::write_test_file(paths.providers_file, providers_json_three_protocols());
   auto catalog = ava::provider::ProviderCatalog::build(paths);
   expect(catalog.has_value(), "catalog builds for auth precedence");
   if (!catalog)
@@ -204,8 +200,8 @@ void test_user_api_key_precedence_and_isolation()
       paths, ava::config::ProviderCredential{
                  .provider_id = "local-chat", .access_token = "stored-chat-key", .credential_type = "api_key", .account_id = "", .source = "test"});
   expect(stored.has_value(), "stored user provider API key writes auth.json");
-  ::setenv("LOCAL_CHAT_API_KEY", "env-chat-key", 1);
-  ::setenv("LOCAL_OPENAI_API_KEY", "wrong-generic-env", 1);
+  ScopedEnvVar configured_key("LOCAL_CHAT_API_KEY", "env-chat-key");
+  ScopedEnvVar generic_key("LOCAL_OPENAI_API_KEY", "wrong-generic-env");
   NullTransport transport;
   auto prepared = ava::app::prepare_runtime_credentials(paths, "local-chat", {}, transport, "test", *catalog);
   expect(prepared && prepared->access_token == "stored-chat-key" && prepared->credential_type == "api_key",
@@ -216,22 +212,20 @@ void test_user_api_key_precedence_and_isolation()
   prepared = ava::app::prepare_runtime_credentials(paths, "local-chat", {}, transport, "test", *catalog);
   expect(prepared && prepared->access_token == "env-chat-key", "configured api_key_env is used when stored key is absent");
 
-  ::unsetenv("LOCAL_CHAT_API_KEY");
+  ScopedEnvVar absent_configured_key("LOCAL_CHAT_API_KEY", std::nullopt);
   prepared = ava::app::prepare_runtime_credentials(paths, "local-chat", {}, transport, "test", *catalog);
   expect(!prepared, "missing stored key and configured env fails closed without falling back to generic env names");
 
   prepared = ava::app::prepare_runtime_credentials(paths, "local-anthropic", {}, transport, "test", *catalog);
   expect(prepared && prepared->credential_type == "none" && prepared->access_token.empty(),
          "auth:none is a successful credential state without manufacturing tokens");
-
-  ::unsetenv("LOCAL_OPENAI_API_KEY");
 }
 
 void test_connect_auth_none_does_not_write_auth_file()
 {
   auto const root = create_empty_root("user-catalog-connect-none");
   auto paths = test_paths(root);
-  write_file(paths.providers_file, providers_json_three_protocols());
+  ava::tests::write_test_file(paths.providers_file, providers_json_three_protocols());
 
   std::istringstream in;
   std::ostringstream out;
@@ -261,6 +255,7 @@ void test_builtin_openai_behavior_unchanged_under_options_defaults()
 
 void run_provider_user_catalog_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("user-catalog-suite-");
   test_catalog_activates_three_protocols_and_auth_none();
   test_user_api_key_precedence_and_isolation();
   test_connect_auth_none_does_not_write_auth_file();

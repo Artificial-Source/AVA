@@ -1,8 +1,12 @@
 #include "sys.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/app/commands.h"
+#include "ava/app/connect_oauth_callback.h"
 #include "ava/app/headless_policy.h"
 #include "ava/app/print_mode.h"
 #include "ava/app/rpc_mode.h"
@@ -34,11 +38,13 @@
 #include "ava/context/context_loader.h"
 #include "ava/context/markdown_resource.h"
 #include "ava/context/skill_loader.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <climits>
 #include <cstdlib>
@@ -46,6 +52,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -55,8 +62,11 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -73,10 +83,10 @@ void test_xdg_paths()
 
   std::filesystem::create_directories(root);
 
-  setenv("HOME", (root / "home").c_str(), 1);
-  unsetenv("XDG_CONFIG_HOME");
-  unsetenv("XDG_STATE_HOME");
-  unsetenv("XDG_DATA_HOME");
+  ScopedEnvVar home("HOME", (root / "home").string());
+  ScopedEnvVar config_unset("XDG_CONFIG_HOME", std::nullopt);
+  ScopedEnvVar state_unset("XDG_STATE_HOME", std::nullopt);
+  ScopedEnvVar data_unset("XDG_DATA_HOME", std::nullopt);
   auto fallback = ava::config::xdg_paths();
   expect(fallback.ava_config_dir == root / "home" / ".config" / "ava", "XDG config falls back to ~/.config/ava");
   expect(fallback.ava_state_dir == root / "home" / ".local" / "state" / "ava", "XDG state falls back to ~/.local/state/ava");
@@ -87,9 +97,9 @@ void test_xdg_paths()
   expect(fallback.providers_file == fallback.ava_config_dir / "providers.json", "providers file is in XDG config dir");
   expect(fallback.sessions_dir == fallback.ava_state_dir / "sessions", "sessions are in XDG state dir");
 
-  setenv("XDG_CONFIG_HOME", (root / "config").c_str(), 1);
-  setenv("XDG_STATE_HOME", (root / "state").c_str(), 1);
-  setenv("XDG_DATA_HOME", (root / "data").c_str(), 1);
+  ScopedEnvVar config_override("XDG_CONFIG_HOME", (root / "config").string());
+  ScopedEnvVar state_override("XDG_STATE_HOME", (root / "state").string());
+  ScopedEnvVar data_override("XDG_DATA_HOME", (root / "data").string());
   auto overridden = ava::config::xdg_paths();
   expect(overridden.ava_config_dir == root / "config" / "ava", "XDG config override is honored");
   expect(overridden.ava_state_dir == root / "state" / "ava", "XDG state override is honored");
@@ -97,19 +107,19 @@ void test_xdg_paths()
   expect(compatible_auth_path.filename() == "auth.json", "compatible auth path points at auth file");
   expect(compatible_auth_path.parent_path().parent_path() == root / "data", "compatible auth path follows XDG data home");
 
-  setenv("XDG_CONFIG_HOME", "relative-config", 1);
+  ScopedEnvVar relative_config("XDG_CONFIG_HOME", "relative-config");
   auto relative_ignored = ava::config::xdg_paths();
   expect(relative_ignored.config_home == root / "home" / ".config", "relative XDG config path is ignored safely");
 
-  unsetenv("HOME");
-  unsetenv("XDG_CONFIG_HOME");
-  unsetenv("XDG_STATE_HOME");
-  unsetenv("XDG_DATA_HOME");
+  ScopedEnvVar no_home_env("HOME", std::nullopt);
+  ScopedEnvVar no_config_env("XDG_CONFIG_HOME", std::nullopt);
+  ScopedEnvVar no_state_env("XDG_STATE_HOME", std::nullopt);
+  ScopedEnvVar no_data_env("XDG_DATA_HOME", std::nullopt);
   auto no_home = ava::config::xdg_paths();
   expect(no_home.config_home.is_absolute(), "XDG config fallback remains absolute when HOME is unset");
   expect(no_home.config_home != std::filesystem::current_path() / ".config", "XDG fallback does not use current directory");
 
-  setenv("HOME", "", 1);
+  ScopedEnvVar empty_home_env("HOME", "");
   auto empty_home = ava::config::xdg_paths();
   expect(empty_home.state_home.is_absolute(), "XDG state fallback remains absolute when HOME is empty");
 }
@@ -379,12 +389,14 @@ void test_markdown_resource_parser_and_reader()
   expect(accepted && *accepted == "exact-size", "resource reader accepts a file whose size equals max_bytes");
 
   auto oversized = ava::context::read_resource_file(file, {.max_bytes = 9, .resource_description = "test resource"});
-  expect(
-      !oversized && oversized.error().message() == "test resource is too large" &&
-          std::ranges::any_of(oversized.error().context(),
-                              [](ava::core::ErrorContext const& item) { return item.key == "path" && item.value.find("resource.md") != std::string::npos; }) &&
-          std::ranges::any_of(oversized.error().context(), [](ava::core::ErrorContext const& item) { return item.key == "max_bytes" && item.value == "9"; }),
-      "resource reader rejects oversized files with resource, path, and max_bytes context");
+  ava::tests::expect_all(
+      "resource reader rejects oversized files with structured size and path context",
+      {{"rejected", !oversized},
+       {"I/O category", !oversized && oversized.error().category() == ava::core::ErrorCategory::Io},
+       {"exact path",
+        !oversized && std::ranges::any_of(oversized.error().context(), [&](auto const& item) { return item.key == "path" && item.value == file.string(); })},
+       {"max_bytes",
+        !oversized && std::ranges::any_of(oversized.error().context(), [](auto const& item) { return item.key == "max_bytes" && item.value == "9"; })}});
 
   auto const symlink_path = root / "linked.md";
   std::error_code symlink_error;
@@ -402,12 +414,13 @@ void test_markdown_resource_parser_and_reader()
   expect(!directory_read && directory_read.error().message() == "test resource is not a regular file", "resource reader rejects directories as non-regular");
 
   auto const fifo_path = root / "blocking.fifo";
-  expect(::mkfifo(fifo_path.c_str(), 0600) == 0, "markdown resource test creates a FIFO fixture");
-  auto const fifo_start = std::chrono::steady_clock::now();
-  auto fifo_read = ava::context::read_resource_file(fifo_path, {.max_bytes = 64, .resource_description = "test resource"});
-  auto const fifo_elapsed = std::chrono::steady_clock::now() - fifo_start;
-  expect(!fifo_read && fifo_read.error().message() == "test resource is not a regular file" && fifo_elapsed < std::chrono::seconds(2),
-         "resource reader rejects FIFOs promptly without blocking");
+  if (!ava::tests::require(::mkfifo(fifo_path.c_str(), 0600) == 0, "markdown resource test creates a FIFO fixture"))
+    return;
+  auto const fifo_status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    auto const result = ava::context::read_resource_file(fifo_path, {.max_bytes = 64, .resource_description = "test resource"});
+    return !result && result.error().category() == ava::core::ErrorCategory::Io ? 0 : 1;
+  });
+  ava::tests::expect_child_success(fifo_status, "resource reader rejects a FIFO as an I/O error under a parent watchdog");
 }
 
 void test_skill_loader()
@@ -576,10 +589,10 @@ void test_auth_load_and_store()
   auto const root = create_empty_root("auth");
 
   std::filesystem::create_directories(root / "config" / "ava");
-  setenv("HOME", (root / "home").c_str(), 1);
-  setenv("XDG_CONFIG_HOME", (root / "config").c_str(), 1);
-  setenv("XDG_STATE_HOME", (root / "state").c_str(), 1);
-  setenv("XDG_DATA_HOME", (root / "data").c_str(), 1);
+  ScopedEnvVar home("HOME", (root / "home").string());
+  ScopedEnvVar config("XDG_CONFIG_HOME", (root / "config").string());
+  ScopedEnvVar state("XDG_STATE_HOME", (root / "state").string());
+  ScopedEnvVar data("XDG_DATA_HOME", (root / "data").string());
 
   auto const paths = ava::config::xdg_paths();
   {
@@ -780,7 +793,7 @@ void test_auth_load_and_store()
                                                                           11);
   expect(api_key_not_expired && *api_key_not_expired == "api-token", "OpenAI API key ignores OAuth expiry field");
 
-  setenv("OPENAI_API_KEY", "env-openai-key", 1);
+  ScopedEnvVar openai_key("OPENAI_API_KEY", "env-openai-key");
   ava::tests::FakeTransport env_transport({});
   auto stored_provider_credential = ava::config::provider_credential_for_request(paths, "openai", env_transport);
   expect(stored_provider_credential && stored_provider_credential->has_value() && (*stored_provider_credential)->access_token == "rotated-openai-api-key" &&
@@ -792,7 +805,7 @@ void test_auth_load_and_store()
   expect(env_openai_credential && env_openai_credential->has_value() && (*env_openai_credential)->access_token == "env-openai-key" &&
              (*env_openai_credential)->source == "env:OPENAI_API_KEY",
          "provider credential discovery falls back to OPENAI_API_KEY without storing it");
-  unsetenv("OPENAI_API_KEY");
+  ScopedEnvVar openai_key_unset("OPENAI_API_KEY", std::nullopt);
   {
     std::ofstream file(paths.auth_file, std::ios::binary | std::ios::trunc);
     file << "{\"anthropic\":{\"type\":\"api_key\",\"api_key\":\"stored-anthropic-key\"}}";
@@ -804,13 +817,14 @@ void test_auth_load_and_store()
              (*stored_anthropic_credential)->source == paths.auth_file.string(),
          "provider credential discovery loads non-OpenAI API keys from auth file");
   std::filesystem::remove(paths.auth_file, remove_error);
-  unsetenv("ANTHROPIC_OAUTH_TOKEN");
-  setenv("ANTHROPIC_API_KEY", "env-anthropic-key", 1);
+  ScopedEnvVar anthropic_oauth("ANTHROPIC_OAUTH_TOKEN", std::nullopt);
+  ScopedEnvVar anthropic_auth("ANTHROPIC_AUTH_TOKEN", std::nullopt);
+  ScopedEnvVar anthropic_key("ANTHROPIC_API_KEY", "env-anthropic-key");
   auto anthropic_credential = ava::config::provider_credential_for_request(paths, "anthropic", env_transport);
   expect(anthropic_credential && anthropic_credential->has_value() && (*anthropic_credential)->provider_id == "anthropic" &&
              (*anthropic_credential)->access_token == "env-anthropic-key",
          "provider credential discovery supports non-OpenAI API key environment variables");
-  unsetenv("ANTHROPIC_API_KEY");
+  ScopedEnvVar anthropic_key_unset("ANTHROPIC_API_KEY", std::nullopt);
   auto restored_api = ava::config::store_openai_credential(paths, ava::config::OpenAICredential{.type = ava::config::OpenAICredentialType::ApiKey,
                                                                                                 .access_token = "stored-api-key",
                                                                                                 .refresh_token = "",
@@ -855,6 +869,7 @@ void test_auth_load_and_store()
   std::filesystem::remove(paths.auth_file, remove_error);
   std::error_code symlink_error;
   std::filesystem::create_symlink(symlink_target, paths.auth_file, symlink_error);
+  expect(!symlink_error, "auth fixture creates a symlink instead of silently omitting the safety case");
   if (!symlink_error)
   {
     auto symlink_store = ava::config::store_openai_credential(paths, ava::config::OpenAICredential{.type = ava::config::OpenAICredentialType::ApiKey,
@@ -1612,10 +1627,10 @@ void test_builtin_provider_model_metadata_contracts()
 void test_model_and_prompt_config()
 {
   auto const root = create_empty_root("model");
-  setenv("HOME", (root / "home").c_str(), 1);
-  setenv("XDG_CONFIG_HOME", (root / "config").c_str(), 1);
-  setenv("XDG_STATE_HOME", (root / "state").c_str(), 1);
-  setenv("XDG_DATA_HOME", (root / "data").c_str(), 1);
+  ScopedEnvVar home("HOME", (root / "home").string());
+  ScopedEnvVar config("XDG_CONFIG_HOME", (root / "config").string());
+  ScopedEnvVar state("XDG_STATE_HOME", (root / "state").string());
+  ScopedEnvVar data("XDG_DATA_HOME", (root / "data").string());
   auto const paths = ava::config::xdg_paths();
 
   auto const builtin = ava::config::builtin_model_registry();
@@ -1901,17 +1916,153 @@ void test_model_and_prompt_config()
   expect(!oversized_prompt, "oversized prompt override is rejected");
 }
 
+void test_oauth_loopback_callback()
+{
+  for (std::string_view const scenario : {"ignore-invalid-then-accept", "provider-error", "cancel", "deadline"})
+  {
+    auto const child = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+      auto const initial_failures = ava::tests::failures();
+      std::promise<std::uint16_t> listening;
+      auto ready = listening.get_future();
+      std::atomic<bool> cancel = false;
+      std::optional<ava::core::Result<ava::app::OAuthCallbackResult>> result;
+      auto const deadline = ava::tests::now_plus_seconds(3);
+      ava::app::detail::OAuthCallbackOptions const options{.port = 0,
+                                                           .deadline = scenario == "deadline" ? std::chrono::steady_clock::time_point::min() : deadline,
+                                                           .listener_ready = [&](std::uint16_t port) { listening.set_value(port); }};
+      std::thread listener([&] { result = ava::app::detail::wait_for_oauth_callback("expected-state", [&] { return cancel.load(); }, options); });
+      bool const listening_ready = ready.wait_until(deadline) == std::future_status::ready;
+      expect(listening_ready, "OAuth callback listener publishes its ephemeral port");
+      bool requests_succeeded = listening_ready;
+      if (listening_ready)
+      {
+        auto const port = ready.get();
+        auto send_request = [&](std::string_view request) {
+          ava::core::UniqueFd client(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
+          if (!ava::tests::require(static_cast<bool>(client), "OAuth callback client socket opens"))
+            return false;
+          sockaddr_in address{};
+          address.sin_family = AF_INET;
+          address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+          address.sin_port = htons(port);
+          if (!ava::tests::require(::connect(client.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0,
+                                   "OAuth callback client connects to the ready listener"))
+            return false;
+          std::size_t offset = 0;
+          while (offset < request.size())
+          {
+            auto const written = ::send(client.get(), request.data() + offset, request.size() - offset, MSG_NOSIGNAL);
+            if (written < 0 && errno == EINTR)
+              continue;
+            if (!ava::tests::require(written > 0, "OAuth callback client sends its complete request"))
+              return false;
+            offset += static_cast<std::size_t>(written);
+          }
+          std::string response;
+          return ava::tests::require(ava::tests::read_until(client.get(), response, "\r\n\r\n", deadline),
+                                     "OAuth callback sends an HTTP response for each received request");
+        };
+        if (scenario == "ignore-invalid-then-accept")
+        {
+          for (std::string_view const request :
+               {"POST /auth/callback?code=wrong&state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback?code=wrong&state=expected-state\r\n\r\n",
+                "GET /other?code=wrong&state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback HTTP/1.1\r\n\r\n",
+                "GET /auth/callback?state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback?code=wrong HTTP/1.1\r\n\r\n",
+                "GET /auth/callback?code=&state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback?code=wrong&state=wrong-state HTTP/1.1\r\n\r\n",
+                "GET /auth/callback?error=access_denied&state=wrong-state HTTP/1.1\r\n\r\n",
+                "GET /auth/callback?code=accepted%2Bcode&state=expected-state HTTP/1.1\r\n\r\n"})
+          {
+            if (!send_request(request))
+            {
+              requests_succeeded = false;
+              break;
+            }
+          }
+        }
+        else if (scenario == "provider-error")
+          requests_succeeded = send_request("GET /auth/callback?error=access_denied&error_description=user+declined&state=expected-state HTTP/1.1\r\n\r\n");
+        else if (scenario == "cancel")
+          cancel.store(true);
+      }
+      if (!requests_succeeded)
+        cancel.store(true);
+      listener.join();
+      if (!ava::tests::require(result.has_value(), "OAuth callback listener returns a result"))
+        return 1;
+      if (scenario == "ignore-invalid-then-accept")
+      {
+        if (ava::tests::require(result->has_value(), "invalid callbacks do not consume the eventual valid authorization"))
+          ava::tests::expect_eq((*result)->code, std::string("accepted+code"), "OAuth callback returns only the valid decoded authorization code");
+      }
+      else if (ava::tests::require(!result->has_value(), "OAuth rejection, cancellation, or expired deadline returns an error"))
+      {
+        auto const& error = result->error();
+        auto const category = scenario == "provider-error" ? ava::core::ErrorCategory::Provider
+                              : scenario == "cancel"       ? ava::core::ErrorCategory::InvalidArgument
+                                                           : ava::core::ErrorCategory::Io;
+        ava::tests::expect_eq(error.category(), category, "OAuth callback failure has the expected stable category");
+        if (scenario == "provider-error")
+          ava::tests::expect_all(
+              "OAuth provider callback retains structured rejection context",
+              {{"error", std::ranges::any_of(error.context(), [](auto const& item) { return item.key == "error" && item.value == "access_denied"; })},
+               {"description",
+                std::ranges::any_of(error.context(), [](auto const& item) { return item.key == "description" && item.value == "user declined"; })}});
+      }
+      return ava::tests::failures() == initial_failures ? 0 : 1;
+    });
+    ava::tests::expect_child_success(child, "loopback OAuth callback: " + std::string(scenario));
+  }
+}
+
+void test_auth_creation_and_replacement_ignore_ambient_umask()
+{
+  for (mode_t const mask : {mode_t{0000}, mode_t{0077}})
+  {
+    ava::tests::HermeticTestEnvironment environment("auth-umask-");
+    auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+      static_cast<void>(::umask(mask));
+      auto const paths = ava::config::xdg_paths();
+      ava::config::OpenAICredential credential{.type = ava::config::OpenAICredentialType::ApiKey,
+                                               .access_token = "first-token",
+                                               .refresh_token = "",
+                                               .expires_at = 0,
+                                               .account_id = "",
+                                               .source_path = {}};
+      for (std::string_view const token : {"first-token", "replacement-token"})
+      {
+        credential.access_token = token;
+        auto const stored = ava::config::store_openai_credential(paths, credential);
+        if (!stored)
+          return 1;
+        struct stat file_status{};
+        struct stat directory_status{};
+        if (::stat(paths.auth_file.c_str(), &file_status) != 0 || ::stat(paths.auth_file.parent_path().c_str(), &directory_status) != 0 ||
+            (file_status.st_mode & 0777) != 0600 || (directory_status.st_mode & 0777) != 0700 || file_status.st_nlink != 1)
+          return 2;
+        auto const loaded = ava::config::load_openai_credential(paths);
+        if (!loaded || !*loaded || (*loaded)->access_token != token)
+          return 3;
+      }
+      return 0;
+    });
+    ava::tests::expect_child_success(status, "auth creation and replacement remain private under umask " + std::to_string(mask));
+  }
+}
+
 }  // namespace
 
 void run_config_context_auth_oauth_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("config-auth-oauth-");
   test_xdg_paths();
   test_context_loader();
   test_markdown_resource_parser_and_reader();
   test_skill_loader();
   test_auth_record_helpers();
   test_auth_load_and_store();
+  test_auth_creation_and_replacement_ignore_ambient_umask();
   test_openai_oauth_helpers();
+  test_oauth_loopback_callback();
   test_openai_oauth_refresh();
   test_anthropic_oauth_request_resolution();
   test_builtin_provider_model_metadata_contracts();

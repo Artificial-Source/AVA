@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/agent_loop_test_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
@@ -14,11 +15,15 @@
 #include "ava/core/json.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <barrier>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -343,11 +348,40 @@ void test_observer_failures_bounds_and_disabled_artifacts()
   bounded.emit(ava::observability::TraceEventType::AgentRunTerminal, {});
   writer->close();
   auto const counters = writer->counters();
-  expect(counters.written == 1 && counters.dropped == 1 && counters.bytes_written <= 1024, "writer enforces item and byte bounds with accounting");
+  ava::tests::expect_all("writer enforces the event cap and records the bounded first event",
+                         {{"written", counters.written == 1}, {"dropped", counters.dropped == 1}, {"failures", counters.failures == 0}});
   std::ifstream file(path);
   std::string line;
   std::getline(file, line);
   expect(!line.empty() && line.size() <= 512 && ava::core::json::is_valid_object(line), "hostile event remains valid bounded JSONL");
+
+  ava::observability::TraceEvent first_byte_event;
+  first_byte_event.type = ava::observability::TraceEventType::AgentRunStart;
+  first_byte_event.sequence = 1;
+  auto second_byte_event = first_byte_event;
+  second_byte_event.sequence = 2;
+  auto const first_record = ava::observability::canonical_json(first_byte_event) + "\n";
+  auto const second_record = ava::observability::canonical_json(second_byte_event) + "\n";
+  auto const byte_limit = first_record.size() + second_record.size();
+  auto const byte_path = root / "observer-byte-bound" / "trace.jsonl";
+  ava::observability::JsonlRunObserver byte_writer(
+      {.path = byte_path, .max_events = 100, .max_bytes = byte_limit, .max_event_bytes = 16 * 1024, .initial_fd = -1});
+  byte_writer.on_event(first_byte_event);
+  byte_writer.on_event(second_byte_event);
+  auto const at_limit = byte_writer.counters();
+  ava::tests::expect_all("JSONL writer accepts a record landing exactly on max_bytes", {{"two records", at_limit.written == 2},
+                                                                                        {"exact byte count", at_limit.bytes_written == byte_limit},
+                                                                                        {"no drops", at_limit.dropped == 0},
+                                                                                        {"no failures", at_limit.failures == 0}});
+  byte_writer.on_event(first_byte_event);
+  byte_writer.close();
+  auto const beyond_limit = byte_writer.counters();
+  ava::tests::expect_all("JSONL writer rejects the next record solely because of max_bytes", {{"written unchanged", beyond_limit.written == 2},
+                                                                                              {"one drop", beyond_limit.dropped == 1},
+                                                                                              {"bytes unchanged", beyond_limit.bytes_written == byte_limit},
+                                                                                              {"no failures", beyond_limit.failures == 0}});
+  ava::tests::expect_eq(ava::tests::read_session_test_binary_file(byte_path), first_record + second_record,
+                        "byte-limited JSONL contains exactly the two complete accepted records");
 
   auto const parent_safety_root = root / "observer-parent-safety";
   std::error_code cleanup_error;
@@ -617,14 +651,17 @@ void test_queued_writer_bounds_and_unsafe_targets()
          "lifetime lock rejects a second writer and preserves one complete non-interleaved record");
 
   auto const fifo = root / "trace-fifo";
-  expect(::mkfifo(fifo.c_str(), 0600) == 0, "create FIFO trace target");
-  auto fifo_writer = std::make_shared<ava::observability::JsonlRunObserver>(ava::observability::JsonlObserverOptions{.path = fifo});
-  ava::observability::RunObservation fifo_observation(fifo_writer, std::make_shared<FixedClock>(1), std::make_shared<ava::observability::CounterIdGenerator>());
-  auto const fifo_start = std::chrono::steady_clock::now();
-  fifo_observation.emit(ava::observability::TraceEventType::AgentRunStart, {});
-  auto const fifo_elapsed = std::chrono::steady_clock::now() - fifo_start;
-  expect(fifo_writer->counters().failures == 1 && fifo_observation.counters().callback_failures == 1 && fifo_elapsed < std::chrono::seconds(1),
-         "FIFO target is rejected promptly through O_NONBLOCK without blocking a producer");
+  if (!ava::tests::require(::mkfifo(fifo.c_str(), 0600) == 0, "create FIFO trace target"))
+    return;
+  auto const fifo_status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    auto fifo_writer = std::make_shared<ava::observability::JsonlRunObserver>(ava::observability::JsonlObserverOptions{.path = fifo});
+    ava::observability::RunObservation fifo_observation(fifo_writer, std::make_shared<FixedClock>(1),
+                                                        std::make_shared<ava::observability::CounterIdGenerator>());
+    fifo_observation.emit(ava::observability::TraceEventType::AgentRunStart, {});
+    auto const counters = fifo_writer->counters();
+    return counters.written == 0 && counters.failures == 1 && fifo_observation.counters().callback_failures == 1 ? 0 : 1;
+  });
+  ava::tests::expect_child_success(fifo_status, "FIFO trace target is rejected and counted under a parent watchdog");
 
   auto const intermediate_target = root / "intermediate-target";
   std::filesystem::create_directories(intermediate_target);
@@ -693,7 +730,7 @@ void test_dispatcher_trace_correlation_and_ordering()
   expect(ordered && process_correlated, "serial and parallel dispatches trace start before effect/result with stable generated correlation IDs");
 }
 
-void test_session_attachment_generation_alias_stress()
+void exercise_session_attachment_generation_alias_stress()
 {
   static_assert(noexcept(std::declval<ava::session::SessionStore&>().set_run_observation(
       std::declval<std::shared_ptr<ava::observability::RunObservation> const&>(), std::declval<ava::observability::TraceContext const&>())));
@@ -709,6 +746,8 @@ void test_session_attachment_generation_alias_stress()
                                                                      std::make_shared<ava::observability::CounterIdGenerator>());
   auto store = ava::session::SessionStore::create_ephemeral(root);
   expect(store.has_value(), "create aliased ephemeral store for attachment stress");
+  if (!ava::tests::require(store.has_value(), "attachment stress creates its aliased store"))
+    return;
   auto alias = *store;
   auto stale_generation = store->set_run_observation(first, {.run_id = "parent",
                                                              .turn_id = "turn",
@@ -744,10 +783,15 @@ void test_session_attachment_generation_alias_stress()
   auto appended = append_session_entry_for_test(
       alias, {.id = "newer", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"});
   expect(appended.has_value(), "stale generation clear leaves newer aliased attachment intact");
-  std::atomic<bool> run = true;
+  constexpr int iterations = 200;
+  std::barrier rendezvous(2);
+  int successful_appends = 0;
+  int successful_loads = 0;
+  int successful_attachments = 0;
   std::thread attach_clear([&] {
-    for (int i = 0; i < 200; ++i)
+    for (int i = 0; i < iterations; ++i)
     {
+      rendezvous.arrive_and_wait();
       auto generation = store->set_run_observation((i % 2) == 0 ? first : second, {.run_id = "stress",
                                                                                    .turn_id = "turn",
                                                                                    .session_id = store->session_id(),
@@ -756,31 +800,37 @@ void test_session_attachment_generation_alias_stress()
                                                                                    .parent_turn_id = {},
                                                                                    .parent_session_id = {}});
       store->clear_run_observation(generation);
+      successful_attachments += generation != 0;
+      rendezvous.arrive_and_wait();
     }
-    run.store(false, std::memory_order_release);
   });
   std::thread append_load([&] {
-    int i = 0;
-    while (run.load(std::memory_order_acquire))
+    for (int i = 0; i < iterations; ++i)
     {
-      static_cast<void>(append_session_entry_for_test(
-          alias,
-          {.id = "stress-" + std::to_string(i++), .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"}));
-      static_cast<void>(alias.load());
+      rendezvous.arrive_and_wait();
+      auto appended = append_session_entry_for_test(
+          alias, {.id = "stress-" + std::to_string(i), .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"});
+      auto loaded = alias.load();
+      successful_appends += appended.has_value();
+      successful_loads += loaded.has_value();
+      rendezvous.arrive_and_wait();
     }
   });
   attach_clear.join();
   append_load.join();
+  ava::tests::expect_all(
+      "attachment stress executes every actor's nonzero quota",
+      {{"attachments", successful_attachments == iterations}, {"appends", successful_appends == iterations}, {"loads", successful_loads == iterations}});
   alias.clear_run_observation(newer_generation);
   auto events_before_terminal = [&] {
     std::lock_guard lock(collector->mutex);
     return collector->events.size();
   }();
-  static_cast<void>(append_session_entry_for_test(
-      alias, {.id = "after-parent-terminal", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"}));
+  auto after_terminal = append_session_entry_for_test(
+      alias, {.id = "after-parent-terminal", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"});
   std::lock_guard lock(collector->mutex);
-  expect(collector->events.size() == events_before_terminal,
-         "copied background-style store emits no session event after parent terminal clear and concurrent attachment snapshots remain safe");
+  ava::tests::expect_all("copied store persists without emitting after its attachment is cleared",
+                         {{"append succeeds", after_terminal.has_value()}, {"no event", collector->events.size() == events_before_terminal}});
 
   auto overlap_store = ava::session::SessionStore::create_ephemeral(root);
   expect(overlap_store.has_value(), "create session for A/B background attachment overlap");
@@ -803,14 +853,28 @@ void test_session_attachment_generation_alias_stress()
                                                              .parent_turn_id = {},
                                                              .parent_session_id = {}});
     auto before_old_write = collector->events.size();
-    static_cast<void>(append_session_entry_for_test(
-        old_background_store, {.id = "A-background", .parent_id = "", .type = ava::session::EntryType::Error, .timestamp = "now", .data_json = "{}"}));
+    auto background_append = append_session_entry_for_test(
+        old_background_store, {.id = "A-background", .parent_id = "", .type = ava::session::EntryType::Error, .timestamp = "now", .data_json = "{}"});
     overlap_store->clear_run_observation(run_b);
-    static_cast<void>(append_session_entry_for_test(
-        old_background_store, {.id = "A-after-terminal", .parent_id = "", .type = ava::session::EntryType::Error, .timestamp = "now", .data_json = "{}"}));
-    expect(collector->events.size() == before_old_write,
-           "an old background persistence copy cannot snapshot B's live attachment or emit after A's terminal cleanup");
+    auto after_background_terminal = append_session_entry_for_test(
+        old_background_store, {.id = "A-after-terminal", .parent_id = "", .type = ava::session::EntryType::Error, .timestamp = "now", .data_json = "{}"});
+    ava::tests::expect_all("old background persistence cannot adopt another live attachment or emit after terminal cleanup",
+                           {{"background append", background_append.has_value()},
+                            {"post-terminal append", after_background_terminal.has_value()},
+                            {"no event", collector->events.size() == before_old_write}});
   }
+}
+
+void test_session_attachment_generation_alias_stress()
+{
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "observer-stress-child-");
+  ScopedEnvVar temporary_directory("TMPDIR", directory.path().string());
+  auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [] {
+    auto const failures = ava::tests::failures();
+    exercise_session_attachment_generation_alias_stress();
+    return ava::tests::failures() == failures ? 0 : 1;
+  });
+  ava::tests::expect_child_success(status, "attachment generation stress completes its fixed concurrent quotas");
 }
 
 void test_session_and_process_boundaries_are_independent()
@@ -932,9 +996,9 @@ void test_disabled_and_enabled_runs_preserve_authoritative_session_semantics()
 
   auto run_scripted = [&root](bool enabled) {
     auto const run_root = root / (enabled ? "enabled" : "disabled");
-    std::filesystem::create_directories(run_root / "workspace");
-    ava::session::SessionStore store({.root_dir = run_root / "sessions", .workspace_dir = run_root / "workspace", .session_id = "semantic"});
-    ava::provider::OpenAIProvider provider("https://api.example.test");
+    agent_loop_test::AgentLoopFixture fixture(enabled ? "observer-enabled" : "observer-disabled");
+    auto& store = fixture.store;
+    auto& provider = fixture.provider;
     ava::tests::FakeTransport transport({ava::http::HttpResponse{
         .status_code = 200, .headers = {}, .body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: [DONE]\n\n"}});
     std::shared_ptr<ava::observability::JsonlRunObserver> writer;
@@ -945,19 +1009,18 @@ void test_disabled_and_enabled_runs_preserve_authoritative_session_semantics()
       observation = std::make_shared<ava::observability::RunObservation>(writer, std::make_shared<FixedClock>(1),
                                                                          std::make_shared<ava::observability::CounterIdGenerator>());
     }
-    ava::agent::AgentLoop loop({.workspace_dir = run_root / "workspace",
-                                .model = agent_loop_test::model_invocation_options("system"),
-                                .access_token = "CANARY_TOKEN",
-                                .append_entry = append_route_for_test(store),
-                                .append_batch = append_batch_route_for_test(store),
-                                .session_read_authority = read_authority_for_test(store),
-                                .observation = observation});
+    auto options = fixture.options(agent_loop_test::model_invocation_options("system"));
+    options.access_token = "CANARY_TOKEN";
+    options.observation = observation;
+    ava::agent::AgentLoop loop(std::move(options));
     auto result = loop.run_turn("scripted prompt", store, provider, transport);
     expect(result && result->final_text == "ok", "scripted fake-provider semantic characterization run succeeds");
     auto loaded = store.load();
     expect(loaded.has_value(), "scripted fake-provider semantic characterization session loads");
 
     ScriptedRunArtifacts artifacts;
+    if (!ava::tests::require(loaded.has_value(), "scripted observer comparison loads its authoritative history"))
+      return artifacts;
     for (auto const& entry : *loaded) artifacts.entries.emplace_back(entry.type, entry.data_json);
     std::ifstream session_file(store.session_path(), std::ios::binary);
     artifacts.session_jsonl.assign(std::istreambuf_iterator<char>(session_file), std::istreambuf_iterator<char>());
@@ -1441,7 +1504,7 @@ void test_jsonl_close_with_concurrent_producers()
   expect(counters.written + counters.dropped == 400 && counters.failures == 0, "close safely accounts concurrent JSONL producers");
 }
 
-void test_concurrent_observation_ordering_and_reentrancy()
+void exercise_concurrent_observation_ordering_and_reentrancy()
 {
   auto const root = create_empty_root("test_concurrent_observation_ordering_and_reentrancy");
 
@@ -1455,29 +1518,32 @@ void test_concurrent_observation_ordering_and_reentrancy()
              reentrant_observer->callback_context_preserved && !enricher_had_callback_context && !ava::observability::in_run_observer_callback(),
          "observer callback context is stack-aware, excludes enrichment, and restores after nested delivery");
 
-  class DelayedFirstObserver final : public ava::observability::RunObserver
+  class GatedFirstObserver final : public ava::observability::RunObserver
   {
    public:
     void on_event(ava::observability::TraceEvent const& event) override
     {
+      std::unique_lock lock(mutex);
+      ++active_callbacks;
+      overlap = overlap || active_callbacks > 1;
       if (event.sequence == 1)
       {
-        {
-          std::lock_guard lock(mutex);
-          first_callback_entered = true;
-        }
-        first_callback.notify_one();
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        first_callback_entered = true;
+        first_callback.notify_all();
+        first_callback.wait(lock, [&] { return release_first; });
       }
-      std::lock_guard lock(mutex);
       events.push_back(event);
+      --active_callbacks;
     }
     std::mutex mutex;
     std::condition_variable first_callback;
     bool first_callback_entered = false;
+    bool release_first = false;
+    bool overlap = false;
+    int active_callbacks = 0;
     std::vector<ava::observability::TraceEvent> events;
   };
-  auto collector = std::make_shared<DelayedFirstObserver>();
+  auto collector = std::make_shared<GatedFirstObserver>();
   auto observation = std::make_shared<ava::observability::RunObservation>(collector, std::make_shared<FixedClock>(1),
                                                                           std::make_shared<ava::observability::CounterIdGenerator>());
   std::thread first([&] {
@@ -1487,18 +1553,32 @@ void test_concurrent_observation_ordering_and_reentrancy()
   });
   {
     std::unique_lock lock(collector->mutex);
-    collector->first_callback.wait(lock, [&] { return collector->first_callback_entered; });
+    expect(collector->first_callback.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return collector->first_callback_entered; }),
+           "first observer callback reaches its explicitly held gate");
   }
+  std::promise<void> contender_started;
+  auto contender_ready = contender_started.get_future();
   std::thread second([&] {
+    contender_started.set_value();
     observation->emit(
         ava::observability::TraceEventType::ProviderStreamEvent,
         {.run_id = "run", .turn_id = {}, .session_id = {}, .provider_id = {}, .parent_run_id = {}, .parent_turn_id = {}, .parent_session_id = {}});
   });
+  expect(contender_ready.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready,
+         "second event producer starts while the first callback is gated");
+  {
+    std::lock_guard lock(collector->mutex);
+    collector->release_first = true;
+  }
+  collector->first_callback.notify_all();
   first.join();
   second.join();
   std::lock_guard lock(collector->mutex);
-  expect(collector->events.size() == 2 && collector->events[0].sequence == 1 && collector->events[1].sequence == 2,
-         "concurrent callbacks are delivered in the same strict order as assigned sequences");
+  ava::tests::expect_all("rendezvoused event producers finish with ordered, nonoverlapping callbacks",
+                         {{"two events", collector->events.size() == 2},
+                          {"first sequence", collector->events.size() >= 1 && collector->events[0].sequence == 1},
+                          {"second sequence", collector->events.size() >= 2 && collector->events[1].sequence == 2},
+                          {"no callback overlap", !collector->overlap}});
 
   auto const file_path = root / "observer-concurrent-sequence" / "trace.jsonl";
   std::error_code remove_error;
@@ -1526,6 +1606,18 @@ void test_concurrent_observation_ordering_and_reentrancy()
   }
   expect(expected_sequence == 101 && writer->counters().written == 100 && writer->counters().dropped == 0,
          "concurrent synchronous JSONL trace writes all ordered records without a loss");
+}
+
+void test_concurrent_observation_ordering_and_reentrancy()
+{
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "observer-order-child-");
+  ScopedEnvVar temporary_directory("TMPDIR", directory.path().string());
+  auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [] {
+    auto const failures = ava::tests::failures();
+    exercise_concurrent_observation_ordering_and_reentrancy();
+    return ava::tests::failures() == failures ? 0 : 1;
+  });
+  ava::tests::expect_child_success(status, "reentrant callbacks and rendezvoused concurrent producers complete under a parent watchdog");
 }
 
 void test_provider_stream_event_outcomes_are_exhaustive()
@@ -1811,6 +1903,127 @@ void test_trace_scoring_separates_loss_from_observed_violations()
   }
 }
 
+void test_queued_writer_accounts_underlying_disk_full()
+{
+  auto const root = create_empty_root("queued-observer-enospc");
+  auto const path = root / "trace.jsonl";
+  auto const status = ava::tests::run_in_child_with_syscall_errno(SYS_write, std::nullopt, ENOSPC, [&] {
+    ava::observability::QueuedJsonlObserverOptions options;
+    options.path = path;
+    options.max_queue_events = 8;
+    ava::observability::QueuedJsonlRunObserver writer(options);
+    ava::observability::TraceEvent event;
+    event.type = ava::observability::TraceEventType::AgentRunStart;
+    event.sequence = 1;
+    writer.on_event(event);
+    event.sequence = 2;
+    writer.on_event(event);
+    writer.close();
+    auto const counters = writer.counters();
+    return counters.written == 0 && counters.failures == 1 && counters.queue_failures == 1 && counters.dropped == 1 && counters.queue_dropped == 0 &&
+                   counters.queue_bytes == 0 && counters.bytes_written == 0
+               ? 0
+               : 1;
+  });
+  if (ava::tests::expect_child_success(status, "queued writer accounts ENOSPC, drains its queue, and refuses later records") !=
+      ava::tests::ChildTestOutcome::Passed)
+    return;
+  ava::tests::expect_eq(ava::tests::read_session_test_binary_file(path), std::string{},
+                        "queued write failure leaves no partial or falsely successful JSONL record");
+}
+
+void test_session_attachment_snapshot_survives_generation_replacement()
+{
+  auto const root = create_empty_root("attachment-snapshot-replacement");
+  auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    auto const failures = ava::tests::failures();
+    class PausedAppendObserver final : public ava::observability::RunObserver
+    {
+     public:
+      void on_event(ava::observability::TraceEvent const& event) override
+      {
+        std::unique_lock lock(mutex);
+        if (event.type == ava::observability::TraceEventType::SessionAppendAttempt)
+        {
+          entered = true;
+          changed.notify_all();
+          changed.wait(lock, [&] { return release; });
+        }
+        events.push_back(event);
+      }
+      std::mutex mutex;
+      std::condition_variable changed;
+      bool entered = false;
+      bool release = false;
+      std::vector<ava::observability::TraceEvent> events;
+    };
+    auto store = ava::session::SessionStore::create_ephemeral(root);
+    if (!ava::tests::require(store.has_value(), "snapshot replacement fixture creates a session"))
+      return 1;
+    auto paused = std::make_shared<PausedAppendObserver>();
+    auto newer = std::make_shared<CollectingObserver>();
+    auto first = std::make_shared<ava::observability::RunObservation>(paused);
+    auto second = std::make_shared<ava::observability::RunObservation>(newer);
+    ava::observability::TraceContext first_context;
+    first_context.run_id = "first-generation";
+    ava::observability::TraceContext second_context;
+    second_context.run_id = "second-generation";
+    auto const first_generation = store->set_run_observation(first, first_context);
+    auto alias = *store;
+    bool appended = false;
+    std::thread writer([&] {
+      appended = append_session_entry_for_test(
+                     alias, {.id = "held", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"})
+                     .has_value();
+    });
+    {
+      std::unique_lock lock(paused->mutex);
+      expect(paused->changed.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return paused->entered; }),
+             "append is held after it captures the first generation's observation");
+    }
+    auto const second_generation = store->set_run_observation(second, second_context);
+    store->clear_run_observation(first_generation);
+    {
+      std::lock_guard lock(paused->mutex);
+      paused->release = true;
+    }
+    paused->changed.notify_all();
+    writer.join();
+    auto appended_new = append_session_entry_for_test(
+        alias, {.id = "new", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "now", .data_json = "{}"});
+    store->clear_run_observation(second_generation);
+    auto expect_append_pair = [](auto const& events, std::string const& generation) {
+      constexpr std::array expected_types{ava::observability::TraceEventType::SessionAppendAttempt, ava::observability::TraceEventType::SessionAppendResult};
+      std::size_t append_events = 0;
+      for (auto const& event : events)
+      {
+        // Raw ephemeral appends also emit a preflight load pair. This case
+        // checks the append snapshot across replacement, not the total trace.
+        if (event.type != ava::observability::TraceEventType::SessionAppendAttempt && event.type != ava::observability::TraceEventType::SessionAppendResult)
+          continue;
+        if (append_events < expected_types.size())
+          ava::tests::expect_eq(event.type, expected_types[append_events], generation + " append boundary order");
+        if (event.type == ava::observability::TraceEventType::SessionAppendResult)
+          ava::tests::expect_eq(event.outcome, ava::observability::TraceOutcome::Success, generation + " append result succeeds");
+        ++append_events;
+      }
+      ava::tests::expect_eq(append_events, expected_types.size(), generation + " has exactly one append attempt/result pair");
+    };
+    expect_append_pair(paused->events, "captured generation");
+    expect_append_pair(newer->events, "replacement generation");
+    ava::tests::expect_all(
+        "generation replacement preserves the in-flight append and the next generation",
+        {{"first attachment", first_generation != 0},
+         {"second attachment", second_generation != 0},
+         {"held append", appended},
+         {"new append", appended_new.has_value()},
+         {"old immutable context", std::ranges::all_of(paused->events, [](auto const& event) { return event.run_id == "first-generation"; })},
+         {"new immutable context", std::ranges::all_of(newer->events, [](auto const& event) { return event.run_id == "second-generation"; })}});
+    return ava::tests::failures() == failures ? 0 : 1;
+  });
+  ava::tests::expect_child_success(status, "attachment snapshot and generation replacement complete while the old callback is gated");
+}
+
 }  // namespace
 
 void run_run_observer_tests()
@@ -1823,8 +2036,10 @@ void run_run_observer_tests()
   test_trace_validator_and_scoring_manifest();
   test_trace_scoring_separates_loss_from_observed_violations();
   test_queued_writer_bounds_and_unsafe_targets();
+  test_queued_writer_accounts_underlying_disk_full();
   test_dispatcher_trace_correlation_and_ordering();
   test_session_attachment_generation_alias_stress();
+  test_session_attachment_snapshot_survives_generation_replacement();
   test_session_and_process_boundaries_are_independent();
   test_agent_fake_provider_boundaries();
   test_disabled_and_enabled_runs_preserve_authoritative_session_semantics();

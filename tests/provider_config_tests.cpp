@@ -1,4 +1,7 @@
 #include "sys.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
@@ -7,10 +10,9 @@
 #include "ava/provider/catalog.h"
 #include "ava/core/error.h"
 
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,12 +51,7 @@ ava::config::XdgPaths providers_test_paths(std::filesystem::path const& root)
 
 void write_providers_file(std::filesystem::path const& path, std::string_view body, mode_t mode = 0600)
 {
-  std::filesystem::create_directories(path.parent_path());
-  {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file.write(body.data(), static_cast<std::streamsize>(body.size()));
-  }
-  ::chmod(path.c_str(), mode);
+  ava::tests::write_test_file(path, body, mode);
 }
 
 bool error_mentions(ava::core::Error const& error, std::string_view needle)
@@ -196,7 +193,7 @@ void test_malformed_oversize_unknown_duplicate()
 
   auto const root = create_empty_root("providers-oversize-file");
   auto const paths = providers_test_paths(root);
-  write_providers_file(paths.providers_file, std::string(ava::config::kMaxUserProviderConfigBytes + 1, 'a'));
+  ava::tests::write_test_file(paths.providers_file, std::string(ava::config::kMaxUserProviderConfigBytes + 1, 'a'));
   auto oversize_file = ava::config::load_user_provider_definitions(paths);
   expect(!oversize_file && error_has_path_context(oversize_file.error()), "oversize present file fails with path context and no content");
 
@@ -284,6 +281,9 @@ void test_url_boundaries()
   accept_url("http://localhost", "http://localhost", "http localhost is accepted");
   accept_url("http://127.0.0.1", "http://127.0.0.1", "http 127.0.0.1 is accepted");
   accept_url("http://[::1]", "http://[::1]", "http [::1] is accepted");
+  accept_url("https://xn--bcher-kva.example", "https://xn--bcher-kva.example", "ASCII punycode hostname is preserved without IDN rewriting");
+  accept_url("https://model_gateway.example", "https://model_gateway.example", "underscore hostname labels are accepted for private gateways");
+  reject_url("https://bücher.example", "raw Unicode hostname is rejected rather than implicitly converted");
 
   reject_url("http://example.com", "remote http is rejected");
   reject_url("https://user:pass@example.com", "userinfo is rejected");
@@ -337,10 +337,12 @@ void test_filesystem_authority()
   // Symlink.
   {
     auto const target = root / "target-providers.json";
-    write_providers_file(target, body);
+    ava::tests::write_test_file(target, body);
     std::error_code ec;
     std::filesystem::remove(paths.providers_file, ec);
     std::filesystem::create_symlink(target, paths.providers_file, ec);
+    if (!ava::tests::require(!ec, "providers symlink fixture is created: " + ec.message()))
+      return;
     auto loaded = ava::config::load_user_provider_definitions(paths);
     expect(!loaded, "symlink providers.json is rejected");
     if (!loaded)
@@ -351,19 +353,19 @@ void test_filesystem_authority()
 
   // Group/world writable.
   {
-    write_providers_file(paths.providers_file, body, 0662);
+    ava::tests::write_test_file(paths.providers_file, body, 0662);
     auto loaded = ava::config::load_user_provider_definitions(paths);
     expect(!loaded, "group/world-writable providers.json is rejected");
     std::filesystem::remove(paths.providers_file);
   }
   {
-    write_providers_file(paths.providers_file, body, 0644);  // world-readable is OK; not writable
+    ava::tests::write_test_file(paths.providers_file, body, 0644);  // world-readable is OK; not writable
     auto loaded = ava::config::load_user_provider_definitions(paths);
     expect(loaded && loaded->size() == 1, "group/world-readable but not writable providers.json is accepted");
     std::filesystem::remove(paths.providers_file);
   }
   {
-    write_providers_file(paths.providers_file, body, 0620);
+    ava::tests::write_test_file(paths.providers_file, body, 0620);
     auto loaded = ava::config::load_user_provider_definitions(paths);
     expect(!loaded, "group-writable providers.json is rejected");
     std::filesystem::remove(paths.providers_file);
@@ -372,10 +374,10 @@ void test_filesystem_authority()
   // Hard link.
   {
     auto const other = root / "hardlink-other.json";
-    write_providers_file(paths.providers_file, body, 0600);
+    ava::tests::write_test_file(paths.providers_file, body, 0600);
     std::error_code ec;
     std::filesystem::create_hard_link(paths.providers_file, other, ec);
-    if (!ec)
+    if (ava::tests::require(!ec, "providers hard-link fixture is created: " + ec.message()))
     {
       auto loaded = ava::config::load_user_provider_definitions(paths);
       expect(!loaded, "hard-linked providers.json is rejected");
@@ -388,18 +390,24 @@ void test_filesystem_authority()
   {
     std::error_code ec;
     std::filesystem::remove(paths.providers_file, ec);
-    expect(::mkfifo(paths.providers_file.c_str(), 0600) == 0, "FIFO providers fixture is created");
-    auto const started = std::chrono::steady_clock::now();
-    auto loaded = ava::config::load_user_provider_definitions(paths);
-    auto const elapsed = std::chrono::steady_clock::now() - started;
-    expect(!loaded, "FIFO providers.json is rejected");
-    expect(elapsed < std::chrono::seconds(2), "FIFO open does not block the loader");
+    if (!ava::tests::require(::mkfifo(paths.providers_file.c_str(), 0600) == 0, "FIFO providers fixture is created"))
+      return;
+    auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+      auto const before = ava::tests::failures();
+      auto const loaded = ava::config::load_user_provider_definitions(paths);
+      ava::tests::expect_all("FIFO providers.json fails closed",
+                             {{"rejected", !loaded},
+                              {"configuration category", !loaded && loaded.error().category() == ava::core::ErrorCategory::Configuration},
+                              {"path context", !loaded && error_has_path_context(loaded.error())}});
+      return ava::tests::failures() == before ? 0 : 1;
+    });
+    ava::tests::expect_child_success(status, "FIFO providers.json is rejected with config category and path context without hanging");
     std::filesystem::remove(paths.providers_file, ec);
   }
 
   // Wrong owner when safely testable (requires privilege to chown).
   {
-    write_providers_file(paths.providers_file, body, 0600);
+    ava::tests::write_test_file(paths.providers_file, body, 0600);
     auto const foreign_uid = ::geteuid() == 0 ? 65534 : static_cast<uid_t>(-1);
     if (::geteuid() == 0 && foreign_uid != static_cast<uid_t>(-1) && ::chown(paths.providers_file.c_str(), foreign_uid, static_cast<gid_t>(-1)) == 0)
     {
@@ -412,7 +420,7 @@ void test_filesystem_authority()
   // CLOEXEC practicality: production opens with O_CLOEXEC; verify the flag works on this platform
   // with the same open flags the loader uses.
   {
-    write_providers_file(paths.providers_file, body, 0600);
+    ava::tests::write_test_file(paths.providers_file, body, 0600);
     int flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
 #ifdef O_NOFOLLOW
     flags |= O_NOFOLLOW;
@@ -470,11 +478,13 @@ void test_provider_catalog_builtins_and_user_defs()
 
   auto const root = create_empty_root("catalog-user-defs");
   auto paths = providers_test_paths(root);
-  write_providers_file(paths.providers_file,
-                       wrap_providers(provider_json("local-openai", "Local OpenAI", "openai_chat_completions", "http://127.0.0.1:11434")));
+  ava::tests::write_test_file(paths.providers_file,
+                              wrap_providers(provider_json("local-openai", "Local OpenAI", "openai_chat_completions", "http://127.0.0.1:11434")));
   auto built = ava::provider::ProviderCatalog::build(paths);
   expect(built && (*built)->user_definitions().size() == 1 && (*built)->user_definitions().front().id == "local-openai",
          "catalog stores validated user definitions");
+  if (!ava::tests::require(built.has_value(), "user-definition catalog fixture builds"))
+    return;
   expect((*built)->contains("local-openai"), "Phase C registers user-defined factories");
   expect((*built)->contains("openai"), "built-in factories remain available alongside stored user defs");
 }
@@ -483,12 +493,12 @@ void test_provider_catalog_collision_before_session()
 {
   auto const root = create_empty_root("catalog-collision");
   auto paths = providers_test_paths(root);
-  write_providers_file(paths.providers_file, wrap_providers(provider_json("openai", "Shadow", "openai_chat_completions", "https://example.com")));
+  ava::tests::write_test_file(paths.providers_file, wrap_providers(provider_json("openai", "Shadow", "openai_chat_completions", "https://example.com")));
   auto built = ava::provider::ProviderCatalog::build(paths);
   expect(!built && error_mentions(built.error(), "collides"), "builtin id collision fails catalog build");
 
   // Unsafe present file also fails closed.
-  write_providers_file(paths.providers_file, "{not-json", 0600);
+  ava::tests::write_test_file(paths.providers_file, "{not-json", 0600);
   auto invalid = ava::provider::ProviderCatalog::build(paths);
   expect(!invalid, "invalid present providers.json fails catalog build");
 }
@@ -549,6 +559,7 @@ void test_session_pins_catalog_identity()
 
 void run_provider_config_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("provider-config-suite-");
   test_parse_all_protocols_and_defaults();
   test_parse_explicit_endpoint_and_compatibility();
   test_missing_file_and_load_success();

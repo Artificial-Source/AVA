@@ -8,6 +8,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
 #include "ava/session/validation.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/result.h"
 
 #include <algorithm>
@@ -530,11 +531,11 @@ void test_session_lease_creation_sync_failures()
       bool const rejected = !failed && failed.error().message().find("sync") != std::string::npos && !std::filesystem::exists(path);
       return rejected ? 0 : 2;
     });
-    ava::tests::expect_child_success(status, denied_syscall == SYS_fdatasync
-                                                 ? "new-session creation rejects file sync failure before publication"
-                                                 : "new-session creation rejects directory sync failure and removes its published name");
-    if (ava::tests::skip_requested())
-      return;
+    auto const outcome = ava::tests::expect_child_success(status, denied_syscall == SYS_fdatasync
+                                                                      ? "new-session creation rejects file sync failure before publication"
+                                                                      : "new-session creation rejects directory sync failure and removes its published name");
+    if (outcome != ava::tests::ChildTestOutcome::Passed)
+      continue;
   }
 
   for (auto const& [ancestor_error, create_subtree] :
@@ -566,9 +567,62 @@ void test_session_lease_creation_sync_failures()
     std::string const message = !create_subtree         ? "new-session creation does not sync pre-existing ancestors when no directories were created"
                                 : ancestor_error == EIO ? "new-session creation syncs the pre-existing directory that received the new subtree"
                                                         : "new-session creation tolerates receiving-ancestor sync errno " + std::to_string(ancestor_error);
-    ava::tests::expect_child_success(status, message);
-    if (ava::tests::skip_requested())
-      return;
+    if (ava::tests::expect_child_success(status, message) != ava::tests::ChildTestOutcome::Passed)
+      continue;
+  }
+}
+
+void test_session_creation_privacy_under_hostile_umasks()
+{
+  auto const root = create_empty_root("session-hostile-umask");
+  for (mode_t const mask : {mode_t{0000}, mode_t{0077}})
+  {
+    auto const sessions = root / std::to_string(mask) / "sessions";
+    auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+      auto const previous_failures = ava::tests::failures();
+      ::umask(mask);
+      auto store = ava::session::SessionStore::create(root, sessions);
+      if (!ava::tests::require(store.has_value(), "umask fixture creates its session store"))
+        return 1;
+      auto lease = ava::session::SessionLease::create_and_acquire(store->session_path());
+      if (!ava::tests::require(lease.has_value(), "umask fixture acquires its newly published session"))
+        return 1;
+      struct stat created{};
+      struct stat directory{};
+      ava::tests::expect_all("session creation is private independently of ambient umask",
+                             {{"session stat", ::stat(store->session_path().c_str(), &created) == 0},
+                              {"session mode", (created.st_mode & 07777) == 0600},
+                              {"regular single-link file", S_ISREG(created.st_mode) && created.st_nlink == 1},
+                              {"directory stat", ::stat(store->session_path().parent_path().c_str(), &directory) == 0},
+                              {"directory mode", (directory.st_mode & 07777) == 0700}});
+      auto appended = store->append(*lease, {.id = "umask-prefix",
+                                             .parent_id = "",
+                                             .type = ava::session::EntryType::UserMessage,
+                                             .timestamp = "2026-10-20T00:00:00Z",
+                                             .data_json = "{\"text\":\"retained\"}",
+                                             .version = ava::session::kCurrentSessionEntryVersion});
+      if (!ava::tests::require(appended.has_value(), "umask fixture appends its durable prefix"))
+        return 1;
+      ava::core::UniqueFd tail(::open(store->session_path().c_str(), O_WRONLY | O_APPEND | O_CLOEXEC));
+      if (!ava::tests::require(tail && write_all_to_descriptor_for_test(tail.get(), "{\"torn\":", 8), "umask fixture appends a torn suffix"))
+        return 1;
+      tail.reset();
+      auto recovered = store->recover_torn_tail(*lease, ava::session::SessionReadLimits{});
+      if (!ava::tests::require(recovered.has_value() && recovered->has_value(), "umask recovery publishes a quarantine"))
+        return 1;
+      struct stat repaired{};
+      struct stat quarantine{};
+      auto entries = store->load(*lease);
+      ava::tests::expect_all("recovery preserves private session and quarantine modes independently of umask",
+                             {{"repaired stat", ::stat(store->session_path().c_str(), &repaired) == 0},
+                              {"repaired mode", (repaired.st_mode & 07777) == 0600},
+                              {"quarantine stat", ::stat((**recovered).c_str(), &quarantine) == 0},
+                              {"quarantine mode", (quarantine.st_mode & 07777) == 0600},
+                              {"quarantined bytes", ava::tests::read_session_test_binary_file(**recovered) == "{\"torn\":"},
+                              {"retained prefix", entries && entries->size() == 1 && entries->front().id == "umask-prefix"}});
+      return ava::tests::failures() == previous_failures ? 0 : 1;
+    });
+    ava::tests::expect_child_success(status, "session privacy under umask " + std::to_string(mask));
   }
 }
 

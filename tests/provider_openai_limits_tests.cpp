@@ -113,41 +113,79 @@ void test_closed_provider_finish_reason_catalog()
 void test_openai_provider_parser_budgets()
 {
   ava::provider::OpenAIProvider const provider("https://api.example.test");
-  std::string output = "{\"status\":\"completed\",\"output\":[";
-  for (std::size_t index = 0; index <= ava::provider::kMaxProviderParserArrayItems; ++index)
-  {
-    if (index > 0)
-      output += ',';
-    output += "{\"id\":\"msg_" + std::to_string(index) + "\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\"}]}";
-  }
-  output += "]}";
-  auto non_stream = provider.parse_response(ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = output}, false);
-  expect(non_stream && non_stream->size() == 1 && (*non_stream)[0].type == ava::provider::StreamEventType::Error &&
-             (*non_stream)[0].error_message == "OpenAI response parser limit exceeded" && (*non_stream)[0].error_message.find("msg_") == std::string::npos,
-         "OpenAI non-stream parser rejects oversized output arrays with one fixed terminal error before materializing provider events");
-
-  std::string oversized_content_event = "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_nested\",\"type\":\"message\",\"content\":[";
-  std::string oversized_summary_event = "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"rs_nested\",\"type\":\"reasoning\",\"summary\":[";
-  for (std::size_t index = 0; index <= ava::provider::kMaxProviderParserArrayItems; ++index)
-  {
-    if (index > 0)
+  auto array_json = [](std::size_t count, auto const& item) {
+    std::string array = "[";
+    for (std::size_t index = 0; index < count; ++index)
     {
-      oversized_content_event += ',';
-      oversized_summary_event += ',';
+      if (index != 0)
+        array += ',';
+      array += item(index);
     }
-    oversized_content_event += "{\"type\":\"output_text\",\"text\":\"x\"}";
-    oversized_summary_event += "{\"text\":\"x\"}";
-  }
-  oversized_content_event += "]}}\n\n";
-  oversized_summary_event += "]}}\n\n";
-  auto oversized_content = ava::provider::parse_openai_sse(oversized_content_event);
-  auto oversized_summary = ava::provider::parse_openai_sse(oversized_summary_event);
-  auto is_one_limit_error = [](auto const& events) {
-    return events && events->size() == 1 && (*events)[0].type == ava::provider::StreamEventType::Error &&
-           (*events)[0].error_message == "OpenAI response parser limit exceeded";
+    return array + "]";
   };
-  expect(is_one_limit_error(oversized_content) && is_one_limit_error(oversized_summary),
-         "OpenAI SSE parser rejects oversized nested content and reasoning-summary arrays before event expansion");
+  auto is_one_limit_error = [](auto const& events) {
+    return events && events->size() == 1 && events->front().type == ava::provider::StreamEventType::Error &&
+           events->front().error_message == "OpenAI response parser limit exceeded";
+  };
+  auto check_boundary = [&](auto const& events, bool at_limit, std::string const& label) {
+    if (!at_limit)
+    {
+      expect(is_one_limit_error(events), label + " rejects limit+1 before expanding provider events");
+      return;
+    }
+    if (!ava::tests::require(events.has_value(), label + " accepts exactly the array limit"))
+      return;
+    ava::tests::expect_all(label + " completes at the array limit",
+                           {{"events present", !events->empty()},
+                            {"no error", std::ranges::none_of(*events, [](auto const& event) { return event.type == ava::provider::StreamEventType::Error; })},
+                            {"completed terminal", !events->empty() && events->back().type == ava::provider::StreamEventType::Done &&
+                                                       events->back().finish_reason == ava::provider::ProviderFinishReason::Completed}});
+  };
+  for (auto const count : {ava::provider::kMaxProviderParserArrayItems, ava::provider::kMaxProviderParserArrayItems + 1})
+  {
+    bool const at_limit = count == ava::provider::kMaxProviderParserArrayItems;
+    auto const output =
+        "{\"status\":\"completed\",\"output\":" +
+        array_json(count,
+                   [](std::size_t index) {
+                     return "{\"id\":\"msg_" + std::to_string(index) + "\",\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"x\"}]}";
+                   }) +
+        "}";
+    auto const non_stream = provider.parse_response({.status_code = 200, .headers = {}, .body = output}, false);
+    check_boundary(non_stream, at_limit, "OpenAI non-stream output array");
+
+    auto const content = array_json(count, [](std::size_t) { return "{\"type\":\"output_text\",\"text\":\"x\"}"; });
+    auto const summary = array_json(count, [](std::size_t) { return "{\"text\":\"x\"}"; });
+    std::string const terminal = "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+    auto const content_events = ava::provider::parse_openai_sse(
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_nested\",\"type\":\"message\",\"content\":" + content +
+        "}}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_nested\",\"type\":\"message\"}}\n\n" +
+        terminal);
+    auto const summary_events = ava::provider::parse_openai_sse(
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_nested\",\"type\":\"reasoning\",\"summary\":" + summary +
+        "}}\n\n" + terminal);
+    check_boundary(content_events, at_limit, "OpenAI SSE nested content array");
+    check_boundary(summary_events, at_limit, "OpenAI SSE reasoning-summary array");
+    if (at_limit && non_stream && content_events && summary_events)
+    {
+      auto text = [](auto const& events, ava::provider::StreamEventType type) {
+        std::string value;
+        for (auto const& event : events)
+          if (event.type == type)
+            value += event.text;
+        return value;
+      };
+      auto const expected_text = std::string(count, 'x');
+      ava::tests::expect_eq(text(*non_stream, ava::provider::StreamEventType::TextDelta), expected_text, "at-limit output retains every item");
+      ava::tests::expect_eq(text(*content_events, ava::provider::StreamEventType::TextDelta), expected_text, "at-limit content retains every part");
+      std::string expected_summary = "x";
+      for (std::size_t index = 1; index < count; ++index)
+        expected_summary += "\n\nx";
+      ava::tests::expect_eq(text(*summary_events, ava::provider::StreamEventType::ReasoningDelta), expected_summary,
+                            "at-limit reasoning summary retains every part in order");
+    }
+  }
 
   ava::provider::OpenAIStreamParser parser;
   std::string single_append;
@@ -174,12 +212,28 @@ void test_openai_provider_parser_budgets()
              (*fragmented_terminal)[0].error_message.find("FRAGMENT_AFTER_LIMIT_CANARY") == std::string::npos,
          "OpenAI SSE parser applies its event budget across fragmented provider chunks");
 
-  ava::provider::OpenAIStreamParser oversized_record_parser;
-  auto oversized_record = oversized_record_parser.append("data: STREAM_RECORD_CANARY" + std::string(ava::provider::kMaxProviderSseBufferedBytes, 'x'));
-  expect(oversized_record && oversized_record->size() == 1 && (*oversized_record)[0].type == ava::provider::StreamEventType::Error &&
-             (*oversized_record)[0].error_message == "OpenAI response parser limit exceeded" &&
-             (*oversized_record)[0].error_message.find("STREAM_RECORD_CANARY") == std::string::npos,
-         "one oversized OpenAI SSE record is rejected before buffering or event expansion");
+  std::string const record_prefix = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"";
+  std::string const record_suffix = "\"}\n\n";
+  for (auto const size : {ava::provider::kMaxProviderSseBufferedBytes, ava::provider::kMaxProviderSseBufferedBytes + 1})
+  {
+    ava::provider::OpenAIStreamParser record_parser;
+    auto const text = std::string(size - record_prefix.size() - record_suffix.size(), 'x');
+    auto const record = record_prefix + text + record_suffix;
+    auto const parsed = record_parser.append(record);
+    if (size > ava::provider::kMaxProviderSseBufferedBytes)
+    {
+      expect(is_one_limit_error(parsed), "OpenAI SSE rejects a valid record exactly one byte above its buffer limit");
+      continue;
+    }
+    auto const done = record_parser.append("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n");
+    auto const final = record_parser.finish();
+    ava::tests::expect_all(
+        "OpenAI SSE accepts a valid record exactly at its buffer limit",
+        {{"complete text", parsed && parsed->size() == 1 && parsed->front().type == ava::provider::StreamEventType::TextDelta && parsed->front().text == text},
+         {"completed terminal", done && done->size() == 1 && done->front().type == ava::provider::StreamEventType::Done &&
+                                    done->front().finish_reason == ava::provider::ProviderFinishReason::Completed},
+         {"no trailing error", final && final->empty()}});
+  }
 }
 
 void test_builtin_provider_registry()

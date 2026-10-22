@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/command/private_group.h"
 #include "ava/tools/file_tools.h"
@@ -6,12 +7,15 @@
 #include "ava/tools/secure_workspace.h"
 #include "ava/tools/tool_permission.h"
 #include "ava/permissions/permission_rules.h"
+#include "ava/core/json.h"
 #include "ava/core/mode.h"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -59,10 +63,7 @@ void write_file_with_mode(std::filesystem::path const& path, std::string const& 
   {
     static_cast<void>(::chmod(current.c_str(), S_IRWXU));
   }
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file << content;
-  file.close();
-  ::chmod(path.c_str(), mode);
+  ava::tests::write_test_file(path, content, mode);
 }
 
 bool owner_only_file(std::filesystem::path const& path)
@@ -129,9 +130,8 @@ void test_permission_rule_storage_add_list_remove()
 
 void test_legacy_command_allows_are_removed_one_at_a_time()
 {
-  auto const root = temp_root() / "permission-rules-legacy-sequential-remove";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-legacy-sequential-remove-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto legacy_allow = ava::permissions::PersistentPermissionRule{.rule_id = "permrule_legacy_first",
                                                                  .scope = ava::permissions::PermissionRuleScope::Global,
@@ -221,10 +221,36 @@ void test_permission_rule_precedence_denies_win()
                                                                                                     .reason = "workspace deny",
                                                                                                     .actor = "test"});
   expect(global_allow && workspace_deny, "permission rule precedence test creates allow and deny rules");
+  if (!ava::tests::require(global_allow.has_value() && workspace_deny.has_value(), "precedence fixture creates both rules"))
+    return;
 
   auto matched = ava::permissions::match_persistent_permission_rule(store, read_prompt(store, outside));
   expect(matched && *matched && (*matched)->rule_id == workspace_deny->rule_id && (*matched)->action == ava::permissions::PermissionAction::Deny,
          "persistent deny rules take precedence over matching allows");
+
+  for (auto const& [literal, other] : {std::pair{"a*.txt", "ab.txt"}, std::pair{"a?.txt", "ab.txt"}, std::pair{"File.txt", "file.txt"}})
+  {
+    auto const target = root / literal;
+    auto added = ava::permissions::add_persistent_permission_rule(store, {.scope = ava::permissions::PermissionRuleScope::Global,
+                                                                          .action = ava::permissions::PermissionAction::Allow,
+                                                                          .operation = ava::permissions::Operation::ReadFile,
+                                                                          .mode = ava::permissions::PermissionRuleMode::Any,
+                                                                          .tool_name = "",
+                                                                          .target_path = target,
+                                                                          .command = "",
+                                                                          .command_recipe_key = {},
+                                                                          .recipe_display = {},
+                                                                          .critical_acknowledged = false,
+                                                                          .reason = "exact literal path",
+                                                                          .actor = "test"});
+    if (!ava::tests::require(added.has_value(), "literal path Allow is persisted"))
+      return;
+    auto exact = ava::permissions::match_persistent_permission_rule(store, read_prompt(store, target));
+    auto different = ava::permissions::match_persistent_permission_rule(store, read_prompt(store, root / other));
+    ava::tests::expect_all(
+        "persistent path matching is literal and case-sensitive: " + std::string(literal),
+        {{"exact match", exact && *exact && (*exact)->rule_id == added->rule_id}, {"different path remains unmatched", different && !*different}});
+  }
 }
 
 ava::permissions::PermissionPrompt command_prompt(ava::permissions::PermissionRuleStore const& store, std::string command)
@@ -257,9 +283,8 @@ ava::permissions::CommandPermissionMetadata stable_command_metadata(std::string 
 
 void test_schema_v2_recipe_rules_bind_scope_and_deny_precedence()
 {
-  auto const root = temp_root() / "permission-rules-stable-recipe";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-stable-recipe-");
+  auto const& root = directory.path();
   auto const workspace_a = root / "workspace-a";
   auto const workspace_b = root / "workspace-b";
   std::filesystem::create_directories(workspace_a);
@@ -335,9 +360,8 @@ void test_schema_v2_recipe_rules_bind_scope_and_deny_precedence()
 
 void test_critical_command_allows_are_always_one_shot()
 {
-  auto const root = temp_root() / "permission-rules-critical-ack";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-critical-ack-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto prompt = command_prompt(store, "python -c 'print(1)'");
   ava::permissions::CommandPermissionMetadata critical;
@@ -385,9 +409,8 @@ void test_critical_command_allows_are_always_one_shot()
 
 void test_critical_acknowledgements_cannot_authorize_repository_build_or_test_text()
 {
-  auto const root = temp_root() / "permission-rules-critical-ack-repository-build";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-critical-ack-repository-build-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto const command = std::string("cmake --build build");
   auto created =
@@ -612,9 +635,8 @@ void test_repository_build_test_persistent_allows_are_rejected_but_denies_win()
 
 void test_legacy_command_allows_do_not_authorize_sealed_critical_or_unverified_plans()
 {
-  auto const root = temp_root() / "permission-rules-sealed-command-v1";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-sealed-command-v1-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto prompt = command_prompt(store, "python -c 'print(1)'");
   ava::permissions::PersistentPermissionRule const legacy_allow{.rule_id = "permrule_legacy_command_allow",
@@ -668,9 +690,8 @@ void test_legacy_command_allows_do_not_authorize_sealed_critical_or_unverified_p
 
 void test_old_critical_acknowledgements_never_recover_authority()
 {
-  auto const root = temp_root() / "permission-rules-critical-unavailable";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-critical-unavailable-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto const command = std::string("curl https://example.test/releases");
   auto rejected = ava::permissions::add_persistent_permission_rule(
@@ -738,7 +759,12 @@ void test_permission_rule_storage_fail_closed()
   write_file_with_mode(store.global_rules_file, "{\"schema_version\":3,\"rules\":[]}", S_IRUSR | S_IWUSR);
 
   auto loaded = ava::permissions::load_persistent_permission_rules(store);
-  expect(!loaded && loaded.error().message() == "unsupported permission rules schema_version", "permission rule storage rejects unsupported schema versions");
+  ava::tests::expect_all("permission rule storage rejects unsupported schema versions with structured context",
+                         {{"rejected", !loaded},
+                          {"category", !loaded && loaded.error().category() == ava::core::ErrorCategory::InvalidArgument},
+                          {"schema version", !loaded && std::ranges::any_of(loaded.error().context(), [](auto const& item) {
+                             return item.key == "schema_version" && item.value == "3";
+                           })}});
 
   bool fallback_called = false;
   auto resolver = ava::permissions::build_persistent_permission_rule_resolver(
@@ -753,8 +779,12 @@ void test_permission_rule_storage_fail_closed()
 
   write_file_with_mode(store.global_rules_file, "{\"schema_version\":2,\"rules\":[],\"unexpected\":true}", S_IRUSR | S_IWUSR);
   auto unknown_v2_member = ava::permissions::load_persistent_permission_rules(store);
-  expect(!unknown_v2_member && unknown_v2_member.error().message() == "schema-v2 permission rules file has unsupported member",
-         "strict bounded schema-v2 rule storage rejects unknown members rather than silently broadening policy");
+  ava::tests::expect_all("strict schema-v2 rule storage rejects the unknown member with structured context",
+                         {{"rejected", !unknown_v2_member},
+                          {"category", !unknown_v2_member && unknown_v2_member.error().category() == ava::core::ErrorCategory::InvalidArgument},
+                          {"unknown field", !unknown_v2_member && std::ranges::any_of(unknown_v2_member.error().context(), [](auto const& item) {
+                             return item.key == "field" && item.value == "unexpected";
+                           })}});
 }
 
 void test_permission_rule_broad_permissions_rejected()
@@ -1294,9 +1324,8 @@ ava::permissions::PermissionRuleDraft persistent_deny_draft(std::filesystem::pat
 
 void test_permission_rule_storage_rejects_unsafe_ancestor_without_dropping_denies()
 {
-  auto const root = temp_root() / "permission-rules-unsafe-ancestor";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-unsafe-ancestor-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto const target = root / "outside.txt";
   auto deny = ava::permissions::add_persistent_permission_rule(store, persistent_deny_draft(target));
@@ -1315,18 +1344,24 @@ void test_permission_rule_storage_rejects_unsafe_ancestor_without_dropping_denie
 
 void test_permission_rule_storage_allows_private_primary_group_ancestor_when_verified()
 {
-  auto const root = temp_root() / "permission-rules-private-primary-group-ancestor";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-private-primary-group-ancestor-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto const config_dir = store.global_rules_file.parent_path().parent_path();
   std::filesystem::create_directories(config_dir);
-  if (::chown(config_dir.c_str(), ::geteuid(), ::getegid()) != 0 || ::chmod(config_dir.c_str(), S_IRWXU | S_IRWXG) != 0)
+  if (!ava::tests::require(::chown(config_dir.c_str(), ::geteuid(), ::getegid()) == 0, "private-group fixture sets its owner and primary group"))
+    return;
+  if (!ava::tests::require(::chmod(config_dir.c_str(), S_IRWXU | S_IRWXG) == 0, "private-group fixture sets group-writable directory mode"))
     return;
 
   struct stat status{};
-  if (::stat(config_dir.c_str(), &status) != 0 || !ava::command::detail::is_current_user_private_primary_group_directory(status))
+  if (!ava::tests::require(::stat(config_dir.c_str(), &status) == 0, "private-group fixture stats its directory"))
     return;
+  if (!ava::command::detail::is_current_user_private_primary_group_directory(status))
+  {
+    ava::tests::request_skip("private primary group ancestor", "the current account has no verifiable private primary group");
+    return;
+  }
 
   auto const target = root / "outside.txt";
   auto deny = ava::permissions::add_persistent_permission_rule(store, persistent_deny_draft(target));
@@ -1337,9 +1372,9 @@ void test_permission_rule_storage_allows_private_primary_group_ancestor_when_ver
 
 void test_permission_rule_storage_rejects_symlinked_or_replaced_directories()
 {
-  auto const root = temp_root() / "permission-rules-replaced-directories";
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-replaced-directories-");
+  auto const& root = directory.path();
   std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
   auto const store = test_store(root);
   auto const target = root / "outside.txt";
   auto deny = ava::permissions::add_persistent_permission_rule(store, persistent_deny_draft(target));
@@ -1379,9 +1414,8 @@ void test_permission_rule_storage_rejects_symlinked_or_replaced_directories()
 
 void test_permission_rule_storage_requires_owner_only_final_directory()
 {
-  auto const root = temp_root() / "permission-rules-final-directory-mode";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rules-final-directory-mode-");
+  auto const& root = directory.path();
   auto const store = test_store(root);
   auto const target = root / "outside.txt";
   auto deny = ava::permissions::add_persistent_permission_rule(store, persistent_deny_draft(target));
@@ -1696,6 +1730,159 @@ void test_permission_rule_capacity_refusal_preserves_store()
   }
 }
 
+void test_permission_rule_file_rejects_malformed_rules()
+{
+  auto directory = ScopedTestDirectory::create_unique(temp_root(), "permission-rule-codec-");
+  auto const store = test_store(directory.path());
+  using Fields = std::map<std::string, std::string>;
+  Fields const valid{{"rule_id", "\"permrule_valid\""},
+                     {"scope", "\"global\""},
+                     {"action", "\"deny\""},
+                     {"operation", "\"read\""},
+                     {"mode", "\"any\""},
+                     {"reason", "\"fixture\""},
+                     {"actor", "\"test\""},
+                     {"created_at", "\"2026-07-19T00:00:00Z\""},
+                     {"target_path", "\"/outside.txt\""}};
+  auto object = [](Fields const& fields) {
+    std::string result = "{";
+    for (auto const& [key, value] : fields)
+    {
+      if (result.size() != 1)
+        result += ',';
+      result += "\"" + key + "\":" + value;
+    }
+    return result + "}";
+  };
+  auto document = [&](Fields const& fields, int version = 2) {
+    return "{\"schema_version\":" + std::to_string(version) + ",\"rules\":[" + object(fields) + "]}";
+  };
+  write_file_with_mode(store.global_rules_file, document(valid), 0600);
+  auto const baseline = ava::permissions::load_persistent_permission_rules(store);
+  if (!ava::tests::require(baseline && baseline->size() == 1, "malformed-rule table starts from an accepted rule"))
+    return;
+  std::vector<std::pair<std::string, std::string>> cases{{"empty file", ""},
+                                                         {"truncated object", "{"},
+                                                         {"non-object document", "[]"},
+                                                         {"missing version", "{\"rules\":[]}"},
+                                                         {"string version", "{\"schema_version\":\"2\",\"rules\":[]}"},
+                                                         {"fractional version", "{\"schema_version\":2.5,\"rules\":[]}"},
+                                                         {"exponent version", "{\"schema_version\":2e0,\"rules\":[]}"},
+                                                         {"overflow version", "{\"schema_version\":9223372036854775808,\"rules\":[]}"},
+                                                         {"unsupported version", "{\"schema_version\":3,\"rules\":[]}"},
+                                                         {"missing rules", "{\"schema_version\":2}"},
+                                                         {"non-array rules", "{\"schema_version\":2,\"rules\":{}}"},
+                                                         {"non-object rule", "{\"schema_version\":2,\"rules\":[false]}"},
+                                                         {"duplicate top-level member", "{\"schema_version\":2,\"schema_version\":2,\"rules\":[]}"},
+                                                         {"unknown top-level member", "{\"schema_version\":2,\"rules\":[],\"unknown\":true}"},
+                                                         {"trailing garbage", "{\"schema_version\":2,\"rules\":[]}x"}};
+  auto change = [&](std::string name, std::string key, std::string value, int version = 2) {
+    auto fields = valid;
+    fields[std::move(key)] = std::move(value);
+    cases.emplace_back(std::move(name), document(fields, version));
+  };
+  for (std::string const key : {"rule_id", "scope", "action", "operation", "mode", "reason", "actor", "created_at"})
+  {
+    auto fields = valid;
+    fields.erase(key);
+    cases.emplace_back("missing " + key, document(fields));
+    change("wrong type " + key, key, "42");
+    change("empty " + key, key, "\"\"");
+  }
+  for (std::string const key : {"workspace_dir", "target_path", "command", "tool_name", "command_recipe_key", "recipe_display"})
+    change("wrong type " + key, key, "false");
+  change("non-boolean acknowledgement", "critical_acknowledged", "\"true\"");
+  for (std::string const key : {"scope", "action", "operation", "mode"})
+    change("unknown " + key, key, "\"unsupported\"");
+  change("ask action", "action", "\"ask\"");
+  change("file-scope mismatch", "scope", "\"workspace\"");
+  change("invalid id", "rule_id", "\"bad/id\"");
+  change("oversized id", "rule_id", "\"" + std::string(257, 'a') + "\"");
+  change("invalid actor", "actor", "\"bad/actor\"");
+  change("control actor", "actor", "\"bad\\nactor\"");
+  change("invalid tool", "tool_name", "\"bad/tool\"");
+  change("control reason", "reason", "\"bad\\nreason\"");
+  change("oversized reason", "reason", "\"" + std::string(1025, 'a') + "\"");
+  change("control command", "command", "\"bad\\ncommand\"");
+  change("oversized command", "command", "\"" + std::string(8193, 'a') + "\"");
+  change("invalid recipe key", "command_recipe_key", "\"not-a-key\"");
+  change("wrong-scope recipe key", "command_recipe_key", "\"sha256:ava-command-workspace-recipe-v1:" + std::string(64, 'a') + "\"");
+  change("control recipe key", "command_recipe_key", "\"bad\\nkey\"");
+  change("oversized recipe key", "command_recipe_key", "\"" + std::string(129, 'a') + "\"");
+  change("control recipe display", "recipe_display", "\"bad\\ndisplay\"");
+  change("oversized recipe display", "recipe_display", "\"" + std::string(1025, 'a') + "\"");
+  change("relative workspace", "workspace_dir", "\"relative\"");
+  change("relative target", "target_path", "\"relative\"");
+  change("missing path target", "target_path", "\"\"");
+  change("acknowledgement on path rule", "critical_acknowledged", "true");
+  change("unknown rule member", "unknown", "true");
+  change("per-rule schema member", "schema_version", "2");
+  change("escaped member name", "escaped\\u005fname", "true");
+  {
+    auto duplicate = object(valid);
+    duplicate.insert(1, "\"rule_id\":\"duplicate\",");
+    cases.emplace_back("duplicate rule id", "{\"schema_version\":2,\"rules\":[" + duplicate + "]}");
+  }
+  for (std::string const key : {"command_recipe_key", "recipe_display"})
+    change("legacy recipe field " + key, key, "\"legacy-value\"", 1);
+  for (std::string const action : {"allow", "deny"})
+    for (int version : {1, 2})
+    {
+      auto fields = valid;
+      fields["operation"] = "\"bash\"";
+      fields["action"] = "\"" + action + "\"";
+      cases.emplace_back("missing command " + action + " v" + std::to_string(version), document(fields, version));
+      fields["critical_acknowledged"] = "true";
+      cases.emplace_back("invalid command acknowledgement " + action + " v" + std::to_string(version), document(fields, version));
+    }
+  for (auto const operation : {ava::permissions::Operation::NetworkFetch, ava::permissions::Operation::NetworkSearch,
+                               ava::permissions::Operation::LspServerLaunch, ava::permissions::Operation::McpResourceRead})
+    change("missing command for " + ava::permissions::to_string(operation), "operation", "\"" + ava::permissions::to_string(operation) + "\"");
+  change("missing tool name", "operation", "\"" + ava::permissions::to_string(ava::permissions::Operation::TaskRun) + "\"");
+  {
+    auto fields = valid;
+    fields["operation"] = "\"bash\"";
+    fields["action"] = "\"allow\"";
+    fields["critical_acknowledged"] = "true";
+    fields["command"] = "\"cmake --build build\"";
+    cases.emplace_back("repository-controlled acknowledgement", document(fields));
+  }
+  auto check_rejected = [&](std::string const& name, std::string const& content, std::filesystem::path const& file) {
+    write_file_with_mode(file, content, 0600);
+    auto loaded = ava::permissions::load_persistent_permission_rules(store);
+    expect(!loaded, "permission rule codec rejects " + name);
+    if (!loaded)
+      ava::tests::expect_eq(loaded.error().category(), ava::core::ErrorCategory::InvalidArgument, "malformed rule category: " + name);
+    bool fallback_called = false;
+    auto resolver = ava::permissions::build_persistent_permission_rule_resolver(
+        store, [&](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+          fallback_called = true;
+          return ava::permissions::PermissionResolution::Allow;
+        });
+    auto decision = resolver(read_prompt(store, directory.path() / "outside.txt"));
+    ava::tests::expect_all("malformed rule fails closed: " + name,
+                           {{"decision returned", decision.has_value()},
+                            {"deny", decision && decision->resolution == ava::permissions::PermissionResolution::Deny},
+                            {"authoritative", decision && decision->authoritative},
+                            {"persistent error source", decision && decision->resolution_source == "persistent_rule_error"},
+                            {"fallback not called", !fallback_called}});
+  };
+  for (auto const& [name, content] : cases)
+    check_rejected(name, content, store.global_rules_file);
+  write_file_with_mode(store.global_rules_file, "{\"schema_version\":2,\"rules\":[]}", 0600);
+  auto workspace_missing = valid;
+  workspace_missing["scope"] = "\"workspace\"";
+  auto const workspace_file = ava::permissions::enforceable_permission_rules_file(store, ava::permissions::PermissionRuleScope::Workspace);
+  check_rejected("missing workspace identity", document(workspace_missing), workspace_file);
+  expect(std::filesystem::remove(workspace_file), "malformed workspace-rule fixture is removed before normalization coverage");
+  auto normalized = valid;
+  normalized["target_path"] = "\"/parent/../outside.txt\"";
+  write_file_with_mode(store.global_rules_file, document(normalized), 0600);
+  auto loaded = ava::permissions::load_persistent_permission_rules(store);
+  expect(loaded && loaded->size() == 1 && loaded->front().target_path == "/outside.txt",
+         "absolute rule paths containing parent components normalize instead of being rejected");
+}
+
 }  // namespace
 
 void run_permission_rules_tests()
@@ -1713,6 +1900,7 @@ void run_permission_rules_tests()
   test_repository_build_test_persistent_allows_are_rejected_but_denies_win();
   test_legacy_command_allows_do_not_authorize_sealed_critical_or_unverified_plans();
   test_permission_rule_storage_fail_closed();
+  test_permission_rule_file_rejects_malformed_rules();
   test_permission_rule_broad_permissions_rejected();
   test_deny_path_matching_follows_physical_aliases_without_broadening_allow();
   test_file_and_search_tools_enforce_denies_across_physical_aliases();

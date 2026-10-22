@@ -7,12 +7,14 @@
 #include "ava/session/record.h"
 #include "ava/session/session_branch.h"
 #include "ava/session/session_store.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/result.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -166,15 +168,16 @@ void check_session_quarantine_publication(int empty_path_error, int descriptor_p
         auto has_context = [&](std::string const& key, std::string const& value) {
           return std::ranges::any_of(recovered.error().context(), [&](auto const& context) { return context.key == key && context.value == value; });
         };
-        expect(recovered.error().message().find("quarantine") != std::string::npos && has_context("session_path", store.session_path().string()) &&
-                   has_context("at_empty_path_cause", std::strerror(empty_path_error)) &&
-                   has_context("proc_self_fd_cause", std::strerror(descriptor_path_error)),
-               "both-route publication failure identifies the session path and preserves both syscall causes");
+        ava::tests::expect_all("both-route publication failure identifies the session and both syscall causes",
+                               {{"session path", has_context("session_path", store.session_path().string())},
+                                {"empty-path cause", has_context("at_empty_path_cause", std::strerror(empty_path_error))},
+                                {"descriptor-path cause", has_context("proc_self_fd_cause", std::strerror(descriptor_path_error))}});
       }
     }
     return ava::tests::failures() == previous_failures ? 0 : 1;
   });
-  expect(status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0, "isolated quarantine publication case succeeds: " + case_name);
+  if (ava::tests::expect_child_success(status, "isolated quarantine publication case succeeds: " + case_name) != ava::tests::ChildTestOutcome::Passed)
+    return;
   expect(ava::tests::read_session_test_binary_file(store.session_path()) == (descriptor_path_error == 0 ? prefix : original),
          "publication success repairs only the suffix; both-route failure leaves all original session bytes unchanged");
   std::size_t artifacts = 0;
@@ -187,6 +190,81 @@ void check_session_quarantine_publication(int empty_path_error, int descriptor_p
   }
   expect(!iter_error && artifacts == (descriptor_path_error == 0 ? 1U : 0U),
          "quarantine publication keeps exactly one final artifact on success and cleans temporary names on failure");
+}
+
+void check_session_restart_after_synced_writer_death()
+{
+  auto const root = create_empty_root("session-restart-after-writer-death");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  ava::session::SessionStore store(ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "restart"});
+  int descriptors[2];
+  if (!ava::tests::require(::pipe(descriptors) == 0, "restart fixture creates a publication notification pipe"))
+    return;
+  ava::core::UniqueFd read_end(descriptors[0]);
+  ava::core::UniqueFd write_end(descriptors[1]);
+  auto const writer = ::fork();
+  if (!ava::tests::require(writer >= 0, "restart fixture forks its writer"))
+    return;
+  if (writer == 0)
+  {
+    read_end.reset();
+    auto lease = ava::session::SessionLease::create_and_acquire(store.session_path());
+    if (!lease)
+      ::_exit(1);
+    store.set_after_append_write_for_test([&] {
+      if (!write_all_to_descriptor_for_test(write_end.get(), "synced\n", 7))
+        ::_exit(2);
+      for (;;)
+        ::pause();
+    });
+    static_cast<void>(store.append(*lease, {.id = "before-death",
+                                            .parent_id = "",
+                                            .type = ava::session::EntryType::UserMessage,
+                                            .timestamp = "2026-10-20T00:00:00Z",
+                                            .data_json = "{\"text\":\"durable\"}",
+                                            .version = ava::session::kCurrentSessionEntryVersion}));
+    ::_exit(3);
+  }
+  ava::tests::ScopedChild writer_owner(writer);
+  write_end.reset();
+  std::string notification;
+  if (!ava::tests::require(ava::tests::read_until(read_end.get(), notification, "synced\n", ava::tests::now_plus_seconds(5)),
+                           "writer reaches its post-sync boundary while still holding the lease"))
+    return;
+  if (!ava::tests::require(::kill(writer, SIGKILL) == 0, "restart fixture kills the gated writer"))
+    return;
+  auto const killed = writer_owner.wait_until(ava::tests::now_plus_seconds(5));
+  ava::tests::expect_all("writer is terminated and reaped before restart",
+                         {{"reaped", killed.has_value()}, {"killed", killed && WIFSIGNALED(*killed) && WTERMSIG(*killed) == SIGKILL}});
+  if (!killed)
+    return;
+  auto const restarted = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    auto const previous_failures = ava::tests::failures();
+    auto lease = ava::session::SessionLease::acquire(store.session_path());
+    if (!ava::tests::require(lease.has_value(), "fresh process acquires the dead writer's released lease"))
+      return 1;
+    auto recovered = store.recover_torn_tail(*lease, ava::session::SessionReadLimits{});
+    auto before = store.load(*lease);
+    ava::tests::expect_all("restart retains the complete synced record without suffix repair",
+                           {{"recovery succeeds", recovered.has_value()},
+                            {"no torn suffix", recovered && !*recovered},
+                            {"retained record", before && before->size() == 1 && before->front().id == "before-death"}});
+    auto appended = store.append(*lease, {.id = "after-restart",
+                                          .parent_id = "before-death",
+                                          .type = ava::session::EntryType::UserMessage,
+                                          .timestamp = "2026-10-20T00:00:01Z",
+                                          .data_json = "{\"text\":\"resumed\"}",
+                                          .version = ava::session::kCurrentSessionEntryVersion});
+    auto after = store.load(*lease);
+    ava::tests::expect_all(
+        "fresh process resumes append after writer death",
+        {{"append", appended.has_value()},
+         {"two records", after && after->size() == 2},
+         {"ordered retained prefix", after && after->size() == 2 && after->front().id == "before-death" && after->back().id == "after-restart"}});
+    return ava::tests::failures() == previous_failures ? 0 : 1;
+  });
+  ava::tests::expect_child_success(restarted, "session restart after a writer killed at its post-sync boundary succeeds");
 }
 
 }  // namespace
@@ -209,6 +287,7 @@ void test_session_torn_tail_recovery()
 {
   test_session_recovery_quarantine_publication_fallback();
   test_session_recovery_quarantine_publication_fail_closed();
+  check_session_restart_after_synced_writer_death();
 
   auto const root = create_empty_root("session-torn-tail-recovery");
 

@@ -10,11 +10,13 @@
 #include "ava/session/validation.h"
 #include "ava/provider/provider.h"
 #include "ava/provider/provider_utils.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/result.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -26,8 +28,10 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #if defined(__linux__)
@@ -38,6 +42,18 @@
 
 namespace session_tests {
 namespace {
+void expect_image_error(auto const& result, ava::core::ErrorCategory category, std::string_view context_key, std::string_view context_value,
+                        std::string const& message, std::source_location location = std::source_location::current())
+{
+  if (!ava::tests::require(!result, message, location))
+    return;
+  ava::tests::expect_eq(result.error().category(), category, message + ": category", location);
+  ava::tests::expect_all(message,
+                         {{"error context", std::ranges::any_of(result.error().context(),
+                                                                [&](auto const& item) { return item.key == context_key && item.value == context_value; })}},
+                         location);
+}
+
 std::optional<std::filesystem::path> created_session_rollback_quarantine(std::filesystem::path const& session_path)
 {
   auto const prefix = "." + session_path.filename().string() + ".rollback.";
@@ -52,7 +68,7 @@ std::optional<std::filesystem::path> created_session_rollback_quarantine(std::fi
 }
 
 // Interposition state machine (one child for each FIFO/symlink replacement):
-// 1. The child requests tracing, stops for setup, then arms a watchdog and reads.
+// 1. The child requests tracing, stops for setup, then reads.
 // 2. The parent steps syscall stops until openat/openat2 is about to open the
 //    attachment, ignoring syscall exits and opens of other paths. Stored reads
 //    may use a root-relative path; imported reads use the source's full path.
@@ -62,7 +78,7 @@ std::optional<std::filesystem::path> created_session_rollback_quarantine(std::fi
 //    the replacement with the expected category, not block opening a FIFO.
 // 5. Reap the child and restore the original fixture before checking the result.
 // Trace failures kill/reap the child; unsupported tracing/filesystem operations
-// skip the case. The child alarm also bounds an unexpected block or broken trace.
+// skip the case. The parent's shared deadline bounds every trace stop and read.
 template <typename ReadAttachment>
 void test_attachment_replacement_before_open(std::filesystem::path const& path, ReadAttachment&& read_attachment)
 {
@@ -79,26 +95,49 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
       if (::ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) != 0)
         ::_exit(77);
       ::raise(SIGSTOP);
-      ::signal(SIGALRM, SIG_DFL);
-      ::alarm(5);
       auto result = read_attachment();
       auto const expected_category = symlink ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::InvalidArgument;
       ::_exit(!result && result.error().category() == expected_category ? 0 : 1);
     }
 
+    ava::tests::ScopedChild child_owner(child);
+    auto const deadline = ava::tests::now_plus_seconds(10);
     int status = 0;
+    bool child_reaped = false;
     auto const wait_child = [&] {
-      pid_t waited;
-      do
+      // A pidfd signals exit, not ptrace stops. Observe stop predicates directly
+      // instead of blocking an exit-only wait on a child deliberately stopped.
+      while (std::chrono::steady_clock::now() < deadline)
       {
-        waited = ::waitpid(child, &status, 0);
+        auto const waited = ::waitpid(child, &status, WNOHANG | WUNTRACED);
+        if (waited == child)
+        {
+          child_reaped = WIFEXITED(status) || WIFSIGNALED(status);
+          return true;
+        }
+        if (waited < 0 && errno != EINTR)
+        {
+          child_reaped = errno == ECHILD;
+          return false;
+        }
+        std::this_thread::yield();
       }
-      while (waited < 0 && errno == EINTR);
-      return waited == child;
+      return false;
     };
     auto const kill_child = [&] {
+      if (child_reaped)
+        return;
       static_cast<void>(::kill(child, SIGKILL));
-      static_cast<void>(wait_child());
+      auto const cleanup_deadline = ava::tests::now_plus_seconds(3);
+      for (;;)
+      {
+        auto const reaped = ava::tests::wait_child_until(child, cleanup_deadline);
+        if (!reaped || WIFEXITED(*reaped) || WIFSIGNALED(*reaped))
+        {
+          child_reaped = true;
+          return;
+        }
+      }
     };
     if (!wait_child())
     {
@@ -108,8 +147,11 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
     }
     if (WIFEXITED(status))
     {
-      ava::tests::expect_child_success(status, "attachment replacement reader exits successfully",
-                                       "attachment replacement race requires permitted parent/child ptrace");
+      auto const outcome = ava::tests::expect_child_success(status, "attachment replacement reader exits successfully",
+                                                            "attachment replacement race requires permitted parent/child ptrace");
+      if (outcome != ava::tests::ChildTestOutcome::Passed)
+        return;
+      expect(false, "attachment replacement reader must stop at its tracing gate before reading");
       return;
     }
     if (!WIFSTOPPED(status) || ::ptrace(PTRACE_SETOPTIONS, child, nullptr, PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) != 0)
@@ -337,8 +379,8 @@ void test_image_attachment_message_reconstruction_and_validation()
   auto const fractional_size_sanitized = ava::session::sanitized_message_data_json(fractional_size_entries.front().data_json);
   expect(fractional_size_sanitized.find("attachments") == std::string::npos, "message data sanitizer omits fractional image byte sizes");
   auto const fractional_size_messages = ava::agent::build_provider_messages_from_entries(fractional_size_entries);
-  expect(!fractional_size_messages && fractional_size_messages.error().message().find("provider replay") != std::string::npos,
-         "provider replay rejects invalid fractional image byte sizes instead of dropping image metadata");
+  expect_image_error(fractional_size_messages, ava::core::ErrorCategory::InvalidArgument, "entry_id", "image_fractional_size",
+                     "provider replay rejects invalid fractional image byte sizes instead of dropping image metadata");
 
   std::vector<ava::session::SessionEntry> const exponent_size_entries = {
       ava::session::SessionEntry{.id = "image_exponent_size",
@@ -351,6 +393,29 @@ void test_image_attachment_message_reconstruction_and_validation()
   auto const exponent_size_validation = ava::session::validate_session_replay(exponent_size_entries);
   expect(!exponent_size_validation.ok() && exponent_size_validation.issues.front().kind == ava::session::SessionReplayIssueKind::InvalidMessageEntry,
          "session replay rejects exponent image byte sizes");
+
+  for (auto const byte_size : {ava::session::kMaxImageAttachmentBytes, ava::session::kMaxImageAttachmentBytes + 1})
+  {
+    auto boundary_entries = entries;
+    auto& data = boundary_entries.front().data_json;
+    auto const offset = data.find("\"byte_size\":1234");
+    if (!ava::tests::require(offset != std::string::npos, "image replay boundary fixture locates its byte size"))
+      return;
+    data.replace(offset, std::string_view("\"byte_size\":1234").size(), "\"byte_size\":" + std::to_string(byte_size));
+    auto const validation = ava::session::validate_session_replay(boundary_entries);
+    auto const replay = ava::agent::build_provider_messages_from_entries(boundary_entries);
+    if (byte_size == ava::session::kMaxImageAttachmentBytes)
+    {
+      ava::tests::expect_all("image metadata accepts the exact per-attachment byte limit",
+                             {{"session validation", validation.ok()}, {"provider replay", replay.has_value()}});
+    }
+    else
+    {
+      ava::tests::expect_all("image metadata rejects an integer byte size one above the limit",
+                             {{"invalid message", ava::tests::session_replay_has_issue(validation, ava::session::SessionReplayIssueKind::InvalidMessageEntry)},
+                              {"provider rejection", !replay}});
+    }
+  }
 
   std::vector<ava::session::SessionEntry> const duplicate_key_entries = {
       ava::session::SessionEntry{.id = "image_duplicate_key",
@@ -419,8 +484,8 @@ void test_image_attachment_message_reconstruction_and_validation()
   ava::provider::ProviderRequest text_only_request{
       .provider_id = "test", .model_id = "text-only", .system_prompt = "", .messages = *messages, .tools_json = {}};
   auto const text_only = ava::provider::validate_image_content_parts(text_only_request, false);
-  expect(!text_only && text_only.error().message().find("does not support image input") != std::string::npos,
-         "provider image validation rejects image parts for text-only models");
+  expect_image_error(text_only, ava::core::ErrorCategory::InvalidArgument, "content_part_index", "1",
+                     "provider image validation rejects image parts for text-only models");
   auto const image_model = ava::provider::validate_image_content_parts(text_only_request, true);
   expect(image_model.has_value(), "provider image validation accepts bounded user image metadata for image models");
 
@@ -438,7 +503,8 @@ void test_image_attachment_message_reconstruction_and_validation()
   ava::provider::ProviderRequest too_many_request{
       .provider_id = "test", .model_id = "image-model", .system_prompt = "", .messages = too_many_images, .tools_json = {}};
   auto const too_many = ava::provider::validate_image_content_parts(too_many_request, true);
-  expect(!too_many && too_many.error().message().find("count") != std::string::npos, "provider image validation caps image attachment count per request");
+  expect_image_error(too_many, ava::core::ErrorCategory::InvalidArgument, "content_part_index", "16",
+                     "provider image validation caps image attachment count per request");
 
   auto too_large_total = *messages;
   too_large_total[0].content_parts.clear();
@@ -453,21 +519,21 @@ void test_image_attachment_message_reconstruction_and_validation()
   }
   too_many_request.messages = too_large_total;
   auto const too_large = ava::provider::validate_image_content_parts(too_many_request, true);
-  expect(!too_large && too_large.error().message().find("total byte size") != std::string::npos,
-         "provider image validation caps aggregate image bytes per request");
+  expect_image_error(too_large, ava::core::ErrorCategory::InvalidArgument, "content_part_index", "2",
+                     "provider image validation caps aggregate image bytes per request");
 
   auto invalid_path_messages = *messages;
   invalid_path_messages[0].content_parts[1].storage_path = "/tmp/img_1.png";
   ava::provider::ProviderRequest invalid_path_request{
       .provider_id = "test", .model_id = "image-model", .system_prompt = "", .messages = invalid_path_messages, .tools_json = {}};
   auto const invalid_path = ava::provider::validate_image_content_parts(invalid_path_request, true);
-  expect(!invalid_path && invalid_path.error().message().find("storage path") != std::string::npos,
-         "provider image validation rejects absolute image storage paths");
+  expect_image_error(invalid_path, ava::core::ErrorCategory::InvalidArgument, "content_part_index", "1",
+                     "provider image validation rejects absolute image storage paths");
   invalid_path_messages[0].content_parts[1].storage_path = "README.md";
   invalid_path_request.messages = invalid_path_messages;
   auto const unanchored_path = ava::provider::validate_image_content_parts(invalid_path_request, true);
-  expect(!unanchored_path && unanchored_path.error().message().find("storage path") != std::string::npos,
-         "provider image validation rejects storage paths outside attachments namespace");
+  expect_image_error(unanchored_path, ava::core::ErrorCategory::InvalidArgument, "content_part_index", "1",
+                     "provider image validation rejects storage paths outside attachments namespace");
 }
 
 void test_synthetic_delivery_provenance_validation()
@@ -536,24 +602,25 @@ void test_image_attachment_storage_boundary()
   auto wrong_size = attachment;
   wrong_size.byte_size = 4;
   auto const size_result = ava::session::load_image_attachment(*store, wrong_size);
-  expect(!size_result && size_result.error().message().find("byte size") != std::string::npos,
-         "image attachment storage verifies file size before returning bytes");
+  expect_image_error(size_result, ava::core::ErrorCategory::InvalidArgument, "storage_path", attachment.storage_path,
+                     "image attachment storage verifies file size before returning bytes");
 
   auto wrong_hash = attachment;
   wrong_hash.sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
   auto const hash_result = ava::session::load_image_attachment(*store, wrong_hash);
-  expect(!hash_result && hash_result.error().message().find("sha256") != std::string::npos, "image attachment storage verifies sha256 before returning bytes");
+  expect_image_error(hash_result, ava::core::ErrorCategory::InvalidArgument, "storage_path", attachment.storage_path,
+                     "image attachment storage verifies sha256 before returning bytes");
 
   auto const symlink_path = attachment_root / "attachments" / "link.txt";
   std::error_code symlink_error;
   std::filesystem::create_symlink(attachment_path, symlink_path, symlink_error);
-  if (!symlink_error)
+  if (ava::tests::require(!symlink_error, "attachment storage fixture creates its final-component symlink: " + symlink_error.message()))
   {
     auto symlink_attachment = attachment;
     symlink_attachment.storage_path = "attachments/link.txt";
     auto const symlink_result = ava::session::load_image_attachment(*store, symlink_attachment);
-    expect(!symlink_result && symlink_result.error().message().find("symlink") != std::string::npos,
-           "image attachment storage rejects symlink attachment paths");
+    expect_image_error(symlink_result, ava::core::ErrorCategory::PermissionDenied, "storage_path", symlink_attachment.storage_path,
+                       "image attachment storage rejects symlink attachment paths");
   }
 
   auto const outside_dir = root / "outside";
@@ -566,13 +633,13 @@ void test_image_attachment_storage_boundary()
   auto const symlink_directory = attachment_root / "attachments" / "linked-dir";
   symlink_error.clear();
   std::filesystem::create_directory_symlink(outside_dir, symlink_directory, symlink_error);
-  if (!symlink_error)
+  if (ava::tests::require(!symlink_error, "attachment storage fixture creates its intermediate symlink: " + symlink_error.message()))
   {
     auto intermediate_symlink = attachment;
     intermediate_symlink.storage_path = "attachments/linked-dir/secret.txt";
     auto const intermediate_result = ava::session::load_image_attachment(*store, intermediate_symlink);
-    expect(!intermediate_result && intermediate_result.error().message().find("symlink") != std::string::npos,
-           "image attachment storage rejects symlinked attachment directories");
+    expect_image_error(intermediate_result, ava::core::ErrorCategory::PermissionDenied, "storage_path", intermediate_symlink.storage_path,
+                       "image attachment storage rejects symlinked attachment directories");
   }
 
   auto symlink_root_store = ava::session::SessionStore::create(workspace, root / "symlink-root-sessions");
@@ -583,11 +650,11 @@ void test_image_attachment_storage_boundary()
     std::filesystem::create_directories(symlink_root.parent_path());
     symlink_error.clear();
     std::filesystem::create_directory_symlink(outside_dir, symlink_root, symlink_error);
-    if (!symlink_error)
+    if (ava::tests::require(!symlink_error, "attachment storage fixture creates its root symlink: " + symlink_error.message()))
     {
       auto const symlink_root_result = ava::session::load_image_attachment(*symlink_root_store, attachment);
-      expect(!symlink_root_result && symlink_root_result.error().message().find("symlink") != std::string::npos,
-             "image attachment storage rejects symlinked attachment roots");
+      expect_image_error(symlink_root_result, ava::core::ErrorCategory::PermissionDenied, "storage_path", attachment.storage_path,
+                         "image attachment storage rejects symlinked attachment roots");
     }
   }
 
@@ -621,18 +688,88 @@ void test_image_attachment_import()
   auto const unsupported_path = root / "not-image.txt";
   ava::tests::write_session_test_binary_file(unsupported_path, "hello");
   auto unsupported = ava::session::import_image_attachment(*store, unsupported_path);
-  expect(!unsupported && unsupported.error().message().find("unsupported image format") != std::string::npos,
-         "image attachment import rejects unsupported byte signatures");
+  expect_image_error(unsupported, ava::core::ErrorCategory::InvalidArgument, "path", unsupported_path.string(),
+                     "image attachment import rejects unsupported byte signatures");
 
   auto const outside = root / "outside.png";
   ava::tests::write_session_test_binary_file(outside, bytes);
   auto const link = root / "linked.png";
   std::error_code symlink_error;
   std::filesystem::create_symlink(outside, link, symlink_error);
-  if (!symlink_error)
+  if (ava::tests::require(!symlink_error, "attachment import fixture creates its source symlink: " + symlink_error.message()))
   {
     auto symlink_import = ava::session::import_image_attachment(*store, link);
-    expect(!symlink_import && symlink_import.error().message().find("symlink") != std::string::npos, "image attachment import rejects symlink source paths");
+    expect_image_error(symlink_import, ava::core::ErrorCategory::PermissionDenied, "path", link.string(),
+                       "image attachment import rejects symlink source paths");
+  }
+
+  for (auto const byte_size : {std::size_t{0}, ava::session::kMaxImageAttachmentBytes, ava::session::kMaxImageAttachmentBytes + 1})
+  {
+    auto const boundary_path = root / ("boundary-" + std::to_string(byte_size) + ".png");
+    // A sparse file exercises the actual stat/read boundary without writing a
+    // second full-size fixture. The accepted case has a real PNG signature.
+    ava::tests::write_test_file(boundary_path, byte_size == 0 ? std::string_view{} : std::string_view(bytes));
+    ava::core::UniqueFd descriptor(::open(boundary_path.c_str(), O_WRONLY | O_CLOEXEC));
+    if (!ava::tests::require(descriptor && ::ftruncate(descriptor.get(), static_cast<off_t>(byte_size)) == 0,
+                             "attachment import sizes its sparse boundary fixture"))
+      return;
+    descriptor.reset();
+    auto result = ava::session::import_image_attachment(*store, boundary_path);
+    if (byte_size == ava::session::kMaxImageAttachmentBytes)
+    {
+      if (!ava::tests::require(result.has_value(), "file import accepts the exact attachment byte limit"))
+        return;
+      ava::tests::expect_eq(result->byte_size, byte_size, "exact-limit file import records its full size");
+      auto reloaded = ava::session::load_image_attachment(*store, *result);
+      ava::tests::expect_all("exact-limit file import remains readable with matching content", {{"load", reloaded.has_value()},
+                                                                                                {"size", reloaded && reloaded->bytes.size() == byte_size},
+                                                                                                {"signature", reloaded && reloaded->bytes.starts_with(bytes)}});
+    }
+    else
+    {
+      if (!ava::tests::require(!result, "file import rejects empty and over-limit byte sizes"))
+        return;
+      ava::tests::expect_eq(result.error().category(), ava::core::ErrorCategory::InvalidArgument, "file byte-size rejection is a caller error");
+      auto const& context = result.error().context();
+      expect(std::ranges::any_of(context, [&](auto const& item) { return item.key == "byte_size" && item.value == std::to_string(byte_size); }),
+             "file byte-size rejection reports the rejected size");
+    }
+  }
+
+  auto empty_bytes = ava::session::import_image_attachment_bytes(*store, {});
+  std::string oversized_bytes(ava::session::kMaxImageAttachmentBytes + 1, '\0');
+  oversized_bytes.replace(0, bytes.size(), bytes);
+  auto oversized_result = ava::session::import_image_attachment_bytes(*store, oversized_bytes);
+  expect_image_error(empty_bytes, ava::core::ErrorCategory::InvalidArgument, "byte_size", "0",
+                     "in-memory image import rejects empty data at the byte-size boundary");
+  expect_image_error(oversized_result, ava::core::ErrorCategory::InvalidArgument, "byte_size", std::to_string(oversized_bytes.size()),
+                     "in-memory image import rejects valid image bytes one above the size limit");
+  oversized_bytes.resize(ava::session::kMaxImageAttachmentBytes);
+  auto exact_bytes = ava::session::import_image_attachment_bytes(*store, oversized_bytes, "image/png");
+  ava::tests::expect_all("in-memory image import accepts the exact byte limit",
+                         {{"import", exact_bytes.has_value()}, {"metadata size", exact_bytes && exact_bytes->byte_size == oversized_bytes.size()}});
+  auto mismatched_mime = ava::session::import_image_attachment_bytes(*store, bytes, "image/jpeg");
+  if (ava::tests::require(!mismatched_mime, "in-memory image import rejects a MIME type that disagrees with the signature"))
+  {
+    ava::tests::expect_eq(mismatched_mime.error().category(), ava::core::ErrorCategory::InvalidArgument, "MIME mismatch is a caller error");
+    auto const& context = mismatched_mime.error().context();
+    ava::tests::expect_all(
+        "MIME mismatch identifies both MIME types",
+        {{"expected", std::ranges::any_of(context, [](auto const& item) { return item.key == "expected_mime_type" && item.value == "image/jpeg"; })},
+         {"detected", std::ranges::any_of(context, [](auto const& item) { return item.key == "detected_mime_type" && item.value == "image/png"; })}});
+  }
+  for (auto const& [signature, mime] : std::array<std::pair<std::string, std::string_view>, 4>{
+           std::pair{std::string("\xff\xd8\xff", 3), std::string_view("image/jpeg")}, std::pair{std::string("GIF87a"), std::string_view("image/gif")},
+           std::pair{std::string("GIF89a"), std::string_view("image/gif")},
+           std::pair{std::string("RIFF\x01\x00\x00\x00WEBP", 12), std::string_view("image/webp")}})
+  {
+    auto result = ava::session::import_image_attachment_bytes(*store, signature, mime);
+    if (!ava::tests::require(result.has_value(), "byte-signature import accepts " + std::string(mime)))
+      return;
+    ava::tests::expect_eq(result->mime_type, std::string(mime), "byte-signature import records its sniffed MIME type");
+    auto reloaded = ava::session::load_image_attachment(*store, *result);
+    if (ava::tests::require(reloaded.has_value(), "byte-signature import reloads its stored bytes"))
+      ava::tests::expect_eq(reloaded->bytes, signature, "byte-signature import preserves exactly the supplied bytes");
   }
 
   test_attachment_replacement_before_open(image_path, [&] { return ava::session::import_image_attachment(*store, image_path); });

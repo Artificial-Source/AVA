@@ -163,12 +163,16 @@ void exercise_contract_http_retry(ava::provider::OpenAIProvider const&)
   }
   auto html_error =
       ava::provider::parse_openai_sse_response(ava::http::HttpResponse{.status_code = 500, .headers = {}, .body = "<html>OPENAI_HTTP_HTML_CANARY</html>"});
+  ava::tests::expect_all("OpenAI 5xx HTML response is a provider error with status context",
+                         {{"rejected", !html_error},
+                          {"provider category", !html_error && html_error.error().category() == ava::core::ErrorCategory::Provider},
+                          {"HTTP status", !html_error && html_error.error().message().find("500") != std::string::npos}});
   if (!html_error)
   {
     auto const formatted = html_error.error().format();
-    expect(formatted.find("OPENAI_HTTP_HTML_CANARY") == std::string::npos && formatted.find("<html>") == std::string::npos &&
-               formatted.find("provider_message") == std::string::npos,
-           "OpenAI HTML error bodies remain opaque and use only generic diagnostics");
+    ava::tests::expect_all("OpenAI HTML error bodies remain opaque", {{"body canary absent", formatted.find("OPENAI_HTTP_HTML_CANARY") == std::string::npos},
+                                                                      {"HTML absent", formatted.find("<html>") == std::string::npos},
+                                                                      {"provider message absent", formatted.find("provider_message") == std::string::npos}});
   }
   auto curl_supervisor = std::make_shared<ava::process::Supervisor>();
   auto curl_scope = ava::process::ProcessScopeV1::application(curl_supervisor);
@@ -437,12 +441,14 @@ void exercise_contract_http_retry(ava::provider::OpenAIProvider const&)
 
 void exercise_contract_final_transport(std::optional<ava::http::HttpRequest> const& request)
 {
-  if (request)
+  if (ava::tests::require(request.has_value(), "final transport fixture has a serialized request"))
   {
     ava::tests::FakeTransport transport({ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "ok"}});
     auto fake_response = transport.send(*request);
-    expect(fake_response && fake_response->body == "ok" && transport.requests().size() == 1 && transport.requests()[0].timeout_ms == request->timeout_ms,
-           "fake transport records offline provider request and preserves timeout");
+    ava::tests::expect_all("fake transport records offline provider request and preserves timeout",
+                           {{"send succeeds", fake_response.has_value()},
+                            {"one recorded request", transport.requests().size() == 1},
+                            {"timeout preserved", transport.requests().size() == 1 && transport.requests()[0].timeout_ms == request->timeout_ms}});
   }
 }
 

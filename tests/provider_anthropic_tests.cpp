@@ -1,5 +1,7 @@
 #include "sys.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/agent/agent_loop.h"
@@ -1073,6 +1075,7 @@ void test_anthropic_registry_and_env_auth()
                                            .sessions_dir = ava_state / "sessions"};
   ava::tests::FakeTransport transport({});
   ScopedEnvVar oauth_token("ANTHROPIC_OAUTH_TOKEN", "");
+  ScopedEnvVar auth_token("ANTHROPIC_AUTH_TOKEN", "");
   ScopedEnvVar api_key("ANTHROPIC_API_KEY", "api-key-value");
   auto api_credential = ava::config::provider_credential_for_request(paths, "anthropic", transport);
   expect(api_credential && *api_credential && (*api_credential)->access_token == "api-key-value" && (*api_credential)->credential_type == "api_key" &&
@@ -1086,10 +1089,7 @@ void test_anthropic_agent_tool_loop_native_replay()
 
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
-  {
-    std::ofstream file(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-    file << "tool content";
-  }
+  ava::tests::write_test_file(workspace / "note.txt", "tool content");
 
   ava::session::SessionStore store(
       ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "anthropic-tool"});
@@ -1338,12 +1338,8 @@ void test_anthropic_agent_multi_tool_native_replay()
 
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
-  {
-    std::ofstream first(workspace / "one.txt", std::ios::binary | std::ios::trunc);
-    first << "first content";
-    std::ofstream second(workspace / "two.txt", std::ios::binary | std::ios::trunc);
-    second << "second content";
-  }
+  ava::tests::write_test_file(workspace / "one.txt", "first content");
+  ava::tests::write_test_file(workspace / "two.txt", "second content");
 
   ava::session::SessionStore store(
       ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "anthropic-multi-tool"});
@@ -1420,10 +1416,7 @@ void test_anthropic_agent_non_stream_tool_loop_native_replay()
 
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
-  {
-    std::ofstream file(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-    file << "non-stream content";
-  }
+  ava::tests::write_test_file(workspace / "note.txt", "non-stream content");
 
   ava::session::SessionStore store(
       ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "anthropic-non-stream-tool"});
@@ -1465,6 +1458,7 @@ void test_anthropic_agent_non_stream_tool_loop_native_replay()
 
 void run_provider_anthropic_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("anthropic-suite-");
   test_json_object_validator();
   test_anthropic_provider_contract();
   test_anthropic_native_content_parts_request();

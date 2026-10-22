@@ -30,11 +30,23 @@
 namespace session_tests {
 void test_compaction_snapshot_matcher_is_exact()
 {
-  std::vector<ava::session::SessionEntry> const snapshot = {{.id = "snapshot-entry",
-                                                             .parent_id = "snapshot-parent",
+  std::vector<ava::session::SessionEntry> const snapshot = {{.id = "snapshot-first",
+                                                             .parent_id = "",
                                                              .type = ava::session::EntryType::UserMessage,
                                                              .timestamp = "2026-08-17T00:00:00Z",
-                                                             .data_json = "{\"text\":\"snapshot\"}",
+                                                             .data_json = "{\"text\":\"first\"}",
+                                                             .version = 3},
+                                                            {.id = "snapshot-second",
+                                                             .parent_id = "snapshot-first",
+                                                             .type = ava::session::EntryType::AssistantMessage,
+                                                             .timestamp = "2026-08-17T00:00:01Z",
+                                                             .data_json = "{\"text\":\"second\"}",
+                                                             .version = 3},
+                                                            {.id = "snapshot-third",
+                                                             .parent_id = "snapshot-second",
+                                                             .type = ava::session::EntryType::UserMessage,
+                                                             .timestamp = "2026-08-17T00:00:02Z",
+                                                             .data_json = "{\"text\":\"third\"}",
                                                              .version = 3}};
   expect(ava::session::compaction_snapshot_matches(snapshot, snapshot), "compaction snapshot matcher accepts an exact ordered history");
 
@@ -49,12 +61,25 @@ void test_compaction_snapshot_matcher_is_exact()
   expect_field_mismatch([](auto& entry) { entry.timestamp = "2026-08-17T00:00:01Z"; }, "timestamp");
   expect_field_mismatch([](auto& entry) { entry.data_json = "{\"text\":\"changed\"}"; }, "data_json");
   expect_field_mismatch([](auto& entry) { entry.version = 4; }, "version");
+  auto reordered = snapshot;
+  std::swap(reordered[0], reordered[1]);
+  expect(!ava::session::compaction_snapshot_matches(snapshot, reordered), "compaction snapshot matcher rejects reordered earlier entries");
+  auto shortened = snapshot;
+  shortened.pop_back();
+  expect(!ava::session::compaction_snapshot_matches(snapshot, shortened), "compaction snapshot matcher rejects truncated history");
+  auto ordinary_suffix = snapshot;
+  ordinary_suffix.push_back({.id = "snapshot-extra",
+                             .parent_id = snapshot.back().id,
+                             .type = ava::session::EntryType::UserMessage,
+                             .timestamp = "2026-08-17T00:00:03Z",
+                             .data_json = "{\"text\":\"extra\"}",
+                             .version = 3});
+  expect(!ava::session::compaction_snapshot_matches(snapshot, ordinary_suffix), "compaction snapshot matcher rejects ordinary trailing history");
 
   auto generated = ava::session::make_session_metadata_entry(ava::session::SessionMetadataUpdate{.actor = "auto-title", .generated_title = "Generated title"},
                                                              snapshot.back().id);
   auto manual = ava::session::make_session_metadata_entry(ava::session::SessionMetadataUpdate{.name = "Manual title", .actor = "manual"}, snapshot.back().id);
-  expect(generated && manual, "compaction snapshot matcher metadata fixtures serialize");
-  if (generated && manual)
+  if (ava::tests::require(generated.has_value() && manual.has_value(), "compaction snapshot matcher metadata fixtures serialize"))
   {
     auto auto_title_suffix = snapshot;
     auto_title_suffix.push_back(*generated);
@@ -64,8 +89,17 @@ void test_compaction_snapshot_matcher_is_exact()
     context_metadata_suffix.back().data_json = "{\"actor\":\"auto-title\",\"generated_title\":\"Generated title\",\"source_session_id\":\"other\"}";
     expect(ava::session::compaction_snapshot_matches(snapshot, auto_title_suffix),
            "compaction snapshot matcher accepts only the validated trailing auto-title exception");
-    expect(!ava::session::compaction_snapshot_matches(snapshot, manual_suffix) && !ava::session::compaction_snapshot_matches(snapshot, context_metadata_suffix),
-           "compaction snapshot matcher rejects manual and context-affecting metadata suffixes");
+    ava::tests::expect_all("compaction snapshot matcher rejects context-affecting metadata suffixes",
+                           {{"manual", !ava::session::compaction_snapshot_matches(snapshot, manual_suffix)},
+                            {"context metadata", !ava::session::compaction_snapshot_matches(snapshot, context_metadata_suffix)}});
+    auto second_title = *generated;
+    second_title.id = "second-auto-title";
+    second_title.parent_id = generated->id;
+    auto_title_suffix.push_back(std::move(second_title));
+    expect(ava::session::compaction_snapshot_matches(snapshot, auto_title_suffix),
+           "compaction snapshot matcher accepts multiple context-neutral trailing automatic titles");
+    auto_title_suffix.front().data_json = "{\"text\":\"changed earlier entry\"}";
+    expect(!ava::session::compaction_snapshot_matches(snapshot, auto_title_suffix), "automatic-title suffixes do not excuse a changed earlier snapshot entry");
   }
 }
 
@@ -403,10 +437,10 @@ void test_compaction_config_and_thresholds()
 {
   auto const root = create_empty_root("compaction-config");
 
-  setenv("HOME", (root / "home").c_str(), 1);
-  setenv("XDG_CONFIG_HOME", (root / "config").c_str(), 1);
-  setenv("XDG_STATE_HOME", (root / "state").c_str(), 1);
-  setenv("XDG_DATA_HOME", (root / "data").c_str(), 1);
+  ScopedEnvVar home("HOME", (root / "home").string());
+  ScopedEnvVar config_home("XDG_CONFIG_HOME", (root / "config").string());
+  ScopedEnvVar state_home("XDG_STATE_HOME", (root / "state").string());
+  ScopedEnvVar data_home("XDG_DATA_HOME", (root / "data").string());
   auto const paths = ava::config::xdg_paths();
 
   expect(paths.compaction_file == root / "config" / "ava" / "compaction.json", "compaction config path follows XDG config home");
@@ -415,6 +449,8 @@ void test_compaction_config_and_thresholds()
              missing->auto_threshold_tokens == 0 && missing->auto_threshold_percent == 80 && missing->keep_recent_turns == 2 &&
              missing->keep_recent_tokens == 20'000,
          "missing compaction config keeps a direct-API compatibility model while runtime resolution remains active-model based");
+  if (!ava::tests::require(missing.has_value(), "default compaction configuration loads before threshold calculation"))
+    return;
   auto const fallback_threshold = ava::session::effective_auto_threshold_tokens(*missing, std::nullopt);
   expect(fallback_threshold > 0, "missing compaction config uses a nonzero effective auto-compaction threshold without model metadata");
 

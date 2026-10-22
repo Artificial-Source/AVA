@@ -1,7 +1,9 @@
 #include "sys.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/core/UniqueFd.h"
+#include "ava/core/atomic_file.h"
 #include "ava/core/fd_io.h"
 #include "ava/core/json.h"
 #include "ava/core/saturating.h"
@@ -461,6 +463,37 @@ void test_json_compact()
   expect(ava::core::json::compact("\"a\tb\"") == std::optional<std::string>("\"a\tb\""), "JSON compaction preserves non-line-break string bytes verbatim");
 }
 
+void test_atomic_publication_failure_preserves_previous_file()
+{
+  auto const root = create_empty_root("core-atomic-publish-failure");
+  auto const target = root / "settings.json";
+  ava::tests::write_test_file(target, "previous\n");
+  constexpr ava::tests::SyscallErrno rules[] = {
+#ifdef SYS_rename
+      {.number = SYS_rename, .argument = std::nullopt, .error_number = EIO},
+#endif
+#ifdef SYS_renameat
+      {.number = SYS_renameat, .argument = std::nullopt, .error_number = EIO},
+#endif
+#ifdef SYS_renameat2
+      {.number = SYS_renameat2, .argument = std::nullopt, .error_number = EIO},
+#endif
+  };
+  auto const status = ava::tests::run_in_child_with_syscall_errno(std::span(rules), [&] {
+    auto const result = ava::core::write_text_file_atomic(target, "replacement\n", "atomic publication fixture");
+    return !result && result.error().category() == ava::core::ErrorCategory::Io ? 0 : 1;
+  });
+  auto const outcome = ava::tests::expect_child_success(status, "atomic publication reports a failed rename");
+  if (outcome != ava::tests::ChildTestOutcome::Passed)
+    return;
+  ava::tests::expect_eq(ava::tests::read_session_test_binary_file(target), std::string("previous\n"),
+                        "failed publication preserves the previous durable contents");
+  bool temporary_found = false;
+  for (auto const& entry : std::filesystem::directory_iterator(root))
+    temporary_found = temporary_found || entry.path().filename().string().starts_with("settings.json.tmp.");
+  expect(!temporary_found, "failed atomic publication removes its unpublished temporary");
+}
+
 }  // namespace
 
 void run_core_fd_helpers_tests()
@@ -470,6 +503,7 @@ void run_core_fd_helpers_tests()
   test_interrupted_pipe_io();
   test_open_regular_and_paths();
   test_rename_and_directory_stream();
+  test_atomic_publication_failure_preserves_previous_file();
   test_saturating_add_and_utf8_prefix();
   test_json_compact();
   test_restart_on_eintr();

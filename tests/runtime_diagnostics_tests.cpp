@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/diagnostics/artifact_store.h"
 #include "ava/diagnostics/runtime_diagnostics.h"
@@ -51,8 +52,7 @@ ava::config::XdgPaths private_paths(std::filesystem::path const& root)
 
 std::string read_all(std::filesystem::path const& path)
 {
-  std::ifstream input(path, std::ios::binary);
-  return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  return ava::tests::read_session_test_binary_file(path);
 }
 
 std::vector<std::string> lines(std::string const& text)

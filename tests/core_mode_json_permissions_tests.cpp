@@ -1,5 +1,7 @@
 #include "sys.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/app/commands.h"
@@ -301,19 +303,31 @@ void test_core_json_top_level_lookup()
   expect(!ava::core::json::string_field("{\"text\":\"\\q\"}", "text"), "JSON string_field rejects invalid escapes");
 }
 
-std::string read_test_file(std::filesystem::path const& path)
+void test_core_json_duplicate_keys_trailing_and_integer_bounds()
 {
-  std::ifstream input(path, std::ios::binary);
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
+  using namespace ava::core::json;
+  using namespace std::string_view_literals;
+  constexpr std::string_view duplicate = "{\"key\":\"first\",\"key\":\"last\",\"number\":1,\"number\":2}";
+  expect(is_valid_object(duplicate), "core syntax validation permits duplicate object member names");
+  auto const key = string_field(duplicate, "key");
+  auto const number = integer_field(duplicate, "number");
+  ava::tests::expect_all("core field accessors select the first duplicate member", {{"string", key && *key == "first"}, {"integer", number && *number == 1}});
+  for (std::string_view const text : std::array<std::string_view, 3>{"{\"a\":1}x", "{\"a\":1} {}", "{\"a\":1}\0garbage"sv})
+    expect(!is_valid_object(text), "core JSON rejects trailing non-whitespace bytes");
+  expect(is_valid_object(" \r\n{\"a\":1}\t "), "core JSON accepts surrounding JSON whitespace");
+  for (auto const& [text, value] : {std::pair{"{\"n\":9223372036854775807}", LLONG_MAX}, std::pair{"{\"n\":-9223372036854775808}", LLONG_MIN}})
+  {
+    auto parsed = integer_field(text, "n");
+    if (ava::tests::require(parsed.has_value(), "core integer accessor accepts the signed boundary"))
+      ava::tests::expect_eq(*parsed, value, "core integer accessor preserves the exact signed boundary");
+  }
+  for (std::string_view const text : {"{\"n\":9223372036854775808}", "{\"n\":-9223372036854775809}", "{\"n\":999999999999999999999999999}"})
+    expect(!integer_field(text, "n"), "core integer accessor rejects signed overflow");
 }
 
 void write_test_file(std::filesystem::path const& path, std::string_view content)
 {
-  std::filesystem::create_directories(path.parent_path());
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output << content;
+  ava::tests::write_test_file(path, content);
 }
 
 void test_process_arg_workspace_relative_detection()
@@ -346,7 +360,7 @@ void test_atomic_text_file_write()
   auto first = ava::core::write_text_file_atomic(target, "{\"ok\":true}\n", "test config");
   expect(first.has_value(),
          first ? "atomic text writer creates parent directories" : "atomic text writer creates parent directories: " + first.error().format());
-  expect(read_test_file(target) == "{\"ok\":true}\n", "atomic text writer stores full file content");
+  expect(ava::tests::read_session_test_binary_file(target) == "{\"ok\":true}\n", "atomic text writer stores full file content");
 
   struct stat target_stat{};
   expect(::stat(target.c_str(), &target_stat) == 0 && (target_stat.st_mode & (S_IRWXG | S_IRWXO)) == 0,
@@ -355,18 +369,20 @@ void test_atomic_text_file_write()
   auto replaced = ava::core::write_text_file_atomic(target, "{\"ok\":false}\n", "test config");
   expect(replaced.has_value(),
          replaced ? "atomic text writer replaces regular files" : "atomic text writer replaces regular files: " + replaced.error().format());
-  expect(read_test_file(target) == "{\"ok\":false}\n", "atomic text writer replacement updates content");
+  expect(ava::tests::read_session_test_binary_file(target) == "{\"ok\":false}\n", "atomic text writer replacement updates content");
 
   auto const outside = root / "outside.json";
   write_test_file(outside, "outside\n");
   auto const link = root / "config" / "linked.json";
   std::error_code symlink_error;
   std::filesystem::create_symlink(outside, link, symlink_error);
+  if (!ava::tests::require(!symlink_error, "atomic text writer fixture creates its final symlink"))
+    return;
   if (!symlink_error)
   {
     auto rejected = ava::core::write_text_file_atomic(link, "changed\n", "test config");
     expect(!rejected && rejected.error().category() == ava::core::ErrorCategory::PermissionDenied, "atomic text writer rejects symlink replacement targets");
-    expect(read_test_file(outside) == "outside\n", "atomic text writer does not modify symlink referents");
+    expect(ava::tests::read_session_test_binary_file(outside) == "outside\n", "atomic text writer does not modify symlink referents");
   }
 }
 
@@ -491,6 +507,7 @@ void test_permission_defaults()
   auto const link = symlink_workspace / "link-outside";
   std::filesystem::remove(link, symlink_error);
   std::filesystem::create_directory_symlink(outside, link, symlink_error);
+  expect(!symlink_error, "permission default fixture creates its workspace-escape symlink");
   if (!symlink_error)
   {
     auto const symlink_escape = ava::permissions::decide(ava::permissions::PermissionRequest{
@@ -527,6 +544,7 @@ void run_core_json_permission_tests()
   test_json_invalid_utf8_replacement();
   test_core_json_nesting_limit();
   test_core_json_top_level_lookup();
+  test_core_json_duplicate_keys_trailing_and_integer_bounds();
   test_process_arg_workspace_relative_detection();
   test_atomic_text_file_write();
   test_permission_defaults();
