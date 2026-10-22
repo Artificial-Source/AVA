@@ -80,7 +80,7 @@ summary itself.
 
 The TUI implements provider-generated summaries of the selected direct parent's
 abandoned post-fork context through
-[`BranchSummaryCoordinator`](../../src/ava/app/branch_summary_coordinator.h).
+`BranchSummaryCoordinator` (`src/ava/app/branch_summary_coordinator.h`).
 Preparation is read-only, and a separate explicit confirmation authorizes the
 operation. Confirmation starts one absolute deadline (30 seconds by default);
 the provider/credential transport is cancellation-aware and bounded by that

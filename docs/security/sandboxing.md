@@ -47,8 +47,8 @@ preflight runs even when built-in policy would auto-allow an operation. Full
 allow/deny resolution handles eligible `ask` decisions; a remembered allow
 cannot upgrade a built-in hard deny. Matching persistent deny rules win over
 matching allow rules, and malformed rule storage fails closed in either phase.
-See the [permission gate](../../src/ava/tools/tool_permission.cpp) and
-[persistent resolvers](../../src/ava/permissions/permission_rules.cpp).
+See the permission gate (`src/ava/tools/tool_permission.cpp`) and the
+persistent resolvers (`src/ava/permissions/permission_rules.cpp`).
 Normal file tools cannot modify enforceable permission-rule files; manage rules
 with `/permissions` or the RPC permission-rule commands.
 
@@ -109,7 +109,7 @@ config as untrusted. Current hardening includes:
   operations even outside the workspace. Matching `--allow-tool read_file`,
   `glob`, `grep`, or `list_directory` flags likewise have no workspace-only
   target condition. Hard secret-path denies and persistent denies still apply.
-  See [`headless_policy.cpp`](../../src/ava/app/headless_policy.cpp).
+  See `src/ava/app/headless_policy.cpp`.
 - Plan mode denies source-code edits except planning markdown.
 - Normal write/edit/apply-patch tools reject enforceable permission-rule files;
   use the permission management commands instead.
@@ -117,8 +117,8 @@ config as untrusted. Current hardening includes:
   `rm`, `dd`, `mkfs*`, privileged helpers, and destructive Git forms as Critical:
   they require explicit one-shot approval, not an unconditional backend deny.
   Raw-shell syntax, including fork bombs or dangerous redirection, also requires
-  Critical one-shot approval. See the [sealed classifier](../../src/ava/command/policy.cpp)
-  and [permission decisions](../../src/ava/permissions/permission.cpp).
+  Critical one-shot approval. See the sealed classifier (`src/ava/command/policy.cpp`)
+  and permission decisions (`src/ava/permissions/permission.cpp`).
 
 These checks reduce accidental or model-initiated damage. They do not make a
 host account safe to expose to untrusted code. A command, plugin, LSP server, or

@@ -81,8 +81,8 @@ root, only the exact executable/interpreter file receives READ_FILE and EXECUTE.
 Home checks cover lexical spellings (including trailing slashes) and descriptor
 device/inode aliases; an uninspectable parent does not gain broad authority.
 These file checks and grants are implemented in
-[`command_plan.cpp`](../../src/ava/command/command_plan.cpp) and
-[`containment_plan.cpp`](../../src/ava/containment/containment_plan.cpp).
+`src/ava/command/command_plan.cpp` and
+`src/ava/containment/containment_plan.cpp`.
 
 ### Executable and Interpreter Target Admission
 
@@ -163,7 +163,7 @@ In both modes:
 - `io_uring_setup()` returns `EPERM`, preventing an io_uring socket bypass.
 
 The filter is defined in
-[`seccomp_network.cpp`](../../src/ava/containment/seccomp_network.cpp).
+`src/ava/containment/seccomp_network.cpp`.
 
 On x86_64, the filter rejects every syscall number with `__X32_SYSCALL_BIT` set
 before normal dispatch, preventing x32 ABI bypass. `io_uring_setup` is blocked
@@ -177,7 +177,7 @@ user code runs while those parent descriptors remain inherited. Descriptor
 closure, **not send-syscall blocking**, is the defence against inherited sockets:
 the filter permits sends on an already-open socket. Only handshake, approved
 executable, and sealed script-source descriptors needed for descriptor execution
-survive this closure in [`bash_tool.cpp`](../../src/ava/tools/bash_tool.cpp).
+survive this closure in `src/ava/tools/bash_tool.cpp`.
 
 The parent probes seccomp support with a non-mutating
 `SECCOMP_GET_ACTION_AVAIL` query for `SECCOMP_RET_ERRNO`. **Any** failed query,
@@ -201,7 +201,7 @@ setuid binaries inside that contained execution.
 - On Landlock ABI >= 6, signal and abstract UNIX socket scoping follow the
   contained command's domain and its descendants. The command cannot signal
   AVA or other processes, or connect to abstract sockets, outside that domain.
-  See [`landlock.cpp`](../../src/ava/containment/landlock.cpp).
+  See `src/ava/containment/landlock.cpp`.
 - Process-group teardown uses `SIGTERM` → grace period → `SIGKILL` on the
   verified PGID (process group ID), with an AVA-owned sentinel preserving
   the PGID from recycling between leader completion and descendant cleanup.
