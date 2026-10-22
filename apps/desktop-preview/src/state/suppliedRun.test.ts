@@ -177,7 +177,7 @@ describe('supplied-run core authority and bounded projection', () => {
     });
     output.forEach((entry) => {
       expect(entry).toMatchObject({ toolId: 'check', truncated: false });
-      expect(entry.delta).toMatch(/^Supplied row \d+: .*\n$/);
+      expect(entry.delta).toMatch(/^PASS return from result \d+: .*\n$/);
     });
     let state = start();
     for (const snapshot of snapshots.slice(0, -3)) state = receive(state, snapshot);

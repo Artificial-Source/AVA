@@ -42,7 +42,7 @@ describe('bounded local appearance controls', () => {
     expect(screen.getByRole('combobox', { name: 'Sidebar material' })).toHaveValue('glass');
     expect(screen.getByRole('figure', { name: 'Live appearance preview' })).toHaveTextContent('A little room to think.');
     expect(screen.getByRole('button', { name: 'Reset appearance' })).toBeDisabled();
-    expect(screen.getByText(/Light and system theme switching are not available/)).toBeVisible();
+    expect(screen.getByRole('radiogroup', { name: 'Dark palette' })).toHaveAccessibleDescription('AVA is dark only. Each palette is a neutral shade.');
     expectTypeOf<Pick<Preferences, 'palette'>>().toEqualTypeOf<Readonly<{ palette?: 'default' | 'charcoal' | 'midnight' }>>();
     expectTypeOf<Pick<Preferences, 'readingWidth'>>().toEqualTypeOf<Readonly<{ readingWidth?: 'narrow' | 'balanced' | 'wide' }>>();
   });

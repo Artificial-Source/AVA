@@ -1,0 +1,24 @@
+.banner { flex-shrink: 0; padding: 0 var(--conversation-padding); border-bottom: 1px solid var(--separator); background: var(--surface-panel); color: var(--muted); font-size: var(--type-meta); line-height: 20px; }
+/* Same column as the title and transcript, so the disclosure never floats away from the reading edge. */
+.inner { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-4); width: min(100%, var(--reading-width)); min-height: 44px; margin: 0 auto; padding: 6px 0; }
+.disclosure { display: flex; align-items: center; gap: var(--space-2); min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.disclosure > svg { color: var(--quiet); }
+.disclosure strong { color: var(--text); font-weight: 550; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.notice { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--danger-text); overflow-wrap: anywhere; }
+.dismiss { margin-left: auto; }
+
+/* Run preview controls, shared with the lazily loaded example/pause/step set. */
+.control { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--surface-control); color: var(--body); font-size: var(--type-meta); line-height: 20px; white-space: nowrap; }
+.control:hover:not(:disabled, [aria-disabled='true']) { background: var(--surface-control-hover); color: var(--text); }
+.control:active:not(:disabled, [aria-disabled='true']) { transform: translateY(1px); }
+.control:disabled, .control[aria-disabled='true'] { border-color: var(--edge); background: transparent; color: var(--quiet); cursor: not-allowed; }
+.control[data-busy='true'] svg { animation: busy 1.2s linear infinite; }
+.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+.select { min-height: 28px; max-width: 170px; padding: 3px 8px; border: 1px solid var(--edge-input); border-radius: var(--radius-control); background: var(--canvas); color: var(--body); font-size: var(--type-meta); }
+.select:disabled { border-color: var(--edge); color: var(--quiet); }
+
+.chip { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; min-height: 26px; padding: 2px 10px; border: 1px solid var(--edge); border-radius: var(--radius-pill); background: transparent; color: var(--muted); font-size: var(--type-caption); }
+.chip:hover { border-color: var(--edge-bright); background: var(--hover); color: var(--text); }
+
+@keyframes busy { to { transform: rotate(360deg); } }

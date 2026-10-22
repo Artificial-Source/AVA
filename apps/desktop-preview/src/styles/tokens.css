@@ -4,33 +4,82 @@
   font-synthesis: none;
   font-size: 14px;
   --mono: 'Geist Mono', 'DejaVu Sans Mono', monospace;
-  --canvas: #141414;
-  --surface-panel: #191919;
+  /* Palette anchors: the default palette, the appearance presets and their settings swatches all read these. */
+  --palette-default-canvas: #141414;
+  --palette-default-panel: #191919;
+  --palette-default-opaque: #202020;
+  --palette-charcoal-canvas: #1b1b1b;
+  --palette-charcoal-panel: #212121;
+  --palette-charcoal-opaque: #272727;
+  --palette-midnight-canvas: #0d0d0d;
+  --palette-midnight-panel: #141414;
+  --palette-midnight-opaque: #191919;
+  --canvas: var(--palette-default-canvas);
+  --surface-panel: var(--palette-default-panel);
+  --surface-composer: #1f1f1f;
   --surface-raised: #242424;
+  --surface-control: #242424;
+  --surface-control-hover: #303030;
+  /* Type roles in rem against the 14px root. Caption is the floor for any text. */
+  --type-caption: .7857rem;
+  --type-meta: .8571rem;
+  --type-control: .9286rem;
+  --type-ui: 1rem;
+  --type-prose: 1.0714rem;
+  --type-title: 1.2143rem;
+  --type-heading: 1.5714rem;
+  --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --radius-chip: 4px;
   --radius-control: 6px;
   --radius-surface: 8px;
+  --radius-dialog: 10px;
+  --radius-bubble: 12px;
+  --radius-pill: 999px;
   --control-height: 36px;
-  --type-control: 13px;
   --code: #111111;
   --text: #eeeeee;
   --body: #d4d4d4;
   --muted: #b8b8b8;
   --quiet: #a1a1a1;
+  --primary-fill: #ededed;
+  --primary-fill-hover: #ffffff;
+  --on-primary: #171717;
+  --badge-fill: #292929;
+  --on-badge: #eeeeee;
   /* Shared status glyphs and static labels only. */
   --status-working: #8bd5a0;
   --status-completed: #ffffff;
   --status-stopped-failed: #efaaa5;
   --status-attention: #e6c77d;
   --status-unavailable: var(--muted);
+  --status-queued: var(--muted);
+  /* Destructive actions and field errors: always paired with a label or icon, never a red fill. */
+  --danger-text: var(--status-stopped-failed);
   --edge: #ffffff1a;
   --edge-bright: #ffffff29;
+  /* Text-entry and select boundaries: at least 3:1 against canvas, panel, composer and raised surfaces. */
+  --edge-input: #727272;
+  --edge-highlight: #ffffff06;
+  --edge-change-before: #ababab4d;
+  --edge-change-after: #d6d6d689;
   --separator: #ffffff10;
+  --fill-subtle: #ffffff07;
   --hover: #ffffff08;
+  --selected: #ffffff0d;
+  --hover-strong: #ffffff0f;
+  --selection-fill: #484848;
+  --on-selection: #ffffff;
+  --scrollbar-thumb: #a0a0a070;
+  --drift-sheen: #ffffff0a;
+  --scrim: #00000099;
+  --shadow-overlay: 0 20px 70px #00000066;
   --glass-fill: rgba(28, 28, 28, .94);
   --glass-sheen: linear-gradient(135deg, rgba(255, 255, 255, .035), transparent 40%, rgba(255, 255, 255, .012));
   --glass-filter: blur(24px);
@@ -44,18 +93,18 @@
 }
 
 [data-material='opaque'] {
-  --glass-fill: #202020;
+  --glass-fill: var(--palette-default-opaque);
   --glass-sheen: linear-gradient(transparent, transparent);
   --glass-filter: none;
   --material-drift-display: none;
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root { --glass-fill: #202020; --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
+  :root { --glass-fill: var(--palette-default-opaque); --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  :root { --glass-fill: #202020; --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
+  :root { --glass-fill: var(--palette-default-opaque); --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -63,7 +112,7 @@
 }
 
 @media (prefers-contrast: more) {
-  :root { --glass-fill: #202020; --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; --muted: #d5d5d5; --quiet: #c7c7c7; --body: #eeeeee; --separator: #ffffff59; --edge: #ffffff8c; --edge-bright: #ffffff8c; }
+  :root { --glass-fill: var(--palette-default-opaque); --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; --muted: #d5d5d5; --quiet: #c7c7c7; --body: #eeeeee; --separator: #ffffff59; --edge: #ffffff8c; --edge-bright: #ffffff8c; --edge-input: #a1a1a1; --selected: #ffffff1a; --primary-fill: #f5f5f5; --on-primary: #111111; --badge-fill: #333333; --on-badge: #ffffff; }
 }
 
 @media (max-width: 1200px) {

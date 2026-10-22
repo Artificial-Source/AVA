@@ -6,8 +6,8 @@ import { previewContextUsage } from './contextPreview';
 
 // Optional inspector bodies load only when Context or Changes is requested.
 // The shell owns visibility, parent identity, native focus and the retained exit.
-export default function DetailInspector({ module, chat, active }: { module: 'changes' | 'context'; chat: Chat; active: boolean }) {
-  return module === 'changes' ? <ChangeReview chat={chat} /> : <ContextInfo key={chat.id} view={previewContextInfo(chat)} active={active} />;
+export default function DetailInspector({ module, chat, active, focusPath = null }: { module: 'changes' | 'context'; chat: Chat; active: boolean; focusPath?: string | null }) {
+  return module === 'changes' ? <ChangeReview chat={chat} focusPath={focusPath} /> : <ContextInfo key={chat.id} view={previewContextInfo(chat)} active={active} />;
 }
 
 // Cumulative session samples are independent of the selected model's active estimate.
@@ -19,18 +19,17 @@ const cumulative: Readonly<Record<string, CumulativeUsageView>> = {
 
 export function previewContextInfo(chat: Chat): ContextInfoView {
   const messages: LocalMessageProjection[] = chat.messages.map((message) => message.role === 'user' ? {
-    id: message.id, role: message.role, origin: message.origin === 'local' ? 'local' : 'example', text: message.text,
+    id: message.id, role: message.role, origin: message.origin === 'local' ? 'local' : 'history', text: message.text,
   } : {
-    id: message.id, role: message.role, origin: 'example', text: message.markdown,
+    id: message.id, role: message.role, origin: 'history', text: message.markdown,
     ...(message.code ? { code: { filename: message.code.filename, text: message.code.code } } : {}),
     ...(message.note ? { note: message.note } : {}),
   });
   return {
     sessionTitle: chat.title,
-    qualifier: 'Fictional profiles and fixed usage snapshots, not live measurements. Invented prompt and committed local message projection—not a sent prompt or provider payload.',
     usage: previewContextUsage(chat),
     cumulative: cumulative[chat.id] ?? {},
-    systemPrompt: 'You are AVA in a fictional workspace. Explain proposed changes clearly, distinguish suggestions from verified results, and ask before taking action. This local example has no tool or provider connection.',
+    systemPrompt: 'You are AVA, a coding agent working in the user’s project. Explain proposed changes clearly, distinguish suggestions from verified results, and ask before taking action.',
     messages,
   };
 }

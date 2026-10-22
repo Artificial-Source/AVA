@@ -1,4 +1,4 @@
-import type { ToolView, TurnAttribution, TurnState } from '../chat/contracts';
+import type { PermissionDecision, PermissionView, ToolView, TurnAttribution, TurnState } from '../chat/contracts';
 import type { RunEvent, RunIdentity, SuppliedRun } from './suppliedRun';
 
 export type ChatStatus = 'idle' | 'working' | 'completed' | 'approval' | 'stopped' | 'failed';
@@ -26,7 +26,6 @@ export interface ChildAgent {
   status: ChildStatus;
   model: ModelId;
   timing: string;
-  statusNote: string;
   messages: ChildMessage[];
 }
 
@@ -53,6 +52,9 @@ export type Message =
       activity?: ToolRecord[];
       code?: CodeExample;
       note?: string;
+      readonly permission?: PermissionView;
+      // The user's answer to `permission`, kept with the turn so the receipt survives remounts.
+      readonly permissionDecision?: PermissionDecision;
     };
 
 export interface MockChange {
@@ -67,6 +69,8 @@ export interface Chat {
   projectId: string;
   title: string;
   nameFromFirstMessage?: boolean;
+  // Hidden from the sidebar until restored; the conversation itself is kept.
+  archived?: boolean;
   status: ChatStatus;
   draft: string;
   model: ModelId;
@@ -92,8 +96,13 @@ export interface PreviewState {
   nextChatNumber: number;
   nextMessageNumber: number;
   announcement: string;
+  // Undo target for the most recent archive; cleared by the next accepted action.
+  archiveNotice?: ArchiveNotice;
   suppliedRun?: SuppliedRun;
 }
+
+// Undo is offered only until the next accepted action, so the pre-archive view can be restored exactly.
+export type ArchiveNotice = Readonly<{ chatId: string; title: string; activeChatId: string; pinnedChatIds: readonly string[]; recentChatIds: readonly string[] }>;
 
 export type PreviewAction =
   | { type: 'startSuppliedRun'; identity: RunIdentity }
@@ -105,6 +114,12 @@ export type PreviewAction =
   | { type: 'unpinChat'; chatId: string }
   | { type: 'removeRecentChat'; chatId: string }
   | { type: 'newChat'; model?: ModelId; mode?: ChatMode; projectId?: string; titleFromFirstMessage?: boolean; inspector?: 'remember' | 'closed' | InspectorModule }
+  | { type: 'renameChat'; chatId: string; title: string }
+  | { type: 'archiveChat'; chatId: string }
+  | { type: 'unarchiveChat'; chatId: string }
+  | { type: 'dismissArchiveNotice' }
+  | { type: 'resolvePermission'; chatId: string; messageId: string; decision: PermissionDecision }
+  | { type: 'branchChat'; chatId: string; messageId: string }
   | { type: 'setDraft'; chatId: string; draft: string }
   | { type: 'setModel'; chatId: string; model: ModelId }
   | { type: 'setMode'; chatId: string; mode: ChatMode }

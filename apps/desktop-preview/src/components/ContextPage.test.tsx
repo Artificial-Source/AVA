@@ -28,7 +28,7 @@ describe('dedicated parent Context page', () => {
     expect(toggle).toHaveAttribute('title', 'Hide inspector · Agents');
     for (const module of ['Agents', 'Changes']) {
       if (module === 'Changes') await user.click(rail().getByRole('button', { name: module }));
-      const panel = screen.getByRole('complementary', { name: module === 'Agents' ? 'Agents inspector' : 'Mock changes' });
+      const panel = screen.getByRole('complementary', { name: module === 'Agents' ? 'Agents inspector' : 'Changes inspector' });
       expect(panel.children).toHaveLength(1);
       expect(within(panel).queryByRole('button', { name: 'Context' })).not.toBeInTheDocument();
       expect(within(panel).queryByRole('button', { name: /^(\d+ changes|Child activity)/ })).not.toBeInTheDocument();
@@ -42,7 +42,7 @@ describe('dedicated parent Context page', () => {
   it('explicitly opens Context from the compact composer meter, including repeated opens and closed-pane memory', async () => {
     const user = start();
     const control = meter();
-    expect(control).toHaveTextContent('173.12k (81%)');
+    expect(control).toHaveTextContent('81% used');
     expect(control).not.toHaveAttribute('aria-controls');
     expect(screen.getByRole('form', { name: 'Message composer' })).toContainElement(control);
     control.focus();
@@ -56,16 +56,22 @@ describe('dedicated parent Context page', () => {
     expect(rail().getByRole('button', { name: 'Context' })).toHaveAttribute('aria-controls', 'context-inspector');
     expect(screen.getByRole('heading', { name: 'Context', level: 2 })).toBeVisible();
     expect(within(page()).queryByRole('heading', { name: 'Remember search filters' })).not.toBeInTheDocument();
-    expect(fact('Session')).toHaveTextContent('Remember search filters');
+    expect(fact('Chat')).toHaveTextContent('Remember search filters');
     expect(fact('Provider')).toHaveTextContent('Aster Lab');
     expect(fact('Configured window')).toHaveTextContent('214,000');
     expect(fact('Active estimate')).toHaveTextContent('173,120');
-    expect(fact('Window used')).toHaveTextContent('81%');
+    // The page leads with the one number that matters, as words and as a meter.
+    const summary = within(page()).getByRole('region', { name: 'Window usage' });
+    expect(page().querySelector('h3, dl')!.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(summary).toHaveTextContent('81% of window used');
+    expect(summary).toHaveTextContent('173,120 of 214,000 tokens');
+    expect(within(summary).getByRole('meter', { name: 'Context window used' })).toHaveAttribute('aria-valuetext', '81% of window used');
+    expect(within(page()).getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Window', 'Session usage', 'Messages']);
     expect(fact('Input tokens')).toHaveTextContent('256,400');
     expect(fact('Reported total')).toHaveTextContent('275,320');
     expect(fact('Cost coverage')).toHaveTextContent('Complete');
-    expect(page()).toHaveTextContent('not a sent prompt or provider payload');
-    expect(screen.queryByRole('article', { name: 'Your local preview message' })).not.toBeInTheDocument();
+    expect(page()).not.toHaveTextContent(/Fictional|not a sent prompt|provider payload/);
+    expect(screen.getAllByRole('article', { name: 'Your message' })).toHaveLength(1);
     await user.click(rail().getByRole('button', { name: 'Context' }));
     expect(control).toHaveAttribute('aria-expanded', 'false');
     expect(control).not.toHaveAttribute('aria-controls');
@@ -109,7 +115,7 @@ describe('dedicated parent Context page', () => {
     const trigger = screen.getByRole('button', { name: 'Raw messages' });
     await user.click(trigger);
     await user.tab();
-    expect(screen.getByRole('region', { name: 'Local committed messages' })).toHaveFocus();
+    expect(screen.getByRole('region', { name: 'Raw message JSON' })).toHaveFocus();
     await user.keyboard('{Escape}');
     expect(trigger).toHaveFocus();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
@@ -124,13 +130,13 @@ describe('dedicated parent Context page', () => {
     await user.click(meter());
     await screen.findByRole('button', { name: 'Raw messages' });
     await user.click(screen.getByRole('button', { name: 'Raw messages' }));
-    const raw = screen.getByRole('region', { name: 'Local committed messages' });
+    const raw = screen.getByRole('region', { name: 'Raw message JSON' });
     const oldPage = page();
     const model = screen.getByRole('button', { name: 'Model for this chat' });
     await chooseMainModel(user, 'aster-mini');
     expect(model).toHaveFocus();
     expect(page()).toBe(oldPage);
-    expect(screen.getByRole('region', { name: 'Local committed messages' })).toBe(raw);
+    expect(screen.getByRole('region', { name: 'Raw message JSON' })).toBe(raw);
     expect(fact('Model')).toHaveTextContent('Aster Mini');
     expect(fact('Configured window')).toHaveTextContent('128,000');
     expect(fact('Active estimate')).toHaveTextContent('48,160');
@@ -141,12 +147,12 @@ describe('dedicated parent Context page', () => {
     expect(fact('Model')).toHaveTextContent('Orion');
     expect(fact('Configured window')).toHaveTextContent('96,000');
     expect(fact('Active estimate')).toHaveTextContent('Unknown');
-    expect(fact('Window used')).toHaveTextContent('Unknown');
+    expect(within(page()).getByRole('region', { name: 'Window usage' })).toHaveTextContent('Window use unknown');
     expect(meter()).toHaveTextContent('Context unknown');
     expect(page()).not.toHaveTextContent('173,120');
     await chooseMainModel(user, 'aster');
-    expect(meter()).toHaveTextContent('173.12k (81%)');
-    expect(screen.getByRole('region', { name: 'Local committed messages' })).toBe(raw);
+    expect(meter()).toHaveTextContent('81% used');
+    expect(screen.getByRole('region', { name: 'Raw message JSON' })).toBe(raw);
   });
 
   it('keeps typing, reference changes, modes and Send separate from fixed token/cost snapshots while projecting actual committed messages', async () => {
@@ -154,7 +160,7 @@ describe('dedicated parent Context page', () => {
     await user.click(meter());
     await screen.findByRole('button', { name: 'Raw messages' });
     await user.click(screen.getByRole('button', { name: 'Raw messages' }));
-    const raw = screen.getByRole('region', { name: 'Local committed messages' });
+    const raw = screen.getByRole('region', { name: 'Raw message JSON' });
     const before = raw.textContent;
     const draft = screen.getByRole('textbox');
     const localText = '<script>plain local message</script>';
@@ -164,22 +170,22 @@ describe('dedicated parent Context page', () => {
     expect(raw.textContent).toBe(before);
     await user.selectOptions(screen.getByRole('combobox', { name: 'Mode for this chat' }), 'plan');
     await user.click(screen.getByRole('button', { name: 'Expand draft' }));
-    await user.click(screen.getByRole('button', { name: 'Add example context' }));
+    await user.click(screen.getByRole('button', { name: 'Add context' }));
     for (const name of ['file SearchPage.tsx', 'image result-layout.png', 'context Navigation notes']) await user.click(screen.getByRole('button', { name }));
-    expect(screen.getByRole('list', { name: 'Attached example context' }).children).toHaveLength(3);
+    expect(screen.getByRole('list', { name: 'Attached context' }).children).toHaveLength(3);
     expect(raw.textContent).toBe(before);
     await user.keyboard('{Escape}');
     await user.click(screen.getByRole('button', { name: 'Send' }));
-    expect(screen.getByRole('region', { name: 'Local committed messages' })).toBe(raw);
+    expect(screen.getByRole('region', { name: 'Raw message JSON' })).toBe(raw);
     expect(JSON.parse(raw.textContent!)).toHaveLength(3);
     expect(raw).toHaveTextContent(localText + ' More.');
     expect(raw.querySelector('script')).toBeNull();
     expect(fact('Committed')).toHaveTextContent(/^3$/);
-    expect(fact('User / assistant')).toHaveTextContent('2 / 1');
-    expect(meter()).toHaveTextContent('173.12k (81%)');
+    expect(fact('You / AVA')).toHaveTextContent('2 / 1');
+    expect(meter()).toHaveTextContent('81% used');
     expect(fact('Cost estimate · USD')).toHaveTextContent('$1.24');
     expect(fact('Reported total')).toHaveTextContent('275,320');
-    expect(screen.getByRole('list', { name: 'Attached example context' }).children).toHaveLength(3);
+    expect(screen.getByRole('list', { name: 'Attached context' }).children).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Collapse draft' })).toBeVisible();
   });
 
@@ -189,9 +195,9 @@ describe('dedicated parent Context page', () => {
     await screen.findByRole('button', { name: 'Raw messages' });
     await user.click(screen.getByRole('button', { name: 'System prompt' }));
     await user.click(screen.getByRole('button', { name: 'Raw messages' }));
-    const oldRaw = screen.getByRole('region', { name: 'Local committed messages' });
-    await user.click(projects().getByRole('button', { name: 'Attention Export date range' }));
-    expect(fact('Session')).toHaveTextContent('Export date range');
+    const oldRaw = screen.getByRole('region', { name: 'Raw message JSON' });
+    await user.click(projects().getByRole('button', { name: 'Export date range Attention' }));
+    expect(fact('Chat')).toHaveTextContent('Export date range');
     expect(fact('Model')).toHaveTextContent('Orion');
     expect(fact('Committed')).toHaveTextContent(/^2$/);
     expect(oldRaw).not.toBeInTheDocument();
@@ -199,18 +205,18 @@ describe('dedicated parent Context page', () => {
     expect(screen.getByRole('button', { name: 'System prompt' })).toHaveAttribute('aria-expanded', 'false');
     expect(fact('Cost estimate · USD')).toHaveTextContent('Unknown');
     await user.click(screen.getByRole('button', { name: 'New chat' }));
-    expect(fact('Session')).toHaveTextContent('New chat 1');
+    expect(fact('Chat')).toHaveTextContent('New chat 1');
     expect(fact('Committed')).toHaveTextContent(/^0$/);
-    expect(fact('User / assistant')).toHaveTextContent('0 / 0');
+    expect(fact('You / AVA')).toHaveTextContent('0 / 0');
     expect(fact('Active estimate')).toHaveTextContent('Unknown');
     expect(fact('Reported total')).toHaveTextContent('Unknown');
     expect(meter()).toHaveTextContent('Context unknown');
     await user.click(screen.getByRole('button', { name: 'Raw messages' }));
-    expect(screen.getByRole('region', { name: 'Local committed messages' }).textContent).toBe('[]');
+    expect(screen.getByRole('region', { name: 'Raw message JSON' }).textContent).toBe('[]');
     await user.click(projects().getByRole('button', { name: 'Remember search filters' }));
     expect(screen.getByRole('button', { name: 'Raw messages' })).toHaveAttribute('aria-expanded', 'false');
     expect(fact('Committed')).toHaveTextContent(/^2$/);
-    expect(meter()).toHaveTextContent('173.12k (81%)');
+    expect(meter()).toHaveTextContent('81% used');
   });
 
   it('keeps Context provider/model/counts/raw projection parent-owned during readonly child inspection and Back', async () => {
@@ -222,21 +228,21 @@ describe('dedicated parent Context page', () => {
     await user.click(rail().getByRole('button', { name: 'Context' }));
     await screen.findByRole('button', { name: 'Raw messages' });
     expect(title).toHaveTextContent('Map return paths');
-    expect(screen.getByRole('region', { name: 'Read-only child context' })).toHaveTextContent('Aster Mini');
-    expect(fact('Session')).toHaveTextContent('Remember search filters');
+    expect(screen.getByRole('group', { name: 'Child agent' })).toHaveTextContent('Aster Mini');
+    expect(fact('Chat')).toHaveTextContent('Remember search filters');
     expect(fact('Model')).toHaveTextContent(/^Aster$/);
     expect(fact('Committed')).toHaveTextContent(/^3$/);
     await user.click(screen.getByRole('button', { name: 'Raw messages' }));
-    const raw = screen.getByRole('region', { name: 'Local committed messages' });
+    const raw = screen.getByRole('region', { name: 'Raw message JSON' });
     expect(JSON.parse(raw.textContent!)).toHaveLength(3);
     expect(raw).not.toHaveTextContent('Outline the paths back');
     expect(screen.queryByRole('form', { name: 'Message composer' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^(Send|Stop mock work|Steer|Restart|Promote)$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Send|Stop|Steer|Restart|Promote)$/ })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Back to parent' })).toHaveLength(1);
     await user.click(screen.getByRole('button', { name: 'Back to parent' }));
     expect(title).toHaveFocus();
     expect(screen.getByRole('heading', { level: 1 })).toBe(title);
-    expect(screen.getByRole('region', { name: 'Local committed messages' })).toBe(raw);
+    expect(screen.getByRole('region', { name: 'Raw message JSON' })).toBe(raw);
   });
 
   it('keeps parent draft/settings/pins/recent/Stop and child selection intact without network or filesystem work', async () => {
@@ -244,11 +250,11 @@ describe('dedicated parent Context page', () => {
       const spy = vi.fn(); vi.stubGlobal(name, spy); return spy;
     });
     const user = start();
-    await user.click(projects().getByRole('button', { name: 'Working Keyboard navigation' }));
+    await user.click(projects().getByRole('button', { name: 'Keyboard navigation Working' }));
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Keep parent draft' } });
     await user.selectOptions(screen.getByRole('combobox', { name: 'Mode for this chat' }), 'plan');
     await user.click(screen.getByRole('button', { name: 'Expand draft' }));
-    await user.click(screen.getByRole('button', { name: 'Add example context' }));
+    await user.click(screen.getByRole('button', { name: 'Add context' }));
     await user.click(screen.getByRole('button', { name: 'file SearchPage.tsx' }));
     await user.keyboard('{Escape}');
     await user.click(projects().getByRole('button', { name: 'Pin Keyboard navigation' }));
@@ -258,10 +264,10 @@ describe('dedicated parent Context page', () => {
     await screen.findByRole('button', { name: 'Raw messages' });
     expect(fact('Cost coverage')).toHaveTextContent('Partial');
     expect(fact('Cache write')).toHaveTextContent(/^0$/);
-    expect(screen.getByRole('button', { name: 'Stop mock work' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
     await user.click(meter());
     await screen.findByRole('button', { name: 'Raw messages' });
-    expect(projects().getByRole('button', { name: 'Working Keyboard navigation' })).toBeVisible();
+    expect(projects().getByRole('button', { name: 'Keyboard navigation Working' })).toBeVisible();
     await user.click(rail().getByRole('button', { name: 'Agents' }));
     await user.click(screen.getByRole('button', { name: /^Working Review focus boundaries/ }));
     const transcript = await screen.findByRole('region', { name: /Child conversation:/ });
@@ -273,9 +279,9 @@ describe('dedicated parent Context page', () => {
     expect(screen.getByRole('textbox')).toHaveValue('Keep parent draft');
     expect(screen.getByRole('combobox', { name: 'Mode for this chat' })).toHaveValue('plan');
     expect(screen.getByRole('button', { name: 'Collapse draft' })).toBeVisible();
-    expect(screen.getByRole('list', { name: 'Attached example context' })).toHaveTextContent('SearchPage.tsx');
-    expect(screen.getByRole('button', { name: 'Stop mock work' })).toBeVisible();
-    expect(screen.queryByRole('article', { name: 'Your local preview message' })).not.toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Attached context' })).toHaveTextContent('SearchPage.tsx');
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
+    expect(screen.getAllByRole('article', { name: 'Your message' })).toHaveLength(1);
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 });

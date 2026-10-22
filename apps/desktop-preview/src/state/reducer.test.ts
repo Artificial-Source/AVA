@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState } from './fixtures';
 import { previewReducer } from './reducer';
-import { inspectedChild, selectedParentChildren } from './selectors';
+import { chatSummaries, inspectedChild, selectedParentChildren } from './selectors';
 import type { ContextId, ModelId, PreviewAction, PreviewState } from './types';
 import { previewContextInfo } from '../components/DetailInspector';
 
@@ -224,7 +224,7 @@ describe('local chat state', () => {
     expect(current(state).draft).toBe('');
     expect(current(state).status).toBe('idle');
     expect(state.chats.slice(1)).toEqual(before.chats.slice(1));
-    expect(state.announcement).toContain('No model was called');
+    expect(state.announcement).toBe('Message added.');
   });
 
   it('does not Send blank drafts or pretend that a Working fixture accepts a live turn', () => {
@@ -526,4 +526,118 @@ it('sets canonical sidebar opacity idempotently without touching chat or inspect
   expect(previewReducer(opaque, { type: 'setOpaque', opaque: true })).toBe(opaque);
   expect(previewReducer(opaque, { type: 'setOpaque', opaque: 'glass' as unknown as boolean })).toBe(opaque);
   expect(previewReducer(opaque, { type: 'setOpaque', opaque: false })).toEqual(state);
+});
+
+describe('rename, archive and undo', () => {
+  it('renames a chat everywhere with a bounded single-line title and rejects blank or unchanged names', () => {
+    const before = deepFreeze(createInitialState());
+    const state = previewReducer(before, { type: 'renameChat', chatId: 'export-range', title: '  Export\n  date   range v2 ' });
+    expect(state.chats.find((chat) => chat.id === 'export-range')).toMatchObject({ title: 'Export date range v2', nameFromFirstMessage: false });
+    expect(state.activeChatId).toBe(before.activeChatId);
+    expect(state.announcement).toBe('Renamed to “Export date range v2”.');
+    for (const title of ['', '   ', 'Export date range v2']) expect(previewReducer(state, { type: 'renameChat', chatId: 'export-range', title })).toBe(state);
+    expect(previewReducer(state, { type: 'renameChat', chatId: 'missing', title: 'Name' })).toBe(state);
+    expect(Array.from(previewReducer(state, { type: 'renameChat', chatId: 'export-range', title: 'x'.repeat(200) }).chats.find((chat) => chat.id === 'export-range')!.title)).toHaveLength(80);
+  });
+
+  it('archives the active chat, views the most recent remaining chat and restores the exact view on Undo', () => {
+    let state = previewReducer(createInitialState(), { type: 'viewChat', chatId: 'export-range' });
+    state = previewReducer(state, { type: 'pinChat', chatId: 'export-range' });
+    const before = deepFreeze(state);
+    const archived = previewReducer(before, { type: 'archiveChat', chatId: 'export-range' });
+    expect(archived.chats.find((chat) => chat.id === 'export-range')?.archived).toBe(true);
+    expect(archived.activeChatId).toBe('search-filters');
+    expect(archived.pinnedChatIds).toEqual([]);
+    expect(archived.recentChatIds).toEqual(['search-filters']);
+    expect(archived.archiveNotice).toMatchObject({ chatId: 'export-range', title: 'Export date range' });
+    expect(archived.announcement).toBe('Archived “Export date range”.');
+    expect(previewReducer(archived, { type: 'archiveChat', chatId: 'export-range' })).toBe(archived);
+    expect(previewReducer(archived, { type: 'viewChat', chatId: 'export-range' })).toBe(archived);
+    expect(previewReducer(archived, { type: 'pinChat', chatId: 'export-range' })).toBe(archived);
+    const restored = previewReducer(archived, { type: 'unarchiveChat', chatId: 'export-range' });
+    expect(restored.chats).toEqual(before.chats);
+    expect(restored.activeChatId).toBe('export-range');
+    expect(restored.pinnedChatIds).toEqual(before.pinnedChatIds);
+    expect(restored.recentChatIds).toEqual(before.recentChatIds);
+    expect(restored.archiveNotice).toBeUndefined();
+  });
+
+  it('keeps the view when archiving another chat and drops the Undo offer on the next accepted action only', () => {
+    const before = deepFreeze(createInitialState());
+    const archived = previewReducer(before, { type: 'archiveChat', chatId: 'route-config' });
+    expect(archived.activeChatId).toBe(before.activeChatId);
+    expect(archived.archiveNotice?.chatId).toBe('route-config');
+    expect(previewReducer(archived, { type: 'removeContext', chatId: 'search-filters', contextId: 'search-file' })).toBe(archived);
+    const typed = previewReducer(archived, { type: 'setDraft', chatId: 'search-filters', draft: 'Next' });
+    expect(typed.archiveNotice).toBeUndefined();
+    expect(previewReducer(typed, { type: 'unarchiveChat', chatId: 'route-config' }).chats.find((chat) => chat.id === 'route-config')?.archived).toBeUndefined();
+    expect(previewReducer(archived, { type: 'dismissArchiveNotice' }).archiveNotice).toBeUndefined();
+  });
+
+  it('starts an empty chat when the last remaining chat is archived', () => {
+    let state = createInitialState();
+    for (const chat of state.chats.filter((entry) => entry.id !== state.activeChatId)) state = previewReducer(state, { type: 'archiveChat', chatId: chat.id });
+    state = previewReducer(state, { type: 'archiveChat', chatId: state.activeChatId });
+    expect(current(state)).toMatchObject({ id: 'local-chat-1', status: 'idle', messages: [] });
+    expect(state.chats.filter((chat) => !chat.archived)).toHaveLength(1);
+  });
+});
+
+describe('permission answers, branches and chat summaries', () => {
+  it('stores one offered decision on the viewed request and clears Attention, never for hidden, stale or unoffered answers', () => {
+    const viewed = deepFreeze(previewReducer(createInitialState(), { type: 'viewChat', chatId: 'export-range' }));
+    const decide = (state: PreviewState, patch: Partial<Extract<PreviewAction, { type: 'resolvePermission' }>> = {}) => previewReducer(state, { type: 'resolvePermission', chatId: 'export-range', messageId: 'export-response', decision: 'deny', ...patch });
+    const denied = decide(viewed);
+    const chat = denied.chats.find((entry) => entry.id === 'export-range')!;
+    expect(chat.status).toBe('idle');
+    expect(chat.messages[1]).toMatchObject({ permissionDecision: 'deny', permission: { state: 'ready' } });
+    expect(chatSummaries(denied).find((entry) => entry.id === 'export-range')?.status).toBe('idle');
+    expect(decide(denied, { decision: 'allow' })).toBe(denied);
+    const unviewed = createInitialState();
+    expect(decide(unviewed)).toBe(unviewed);
+    expect(decide(viewed, { messageId: 'export-question' })).toBe(viewed);
+    expect(decide(viewed, { decision: 'always' as 'deny' })).toBe(viewed);
+    const child = { ...viewed, childAgents: [{ ...viewed.childAgents[0], parentChatId: 'export-range' }], inspectedChildId: viewed.childAgents[0].id };
+    expect(decide(child)).toBe(child);
+  });
+
+  it('branches from a user message into a new viewed chat in the same project, leaving the source untouched', () => {
+    const before = deepFreeze(previewReducer(createInitialState(), { type: 'viewChat', chatId: 'export-range' }));
+    const branched = previewReducer(before, { type: 'branchChat', chatId: 'export-range', messageId: 'export-question' });
+    const branch = current(branched);
+    expect(branch).toMatchObject({ id: 'local-chat-1', projectId: 'papertrail', title: 'Export date range (branch)', status: 'idle', draft: '', model: 'orion', mode: 'plan', changes: [] });
+    expect(branch.messages).toEqual([before.chats[3].messages[0]]);
+    expect(branched.recentChatIds[0]).toBe(branch.id);
+    expect(branched.chats.slice(0, before.chats.length)).toEqual(before.chats);
+    expect(branched.nextChatNumber).toBe(2);
+    expect(branched.announcement).toBe('Created “Export date range (branch)” from the chosen message.');
+    // Only the user's own messages are branch points.
+    expect(previewReducer(before, { type: 'branchChat', chatId: 'export-range', messageId: 'export-response' })).toBe(before);
+    expect(previewReducer(before, { type: 'branchChat', chatId: 'missing', messageId: 'export-question' })).toBe(before);
+    const long = previewReducer(before, { type: 'renameChat', chatId: 'export-range', title: 'x'.repeat(200) });
+    expect(Array.from(current(previewReducer(long, { type: 'branchChat', chatId: 'export-range', messageId: 'export-question' })).title)).toHaveLength(80);
+  });
+
+  it('closes an unanswered request copied into a branch so only its own chat can answer it', () => {
+    let state = previewReducer(createInitialState(), { type: 'viewChat', chatId: 'export-range' });
+    state = previewReducer(state, { type: 'setDraft', chatId: 'export-range', draft: 'And the summary?' });
+    state = previewReducer(state, { type: 'sendLocalMessage' });
+    const branch = current(previewReducer(state, { type: 'branchChat', chatId: 'export-range', messageId: 'local-message-1' }));
+    expect(branch.messages).toHaveLength(3);
+    expect(branch.messages[1]).toMatchObject({ permission: { state: 'closed' } });
+    expect(state.chats[3].messages[1]).toMatchObject({ permission: { state: 'ready' } });
+  });
+
+  it('labels branch points as one-line previews that end with an ellipsis when cut, keeps the whole message, and indexes message text for search', () => {
+    const summaries = chatSummaries(createInitialState());
+    const search = summaries.find((entry) => entry.id === 'search-filters')!;
+    expect(search.branchPoints).toEqual([{ id: 'search-question', label: 'Keep the search filters when I open a result and go back…', text: 'Keep the search filters when I open a result and go back. Use the URL so I can share the same view.' }]);
+    const exportRange = summaries.find((entry) => entry.id === 'export-range')!;
+    expect(exportRange.searchText?.split('\n').slice(0, 2)).toEqual(['Export date range', 'Papertrail']);
+    expect(exportRange.searchText).toMatch(/including the selected timezone/);
+    expect(exportRange.searchText).not.toMatch(/\*\*/);
+    const retry = summaries.find((entry) => entry.id === 'retry-behavior')!;
+    expect(retry.searchText).toContain('Temporary unavailable Retry with backoff');
+    expect(retry.searchText).not.toMatch(/\||---/);
+  });
 });

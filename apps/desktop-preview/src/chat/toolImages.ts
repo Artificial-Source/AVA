@@ -3,8 +3,7 @@ export type ToolImagePreviewId = 'search-results-example';
 
 const searchResultsImage = Object.freeze({
   src: '/tool-previews/search-results.png',
-  alt: 'Supplied example: search results with a search field, Recent filter, and three result rows.',
-  label: 'Supplied image · Search results example',
+  alt: 'Search results page with a search field, a Recent filter and three result rows.',
   width: 640,
   height: 400,
 } as const);

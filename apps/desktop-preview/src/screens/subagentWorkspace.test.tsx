@@ -2,7 +2,7 @@ import { StrictMode, type ReactNode } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { SubagentIntent } from './contracts';
-import { applySubagentIntent, initialSubagentWorkspace, subagentErrors, useSubagentWorkspace } from './subagentWorkspace';
+import { applySubagentIntent, applySubagentRemoval, initialSubagentWorkspace, subagentErrors, useSubagentWorkspace } from './subagentWorkspace';
 
 const create: SubagentIntent = { version: 1, definitionId: null, revision: null, name: '  Release notes  ', description: '  Review the public release summary.  ', modelPreference: 'orion' };
 const edit: SubagentIntent = { ...create, definitionId: 'user:1', revision: 1 };
@@ -41,6 +41,19 @@ describe('local user-definition metadata ownership', () => {
     for (const seed of [null, [], {}, { ...initial, version: -1 }, { ...initial, nextUserId: 1 }, { ...initial, definitions: [null] }, { ...initial, definitions: [{ id: 'user:1' }] }, { ...initial, definitions: initial.definitions.slice(1) }, { ...initial, definitions: [...initial.definitions, initial.definitions[3]] }, { ...initial, definitions: initial.definitions.map((entry) => ({ ...entry, modelPreference: 'orion' })) }]) {
       expect(initialSubagentWorkspace(seed)).toEqual(initial);
     }
+  });
+  it('removes only a current user definition, keeps ids monotonic and refuses built-in, project, stale or forged removals', () => {
+    const initial = initialSubagentWorkspace();
+    for (const forged of [{ definitionId: 'builtin:general', revision: 1 }, { definitionId: 'project:review-example', revision: 1 }, { definitionId: 'user:1', revision: 2 }, { definitionId: 'user:9', revision: 1 }, { version: 2 }, { remove: false }]) {
+      expect(applySubagentRemoval(initial, { remove: true, version: 1, definitionId: 'user:1', revision: 1, ...forged } as Parameters<typeof applySubagentRemoval>[1])).toBeNull();
+    }
+    const removed = applySubagentRemoval(initial, { remove: true, version: 1, definitionId: 'user:1', revision: 1 })!;
+    expect(removed.version).toBe(2); expect(removed.nextUserId).toBe(initial.nextUserId); expect(removed.definitions.map((entry) => entry.id)).not.toContain('user:1');
+    expect(initialSubagentWorkspace(removed)).toEqual(removed);
+    expect(applySubagentIntent(removed, { ...create, version: 2 })!.definitions.at(-1)!.id).toBe('user:2');
+    const host = renderHook(() => useSubagentWorkspace(undefined, true));
+    act(() => expect(host.result.current.save({ remove: true, version: 1, definitionId: 'user:1', revision: 1 })).toBe(true));
+    expect(host.result.current.workspace.definitions.some((entry) => entry.id === 'user:1')).toBe(false);
   });
   it('guards duplicate, latest, inactive, closed and unmounted callbacks; reopening uses only an explicit opaque seed', () => {
     const nextEdit = { ...edit, version: 2, name: 'Updated notes' };

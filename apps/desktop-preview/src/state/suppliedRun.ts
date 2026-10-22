@@ -31,7 +31,7 @@ export function stopSuppliedRun(state: PreviewState): PreviewState {
   const run = state.suppliedRun;
   if (!run || run.state !== 'streaming') return state;
   const message = state.chats.find((chat) => chat.id === run.chatId)?.messages.find((entry) => entry.id === run.messageId);
-  return message?.role === 'assistant' ? { ...replaceRunTurn(state, { ...run, state: 'canceled' }, { ...message, lifecycle: 'canceled' }), announcement: 'Run preview stopped. Partial response and supplied tool facts retained.' } : state;
+  return message?.role === 'assistant' ? { ...replaceRunTurn(state, { ...run, state: 'canceled' }, { ...message, lifecycle: 'canceled' }), announcement: 'Run preview stopped. The partial reply is kept.' } : state;
 }
 
 export function receiveSuppliedRun(state: PreviewState, events: readonly RunEvent[]): PreviewState {
@@ -47,5 +47,5 @@ export function receiveSuppliedRun(state: PreviewState, events: readonly RunEven
   if (!next) return state;
   const kind = events.at(-1)!.kind;
   const phase = kind === 'complete' ? 'committed' : kind === 'error' ? 'failed' : 'streaming';
-  return { ...replaceRunTurn(state, { ...run, sequence: run.sequence + events.length, state: phase }, { ...next, lifecycle: phase }), announcement: kind === 'complete' ? 'Run preview complete.' : kind === 'error' ? 'Run preview failed. Partial response retained.' : state.announcement };
+  return { ...replaceRunTurn(state, { ...run, sequence: run.sequence + events.length, state: phase }, { ...next, lifecycle: phase }), announcement: kind === 'complete' ? 'Run preview complete.' : kind === 'error' ? 'Run preview failed. The partial reply is kept.' : state.announcement };
 }

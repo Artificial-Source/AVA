@@ -5,11 +5,10 @@ import type { ModelId } from '../state/types';
 
 export async function chooseMainModel(user: ReturnType<typeof userEvent.setup>, model: ModelId) {
   await user.click(screen.getByRole('button', { name: 'Model for this chat' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
+  const dialog = await screen.findByRole('dialog', { name: /^Model for “/ });
   const radio = within(dialog).getAllByRole<HTMLInputElement>('radio').find((input) => input.value === model)!;
   await user.click(radio);
-  const label = { aster: 'Aster', 'aster-mini': 'Aster Mini', orion: 'Orion' }[model];
-  await user.click(within(dialog).getByRole('button', { name: `Use ${label}` }));
+  await user.click(within(dialog).getByRole('button', { name: 'Use for this chat' }));
 }
 
 // jsdom only. Production uses the browser's native top layer and focus algorithm.

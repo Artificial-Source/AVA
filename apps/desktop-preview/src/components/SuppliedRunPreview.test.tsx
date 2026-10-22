@@ -19,16 +19,16 @@ async function begin() {
 }
 async function paused() { await begin(); fireEvent.click(screen.getByRole('button', { name: 'Pause preview' })); }
 function step() { fireEvent.click(screen.getByRole('button', { name: 'Next snapshot' })); }
-function run() { return screen.getAllByRole('article', { name: 'AVA supplied run response' }).at(-1)!; }
+function run() { return screen.getAllByRole('article', { name: 'AVA response' }).at(-1)!; }
 
 describe('explicit normal-chat supplied run integration', () => {
   it('keeps Send user-only, fixed response facts/context, mounted editor/history and draft selection while the preview progresses', async () => {
     const fetch = vi.fn(); const socket = vi.fn(); vi.stubGlobal('fetch', fetch); vi.stubGlobal('WebSocket', socket);
     render(<StrictMode><AppShell /></StrictMode>);
     const draft = screen.getByRole('textbox') as HTMLTextAreaElement;
-    const historical = screen.getByRole('article', { name: 'AVA example response' }); const historicalBody = historical.querySelector('p');
+    const historical = screen.getByRole('article', { name: 'AVA response' }); const historicalBody = historical.querySelector('p');
     fireEvent.change(draft, { target: { value: 'Local-only message' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    expect(screen.queryByRole('article', { name: 'AVA supplied run response' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('article', { name: 'AVA response' })).toEqual([historical]);
     fireEvent.change(draft, { target: { value: 'Keep editing this draft' } });
     const context = screen.getByRole('button', { name: /^Open Context/ }).textContent;
     await paused();
@@ -38,9 +38,9 @@ describe('explicit normal-chat supplied run integration', () => {
     draft.focus(); draft.setSelectionRange(5, 12); const focus = vi.spyOn(draft, 'focus');
     const next = screen.getByRole('button', { name: 'Next snapshot' }); fireEvent.click(next);
     expect(document.activeElement).toBe(draft); expect(draft.selectionStart).toBe(5); expect(draft.selectionEnd).toBe(12); expect(focus).not.toHaveBeenCalled();
-    expect(screen.getByRole('article', { name: 'AVA example response' })).toBe(historical); expect(historical.querySelector('p')).toBe(historicalBody);
+    expect(screen.getAllByRole('article', { name: 'AVA response' })[0]).toBe(historical); expect(historical.querySelector('p')).toBe(historicalBody);
     for (let i = 0; i < 4; i++) step();
-    expect(run()).toHaveAttribute('data-turn-state', 'committed'); expect(run()).toHaveTextContent('Example complete.');
+    expect(run()).toHaveAttribute('data-turn-state', 'committed'); expect(run()).toHaveTextContent('Saved filters now survive a return from a result.');
     expect(screen.queryByRole('button', { name: 'Stop preview' })).not.toBeInTheDocument(); expect(frames.size).toBe(0);
     expect(screen.getByRole('button', { name: /^Open Context/ })).toHaveTextContent(context!);
     expect(fetch).not.toHaveBeenCalled(); expect(socket).not.toHaveBeenCalled();
@@ -50,21 +50,21 @@ describe('explicit normal-chat supplied run integration', () => {
     const firstFrame = [...frames.values()][0]; act(() => firstFrame(0)); frames.clear();
     const partial = run(); const text = partial.textContent;
     fireEvent.click(screen.getByRole('button', { name: 'Stop preview' }));
-    expect(partial).toHaveAttribute('data-turn-state', 'canceled'); expect(partial.textContent).toContain('The supplied example traces');
+    expect(partial).toHaveAttribute('data-turn-state', 'canceled'); expect(partial.textContent).toContain('I’ll trace how search filters');
     const stoppedText = partial.textContent; act(() => firstFrame(0)); expect(partial.textContent).toBe(stoppedText);
     expect(partial.textContent).not.toBe(text); expect(within(partial).getAllByRole('listitem')).toHaveLength(3);
-    await paused(); expect(run()).not.toBe(partial); expect(screen.getAllByRole('article', { name: 'AVA supplied run response' })).toHaveLength(2);
+    await paused(); expect(run()).not.toBe(partial); expect(screen.getAllByRole('article', { name: 'AVA response' })).toHaveLength(3);
     expect(partial).toHaveAttribute('data-turn-state', 'canceled'); expect(frames.size).toBe(0);
   });
   it('plays real local failure and retry transitions; burst delivery remains finite', async () => {
     render(<AppShell />); await paused(); fireEvent.click(screen.getByRole('button', { name: 'Stop preview' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Preview example' }), { target: { value: 'failure' } });
     await paused(); for (let i = 0; i < 5; i++) step();
-    expect(run()).toHaveAttribute('data-turn-state', 'failed'); expect(run()).toHaveTextContent('Supplied example failure:');
+    expect(run()).toHaveAttribute('data-turn-state', 'failed'); expect(run()).toHaveTextContent('The navigation test couldn’t read a browser-history result');
     expect(within(run()).getByRole('button', { name: /Check.*Failed/ })).toBeVisible();
     fireEvent.change(screen.getByRole('combobox', { name: 'Preview example' }), { target: { value: 'burst' } });
     await paused(); for (let i = 0; i < 7; i++) step();
-    expect(run()).toHaveAttribute('data-turn-state', 'committed'); expect(run()).toHaveTextContent('Burst delivery sample:'); expect(frames.size).toBe(0);
+    expect(run()).toHaveAttribute('data-turn-state', 'committed'); expect(run()).toHaveTextContent('Replaying the test across the full result list:'); expect(frames.size).toBe(0);
   });
   it.each(['Settings', 'models', 'chat', 'new', 'child'])('cancels atomically on %s departure; old callbacks cannot write or restart hidden history', async (destination) => {
     render(<AppShell />); const draft = screen.getByRole('textbox') as HTMLTextAreaElement; const draftText = draft.value;
@@ -74,15 +74,15 @@ describe('explicit normal-chat supplied run integration', () => {
     else if (destination === 'models') await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Model for this chat' })); });
     else if (destination === 'new') fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
     else if (destination === 'child') await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Working Review back navigation/ })); });
-    else fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Completed Simplify route config' }));
+    else fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Simplify route config Completed' }));
     const after = partial.textContent; act(() => late(0)); expect(partial.textContent).toBe(after); expect(frames.size).toBe(0);
     if (destination === 'Settings') {
       expect(partial.closest('[hidden][inert]')).not.toBeNull();
-      const stop = document.querySelector('button[title="Pause supplied snapshot delivery only"]'); if (stop) fireEvent.click(stop);
+      const pause = document.querySelector('button[title="Pause the preview reply"]'); if (pause) fireEvent.click(pause);
       await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Back to chat' })); });
-    } else if (destination === 'models') await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Close dialog' })); });
+    } else if (destination === 'models') await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Close' })); });
     else if (destination === 'child') fireEvent.click(screen.getByRole('button', { name: 'Back to parent' }));
-    else fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Stopped Remember search filters' }));
+    else fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Remember search filters Stopped' }));
     expect(run()).toHaveAttribute('data-turn-state', 'canceled'); expect(screen.getByRole('textbox')).toHaveValue(draftText);
     expect(screen.getByRole('button', { name: 'Retry preview' })).toBeEnabled();
   });

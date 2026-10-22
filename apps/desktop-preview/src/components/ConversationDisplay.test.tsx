@@ -27,7 +27,7 @@ afterEach(() => { window.getSelection()?.removeAllRanges(); });
 describe('display presets and stable explicit intent', () => {
   it('preserves the shared standalone disclosure inside its own open tool-detail dialog', async () => {
     render(<dialog open aria-label="Tool detail"><ToolActivity records={[record('dialog')]} /></dialog>);
-    const group = screen.getByRole('button', { name: /^Tool details/ }); fireEvent.click(group);
+    const group = screen.getByRole('button', { name: /^\d+ tools?\b/ }); fireEvent.click(group);
     expect(group).toHaveAttribute('aria-expanded', 'true'); expect(await screen.findByLabelText('Output: Read dialog')).toBeVisible();
     fireEvent.click(group); expect(group).toHaveAttribute('aria-expanded', 'false');
   });
@@ -45,7 +45,9 @@ describe('display presets and stable explicit intent', () => {
     for (const lifecycle of ['committed', 'failed', 'canceled'] as const) {
       view.rerender(content({ ...turn, lifecycle }, display));
       expect(states.map((state) => row(state).getAttribute('aria-expanded'))).toEqual(terminal.map(String));
-      expect(row('running')).toHaveTextContent('Working'); // No fabricated cancellation/completion.
+      // Never fabricated as completed; an ended turn shows unstarted/unfinished work as such, in gray.
+      expect(row('running')).toHaveTextContent(lifecycle === 'committed' ? 'Working' : 'Not finished');
+      expect(row('queued')).toHaveTextContent(lifecycle === 'committed' ? 'Queued' : 'Not run');
       expect(screen.getAllByRole('listitem')).toHaveLength(6);
     }
     expect(JSON.stringify(turn)).toBe(before);
@@ -54,17 +56,17 @@ describe('display presets and stable explicit intent', () => {
   });
   it('preserves row/group/all choices within a mode; every actual different preset is fresh intent without replacing retained DOM', async () => {
     let turn = message([record('one'), record('two', 'failed')]); const view = render(content(turn));
-    const article = screen.getByRole('article'); const group = screen.getByRole('button', { name: /^Tool details/ }); const first = row('one'); const second = row('two');
+    const article = screen.getByRole('article'); const group = screen.getByRole('button', { name: /^\d+ tools?\b/ }); const first = row('one'); const second = row('two');
     const failureOutput = await screen.findByLabelText('Output: Read two');
     fireEvent.click(first); expect(first).toHaveAttribute('aria-expanded', 'false');
     turn = { ...turn, markdown: 'Partial assistant text growing', activity: turn.activity!.map((entry) => ({ ...entry, output: { text: entry.output!.text + '\nMore', truncated: false } })) };
     view.rerender(content(turn)); expect(first).toHaveAttribute('aria-expanded', 'false'); expect(screen.getByLabelText('Output: Read two')).toBe(failureOutput);
     view.rerender(content(turn, 'expanded')); expect(first).toHaveAttribute('aria-expanded', 'true'); expect(screen.getByLabelText('Output: Read two')).toBe(failureOutput);
-    expect(screen.getByRole('article')).toBe(article); expect(screen.getByRole('button', { name: /^Tool details/ })).toBe(group); expect(row('one')).toBe(first); expect(row('two')).toBe(second);
+    expect(screen.getByRole('article')).toBe(article); expect(screen.getByRole('button', { name: /^\d+ tools?\b/ })).toBe(group); expect(row('one')).toBe(first); expect(row('two')).toBe(second);
     fireEvent.click(first); view.rerender(content({ ...turn }, 'expanded')); expect(first).toHaveAttribute('aria-expanded', 'false');
     view.rerender(content(turn)); expect(first).toHaveAttribute('aria-expanded', 'true'); // Earlier Auto collapse cannot return.
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(first).toHaveAttribute('aria-expanded', 'false'); expect(second).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(first); fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(first).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(first); fireEvent.click(screen.getByRole('button', { name: 'Expand all tools' })); fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(first).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(group); expect(first).toHaveAttribute('aria-expanded', 'true'); fireEvent.click(first);
     view.rerender(content({ ...turn, lifecycle: 'committed' })); expect(first).toHaveAttribute('aria-expanded', 'false'); expect(second).toHaveAttribute('aria-expanded', 'true');
     view.rerender(content(turn, 'compact')); expect(first).toHaveAttribute('aria-expanded', 'false'); expect(second).toHaveAttribute('aria-expanded', 'false');
@@ -117,7 +119,7 @@ describe('Auto reading safety without automatic-scroll pinning', () => {
     if (inspection === 'focus') expect(output).toHaveFocus(); else { expect(editor).toHaveFocus(); expect(editor.selectionStart).toBe(2); expect(editor.selectionEnd).toBe(6); }
     window.getSelection()!.removeAllRanges(); act(() => editor.focus()); fireEvent(document, new Event('selectionchange'));
     view.rerender(content({ ...terminal, markdown: 'Final text' })); expect(row('one')).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(row('one')).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all tools' })); fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(row('one')).toHaveAttribute('aria-expanded', 'false');
     view.rerender(content(turn)); expect(row('one')).toHaveAttribute('aria-expanded', 'false');
     view.rerender(content(turn, 'expanded')); view.rerender(content(terminal)); expect(row('one')).toHaveAttribute('aria-expanded', 'false');
   });

@@ -13,20 +13,18 @@ export default function ChildConversation({ child }: { child: ChildAgent }) {
   return (
     <div className={transcript.transcript} role="region" tabIndex={0} aria-label={`Child conversation: ${child.title}`}>
       <div className={transcript.messages}>
-        <div className={styles.snapshot}>
-          <div className={styles.label} role="region" aria-label="Read-only child context">
-            <LockSimpleIcon size={13} aria-hidden="true" />Read-only child <span aria-hidden="true">·</span> <ModelMark model={child.model} />{model.label}
-          </div>
+        <div className={styles.snapshot} role="group" aria-label="Child agent">
           <ChatStatus status={child.status} />
-          <p>{child.statusNote}</p>
+          <span className={styles.facts}><ModelMark model={child.model} />{model.label}<span aria-hidden="true">·</span>{child.timing}</span>
+          <span className={styles.readOnly}><LockSimpleIcon size={13} aria-hidden="true" />Read only</span>
         </div>
         {child.messages.map((message) => message.role === 'user' ? (
-          <article key={message.id} className={transcript.userMessage} aria-label="Committed child user example">
-            <div className={transcript.userHeading}>User · committed example</div>
+          <article key={message.id} className={transcript.userMessage} aria-label="Your message">
+            <div className={transcript.userHeading}>You</div>
             <div className={transcript.userBubble}><p>{message.text}</p></div>
           </article>
         ) : (
-          <MessageTurn key={message.id} turn={{ ...message, author: 'AVA · child', state: 'committed', label: 'Committed child assistant example' }} mark={<AvaMark />} />
+          <MessageTurn key={message.id} turn={{ ...message, author: 'AVA · child', state: 'committed', label: 'Child agent response' }} mark={<AvaMark />} />
         ))}
         {child.status === 'unavailable' ? <p className={styles.unavailable}>No conversation to display.</p> : null}
       </div>

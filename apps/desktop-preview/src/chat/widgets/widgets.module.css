@@ -1,20 +1,55 @@
-.eyebrow { margin: 0 0 var(--space-3); color: var(--quiet); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
-.title { margin: 0; color: var(--text); font-size: 15px; line-height: 1.5; font-weight: 550; overflow-wrap: anywhere; }
-.description { margin: var(--space-3) 0; color: var(--body); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-.scope { margin: var(--space-3) 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.state { display: block; margin: var(--space-3) 0; color: var(--quiet); font-size: 11px; line-height: 1.6; }
-.target { display: block; padding: var(--space-3); border-radius: var(--radius-control); background: var(--code); color: var(--body); font-size: 12px; overflow-wrap: anywhere; }
-.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
-.fields { display: grid; gap: var(--space-3); min-width: 0; margin: var(--space-4) 0; padding: 0; border: 0; }
-.fields legend { padding: 0 0 var(--space-3); color: var(--muted); font-size: 12px; }
+/* Requests: status first, the exact subject in mono, then equal-weight choices. */
+.request { min-width: 0; }
+.requestStatus { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) 10px; margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--type-caption); line-height: 1.6; }
+.requester { color: var(--muted); }
+.title { margin: 0; color: var(--text); font-size: var(--type-prose); line-height: 1.5; font-weight: 550; overflow-wrap: anywhere; }
+.description { margin: var(--space-2) 0 0; color: var(--body); font-size: var(--type-control); line-height: 1.7; overflow-wrap: anywhere; }
+.subject { display: grid; gap: var(--space-2); margin: var(--space-4) 0 0; padding: var(--space-3); border: 1px solid var(--edge); border-radius: var(--radius-control); background: var(--code); }
+.subject > div { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: var(--space-3); align-items: baseline; }
+.subject dt { color: var(--muted); font-size: var(--type-caption); }
+.subject dd { margin: 0; min-width: 0; }
+.subject code { color: var(--text); font: var(--type-meta)/1.6 var(--mono); overflow-wrap: anywhere; }
+.reason { margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.7; overflow-wrap: anywhere; }
+
+.choices { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-4); align-items: center; margin-top: var(--space-5); }
+.choice { display: contents; }
+.choiceButton { justify-self: stretch; }
+.choiceButton[aria-pressed='true'], .choices .choiceButton[aria-pressed='true']:hover { border-color: var(--text); background: var(--selected); color: var(--text); cursor: default; }
+.scopeText { min-width: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.5; overflow-wrap: anywhere; }
+/* Deny is a full choice, set apart so it is never mistaken for one of the grants. */
+.choiceDivider { grid-column: 1 / -1; height: 1px; margin-block: var(--space-1); background: var(--separator); }
+.outcome { display: flex; align-items: center; gap: 6px; margin: var(--space-4) 0 0; color: var(--body); font-size: var(--type-meta); line-height: 1.6; overflow-wrap: anywhere; }
+.outcome:empty { margin: 0; }
+.outcome > svg { flex-shrink: 0; }
+
+.fields { display: grid; gap: 10px; min-width: 0; margin: var(--space-4) 0 0; padding: 0; border: 0; }
+.fields legend { padding: 0 0 var(--space-2); color: var(--muted); font-size: var(--type-meta); }
 .fields:disabled { opacity: .65; }
-.choice { display: flex; align-items: baseline; gap: var(--space-2); color: var(--body); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
-.choice input { flex-shrink: 0; }
-.field { display: grid; gap: var(--space-2); color: var(--muted); font-size: 12px; }
-.input { width: 100%; min-width: 0; min-height: var(--control-height); padding: 8px 10px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); color: var(--text); background: var(--code); font: inherit; }
-.input:focus-visible, .choice input:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-.output { flex-basis: 100%; min-width: 0; }
-.output pre { max-height: 220px; overflow: auto; margin: 6px 0; padding: var(--space-3); border-radius: var(--radius-control); background: var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
-.caret { transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
-.excerptToggle { margin: 0 0 var(--space-3); padding: 5px 0; background: transparent; color: var(--muted); text-align: left; font-size: 12px; }
-.excerptToggle:hover { color: var(--text); }
+/* The whole label is the target: padding lifts it to 24px, the matching negative margin keeps the list rhythm. */
+.option { display: flex; align-items: baseline; gap: var(--space-2); margin-block: -2px; padding-block: 2px; color: var(--body); font-size: var(--type-control); line-height: 1.6; overflow-wrap: anywhere; }
+.option input { flex-shrink: 0; }
+.field { display: grid; gap: var(--space-2); color: var(--muted); font-size: var(--type-meta); }
+.otherField { margin-left: var(--space-6); }
+.hint { margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+.input { width: 100%; min-width: 0; min-height: var(--control-height); padding: var(--space-2) 10px; border: 1px solid var(--edge-input); border-radius: var(--radius-control); color: var(--text); background: var(--code); font: inherit; }
+.input:focus-visible, .option input:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
+
+/* Run notices: a status, one sentence, and Retry only when it can run. Without Retry, the cause
+   line ends in "Ask AVA to retry", a quiet text action that drafts the request in the composer. */
+.runNotice { display: grid; justify-items: start; gap: var(--space-2); min-width: 0; }
+.runLine { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) 10px; margin: 0; color: var(--body); font-size: var(--type-meta); line-height: 1.6; }
+.runCause { max-width: 65ch; margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.6; overflow-wrap: anywhere; }
+.retry { margin-top: var(--space-1); }
+.askRetry { display: inline; padding: 0; background: transparent; color: var(--body); font: inherit; text-decoration: underline; text-decoration-color: var(--edge-bright); text-underline-offset: 3px; white-space: nowrap; }
+.askRetry:hover { color: var(--text); text-decoration-color: currentColor; }
+
+/* A request that failed to load: the choices are gone, the cause and any Retry take their place. */
+.requestFailure { display: grid; justify-items: start; gap: var(--space-2); min-width: 0; margin-top: var(--space-4); }
+.failureMessage { min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 560px) {
+  .choices { grid-template-columns: minmax(0, 1fr); row-gap: var(--space-1); }
+  .scopeText { margin-bottom: var(--space-2); }
+  .subject > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}

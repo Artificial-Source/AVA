@@ -1,6 +1,22 @@
 # AVA desktop UI preview
 
-## Revision 20: inline tool image (current)
+## Revision 21: critique refinement (current)
+
+[Critique refinement](../../docs/desktop/critique-refinement.md) fixes all P1 and P2
+findings with trust moments first, the familiar monochrome look and one preview
+banner. Independent reviewer scores (baseline → after round 1 → final, out of 40):
+main chat **24 → 28 → 30**, in-chat widgets **24 → 28 → 33**, Settings
+**22 → 30 → 33**, models & providers **22 → 26 → 32**, finder & dialogs
+**22 → 29 → 34**, whole product **27 → 28 → 30**; all final scores are **Good**
+(28–35). The technical audit remains **14/20** and was not re-run. Typecheck,
+**988 tests / 68 files** (`--maxWorkers=6`) and the build passed, with a
+**427.38 kB raw / 130.39 kB gzip** entry under the unchanged 500,000-byte cap.
+The detector found no sub-11px text left in the app; browser checks covered
+**1440×900 and 1024×700**. The scope records both corrective rounds and heavy-load
+test limits. Browser-only, visit-local, no real backend/provider/auth; earlier
+“current” labels and complete acceptance bodies below are dated history.
+
+## Revision 20: inline tool image (dated history)
 
 Opening Inspect image now embeds its explicitly supplied raster in the tool details,
 with bounded scaling and honest missing/load-error states. Existing display presets,
@@ -580,9 +596,12 @@ catalog. The default route remains the existing chat shell, with no new main-cha
 button or toolbar. Reset/refresh clears catalog state; Back to chat returns to the
 preview. All scenarios and receipts are **invented/local**, not execution results.
 
-- `src/ui/`: native Button/IconButton, Surface, shared Status, and the existing
-  controlled Disclosure/Presence/reduced-motion foundations. Semantic neutral
-  spacing, radius, control and surface tokens are actually reused.
+- `src/ui/`: native Button/IconButton, the shared BackButton/BackLink (one quiet
+  ArrowLeft + "Back to …" treatment for Settings, the catalog, the screen review and
+  child views), Surface, shared Status, and the existing controlled
+  Disclosure/Presence/reduced-motion foundations. Icon-only controls use IconButton
+  (every close is the quiet Phosphor X); there is no global icon-button class.
+  Semantic neutral spacing, radius, control and surface tokens are actually reused.
 - `src/chat/contracts.ts`: readonly, discriminated **UI view models**, not RPC
   schemas. `src/chat/widgets/` implements MessageTurn, ToolActivityGroup,
   PermissionCard, QuestionCard, RunNotice, ChatComposer, and ChangeReviewView.
@@ -643,80 +662,126 @@ rather than bypassing a failed install or launch.
 
 ## Try the local interactions
 
-- **Projects** is the complete chat library. Expand/collapse projects and switch
-  chats without pinning them or changing their mock status.
-- **Pins start empty.** Each chat row has a labeled Pin/Unpin button. Pinning adds
-  a shortcut to **Pinned**, below Projects. Unpinning removes only that shortcut,
-  never the chat or current view. The section disappears when empty.
+- **Keyboard navigation:** focusable skip links reach the main regions;
+  **F6 / Shift+F6** cycles regions forward/backward. Panel shortcuts move focus to
+  the opened panel. Settings → Shortcuts lists navigation keys and how to remap
+  app shortcuts.
+- **Projects** is the complete unarchived chat library. Expand/collapse projects
+  and switch chats without pinning them or changing their mock status. Collapsed
+  headings retain glyph-and-count rollups for chats needing attention, failed or
+  working; completed and stopped chats do not add rollup noise.
+- **Pins start empty.** Pin/Unpin appears on row hover or keyboard focus; a pinned
+  chat keeps its filled pin visible in Projects. Pinning adds a shortcut to
+  **Pinned**, below Projects. Unpinning removes only that shortcut, never the chat
+  or current view. The section disappears when empty.
 - **Recent**, below Projects and Pinned, tracks only actual views and new chats:
   newest first, unique, at most five in memory. Only the initial view is seeded.
   Pinned chats are omitted from the displayed recent list to avoid redundant
   shortcuts. Removing a recent shortcut never deletes or stops a chat; selecting
   the chat again records a new view. An empty Recent section is omitted.
+- The open chat is marked once: in Projects when its project is expanded,
+  otherwise in Pinned, then Recent, then its collapsed project heading.
+- Each chat row has a **⋯** menu on hover or keyboard focus, also available by
+  right-click. It offers Rename, **Branch from a message…** when messages exist,
+  and Archive; **F2** on a focused row starts Rename. Arrow keys navigate the menu
+  and Escape returns focus. Archive removes the chat from sidebar lists and
+  offers Undo; its guidance opens **Find a chat** on Archived. Branch displays the
+  full selected message and creates a new visit-local chat from that point.
 - All three sections share one independently scrollable sidebar flow, not a
   fixed bottom bar. Shortcuts include the project name and reference the same
   chat identities and statuses as the project library.
-- Each parent retains its own draft, fictional model choice, Build/Plan mode,
-  attached example references, and inline composer expansion across selection,
-  pinning, recent removal, project collapse, and child inspection. These choices
-  do not configure a provider or grant any permission.
-- **New chat** creates an in-memory chat in the viewed project without pinning it.
-- **Send** (or Ctrl/Cmd+Enter) adds one escaped local user message. It does not
-  generate a response, start a timer, run a model, or simulate successful work.
-  Its tooltip and accessible shortcut label retain the keyboard hint.
-- The fixed Working parent has an explicit **Stop mock work** action. It changes
-  only the viewed parent fixture to Stopped, never a background child or another
-  parent. Child liveness does not change the parent's status or execution target.
-  Navigation, unpinning, and recent removal never stop work. Approval is
-  explanatory, with no Allow/Deny decisions.
+- Each parent retains its own draft, model choice, Build/Plan mode, attached
+  references and inline composer expansion across selection, pinning, recent
+  removal, project collapse and child inspection. These choices do not configure
+  a provider or grant any permission.
+- **New chat** creates an in-memory chat in the viewed project without pinning it
+  and focuses the composer. Each project heading also has a **New chat in …**
+  button on hover or keyboard focus.
+- **Send** (Ctrl+Enter, ⌘↩ on Mac) adds one escaped local user message. It does not
+  generate a response, start a timer, run a model or simulate successful work.
+  Send and **Stop** share one stable button so keyboard focus survives a change
+  of action. An empty draft leaves Send focusable but unavailable.
+- **Stop** (default **Mod+Shift+.**, where Mod is Ctrl on Windows/Linux and ⌘ on
+  Mac) affects only the viewed parent's supplied run or Working fixture, never a
+  background child or another parent. Navigation, unpinning and recent removal
+  never stop the fixed Working fixture; leaving a supplied run preview cancels
+  its local delivery. Child liveness never changes the parent's target.
+- The Attention chat has an inline permission request with explicit Allow/Deny
+  choices and a receipt naming the decision. The decision is stored for the visit
+  and clears Attention everywhere, without granting permission to a backend.
 - **Agents** lists children of the selected parent, Working first, with bounded
   snapshot timing/model metadata. Remember search filters has Working, Completed,
   and Failed examples; Export date range has an Unavailable child; Simplify route
   config has none. These are fixed examples, not live jobs or verified check results.
 - Select a child to inspect its committed user/assistant conversation in the
-  center. Parent identity stays clear. **Back to parent** restores the same parent
-  draft/settings/context/expansion; both transitions focus the updated heading.
-  Inspection never creates a top-level chat, pin, or recent view. Any sidebar view
-  or New clears inspection. No child Send/Stop/Steer/Restart/Promote is offered;
-  Send/Stop and composer edits are also blocked by the reducer while inspecting.
-- **Add example context** opens an ordinary disclosure with invented file, image,
-  and note references. Native buttons toggle per-parent chips in memory. No OS
-  dialog, file input, filesystem read, upload, or attachment processing occurs.
-  Escape closes it and returns focus to Add; chip removal also returns focus.
+  center. **Back to parent** restores the same parent draft/settings/context/
+  expansion; Escape returns to the child's row in **Agents**. Inspection never
+  creates a top-level chat, pin or recent view. Any sidebar view or New chat clears
+  inspection. No child Send/Stop/Steer/Restart/Promote is offered; Send/Stop and
+  composer edits are also blocked by the reducer while inspecting.
+- **Add context** opens a disclosure of file, image and note references. Native
+  buttons toggle per-parent chips in memory. No OS dialog, file input, filesystem
+  read, upload or attachment processing occurs. Escape closes it and returns focus
+  to Add context; chip removal also returns focus.
   Leaving the composer closes the disclosure. Attached references remain after
   local Send, which appends only text.
 - **Expand draft** grows the same textarea within the canvas. Collapse or Escape
-  retains the text; Escape returns focus to the expand control. A first-party
-  model glyph remains beside the name in the labeled native picker. Build/Plan
-  stays a local choice, not a permission switch.
+  retains the text; Escape returns focus to the expand control. The model chip
+  opens **Choose model**, whose search can select a model with typing and Enter.
+  Build/Plan describes each mode: Build can edit files and run tools; Plan proposes
+  changes without editing. Here it remains a local choice, not a permission switch.
+- **Find a chat** in the sidebar opens the finder; the **Commands** button opens
+  the palette. **Mod+K** and **Mod+P** reach the same palette and finder, including
+  from the composer. Type to filter, use arrow keys to move and Enter to choose.
+  Finder searches message text as well as titles and shows matching snippets.
+  Escape closes the picker.
 - The rail's first **Show inspector** / **Hide inspector** button restores the last
   selected module without changing parent/child selection, drafts, settings,
-  shortcuts, or statuses. Hiding/showing keeps focus on that button.
-- **Context** is a dedicated rail page, not a shared header row. The composer's
-  **173.12k (81%)** button explicitly opens it and retains focus. Choose Aster Mini
-  for its different snapshot, Orion for unknown active usage, or New chat for
-  unavailable usage/cost with an actual zero local-message count. System prompt
-  and Raw messages are read-only native disclosures with escaped example text.
-  Model changes, typing and local Send keep disclosures stable; only the committed
-  raw projection/message counts change on Send, never token/cost measurements.
+  shortcuts or statuses. **Widen / Narrow** changes the inspector's width.
+  The inspector starts closed below 1280px; at ≤1100px it opens as an overlay sheet
+  without squeezing the transcript. Opening a sheet focuses it; Close or Escape
+  returns focus to its rail icon. Moving focus into the conversation closes the
+  sheet so it cannot cover the focused control.
+- **Context** is a dedicated rail page with a window-usage summary and grouped
+  facts. The composer's context button opens it: below 80% it shows tokens and
+  percentage, from 80% it leads with **81% used**, and from 90% it adds the Attention
+  color and warning glyph. Unknown usage stays neutral. Choose Aster Mini for a
+  different snapshot, Orion for unknown active usage, or New chat for unavailable
+  usage/cost and zero local messages. System prompt and Raw messages are read-only
+  disclosures with escaped text. Model changes, typing and local Send keep them
+  stable; only committed raw messages/counts change on Send, not token/cost samples.
 - Context and Changes follow the selected parent during child inspection. Context
   has no Send/Stop, export, upload, clipboard or file operation. Close/Escape
   returns to its rail icon; Escape inside expanded raw/prompt text closes that
   disclosure first and restores its trigger.
-- Tool activity opens with click, Enter, or Space. All activity/file/code/change
-  records are invented. **Changes** follows the selected parent even during child
-  inspection. Close or Escape inside any inspector returns focus to its rail
-  icon. The rail remains present when both panels are closed.
-- The half-circle **Opaque materials** icon beside AVA switches the sidebar
-  material. Reduced motion, reduced transparency, higher contrast, and
-  unsupported-blur fallbacks remain in CSS.
+- Tool activity opens with click, Enter or Space. Failed turns/tools offer
+  **Ask AVA to retry**, and question-load errors offer **Retry**. The Tool details
+  preset shows **Custom** when manual expansion diverges from the preset.
+  **Changes** follows the selected parent during child inspection, deduplicates
+  file paths and has a summary, file list and per-file collapse. Close or Escape
+  inside any inspector returns focus to its rail icon. The rail remains present
+  when both panels are closed. All activity/file/code/change records are invented.
+- **Provider connections** persist for the visit; Aster Lab and Orion Lab start
+  connected. Models from unconnected providers say so. The provider directory can
+  be filtered, and API-key guidance explains the local check: at least 20
+  characters, without spaces. Browser/device steps settle without preview-only
+  advance controls; single-method providers skip the method list. These are local
+  connection states, not real provider authentication.
+- The icon beside AVA collapses the sidebar to a **56px rail** with New chat and
+  Settings; expand it to restore the library. **Sidebar material** lives only in
+  Settings → Appearance. Reduced motion, reduced transparency, higher contrast
+  and unsupported-blur fallbacks remain.
+- One **Preview** banner carries the invented-data/no-save/no-send/no-run boundary
+  and **Run preview** controls. Run preview explicitly plays supplied scenes,
+  separate from Send; Pause/Resume, Next snapshot and Stop/Retry affect only their
+  local delivery. Hide the banner to leave a quiet Preview chip that reopens it.
 
-The HTML title/description, accessible app description, action tooltips, and
-screen-reader announcements retain the truthful preview boundary without a
-visible developer bar. There is no persistence, session/auth/provider integration,
-filesystem API, IPC/Node bridge, command execution, real tool use, git/worktree,
-native window, editor, terminal, or cloud behavior. There is no running agent
-behind the Working label.
+The banner replaces repeated per-surface disclosures. The HTML title/description,
+accessible app description and screen-reader announcements retain the truthful
+preview boundary. There is no durable persistence, real session/auth/provider
+integration, filesystem API, IPC/Node bridge, command execution, real tool use,
+git/worktree, native window, editor, terminal or cloud behavior. There is no
+running agent behind the Working label.
 
 ## Validation
 

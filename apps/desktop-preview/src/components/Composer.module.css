@@ -1,46 +1,47 @@
-.canvas { display: flex; flex-direction: column; flex-shrink: 0; max-height: 65%; min-height: 0; padding: 0 var(--conversation-padding) 24px; background: var(--canvas); }
-.composer { display: flex; flex-direction: column; min-height: 0; width: min(100%, var(--reading-width)); margin: 0 auto; padding: 14px 14px 10px; border: 1px solid var(--edge-bright); border-radius: 12px; background: #1f1f1f; box-shadow: inset 0 1px 0 #ffffff04; }
-.input { display: block; flex-shrink: 1; width: 100%; height: 52px; min-height: 46px; padding: 2px 4px 6px; resize: none; border: none; border-radius: 3px; background: transparent; color: var(--text); font-size: 15px; line-height: 1.7; }
+.canvas { display: flex; flex-direction: column; flex-shrink: 0; max-height: 65%; min-height: 0; padding: 0 var(--conversation-padding) var(--space-6); background: var(--canvas); }
+.composer { display: flex; flex-direction: column; min-height: 0; width: min(100%, var(--reading-width)); margin: 0 auto; padding: 14px 14px 10px; border: 1px solid var(--edge-input); border-radius: var(--radius-bubble); background: var(--surface-composer); box-shadow: inset 0 1px 0 var(--edge-highlight); }
+.input { display: block; flex-shrink: 1; width: 100%; height: 52px; min-height: 46px; padding: 2px var(--space-1) 6px; resize: none; border: none; border-radius: var(--radius-chip); background: transparent; color: var(--text); font-size: var(--type-prose); line-height: 1.7; }
 .composer[data-expanded='true'] .input { height: clamp(96px, 23dvh, 250px); }
 .input::placeholder { color: var(--muted); opacity: 1; }
-.controls { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 10px; min-height: 34px; }
+.controls { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin-top: 10px; min-height: 34px; }
 .tools { display: flex; align-items: center; gap: 2px; margin-right: 2px; }
-.modelPicker, .modePicker { position: relative; display: flex; align-items: center; color: var(--muted); border-radius: 5px; }
+.modelPicker, .modePicker { position: relative; display: flex; align-items: center; color: var(--muted); border-radius: var(--radius-control); }
 .modelPicker > svg:first-child { position: absolute; left: 6px; pointer-events: none; }
-.modelPicker select, .modePicker select { width: 100%; appearance: none; min-height: 32px; padding: 6px 24px 6px 27px; border: none; border-radius: 5px; color: var(--body); background: transparent; font-size: 12px; cursor: pointer; }
+.modelPicker select, .modePicker select { width: 100%; appearance: none; min-height: 32px; padding: 6px var(--space-6) 6px 27px; border: none; border-radius: var(--radius-control); color: var(--body); background: transparent; font-size: var(--type-meta); cursor: pointer; }
 .modelPicker select:hover, .modePicker select:hover { background: var(--hover); }
-.modePicker select { padding-left: 8px; color: var(--muted); }
+.modePicker select { padding-left: var(--space-2); color: var(--muted); }
 .selectCaret { position: absolute; right: 7px; pointer-events: none; }
 .separator { width: 1px; height: 14px; background: var(--separator); }
-.send, .stop { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 9px; min-height: 34px; margin-left: auto; padding: 8px 13px; border-radius: 6px; font-size: 12px; font-weight: 550; }
-.send { background: #ededed; color: #171717; }
-.send:hover:not(:disabled) { background: #ffffff; }
-.send:disabled { background: #343434; color: #ababab; cursor: not-allowed; }
-.stop { color: var(--text); background: #ffffff08; border: 1px solid var(--edge-bright); }
-.stop:hover { background: #ffffff10; }
+/* One element for Send and Stop: the same size in both modes so focus and layout stay put. */
+.action { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: var(--space-2); min-width: 78px; min-height: 34px; margin-left: auto; padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius-control); font-size: var(--type-meta); font-weight: 550; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
+.action[data-mode='send'] { background: var(--primary-fill); color: var(--on-primary); }
+.action[data-mode='send']:hover:not(:disabled, [aria-disabled='true']) { background: var(--primary-fill-hover); }
+.action[data-mode='send']:is(:disabled, [aria-disabled='true']) { background: var(--surface-control-hover); color: var(--quiet); cursor: not-allowed; }
+.action[data-mode='stop'] { color: var(--text); background: var(--fill-subtle); border-color: var(--edge-bright); }
+.action[data-mode='stop']:hover:not(:disabled) { background: var(--hover-strong); }
+.action[data-mode='stop']:disabled { color: var(--quiet); cursor: not-allowed; }
 
 @media (max-width: 800px) {
   .canvas { padding-bottom: 18px; }
-  .controls { gap: 5px; }
   .modelPicker select { max-width: 140px; }
 }
 
 @media (max-height: 760px) {
-  .canvas { padding-bottom: 16px; }
-  .composer { padding-top: 12px; }
+  .canvas { padding-bottom: var(--space-4); }
+  .composer { padding-top: var(--space-3); }
   .input { height: 46px; min-height: 46px; }
 }
 
-.contextPicker { min-height: 66px; max-height: 178px; overflow-y: auto; margin: 0 0 12px; padding: 0 4px 12px; border-bottom: 1px solid var(--edge); }
-.contextPicker h2 { margin: 0; color: var(--text); font-size: 12px; font-weight: 550; }
-.contextPicker p { margin: 5px 0 10px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.contextPicker { min-height: 66px; max-height: 178px; overflow-y: auto; margin: 0 0 var(--space-3); padding: 0 var(--space-1) var(--space-3); border-bottom: 1px solid var(--edge); }
+.contextPicker h2 { margin: 0; color: var(--text); font-size: var(--type-meta); font-weight: 550; }
+.contextPicker p { margin: var(--space-1) 0 10px; color: var(--muted); font-size: var(--type-caption); line-height: 1.6; }
 .contextOptions { display: grid; gap: 3px; }
-.contextOptions button { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; min-height: 30px; padding: 5px 7px; border-radius: 4px; color: var(--body); background: #ffffff04; font-size: 12px; text-align: left; }
+.contextOptions button { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; min-height: 30px; padding: var(--space-1) var(--space-2); border-radius: var(--radius-chip); color: var(--body); background: var(--fill-subtle); font-size: var(--type-meta); text-align: left; }
 .contextOptions button:hover, .contextOptions button[aria-pressed='true'] { color: var(--text); background: var(--hover); }
-.contextOptions button > span { display: flex; flex-wrap: wrap; gap: 5px 12px; min-width: 0; overflow-wrap: anywhere; }
-.kind { min-width: 46px; color: var(--quiet); font-size: 10px; text-transform: capitalize; }
+.contextOptions button > span { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); min-width: 0; overflow-wrap: anywhere; }
+.kind { min-width: 46px; color: var(--quiet); font-size: var(--type-caption); text-transform: capitalize; }
 .chips { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 6px; max-height: 70px; overflow-y: auto; margin: 0 0 10px; padding: 2px; list-style: none; }
-.chips li { display: flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 3px 2px 7px; border: 1px solid var(--edge); border-radius: 5px; color: var(--muted); font-size: 11px; }
+.chips li { display: flex; align-items: center; gap: var(--space-1); max-width: 100%; padding: 1px 3px 1px 7px; border: 1px solid var(--edge); border-radius: var(--radius-control); color: var(--muted); font-size: var(--type-caption); }
 .chips li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chips button { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; padding: 0; border-radius: 3px; background: transparent; color: var(--muted); }
+.chips button { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 24px; padding: 0; border-radius: var(--radius-chip); background: transparent; color: var(--muted); }
 .chips button:hover { background: var(--hover); color: var(--text); }

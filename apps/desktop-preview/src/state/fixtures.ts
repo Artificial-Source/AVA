@@ -52,13 +52,13 @@ export function createInitialState(): PreviewState {
             activity: [
               { id: 'read-search', action: 'Read source', detail: 'SearchPage.tsx and router.ts', state: 'completed' },
               { id: 'edit-search', action: 'Updated search state', detail: 'SearchPage.tsx and search-state.ts', state: 'completed', changes: [
-                { id: 'search-state', filename: 'search-state.ts', operation: 'modified', additions: 2, deletions: 2, diff: { state: 'text', truncated: false, text: '@@ -1,2 +1,2 @@\n-const query = "";\n-const tags: string[] = [];\n+const query = params.get("q") ?? "";\n+const tags = params.getAll("tag");' } },
-                { id: 'search-page', filename: 'SearchPage.tsx', operation: 'modified', additions: 1, deletions: 1, diff: { state: 'text', truncated: false, text: '@@ -1 +1 @@\n-const href = `/results/${id}`;\n+const href = `/results/${id}${location.search}`;' } },
+                { id: 'search-state', filename: 'src/search-state.ts', operation: 'modified', additions: 2, deletions: 2, diff: { state: 'text', truncated: false, text: '@@ -1,2 +1,2 @@\n-const query = "";\n-const tags: string[] = [];\n+const query = params.get("q") ?? "";\n+const tags = params.getAll("tag");' } },
+                { id: 'search-page', filename: 'src/SearchPage.tsx', operation: 'modified', additions: 1, deletions: 1, diff: { state: 'text', truncated: false, text: '@@ -1 +1 @@\n-const href = `/results/${id}`;\n+const href = `/results/${id}${location.search}`;' } },
               ] },
-              { id: 'inspect-image', action: 'Inspect image', detail: 'No failure cause supplied.', state: 'failed', resource: { kind: 'image', path: '/tmp/example/pi-clipboard-12345678.png', previewId: 'search-results-example' } },
+              { id: 'inspect-image', action: 'Inspect image', detail: 'Compare the pasted results page with the restored filters.', state: 'failed', resource: { kind: 'image', path: '/tmp/pi-clipboard-12345678.png', previewId: 'search-results-example' } },
             ],
             code: {
-              filename: 'search-state.ts',
+              filename: 'src/search-state.ts',
               code: 'const params = new URLSearchParams(location.search);\nconst query = params.get("q") ?? "";\nconst tags = params.getAll("tag");',
             },
             note: 'Browser back/forward behavior still needs a manual check.',
@@ -66,13 +66,13 @@ export function createInitialState(): PreviewState {
         ],
         changes: [
           {
-            filename: 'search-state.ts',
+            filename: 'src/search-state.ts',
             description: 'Read the search state from URL parameters.',
             before: 'const query = "";\nconst tags: string[] = [];',
             after: 'const query = params.get("q") ?? "";\nconst tags = params.getAll("tag");',
           },
           {
-            filename: 'SearchPage.tsx',
+            filename: 'src/SearchPage.tsx',
             description: 'Keep the same search parameters when opening a result.',
             before: 'const href = `/results/${id}`;',
             after: 'const href = `/results/${id}${location.search}`;',
@@ -104,7 +104,7 @@ export function createInitialState(): PreviewState {
               'I’m looking at how the result list tracks the active item. The intended behavior is **Arrow keys to explore, Enter to open, and Escape to return**.\n\nFocus should stay predictable when the result list changes.',
             activity: [
               { id: 'read-list', action: 'Read source', detail: 'ResultList.tsx and SearchInput.tsx', state: 'running' },
-              { id: 'check-focus', action: 'Check focus order', detail: 'Keyboard navigation example', state: 'queued' },
+              { id: 'check-focus', action: 'Check focus order', detail: 'Arrow keys, Enter and Escape', state: 'queued' },
             ],
           },
         ],
@@ -158,6 +158,28 @@ export function createInitialState(): PreviewState {
             id: 'export-response',
             role: 'assistant',
             attribution: orionAttribution,
+            activity: [
+              { id: 'read-export', action: 'Read source', detail: 'ExportDialog.tsx and date-range.ts', state: 'completed' },
+            ],
+            permission: {
+              kind: 'permission',
+              id: 'export-range-run',
+              version: 1,
+              state: 'ready',
+              title: 'Run the export for the selected range?',
+              summary: 'AVA wants to export the entries between the two dates and compare them with the visible list.',
+              requester: 'AVA',
+              action: 'npm run export -- --from 2026-10-01 --to 2026-10-14 --tz Europe/Berlin',
+              target: 'papertrail/exports/range-check.csv',
+              reason: 'Entries near midnight are where the timezone boundary usually goes wrong.',
+              decisions: ['allow', 'allow_session', 'deny'],
+              sessionAllowed: true,
+              scopes: {
+                allow: 'Only this command, this one time.',
+                allow_session: 'Export commands in this chat until AVA restarts.',
+                deny: 'AVA continues the plan without running the export.',
+              },
+            },
             markdown:
               'The export should use the same date boundaries as the visible list, including the selected timezone.\n\nThe proposed summary shows the **start date, end date, and included entries** before an export is prepared.',
           },
@@ -214,7 +236,7 @@ export function createInitialState(): PreviewState {
             role: 'assistant',
             attribution: orionAttribution,
             markdown:
-              'Separate transient failures from permanent ones. Use a bounded retry count and a clear stopping point.\n\n| Failure | Proposed behavior |\n| --- | --- |\n| Temporary unavailable | Retry with backoff |\n| Invalid input | Explain; do not retry |\n| Cancelled | Stop immediately |\n\nThese are example recommendations, not the result of a live review.',
+              'Separate transient failures from permanent ones. Use a bounded retry count and a clear stopping point.\n\n| Failure | Proposed behavior |\n| --- | --- |\n| Temporary unavailable | Retry with backoff |\n| Invalid input | Explain; do not retry |\n| Cancelled | Stop immediately |\n\nI haven’t checked these against the current retry code yet.',
           },
         ],
         changes: [],
@@ -232,8 +254,7 @@ export function createInitialState(): PreviewState {
         title: 'Map return paths',
         status: 'completed',
         model: 'aster-mini',
-        timing: 'Snapshot · 42s of mock work',
-        statusNote: 'Completed example. This is a fixed conversation, not a successful test or live result.',
+        timing: '42s',
         messages: [
           { id: 'outline-user', role: 'user', text: 'Outline the paths back to the filtered result list. Keep this to a short note.' },
           { id: 'outline-assistant', role: 'assistant', attribution: miniAttribution, markdown: 'There are two paths to consider: the **browser Back button** and the in-page return link. Both should keep the query, sort order, and selected tags.\n\nThis outline does not verify either path in a browser.' },
@@ -245,11 +266,10 @@ export function createInitialState(): PreviewState {
         title: 'Review back navigation',
         status: 'working',
         model: 'aster',
-        timing: 'Snapshot · 1m 12s of mock work',
-        statusNote: 'Working example, frozen at this snapshot. No child is running and no messages are streaming.',
+        timing: '1m 12s',
         messages: [
           { id: 'return-user', role: 'user', text: 'Review how the selected filters should survive opening a result and returning to the list.' },
-          { id: 'return-assistant', role: 'assistant', attribution: asterAttribution, markdown: 'The return path should preserve the **same search parameters**, rather than build a fresh search.\n\nA useful example starts with two tags and a non-default sort order. Open a result, return, and compare the visible controls with the URL. This is a suggested manual check, not a completed one.' },
+          { id: 'return-assistant', role: 'assistant', attribution: asterAttribution, markdown: 'The return path should preserve the **same search parameters**, rather than build a fresh search.\n\nA good test case starts with two tags and a non-default sort order. Open a result, return, and compare the visible controls with the URL. This is a suggested manual check, not a completed one.' },
         ],
       },
       {
@@ -258,11 +278,10 @@ export function createInitialState(): PreviewState {
         title: 'Check empty queries',
         status: 'failed',
         model: 'orion',
-        timing: 'Snapshot · ended after 18s',
-        statusNote: 'Failed example. The fictional source was unavailable; no check result is available.',
+        timing: 'Ended after 18s',
         messages: [
           { id: 'edge-user', role: 'user', text: 'Describe the expected return behavior when the query is empty but tags are selected.' },
-          { id: 'edge-assistant', role: 'assistant', attribution: orionAttribution, markdown: 'I could not access the example source for this check. I have **no verified result** to report.' },
+          { id: 'edge-assistant', role: 'assistant', attribution: orionAttribution, markdown: 'I couldn’t open the source for this check, so I have **no verified result** to report.' },
         ],
       },
       {
@@ -271,8 +290,7 @@ export function createInitialState(): PreviewState {
         title: 'Review focus boundaries',
         status: 'working',
         model: 'aster-mini',
-        timing: 'Snapshot · 36s of mock work',
-        statusNote: 'Working example only. Its state is independent of the parent’s mock Stop control.',
+        timing: '36s',
         messages: [
           { id: 'focus-user', role: 'user', text: 'Suggest a focus boundary for the search field and its result list.' },
           { id: 'focus-assistant', role: 'assistant', attribution: miniAttribution, markdown: 'Keep keyboard focus in the search field while the active result changes. Document what Escape does before choosing the final interaction.' },
@@ -284,8 +302,7 @@ export function createInitialState(): PreviewState {
         title: 'Review summary wording',
         status: 'unavailable',
         model: 'orion',
-        timing: 'No transcript snapshot',
-        statusNote: 'Conversation unavailable in this example. No committed messages were supplied; nothing is loading or being retried.',
+        timing: 'No transcript',
         messages: [],
       },
     ],

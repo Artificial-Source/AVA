@@ -1,17 +1,26 @@
-.activity { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.summary { margin-left: auto; color: var(--muted); font-size: 10px; font-weight: 400; }
+.activity { margin: 0 0 var(--space-4); color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
 .outcomes { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .outcomes li { min-width: 0; border-top: 1px solid var(--separator); }
-.row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 8px 2px; text-align: left; background: transparent; color: var(--body); font: inherit; }
-.row > svg { flex-shrink: 0; align-self: center; }
-.row > :last-child { flex-shrink: 0; margin-left: auto; }
+/* Status sits with the action it describes, not at the far edge; file counts take the edge. */
+.row { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 32px; padding: 6px 2px; text-align: left; background: transparent; color: var(--body); font: inherit; }
+.row > svg { flex-shrink: 0; }
 .row:hover { color: var(--text); }
+.toolLabel { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: 2px var(--space-2); min-width: 0; overflow-wrap: anywhere; }
+.action { color: inherit; }
+.resource { color: var(--muted); font-size: var(--type-caption); }
+.counts { flex-shrink: 0; margin-left: auto; color: var(--muted); font-size: var(--type-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.loading { margin: var(--space-1) 22px var(--space-3); font-size: var(--type-caption); }
+.empty { margin: 0; color: var(--muted); font-size: var(--type-caption); }
+
+/* Group header: a count, the states that need a look, and a plain Show/Hide toggle. */
+.disclosure { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); min-height: 28px; margin-bottom: var(--space-1); padding: 2px 3px 2px 0; border-radius: var(--radius-chip); text-align: left; background: transparent; color: var(--body); font-size: var(--type-meta); line-height: 1.6; }
+.count { color: var(--body); font-weight: 500; }
+.dot { color: var(--quiet); }
+.toggle { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: var(--space-2); color: var(--muted); font-size: var(--type-caption); }
+.disclosure:hover .toggle, .disclosure:hover .count { color: var(--text); }
+.caret { transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.row .caret { transform: rotate(-90deg); }
 .row[aria-expanded='true'] .caret { transform: rotate(0deg); }
-.loading { margin: 4px 22px 12px; font-size: 11px; }
-.toolLabel { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; overflow-wrap: anywhere; }
-.resource { color: var(--muted); font-size: 11px; }
-.queued { flex-shrink: 0; color: var(--status-attention); font-size: 11px; }
-.disclosure { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; width: 100%; margin-bottom: 6px; padding: 4px 3px 4px 0; border-radius: 4px; text-align: left; background: transparent; color: var(--body); font-size: 12px; line-height: 1.6; }
-.disclosure:hover { color: var(--text); }
-.caret { transform: rotate(-90deg); transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
-.disclosure[aria-expanded='true'] .caret { transform: rotate(0deg); }
+.disclosure[aria-expanded='true'] .toggle .caret { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .caret { transition: none; } }
+:global([data-motion='reduced']) .caret { transition: none; }

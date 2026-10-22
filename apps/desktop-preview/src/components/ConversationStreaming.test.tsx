@@ -21,25 +21,26 @@ function geometry(node: HTMLElement, height: () => number, client = 100) { Objec
 describe('stable supplied turn and tool presentation', () => {
   it('retains same-ID turn/group/row/output/disclosure DOM, row choices and scroll across snapshot updates', async () => {
     let message = assistant(); const view = render(<StrictMode><Conversation chat={chat(message)} /></StrictMode>);
-    const turn = screen.getByRole('article', { name: 'AVA supplied run response' }); const historical = screen.getByRole('article', { name: 'Your example message' });
-    const group = screen.getByRole('button', { name: /^Tool details/ }); const row = screen.getByRole('button', { name: /Read example.ts Working/ });
+    const turn = screen.getByRole('article', { name: 'AVA response' }); const historical = screen.getByRole('article', { name: 'Your message' });
+    const group = screen.getByRole('button', { name: /^\d+ tools?\b/ }); const row = screen.getByRole('button', { name: /Read example.ts Working/ });
     fireEvent.click(row); const output = await screen.findByLabelText('Output: Read'); geometry(output, () => 800); output.scrollTop = 60; fireEvent.scroll(output);
     row.focus();
     message = { ...message, markdown: 'Partial response with more text', activity: message.activity!.map((record) => record.id === 'read' ? { ...record, output: { text: 'First line\nSecond line', truncated: false } } : record) };
     view.rerender(<StrictMode><Conversation chat={chat(message)} preferences={{ ...defaultConversation, toolDisplay: 'expanded' as const }} /></StrictMode>);
-    expect(screen.getByRole('article', { name: 'AVA supplied run response' })).toBe(turn); expect(screen.getByRole('article', { name: 'Your example message' })).toBe(historical);
-    expect(screen.getByRole('button', { name: /^Tool details/ })).toBe(group); expect(screen.getByRole('button', { name: /Read example.ts Working/ })).toBe(row);
+    expect(screen.getByRole('article', { name: 'AVA response' })).toBe(turn); expect(screen.getByRole('article', { name: 'Your message' })).toBe(historical);
+    expect(screen.getByRole('button', { name: /^\d+ tools?\b/ })).toBe(group); expect(screen.getByRole('button', { name: /Read example.ts Working/ })).toBe(row);
     expect(screen.getByLabelText('Output: Read')).toBe(output); expect(output.scrollTop).toBe(60); expect(row).toHaveFocus(); expect(row).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(row); view.rerender(<StrictMode><Conversation chat={chat({ ...message, markdown: 'More' })} preferences={{ ...defaultConversation, toolDisplay: 'expanded' as const }} /></StrictMode>);
     expect(row).toHaveAttribute('aria-expanded', 'false'); // Row choice beats ambient expand preference.
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(row).toHaveAttribute('aria-expanded', 'false');
   });
-  it('resets individual row choices on explicit same-false Collapse all intent and explicit group/all expansion', async () => {
+  it('resets individual row choices on explicit Collapse all intent and explicit group/all expansion', async () => {
     const view = render(<Conversation chat={chat()} />);
-    const group = screen.getByRole('button', { name: /^Tool details/ }); const row = screen.getByRole('button', { name: /Read example.ts/ });
-    fireEvent.click(row); await screen.findByLabelText('Output: Read'); expect(group).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(row).toHaveAttribute('aria-expanded', 'false'); expect(screen.queryByLabelText('Output: Read')).not.toBeInTheDocument();
-    fireEvent.click(row); await screen.findByLabelText('Output: Read'); fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(row).toHaveAttribute('aria-expanded', 'false');
+    const group = screen.getByRole('button', { name: /^\d+ tools?\b/ }); const row = screen.getByRole('button', { name: /Read example.ts/ });
+    const toggle = screen.getByRole('button', { name: 'Expand all tools' });
+    fireEvent.click(row); await screen.findByLabelText('Output: Read'); expect(group).toHaveAttribute('aria-expanded', 'false'); expect(toggle).toHaveTextContent('Expand all tools');
+    fireEvent.click(toggle); expect(toggle).toHaveTextContent('Collapse all tools'); fireEvent.click(toggle); expect(row).toHaveAttribute('aria-expanded', 'false'); expect(screen.queryByLabelText('Output: Read')).not.toBeInTheDocument();
+    fireEvent.click(row); await screen.findByLabelText('Output: Read'); fireEvent.click(toggle); fireEvent.click(toggle); expect(row).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(group); expect(row).toHaveAttribute('aria-expanded', 'true'); fireEvent.click(row); expect(row).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); fireEvent.click(screen.getByRole('button', { name: 'Expand all tools' })); expect(row).toHaveAttribute('aria-expanded', 'true');
     view.rerender(<Conversation chat={chat({ ...assistant(), activity: [] })} />); view.rerender(<Conversation chat={chat()} />);
@@ -49,16 +50,18 @@ describe('stable supplied turn and tool presentation', () => {
     const record: ToolView = { id: 'long', action: 'Inspect', detail: 'Supplied', state: 'failed', output: { text: '<script>bad()</script>\n' + 'x\n'.repeat(500), truncated: true }, changes: [{ id: 'change', filename: 'new.ts', operation: 'created', additions: 0, diff: { state: 'unavailable' } }] };
     const view = render(<ToolActivityDetails record={record} showCompletedOutput={false} />);
     const output = screen.getByLabelText('Output: Inspect'); expect(output.textContent!.split('\n')).toHaveLength(200); expect(output.querySelector('script')).toBeNull();
-    expect(screen.getByText('Output truncated by the supplied view.')).toBeVisible(); expect(screen.getByText(/Remaining supplied output text omitted/)).toBeVisible(); expect(screen.getByLabelText('0 additions')).toBeVisible();
+    expect(screen.getByText('Output was cut off before the end.')).toBeVisible(); expect(screen.getByText(/Showing the first 200 lines/)).toBeVisible(); expect(screen.getByLabelText('0 additions')).toBeVisible();
+    expect(screen.getByText('This step failed. Its output is below.')).toBeVisible();
     view.rerender(<ToolActivityDetails record={{ ...record, state: 'completed' }} showCompletedOutput={false} />);
     expect(screen.queryByLabelText('Output: Inspect')).not.toBeInTheDocument(); expect(screen.getByLabelText('File change: new.ts')).toBeVisible();
     view.rerender(<ToolActivityDetails record={{ ...record, output: { text: 'x'.repeat(25000), truncated: false } }} />);
-    expect(screen.getByLabelText('Output: Inspect').textContent).toHaveLength(20000); expect(screen.queryByText('Output truncated by the supplied view.')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Output: Inspect').textContent).toHaveLength(20000); expect(screen.queryByText('Output was cut off before the end.')).not.toBeInTheDocument();
   });
   it('keeps partial Markdown/fences/Unicode escaped and readable without a dangling surrogate, unsafe HTML or network image nodes', () => {
     const text = '**unclosed\n```ts\n<img src="https://remote.example/x">\n![remote](https://remote.example/x)\n\ud83d';
-    const view = render(<Conversation chat={chat(assistant(text))} />); const turn = screen.getByRole('article', { name: 'AVA supplied run response' });
-    expect(turn.textContent).toContain('```ts'); expect(turn.textContent).not.toContain('\ud83d'); expect(turn.querySelector('img, script, iframe')).toBeNull();
+    const view = render(<Conversation chat={chat(assistant(text))} />); const turn = screen.getByRole('article', { name: 'AVA response' });
+    expect(within(turn).getByLabelText('TypeScript code block')).toHaveTextContent('<img src="https://remote.example/x">'); expect(turn.textContent).not.toContain('```');
+    expect(turn.textContent).not.toContain('\ud83d'); expect(turn.querySelector('img, script, iframe')).toBeNull();
     view.rerender(<Conversation chat={chat(assistant(text + '\ude80'))} />); expect(turn.textContent).toContain('🚀');
     view.rerender(<Conversation chat={chat({ ...assistant('![remote](https://remote.example/x)\n\n<script>alert(1)</script>\n\n[bad](javascript:alert%281%29)'), lifecycle: 'committed' })} />);
     expect(turn.querySelector('img, script')).toBeNull(); expect(within(turn).getByText('[Image: remote]')).toBeVisible(); expect(within(turn).getByText('bad')).not.toHaveAttribute('href', expect.stringMatching(/^javascript:/));
@@ -166,7 +169,7 @@ describe('transcript/output bottom-follow without focus or reading disruption', 
     height = 700; message = { ...message, markdown: 'Partial response growing' }; view.rerender(<Conversation chat={chat(message)} />);
     expect(transcript.scrollTop).toBe(400); expect(selection.toString()).toBe('Partial'); const latest = screen.getByRole('button', { name: 'Latest' });
     view.rerender(<Conversation chat={chat({ ...message, markdown: message.markdown + '\n**Complete**', lifecycle: 'committed' })} />);
-    expect(selection.toString()).toBe('Partial'); expect(screen.getByRole('article', { name: 'AVA supplied run response' })).toHaveAttribute('data-turn-state', 'committed');
+    expect(selection.toString()).toBe('Partial'); expect(screen.getByRole('article', { name: 'AVA response' })).toHaveAttribute('data-turn-state', 'committed');
     expect(screen.queryByText('Complete', { selector: 'strong' })).not.toBeInTheDocument();
     selection.removeAllRanges(); fireEvent(document, new Event('selectionchange')); expect(screen.getByText('Complete', { selector: 'strong' })).toBeVisible();
     transcript.setAttribute('inert', ''); height = 900; view.rerender(<Conversation chat={chat({ ...message, markdown: 'Hidden growth' })} active={false} />);
@@ -187,5 +190,23 @@ describe('transcript/output bottom-follow without focus or reading disruption', 
     const view = render(<StrictMode><Conversation chat={chat()} /></StrictMode>); const transcript = screen.getByRole('region', { name: /^Conversation:/ }); let height = 500; geometry(transcript, () => height); transcript.scrollTop = 400; fireEvent.scroll(transcript);
     height = 800; act(() => observers.at(-1)!.callback()); expect(transcript.scrollTop).toBe(800);
     view.unmount(); expect(observers.every((observer) => observer.disconnect.mock.calls.length > 0)).toBe(true); act(() => observers.at(-1)!.callback()); expect(transcript.scrollTop).toBe(800); vi.unstubAllGlobals();
+  });
+  it('stops bottom-follow for a user-opened tool row and keeps it in view; keyboard activation counts as reading (WCAG 2.4.11)', async () => {
+    const observers: (() => void)[] = [];
+    vi.stubGlobal('ResizeObserver', class { disconnect = vi.fn(); observe = vi.fn(); constructor(callback: () => void) { observers.push(callback); } });
+    try {
+      let height = 500; render(<Conversation chat={chat()} />);
+      const transcript = screen.getByRole('region', { name: /^Conversation:/ }); geometry(transcript, () => height); transcript.scrollTop = 400; fireEvent.scroll(transcript);
+      const grow = (next: number) => { height = next; act(() => observers.forEach((callback) => callback())); };
+      grow(600); expect(transcript.scrollTop).toBe(600); // Arrivals still follow from the bottom.
+      const row = screen.getByRole('button', { name: /^Check / }); const reveal = vi.fn(); row.closest('li')!.scrollIntoView = reveal;
+      fireEvent.keyDown(row, { key: 'Enter' }); grow(700); expect(transcript.scrollTop).toBe(600);
+      fireEvent.keyUp(window, { key: 'Enter' }); grow(800); expect(transcript.scrollTop).toBe(800);
+      fireEvent.click(row); expect(row).toHaveAttribute('aria-expanded', 'true'); expect(reveal).toHaveBeenCalledWith({ block: 'nearest' });
+      await screen.findByText('No output yet.');
+      grow(1000); expect(transcript.scrollTop).toBe(800); expect(screen.getByRole('button', { name: 'Latest' })).toBeVisible();
+      transcript.scrollTop = 900; fireEvent.scroll(transcript); grow(1100); expect(transcript.scrollTop).toBe(900); // A programmatic reveal scroll is not consent to follow.
+      fireEvent.wheel(transcript, { deltaY: 100 }); transcript.scrollTop = 1000; fireEvent.scroll(transcript); grow(1200); expect(transcript.scrollTop).toBe(1200);
+    } finally { vi.unstubAllGlobals(); }
   });
 });

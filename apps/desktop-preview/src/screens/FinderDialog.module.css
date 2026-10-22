@@ -1,0 +1,50 @@
+/* The search bar stays pinned while results scroll beneath it. */
+.bar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding-bottom: var(--space-3); background: var(--surface-panel); }
+.search { flex: 1 1 240px; min-width: 0; height: 40px; padding: 0 var(--space-3); border: 1px solid var(--edge-input); border-radius: var(--radius-control); background: var(--canvas); color: var(--text); font: inherit; font-size: var(--type-ui); }
+.search::placeholder { color: var(--quiet); opacity: 1; }
+.search:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+.scope { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--canvas); }
+.scope button { min-height: 34px; padding: 0 var(--space-3); border: 0; border-radius: var(--radius-chip); background: transparent; color: var(--muted); font: inherit; font-size: var(--type-control); cursor: pointer; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
+.scope button:hover { color: var(--text); }
+.scope button[aria-pressed='true'] { background: var(--surface-control); color: var(--text); }
+.scope button:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+
+.group + .group { margin-top: var(--space-2); }
+.groupLabel { padding: var(--space-3) var(--space-3) var(--space-1); color: var(--quiet); font-size: var(--type-caption); font-weight: 500; letter-spacing: .02em; }
+
+/* 38px rows: label, muted inline detail, then tags and the shortcut on the right.
+   Scroll margin keeps a revealed row clear of the pinned search bar. */
+.option { display: flex; align-items: center; gap: var(--space-3); min-height: 38px; padding: 0 var(--space-3); border-radius: var(--radius-control); color: var(--body); cursor: pointer; scroll-margin-block: 64px var(--space-2); }
+.option[data-active='true'] { background: var(--surface-control); }
+.option[aria-disabled='true'] { cursor: default; }
+.option[aria-disabled='true'] .label { color: var(--quiet); }
+.glyph { display: inline-flex; flex-shrink: 0; justify-content: center; width: 14px; }
+.label { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--text); font-size: var(--type-control); text-overflow: ellipsis; white-space: nowrap; }
+.detail { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--muted); font-size: var(--type-meta); text-overflow: ellipsis; white-space: nowrap; }
+.detail > * + * { margin-left: var(--space-2); }
+.meta { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--space-2); margin-left: auto; }
+.tag { padding: 0 6px; border: 1px solid var(--edge-bright); border-radius: var(--radius-chip); color: var(--muted); font-size: var(--type-caption); line-height: 18px; white-space: nowrap; }
+.reason { color: var(--quiet); font-size: var(--type-caption); line-height: 18px; white-space: nowrap; }
+.key { padding: 0 6px; border: 1px solid var(--edge); border-radius: var(--radius-chip); background: var(--fill-subtle); color: var(--muted); font: inherit; font-size: var(--type-caption); line-height: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.option[aria-disabled='true'] .key { background: transparent; color: var(--quiet); }
+
+/* A chat found by its messages: a second line under the title, aligned with it, showing
+   where the words appear. The window starts just before the match, so the match stays
+   visible when the line truncates. */
+.option[data-snippet='true'] { flex-wrap: wrap; row-gap: 2px; padding-block: var(--space-2); }
+.snippet { flex: 1 0 100%; min-width: 0; overflow: hidden; padding-inline-start: calc(14px + var(--space-3)); color: var(--muted); font-size: var(--type-meta); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.snippet mark { background: transparent; color: var(--text); font-weight: 500; }
+
+@media (max-width: 520px) {
+  .scope { flex: 1 1 100%; }
+  .scope button { flex: 1; }
+  .key { display: none; }
+}
+@media (forced-colors: active) {
+  .option[data-active='true'] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .scope button[aria-pressed='true'] { outline: 2px solid Highlight; }
+  .snippet mark { text-decoration: underline; text-underline-offset: 2px; }
+}
+@media (prefers-reduced-motion: reduce) { .scope button { transition: none; } }
+:global([data-motion='reduced']) .scope button { transition: none; }

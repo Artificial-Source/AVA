@@ -1,5 +1,5 @@
 import { StrictMode, useState } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { PermissionView, QuestionAnswer, QuestionView, RequestState } from '../contracts';
@@ -11,27 +11,69 @@ const question: QuestionView = { kind: 'question', id: 'opaque-question', versio
 const empty: QuestionAnswer = { selectedIds: [], customText: '' };
 const inactive: readonly RequestState[] = ['pending', 'submitted', 'error', 'stale', 'closed'];
 
-describe('permission UI intent boundary', () => {
-  it('has no default action, advertises only allowed choices, and emits an opaque versioned intent once', async () => {
+describe('permission decision boundary', () => {
+  it('has no default action, advertises only allowed choices, and emits an opaque versioned decision once with a receipt', async () => {
     const user = userEvent.setup();
     const onDecide = vi.fn();
     const { rerender } = render(<PermissionCard request={permission} onDecide={onDecide} />);
-    expect(onDecide).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Allow for session' })).not.toBeInTheDocument();
+    expect(onDecide).not.toHaveBeenCalled(); expect(document.activeElement).toBe(document.body);
+    expect(screen.getByText('Needs your decision')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Allow for this session' })).not.toBeInTheDocument();
     screen.getByRole('button', { name: 'Deny' }).focus();
     await user.keyboard(' ');
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
     expect(onDecide).toHaveBeenCalledExactlyOnceWith({ id: 'opaque-request', version: 4, decision: 'deny' });
-    expect(screen.getByRole('status')).toHaveTextContent('Intent submitted');
+    expect(screen.getByRole('status')).toHaveTextContent('You chose Deny.');
+    expect(screen.getByRole('button', { name: 'Deny' })).toHaveAttribute('aria-pressed', 'true'); expect(screen.getByRole('button', { name: 'Deny' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toHaveAttribute('aria-pressed', 'false'); expect(screen.getByRole('button', { name: 'Allow once' })).toBeDisabled();
     rerender(<PermissionCard request={{ ...permission, state: 'pending' }} onDecide={onDecide} />);
     rerender(<PermissionCard request={permission} onDecide={onDecide} />);
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeDisabled();
     rerender(<PermissionCard request={{ ...permission, version: 5, sessionAllowed: true, decisions: ['allow_session', 'deny'] }} onDecide={onDecide} />);
-    await user.click(screen.getByRole('button', { name: 'Allow for session' }));
+    expect(screen.getByRole('status')).toBeEmptyDOMElement(); expect(screen.getByRole('button', { name: 'Deny' })).not.toHaveAttribute('aria-pressed');
+    await user.click(screen.getByRole('button', { name: 'Allow for this session' }));
     expect(onDecide).toHaveBeenLastCalledWith({ id: 'opaque-request', version: 5, decision: 'allow_session' });
     rerender(<PermissionCard request={permission} onDecide={onDecide} />);
-    expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
+    const deny = screen.getByRole('button', { name: 'Deny' });
+    expect(deny).toHaveAttribute('aria-pressed', 'true'); expect(deny).toHaveAttribute('aria-disabled', 'true'); fireEvent.click(deny);
     expect(onDecide).toHaveBeenCalledTimes(2);
+  });
+
+  it('names the requester, the exact action and target, and one consequence line per choice; Deny sits apart and takes dialog focus', () => {
+    render(<PermissionCard onDecide={vi.fn()} request={{ ...permission, sessionAllowed: true, decisions: ['allow', 'allow_session', 'deny'], requester: 'AVA', action: 'npm run export -- --from 2026-10-01', target: 'exports/range.csv', reason: 'Check the timezone boundary.', scopes: { allow: 'Only this command.' } }} />);
+    expect(screen.getByText('Requested by AVA')).toBeVisible();
+    expect(screen.getByText('npm run export -- --from 2026-10-01').tagName).toBe('CODE'); expect(screen.getByText('exports/range.csv').tagName).toBe('CODE');
+    expect(screen.getByText('Check the timezone boundary.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toHaveAccessibleDescription('Only this command.');
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toHaveAccessibleDescription('This kind of action in this chat until AVA restarts.');
+    expect(screen.getByRole('button', { name: 'Deny' })).toHaveAccessibleDescription('AVA continues without doing this.');
+    expect(screen.getByRole('button', { name: 'Deny' })).toHaveAttribute('data-autofocus'); expect(screen.getByRole('button', { name: 'Allow once' })).not.toHaveAttribute('data-autofocus');
+    expect(screen.queryByText(/intent|host owns|policy/i)).not.toBeInTheDocument();
+  });
+
+  it('puts Deny first, so it is the first choice keyboard focus reaches, without giving any choice more weight', () => {
+    render(<PermissionCard onDecide={vi.fn()} request={{ ...permission, sessionAllowed: true, decisions: ['allow', 'allow_session', 'deny'] }} />);
+    const choices = within(screen.getByRole('group', { name: 'Your decision' })).getAllByRole('button');
+    expect(choices.map((button) => button.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this session']);
+    expect(new Set(choices.map((button) => button.dataset.tone))).toEqual(new Set(['quiet']));
+  });
+
+  it('renders a stored decision as the receipt on a fresh mount and offers no second decision', () => {
+    const onDecide = vi.fn();
+    const { unmount } = render(<PermissionCard request={permission} decided="deny" onDecide={onDecide} />);
+    expect(screen.getByRole('status')).toHaveTextContent('You chose Deny.'); expect(screen.getByText('Decided')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Deny' })).toHaveAttribute('aria-pressed', 'true'); expect(screen.getByRole('button', { name: 'Allow once' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' })); fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+    expect(onDecide).not.toHaveBeenCalled();
+    unmount();
+    // A stored choice this request never offered is not a receipt.
+    render(<PermissionCard request={permission} decided="allow_session" onDecide={onDecide} />);
+    expect(screen.getByRole('status')).toBeEmptyDOMElement(); expect(screen.getByRole('button', { name: 'Allow once' })).toBeEnabled();
+  });
+
+  it.each([['stale', 'Replaced by a newer request.'], ['closed', 'Closed by AVA · nothing was allowed.'], ['pending', 'Not ready for a decision yet.']] as const)('explains a %s request in a sentence', (state, message) => {
+    render(<PermissionCard request={{ ...permission, state }} onDecide={vi.fn()} />);
+    expect(screen.getByRole('status')).toHaveTextContent(message); expect(screen.queryByText('Needs your decision')).not.toBeInTheDocument();
   });
 
   it.each(inactive)('makes %s noninteractive even with a callback', (state) => {
@@ -47,7 +89,7 @@ describe('permission UI intent boundary', () => {
   ])('fails closed for malformed permission metadata %j', (patch) => {
     const onDecide = vi.fn();
     render(<PermissionCard request={{ ...permission, ...patch } as PermissionView} onDecide={onDecide} />);
-    expect(screen.getByRole('status')).toHaveTextContent('Unsupported or invalid request');
+    expect(screen.getByRole('status')).toHaveTextContent('can’t be answered here');
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
     expect(onDecide).not.toHaveBeenCalled();
   });
@@ -70,7 +112,7 @@ describe('controlled question forms', () => {
     }
     render(<Example />);
     await user.click(screen.getByRole('button', { name: 'Submit answer' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('Choose a valid answer');
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose an answer to continue.');
     expect(onAnswer).not.toHaveBeenCalled();
     screen.getByRole('radio', { name: 'Layout' }).focus();
     await user.keyboard(' ');
@@ -116,13 +158,13 @@ describe('controlled question forms', () => {
   ])('fails closed for unsupported question metadata %j', (patch) => {
     const onAnswer = vi.fn();
     render(<QuestionCard request={{ ...question, ...patch } as QuestionView} value={empty} onChange={vi.fn()} onAnswer={onAnswer} />);
-    expect(screen.getByRole('status')).toHaveTextContent('Unsupported or invalid request');
+    expect(screen.getByRole('status')).toHaveTextContent('can’t be answered here');
     expect(screen.getByRole('button', { name: 'Submit answer' })).toBeDisabled();
     fireEvent.submit(screen.getByRole('form'));
     expect(onAnswer).not.toHaveBeenCalled();
   });
 
-  it.each(inactive)('blocks answer, cancel, and input callbacks while %s', (state) => {
+  it.each(inactive.filter((state) => state !== 'error'))('blocks answer, cancel, and input callbacks while %s', (state) => {
     const onAnswer = vi.fn(); const onChange = vi.fn(); const onCancel = vi.fn();
     render(<QuestionCard request={{ ...question, state }} value={{ selectedIds: ['a'], customText: '' }} onChange={onChange} onAnswer={onAnswer} onCancel={onCancel} />);
     const radio = screen.getByRole('radio', { name: 'Keyboard' });
@@ -131,6 +173,25 @@ describe('controlled question forms', () => {
     fireEvent.submit(screen.getByRole('form'));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel question' }));
     expect(onAnswer).not.toHaveBeenCalled(); expect(onChange).not.toHaveBeenCalled(); expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('replaces a failed question’s choices and actions with its cause, and sends one Retry per version', async () => {
+    const user = userEvent.setup(); const onRetry = vi.fn(); const onAnswer = vi.fn(); const onCancel = vi.fn();
+    const failed: QuestionView = { ...question, state: 'error', error: 'This question couldn’t be loaded.' };
+    const props = { value: { selectedIds: ['a'], customText: '' }, onChange: vi.fn(), onAnswer, onCancel };
+    const { rerender } = render(<QuestionCard request={failed} {...props} onRetry={onRetry} />);
+    expect(screen.getByRole('status')).toHaveTextContent(/Failed/); expect(screen.getByRole('status')).toHaveTextContent('This question couldn’t be loaded.');
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument(); expect(screen.queryByRole('form')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit answer' })).not.toBeInTheDocument(); expect(screen.queryByRole('button', { name: 'Cancel question' })).not.toBeInTheDocument();
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    await user.click(retry); await user.click(retry);
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith({ id: 'opaque-question', version: 1 });
+    expect(retry).toHaveAttribute('aria-disabled', 'true'); expect(retry).toHaveFocus(); expect(screen.getByRole('status')).toHaveTextContent('Retry requested.');
+    rerender(<QuestionCard request={{ ...failed, version: 2 }} {...props} onRetry={onRetry} />);
+    await user.click(screen.getByRole('button', { name: 'Retry' })); expect(onRetry).toHaveBeenLastCalledWith({ id: 'opaque-question', version: 2 });
+    rerender(<QuestionCard request={{ ...failed, version: 3, error: undefined }} {...props} />);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument(); expect(screen.getByRole('status')).toHaveTextContent('This question couldn’t be completed.');
+    expect(onAnswer).not.toHaveBeenCalled(); expect(onCancel).not.toHaveBeenCalled(); expect(onRetry).toHaveBeenCalledTimes(2);
   });
 
   it('masks custom secrets, never echoes them, and clears single-choice IDs for a custom answer', async () => {
@@ -144,7 +205,7 @@ describe('controlled question forms', () => {
     const input = screen.getByLabelText('Secret answer');
     expect(input).toHaveAttribute('type', 'password');
     await user.type(input, 'invented-sensitive-answer');
-    expect(screen.getByRole('radio', { name: 'Layout' })).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Layout' })).not.toBeChecked(); expect(screen.getByRole('radio', { name: 'Other…' })).toBeChecked();
     await user.keyboard('{Enter}');
     expect(onAnswer).toHaveBeenCalledExactlyOnceWith({ id: 'opaque-question', version: 1, answer: { selectedIds: [], customText: 'invented-sensitive-answer' } });
     expect(container.textContent).not.toContain('invented-sensitive-answer');
@@ -180,5 +241,35 @@ describe('controlled question forms', () => {
     rerender(<QuestionCard request={{ ...question, version: 2, custom: { kind: 'text', label: 'Other' } }} value={{ selectedIds: [], customText: 'Another focus' }} onChange={vi.fn()} onAnswer={onAnswer} />);
     fireEvent.submit(screen.getByRole('form'));
     expect(onAnswer).toHaveBeenLastCalledWith({ id: question.id, version: 2, answer: { selectedIds: [], customText: 'Another focus' } });
+  });
+
+  it('makes choosing Other… visible and asks for its text before sending', async () => {
+    const user = userEvent.setup(); const onAnswer = vi.fn();
+    function Example() {
+      const [value, setValue] = useState<QuestionAnswer>({ selectedIds: ['a'], customText: '' });
+      return <QuestionCard request={{ ...question, custom: { kind: 'text', label: 'Your answer' } }} value={value} onChange={setValue} onAnswer={onAnswer} />;
+    }
+    render(<Example />);
+    await user.click(screen.getByRole('radio', { name: 'Other…' }));
+    expect(screen.getByRole('radio', { name: 'Other…' })).toBeChecked(); expect(screen.getByRole('radio', { name: 'Layout' })).not.toBeChecked(); expect(screen.getByLabelText('Your answer')).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Submit answer' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Type your answer, or choose one of the options.'); expect(screen.getByLabelText('Your answer')).toHaveAttribute('aria-invalid', 'true');
+    expect(onAnswer).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText('Your answer'), 'Copy'); expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Submit answer' }));
+    expect(onAnswer).toHaveBeenCalledExactlyOnceWith({ id: question.id, version: 1, answer: { selectedIds: [], customText: 'Copy' } });
+  });
+
+  it('shows a secret-only question as one labelled field without an options legend', async () => {
+    const user = userEvent.setup(); const onAnswer = vi.fn();
+    function Example() {
+      const [value, setValue] = useState(empty);
+      return <QuestionCard request={{ ...question, options: [], custom: { kind: 'secret', label: 'Access code' } }} value={value} onChange={setValue} onAnswer={onAnswer} />;
+    }
+    const { container } = render(<Example />);
+    expect(container.querySelector('legend')).toBeNull(); expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Access code')).toHaveAttribute('type', 'password');
+    await user.click(screen.getByRole('button', { name: 'Submit answer' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Type an answer to continue.'); expect(onAnswer).not.toHaveBeenCalled();
   });
 });

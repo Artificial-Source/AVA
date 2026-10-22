@@ -1,5 +1,6 @@
 import { previewModelProfile } from '../components/contextPreview';
 import type { ModelId } from '../state/types';
+import { providerIdentities } from '../ui/providerIdentity';
 import type { ModelChoice, Preferences, Provider, ResourceInspections, SubagentDefinition } from './contracts';
 
 import { defaultGeneral, defaultConversation, defaultNotifications, defaultContextPolicy } from './behaviorPreferences';
@@ -22,22 +23,24 @@ export const modelChoices: readonly ModelChoice[] = modelIds.map((id) => {
 export const subagentDefinitions: readonly SubagentDefinition[] = [
   { id: 'builtin:general', revision: 1, source: 'builtin', name: 'general', description: 'General-purpose delegated work.', modelPreference: 'inherit' },
   { id: 'builtin:explore', revision: 1, source: 'builtin', name: 'explore', description: 'Read-only codebase exploration.', modelPreference: 'inherit' },
-  { id: 'project:review-example', revision: 1, source: 'project', name: 'Project reviewer', description: 'Supplied project-managed example · trust not evaluated.', modelPreference: 'inherit' },
+  { id: 'project:review-example', revision: 1, source: 'project', name: 'Project reviewer', description: 'Reviews changes against this project’s conventions.', modelPreference: 'inherit' },
   { id: 'user:1', revision: 1, source: 'user', name: 'Notes reviewer', description: 'Summarize open questions in a set of notes.', modelPreference: 'inherit' },
 ];
+// Only MCP has entries; the other inventories are honestly empty.
 export const resourceInspections: ResourceInspections = {
-  skills: { state: 'ready', rows: [{ title: 'Skill inventory', detail: 'No skill metadata supplied.', status: 'Unknown' }, { title: 'Project scope', detail: 'Project skills require trust.', status: 'Not evaluated' }] },
-  prompts: { state: 'ready', rows: [{ title: 'Prompt inventory', detail: 'No prompt metadata supplied.', status: 'Unknown' }, { title: 'Prompt content', detail: 'Instruction bodies are not inspected here.', status: 'Not supplied' }] },
-  plugins: { state: 'ready', rows: [{ title: 'Installed inventory', detail: 'No package inventory supplied.', status: 'Unknown' }, { title: 'Plugin processes', detail: 'No process status supplied.', status: 'Unknown' }] },
-  lsp: { state: 'ready', rows: [{ title: 'Language servers', detail: 'No server inventory supplied.', status: 'Unknown' }, { title: 'Server status', detail: 'No server is started or queried by this page.', status: 'Not supplied' }] },
+  skills: { state: 'empty', rows: [] },
+  prompts: { state: 'empty', rows: [] },
+  plugins: { state: 'empty', rows: [] },
+  lsp: { state: 'empty', rows: [] },
   mcp: { state: 'ready', servers: [
     { id: 'notes-example', name: 'Workspace notes', transport: 'stdio', configEnabled: true, source: 'global', trust: 'not-required', connection: 'not-connected', lifecycle: 'one-shot' },
     { id: 'reference-example', name: 'Project reference', transport: 'stdio', configEnabled: false, source: 'project', trust: 'required', connection: 'unknown', lifecycle: 'one-shot' },
   ] },
 };
 export const providers: readonly Provider[] = [
-  { id: 'aster-lab', label: 'Aster Lab', state: 'available', source: 'none', methods: ['key', 'browser', 'device'], description: 'Fictional provider · Aster and Aster Mini example profiles.' },
-  { id: 'orion-lab', label: 'Orion Lab', state: 'connected-example', source: 'stored-example', methods: ['key'], description: 'Connected EXAMPLE · stored dummy credential status, not a real connection.' },
-  { id: 'cedar-example', label: 'Cedar Example', state: 'external', source: 'environment-example', methods: [], description: 'Externally managed example. Environment credentials cannot be removed here.' },
-  { id: 'harbor-example', label: 'Harbor Example', state: 'error', source: 'none', methods: ['key'], description: 'Example connection error. No credential or catalog details were received.' },
+  { id: 'aster-lab', label: 'Aster Lab', state: 'available', source: 'none', methods: ['key', 'browser', 'device'], description: 'Aster and Aster Mini models.' },
+  { id: 'orion-lab', label: 'Orion Lab', state: 'connected-example', source: 'stored-example', methods: ['key'], description: 'Orion models.' },
+  { id: 'cedar', label: 'Cedar', state: 'external', source: 'environment-example', methods: [], description: 'Credentials come from your environment.' },
+  { id: 'harbor', label: 'Harbor', state: 'error', source: 'none', methods: ['key'], description: 'The API key expired.' },
+  ...Object.entries(providerIdentities).map(([id, { label }]): Provider => ({ id, label, state: 'available', source: 'none', methods: ['key'], description: `${label} models.` })),
 ];

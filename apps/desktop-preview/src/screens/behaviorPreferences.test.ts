@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { previewContextUsage } from '../components/contextPreview';
 import { createInitialState } from '../state/fixtures';
-import { contextProjection, defaultContextPolicy, defaultGeneral, defaultConversation, defaultNotifications, notificationDecision, boundedInteger } from './behaviorPreferences';
+import { contextProjection, defaultContextPolicy, defaultGeneral, defaultConversation, defaultNotifications, previewTone, boundedInteger } from './behaviorPreferences';
 
 const usage = previewContextUsage(createInitialState().chats[0]);
 describe('visit-local behavior defaults and pure policy projections', () => {
@@ -38,18 +38,17 @@ describe('visit-local behavior defaults and pure policy projections', () => {
     }
     expect(boundedInteger(0, 0, 100)).toBe(true); expect(boundedInteger(NaN, 0, 100)).toBe(false);
   });
-  it.each(['completion', 'input', 'failure'] as const)('evaluates %s without sending events or playing sound', (event) => {
-    expect(notificationDecision(defaultNotifications, event, true)).toMatchObject({ delivered: true, tone: event === 'completion' ? 'soft' : 'chime' });
-    expect(notificationDecision(defaultNotifications, event, false)).toMatchObject({ delivered: false, tone: 'none' });
-    expect(notificationDecision({ ...defaultNotifications, muted: true }, event, true)).toMatchObject({ delivered: false, reason: 'Master mute is on.' });
-    expect(notificationDecision({ ...defaultNotifications, channels: { ...defaultNotifications.channels, [event]: { enabled: false, tone: 'soft' } } }, event, true).delivered).toBe(false);
-    expect(notificationDecision({ ...defaultNotifications, backgroundOnly: false }, event, false).delivered).toBe(true);
+  it.each(['completion', 'input', 'failure'] as const)('previews the %s tone only when unmuted and audible, independent of the event switch', (event) => {
+    expect(previewTone(defaultNotifications, event)).toBe(event === 'completion' ? 'soft' : 'chime');
+    expect(previewTone({ ...defaultNotifications, muted: true }, event)).toBe('none');
+    expect(previewTone({ ...defaultNotifications, channels: { ...defaultNotifications.channels, [event]: { enabled: false, tone: 'soft' } } }, event)).toBe('soft');
+    expect(previewTone({ ...defaultNotifications, channels: { ...defaultNotifications.channels, [event]: { enabled: true, tone: 'none' } } }, event)).toBe('none');
   });
   it('keeps unknown tone values silent rather than treating them as audio instructions', () => {
     const channels = { ...defaultNotifications.channels, completion: { enabled: true, tone: 'unrecognized' as 'soft' } };
-    expect(notificationDecision({ ...defaultNotifications, channels }, 'completion', true)).toMatchObject({ delivered: true, tone: 'none' });
+    expect(previewTone({ ...defaultNotifications, channels }, 'completion')).toBe('none');
   });
   it.each([0, NaN, Infinity, -1, 101, 2.5])('keeps zero/invalid volume silent (%s)', (volume) => {
-    expect(notificationDecision({ ...defaultNotifications, volume }, 'completion', true)).toMatchObject({ delivered: true, tone: 'none' });
+    expect(previewTone({ ...defaultNotifications, volume }, 'completion')).toBe('none');
   });
 });

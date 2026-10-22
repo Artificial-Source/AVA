@@ -1,22 +1,31 @@
-.details { margin: 2px 0 14px 22px; padding-left: 0; color: var(--muted); font-size: 11px; min-width: 0; }
+.details { margin: 2px 0 14px 22px; padding-left: 0; color: var(--muted); font-size: var(--type-caption); min-width: 0; }
 .details p { margin: 6px 0; line-height: 1.6; overflow-wrap: anywhere; }
-.path { display: block; margin: 6px 0; color: var(--body); font-size: 11px; overflow-wrap: anywhere; }
-.imagePreview { width: 640px; max-width: 100%; margin: 8px 0; }
-.imageFrame { position: relative; aspect-ratio: 8 / 5; max-height: 400px; overflow: hidden; background: var(--code); border: 1px solid var(--edge); border-radius: 4px; }
+.details .failure { display: flex; align-items: flex-start; gap: 6px; color: var(--danger-text); font-size: var(--type-meta); }
+.failure > svg { flex-shrink: 0; margin-block-start: 3px; }
+/* The cause stays in the failure color; its next step reads as a neutral text action. */
+.askRetry { display: inline; padding: 0; background: transparent; color: var(--body); font: inherit; text-decoration: underline; text-decoration-color: var(--edge-bright); text-underline-offset: 3px; white-space: nowrap; }
+.askRetry:hover { color: var(--text); text-decoration-color: currentColor; }
+.path { display: block; margin: 6px 0; color: var(--body); font-size: var(--type-caption); overflow-wrap: anywhere; }
+
+/* Input images open as a thumbnail and grow in place; a failed load collapses to one line. */
+.imagePreview { width: 160px; max-width: 100%; margin: var(--space-2) 0; }
+.imagePreview[data-enlarged='true'] { width: 640px; }
+.imageButton { position: relative; display: block; width: 100%; padding: 0; border: 1px solid var(--edge); border-radius: var(--radius-chip); background: var(--code); cursor: zoom-in; overflow: hidden; }
+.imagePreview[data-enlarged='true'] .imageButton { cursor: zoom-out; }
+.imageButton:hover { border-color: var(--edge-bright); }
+.imageButton:focus-visible { outline-offset: 2px; }
+.imageFrame { position: relative; aspect-ratio: 8 / 5; max-height: 400px; overflow: hidden; }
 .image { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 400px; object-fit: contain; }
 .imageLoading { visibility: hidden; }
-.details .imageStatus { position: absolute; inset: 0; display: grid; place-content: center; margin: 0; padding: 12px; text-align: center; }
-.imagePreview figcaption { margin-top: 6px; line-height: 1.6; overflow-wrap: anywhere; }
-.latest { margin: 0 0 4px; padding: 3px 0; background: transparent; color: var(--body); font: inherit; }
-.latest:hover { color: var(--text); }
-.output, .diff { overflow-anchor: none; min-width: 0; max-width: 100%; max-height: 240px; overflow: auto; margin: 8px 0; padding: 10px 12px; background: var(--code); border: 1px solid var(--edge); border-radius: 4px; color: var(--body); font: 11px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
-.output:focus-visible, .diff:focus-visible { outline-offset: -2px; }
-.changes { min-width: 0; margin-top: 12px; }
-.change { padding: 8px 0; border-top: 1px solid var(--edge); }
-.fileHeading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; color: var(--body); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
-.filename { font-family: var(--mono); }
-.changeFacts { display: inline-flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.diff { max-height: 300px; margin-bottom: 0; }
-@media (max-width: 640px) { .details { padding-left: 10px; } .changeFacts { flex-basis: 100%; } }
+.details .imageStatus { position: absolute; inset: 0; display: grid; place-content: center; margin: 0; padding: var(--space-2); text-align: center; }
+.zoom { position: absolute; right: var(--space-1); bottom: var(--space-1); display: inline-flex; padding: 3px; border-radius: var(--radius-chip); background: var(--surface-raised); color: var(--body); }
+.imagePreview figcaption { margin-top: 6px; color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
 
-:global([data-diff-wrap='false']) .diff { white-space: pre; overflow-wrap: normal; }
+.latest { margin: 0 0 var(--space-1); padding: 3px 0; background: transparent; color: var(--body); font: inherit; }
+.latest:hover { color: var(--text); }
+.output { overflow-anchor: none; min-width: 0; max-width: 100%; max-height: 240px; overflow: auto; margin: var(--space-2) 0; padding: 10px var(--space-3); background: var(--code); border: 1px solid var(--edge); border-radius: var(--radius-chip); color: var(--body); font: var(--type-meta)/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+.output:focus-visible { outline-offset: -2px; }
+.changes { display: grid; gap: var(--space-4); min-width: 0; margin-top: var(--space-3); }
+.review { display: inline-flex; align-items: center; gap: var(--space-1); min-height: 24px; padding: 0 2px; background: transparent; color: var(--body); font-size: var(--type-caption); text-decoration: underline; text-decoration-color: var(--edge-bright); text-underline-offset: 3px; }
+.review:hover { color: var(--text); text-decoration-color: currentColor; }
+@media (max-width: 640px) { .details { margin-left: 10px; } }

@@ -8,7 +8,8 @@ import type { ConnectView, WorkspaceView } from './contracts';
 import { PermissionDialog, QuestionDialog, RunDialog, WorkspaceDialog } from './ChatDialogs';
 import { installDialogTestSupport } from './dialogTestSupport';
 import { permissionCase, questionCase, runCase, workspaceChoices } from './fixtures';
-import { ProviderConnectDialog } from './ProviderViews';
+import { ProviderConnectDialog, connectDelays } from './ProviderViews';
+import { resetProviderState, setProviderState } from './providerState';
 import { providers } from './screenExamples';
 import { useDialogTransitionFocus } from './useDialogTransitionFocus';
 
@@ -61,6 +62,13 @@ beforeEach(() => {
   });
 });
 afterEach(() => { Reflect.deleteProperty(document, 'elementFromPoint'); });
+// Provider connections last for the whole visit; each case starts from the visit's start.
+beforeEach(resetProviderState);
+// These cases test focus, not settling: connect steps hold still instead of moving on
+// after product delays the test would otherwise race.
+const productDelays = { ...connectDelays };
+beforeEach(() => { Object.assign(connectDelays, { browser: 2 ** 31 - 1, device: 2 ** 31 - 1, verify: 2 ** 31 - 1 }); });
+afterEach(() => { Object.assign(connectDelays, productDelays); });
 
 const connection: ConnectView = { id: 'connect', version: 1, provider: providers[0], step: 'method', method: null };
 function ProviderHost() {
@@ -71,55 +79,57 @@ function ProviderHost() {
 }
 
 describe('SCREEN11-F03 explicit same-modal content transitions', () => {
-  it('focuses the current dummy field after its method button unmounts, keeping the same native dialog', async () => {
+  it('focuses the current key field after its method button unmounts, keeping the same native dialog', async () => {
     const user = userEvent.setup(); render(<StrictMode><ProviderHost /></StrictMode>);
     const dialog = screen.getByRole('dialog');
-    await user.click(within(dialog).getByRole('button', { name: /Dummy API key/ }));
-    expect(screen.getByLabelText('Dummy API key')).toHaveFocus();
+    await user.click(within(dialog).getByRole('button', { name: /API key/ }));
+    expect(screen.getByLabelText('API key')).toHaveFocus();
     expect(screen.getByRole('dialog')).toBe(dialog); expect(dialog).toHaveAttribute('open');
   });
-  it('focuses a current opening action after removing workspace choices', async () => {
+  it('focuses the single opening action after removing workspace choices', async () => {
     function Host() {
       const [view, setView] = useState<WorkspaceView>({ id: 'workspace', version: 1, state: 'choice', selectedId: 'atlas', choices: workspaceChoices });
       return <WorkspaceDialog view={view} onDismiss={vi.fn()} onIntent={(intent) => setView({ ...view, version: 2, state: 'opening', selectedId: intent.workspaceId! })} />;
     }
     const user = userEvent.setup(); render(<StrictMode><Host /></StrictMode>);
-    await user.click(screen.getByRole('button', { name: new RegExp(workspaceChoices[0].label) }));
-    expect(screen.getByRole('button', { name: 'Show ready example' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: new RegExp(`^${workspaceChoices[0].label}`) }));
+    expect(screen.getByRole('button', { name: 'Cancel opening' })).toHaveFocus();
   });
-  it('repairs a PermissionCard-only disabling commit without relying on a host rerender', async () => {
+  it('keeps focus on the chosen permission decision while the others lock', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn();
     render(<StrictMode><PermissionDialog request={permissionCase('once', 1)} onIntent={onIntent} onDismiss={vi.fn()} /></StrictMode>);
-    await user.click(screen.getByRole('button', { name: 'Allow once' }));
-    expect(screen.getByRole('button', { name: 'Allow once' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Dismiss unresolved' })).toHaveFocus();
+    const allow = screen.getByRole('button', { name: 'Allow once' });
+    await user.click(allow);
+    expect(allow).toHaveAttribute('aria-pressed', 'true'); expect(allow).toHaveAttribute('aria-disabled', 'true'); expect(allow).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
     expect(onIntent).toHaveBeenCalledTimes(1);
   });
   it('repairs the QuestionBody/QuestionCard commit while clearing and excluding secret drafts', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn();
     render(<StrictMode><QuestionDialog request={questionCase('secret', 1)} onIntent={onIntent} onDismiss={vi.fn()} /></StrictMode>);
-    const input = screen.getByLabelText('Dummy secret answer');
+    const input = screen.getByLabelText('Access token');
     await user.type(input, 'dummy-only-value'); expect(input).toHaveFocus();
     await user.click(screen.getByRole('button', { name: 'Submit answer' }));
     expect(input).toHaveValue(''); expect(screen.getByRole('button', { name: 'Submit answer' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Dismiss unresolved' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Answer later' })).toHaveFocus();
     expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'review-question', version: 1, kind: 'question-answer' });
   });
   it('also repairs native form submission when the secret field, not Submit, owned focus', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn();
     render(<QuestionDialog request={questionCase('secret', 1)} onIntent={onIntent} onDismiss={vi.fn()} />);
-    await user.type(screen.getByLabelText('Dummy secret answer'), 'dummy-only-value');
+    await user.type(screen.getByLabelText('Access token'), 'dummy-only-value');
     await user.keyboard('{Enter}');
-    expect(screen.getByLabelText('Dummy secret answer')).toHaveValue('');
-    expect(screen.getByRole('button', { name: 'Dismiss unresolved' })).toHaveFocus();
+    expect(screen.getByLabelText('Access token')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Answer later' })).toHaveFocus();
     expect(onIntent).toHaveBeenCalledTimes(1);
   });
-  it('focuses the current close action after Request retry unmounts', async () => {
+  it('focuses the current Done action after Retry unmounts', async () => {
     const user = userEvent.setup(); const onRetry = vi.fn();
     render(<StrictMode><RunDialog view={runCase('error')} onRetry={onRetry} onDismiss={vi.fn()} /></StrictMode>);
-    await user.click(screen.getByRole('button', { name: 'Request retry' }));
-    expect(screen.queryByRole('button', { name: 'Request retry' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close notice' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Retry requested.');
+    expect(screen.getByRole('button', { name: 'Done' })).toHaveFocus();
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });
@@ -127,25 +137,24 @@ describe('SCREEN11-F03 explicit same-modal content transitions', () => {
 describe('late native disabled focus before browser focus fixup', () => {
   beforeEach(() => { vi.mocked(Element.prototype.setAttribute).mockRestore(); });
 
-  it('repairs a PermissionCard-only disabling commit while the captured button still owns focus', async () => {
+  it('leaves a chosen permission decision focused when the browser has not yet fixed focus', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn();
     render(<StrictMode><PermissionDialog request={permissionCase('once', 1)} onIntent={onIntent} onDismiss={vi.fn()} /></StrictMode>);
     const allow = screen.getByRole('button', { name: 'Allow once' });
     await user.click(allow);
-    expect(allow).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Dismiss unresolved' })).toHaveFocus();
+    expect(allow).toHaveAttribute('aria-disabled', 'true'); expect(allow).toHaveFocus();
     expect(onIntent).toHaveBeenCalledTimes(1);
   });
   it.each(['click', 'Enter'])('repairs SecretQuestion %s submission while the captured control still owns focus', async (submission) => {
     const user = userEvent.setup(); const onIntent = vi.fn();
     render(<StrictMode><QuestionDialog request={questionCase('secret', 1)} onIntent={onIntent} onDismiss={vi.fn()} /></StrictMode>);
-    const input = screen.getByLabelText('Dummy secret answer');
+    const input = screen.getByLabelText('Access token');
     const submit = screen.getByRole('button', { name: 'Submit answer' });
     await user.type(input, 'dummy-only-value'); expect(input).toHaveFocus();
     if (submission === 'Enter') await user.keyboard('{Enter}');
     else await user.click(submit);
     expect(input).toHaveValue(''); expect(input).toBeDisabled(); expect(submit).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Dismiss unresolved' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Answer later' })).toHaveFocus();
     expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'review-question', version: 1, kind: 'question-answer' });
   });
 });
@@ -178,7 +187,7 @@ describe('transition focus stays local, foreground and commit-bound', () => {
       destination.focus(); destination.setAttribute('disabled', '');
     }} />);
     const destination = screen.getByRole('button', { name: 'Current action' });
-    const closeFocus = vi.spyOn(screen.getByRole('button', { name: 'Close dialog' }), 'focus');
+    const closeFocus = vi.spyOn(screen.getByRole('button', { name: 'Close' }), 'focus');
     await user.click(screen.getByRole('button', { name: 'Transition' }));
     expect(destination).toBeDisabled(); expect(destination).toHaveFocus(); expect(closeFocus).not.toHaveBeenCalled();
   });
@@ -197,7 +206,7 @@ describe('transition focus stays local, foreground and commit-bound', () => {
   });
   it('ignores supplied view/case replacements without an accepted UI transition', () => {
     const result = render(<ProviderConnectDialog view={connection} onIntent={vi.fn()} onDismiss={vi.fn()} />);
-    screen.getByRole('button', { name: /Dummy API key/ }).focus();
+    screen.getByRole('button', { name: /API key/ }).focus();
     result.rerender(<ProviderConnectDialog view={{ ...connection, version: 2, step: 'key', method: 'key' }} onIntent={vi.fn()} onDismiss={vi.fn()} />);
     expect(document.activeElement).toBe(document.body);
   });
@@ -221,14 +230,14 @@ describe('transition focus stays local, foreground and commit-bound', () => {
     const action = screen.getByRole('button', { name: 'Current action' }); rectangles.set(action, rect(80, 150, 300, 30));
     const focus = vi.spyOn(action, 'focus');
     await user.click(screen.getByRole('button', { name: 'Transition' }));
-    expect(screen.getByRole('button', { name: 'Close dialog' })).toHaveFocus(); expect(focus).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus(); expect(focus).not.toHaveBeenCalled();
   });
   it('does not focus hidden or viewport-clipped current controls', async () => {
     const user = userEvent.setup(); render(<FocusProbe />);
     const action = screen.getByRole('button', { name: 'Current action' }); action.style.visibility = 'hidden';
     rectangles.set(action, rect(80, 900, 300, 30));
     await user.click(screen.getByRole('button', { name: 'Transition' }));
-    expect(screen.getByRole('button', { name: 'Close dialog' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
   });
   it('ignores IME composition without leaving a delayed repair', async () => {
     const user = userEvent.setup(); const result = render(<FocusProbe />);
@@ -264,26 +273,27 @@ describe('transition focus stays local, foreground and commit-bound', () => {
     await user.click(opener); expect(screen.getByRole('dialog')).toHaveAttribute('open');
   });
   it('repairs provider steps above a Settings page and preserves both levels of Escape and return focus', async () => {
+    // Aster Lab starts connected; its connect steps need it available.
+    setProviderState('aster-lab', { state: 'available', source: 'none' });
     const user = userEvent.setup(); render(<StrictMode><AppShell /></StrictMode>);
     const opener = screen.getByRole('button', { name: 'Settings' }); await user.click(opener);
     await screen.findByRole('navigation', { name: 'Settings sections' });
     const settings = screen.getByRole('region', { name: 'Settings page' });
-    await user.click(within(settings).getByRole('button', { name: 'Providers' }));
-    await user.click(within(settings).getByRole('button', { name: 'Connection examples' }));
-    const connect = within(settings).getAllByRole('button', { name: 'Connect example' })[0]; await user.click(connect);
+    await user.click(within(settings).getByRole('button', { name: 'Models & providers' }));
+    const connect = within(settings).getByRole('button', { name: 'Connect Aster Lab' }); await user.click(connect);
     const provider = screen.getByRole('dialog', { name: 'Connect Aster Lab' });
-    await user.click(within(provider).getByRole('button', { name: /Dummy API key/ }));
-    expect(screen.getByLabelText('Dummy API key')).toHaveFocus();
+    await user.click(within(provider).getByRole('button', { name: /API key/ }));
+    expect(screen.getByLabelText('API key')).toHaveFocus();
     await user.keyboard('{Escape}');
-    expect(within(provider).getByRole('button', { name: /Dummy API key/ })).toHaveFocus();
-    await user.click(within(provider).getByRole('button', { name: /Device code example/ }));
-    expect(within(provider).getByRole('button', { name: 'Show waiting example' })).toHaveFocus();
+    expect(within(provider).getByRole('button', { name: /API key/ })).toHaveFocus();
+    await user.click(within(provider).getByRole('button', { name: /Sign in with a code/ }));
+    expect(within(provider).getByRole('button', { name: 'Copy code' })).toHaveFocus();
     expect(modals).toEqual([provider]); expect(settings.tagName).not.toBe('DIALOG');
     await user.keyboard('{Escape}'); await user.keyboard('{Escape}');
     expect(provider).not.toBeInTheDocument(); expect(connect).toHaveFocus();
+    // Settings Escape clears its search, else returns to the chat; no section hop.
     await user.keyboard('{Escape}');
-    expect(within(settings).getByRole('button', { name: 'General' })).toHaveFocus();
-    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('region', { name: 'Settings page' })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(opener).toHaveFocus();
   });
 });

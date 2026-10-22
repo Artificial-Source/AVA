@@ -31,12 +31,17 @@ describe('pinned local provider identities', () => {
     expect(providerIdentity('xai')?.file).toBe('xai.svg');
     for (const id of Object.keys(providerIdentities)) expect(providerIdentity(id)?.file).toBe(`${id === 'zai-coding-cn' ? 'zai' : id}.svg`);
   });
-  it.each(['unknown', 'custom', 'openai-compatible', 'OpenAI', ' openai', 'aster', 'aster-lab', 'orion', 'orion-lab', 'vercel', 'grok', '__proto__', 'constructor', 'toString', 'hasOwnProperty', 'https://example.invalid/icon.svg', '../openai.svg'])('uses only a neutral decorative fallback for %s', (id) => {
+  it.each(['unknown', 'custom', 'openai-compatible', 'OpenAI', ' openai', 'aster', 'aster-lab', 'orion', 'orion-lab', 'vercel', 'grok', '__proto__', 'constructor', 'toString', 'hasOwnProperty', 'https://example.invalid/icon.svg', '../openai.svg'])('uses only a neutral decorative monogram for %s', (id) => {
     expect(providerIdentity(id)).toBeNull();
     const { container } = render(<ProviderMark id={id} />);
     const mark = container.firstElementChild!;
     expect(mark).toHaveAttribute('data-provider-mark', 'neutral'); expect(mark).toHaveAttribute('aria-hidden', 'true');
-    expect(mark).not.toHaveAttribute('style'); expect(container.querySelector('img, a, script')).toBeNull();
+    expect(mark).not.toHaveAttribute('style'); expect(container.querySelector('img, a, script, svg')).toBeNull();
+    expect(mark.textContent).toMatch(/^[A-Z]$/);
+  });
+  it('prefers the supplied label for the monogram letter', () => {
+    const { container } = render(<ProviderMark id="cedar-example" label="Harbor" />);
+    expect(container.firstElementChild).toHaveTextContent(/^H$/);
   });
   it('references every known mark through a local mask, never raw SVG/HTML or arbitrary URLs', () => {
     const { container } = render(<>{Object.keys(providerIdentities).map((id) => <ProviderMark key={id} id={id} />)}</>);

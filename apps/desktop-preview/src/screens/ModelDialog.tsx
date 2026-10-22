@@ -1,16 +1,33 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { MagnifyingGlassIcon } from '@phosphor-icons/react/dist/csr/MagnifyingGlass';
+import { MinusCircleIcon } from '@phosphor-icons/react/dist/csr/MinusCircle';
+import { PlugsIcon } from '@phosphor-icons/react/dist/csr/Plugs';
+import { PlusIcon } from '@phosphor-icons/react/dist/csr/Plus';
 import { validIdentity } from '../chat/requestValidation';
+import { previewModelProfile } from '../components/contextPreview';
 import { ModelMark } from '../components/ModelMark';
+import type { ModelId } from '../state/types';
 import { Button } from '../ui/Button';
 import { DialogFrame, type DialogChrome } from '../ui/DialogFrame';
-import type { ModelChoice, ModelPickerView, ModelSelection } from './contracts';
-import { FormField, ListNotice, SearchField } from './ScreenPrimitives';
+import feedback from '../ui/feedback.module.css';
+import type { ListState, ModelChoice, ModelPickerView, ModelSelection, Provider } from './contracts';
+import { useProviderList } from './providerState';
+import { FormField, ListNotice } from './ScreenPrimitives';
 import { useViewGuard } from './useViewGuard';
-import styles from './screens.module.css';
+import screens from './screens.module.css';
+import styles from './ModelDialog.module.css';
 
-const boundModels = ['aster', 'aster-mini', 'orion'];
+const boundModels: readonly string[] = ['aster', 'aster-mini', 'orion'];
+const isBound = (id: string | undefined): id is ModelId => id !== undefined && boundModels.includes(id);
 const groupKey = (choice: ModelChoice) => JSON.stringify([choice.providerId, choice.family?.id ?? null]);
 const windowLabel = (choice: ModelChoice) => Number.isSafeInteger(choice.windowTokens) && choice.windowTokens! > 0 ? `${choice.windowTokens!.toLocaleString('en-US')} token window` : 'Window unknown';
+const notices: Partial<Record<ListState, string>> = {
+  loading: 'Loading models…',
+  error: 'Couldn’t load models.',
+  empty: 'No models yet. Connect a provider to add some.',
+  unavailable: 'Models aren’t available right now.',
+};
+
 export function validModelCatalog(view: ModelPickerView) {
   const providers = new Map<string, string>();
   const families = new Map<string, string>();
@@ -38,71 +55,145 @@ export function validModelSelection(view: ModelPickerView, intent: ModelSelectio
     (view.reasoningEditable === false ? intent.reasoning === null : choice!.reasoning.length ? intent.reasoning !== null && choice!.reasoning.includes(intent.reasoning) : intent.reasoning === null);
 }
 
-export function ModelDialog({ view, query, onQueryChange, onSelect, onRetry, description = 'Choose a model for this review.', ...chrome }: DialogChrome & {
-  view: ModelPickerView; query: string; onQueryChange: (query: string) => void; description?: string;
+// This visit's picks, newest first. Memory only: nothing is saved and a reload starts empty.
+let recentPicks: readonly string[] = [];
+export function forgetRecentModels() { recentPicks = []; }
+
+// A model is usable only through a connected provider. Providers the list doesn't
+// know keep whatever the catalog says; a catalog reason always wins.
+function withConnections(view: ModelPickerView, providers: readonly Provider[]): ModelPickerView {
+  const offline = new Set((Array.isArray(providers) ? providers : []).filter((provider) => provider && provider.state !== 'connected-example' && provider.state !== 'external').map((provider) => provider.id));
+  if (!offline.size || !Array.isArray(view.choices)) return view;
+  return { ...view, choices: view.choices.map((choice) => choice && offline.has(choice.providerId) && !choice.disabledReason ? { ...choice, disabledReason: `${choice.providerLabel} isn’t connected.` } : choice) };
+}
+
+// Recent is a browsing shortcut; while searching, results stay with their family.
+function arrange(choices: readonly ModelChoice[], query: string) {
+  const needle = query.toLocaleLowerCase().trim();
+  const filtered = choices.filter((choice) => `${choice.label} ${choice.providerLabel} ${choice.family?.label ?? ''}`.toLocaleLowerCase().includes(needle));
+  const recent = needle ? [] : recentPicks.flatMap((id) => filtered.filter((choice) => choice.id === id));
+  const rest = filtered.filter((choice) => !recent.includes(choice));
+  const groups = [...new Set(rest.map(groupKey))].map((key) => rest.filter((choice) => groupKey(choice) === key));
+  return { recent, groups, ordered: [...recent, ...groups.flat()] };
+}
+
+// `providers` defaults to this visit's connections; a review host can pass its own list.
+export function ModelDialog({ view: catalog, providers, query, onQueryChange, onSelect, onRetry, onConnectProvider, chatTitle, description, ...chrome }: DialogChrome & {
+  view: ModelPickerView; query: string; onQueryChange: (query: string) => void;
   onSelect: (intent: ModelSelection) => void; onRetry: () => void;
+  onConnectProvider?: (providerId?: string) => void;
+  providers?: readonly Provider[];
+  chatTitle?: string; description?: string;
 }) {
   const name = useId();
-  const [draft, setDraft] = useState(view.scope === 'current-chat' ? view.currentId : view.defaultId);
-  const [effort, setEffort] = useState<string | null>((view.scope === 'current-chat' ? view.currentReasoning : view.defaultReasoning) ?? null);
+  const hintId = useId();
+  const reasoningId = useId();
+  const formId = useId();
+  const search = useRef<HTMLInputElement>(null);
+  const tiles = useRef(new Map<string, HTMLElement>());
+  const composing = useRef(false);
+  const connections = useProviderList();
+  const view = withConnections(catalog, providers ?? connections);
   const gate = useViewGuard(JSON.stringify(view));
   const valid = validModelCatalog(view);
-  const selected = valid ? view.choices.find((choice) => choice.id === draft) : undefined;
-  const reasoning = view.reasoningEditable !== false && selected?.reasoning.length ? (effort && selected.reasoning.includes(effort) ? effort : selected.reasoning[0]) : null;
-  const filtered = valid ? view.choices.filter((choice) => `${choice.label} ${choice.providerLabel} ${choice.family?.label ?? ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim())) : [];
-  const groups = [...new Set(filtered.map(groupKey))];
-  const enabled = selectableModel(view, selected);
-  return <DialogFrame {...chrome} wide title="Choose a model" description={description} onBack={query ? () => { if (gate.valid()) onQueryChange(''); } : undefined}>
-    <section className={styles.modelSummary} aria-label="Selected model">
-      <div className={styles.modelSummaryHeading}>
-        <div className={styles.modelIdentity}>
-          {selected?.modelId && boundModels.includes(selected.modelId) ? <span className={styles.modelMark}><ModelMark model={selected.modelId} /></span> : null}
-          <div><h2>{selected?.label ?? 'Choose a model'}</h2><p>{selected ? `${selected.providerLabel}${selected.family ? ` · ${selected.family.label} family` : ''}` : 'Model details unavailable'}</p></div>
-        </div>
-        <span className={styles.modelScope}>{view.scope === 'current-chat' ? 'This chat' : 'New chat default'}</span>
+  const choices = valid ? view.choices : [];
+  const scopeId = view.scope === 'new-chat-default' ? view.defaultId : view.currentId;
+  // A picker opened with a query starts on its first match, like typing it.
+  const [draft, setDraft] = useState(() => query.trim() ? arrange(choices, query).ordered.find((choice) => selectableModel(view, choice))?.id ?? scopeId : scopeId);
+  const [effort, setEffort] = useState<string | null>((view.scope === 'current-chat' ? view.currentReasoning : view.defaultReasoning) ?? null);
+  const { recent, groups, ordered } = arrange(choices, query);
+  // Only a visible highlight can be used: a filtered-out model never stays the primary action.
+  const highlighted = ordered.find((choice) => choice.id === draft);
+  const enabled = selectableModel(view, highlighted);
+  const levels = view.reasoningEditable !== false && enabled ? highlighted!.reasoning : [];
+  const reasoning = levels.length ? (effort && levels.includes(effort) ? effort : levels[0]) : null;
+  const summary = highlighted ? { mark: isBound(highlighted.modelId) ? highlighted.modelId : undefined, label: highlighted.label, detail: [highlighted.providerLabel, windowLabel(highlighted)] }
+    : view.state === 'loading' && isBound(scopeId) ? { mark: scopeId, label: previewModelProfile(scopeId).modelLabel, detail: [previewModelProfile(scopeId).providerLabel, 'In use'] } : null;
+
+  useEffect(() => { tiles.current.get(draft)?.scrollIntoView?.({ block: 'nearest' }); }, [draft]);
+
+  function commit() {
+    if (!enabled || !highlighted?.modelId) return;
+    const intent: ModelSelection = { id: view.id, version: view.version, modelId: highlighted.modelId, scope: view.scope, reasoning };
+    if (!validModelSelection(view, intent) || !gate.claim()) return;
+    recentPicks = [highlighted.id, ...recentPicks.filter((id) => id !== highlighted.id)].slice(0, 4);
+    onSelect(intent);
+  }
+  function move(step: 1 | -1) {
+    const options = ordered.filter((choice) => selectableModel(view, choice));
+    if (!gate.valid() || !options.length) return;
+    const index = options.findIndex((choice) => choice.id === draft);
+    setDraft((index < 0 ? options[step > 0 ? 0 : options.length - 1] : options[(index + step + options.length) % options.length]).id);
+  }
+  function changeQuery(value: string) {
+    if (!gate.valid()) return;
+    onQueryChange(value);
+    const first = value.trim() ? arrange(choices, value).ordered.find((choice) => selectableModel(view, choice)) : undefined;
+    if (first) setDraft(first.id);
+  }
+
+  function tile(choice: ModelChoice) {
+    const selectable = selectableModel(view, choice);
+    const bound = choice.modelId === choice.id && isBound(choice.id);
+    const reason = choice.disabledReason || (bound ? '' : 'No model profile, so this can’t be selected.');
+    return <div key={choice.id} ref={(node) => { if (node) tiles.current.set(choice.id, node); else tiles.current.delete(choice.id); }} className={styles.tile} data-selected={draft === choice.id} data-disabled={!selectable}>
+      <label className={styles.choice}>
+        <input type="radio" name={name} value={choice.id} checked={draft === choice.id} disabled={!selectable} onChange={() => { if (gate.valid() && selectableModel(view, choice)) setDraft(choice.id); }} />
+        <span className={styles.tileBody}>
+          <span className={styles.tileTitle}>{isBound(choice.modelId) ? <ModelMark model={choice.modelId} /> : null}<strong>{choice.label}</strong>{' '}
+            {choice.id === view.currentId ? <span className={styles.tag}>This chat</span> : null}{' '}{choice.id === view.defaultId ? <span className={styles.tag}>New chat default</span> : null}
+          </span>{' '}
+          <span className={styles.facts}>{windowLabel(choice)} · {choice.capabilities.length ? choice.capabilities.join(' · ') : 'Capabilities unknown'}{choice.reasoning.length ? ' · Reasoning' : ''}</span>
+          {reason ? <span className={styles.reason}><MinusCircleIcon size={14} aria-hidden="true" />{reason}</span> : null}
+        </span>
+      </label>
+      {/* A model blocked only by its provider offers the way out next to the reason. */}
+      {reason && bound && onConnectProvider ? <button type="button" className={`${styles.link} ${styles.tileLink}`} onClick={() => { if (gate.valid()) onConnectProvider(choice.providerId); }}><PlugsIcon size={14} aria-hidden="true" />Connect {choice.providerLabel}</button> : null}
+    </div>;
+  }
+
+  const title = view.scope === 'new-chat-default' ? 'Default model for new chats' : chatTitle?.trim() ? `Model for “${chatTitle.trim()}”` : 'Model for this chat';
+  const footer = <div className={styles.bar}>
+    <p className={styles.summary} data-model-summary aria-live="polite" aria-atomic="true">{summary ? <>{summary.mark ? <ModelMark model={summary.mark} /> : null}<strong>{summary.label}</strong>{summary.detail.map((part) => <span key={part}> · {part}</span>)}</> : 'Nothing selected'}</p>
+    <div className={styles.barRow}>
+      {onConnectProvider ? <button type="button" className={styles.link} onClick={() => { if (gate.valid()) onConnectProvider(); }}><PlusIcon size={14} aria-hidden="true" />Connect a provider…</button> : null}
+      <div className={styles.barEnd}>
+        {levels.length ? <span className={styles.reasoning}><label htmlFor={reasoningId}>Reasoning level</label><select id={reasoningId} className={screens.select} value={reasoning ?? ''} onChange={(event) => {
+          if (gate.valid() && levels.includes(event.currentTarget.value)) setEffort(event.currentTarget.value);
+        }}>{levels.map((level) => <option key={level}>{level}</option>)}</select></span> : null}
+        <Button onClick={chrome.onDismiss}>Cancel</Button>
+        <Button type="submit" form={formId} tone="primary" disabled={!enabled}>{view.scope === 'new-chat-default' ? 'Set as default' : 'Use for this chat'}</Button>
       </div>
-      {selected ? <div className={styles.modelSummaryFacts}>
-        <span className={styles.modelWindow}>{windowLabel(selected)}</span>
-        <ul className={styles.modelCapabilities} aria-label="Model capabilities">
-          {selected.capabilities.length ? selected.capabilities.map((capability, index) => <li key={index}>{capability}</li>) : <li>Capabilities unknown</li>}
-          {selected.reasoning.length ? <li>Reasoning: {selected.reasoning.join(', ')}</li> : null}
-        </ul>
+    </div>
+  </div>;
+  return <DialogFrame {...chrome} wide title={title} subtitle={view.scope === 'new-chat-default' ? 'Existing chats keep their model.' : 'Only this chat changes.'}
+    description={description} initialFocus={search} footer={footer} onBack={query ? () => { if (gate.valid()) onQueryChange(''); } : undefined}>
+    <FormField label="Search models">{(props) => <input {...props} ref={search} aria-describedby={hintId} className={screens.input} type="search" autoComplete="off" spellCheck={false} value={query}
+      onChange={(event) => changeQuery(event.currentTarget.value)}
+      onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
+      onKeyDown={(event) => {
+        if (composing.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); move(event.key === 'ArrowDown' ? 1 : -1); }
+        else if (event.key === 'Enter') { event.preventDefault(); commit(); }
+      }} />}</FormField>
+    <p id={hintId} className="srOnly">Up and down arrows move between models. Enter uses the selected one.</p>
+    {!valid ? <ListNotice state="error" message="This model list can’t be shown, so nothing can be selected." />
+      : view.state !== 'ready' ? <ListNotice state={view.state} message={view.state === 'disabled' ? description : notices[view.state]} onRetry={() => { if (gate.claim()) onRetry(); }} />
+      : !view.choices.length ? <ListNotice state="empty" message={notices.empty} />
+      : !ordered.length ? <div className={feedback.notice} data-state="empty">
+        <span className={feedback.noticeIcon} aria-hidden="true"><MagnifyingGlassIcon size={16} /></span>
+        <div className={feedback.noticeBody}><p className={feedback.noticeMessage} role="status">No models match “{query.trim()}”.</p>
+          <Button onClick={() => { if (gate.valid()) { onQueryChange(''); search.current?.focus(); } }}>Clear search</Button></div>
       </div> : null}
-    </section>
-    <SearchField label="Search models" value={query} onChange={(value) => { if (gate.valid()) onQueryChange(value); }} />
-    <ListNotice state={view.state} onRetry={() => { if (gate.claim()) onRetry(); }} />
-    {!valid ? <p role="alert" className={styles.notice}>Unsupported or malformed model catalog. No choices can be applied.</p> : null}
-    {valid && filtered.length === 0 && view.state === 'ready' ? <p role="status" className={styles.notice}>No matching models. Clear the search to see supplied choices.</p> : null}
-    <form onSubmit={(event) => {
-      event.preventDefault();
-      if (!enabled || !selected?.modelId) return;
-      const intent: ModelSelection = { id: view.id, version: view.version, modelId: selected.modelId, scope: view.scope, reasoning };
-      if (validModelSelection(view, intent) && gate.claim()) onSelect(intent);
-    }}>
-      {groups.map((key) => {
-        const choices = filtered.filter((choice) => groupKey(choice) === key);
-        const { family, providerLabel } = choices[0];
-        return <fieldset className={styles.modelGroup} key={key}>
+    <form id={formId} onSubmit={(event) => { event.preventDefault(); commit(); }}>
+      {recent.length ? <fieldset className={styles.group}><legend>Recent</legend><div className={styles.tiles}>{recent.map(tile)}</div></fieldset> : null}
+      {groups.map((members) => {
+        const { family, providerLabel } = members[0];
+        return <fieldset className={styles.group} key={groupKey(members[0])}>
           <legend>{family ? <>{family.label} family{' '}<span>{providerLabel}</span></> : providerLabel}</legend>
-          <div className={styles.modelTiles}>{choices.map((choice) => <label key={choice.id} className={styles.modelTile} data-selected={draft === choice.id} data-disabled={!selectableModel(view, choice)}>
-            <input type="radio" name={name} value={choice.id} checked={draft === choice.id} disabled={!selectableModel(view, choice)} onChange={() => {
-              if (gate.valid() && selectableModel(view, choice)) { setDraft(choice.id); setEffort(null); }
-            }} />
-            <span className={styles.modelTileBody}>
-              <span className={styles.modelTileTitle}>{choice.modelId && boundModels.includes(choice.modelId) ? <ModelMark model={choice.modelId} /> : null}<strong>{choice.label}</strong>{' '}
-                {choice.id === view.currentId ? <span className={styles.tag}>CURRENT</span> : null}{' '}{choice.id === view.defaultId ? <span className={styles.tag}>DEFAULT</span> : null}
-              </span>{' '}
-              <span className={styles.modelWindow}>{windowLabel(choice)}</span>{' '}
-              <span className={styles.modelTileCapabilities}>{choice.capabilities.length ? choice.capabilities.join(' · ') : 'Capabilities unknown'}{choice.reasoning.length ? ' · Reasoning' : ''}</span>
-              {choice.disabledReason || !choice.modelId ? <span className={styles.modelUnavailable}>{choice.disabledReason || 'No bound model profile. Selection unavailable.'}</span> : null}
-            </span>
-          </label>)}</div>
+          <div className={styles.tiles}>{members.map(tile)}</div>
         </fieldset>;
       })}
-      {view.reasoningEditable !== false && selected?.reasoning.length ? <FormField label="Reasoning level" hint="Supplied example capability, not private reasoning content.">{(props) => <select {...props} className={styles.select} value={reasoning ?? ''} disabled={!enabled} onChange={(event) => {
-        if (gate.valid() && enabled && selected.reasoning.includes(event.currentTarget.value)) setEffort(event.currentTarget.value);
-      }}>{selected.reasoning.map((level) => <option key={level}>{level}</option>)}</select>}</FormField> : null}
-      <div className={styles.modelActions}><Button onClick={chrome.onDismiss}>Cancel</Button><Button type="submit" tone="primary" disabled={!enabled}>Use {selected?.label ?? 'model'}</Button></div>
     </form>
   </DialogFrame>;
 }

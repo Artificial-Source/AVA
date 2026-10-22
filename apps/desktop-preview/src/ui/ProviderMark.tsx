@@ -1,9 +1,11 @@
 import { providerIdentity } from './providerIdentity';
 import styles from './ProviderMark.module.css';
 
-// Decorative only: the adjacent supplied label owns the accessible identity.
-export function ProviderMark({ id }: { id: string }) {
+// Decorative only: the adjacent label owns the accessible identity. Providers
+// without a local mark get a letter tile, never an empty outline that reads as a radio.
+export function ProviderMark({ id, label }: { id: string; label?: string }) {
   const identity = providerIdentity(id);
-  return <span aria-hidden="true" data-provider-mark={identity ? id : 'neutral'} className={identity ? styles.mark : styles.fallback}
-    style={identity ? { maskImage: `url("/provider-marks/${identity.file}")`, WebkitMaskImage: `url("/provider-marks/${identity.file}")` } : undefined} />;
+  if (identity) return <span aria-hidden="true" data-provider-mark={id} className={styles.mark}
+    style={{ maskImage: `url("/provider-marks/${identity.file}")`, WebkitMaskImage: `url("/provider-marks/${identity.file}")` }} />;
+  return <span aria-hidden="true" data-provider-mark="neutral" className={styles.monogram}>{String(label ?? id).match(/[\p{L}\p{N}]/u)?.[0].toLocaleUpperCase()}</span>;
 }

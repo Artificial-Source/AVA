@@ -1,11 +1,10 @@
+import { useMemo } from 'react';
 import { ChangeReviewView } from '../chat/widgets/ChangeReviewView';
+import { canonicalPath, chatChanges } from '../state/changeLedger';
 import type { Chat } from '../state/types';
 
-export function ChangeReview({ chat }: { chat: Chat }) {
-  return <ChangeReviewView
-    notice="Invented excerpts for this chat. No files were accessed or changed."
-    view={chat.changes.length === 0
-      ? { state: 'empty', message: 'No changes in this chat.' }
-      : { state: 'ready', changes: chat.changes.map((change) => ({ ...change, id: change.filename })) }}
-  />;
+// Keyed by chat: which files are collapsed belongs to one chat's inventory, not to a path name.
+export function ChangeReview({ chat, focusPath }: { chat: Chat; focusPath?: string | null }) {
+  const changes = useMemo(() => chatChanges(chat), [chat]);
+  return <ChangeReviewView key={chat.id} focusPath={focusPath ? canonicalPath(focusPath) : focusPath} view={changes.length ? { state: 'ready', changes } : { state: 'empty', message: 'No changes in this chat.' }} />;
 }

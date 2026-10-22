@@ -28,9 +28,9 @@ describe('image disclosure and passive R19 reading policy', () => {
     const editor = screen.getByRole('textbox') as HTMLTextAreaElement; const draft = editor.value; editor.focus(); editor.setSelectionRange(3, 9); const focus = vi.spyOn(editor, 'focus');
     const model = screen.getByRole('button', { name: 'Model for this chat' }).textContent;
     fireEvent.click(trigger); const preview = await screen.findByAltText(image.alt); load(preview);
-    expect(preview).toHaveAttribute('src', image.src); expect(trigger).toHaveTextContent('Failed'); expect(screen.getByText('No failure cause supplied.')).toBeVisible(); expect(screen.getByText('/tmp/example/pi-clipboard-12345678.png')).toBeVisible();
+    expect(preview).toHaveAttribute('src', image.src); expect(trigger).toHaveTextContent('Failed'); expect(screen.getByText('AVA didn’t report why this failed.')).toBeVisible(); expect(screen.getByText('/tmp/pi-clipboard-12345678.png')).toBeVisible();
     fireEvent.click(trigger); expect(preview).not.toBeInTheDocument(); fireEvent.click(trigger); expect(await screen.findByAltText(image.alt)).not.toBe(preview);
-    const display = screen.getByRole('combobox', { name: 'Chat display' });
+    const display = screen.getByRole('combobox', { name: 'Tool details' });
     fireEvent.change(display, { target: { value: 'expanded' } }); const expanded = await screen.findByAltText(image.alt);
     fireEvent.change(display, { target: { value: 'auto' } }); expect(screen.getByAltText(image.alt)).toBe(expanded);
     fireEvent.change(display, { target: { value: 'compact' } }); expect(view.container.querySelector('img')).toBeNull();
@@ -46,7 +46,7 @@ describe('image disclosure and passive R19 reading policy', () => {
     fireEvent.click(trigger); expect(view.container.querySelector('img')).toBeNull(); fireEvent.click(trigger); expect(await screen.findByAltText(image.alt)).not.toBe(preview);
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(view.container.querySelector('img')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Expand all tools' })); await screen.findByAltText(image.alt);
-    fireEvent.click(screen.getByRole('button', { name: /^Tool details/ })); expect(view.container.querySelector('img')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^1 tool\b/ })); expect(view.container.querySelector('img')).toBeNull();
     view.rerender(content(next, 'expanded')); await screen.findByAltText(image.alt);
     view.rerender(content(next, 'compact')); expect(view.container.querySelector('img')).toBeNull();
   });
@@ -55,7 +55,7 @@ describe('image disclosure and passive R19 reading policy', () => {
     const editor = screen.getByRole('textbox') as HTMLTextAreaElement; editor.focus(); editor.setSelectionRange(2, 6);
     if (event === 'load') load(preview); else fireEvent.error(preview);
     view.rerender(content({ ...record, state: 'completed' }, 'auto', 'committed'));
-    expect(row()).toHaveAttribute('aria-expanded', 'false'); expect(view.container.querySelector('img')).toBeNull(); expect(screen.queryByText(/Image preview unavailable/)).not.toBeInTheDocument();
+    expect(row()).toHaveAttribute('aria-expanded', 'false'); expect(view.container.querySelector('img')).toBeNull(); expect(screen.queryByText(/Couldn’t load the input image/)).not.toBeInTheDocument();
     expect(editor).toHaveFocus(); expect(editor.selectionStart).toBe(2); expect(editor.selectionEnd).toBe(6);
   });
   it.each(['pointer', 'wheel'] as const)('retains genuine %s inspection through terminal delivery via the unchanged wrapper', async (inspection) => {
@@ -64,6 +64,7 @@ describe('image disclosure and passive R19 reading policy', () => {
     if (inspection === 'pointer') { fireEvent.pointerDown(preview); fireEvent.pointerUp(window); } else fireEvent.wheel(preview, { deltaY: -100 });
     view.rerender(content({ ...record, state: 'completed' }, 'auto', 'committed'));
     expect(row()).toHaveAttribute('aria-expanded', 'true'); expect(screen.getByAltText(image.alt)).toBe(preview); expect(editor).toHaveFocus(); expect(editor.selectionStart).toBe(2); expect(editor.selectionEnd).toBe(6);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all tools' })); expect(screen.getByAltText(image.alt)).toBe(preview);
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all tools' })); expect(preview).not.toBeInTheDocument();
   });
 });

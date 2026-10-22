@@ -1,38 +1,34 @@
-.catalog { min-height: 100dvh; padding: 0 32px 48px; background: var(--canvas); color: var(--body); }
-.header { display: flex; justify-content: space-between; align-items: center; gap: 24px; max-width: 1120px; min-height: 90px; margin: 0 auto; border-bottom: 1px solid var(--separator); }
-.identity { display: flex; align-items: center; gap: 12px; color: var(--text); font-size: 11px; letter-spacing: 1.3px; }
+.catalog { min-height: 100dvh; padding: 0 var(--space-8) 48px; background: var(--canvas); color: var(--body); }
+.header { display: flex; justify-content: space-between; align-items: center; gap: var(--space-6); max-width: 1120px; min-height: 90px; margin: 0 auto; border-bottom: 1px solid var(--separator); }
+.identity { display: flex; align-items: center; gap: var(--space-3); color: var(--text); font-size: var(--type-control); font-weight: 500; }
 .identity svg { width: 24px; height: 24px; }
-.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.controls a { padding: 8px 0; font-size: 12px; text-underline-offset: 4px; }
-.intro { max-width: 780px; margin: 64px auto 32px; }
-.kicker { color: var(--quiet); font-size: 11px; letter-spacing: .7px; }
-.intro h1 { margin: 18px 0; color: var(--text); font-size: clamp(28px, 4vw, 40px); font-weight: 500; letter-spacing: -1.1px; line-height: 1.2; }
-.intro > p:last-child { max-width: 580px; font-size: 14px; line-height: 1.8; }
-.index { display: flex; flex-wrap: wrap; gap: 10px 20px; max-width: 780px; margin: 0 auto 28px; padding: 20px 0; border-top: 1px solid var(--separator); border-bottom: 1px solid var(--separator); }
-.index a { color: var(--muted); font-size: 12px; text-decoration: none; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.intro { max-width: 780px; margin: 64px auto var(--space-8); }
+.intro h1 { margin: 0 0 var(--space-3); color: var(--text); font-size: var(--type-heading); font-weight: 500; letter-spacing: -.03em; line-height: 1.25; text-wrap: balance; }
+.intro > p { max-width: 62ch; margin: 0; color: var(--muted); font-size: var(--type-ui); line-height: 1.7; }
+.index { display: flex; flex-wrap: wrap; gap: 10px var(--space-5); max-width: 780px; margin: 0 auto 28px; padding: var(--space-5) 0; border-top: 1px solid var(--separator); border-bottom: 1px solid var(--separator); }
+/* 24px link targets; the negative block margin keeps the index row height unchanged. */
+.index a { display: inline-flex; align-items: center; min-height: 24px; margin-block: -4px; color: var(--muted); font-size: var(--type-meta); text-decoration: none; }
 .index a:hover { color: var(--text); }
 .examples { max-width: 780px; margin: 0 auto; }
-.receipt { min-height: 44px; margin: 0 0 36px; color: var(--quiet); font-size: 11px; line-height: 1.7; }
-.section { min-width: 0; margin: 0 0 60px; scroll-margin-top: 24px; }
-.sectionHeading { display: flex; gap: 18px; margin-bottom: 20px; }
-.sectionHeading > span { padding-top: 4px; color: var(--quiet); font-family: var(--mono); font-size: 11px; }
-.sectionHeading h2 { margin: 0; color: var(--text); font-size: 19px; font-weight: 500; letter-spacing: -.3px; }
-.sectionHeading p { max-width: 610px; margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.caseSelect { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; color: var(--muted); font-size: 12px; }
-.caseSelect select { min-height: var(--control-height); min-width: 160px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--body); font-size: 12px; }
+.receipt { min-height: 44px; margin: 0 0 36px; color: var(--quiet); font-size: var(--type-caption); line-height: 1.7; }
+.section { min-width: 0; margin: 0 0 60px; scroll-margin-top: var(--space-6); }
+.sectionHeading { margin-bottom: var(--space-5); }
+.sectionHeading h2 { margin: 0; color: var(--text); font-size: var(--type-title); font-weight: 500; letter-spacing: -.02em; }
+.sectionHeading p { max-width: 610px; margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.7; }
+.caseSelect { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); margin: 0 0 var(--space-4); color: var(--muted); font-size: var(--type-meta); }
+.caseSelect select { min-height: var(--control-height); min-width: 160px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--edge-input); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--body); font-size: var(--type-meta); }
 .statuses { display: flex; flex-wrap: wrap; gap: 14px; margin: 26px 0 18px; }
-.textButton { padding: 6px 0; color: var(--muted); background: transparent; text-align: left; font-size: 12px; }
+.textButton { padding: 6px 0; color: var(--muted); background: transparent; text-align: left; font-size: var(--type-meta); }
 .textButton:hover { color: var(--text); }
-.note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
-.turn { min-width: 0; padding: 24px 0 0; font-size: 15px; line-height: 1.7; }
-.revise { margin-top: 12px; }
+.note { margin: 10px 0 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.8; }
+.turn { min-width: 0; padding: var(--space-6) 0 0; font-size: var(--type-prose); line-height: 1.7; }
+.revise { margin-top: var(--space-3); }
 .composer { min-width: 0; }
 .composer > footer { max-height: none; padding: 0; }
-.footer { max-width: 780px; margin: 0 auto; padding-top: 24px; border-top: 1px solid var(--separator); color: var(--quiet); font-size: 11px; line-height: 1.8; }
-.catalog a:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
+.index a:focus-visible { outline: 2px solid var(--text); outline-offset: 4px; }
 @media (max-width: 700px) {
-  .catalog { padding-right: 20px; padding-left: 20px; }
+  .catalog { padding-right: var(--space-5); padding-left: var(--space-5); }
   .header { flex-wrap: wrap; padding: 18px 0; }
-  .intro { margin-top: 40px; }
-  .identity { font-size: 10px; }
+  .intro { margin-top: var(--space-10); }
 }

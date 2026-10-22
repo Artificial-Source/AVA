@@ -1,0 +1,45 @@
+/* One diff format for the transcript and Changes. Status is never color: the +/− gutter and
+   weight carry it, and line tints stay neutral gray. */
+.file { min-width: 0; scroll-margin-block: var(--space-6); }
+.file[tabindex='-1']:focus { outline: 2px solid var(--edge-bright); outline-offset: var(--space-1); border-radius: var(--radius-chip); }
+.header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); min-width: 0; margin-bottom: var(--space-2); }
+.path { min-width: 0; margin: 0; color: var(--text); font: 500 var(--type-meta)/1.5 var(--mono); overflow-wrap: anywhere; }
+/* A collapsible file: the path is the disclosure, its caret turns like a tool row's. */
+.toggle { display: inline-flex; align-items: baseline; gap: var(--space-2); min-width: 0; min-height: 24px; margin-inline-start: calc(var(--space-1) * -1); padding: 2px var(--space-1); border-radius: var(--radius-chip); background: transparent; text-align: start; overflow-wrap: anywhere; }
+.toggle:hover { background: var(--hover); }
+.toggle > span { min-width: 0; }
+.caret { align-self: center; color: var(--muted); transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.toggle[aria-expanded='false'] .caret { transform: rotate(-90deg); }
+@media (prefers-reduced-motion: reduce) { .caret { transition: none; } }
+:global([data-motion='reduced']) .caret { transition: none; }
+.body { min-width: 0; }
+.facts { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); color: var(--muted); font-size: var(--type-caption); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.added { color: var(--text); }
+.action { display: inline-flex; margin-left: auto; }
+.description { margin: calc(var(--space-1) * -1) 0 var(--space-2); color: var(--muted); font-size: var(--type-caption); line-height: 1.6; overflow-wrap: anywhere; }
+.note { margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--type-caption); line-height: 1.6; }
+
+.diff { overflow: auto; overflow-anchor: none; min-width: 0; max-width: 100%; margin: 0; padding: var(--space-2) 0; border: 1px solid var(--edge); border-radius: var(--radius-chip); background: var(--code); color: var(--body); font: var(--type-meta)/1.6 var(--mono); tab-size: 2; }
+.diff[data-bounded='true'] { max-height: 300px; }
+.diff:focus-visible { outline-offset: -2px; }
+.lines { display: grid; min-width: 100%; font: inherit; }
+.line { display: grid; grid-template-columns: 3ch minmax(0, 1fr); min-height: 1.6em; padding-right: var(--space-3); white-space: pre-wrap; overflow-wrap: anywhere; }
+.marker { padding-left: var(--space-2); color: var(--quiet); }
+.full { grid-column: 1 / -1; padding-left: var(--space-2); }
+.text { min-width: 0; }
+.line[data-kind='add'] { background: var(--hover-strong); color: var(--text); }
+.line[data-kind='add'] .marker { color: var(--text); }
+.line[data-kind='del'] { background: var(--fill-subtle); color: var(--muted); }
+.line[data-kind='hunk'], .line[data-kind='meta'] { color: var(--quiet); }
+.line[data-kind='hunk']:not(:first-child) { margin-top: var(--space-2); }
+
+/* Word wrap (Changes): lines break only at spaces. A token wider than the column widens every row
+   to fit it, so the diff scrolls sideways and tints still reach the edge. */
+.words .lines { width: min-content; }
+.words .line { grid-template-columns: 3ch 1fr; overflow-wrap: normal; }
+.words .text { min-width: min-content; }
+
+/* Unwrapped diffs scroll sideways; rows stretch to the longest line so tints never stop short.
+   Declared after word wrap so turning the preference off always wins. */
+:global([data-diff-wrap='false']) .lines { width: max-content; }
+:global([data-diff-wrap='false']) .line { white-space: pre; overflow-wrap: normal; }

@@ -1,4 +1,5 @@
-.inspector { width: var(--inspector-width); height: 100%; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; border-left: 1px solid var(--edge); background: var(--surface-panel); scroll-padding: 20px; }
+/* Fills its track: the widen/narrow change animates with the track and never leaves a gap beside the panel. */
+.inspector { width: max(100%, var(--inspector-width)); height: 100%; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; border-left: 1px solid var(--edge); background: var(--surface-panel); scroll-padding: var(--space-5); }
 .inspector:focus-visible { outline-offset: -4px; }
 .module { min-width: 0; animation: moduleEntry var(--motion-panel-duration) var(--motion-ease-out) both; }
 
@@ -6,13 +7,17 @@
   from { opacity: 0; transform: translateX(4px); }
   to { opacity: 1; transform: translateX(0); }
 }
-.header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px 0; }
-.header > button { flex-shrink: 0; }
-.header h2 { margin: 0; color: var(--text); font-size: 13px; font-weight: 550; }
-.header h2 span { margin-left: 7px; color: var(--quiet); font-family: var(--mono); font-size: 10px; font-weight: 400; }
-.content { padding: 14px 16px 24px; }
+.header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); padding: var(--space-3) 18px 0; }
+.tools { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin-left: auto; }
+.tools > .widen[aria-pressed='true'] { background: var(--selected); color: var(--text); }
+.tools > .widen[aria-pressed='true']:hover:not(:disabled) { background: var(--hover-strong); }
+.header h2 { margin: 0; color: var(--text); font-size: var(--type-control); font-weight: 550; }
+.header h2 span { margin-left: var(--space-2); color: var(--quiet); font-family: var(--mono); font-size: var(--type-caption); font-weight: 400; font-variant-numeric: tabular-nums; }
+.summary { display: flex; align-items: center; color: var(--muted); font-size: var(--type-caption); }
+.content { padding: 14px var(--space-4) var(--space-6); }
 .content:focus-visible { outline-offset: -4px; }
 
+/* Small windows: the track becomes a sheet over the transcript, so the panel fills it. */
 @media (max-width: 1100px) {
-  .inspector { width: 100%; border-left: none; border-top: 1px solid var(--edge); }
+  .inspector { width: 100%; }
 }

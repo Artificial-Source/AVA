@@ -1,24 +1,39 @@
 import type { Dispatch } from 'react';
 import { ChatComposer } from '../chat/widgets/ChatComposer';
+import { applePlatform } from '../screens/shortcutBindings';
+import { shortcutHint, type ShortcutPreferences } from '../screens/shortcuts';
 import { contextReferences, modelOptions } from '../state/fixtures';
 import type { Chat, PreviewAction } from '../state/types';
 import { ModelMark } from './ModelMark';
 import { previewContextUsage } from './contextPreview';
 
 const modeOptions = [{ id: 'build', label: 'Build' }, { id: 'plan', label: 'Plan' }] as const;
+const modeDescriptions = {
+  build: 'AVA can edit files and run tools.',
+  plan: 'AVA proposes changes without editing files.',
+};
 const copy = {
-  context: 'Example context', contextDescription: 'Invented references only. Nothing is opened or uploaded.',
-  addContext: 'Add example context', attachedContext: 'Attached example context', contextTitle: 'Choose invented context references; no files are read',
-  referencePrefix: 'Invented', modelTitle: 'Fictional model catalog; no provider is connected',
-  stop: 'Stop mock work',
+  context: 'Add context', addContext: 'Add context', attachedContext: 'Attached context', contextTitle: 'Add context',
+  stop: 'Stop',
 };
 
-export function Composer({ chat, dispatch, contextOpen, onOpenContext, onOpenModel, enterBehavior = 'newline' }: { chat: Chat; dispatch: Dispatch<PreviewAction>; contextOpen: boolean; onOpenContext: () => void; onOpenModel?: () => void; enterBehavior?: 'send' | 'newline' }) {
+export function Composer({ chat, dispatch, contextOpen, onOpenContext, onOpenModel, enterBehavior = 'newline', shortcuts }: { chat: Chat; dispatch: Dispatch<PreviewAction>; contextOpen: boolean; onOpenContext: () => void; onOpenModel?: () => void; enterBehavior?: 'send' | 'newline'; shortcuts?: ShortcutPreferences }) {
+  const modelHint = shortcutHint(shortcuts, 'models');
+  const stopHint = shortcutHint(shortcuts, 'stop');
+  const apple = applePlatform();
+  const sendKeys = enterBehavior === 'send' ? apple ? '↩' : 'Enter' : apple ? '⌘↩' : 'Ctrl+Enter';
   return <ChatComposer
     key={chat.id}
     idPrefix=""
     view={{ title: chat.title, draft: chat.draft, expanded: chat.composerExpanded, runState: chat.status === 'working' ? 'running' : 'idle', contextOptions: contextReferences, selectedContextIds: chat.contextIds, modelOptions, modelId: chat.model, modeOptions, modeId: chat.mode, contextUsage: previewContextUsage(chat) }}
-    copy={{ ...copy, stop: chat.messages.some((message) => message.role === 'assistant' && message.lifecycle === 'streaming') ? 'Stop preview' : copy.stop, sendTitle: `Add a local message. No model call. ${enterBehavior === 'send' ? 'Enter or ' : ''}Ctrl/Cmd+Enter.` }}
+    copy={{
+      ...copy,
+      modelTitle: modelHint ? `Choose model · ${modelHint.label}` : 'Choose model',
+      sendTitle: `Send · ${sendKeys}`,
+      stopTitle: stopHint ? `Stop · ${stopHint.label}` : 'Stop',
+    }}
+    modeDescriptions={modeDescriptions}
+    keyShortcuts={{ model: modelHint?.aria, stop: stopHint?.aria }}
     enterBehavior={enterBehavior}
     modelMark={<ModelMark model={chat.model} />}
     contextTarget={{ id: 'context-inspector', open: contextOpen }}

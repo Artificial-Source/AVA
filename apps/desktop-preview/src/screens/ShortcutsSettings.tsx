@@ -1,67 +1,135 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useId, useLayoutEffect, useRef, useState } from 'react';
+import { WarningCircleIcon } from '@phosphor-icons/react/dist/csr/WarningCircle';
 import { canFocus } from '../ui/DialogFrame';
 import { Button } from '../ui/Button';
+import feedback from '../ui/feedback.module.css';
 import type { BehaviorSettingsProps } from './GeneralSettings';
-import { PreferenceRow, SearchField } from './ScreenPrimitives';
-import { bindingConflict, bindingLabel, bindingProblem, defaultShortcuts, effectiveBinding, recordedBinding, shortcutActions, type ShortcutAction } from './shortcuts';
+import { PreferenceRow } from './ScreenPrimitives';
+import { anchor } from './settingsIndex';
+import { bindingLabel, bindingProblem, defaultShortcuts, effectiveBinding, recordedBinding, shortcutActions, shortcutGroups, type ShortcutAction, type ShortcutPreferences } from './shortcuts';
+import { applePlatform } from './shortcutBindings';
 import { useViewGuard } from './useViewGuard';
 import styles from './BehaviorSettings.module.css';
+import controls from './screens.module.css';
+
+// `binding` undefined means "back to the default"; the fix also unassigns `from`.
+type Problem = Readonly<{ id: ShortcutAction; message: string; fix?: Readonly<{ from: ShortcutAction; fromLabel: string; binding: string | undefined }> }>;
+type Overrides = Partial<Record<ShortcutAction, string | null>>;
+// An override equal to its default is not a customization.
+function normalized(overrides: Overrides): ShortcutPreferences['overrides'] {
+  for (const action of shortcutActions) if (Object.hasOwn(overrides, action.id) && overrides[action.id] === action.binding) delete overrides[action.id];
+  return overrides;
+}
+// Built-in keys: always on, whatever App shortcuts says, and never remapped. Each row mirrors a
+// handler: F6 in the app shell, F2 on sidebar rows and the chat title, Escape in dialogs, menus,
+// panels, Settings and subagent views, and Ctrl/Cmd+Enter in the message box.
+function navigationKeys(): readonly Readonly<{ id: string; label: string; detail: string; keys: readonly string[] }>[] {
+  const apple = applePlatform();
+  return [
+    { id: 'regions', label: 'Move between areas', detail: 'Steps through the sidebar, conversation, message box and open panel. Add Shift to go back.', keys: ['F6', apple ? '⇧F6' : 'Shift+F6'] },
+    { id: 'rename', label: 'Rename chat', detail: 'When a chat in the sidebar or the chat title has focus.', keys: ['F2'] },
+    { id: 'escape', label: 'Close or go back', detail: 'Closes a dialog, menu or panel, or leaves Settings or a subagent. In a search, clears it first.', keys: ['Esc'] },
+    { id: 'send', label: 'Send message', detail: 'From the message box, even when Enter adds a new line.', keys: [apple ? '⌘Return' : 'Ctrl+Enter'] },
+  ];
+}
 
 export function ShortcutsSettings({ preferences, active, allowed, update }: BehaviorSettingsProps) {
   const value = preferences.shortcuts ?? defaultShortcuts;
-  const [query, setQuery] = useState('');
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
-  const [error, setError] = useState('');
+  const [problem, setProblem] = useState<Problem | null>(null);
   const composing = useRef(false);
-  const recorder = useRef<HTMLDivElement>(null);
-  const opener = useRef<HTMLButtonElement>(null);
-  const gate = useViewGuard(JSON.stringify([value, query, recording, active]));
-  useLayoutEffect(() => { if (recording && active && canFocus(recorder.current)) recorder.current.focus(); }, [recording, active]);
-  const matches = shortcutActions.filter((action) => `${action.label} ${action.detail} ${action.group} ${bindingLabel(effectiveBinding(value, action.id))}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const keycaps = useRef(new Map<ShortcutAction, HTMLButtonElement>());
+  const refocus = useRef<ShortcutAction | null>(null);
+  const id = useId();
+  const gate = useViewGuard(JSON.stringify([value, recording, active]));
+  // Unassign/Reset can remove the focused button; keep focus on the row's keycap instead.
+  useLayoutEffect(() => {
+    const target = refocus.current ? keycaps.current.get(refocus.current) ?? null : null;
+    refocus.current = null;
+    if (active && canFocus(target)) target.focus();
+  });
   function valid() { return allowed() && gate.valid(); }
-  function cancel() { if (valid()) { setRecording(null); setError(''); if (canFocus(opener.current)) opener.current.focus(); } }
-  function bind(id: ShortcutAction, binding: string | null | undefined) {
-    if (!valid() || !matches.some((action) => action.id === id)) return;
-    if (binding) {
-      const problem = bindingProblem(binding); const conflict = bindingConflict(value, id, binding);
-      if (problem || conflict) { setError(problem ?? `Already assigned to ${conflict}. Unassign that action first.`); return; }
+  function apply(next: ShortcutPreferences, target: ShortcutAction) {
+    refocus.current = target; setRecording(null); setProblem(null); update({ shortcuts: next });
+  }
+  // A recorded string, null to unassign, or undefined to restore the default.
+  function assign(target: ShortcutAction, binding: string | null | undefined) {
+    if (!valid()) return;
+    const reserved = binding ? bindingProblem(binding) : null;
+    if (reserved) { setProblem({ id: target, message: reserved }); return; }
+    const overrides: Overrides = { ...value.overrides };
+    if (binding === undefined) delete overrides[target]; else overrides[target] = binding;
+    const next = { ...value, overrides: normalized(overrides) };
+    const effective = effectiveBinding(next, target);
+    const taken = effective ? shortcutActions.find((action) => action.id !== target && effectiveBinding(value, action.id) === effective) : undefined;
+    if (effective && taken) {
+      refocus.current = target; setRecording(null);
+      setProblem({ id: target, message: binding === undefined ? `The default, ${bindingLabel(effective)}, is used by ${taken.label}.` : `${bindingLabel(effective)} is already used by ${taken.label}.`, fix: { from: taken.id, fromLabel: taken.label, binding: binding ?? undefined } });
+      return;
     }
-    const overrides = { ...value.overrides };
-    if (binding === undefined) delete overrides[id]; else overrides[id] = binding;
-    // Reset must not silently create a conflict with another customized action.
-    const next = { ...value, overrides }; const effective = effectiveBinding(next, id);
-    const conflict = effective && bindingConflict(next, id, effective);
-    if (conflict) { setError(`Default is assigned to ${conflict}. Unassign it first, or reset all shortcuts.`); return; }
-    cancel(); update({ shortcuts: next });
+    apply(next, target);
+  }
+  function move(target: ShortcutAction, fix: NonNullable<Problem['fix']>) {
+    if (!valid()) return;
+    const overrides: Overrides = { ...value.overrides, [fix.from]: null };
+    if (fix.binding === undefined) delete overrides[target]; else overrides[target] = fix.binding;
+    apply({ ...value, overrides: normalized(overrides) }, target);
   }
   return <div onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}>
-    <p className={styles.intro}>Keys for real local app actions. Ctrl on Windows/Linux, Cmd on macOS. Native editing and General’s Enter behavior are always separate.</p>
-    <PreferenceRow title="App shortcuts" description="Active inside the chat workspace, outside editors, menus and dialogs. Never intercept browser chrome."><input type="checkbox" aria-label="Enable app shortcuts" disabled={!active} checked={value.enabled} onChange={(event) => { if (valid()) { update({ shortcuts: { ...value, enabled: event.currentTarget.checked } }); setRecording(null); setError(''); } }} /></PreferenceRow>
-    <div className={styles.toolbar}><SearchField label="Search shortcuts" value={query} onChange={(text) => { if (valid()) { setQuery(text); setRecording(null); setError(''); } }} /></div>
-    {['Application', 'Conversation', 'Inspector'].map((group) => {
-      const actions = matches.filter((action) => action.group === group);
-      return actions.length ? <fieldset className={styles.group} disabled={!active} key={group}><legend>{group}</legend><ul className={styles.list}>{actions.map((action) => {
-        const binding = effectiveBinding(value, action.id); const custom = Object.hasOwn(value.overrides, action.id);
-        return <li className={styles.shortcut} key={action.id}>
-          <div><strong>{action.label}</strong><small>{action.detail}</small><small>{custom ? 'Custom' : 'Default'} · Default: {bindingLabel(action.binding)}</small></div>
-          <div className={styles.binding}><Button aria-label={`Record shortcut: ${action.label}`} aria-expanded={recording === action.id} onClick={(event) => { if (valid()) { opener.current = event.currentTarget; if (recording === action.id && canFocus(recorder.current)) recorder.current.focus(); setRecording(action.id); setError(''); } }}><kbd>{bindingLabel(binding)}</kbd></Button><Button aria-label={`Unassign ${action.label}`} disabled={!binding} onClick={() => bind(action.id, null)}>Unassign</Button><Button aria-label={`Reset shortcut: ${action.label}`} disabled={!custom} onClick={() => bind(action.id, undefined)}>Reset</Button></div>
-          {recording === action.id ? <div className={styles.recording} role="group" aria-label={`Recording ${action.label}`} tabIndex={0} ref={recorder} onKeyDown={(event) => {
-            if (event.key === 'Tab') return;
-            event.stopPropagation();
-            if (!valid() || composing.current || event.nativeEvent.isComposing || event.keyCode === 229 || event.repeat) return;
-            if (event.key === 'Escape') { event.preventDefault(); cancel(); return; }
-            if (event.target !== event.currentTarget) return;
-            if (['Control', 'Meta', 'Shift', 'Alt'].includes(event.key)) return;
-            event.preventDefault();
-            const candidate = recordedBinding(event.nativeEvent);
-            if (!candidate) setError('Use Ctrl/Cmd with another key. AltGraph, typing and modifier-only keys are not app shortcuts.'); else bind(action.id, candidate);
-          }}><p>Press a new shortcut. Esc cancels; Tab moves to Cancel. Try Ctrl/Cmd + Shift + period.</p>{error ? <p className={styles.error} role="alert">{error}</p> : null}<Button onClick={cancel}>Cancel recording</Button></div> : null}
-        </li>;
-      })}</ul></fieldset> : null;
+    <div {...anchor('shortcuts.enabled')}><PreferenceRow title="App shortcuts" description="Ctrl on Windows and Linux, Cmd on macOS. Typing and text editing keys keep working as usual."><input type="checkbox" aria-label="Enable app shortcuts" disabled={!active} checked={value.enabled} onChange={(event) => { if (valid()) { setRecording(null); setProblem(null); update({ shortcuts: { ...value, enabled: event.currentTarget.checked } }); } }} /></PreferenceRow></div>
+    <p id={`${id}-hint`} className={styles.recordHint}>Select a shortcut, then press the new keys. Esc cancels.</p>
+    {shortcutGroups.map((group) => {
+      const actions = shortcutActions.filter((action) => action.group === group);
+      return actions.length ? <fieldset className={styles.group} disabled={!active} key={group}><legend>{group}</legend>
+        <table className={styles.shortcutTable} aria-label={`${group} shortcuts`}>
+          <thead className="srOnly"><tr><th scope="col">Action</th><th scope="col">Shortcut</th><td /></tr></thead>
+          <tbody>{actions.map((action) => {
+            const binding = effectiveBinding(value, action.id); const custom = Object.hasOwn(value.overrides, action.id);
+            const listening = recording === action.id; const issue = problem?.id === action.id ? problem : null;
+            const keyText = listening ? 'Press keys… Esc cancels' : bindingLabel(binding);
+            return <Fragment key={action.id}>
+              <tr className={styles.shortcutRow} data-recording={listening || undefined} {...anchor(`shortcuts.${action.id}`)}>
+                <th scope="row"><span>{action.label}</span><small>{action.detail}</small>{custom ? <small>Default: {bindingLabel(action.binding)}</small> : null}</th>
+                <td><button type="button" className={styles.keycap} data-state={listening ? 'recording' : binding ? 'bound' : 'unassigned'}
+                  ref={(node) => { if (node) keycaps.current.set(action.id, node); else keycaps.current.delete(action.id); }}
+                  aria-label={`${action.label} shortcut: ${keyText}`} aria-describedby={issue ? `${id}-${action.id}-problem ${id}-hint` : `${id}-hint`}
+                  onClick={() => { if (valid()) { setRecording(listening ? null : action.id); setProblem(null); } }}
+                  onBlur={() => { if (listening) setRecording(null); }}
+                  onKeyUp={(event) => { if (listening && event.key === ' ') event.preventDefault(); }}
+                  onKeyDown={(event) => {
+                    if (!listening || event.key === 'Tab') return;
+                    event.preventDefault(); event.stopPropagation();
+                    if (!valid() || composing.current || event.nativeEvent.isComposing || event.keyCode === 229 || event.repeat) return;
+                    if (event.key === 'Escape') { setRecording(null); setProblem(null); return; }
+                    if (['Control', 'Meta', 'Shift', 'Alt', 'AltGraph'].includes(event.key)) return;
+                    const candidate = recordedBinding(event.nativeEvent);
+                    if (!candidate) setProblem({ id: action.id, message: 'Hold Ctrl or Cmd with another key. Keys you type can’t be shortcuts on their own.' });
+                    else assign(action.id, candidate);
+                  }}>{binding && !listening ? <kbd>{keyText}</kbd> : keyText}</button></td>
+                <td><div className={styles.rowActions}>
+                  {binding ? <Button className={styles.rowAction} aria-label={`Unassign ${action.label}`} onClick={() => assign(action.id, null)}>Unassign</Button> : null}
+                  {custom ? <Button className={styles.rowAction} aria-label={`Reset ${action.label} shortcut`} onClick={() => assign(action.id, undefined)}>Reset</Button> : null}
+                </div></td>
+              </tr>
+              {issue ? <tr className={styles.problemRow}><td colSpan={3}><div className={styles.problem}>
+                <p id={`${id}-${action.id}-problem`} className={feedback.fieldError} role="alert"><WarningCircleIcon size={14} aria-hidden="true" /><span>{issue.message}</span></p>
+                {issue.fix ? <Button onClick={() => move(action.id, issue.fix!)}>Move from {issue.fix.fromLabel}</Button> : null}
+              </div></td></tr> : null}
+            </Fragment>;
+          })}</tbody>
+        </table>
+      </fieldset> : null;
     })}
-    {!matches.length ? <p className={styles.hint} role="status">No matching shortcuts. Try “inspector” or “chat”.</p> : null}
-    {error && !recording ? <p className={styles.error} role="alert">{error}</p> : null}
-    <p className={styles.hint}>Tab, Space, Enter and Escape keep their native jobs. Stop and inspector visibility are unassigned by default. Read-only child views never target a hidden parent composer or run.</p>
-    <div className={styles.reset}><p>Restore every default binding and enable app shortcuts.</p><Button disabled={!active || value.enabled && !Object.keys(value.overrides).length} onClick={() => { if (valid()) { update({ shortcuts: defaultShortcuts }); setRecording(null); setError(''); } }}>Reset all shortcuts</Button></div>
+    <fieldset className={styles.group}><legend>Navigation</legend>
+      <p id={`${id}-fixed`} className={controls.hint}>Always on. These keys can’t be changed.</p>
+      <table className={styles.shortcutTable} aria-label="Navigation keys" aria-describedby={`${id}-fixed`}>
+        <thead className="srOnly"><tr><th scope="col">Action</th><th scope="col">Keys</th></tr></thead>
+        <tbody>{navigationKeys().map((entry) => <tr key={entry.id} className={styles.shortcutRow}>
+          <th scope="row"><span>{entry.label}</span><small>{entry.detail}</small></th>
+          <td>{entry.keys.map((key, index) => <Fragment key={key}>{index ? ' ' : null}<kbd className={styles.fixedKey}>{key}</kbd></Fragment>)}</td>
+        </tr>)}</tbody>
+      </table>
+    </fieldset>
+    <div className={styles.reset}><p>Restore every default shortcut and turn app shortcuts on.</p><Button disabled={!active || value.enabled && !Object.keys(value.overrides).length} onClick={() => { if (valid()) { setRecording(null); setProblem(null); update({ shortcuts: defaultShortcuts }); } }}>Reset all shortcuts</Button></div>
   </div>;
 }

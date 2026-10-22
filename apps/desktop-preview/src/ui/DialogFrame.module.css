@@ -1,10 +1,32 @@
-.dialog { width: min(660px, calc(100vw - 32px)); max-width: 100%; max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow: hidden; color: var(--text); background: var(--surface-panel); border: 1px solid var(--edge-bright); border-radius: 10px; box-shadow: 0 20px 70px #0006; }
+.dialog { width: min(660px, calc(100vw - 32px)); max-width: 100%; max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow: hidden; color: var(--text); background: var(--surface-panel); border: 1px solid var(--edge-bright); border-radius: var(--radius-dialog, 10px); box-shadow: var(--shadow-overlay, 0 20px 70px #0006); }
 .dialog[open] { display: flex; flex-direction: column; animation: arrive var(--motion-panel-duration) var(--motion-ease-out); }
 .dialog[data-wide='true'] { width: min(960px, calc(100vw - 32px)); }
-.dialog::backdrop { background: #0009; }
-.header { display: flex; flex-shrink: 0; justify-content: flex-end; padding: 8px 10px 0; }
-.body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 24px 24px; }
-.toolbar { padding-bottom: 16px; margin-bottom: 20px; border-bottom: 1px solid var(--edge); }
+/* Top anchor (the default): the top edge is pinned and height is bounded, so a body
+   that changes below never moves the header or the first field. Only the bottom
+   edge moves. Short windows give the offset back to the content. */
+.dialog[data-anchor='top'] { --dialog-top: clamp(16px, 30vh - 160px, 12vh); margin-block: var(--dialog-top) auto; max-height: min(720px, calc(100dvh - var(--dialog-top) - 16px)); }
+/* Fallback covers engines where ::backdrop does not inherit custom properties. */
+.dialog::backdrop { background: var(--scrim, #0009); }
+/* The X's visible stroke sits ~10px inside the 30px Close box, so a 14px end
+   inset lines it up with the 24px body edge; the heading's 3px offset centers
+   the button on the title's first line. */
+.header { display: flex; flex-shrink: 0; align-items: flex-start; gap: var(--space-4, 16px); padding: var(--space-5, 20px) 14px var(--space-4, 16px) var(--space-6, 24px); }
+.heading { flex: 1; min-width: 0; padding-block-start: 3px; }
+.title { margin: 0; color: var(--text); font-size: var(--type-title, 1.2143rem); font-weight: 500; line-height: 24px; letter-spacing: -.02em; overflow-wrap: anywhere; text-wrap: balance; }
+.subtitle { margin: var(--space-1, 4px) 0 0; color: var(--muted); font-size: var(--type-control, .9286rem); line-height: 20px; overflow-wrap: anywhere; }
+/* Body and footer share the height left under the header: the body takes what it
+   needs and scrolls past that; the footer keeps its own height at the bottom. */
+.content { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.body { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 var(--space-6, 24px) var(--space-6, 24px); }
+.footer { flex: none; padding: var(--space-4, 16px) var(--space-6, 24px) var(--space-5, 20px); border-top: 1px solid var(--edge); }
+.toolbar { padding-bottom: var(--space-4, 16px); margin-bottom: var(--space-5, 20px); border-bottom: 1px solid var(--edge); }
 @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-@media (max-width: 520px) { .body { padding: 0 16px 16px; } .dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); } }
+@media (max-width: 520px) {
+  .dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .dialog[data-anchor='top'] { --dialog-top: 8px; max-height: calc(100dvh - 16px); }
+  .header { padding: var(--space-4, 16px) 6px var(--space-3, 12px) var(--space-4, 16px); }
+  .body { padding: 0 var(--space-4, 16px) var(--space-4, 16px); }
+  .footer { padding: var(--space-3, 12px) var(--space-4, 16px) var(--space-4, 16px); }
+}
 @media (prefers-reduced-motion: reduce) { .dialog[open] { animation: none; } }
+:global([data-motion='reduced']) .dialog[open] { animation: none; }

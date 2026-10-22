@@ -1,0 +1,57 @@
+/* Chat action and request dialogs. Body copy sits on the dialog panel; every
+   state carries words (and an icon where it is a status), never color alone. */
+.lead { max-width: 60ch; margin: 0 0 var(--space-4); color: var(--muted); font-size: var(--type-control); line-height: 1.6; }
+
+/* Archive: what happens, said once, as a short scannable list. */
+.consequences { display: grid; gap: var(--space-3); margin: var(--space-1) 0 0; padding: 0; list-style: none; }
+.consequences li { display: flex; align-items: flex-start; gap: var(--space-3); color: var(--body); font-size: var(--type-control); line-height: 20px; }
+.consequences svg { flex-shrink: 0; margin-block-start: 2px; color: var(--muted); }
+.consequences strong { color: var(--text); font-weight: 500; }
+/* Find a chat's key, inline in the sentence: a quiet chip, never a second button. */
+.key { padding: 0 6px; border: 1px solid var(--edge); border-radius: var(--radius-chip); background: var(--fill-subtle); color: var(--muted); font: inherit; font-size: var(--type-caption); line-height: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Branch points: native radios, one Tab stop, the whole row is the target. */
+.points { display: grid; gap: var(--space-1); min-width: 0; margin: 0; padding: 0; border: 0; }
+.points legend { margin-bottom: var(--space-2); padding: 0; color: var(--muted); font-size: var(--type-meta); font-weight: 500; }
+.point { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3); border: 1px solid transparent; border-radius: var(--radius-control); cursor: pointer; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), border-color var(--motion-feedback-duration) var(--motion-ease-out); }
+.point:hover:not(:has(input:disabled)) { background: var(--hover-strong); }
+.point:has(input:checked) { border-color: var(--edge-bright); background: var(--selected); }
+.point:has(input:focus-visible) { outline: 2px solid var(--text); outline-offset: 2px; }
+.point:has(input:disabled) { cursor: not-allowed; }
+.point input { flex-shrink: 0; margin: 3px 0 0; accent-color: var(--text); }
+.point input:focus-visible { outline: none; }
+.pointBody { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.pointMeta { color: var(--quiet); font-size: var(--type-caption); line-height: 16px; font-variant-numeric: tabular-nums; }
+.pointText { color: var(--text); font-size: var(--type-ui); font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.pointKeeps { color: var(--muted); font-size: var(--type-meta); line-height: 1.5; }
+/* The picked message in full, where its one-line label was: bounded, scrolling on its own so a long
+   message never pushes the other rows away, line breaks kept. Text inside it reads, not clicks. */
+.pointFull { display: block; max-block-size: min(240px, 34dvh); margin-block: 2px; padding: var(--space-2) var(--space-3); overflow: auto; overscroll-behavior: contain; border: 1px solid var(--edge); border-radius: var(--radius-control); background: var(--canvas); color: var(--body); font-size: var(--type-ui); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; cursor: auto; }
+.pointFull:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.point:has(input:disabled) .pointText { color: var(--muted); }
+
+/* Project choices: a quiet list, each row one button. The focus ring sits inside the row,
+   so the dialog body's scroll edge never clips it on the first or last row. */
+.workspaces { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.workspaceChoice { display: flex; align-items: center; gap: var(--space-3); width: 100%; min-height: 52px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: transparent; color: var(--body); text-align: left; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out); }
+.workspaceChoice:hover:not(:disabled) { background: var(--hover-strong); }
+.workspaceChoice:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+.workspaceChoice > svg { flex-shrink: 0; color: var(--muted); }
+.workspaceText { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.workspaceText strong { color: var(--text); font-size: var(--type-control); font-weight: 500; overflow-wrap: anywhere; }
+.workspaceText small { color: var(--muted); font-size: var(--type-meta); line-height: 1.5; overflow-wrap: anywhere; }
+.current { flex-shrink: 0; padding: 1px 6px; border: 1px solid var(--edge-bright); border-radius: var(--radius-chip); color: var(--muted); font-size: var(--type-caption); line-height: 16px; }
+
+/* One project in a state: identity on the left, status on the right. */
+.workspaceState { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--edge); border-radius: var(--radius-surface); background: var(--fill-subtle); }
+.workspaceState > svg { flex-shrink: 0; color: var(--muted); }
+.workspaceState .workspaceText { flex: 1 1 160px; }
+.cause { max-width: 60ch; margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--type-control); line-height: 1.6; }
+
+/* Message text is prose, not code: proportional face, preserved line breaks. */
+.messageState { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-4); color: var(--muted); font-size: var(--type-control); line-height: 20px; }
+.messageText { margin: 0; padding: var(--space-4); border: 1px solid var(--edge); border-radius: var(--radius-control); background: var(--canvas); color: var(--body); font-size: var(--type-prose); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.receipt { margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+
+@media (prefers-reduced-motion: reduce) { .point, .workspaceChoice { transition: none; } }

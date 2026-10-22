@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { ChangeReviewState, ComposerView, MessageTurnView, ToolView } from '../contracts';
+import type { ChangeEntryView, ChangeReviewState, ComposerView, MessageTurnView, ToolView } from '../contracts';
 import { MessageTurn } from './MessageTurn';
 import { ToolActivityGroup } from './ToolActivityGroup';
 import { ChangeReviewView } from './ChangeReviewView';
@@ -34,10 +34,10 @@ describe('controlled turn/tool/change/run presentation', () => {
     const records: readonly ToolView[] = [{ id: 'image', action: 'Inspect image', detail: 'No cause supplied.', state: 'failed', resource: { kind: 'image', path }, output: { text: '<script>raw /tmp/example</script>', truncated: false } }];
     function Host() { const [open, setOpen] = useState(false); return <ToolActivityGroup records={records} open={open} onOpenChange={setOpen} />; }
     render(<Host />);
-    const outcomes = screen.getByRole('list', { name: 'Supplied tool activity' });
+    const outcomes = within(screen.getByRole('region', { name: 'Tool activity' })).getByRole('list');
     expect(outcomes).toHaveTextContent('Inspect image Pasted image Failed');
     expect(outcomes).not.toHaveTextContent(path); expect(screen.queryByText(path)).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /^Tool details · 1/ }));
+    await user.click(screen.getByRole('button', { name: /^1 tool\b/ }));
     expect(await screen.findByText(path)).toBeVisible();
     expect(screen.getByText('<script>raw /tmp/example</script>')).toBeVisible();
     expect(screen.getByRole('region', { name: 'Tool activity' }).querySelector('script')).toBeNull();
@@ -52,7 +52,8 @@ describe('controlled turn/tool/change/run presentation', () => {
       act(() => vi.advanceTimersByTime(60_000));
       expect(container.textContent).toBe(original);
       expect(vi.getTimerCount()).toBe(0);
-      if (state !== 'committed') expect(screen.getByRole('article')).toHaveTextContent('Partial message');
+      if (state !== 'committed') expect(screen.getByRole('article')).toHaveTextContent({ streaming: 'Responding', failed: 'Failed · reply incomplete', canceled: 'Stopped · reply incomplete' }[state]);
+      expect(screen.getByRole('article')).not.toHaveTextContent(/Partial message|canceled/);
     } finally { vi.useRealTimers(); }
   });
 
@@ -72,7 +73,7 @@ describe('controlled turn/tool/change/run presentation', () => {
     const records: readonly ToolView[] = ['queued', 'running', 'completed', 'failed', 'canceled'].map((state) => ({ id: state, state: state as ToolView['state'], action: `Example ${state}`, detail: 'Detail', output: state === 'failed' ? { text: '<script>tail</script>', truncated: true } : undefined }));
     const onOpenChange = vi.fn();
     const { rerender } = render(<ToolActivityGroup records={records} open={false} onOpenChange={onOpenChange} />);
-    const outcomes = screen.getByRole('list', { name: 'Supplied tool activity' });
+    const outcomes = within(screen.getByRole('region', { name: 'Tool activity' })).getByRole('list');
     for (const label of ['Queued', 'Working', 'Completed', 'Failed', 'Stopped']) expect(within(outcomes).getByText(label)).toBeVisible();
     records.forEach((record, index) => expect(outcomes.children[index]).toHaveAttribute('data-tool-state', record.state));
     const trigger = screen.getByRole('button'); trigger.focus(); await user.keyboard('{Enter}');
@@ -84,33 +85,64 @@ describe('controlled turn/tool/change/run presentation', () => {
     const items = within(details).getAllByRole('listitem');
     expect(items).toHaveLength(5);
     records.forEach((record, index) => expect(items[index]).toHaveTextContent(record.action));
-    expect(screen.getByText('Output truncated by the supplied view.')).toBeInTheDocument();
+    expect(screen.getByText('Output was cut off before the end.')).toBeInTheDocument();
     expect(screen.getByText('<script>tail</script>')).toBeInTheDocument();
     expect(details.querySelector('script')).toBeNull();
     rerender(<ToolActivityGroup records={records} open={false} onOpenChange={onOpenChange} />);
     expect(screen.queryByText('<script>tail</script>')).not.toBeInTheDocument();
   });
 
-  it.each(['loading', 'empty', 'error', 'ready', 'stale'] as const)('presents %s changes without mutation controls', (state) => {
-    const change = { id: 'file', filename: '<example>.ts', description: 'Supplied excerpt', before: '<script>old</script>', after: '<img>new</img>' };
-    const view: ChangeReviewState = state === 'ready' ? { state, changes: [change] } : state === 'stale' ? { state, changes: [change], message: 'Last supplied content is stale.' } : state === 'loading' ? { state } : { state, message: 'No current excerpts.' };
-    const { container } = render(<ChangeReviewView view={view} notice="Read-only example." />);
+  it.each(['loading', 'empty', 'error', 'ready', 'stale'] as const)('presents %s changes in the shared diff format with no control but the file disclosure', (state) => {
+    const change: ChangeEntryView = { id: 'file', path: '<example>.ts', status: 'modified', added: 1, removed: 1, description: 'Narrower reading width', diff: { state: 'text', truncated: false, text: '@@ -1 +1 @@\n-<script>old</script>\n+<img>new</img>' } };
+    const view: ChangeReviewState = state === 'ready' ? { state, changes: [change] } : state === 'stale' ? { state, changes: [change], message: 'These changes may be out of date.' } : state === 'loading' ? { state } : { state, message: 'Couldn’t load changes.' };
+    const { container } = render(<ChangeReviewView view={view} />);
     if (state === 'ready' || state === 'stale') {
       expect(screen.getByRole('heading', { name: '<example>.ts' })).toBeInTheDocument();
-      expect(screen.getByText('<script>old</script>')).toBeInTheDocument();
+      expect(screen.getByLabelText('Diff: <example>.ts')).toHaveTextContent('-<script>old</script>+<img>new</img>');
+      expect(screen.getByLabelText('1 additions')).toHaveTextContent('+1'); expect(screen.getByText('Narrower reading width')).toBeVisible();
+      expect(screen.getByText('1 file changed, 1 line added, 1 removed')).toBeInTheDocument();
+      expect(screen.queryByRole('navigation', { name: 'Changed files' })).not.toBeInTheDocument(); // One file needs no index.
     }
     if (state === 'loading') expect(screen.getByRole('status')).toHaveTextContent('Loading');
-    if (state === 'error') expect(screen.getByRole('alert')).toHaveTextContent('No current excerpts');
+    if (state === 'error') expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t load changes');
     expect(container.querySelector('script, img')).toBeNull();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('button').map((button) => button.getAttribute('aria-expanded'))).toEqual(state === 'ready' || state === 'stale' ? ['true'] : []);
   });
 
-  it('can disclose file excerpts through a supplied callback without owning expanded state', () => {
-    const onExpandedChange = vi.fn();
-    render(<ChangeReviewView view={{ state: 'ready', changes: [{ id: 'file', filename: 'sample.ts', description: 'Sample', before: 'a', after: 'b' }] }} notice="Example" expandedIds={[]} onExpandedChange={onExpandedChange} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Excerpts for sample.ts' }));
-    expect(onExpandedChange).toHaveBeenCalledWith('file', true);
-    expect(screen.queryByRole('heading', { name: 'Before' })).not.toBeInTheDocument();
+  it('focuses the requested file once per request without stealing focus on later updates', () => {
+    const entry = (path: string): ChangeEntryView => ({ id: path, path, status: 'modified', diff: { state: 'text', truncated: false, text: `+${path}` } });
+    const view: ChangeReviewState = { state: 'ready', changes: [entry('a.ts'), entry('src/b.ts')] };
+    const { rerender } = render(<><ChangeReviewView view={view} focusPath="src/b.ts" /><button type="button">Elsewhere</button></>);
+    expect(screen.getByRole('region', { name: 'File change: src/b.ts' })).toHaveFocus();
+    screen.getByRole('button', { name: 'Elsewhere' }).focus();
+    rerender(<><ChangeReviewView view={{ ...view, changes: [...view.changes] }} focusPath="src/b.ts" /><button type="button">Elsewhere</button></>);
+    expect(screen.getByRole('button', { name: 'Elsewhere' })).toHaveFocus();
+    rerender(<><ChangeReviewView view={view} focusPath="a.ts" /><button type="button">Elsewhere</button></>);
+    expect(screen.getByRole('region', { name: 'File change: a.ts' })).toHaveFocus();
+    rerender(<><ChangeReviewView view={view} focusPath="missing.ts" /><button type="button">Elsewhere</button></>);
+    expect(screen.getByRole('region', { name: 'File change: a.ts' })).toHaveFocus();
+  });
+
+  it('totals the files, jumps to each from a compact index and collapses files one at a time', async () => {
+    const user = userEvent.setup();
+    const entry = (path: string, added?: number, removed?: number): ChangeEntryView => ({ id: path, path, status: 'modified', added, removed, diff: { state: 'text', truncated: false, text: `@@ -1 +1 @@\n-old ${path}\n+new ${path}` } });
+    const view: ChangeReviewState = { state: 'ready', changes: [entry('src/search-state.ts', 2, 1), entry('README.md', 1, 3), entry('docs/notes.txt')] };
+    const { rerender } = render(<ChangeReviewView view={view} />);
+    expect(screen.getByText('3 files changed, 3 lines added, 4 removed')).toBeInTheDocument();
+    const index = screen.getByRole('navigation', { name: 'Changed files' });
+    expect(within(index).getAllByRole('button').map((button) => button.textContent)).toEqual(['search-state.tssrc+2 −1', 'README.md+1 −3', 'notes.txtdocs']);
+    const file = screen.getByRole('region', { name: 'File change: src/search-state.ts' });
+    const toggle = within(file).getByRole('button', { name: 'src/search-state.ts' });
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false'); expect(screen.queryByLabelText('Diff: src/search-state.ts')).not.toBeInTheDocument();
+    expect(within(file).getByLabelText('2 additions')).toBeVisible(); expect(screen.getByLabelText('Diff: README.md')).toBeVisible();
+    // Jumping to a collapsed file opens it and moves focus to it.
+    await user.click(within(index).getByRole('button', { name: 'src/search-state.ts, 2 added, 1 removed' }));
+    expect(file).toHaveFocus(); expect(toggle).toHaveAttribute('aria-expanded', 'true'); expect(screen.getByLabelText('Diff: src/search-state.ts')).toBeVisible();
+    await user.click(toggle); rerender(<ChangeReviewView view={view} focusPath="src/search-state.ts" />);
+    expect(file).toHaveFocus(); expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    rerender(<ChangeReviewView view={{ state: 'ready', changes: [view.changes[0]] }} />);
+    expect(screen.queryByRole('navigation', { name: 'Changed files' })).not.toBeInTheDocument(); expect(screen.getByText('1 file changed, 2 lines added, 1 removed')).toBeInTheDocument();
   });
 
   it('keeps retry capability explicit, unknown errors generic, and supplied retry/cancel/terminal states static', () => {
@@ -118,23 +150,41 @@ describe('controlled turn/tool/change/run presentation', () => {
     try {
       const retry = vi.fn();
       const { rerender } = render(<RunNotice view={{ state: 'error', code: '__proto__' }} />);
-      expect(screen.getByText(/No further error details/)).toBeInTheDocument();
+      expect(screen.getByRole('region', { name: 'Run status' })).toHaveTextContent('Failed');
+      expect(screen.getByText('AVA didn’t report why.')).toBeInTheDocument();
       expect(screen.queryByRole('button')).not.toBeInTheDocument();
       rerender(<RunNotice view={{ state: 'error', code: 'unavailable' }} onRetry={retry} />);
-      expect(retry).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole('button', { name: 'Request retry' }));
+      expect(retry).not.toHaveBeenCalled(); expect(screen.queryByText('AVA didn’t report why.')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
       expect(retry).toHaveBeenCalledTimes(1);
+      rerender(<RunNotice view={{ state: 'error', code: 'run_failed', message: '<script>reported cause</script>' }} onRetry={retry} />);
+      expect(screen.getByText('<script>reported cause</script>')).toBeInTheDocument();
       rerender(<RunNotice view={{ state: 'retrying', attempt: 3, cause: '<script>supplied cause</script>' }} onRetry={retry} />);
-      expect(screen.getByText(/Attempt 3/)).toHaveTextContent('<script>supplied cause</script>');
+      expect(screen.getByRole('region', { name: 'Run status' })).toHaveTextContent('Attempt 3'); expect(screen.getByText('<script>supplied cause</script>')).toBeInTheDocument();
       act(() => vi.advanceTimersByTime(60_000));
       expect(screen.getByText(/Attempt 3/)).toBeInTheDocument();
-      for (const state of ['cancel-requested', 'canceled', 'completed'] as const) {
+      for (const state of ['running', 'cancel-requested', 'canceled', 'completed'] as const) {
         rerender(<RunNotice view={{ state }} onRetry={retry} />);
         expect(screen.queryByRole('button')).not.toBeInTheDocument();
       }
       expect(vi.getTimerCount()).toBe(0);
       expect(retry).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
+  });
+
+  it('offers Ask AVA to retry on the cause line only for a failure the caller can’t retry', () => {
+    const ask = vi.fn(); const retry = vi.fn();
+    const { rerender } = render(<RunNotice view={{ state: 'error', code: 'run_failed' }} onAskRetry={ask} />);
+    fireEvent.click(within(screen.getByText('AVA didn’t report why.')).getByRole('button', { name: 'Ask AVA to retry' })); expect(ask).toHaveBeenCalledTimes(1);
+    rerender(<RunNotice view={{ state: 'error', code: 'unavailable' }} onAskRetry={ask} />);
+    expect(screen.getByRole('button', { name: 'Ask AVA to retry' })).toBeVisible();
+    rerender(<RunNotice view={{ state: 'error', code: 'run_failed' }} onRetry={retry} onAskRetry={ask} />);
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Retry']);
+    for (const state of ['running', 'cancel-requested', 'canceled', 'completed'] as const) {
+      rerender(<RunNotice view={{ state }} onAskRetry={ask} />);
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    }
+    expect(ask).toHaveBeenCalledTimes(1); expect(retry).not.toHaveBeenCalled();
   });
 });
 

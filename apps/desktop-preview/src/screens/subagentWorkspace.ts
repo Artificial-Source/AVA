@@ -4,12 +4,15 @@ import { subagentDefinitions } from './screenExamples';
 import { useViewGuard } from './useViewGuard';
 
 export const subagentLimits = { name: 64, description: 512 } as const;
+// Deletes one user definition at its current revision. Built-in and project definitions are never removable.
+export type SubagentRemoval = Readonly<{ remove: true; version: number; definitionId: string; revision: number }>;
+export type SubagentChange = SubagentIntent | SubagentRemoval;
 export function subagentErrors(draft: SubagentDraft, definitions: readonly SubagentDefinition[], editingId: string | null) {
   const name = typeof draft.name === 'string' ? draft.name.trim() : '';
   return {
-    name: !name || draft.name.length > subagentLimits.name ? 'Enter a name of 1–64 characters.' : definitions.some((entry) => entry.id !== editingId && typeof entry.name === 'string' && entry.name.toLocaleLowerCase() === name.toLocaleLowerCase()) ? 'A definition with this name already exists.' : '',
+    name: !name || draft.name.length > subagentLimits.name ? 'Enter a name of 1–64 characters.' : definitions.some((entry) => entry.id !== editingId && typeof entry.name === 'string' && entry.name.toLocaleLowerCase() === name.toLocaleLowerCase()) ? 'A subagent with this name already exists.' : '',
     description: typeof draft.description !== 'string' || !draft.description.trim() || draft.description.length > subagentLimits.description ? 'Enter a description of 1–512 characters.' : '',
-    modelPreference: !['inherit', 'aster', 'aster-mini', 'orion'].includes(draft.modelPreference) ? 'Choose a supplied model preference.' : '',
+    modelPreference: !['inherit', 'aster', 'aster-mini', 'orion'].includes(draft.modelPreference) ? 'Choose a model from the list.' : '',
   };
 }
 const positive = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0 && (value as number) < Number.MAX_SAFE_INTEGER;
@@ -49,15 +52,21 @@ export function applySubagentIntent(workspace: SubagentWorkspace, intent: Subage
   if (!definition || definition.source !== 'user' || definition.revision !== intent.revision) return null;
   return { ...workspace, version: workspace.version + 1, definitions: workspace.definitions.map((entry) => entry === definition ? { ...entry, ...draft, revision: entry.revision + 1 } : entry) };
 }
+export function applySubagentRemoval(workspace: SubagentWorkspace, removal: SubagentRemoval): SubagentWorkspace | null {
+  if (!validWorkspace(workspace) || removal.remove !== true || removal.version !== workspace.version) return null;
+  const definition = workspace.definitions.find((entry) => entry.id === removal.definitionId);
+  if (!definition || definition.source !== 'user' || definition.revision !== removal.revision) return null;
+  return { ...workspace, version: workspace.version + 1, definitions: workspace.definitions.filter((entry) => entry !== definition) };
+}
 
 export function useSubagentWorkspace(seed: unknown, active: boolean, onSnapshot?: (snapshot: unknown) => void) {
   const [workspace, setWorkspace] = useState(() => initialSubagentWorkspace(seed));
   const gate = useViewGuard(JSON.stringify([workspace.version, active]));
   return {
     workspace,
-    save(intent: SubagentIntent) {
+    save(change: SubagentChange) {
       if (!active || !gate.valid()) return false;
-      const next = applySubagentIntent(workspace, intent);
+      const next = 'remove' in change ? applySubagentRemoval(workspace, change) : applySubagentIntent(workspace, change);
       if (!next || !gate.claim()) return false;
       setWorkspace(next); onSnapshot?.(next);
       return true;

@@ -1,7 +1,15 @@
-.button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--control-height); padding: 7px 12px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--body); font-size: var(--type-control); line-height: 20px; }
-.button:hover:not(:disabled) { background: #303030; color: var(--text); }
-.button[data-tone='primary'] { background: #ededed; color: #171717; border-color: transparent; }
-.button[data-tone='primary']:hover:not(:disabled) { background: #ffffff; }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); min-height: var(--control-height); padding: 7px 12px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--surface-control, var(--surface-raised)); color: var(--body); font-size: var(--type-control); line-height: 20px; }
+.button:hover:not(:disabled) { background: var(--surface-control-hover, #303030); color: var(--text); }
+.button[data-tone='primary'] { background: var(--primary-fill, #ededed); color: var(--on-primary, #171717); border-color: transparent; }
+.button[data-tone='primary']:hover:not(:disabled) { background: var(--primary-fill-hover, #ffffff); color: var(--on-primary, #171717); }
+/* Destructive stays on the neutral surface: red marks the label and edge, never the fill. */
+.button[data-tone='destructive'], .button[data-tone='destructive']:hover:not(:disabled) { color: var(--danger-text, var(--status-stopped-failed)); border-color: currentColor; }
 .button:disabled { opacity: .55; cursor: not-allowed; }
 .icon { width: var(--control-height); padding: 0; flex-shrink: 0; }
+.icon[data-variant='quiet'] { width: 30px; height: 30px; min-height: 30px; border-color: transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); }
+.icon[data-variant='quiet']:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+/* Back: buttons and links share one quiet look, so leaving any page reads the same. */
+.back { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; min-height: 30px; padding: 5px 7px; border-radius: var(--radius-control); background: transparent; color: var(--muted); font-size: var(--type-meta); line-height: 20px; text-decoration: none; white-space: nowrap; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
+.back:hover { background: var(--hover); color: var(--text); }
+.back:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .surface { min-width: 0; padding: var(--space-5); border: 1px solid var(--edge); border-radius: var(--radius-surface); background: var(--surface-panel); color: var(--body); }

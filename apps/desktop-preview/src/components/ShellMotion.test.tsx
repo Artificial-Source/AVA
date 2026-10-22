@@ -68,7 +68,7 @@ describe('shell motion logical boundaries', () => {
     act(() => vi.advanceTimersByTime(PRESENCE_EXIT_MS * 2));
     expect(changes).toHaveAttribute('aria-expanded', 'true');
     expect(visibility).toHaveAttribute('title', 'Hide inspector · Changes');
-    expect(screen.getAllByRole('complementary', { name: 'Mock changes' })).toHaveLength(1);
+    expect(screen.getAllByRole('complementary', { name: 'Changes inspector' })).toHaveLength(1);
     expect(document.querySelectorAll('#change-review')).toHaveLength(1);
     expect(document.querySelector('#agents-inspector')).toBeNull();
     expect(screen.getByRole('heading', { level: 1 })).toBe(title);
@@ -85,7 +85,7 @@ describe('shell motion logical boundaries', () => {
     render(<AppShell />);
     const projects = within(screen.getByRole('navigation', { name: 'All project chats' }));
     const project = projects.getByRole('button', { name: 'Wayfinder' });
-    const chat = projects.getByRole('button', { name: 'Working Keyboard navigation' });
+    const chat = projects.getByRole('button', { name: 'Keyboard navigation Working' });
     const pin = projects.getByRole('button', { name: 'Pin Keyboard navigation' });
     const id = project.getAttribute('aria-controls')!;
     chat.focus();
@@ -94,7 +94,7 @@ describe('shell motion logical boundaries', () => {
     expect(project).toHaveAttribute('aria-expanded', 'false');
     expect(document.getElementById(id)).toHaveAttribute('inert');
     expect(document.getElementById(id)).toHaveAttribute('aria-hidden', 'true');
-    expect(projects.queryByRole('button', { name: 'Working Keyboard navigation' })).not.toBeInTheDocument();
+    expect(projects.queryByRole('button', { name: 'Keyboard navigation Working' })).not.toBeInTheDocument();
     fireEvent.click(chat);
     fireEvent.click(pin);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Remember search filters');
@@ -102,17 +102,17 @@ describe('shell motion logical boundaries', () => {
     act(() => vi.advanceTimersByTime(PRESENCE_EXIT_MS - 5));
     fireEvent.click(project);
     act(() => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
-    expect(projects.getByRole('button', { name: 'Working Keyboard navigation' })).toBe(chat);
+    expect(projects.getByRole('button', { name: 'Keyboard navigation Working' })).toBe(chat);
     expect(document.querySelectorAll(`#${id}`)).toHaveLength(1);
     expect(document.getElementById(id)).not.toHaveAttribute('inert');
     fireEvent.click(chat);
-    expect(screen.getByRole('button', { name: 'Stop mock work' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it('removes panels and project contents immediately with reduced motion and schedules no exits', () => {
     vi.useFakeTimers();
-    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)', addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     render(<AppShell />);
     const close = screen.getByRole('button', { name: 'Close agents' });
     close.focus();
@@ -122,7 +122,7 @@ describe('shell motion logical boundaries', () => {
     const projects = within(screen.getByRole('navigation', { name: 'All project chats' }));
     const project = projects.getByRole('button', { name: 'Wayfinder' });
     const id = project.getAttribute('aria-controls')!;
-    projects.getByRole('button', { name: 'Working Keyboard navigation' }).focus();
+    projects.getByRole('button', { name: 'Keyboard navigation Working' }).focus();
     fireEvent.click(project);
     expect(project).toHaveFocus();
     expect(document.getElementById(id)).toBeNull();
@@ -137,7 +137,7 @@ describe('shell motion logical boundaries', () => {
     const { unmount } = render(<StrictMode><AppShell /></StrictMode>);
     await openContext();
     fireEvent.click(screen.getByRole('button', { name: 'Raw messages' }));
-    fireEvent.keyDown(screen.getByRole('region', { name: 'Local committed messages' }), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('region', { name: 'Raw message JSON' }), { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: 'Hide inspector' }));
     fireEvent.click(screen.getByRole('button', { name: 'Wayfinder' }));
     expect(vi.getTimerCount()).toBe(3);
@@ -153,7 +153,7 @@ describe('shell motion logical boundaries', () => {
     await openContext();
     const trigger = screen.getByRole('button', { name: 'Raw messages' });
     fireEvent.click(trigger);
-    const context = screen.getByRole('region', { name: 'Local committed messages' });
+    const context = screen.getByRole('region', { name: 'Raw message JSON' });
     const presence = context.parentElement!;
     context.focus();
     fireEvent.keyDown(context, { key: 'Escape' });
@@ -162,7 +162,7 @@ describe('shell motion logical boundaries', () => {
     expect(trigger).not.toHaveAttribute('aria-controls');
     expect(presence).toHaveAttribute('inert');
     expect(presence).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.queryByRole('region', { name: 'Local committed messages' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Raw message JSON' })).not.toBeInTheDocument();
     fireEvent.keyDown(context, { key: 'Escape' });
     fireEvent.pointerDown(context);
     fireEvent.click(context);
@@ -181,7 +181,7 @@ describe('shell motion logical boundaries', () => {
     await openContext();
     const trigger = screen.getByRole('button', { name: 'Raw messages' });
     fireEvent.click(trigger);
-    const context = screen.getByRole('region', { name: 'Local committed messages' });
+    const context = screen.getByRole('region', { name: 'Raw message JSON' });
     const panel = screen.getByRole('complementary', { name: 'Context inspector' });
     const close = screen.getByRole('button', { name: 'Close context' });
     context.focus();
@@ -199,7 +199,7 @@ describe('shell motion logical boundaries', () => {
     act(() => vi.advanceTimersByTime(PRESENCE_EXIT_MS - 1));
     fireEvent.click(screen.getByRole('button', { name: 'Show inspector' }));
     act(() => vi.advanceTimersByTime(PRESENCE_EXIT_MS));
-    expect(screen.getByRole('region', { name: 'Local committed messages' })).toBe(context);
+    expect(screen.getByRole('region', { name: 'Raw message JSON' })).toBe(context);
     expect(context.closest('[inert], [aria-hidden="true"]')).toBeNull();
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     expect(vi.getTimerCount()).toBe(0);
@@ -212,7 +212,7 @@ describe('shell motion logical boundaries', () => {
     await openContext();
     const trigger = screen.getByRole('button', { name: 'Raw messages' });
     fireEvent.click(trigger);
-    const raw = screen.getByRole('region', { name: 'Local committed messages' });
+    const raw = screen.getByRole('region', { name: 'Raw message JSON' });
     fireEvent.click(trigger);
     act(() => vi.advanceTimersByTime(PRESENCE_EXIT_MS - 10));
     fireEvent.click(trigger);
@@ -221,7 +221,7 @@ describe('shell motion logical boundaries', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show inspector' }));
     fireEvent(window, new Event('resize'));
     act(() => vi.advanceTimersByTime(PRESENCE_EXIT_MS * 2));
-    expect(screen.getByRole('region', { name: 'Local committed messages' })).toBe(raw);
+    expect(screen.getByRole('region', { name: 'Raw message JSON' })).toBe(raw);
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
@@ -267,13 +267,13 @@ describe('shell motion logical boundaries', () => {
     const trigger = screen.getByRole('button', { name: 'Raw messages' });
     fireEvent.click(trigger);
     const rawId = trigger.getAttribute('aria-controls')!;
-    const context = screen.getByRole('region', { name: 'Local committed messages' });
+    const context = screen.getByRole('region', { name: 'Raw message JSON' });
     context.focus();
     fireEvent.keyDown(context, { key: 'Escape' });
     expect(trigger).toHaveFocus();
     expect(document.getElementById(rawId)).toBeNull();
     fireEvent.click(trigger);
-    screen.getByRole('region', { name: 'Local committed messages' }).focus();
+    screen.getByRole('region', { name: 'Raw message JSON' }).focus();
     fireEvent.click(screen.getByRole('button', { name: 'Close context' }));
     expect(document.getElementById(rawId)).toBeNull();
     expect(document.querySelector('#context-inspector')).toBeNull();
@@ -318,10 +318,13 @@ describe('shell motion logical boundaries', () => {
     const entry = panel.lastElementChild;
     fireEvent.keyDown(panel, { key: 'Escape', isComposing: true });
     expect(onClose).not.toHaveBeenCalled();
-    rerender(<Inspector module="agents" active={false} count={1} onClose={onClose}><button>Child</button></Inspector>);
+    const onToggleWide = vi.fn();
+    rerender(<Inspector module="agents" active={false} count={1} onToggleWide={onToggleWide} onClose={onClose}><button>Child</button></Inspector>);
     fireEvent.keyDown(panel, { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: 'Close agents' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Widen inspector' }));
     expect(onClose).not.toHaveBeenCalled();
+    expect(onToggleWide).not.toHaveBeenCalled();
     rerender(<Inspector module="changes" active count={0} onClose={onClose}>Changes example</Inspector>);
     expect(panel.lastElementChild).not.toBe(entry);
     expect(panel.children).toHaveLength(1);

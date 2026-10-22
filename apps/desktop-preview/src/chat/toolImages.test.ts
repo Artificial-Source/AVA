@@ -7,7 +7,7 @@ describe('closed supplied tool image descriptor', () => {
   it('maps only the explicit opaque ID to a stable, immutable local raster descriptor', () => {
     const image = toolImagePreview('search-results-example');
     expect(isToolImagePreviewId('search-results-example')).toBe(true);
-    expect(image).toEqual({ src: '/tool-previews/search-results.png', alt: 'Supplied example: search results with a search field, Recent filter, and three result rows.', label: 'Supplied image · Search results example', width: 640, height: 400 });
+    expect(image).toEqual({ src: '/tool-previews/search-results.png', alt: 'Search results page with a search field, a Recent filter and three result rows.', width: 640, height: 400 });
     expect(Object.isFrozen(image)).toBe(true); expect(toolImagePreview('search-results-example')).toBe(image);
     expectTypeOf<{ kind: 'image'; path: string; previewId: 'search-results-example' }>().toExtend<ToolResource>();
     expectTypeOf<{ kind: 'file'; path: string; previewId: 'search-results-example' }>().not.toExtend<ToolResource>();

@@ -6,6 +6,8 @@
   border-right: 1px solid var(--edge);
   isolation: isolate;
   overflow: hidden;
+  /* Clip without a scroll container: the oversized drift layer must never become a hidden scroll range. */
+  overflow: clip;
 }
 
 .sidebar[hidden] { display: none; }
@@ -17,7 +19,7 @@
   position: absolute;
   z-index: -1;
   inset: -10%;
-  background: linear-gradient(155deg, transparent 18%, #ffffff0a 45%, transparent 68%);
+  background: linear-gradient(155deg, transparent 18%, var(--drift-sheen) 45%, transparent 68%);
   pointer-events: none;
   animation: materialDrift 28s ease-in-out infinite alternate;
 }
@@ -32,17 +34,16 @@
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 22px;
-  font-size: 16px;
+  gap: var(--space-2);
+  padding: 0 14px 0 22px;
+  font-size: var(--type-title);
   font-weight: 600;
   letter-spacing: 2px;
 }
 
 .brand > svg { width: 22px; height: 22px; color: var(--text); }
-.materialToggle { margin-left: auto; }
-.materialToggle[aria-pressed='true'] { background: var(--hover); color: var(--text); }
-.actions { padding: 0 14px 12px; }
+.collapseToggle { margin-left: auto; }
+.actions { padding: 0 14px var(--space-3); }
 
 .newChat {
   display: flex;
@@ -51,47 +52,69 @@
   width: 100%;
   min-height: 36px;
   padding: 7px 11px;
-  border: 1px solid #ffffff10;
-  border-radius: 6px;
-  background: #ffffff07;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-control);
+  background: var(--fill-subtle);
   color: var(--text);
   text-align: left;
-  font-size: 13px;
+  font-size: var(--type-control);
   font-weight: 500;
-  box-shadow: inset 0 1px 0 #ffffff05;
+  box-shadow: inset 0 1px 0 var(--edge-highlight);
 }
 
-.newChat:hover { background: #ffffff0f; }
-.library { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 24px; }
+.newChat:hover { background: var(--hover-strong); }
+
+/* Find a chat and Commands: quiet companions under New chat, one row, not a second bar. */
+.find { display: flex; align-items: center; gap: 2px; margin-top: var(--space-1); }
+.findChat { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; min-height: 32px; padding: 5px var(--space-2) 5px var(--space-3); border-radius: var(--radius-control); background: transparent; color: var(--muted); font-size: var(--type-control); text-align: left; }
+.findChat:hover { background: var(--hover); color: var(--text); }
+.findLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hint { flex-shrink: 0; color: var(--quiet); font-family: var(--mono); font-size: var(--type-caption); font-weight: 400; line-height: 1; }
+.find > .commands[data-variant] { width: 32px; height: 32px; min-height: 32px; }
+.library { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px var(--space-6); }
 .library:focus-visible { outline-offset: -4px; }
-.sectionLabel { display: flex; align-items: center; justify-content: space-between; padding: 15px 12px 9px; color: var(--quiet); }
-.sectionLabel h2 { margin: 0; font-size: 10px; font-weight: 550; letter-spacing: 1.1px; text-transform: uppercase; }
-.sectionLabel > span { font-family: var(--mono); font-size: 10px; }
-.project { margin-bottom: 13px; }
+.sectionLabel { display: flex; align-items: center; justify-content: space-between; padding: var(--space-4) var(--space-3) var(--space-2); color: var(--quiet); }
+.sectionLabel h2 { margin: 0; font-size: var(--type-caption); font-weight: 550; letter-spacing: .1em; text-transform: uppercase; }
+.sectionLabel > span { font-family: var(--mono); font-size: var(--type-caption); }
+
+/* Heading row: disclosure trigger + New chat accessory; the list track spans both columns. */
+.project { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 2px; margin-bottom: var(--space-3); }
+.project > :not(.projectHeading, .projectAction) { grid-column: 1 / -1; }
 
 .projectHeading {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-2);
   width: 100%;
+  min-width: 0;
   height: 34px;
-  padding: 0 12px;
-  border-radius: 5px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-radius: var(--radius-control);
   color: var(--text);
   background: transparent;
   text-align: left;
-  font-size: 13px;
+  font-size: var(--type-control);
   font-weight: 550;
 }
 
 .projectHeading > svg:first-child { color: var(--muted); }
 .projectHeading:hover { background: var(--hover); }
-.caret { margin-left: auto; color: var(--quiet); transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.project[data-holds-current='true'] > .projectHeading { background: var(--selected); box-shadow: inset 0 1px 0 var(--edge-highlight); }
+.projectName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rollup { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--space-2); margin-left: auto; font-variant-numeric: tabular-nums; }
+.rollup > [data-status] { gap: 3px; font-weight: 550; }
+.caret { flex-shrink: 0; margin-left: auto; color: var(--quiet); transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.rollup ~ .caret { margin-left: var(--space-1); }
 .projectHeading[aria-expanded='false'] .caret { transform: rotate(-90deg); }
+
+.projectAction { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; transition: opacity var(--motion-feedback-duration) var(--motion-ease-out); }
+.projectAction:hover { color: var(--text); background: var(--hover-strong); }
+.emptyProject { margin: 2px 0 0; padding: var(--space-2) var(--space-3) var(--space-2) 37px; color: var(--quiet); font-size: var(--type-meta); }
+
 .chatList { display: grid; gap: 2px; margin: 2px 0 0; padding: 0; list-style: none; }
-.chatEntry { position: relative; display: flex; min-width: 0; border-radius: 5px; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), box-shadow var(--motion-feedback-duration) var(--motion-ease-out); }
-.chatEntry:hover { background: var(--hover); }
-.chatEntry[data-current='true'] { background: #ffffff0d; box-shadow: inset 0 1px 0 #ffffff07; }
+.chatEntry { position: relative; display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-control); transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), box-shadow var(--motion-feedback-duration) var(--motion-ease-out); }
+.chatEntry:hover, .chatEntry[data-menu-open='true'] { background: var(--hover); }
+.chatEntry[data-current='true'] { background: var(--selected); box-shadow: inset 0 1px 0 var(--edge-highlight); }
 .chatEntry::before { content: ''; position: absolute; left: 2px; top: 12px; width: 2px; height: 12px; border-radius: 2px; background: var(--text); opacity: 0; transform: scaleY(.6); transition: opacity var(--motion-feedback-duration) var(--motion-ease-out), transform var(--motion-feedback-duration) var(--motion-ease-out); }
 .chatEntry[data-current='true']::before { opacity: 1; transform: scaleY(1); }
 
@@ -100,37 +123,72 @@
   flex: 1;
   flex-direction: column;
   justify-content: center;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
   min-height: 36px;
-  padding: 8px 3px 8px 12px;
-  border-radius: 5px;
+  padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
   color: var(--muted);
   background: transparent;
   text-align: left;
-  font-size: 13px;
+  font-size: var(--type-control);
   line-height: 18px;
 }
 
 .chatRow[aria-current='page'], .chatRow:hover { color: var(--text); }
-.chatLine { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; }
+.chatLine { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-width: 0; }
+/* A fixed glyph column keeps every title on the same start edge, idle or not. */
+.glyph { display: inline-flex; flex-shrink: 0; justify-content: center; width: 12px; }
 .chatTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chatMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; color: var(--quiet); font-size: 11px; line-height: 17px; }
-.rowActions { display: flex; align-items: center; padding-right: 3px; }
-.rowAction { display: grid; place-items: center; flex-shrink: 0; width: 26px; height: 30px; padding: 0; border-radius: 4px; color: var(--quiet); background: transparent; }
-.rowAction:hover, .rowAction[aria-pressed='true'] { color: var(--text); }
-.rowAction:hover { background: #ffffff0b; }
-.settings { flex-shrink: 0; padding: 8px 14px 14px; }
-.settings button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 7px 11px; border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; text-align: left; }
+.chatMeta { display: flex; align-items: center; gap: var(--space-1) 6px; min-width: 0; padding-left: 20px; color: var(--quiet); font-size: var(--type-caption); line-height: 17px; }
+.metaDot { flex-shrink: 0; }
+.metaProject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rowActions { --row-action-size: 26px; display: flex; flex-shrink: 0; align-items: center; padding: 3px 3px 0 0; }
+.rowAction { display: grid; place-items: center; flex-shrink: 0; width: var(--row-action-size); height: 30px; padding: 0; overflow: hidden; border-radius: var(--radius-chip); color: var(--quiet); background: transparent; transition: opacity var(--motion-feedback-duration) var(--motion-ease-out); }
+.rowAction:hover, .rowAction[aria-pressed='true'], .rowAction[aria-expanded='true'] { color: var(--text); }
+.rowAction:hover, .rowAction[aria-expanded='true'] { background: var(--hover-strong); }
+
+.settings { flex-shrink: 0; padding: var(--space-2) 14px 14px; }
+.settings button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 7px 11px; border-radius: var(--radius-control); background: transparent; color: var(--muted); font-size: var(--type-control); text-align: left; }
 .settings button:hover, .settings button[aria-current='page'] { background: var(--hover); color: var(--text); }
 .settings button > svg { flex-shrink: 0; }
-.shortcuts { margin-top: 12px; }
-.shortcuts .sectionLabel { padding-top: 12px; }
-.shortcuts .chatRow { padding-left: 12px; }
-.shortcuts .chatEntry[data-current='true']::before { left: 2px; }
+.shortcuts { margin-top: var(--space-3); }
+.shortcuts .sectionLabel { padding-top: var(--space-3); }
+
+/* Collapsed rail: one icon column, same elements so focus survives the toggle. Labels stay as names and tooltips. */
+.sidebar[data-collapsed='true'] .brand { justify-content: center; padding: 0; }
+.sidebar[data-collapsed='true'] .brand > :not(.collapseToggle) { display: none; }
+.sidebar[data-collapsed='true'] .collapseToggle { margin: 0; }
+.sidebar[data-collapsed='true'] .actions,
+.sidebar[data-collapsed='true'] .settings { display: flex; justify-content: center; padding-inline: 0; }
+.sidebar[data-collapsed='true'] .settings { margin-top: auto; }
+.sidebar[data-collapsed='true'] .newChat,
+.sidebar[data-collapsed='true'] .settings button { justify-content: center; width: 36px; padding: 0; }
+.sidebar[data-collapsed='true'] .actions { flex-direction: column; align-items: center; gap: var(--space-1); }
+.sidebar[data-collapsed='true'] .find { flex-direction: column; gap: var(--space-1); margin-top: 0; }
+.sidebar[data-collapsed='true'] .find > button { flex: none; justify-content: center; width: 36px; height: 36px; min-height: 36px; padding: 0; }
+
+/* With a hover-capable pointer, row and project actions take no width until the row is hovered,
+   focused or has its menu open, so titles keep their room. Zero width (not display: none) keeps
+   them in the Tab order in both directions. Without hover they always show; a pinned chat's pin
+   always shows outside Pinned. */
+@media (hover: hover) {
+  .rowAction:not([data-persistent='true']) { width: 0; opacity: 0; }
+  .chatEntry:is(:hover, :focus-within, [data-menu-open='true']) .rowAction { width: var(--row-action-size); opacity: 1; }
+  .projectAction { opacity: 0; }
+  .project:has(> .projectHeading:hover, > .projectHeading:focus-visible) > .projectAction,
+  .projectAction:hover,
+  .projectAction:focus-visible { opacity: 1; }
+}
 
 @media (max-width: 1100px) {
-  .brand { padding: 0 16px; }
-  .library { padding-right: 8px; padding-left: 8px; }
-  .rowAction { width: 24px; }
+  .brand { padding: 0 var(--space-2) 0 var(--space-4); }
+  .library { padding-right: var(--space-2); padding-left: var(--space-2); }
+  .rowActions { --row-action-size: 24px; }
+}
+
+/* Narrow sidebars keep the Find a chat label; its keys stay in the tooltip. */
+@media (max-width: 1000px) {
+  .hint { display: none; }
 }

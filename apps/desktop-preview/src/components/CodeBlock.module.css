@@ -1,8 +1,28 @@
-.example { margin: 20px 0 16px; border: 1px solid var(--edge); border-radius: 7px; overflow: hidden; background: var(--code); }
-.caption { display: flex; align-items: center; gap: 7px; min-height: 33px; padding: 7px 13px; border-bottom: 1px solid var(--separator); color: var(--muted); font-size: 10px; }
-.language { margin-left: auto; color: var(--quiet); }
-.example pre { margin: 0; padding: 15px 17px; overflow-x: auto; color: var(--body); font-family: var(--mono); font-size: 13px; line-height: 1.8; tab-size: 2; }
+/* Syntax roles differ by luminance, never hue; highlight.ts tokens reference these variables. */
+.example {
+  --syntax-foreground: #d4d4d4;
+  --syntax-keyword: #eeeeee;
+  --syntax-constant: #dedede;
+  --syntax-string: #b8b8b8;
+  --syntax-punctuation: #a9a9a9;
+  --syntax-comment: #a1a1a1;
+  margin: var(--space-5, 20px) 0 var(--space-4, 16px);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-surface, 8px);
+  overflow: hidden;
+  background: var(--code);
+}
+.caption { display: flex; align-items: center; gap: var(--space-2, 8px); min-height: 32px; padding: 6px var(--space-3, 12px); border-bottom: 1px solid var(--separator); color: var(--muted); font-size: var(--type-caption, .7857rem); }
+.name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.language { flex-shrink: 0; margin-left: auto; color: var(--quiet); }
+.example pre { margin: 0; padding: var(--space-4, 16px); overflow-x: auto; color: var(--syntax-foreground); font-family: var(--mono); font-size: var(--type-control, .9286rem); line-height: 1.8; tab-size: 2; }
 .example pre code { font-size: inherit; }
-.fallback { margin: 0; padding: 0 16px 10px; color: var(--quiet); font-size: 11px; }
+.fallback { margin: 0; padding: 0 var(--space-4, 16px) 10px; color: var(--quiet); font-size: var(--type-caption, .7857rem); }
 
 :global([data-code-wrap='true']) .example pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Higher contrast lifts every role and keeps their luminance order. */
+:global([data-contrast='higher']) .example { --syntax-foreground: #eeeeee; --syntax-keyword: #ffffff; --syntax-constant: #f5f5f5; --syntax-string: #d5d5d5; --syntax-punctuation: #cccccc; --syntax-comment: #c7c7c7; }
+@media (prefers-contrast: more) {
+  .example { --syntax-foreground: #eeeeee; --syntax-keyword: #ffffff; --syntax-constant: #f5f5f5; --syntax-string: #d5d5d5; --syntax-punctuation: #cccccc; --syntax-comment: #c7c7c7; }
+}

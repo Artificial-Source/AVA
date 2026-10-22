@@ -14,19 +14,19 @@ export const defaultConversation: ConversationPreferences = { toolDisplay: 'comp
 export const defaultNotifications: NotificationPreferences = { muted: false, backgroundOnly: true, volume: 30, channels: { completion: { enabled: true, tone: 'soft' }, input: { enabled: true, tone: 'chime' }, failure: { enabled: true, tone: 'chime' } } };
 export const defaultContextPolicy: ContextPolicy = { autoCompact: true, triggerPercent: 80, recentTurns: 2, recentTokens: 20000 };
 export const notificationEvents: readonly { id: NotificationEvent; label: string; description: string }[] = [
-  { id: 'completion', label: 'Completion', description: 'When a task finishes.' },
-  { id: 'input', label: 'Input required', description: 'When a reply or permission is needed.' },
-  { id: 'failure', label: 'Failure', description: 'When a task cannot continue.' },
+  { id: 'completion', label: 'Task finished', description: 'When AVA finishes a task.' },
+  { id: 'input', label: 'Needs attention', description: 'When AVA needs your answer or approval.' },
+  { id: 'failure', label: 'Task failed', description: 'When a task stops with an error.' },
 ];
 export function boundedInteger(value: number, min: number, max: number) { return Number.isSafeInteger(value) && value >= min && value <= max; }
-export function notificationDecision(preferences: NotificationPreferences, event: NotificationEvent, background: boolean) {
-  const channel = preferences.channels[event];
-  const reason = preferences.muted ? 'Master mute is on.' : !channel?.enabled ? 'This event channel is off.' : preferences.backgroundOnly && !background ? 'Background-only policy; this test is foreground.' : null;
-  const tone = channel?.tone === 'soft' || channel?.tone === 'chime' ? channel.tone : 'none';
-  return { delivered: reason === null, reason, tone: reason || !boundedInteger(preferences.volume, 0, 100) || preferences.volume === 0 ? 'none' as const : tone };
+// The tone an event's preview may play. Mute, zero/invalid volume and unknown tones stay silent.
+export function previewTone(preferences: NotificationPreferences, event: NotificationEvent): PreviewTone {
+  const tone = preferences.channels[event]?.tone;
+  if (preferences.muted || !boundedInteger(preferences.volume, 0, 100) || preferences.volume === 0) return 'none';
+  return tone === 'soft' || tone === 'chime' ? tone : 'none';
 }
 export function contextProjection(policy: ContextPolicy, view?: ContextUsageView) {
-  const usage = view ? contextUsage(view) : { activeTokens: null, windowTokens: null, percentage: null, reason: 'No supplied profile' };
+  const usage = view ? contextUsage(view) : { activeTokens: null, windowTokens: null, percentage: null, reason: 'Unknown model' };
   const valid = typeof policy.autoCompact === 'boolean' && boundedInteger(policy.triggerPercent, 1, 95) && boundedInteger(policy.recentTurns, 0, 20) && boundedInteger(policy.recentTokens, 0, 100000);
   // Exact floor(window * percent / 100), without overflowing the safe-integer product.
   const threshold = valid && usage.windowTokens !== null ? Math.floor(usage.windowTokens / 100) * policy.triggerPercent + Math.floor(usage.windowTokens % 100 * policy.triggerPercent / 100) : null;

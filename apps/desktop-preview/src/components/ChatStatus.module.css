@@ -2,10 +2,10 @@
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  gap: 4px;
+  gap: var(--space-1, 4px);
   white-space: nowrap;
   color: var(--status-unavailable);
-  font-size: 11px;
+  font-size: var(--type-caption, .7857rem);
   line-height: 17px;
 }
 
@@ -14,6 +14,8 @@
 .status[data-status='stopped'],
 .status[data-status='failed'] { color: var(--status-stopped-failed); }
 .status[data-status='approval'] { color: var(--status-attention); }
+/* Queued is neutral gray and never animated: it has not started. */
+.status[data-status='queued'] { color: var(--status-queued, var(--muted)); }
 
 .glyph { display: inline-flex; flex-shrink: 0; }
 

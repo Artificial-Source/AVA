@@ -1,4 +1,5 @@
-import { useId, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useId, useLayoutEffect, useRef, type ComponentProps, type ReactNode, type RefObject } from 'react';
+import { XIcon } from '@phosphor-icons/react/dist/csr/X';
 import { IconButton } from './Button';
 import styles from './DialogFrame.module.css';
 
@@ -17,25 +18,70 @@ export function canFocus(element: HTMLElement | null): element is HTMLElement {
   return true;
 }
 
+const fields = 'input:not([type="hidden"]), textarea, select, [data-autofocus]';
+const focusables = 'a[href], button, input:not([type="hidden"]), textarea, select, summary, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+
+// A radio group is one Tab stop: land on its checked option, as Tab would.
+function tabStop(node: HTMLElement) {
+  if (!(node instanceof HTMLInputElement) || node.type !== 'radio' || node.checked || !node.name) return node;
+  const scope = node.form ?? node.closest('dialog');
+  const checked = scope ? Array.from(scope.querySelectorAll<HTMLInputElement>('input[type="radio"]')).find((radio) => radio.name === node.name && radio.checked) : undefined;
+  return checked && canFocus(checked) ? checked : node;
+}
+
+// Caller target, then the first field, then the first control in the task
+// content (body, then footer), then the review toolbar, then Close. Stops at the
+// first that takes focus.
+function focusInitial(task: readonly (HTMLElement | null)[], toolbar: HTMLElement | null, preferred: HTMLElement | null | undefined, close: HTMLElement | null) {
+  const regions = task.filter((region): region is HTMLElement => region !== null);
+  const controls = [...regions.flatMap((region) => [...region.querySelectorAll<HTMLElement>(fields)]), ...regions.flatMap((region) => [...region.querySelectorAll<HTMLElement>(focusables)])].filter((node) => !toolbar?.contains(node));
+  const candidates = [preferred, ...controls, ...(toolbar ? toolbar.querySelectorAll<HTMLElement>(focusables) : []), close];
+  for (const candidate of candidates) {
+    const target = candidate === preferred ? candidate : candidate && tabStop(candidate);
+    if (!target || !canFocus(target)) continue;
+    target.focus();
+    if (target.ownerDocument.activeElement === target) return;
+  }
+}
+
 // Mount only while logically open. Native dialog owns modal focus and Tab; no retained exit.
-export function DialogFrame({ title, description, children, onDismiss, onBack, returnFocus, toolbar, wide = false }: DialogChrome & {
+// Layout is a column: header, the body that scrolls, then the footer, which always
+// sits at the dialog's bottom edge and never covers the body. The top anchor is the
+// default so a body that changes height (validation, filtering, a new step) never
+// moves the title or the first field; pass anchor="center" only for fixed content.
+export function DialogFrame({ title, subtitle, description, children, footer, contentProps, onDismiss, onBack, returnFocus, initialFocus, toolbar, wide = false, anchor = 'top' }: DialogChrome & {
   title: string;
+  subtitle?: string;
   description?: string;
   children: ReactNode;
+  /** The step's actions, pinned below the scrolling body. */
+  footer?: ReactNode;
+  /** Spread on the region that holds both body and footer, e.g. a transition-focus root. */
+  contentProps?: Omit<ComponentProps<'div'>, 'className' | 'children'>;
   onBack?: () => void;
+  initialFocus?: RefObject<HTMLElement | null>;
   wide?: boolean;
+  anchor?: 'top' | 'center';
 }) {
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const actions = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
   const active = useRef(false);
   const composing = useRef(false);
   const fallback = useRef(returnFocus);
   fallback.current = returnFocus;
+  const preferred = useRef(initialFocus);
+  preferred.current = initialFocus;
   useLayoutEffect(() => {
     const node = dialog.current!;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     active.current = true;
     node.showModal();
+    // Native showModal lands on the first control, which is Close; move to the task.
+    focusInitial([body.current, actions.current], bar.current, preferred.current?.current, close.current);
     return () => {
       active.current = false;
       node.close();
@@ -52,7 +98,8 @@ export function DialogFrame({ title, description, children, onDismiss, onBack, r
     if (!active.current || composing.current) return;
     if (onBack) onBack(); else dismiss();
   }
-  return <dialog ref={dialog} className={styles.dialog} data-wide={wide || undefined} aria-labelledby={`${id}-title`} aria-describedby={description ? `${id}-description` : undefined}
+  const describedBy = [subtitle ? `${id}-subtitle` : '', description ? `${id}-description` : ''].filter(Boolean).join(' ') || undefined;
+  return <dialog ref={dialog} className={styles.dialog} data-wide={wide || undefined} data-anchor={anchor === 'center' ? 'center' : 'top'} aria-labelledby={`${id}-title`} aria-describedby={describedBy}
     onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
     onKeyDown={(event) => {
       if (event.defaultPrevented || event.key !== 'Escape' || event.target instanceof Element && event.target.closest('dialog') !== event.currentTarget) return;
@@ -62,7 +109,17 @@ export function DialogFrame({ title, description, children, onDismiss, onBack, r
       escape();
     }}
     onCancel={(event) => { event.preventDefault(); event.stopPropagation(); if (event.target === event.currentTarget) escape(); }}>
-    <header className={styles.header}><div className="srOnly"><h2 id={`${id}-title`}>{title}</h2>{description ? <p id={`${id}-description`}>{description}</p> : null}</div><IconButton label="Close dialog" onClick={dismiss}>×</IconButton></header>
-    <div className={styles.body}>{toolbar ? <div className={styles.toolbar}>{toolbar}</div> : null}{children}</div>
+    <header className={styles.header}>
+      <div className={styles.heading}>
+        <h2 id={`${id}-title`} className={styles.title}>{title}</h2>
+        {subtitle ? <p id={`${id}-subtitle`} className={styles.subtitle}>{subtitle}</p> : null}
+        {description ? <p id={`${id}-description`} className="srOnly">{description}</p> : null}
+      </div>
+      <IconButton ref={close} variant="quiet" label="Close" onClick={dismiss}><XIcon size={15} aria-hidden="true" /></IconButton>
+    </header>
+    <div {...contentProps} className={styles.content}>
+      <div ref={body} className={styles.body}>{toolbar ? <div ref={bar} className={styles.toolbar}>{toolbar}</div> : null}{children}</div>
+      {footer ? <div ref={actions} className={styles.footer}>{footer}</div> : null}
+    </div>
   </dialog>;
 }

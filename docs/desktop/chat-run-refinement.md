@@ -37,9 +37,9 @@ records and captures remain intact history.
   Pause, Resume and Next snapshot affect fixture delivery only. Ordinary Send
   still adds only a local user message; it neither starts a model nor replies to
   the draft. Preview attribution is supplied, not inferred from current settings.
-- Partial prose/code is safe incremental plain text. Finished responses receive
-  rich formatting without repeatedly highlighting unfinished code. A selected
-  partial response stays in that stable form until selection is released.
+- Partial replies now render Markdown progressively. Even an unterminated fence
+  is already shown as a framed code block; syntax highlighting waits for idle
+  work rather than repeatedly highlighting each unfinished increment.
 - Transcript and output follow their own bottom only while the reader has not
   moved away. **Latest** and **Latest output** are explicit actions. Arrivals do
   not steal composer focus/selection, rebuild historical turns or reset mounted

@@ -7,8 +7,8 @@ it('contains an optional detail-load failure without losing status or the native
   try {
     render(<ToolActivityGroup individual records={[{ id: 'failed', action: 'Read', detail: 'example.ts', state: 'failed' }]} open={false} onOpenChange={() => {}} />);
     const row = screen.getByRole('button', { name: 'Read example.ts Failed' }); fireEvent.click(row);
-    expect(await screen.findByText('Details unavailable. Supplied tool status is retained above.')).toBeVisible(); expect(row).toHaveTextContent('Failed'); expect(row).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(row); expect(row).toHaveAttribute('aria-expanded', 'false'); expect(screen.queryByText('Details unavailable. Supplied tool status is retained above.')).not.toBeInTheDocument();
+    expect(await screen.findByText('Details couldn’t load. The status above is unchanged.')).toBeVisible(); expect(row).toHaveTextContent('Failed'); expect(row).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(row); expect(row).toHaveAttribute('aria-expanded', 'false'); expect(screen.queryByText('Details couldn’t load. The status above is unchanged.')).not.toBeInTheDocument();
     expect(error).toHaveBeenCalled();
   } finally { error.mockRestore(); }
 });

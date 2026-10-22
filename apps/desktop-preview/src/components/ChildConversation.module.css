@@ -1,4 +1,4 @@
-.snapshot { margin: 0 0 28px; padding-bottom: 18px; border-bottom: 1px solid var(--separator); }
-.snapshot p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 14px; color: var(--muted); font-size: 11px; }
+.snapshot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); margin: 0 0 28px; padding-bottom: 18px; border-bottom: 1px solid var(--separator); color: var(--muted); font-size: var(--type-meta); line-height: 20px; }
+.facts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.readOnly { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--quiet); font-size: var(--type-caption); }
 .unavailable { color: var(--body); }

@@ -8,10 +8,12 @@ interface DisclosureProps {
   onOpenChange: (open: boolean) => void;
   trigger: ReactNode;
   triggerClassName?: string;
+  /** Optional control placed between the trigger and the content, e.g. a heading-row action. */
+  accessory?: ReactNode;
   children: ReactNode;
 }
 
-export function Disclosure({ id, open, onOpenChange, trigger, triggerClassName, children }: DisclosureProps) {
+export function Disclosure({ id, open, onOpenChange, trigger, triggerClassName, accessory, children }: DisclosureProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const contentFocused = useRef(false);
 
@@ -32,6 +34,7 @@ export function Disclosure({ id, open, onOpenChange, trigger, triggerClassName, 
         aria-controls={open ? id : undefined}
         onClick={() => onOpenChange(!open)}
       >{trigger}</button>
+      {accessory}
       <div
         className={styles.track}
         data-open={open}

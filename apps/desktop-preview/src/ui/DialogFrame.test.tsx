@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { StrictMode, useRef, useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -6,26 +7,40 @@ import { installDialogTestSupport } from '../screens/dialogTestSupport';
 import { useViewGuard } from '../screens/useViewGuard';
 import { DialogFrame } from './DialogFrame';
 
+const css = readFileSync('src/ui/DialogFrame.module.css', 'utf8');
 beforeEach(installDialogTestSupport);
 function Host({ back }: { back?: () => void }) {
   const [open, setOpen] = useState(false);
   const fallback = useRef<HTMLButtonElement>(null);
   return <><button ref={fallback}>Fallback</button><button onClick={() => setOpen(true)}>Open</button>{open ? <DialogFrame title="Example dialog" onDismiss={() => setOpen(false)} onBack={back} returnFocus={fallback}><input aria-label="Example input" /></DialogFrame> : null}</>;
 }
+function Preferred() {
+  const target = useRef<HTMLButtonElement>(null);
+  return <DialogFrame title="Preferred" initialFocus={target} onDismiss={vi.fn()}><input aria-label="Earlier field" /><button ref={target}>Chosen action</button></DialogFrame>;
+}
 describe('native dialog lifetime', () => {
-  it('keeps accessible naming and description without a visible shared title/subtitle slab', () => {
-    render(<DialogFrame title="Task name" description="Accessible scope" onDismiss={vi.fn()}><p>Task-specific body</p></DialogFrame>);
+  it('shows a visible title and subtitle, keeps the description screen-reader-only, and closes from a quiet X', () => {
+    render(<DialogFrame title="Task name" subtitle="Current chat" description="Accessible scope" onDismiss={vi.fn()}><p>Task-specific body</p></DialogFrame>);
     const dialog = screen.getByRole('dialog', { name: 'Task name' });
-    expect(dialog).toHaveAccessibleDescription('Accessible scope');
-    expect(dialog.querySelector(':scope > header .srOnly')).toContainElement(screen.getByRole('heading', { name: 'Task name' }));
-    expect(dialog.querySelector(':scope > header button')).toBe(screen.getByRole('button', { name: 'Close dialog' }));
+    const heading = screen.getByRole('heading', { level: 2, name: 'Task name' });
+    expect(dialog.querySelector(':scope > header')).toContainElement(heading);
+    expect(heading.closest('.srOnly')).toBeNull();
+    expect(screen.getByText('Current chat').closest('.srOnly')).toBeNull();
+    expect(screen.getByText('Accessible scope')).toHaveClass('srOnly');
+    expect(dialog).toHaveAccessibleDescription('Current chat Accessible scope');
+    const close = screen.getByRole('button', { name: 'Close' });
+    expect(dialog.querySelector(':scope > header button')).toBe(close);
+    expect(close).toHaveAttribute('data-variant', 'quiet');
+    expect(close.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(close.textContent).toBe('');
     expect(screen.getByText('Task-specific body')).toBeVisible();
   });
   it('opens natively and closes immediately with visible opener restoration', async () => {
     const user = userEvent.setup(); render(<StrictMode><Host /></StrictMode>);
     const opener = screen.getByRole('button', { name: 'Open' }); await user.click(opener);
     expect(screen.getByRole('dialog')).toHaveAttribute('open');
-    await user.click(screen.getByRole('button', { name: 'Close dialog' }));
+    expect(screen.getByLabelText('Example input')).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(opener).toHaveFocus();
     await user.click(opener); expect(screen.getByRole('dialog')).toHaveAttribute('open');
   });
@@ -53,7 +68,7 @@ describe('native dialog lifetime', () => {
   });
   it('never restores a removed or hidden opener', async () => {
     const user = userEvent.setup(); render(<Host />); const opener = screen.getByText('Open'); await user.click(opener);
-    opener.hidden = true; await user.click(screen.getByLabelText('Close dialog')); expect(screen.getByText('Fallback')).toHaveFocus();
+    opener.hidden = true; await user.click(screen.getByLabelText('Close')); expect(screen.getByText('Fallback')).toHaveFocus();
   });
   it('invalidates captured callbacks on revision, synchronous close and unmount', () => {
     let gate: ReturnType<typeof useViewGuard>;
@@ -62,5 +77,68 @@ describe('native dialog lifetime', () => {
     result.rerender(<Probe scope="b" />); expect(first.claim()).toBe(false);
     const second = gate!; expect(second.claim()).toBe(true); expect(second.claim()).toBe(false); second.invalidate(); expect(second.valid()).toBe(false);
     result.rerender(<Probe scope="c" />); const last = gate!; result.unmount(); expect(last.claim()).toBe(false);
+  });
+});
+
+// Native showModal lands on Close (the first control); the frame must move focus to the task.
+describe('initial focus order', () => {
+  it('focuses the first field, not Close, even after an earlier body button', () => {
+    render(<DialogFrame title="Find" onDismiss={vi.fn()}><button>Earlier action</button><input aria-label="Search" /></DialogFrame>);
+    expect(screen.getByLabelText('Search')).toHaveFocus();
+  });
+  it('honors initialFocus over every default', () => {
+    render(<Preferred />);
+    expect(screen.getByRole('button', { name: 'Chosen action' })).toHaveFocus();
+  });
+  it('falls back to the first usable body control when there is no field', () => {
+    render(<DialogFrame title="Confirm" onDismiss={vi.fn()}><p>Body copy</p><button disabled>Disabled action</button><button hidden>Hidden action</button><button>First action</button><button>Second action</button></DialogFrame>);
+    expect(screen.getByRole('button', { name: 'First action' })).toHaveFocus();
+  });
+  it('focuses Close only when the body has no control', () => {
+    render(<DialogFrame title="Loading" onDismiss={vi.fn()}><p>Loading…</p></DialogFrame>);
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  });
+  it('prefers task content over the review toolbar and treats [data-autofocus] as a field', () => {
+    render(<DialogFrame title="Review" toolbar={<select aria-label="Scenario"><option>Ready</option></select>} onDismiss={vi.fn()}><button>Earlier action</button><button data-autofocus>Marked action</button></DialogFrame>);
+    expect(screen.getByRole('button', { name: 'Marked action' })).toHaveFocus();
+  });
+  it('falls back to the toolbar before Close when the task content has no control', () => {
+    render(<DialogFrame title="Review" toolbar={<select aria-label="Scenario"><option>Ready</option></select>} onDismiss={vi.fn()}><p>Read-only body</p></DialogFrame>);
+    expect(screen.getByLabelText('Scenario')).toHaveFocus();
+  });
+  it('lands on the checked option of a radio group, as Tab would', () => {
+    render(<DialogFrame title="Branch" onDismiss={vi.fn()}><input type="radio" name="point" aria-label="First point" /><input type="radio" name="point" aria-label="Second point" defaultChecked /></DialogFrame>);
+    expect(screen.getByLabelText('Second point')).toHaveFocus();
+  });
+  it('keeps the task order across body and footer: fields, marked actions, then the first control', () => {
+    const first = render(<DialogFrame title="Connect" footer={<button data-autofocus>Verify</button>} onDismiss={vi.fn()}><input aria-label="API key" /></DialogFrame>);
+    expect(screen.getByLabelText('API key')).toHaveFocus(); expect(screen.getByRole('button', { name: 'Verify' })).not.toHaveFocus(); first.unmount();
+    const second = render(<DialogFrame title="Done" footer={<><button>Later</button><button data-autofocus>Choose</button></>} onDismiss={vi.fn()}><button>Body action</button></DialogFrame>);
+    expect(screen.getByRole('button', { name: 'Choose' })).toHaveFocus(); second.unmount();
+    render(<DialogFrame title="Confirm" footer={<><button>Cancel</button><button>Remove</button></>} onDismiss={vi.fn()}><p>Body copy</p></DialogFrame>);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+  });
+});
+
+describe('layout', () => {
+  it('pins the footer under the scrolling body, never over it, inside one content region', () => {
+    render(<DialogFrame title="Steps" contentProps={{ id: 'task-region' }} footer={<button>Save</button>} onDismiss={vi.fn()}><p>Long body</p></DialogFrame>);
+    const dialog = screen.getByRole('dialog', { name: 'Steps' });
+    const region = document.getElementById('task-region')!; const save = screen.getByRole('button', { name: 'Save' }); const body = screen.getByText('Long body').parentElement!;
+    expect(region.parentElement).toBe(dialog); expect(region).toContainElement(body); expect(region.lastElementChild).toContainElement(save); expect(body).not.toContainElement(save);
+    // Source contract only; real heights need browser validation.
+    expect(css).toMatch(/\.content \{ display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; \}/);
+    expect(css).toMatch(/\.body \{ flex: 1 1 auto; min-height: 0; overflow: auto;/);
+    expect(css).toMatch(/\.footer \{ flex: none;/);
+    expect(css).not.toMatch(/sticky/);
+  });
+  it('pins the top edge by default so changing content never re-centers it; center is opt-in', () => {
+    const { rerender } = render(<DialogFrame title="Commands" onDismiss={vi.fn()}><input aria-label="Search commands" /></DialogFrame>);
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-anchor', 'top');
+    rerender(<DialogFrame key="center" title="Commands" anchor="center" onDismiss={vi.fn()}><input aria-label="Search commands" /></DialogFrame>);
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-anchor', 'center');
+    // Source contract only; the pinned position needs browser validation.
+    expect(css).toMatch(/\.dialog\[data-anchor='top'\] \{ --dialog-top: clamp\(16px, 30vh - 160px, 12vh\); margin-block: var\(--dialog-top\) auto; max-height: min\(720px, calc\(100dvh - var\(--dialog-top\) - 16px\)\); \}/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{ \.dialog\[open\] \{ animation: none; \} \}/);
   });
 });

@@ -45,7 +45,9 @@ export function useDialogTransitionFocus(onDismiss: () => void) {
     // Native focus fixup can lag this effect. Only the captured, now-disabled
     // control is equivalent to body, never a different focus destination.
     if (current !== document.body && (current !== control || !disabled) || control.isConnected && !disabled) return;
-    const candidates = [...root.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled), select:not(:disabled), textarea:not(:disabled)')];
+    // A step's marked primary ([data-autofocus], as DialogFrame also honors) wins, then the first live control.
+    const controls = 'input:not(:disabled), button:not(:disabled), select:not(:disabled), textarea:not(:disabled)';
+    const candidates = [...[...root.querySelectorAll<HTMLElement>('[data-autofocus]')].filter((node) => node.matches(controls)), ...root.querySelectorAll<HTMLElement>(controls)];
     const close = dialog.querySelector<HTMLElement>(':scope > header button');
     if (close) candidates.push(close);
     candidates.find((node) => visibleControl(node, dialog))?.focus({ preventScroll: true });

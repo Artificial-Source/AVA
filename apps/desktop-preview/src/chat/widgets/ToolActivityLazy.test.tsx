@@ -27,7 +27,7 @@ it('loads only after explicit expansion, never reopens on late resolution, and k
   }
   const view = render(<StrictMode><Host /></StrictMode>);
   expect(detail.loads).toBe(0); expect(screen.queryByLabelText('Loaded tool output')).not.toBeInTheDocument();
-  const trigger = screen.getByRole('button', { name: /^Tool details/ }); trigger.focus(); await user.keyboard('{Enter}');
+  const trigger = screen.getByRole('button', { name: /^1 tool\b/ }); trigger.focus(); await user.keyboard('{Enter}');
   await waitFor(() => expect(detail.loads).toBe(1)); expect(trigger).toHaveAttribute('aria-expanded', 'true'); expect(trigger).toHaveFocus();
   await user.keyboard(' '); expect(trigger).toHaveAttribute('aria-expanded', 'false');
   const closing = view.container.querySelector('[data-presence="closing"]'); expect(closing).toHaveAttribute('inert'); expect(closing).toHaveAttribute('aria-hidden', 'true');

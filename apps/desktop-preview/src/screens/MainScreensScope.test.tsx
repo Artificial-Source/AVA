@@ -24,8 +24,9 @@ vi.mock('./MainScreens', async () => {
 });
 // Simulate an external owner replacing the viewed parent at the reducer boundary.
 vi.mock('../state/reducer', async (original) => {
-  const { previewReducer } = await original<typeof import('../state/reducer')>();
-  return { previewReducer: ((state, action) => {
+  const actual = await original<typeof import('../state/reducer')>();
+  const { previewReducer } = actual;
+  return { ...actual, previewReducer: ((state, action) => {
     if (host.switchParent && action.type === 'setModel') {
       host.switchParent = false;
       return previewReducer(state, { type: 'viewChat', chatId: 'export-range' });
@@ -50,9 +51,10 @@ describe('latest main-screen scope and pending boundary', () => {
     expect(host.loads).toBe(0); expect(host.props).toBeNull();
     const sidebar = screen.getByRole('complementary', { name: 'Projects and chats' });
     const projectChats = within(screen.getByRole('navigation', { name: 'All project chats' }));
-    const exportChat = projectChats.getByRole('button', { name: 'Attention Export date range' });
-    const keyboardChat = projectChats.getByRole('button', { name: 'Working Keyboard navigation' });
+    const exportChat = projectChats.getByRole('button', { name: 'Export date range Attention' });
+    const keyboardChat = projectChats.getByRole('button', { name: 'Keyboard navigation Working' });
     const newChat = screen.getByRole('button', { name: 'New chat' }); const settings = screen.getByRole('button', { name: 'Settings' });
+    const messages = screen.queryAllByRole('article', { name: 'Your message' }).length;
     const model = modelButton(); model.focus(); fireEvent.click(model);
     const pending = screen.getByRole('dialog', { name: 'Loading models' }); expect(pending).toHaveAttribute('open');
     const draft = screen.getByRole('textbox'); const original = (draft as HTMLTextAreaElement).value;
@@ -63,7 +65,7 @@ describe('latest main-screen scope and pending boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Working Review back navigation/ }));
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Remember search filters');
     expect(screen.getByRole('textbox')).toHaveValue(original);
-    expect(screen.queryByRole('article', { name: 'Your local preview message' })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('article', { name: 'Your message' })).toHaveLength(messages);
     fireEvent.keyDown(pending, { key: 'Escape', isComposing: true }); expect(pending).toBeInTheDocument();
     fireEvent.keyDown(pending, { key: 'Escape' }); expect(pending).not.toBeInTheDocument(); expect(model).toHaveFocus();
     settings.focus(); fireEvent.click(settings);
@@ -86,8 +88,8 @@ describe('latest main-screen scope and pending boundary', () => {
     expect(screen.getByRole('complementary', { name: 'Projects and chats' })).toBe(sidebar);
     expect(sidebar).not.toHaveAttribute('hidden'); expect(sidebar).not.toHaveAttribute('inert');
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Remember search filters');
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Working Keyboard navigation' }));
-    const stop = screen.getByRole('button', { name: 'Stop mock work' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Keyboard navigation Working' }));
+    const stop = screen.getByRole('button', { name: 'Stop' });
     fireEvent.click(settings); fireEvent.click(stop);
     expect(screen.getByRole('region', { name: 'Settings page' })).toBeInTheDocument();
     await act(async () => { host.resolve(); await host.ready; });
@@ -97,13 +99,13 @@ describe('latest main-screen scope and pending boundary', () => {
     expect(sidebar).toHaveAttribute('hidden'); expect(sidebar).toHaveAttribute('inert');
     fireEvent.click(screen.getByRole('button', { name: 'Back to chat' })); expect(settings).toHaveFocus(); expect(sidebar).toBeVisible();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(modelButton()).toHaveTextContent('Aster Mini');
-    expect(screen.getByRole('button', { name: 'Stop mock work' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
   });
 
   it('requires Back before sidebar navigation or New chat and rejects departed Settings callbacks', async () => {
     render(<AppShell />);
     const sidebar = screen.getByRole('complementary', { name: 'Projects and chats' });
-    const exportChat = within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Attention Export date range' });
+    const exportChat = within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Export date range Attention' });
     const newChat = screen.getByRole('button', { name: 'New chat' }); const settings = screen.getByRole('button', { name: 'Settings' });
     fireEvent.click(settings);
     await screen.findByRole('button', { name: 'Back to chat' }); const old = host.props!;
@@ -113,7 +115,7 @@ describe('latest main-screen scope and pending boundary', () => {
     expect(screen.queryByRole('navigation', { name: 'All project chats' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to chat' })); expect(settings).toHaveFocus(); expect(sidebar).toBeVisible();
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Remember search filters');
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Attention Export date range' }));
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'All project chats' })).getByRole('button', { name: 'Export date range Attention' }));
     act(() => { old.onSelectModel(choice(old)); old.onPreferencesChange({ ...old.preferences, enter: 'newline' }); old.onSectionChange('about'); old.onDismiss(); });
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Export date range');
     fireEvent.click(screen.getByRole('button', { name: 'Settings' })); await screen.findByRole('button', { name: 'Back to chat' });

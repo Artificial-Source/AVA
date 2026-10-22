@@ -13,15 +13,16 @@ const cases = [
   ['stopped', 'Stopped'],
   ['failed', 'Failed'],
   ['unavailable', 'Unavailable'],
+  ['queued', 'Queued'],
 ] as const;
 
-describe('shared fixed-example status', () => {
-  it.each(cases)('renders %s as a labeled status with a decorative glyph', (status, label) => {
+describe('shared status', () => {
+  it.each(cases)('renders %s as a labeled status with a decorative glyph and no mock tooltip', (status, label) => {
     render(<button><ChatStatus status={status} />{' '}Example chat</button>);
     const badge = screen.getByText(label);
     const glyph = badge.firstElementChild!;
     expect(badge).toHaveAttribute('data-status', status);
-    expect(badge).toHaveAttribute('title', 'Fixed example status, not live activity');
+    expect(badge).not.toHaveAttribute('title');
     expect(badge).toHaveTextContent(new RegExp(`^${label}$`));
     expect(screen.getByRole('button')).toHaveAccessibleName(`${label} Example chat`);
     expect(glyph).toHaveClass(styles.glyph);
@@ -43,9 +44,38 @@ describe('shared fixed-example status', () => {
     expect(new Set(paths).size).toBe(cases.length);
   });
 
+  it('renders Queued as a static neutral clock, distinct from the Working cycle', () => {
+    render(<ChatStatus status="queued" />);
+    const badge = screen.getByText('Queued');
+    expect(badge).toHaveAttribute('data-status', 'queued');
+    expect(badge.firstElementChild).not.toHaveClass(styles.cycling);
+    expect(css).toMatch(/\.status\[data-status='queued'\] \{ color: var\(--status-queued, var\(--muted\)\); \}/);
+    expect(css).not.toMatch(/data-status='queued'\][^{]*\{[^}]*animation/);
+  });
+
+  it('overrides only the visible word, keeping the status look and glyph', () => {
+    const { container } = render(<><ChatStatus status="unavailable" /><ChatStatus status="unavailable" label="Not run" /></>);
+    const [plain, renamed] = Array.from(container.querySelectorAll('[data-status]'));
+    expect(renamed).toHaveTextContent(/^Not run$/);
+    expect(renamed).toHaveAttribute('data-status', 'unavailable');
+    expect(renamed.querySelector('svg')!.innerHTML).toBe(plain.querySelector('svg')!.innerHTML);
+    expect(screen.queryAllByText('Unavailable')).toHaveLength(1);
+  });
+
   it('renders nothing for idle, with no empty label or motion wrapper', () => {
     const { container } = render(<ChatStatus status="idle" />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('splits into a hidden glyph part that keeps the cycle hook and a glyph-free label part', () => {
+    const { container } = render(<button><ChatStatus status="working" part="glyph" />Example chat{' '}<ChatStatus status="working" part="label" /></button>);
+    const [glyphPart, labelPart] = Array.from(container.querySelectorAll('[data-status="working"]'));
+    expect(glyphPart).toHaveAttribute('aria-hidden', 'true');
+    expect(glyphPart).toHaveTextContent(/^$/);
+    expect(glyphPart.firstElementChild).toHaveClass(styles.cycling);
+    expect(labelPart).not.toHaveAttribute('aria-hidden');
+    expect(labelPart.querySelector('svg')).toBeNull();
+    expect(screen.getByRole('button')).toHaveAccessibleName('Example chat Working');
   });
 
   it('removes the icon-only cycle hook on every supplied nonworking status, including Stop and idle', () => {

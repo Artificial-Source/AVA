@@ -1,251 +1,268 @@
 import { useState } from 'react';
-import { readFileSync } from 'node:fs';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ConnectView, FinderView, ModelChoice, ModelPickerView, ModelSelection } from './contracts';
-import { ChatActionDialog, PermissionDialog, QuestionDialog, RenameDialog, validTitle, validWorkspaceIntent } from './ChatDialogs';
+import type { FinderView, WorkspaceIntent, WorkspaceView } from './contracts';
+import { ChatActionDialog, PermissionDialog, QuestionDialog, RenameDialog, validTitle, validWorkspaceIntent, WorkspaceDialog } from './ChatDialogs';
 import { installDialogTestSupport } from './dialogTestSupport';
 import { FinderDialog, validFinderIntent } from './FinderDialog';
-import { modelCase, modelChoices, permissionCase, projects, providers, questionCase, sessions, workspaceChoices } from './fixtures';
-import { ModelDialog, validModelCatalog, validModelSelection } from './ModelDialog';
-import { ProviderConnectDialog, validConnectIntent } from './ProviderViews';
+import { branchPoints, permissionCase, projects, questionCase, sessions, workspaceChoices } from './fixtures';
 
 beforeEach(installDialogTestSupport);
 const chrome = { onDismiss: vi.fn() };
-const modelView: ModelPickerView = { id: 'models', version: 1, state: 'ready', scope: 'current-chat', currentId: 'aster', defaultId: 'aster-mini', choices: modelChoices };
-const modelIntent: ModelSelection = { id: 'models', version: 1, modelId: 'aster', scope: 'current-chat', reasoning: 'Low' };
+const chat = { id: 'chat', version: 1, title: 'Refine search filters', state: 'ready' as const };
 
-it('SCREEN11-F01: completed provider examples use white, not Working green', () => {
-  const screenCss = readFileSync('src/screens/screens.module.css', 'utf8');
-  expect(screenCss).toContain(".status[data-status='connected-example'], .status[data-status='success'] { color: var(--status-completed); }");
-  expect(screenCss).toContain(".status[data-status='error'] { color: var(--status-stopped-failed); }");
-  expect(screenCss).toContain(".status[data-status='waiting'] { color: var(--status-attention); }");
-});
-
-describe('controlled model dialog', () => {
-  it('summarizes the selected profile and groups exactly three supplied profiles by family and provider', async () => {
-    const user = userEvent.setup(); const onSelect = vi.fn(); render(<ModelDialog {...chrome} view={modelView} query="" onQueryChange={vi.fn()} onSelect={onSelect} onRetry={vi.fn()} />);
-    expect(screen.getByRole('dialog', { name: 'Choose a model' })).toHaveAttribute('data-wide', 'true');
-    const summary = screen.getByRole('region', { name: 'Selected model' });
-    expect(within(summary).getByRole('heading', { name: 'Aster' })).toBeVisible();
-    expect(summary).toHaveTextContent('Aster Lab'); expect(summary).toHaveTextContent('This chat');
-    expect(summary).toHaveTextContent('214,000 token window'); expect(summary).toHaveTextContent('Images');
-    expect(within(summary).getByRole('list', { name: 'Model capabilities' })).toHaveTextContent('Reasoning: Low, Medium, High');
-    const aster = screen.getByRole('group', { name: 'Aster family Aster Lab' });
-    const orion = screen.getByRole('group', { name: 'Orion family Orion Lab' });
-    expect(within(aster).getAllByRole('radio')).toHaveLength(2); expect(within(orion).getAllByRole('radio')).toHaveLength(1);
-    expect(within(aster).getByRole('radio', { name: /Aster CURRENT.*214,000/ })).toBeChecked();
-    expect(within(aster).getByRole('radio', { name: /Aster Mini DEFAULT.*128,000/ })).toBeEnabled();
-    expect(new Set(screen.getAllByRole<HTMLInputElement>('radio').map((radio) => radio.name)).size).toBe(1);
-    await user.click(within(orion).getByRole('radio', { name: /Orion.*96,000/ })); expect(onSelect).not.toHaveBeenCalled();
-    expect(within(summary).getByRole('heading', { name: 'Orion' })).toBeVisible();
-    expect(summary).toHaveTextContent('96,000 token window'); expect(summary).not.toHaveTextContent('Images');
-    await user.selectOptions(screen.getByLabelText('Reasoning level'), 'High'); await user.click(screen.getByText('Use Orion'));
-    expect(onSelect).toHaveBeenCalledWith({ ...modelIntent, modelId: 'orion', reasoning: 'High' });
-  });
-  it('offers facts only to a main host with no reasoning setting, emitting null rather than an ignored level', async () => {
-    const user = userEvent.setup(); const onSelect = vi.fn(); const view = { ...modelView, reasoningEditable: false };
-    render(<ModelDialog {...chrome} description="Changes this local parent only." view={view} query="" onQueryChange={vi.fn()} onSelect={onSelect} onRetry={vi.fn()} />);
-    expect(screen.getByRole('dialog')).toHaveAccessibleDescription('Changes this local parent only.');
-    expect(screen.queryByLabelText('Reasoning level')).not.toBeInTheDocument();
-    expect(screen.getByText('Changes this local parent only.').closest('.srOnly')).not.toBeNull();
-    expect(screen.getAllByText('Changes this local parent only.')).toHaveLength(1);
-    expect(screen.queryByText(/^Scope:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Current:.*Default:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Reasoning capabilities are facts only|no reasoning setting/)).not.toBeInTheDocument();
-    await user.click(screen.getByRole('radio', { name: /Orion.*96,000/ }));
-    await user.click(screen.getByText('Use Orion'));
-    expect(onSelect).toHaveBeenCalledWith({ ...modelIntent, modelId: 'orion', reasoning: null });
-    expect(validModelSelection(view, { ...modelIntent, reasoning: null })).toBe(true);
-    expect(validModelSelection(view, modelIntent)).toBe(false);
-    expect(validModelSelection(modelView, { ...modelIntent, reasoning: null })).toBe(false);
-  });
-  it('keeps native radio keyboard navigation across family groups without submitting a draft', async () => {
-    const user = userEvent.setup(); const onSelect = vi.fn();
-    render(<ModelDialog {...chrome} view={modelView} query="" onQueryChange={vi.fn()} onSelect={onSelect} onRetry={vi.fn()} />);
-    const radios = screen.getAllByRole<HTMLInputElement>('radio'); radios[0].focus();
-    await user.keyboard('{ArrowRight}'); expect(radios[1]).toHaveFocus(); expect(radios[1]).toBeChecked();
-    await user.keyboard('{ArrowRight}'); expect(radios[2]).toHaveFocus(); expect(radios[2]).toBeChecked();
-    expect(within(screen.getByRole('region', { name: 'Selected model' })).getByRole('heading', { name: 'Orion' })).toBeVisible();
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-  it('scopes family identities to providers, uses provider-only groups when absent, and searches supplied family labels', async () => {
-    const user = userEvent.setup();
-    const choices = [
-      { ...modelChoices[0], family: { id: 'shared', label: 'Navigation' } },
-      { ...modelChoices[1], family: undefined },
-      { ...modelChoices[2], family: { id: 'shared', label: 'Writing' } },
-    ];
-    expect(validModelCatalog({ ...modelView, choices })).toBe(true);
-    function Host() {
-      const [query, setQuery] = useState('');
-      return <ModelDialog {...chrome} view={{ ...modelView, choices }} query={query} onQueryChange={setQuery} onSelect={vi.fn()} onRetry={vi.fn()} />;
-    }
-    render(<Host />);
-    for (const name of ['Navigation family Aster Lab', 'Aster Lab', 'Writing family Orion Lab']) expect(screen.getByRole('group', { name })).toBeVisible();
-    const search = screen.getByRole('searchbox', { name: 'Search models' });
-    for (const [query, id] of [['navigation', 'aster'], ['Orion Lab', 'orion'], ['Mini', 'aster-mini']]) {
-      await user.clear(search); await user.type(search, query);
-      expect(screen.getAllByRole('radio')).toHaveLength(1); expect(screen.getByRole('radio')).toHaveAttribute('value', id);
-    }
-    expect(within(screen.getByRole('region', { name: 'Selected model' })).getByRole('heading', { name: 'Aster' })).toBeVisible();
-    await user.clear(search); await user.type(search, 'no matching profile');
-    expect(screen.queryByRole('radio')).not.toBeInTheDocument(); expect(screen.getByRole('status')).toHaveTextContent('No matching models');
-  });
-  it('keeps unknown facts and unbound choices explicit without guessing a family', () => {
-    render(<ModelDialog {...chrome} view={{ ...modelView, currentId: 'unbound-example', choices: modelCase('unknown') }} query="" onQueryChange={vi.fn()} onSelect={vi.fn()} onRetry={vi.fn()} />);
-    const group = screen.getByRole('group', { name: 'Example provider' });
-    expect(group).toHaveTextContent('Window unknown'); expect(group).toHaveTextContent('Capabilities unknown');
-    expect(group).toHaveTextContent('No bound model profile'); expect(within(group).getByRole('radio')).toBeDisabled();
-    const summary = screen.getByRole('region', { name: 'Selected model' });
-    expect(summary).toHaveTextContent('Window unknown'); expect(summary).toHaveTextContent('Capabilities unknown');
-    expect(screen.getByRole('button', { name: 'Use Unbound model' })).toBeDisabled();
-  });
-  it.each([null, [], {}, { id: 'aster' }, { label: 'Aster' }, { id: 4, label: 'Aster' }, { id: ' ', label: 'Aster' }, { id: 'aster', label: ' ' }])('rejects malformed optional family metadata %j', (family) => {
-    const view = { ...modelView, choices: [{ ...modelChoices[0], family: family as ModelChoice['family'] }] };
-    render(<ModelDialog {...chrome} view={view} query="" onQueryChange={vi.fn()} onSelect={vi.fn()} onRetry={vi.fn()} />);
-    expect(validModelCatalog(view)).toBe(false); expect(validModelSelection(view, modelIntent)).toBe(false);
-    expect(screen.getByRole('alert')).toHaveTextContent('malformed'); expect(screen.queryByRole('radio')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Use model' })).toBeDisabled();
-  });
-  it('rejects inconsistent labels for the same supplied provider or provider-scoped family', () => {
-    expect(validModelCatalog({ ...modelView, choices: [modelChoices[0], { ...modelChoices[1], family: { id: 'aster', label: 'Different label' } }] })).toBe(false);
-    expect(validModelCatalog({ ...modelView, choices: [modelChoices[0], { ...modelChoices[1], providerLabel: 'Different provider label' }] })).toBe(false);
-  });
-  it('SCREEN11-F02: ignores IME Escape, clears model search first, then dismisses', async () => {
-    const user = userEvent.setup(); const onDismiss = vi.fn();
-    function Host() {
-      const [query, setQuery] = useState('Orion');
-      return <ModelDialog onDismiss={onDismiss} view={modelView} query={query} onQueryChange={setQuery} onSelect={vi.fn()} onRetry={vi.fn()} />;
-    }
-    render(<Host />);
-    const search = screen.getByRole('searchbox', { name: 'Search models' }); search.focus();
-    fireEvent.keyDown(search, { key: 'Escape', isComposing: true });
-    expect(search).toHaveValue('Orion'); expect(onDismiss).not.toHaveBeenCalled();
-    await user.keyboard('{Escape}');
-    expect(search).toHaveValue(''); expect(search).toHaveFocus(); expect(onDismiss).not.toHaveBeenCalled();
-    expect(screen.getByRole('dialog')).toHaveAttribute('open');
-    expect(screen.getAllByRole('radio')).toHaveLength(3);
-    await user.keyboard('{Escape}'); expect(onDismiss).toHaveBeenCalledTimes(1);
-  });
-  it('retains the draft across stale/ready views without accepting stale or busy choices', async () => {
-    const user = userEvent.setup(); const onSelect = vi.fn(); const props = { ...chrome, query: '', onQueryChange: vi.fn(), onSelect, onRetry: vi.fn() };
-    const result = render(<ModelDialog {...props} view={modelView} />); await user.click(screen.getByRole('radio', { name: /Orion.*96,000/ }));
-    result.rerender(<ModelDialog {...props} view={{ ...modelView, version: 2, state: 'stale' }} />); expect(screen.getByRole('radio', { name: /Orion.*96,000/ })).toBeChecked(); expect(screen.getByText('Use Orion')).toBeDisabled();
-    result.rerender(<ModelDialog {...props} view={{ ...modelView, version: 3 }} />); await user.click(screen.getByText('Use Orion')); expect(onSelect).toHaveBeenCalledTimes(1);
-  });
-  it.each(['loading', 'empty', 'error', 'stale', 'unavailable', 'busy', 'disabled'] as const)('rejects %s mutation', (state) => {
-    expect(validModelSelection({ ...modelView, state }, modelIntent)).toBe(false);
-  });
-  it('renders malformed supplied catalogs fail-closed rather than dereferencing them', () => {
-    const view = { ...modelView, choices: null! };
-    render(<ModelDialog {...chrome} view={view} query="" onQueryChange={vi.fn()} onSelect={vi.fn()} onRetry={vi.fn()} />);
-    expect(screen.getByRole('alert')).toHaveTextContent('malformed');
-    expect(screen.getByText('Use model')).toBeDisabled();
-    expect(validModelSelection(view, modelIntent)).toBe(false);
-  });
-  it('rejects unknown, malformed, duplicate, stale-scope and unknown reasoning intents', () => {
-    expect(validModelSelection(modelView, { ...modelIntent, modelId: 'unknown' as ModelSelection['modelId'] })).toBe(false);
-    expect(validModelSelection(modelView, { ...modelIntent, version: 0 })).toBe(false);
-    expect(validModelSelection(modelView, { ...modelIntent, scope: 'new-chat-default' })).toBe(false);
-    expect(validModelSelection(modelView, { ...modelIntent, reasoning: 'Unbound' })).toBe(false);
-    expect(validModelCatalog({ ...modelView, choices: [...modelChoices, modelChoices[0]] })).toBe(false);
-    expect(validModelCatalog({ ...modelView, choices: [{ ...modelChoices[0], reasoning: null! }] })).toBe(false);
-    expect(validModelCatalog({ ...modelView, choices: null! })).toBe(false);
-  });
-});
-
-describe('provider connection scopes and ephemeral input', () => {
-  const view: ConnectView = { id: 'connect', version: 1, provider: providers[0], step: 'key', method: 'key' };
-  it('accepts only a masked dummy literal and never emits its value', async () => {
-    const user = userEvent.setup(); const onIntent = vi.fn(); render(<ProviderConnectDialog {...chrome} view={view} onIntent={onIntent} />);
-    const input = screen.getByLabelText('Dummy API key'); expect(input).toHaveAttribute('type', 'password');
-    await user.type(input, 'not-an-accepted-demo-value'); await user.click(screen.getByText('Continue with dummy key')); expect(onIntent).not.toHaveBeenCalled(); expect(input).toHaveValue(''); expect(screen.getByRole('alert')).toBeInTheDocument();
-    await user.type(input, 'AVA-DEMO-KEY'); await user.click(screen.getByText('Continue with dummy key'));
-    expect(input).toHaveValue(''); expect(onIntent).toHaveBeenCalledWith({ id: 'connect', version: 1, action: 'submit-demo-key' });
-    expect(JSON.stringify(onIntent.mock.calls)).not.toContain('AVA-DEMO-KEY');
-  });
-  it('clears transient keys on step replacement and unmount, with no automatic settlement', async () => {
-    const user = userEvent.setup(); const onIntent = vi.fn(); const result = render(<ProviderConnectDialog {...chrome} view={view} onIntent={onIntent} />);
-    await user.type(screen.getByLabelText('Dummy API key'), 'AVA-DEMO-KEY');
-    result.rerender(<ProviderConnectDialog {...chrome} view={{ ...view, version: 2, step: 'waiting' }} onIntent={onIntent} />); expect(screen.queryByLabelText('Dummy API key')).not.toBeInTheDocument(); expect(onIntent).not.toHaveBeenCalled();
-    result.rerender(<ProviderConnectDialog {...chrome} view={{ ...view, version: 3 }} onIntent={onIntent} />); expect(screen.getByLabelText('Dummy API key')).toHaveValue(''); result.unmount();
-    render(<ProviderConnectDialog {...chrome} view={view} onIntent={onIntent} />); expect(screen.getByLabelText('Dummy API key')).toHaveValue('');
-  });
-  it('renders malformed provider methods without exposing an active form', () => {
-    render(<ProviderConnectDialog {...chrome} view={{ ...view, provider: { ...providers[0], methods: null! } }} onIntent={vi.fn()} />);
-    expect(screen.getByRole('alert')).toHaveTextContent('Unsupported');
-    expect(screen.queryByLabelText('Dummy API key')).not.toBeInTheDocument();
-  });
-  it('rejects stale, unknown-method, unsupported-step and environment disconnect intents', () => {
-    const identity = { id: 'connect', version: 1 };
-    expect(validConnectIntent(view, { ...identity, action: 'submit-demo-key', version: 0 })).toBe(false);
-    expect(validConnectIntent({ ...view, step: 'method' }, { ...identity, action: 'choose-method', method: 'unknown' as 'key' })).toBe(false);
-    expect(validConnectIntent(view, { ...identity, action: 'show-success' })).toBe(false);
-    expect(validConnectIntent({ ...view, step: 'disconnect', provider: providers[2] }, { ...identity, action: 'disconnect' })).toBe(false);
-    expect(validConnectIntent({ ...view, step: 'disconnect', provider: providers[1] }, { ...identity, action: 'disconnect' })).toBe(true);
-  });
-  it('ignores IME Escape, then goes Back without closing or emitting input', async () => {
-    const user = userEvent.setup(); const onIntent = vi.fn(); const onDismiss = vi.fn(); render(<ProviderConnectDialog onDismiss={onDismiss} view={view} onIntent={onIntent} />);
-    await user.type(screen.getByLabelText('Dummy API key'), 'AVA-DEMO-KEY'); fireEvent.keyDown(screen.getByLabelText('Dummy API key'), { key: 'Escape', isComposing: true }); expect(onIntent).not.toHaveBeenCalled();
-    fireEvent.keyDown(screen.getByLabelText('Dummy API key'), { key: 'Escape' }); expect(onIntent).toHaveBeenCalledWith({ id: 'connect', version: 1, action: 'back' }); expect(onDismiss).not.toHaveBeenCalled();
-  });
-});
-
-describe('session, rename, confirmations and request wrappers', () => {
-  it('filters projects and refuses unbound or stale finder choices', async () => {
+describe('chat finder', () => {
+  it('separates archived chats and refuses unbound or stale finder choices', async () => {
     const user = userEvent.setup(); const onSelect = vi.fn(); const view: FinderView = { id: 'sessions', version: 1, kind: 'sessions', state: 'ready', items: sessions, projects };
     render(<FinderDialog {...chrome} view={view} query="" onQueryChange={vi.fn()} onSelect={onSelect} onRetry={vi.fn()} />);
-    await user.selectOptions(screen.getByLabelText('Project filter'), 'notebook'); expect(screen.queryByText('Refine search filters')).not.toBeInTheDocument();
-    await user.click(screen.getByText('Organize reading notes')); expect(onSelect).toHaveBeenCalledWith({ id: 'sessions', version: 1, itemId: 'notes' });
+    await user.click(screen.getByRole('button', { name: 'Archived' })); expect(screen.queryByRole('option', { name: 'Refine search filters' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('option', { name: 'Organize reading notes' })); expect(onSelect).toHaveBeenCalledWith({ id: 'sessions', version: 1, itemId: 'notes' });
     expect(validFinderIntent(view, { id: 'sessions', version: 0, itemId: 'notes' })).toBe(false);
-    expect(validFinderIntent(view, { id: 'sessions', version: 1, itemId: 'unavailable' })).toBe(false);
+    expect(validFinderIntent(view, { id: 'sessions', version: 1, itemId: 'release' })).toBe(false);
     expect(validFinderIntent({ ...view, kind: 'commands' }, { id: 'sessions', version: 1, itemId: 'notes' })).toBe(false);
   });
-  it('rejects unbound, duplicate and stale workspace choices', () => {
-    const view = { id: 'workspace', version: 1, state: 'choice' as const, selectedId: 'atlas', choices: workspaceChoices };
-    expect(validWorkspaceIntent(view, { id: 'workspace', version: 1, action: 'choose', workspaceId: 'unknown' })).toBe(false);
-    expect(validWorkspaceIntent(view, { id: 'workspace', version: 0, action: 'choose', workspaceId: 'atlas' })).toBe(false);
-    expect(validWorkspaceIntent({ ...view, choices: [workspaceChoices[0], workspaceChoices[0]] }, { id: 'workspace', version: 1, action: 'choose', workspaceId: 'atlas' })).toBe(false);
-    expect(validWorkspaceIntent({ ...view, state: 'opening', selectedId: 'unknown' }, { id: 'workspace', version: 1, action: 'show-ready' })).toBe(false);
+  it('opens on a requested filter that the filter buttons still change', async () => {
+    const user = userEvent.setup(); const view: FinderView = { id: 'sessions', version: 1, kind: 'sessions', state: 'ready', items: sessions, projects };
+    render(<FinderDialog {...chrome} view={view} initialScope="archived" query="" onQueryChange={vi.fn()} onSelect={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Archived' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([expect.stringContaining('Organize reading notes')]);
+    await user.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByRole('option', { name: 'Refine search filters' })).toBeInTheDocument();
   });
-  it('validates trimmed nonempty rename and the 256 character bound', async () => {
-    const user = userEvent.setup(); const onRename = vi.fn(); render(<RenameDialog {...chrome} view={{ id: 'rename', version: 1, state: 'ready', title: '' }} onRename={onRename} />);
-    const input = screen.getByLabelText('Chat title'); expect(input).toHaveAttribute('maxlength', '256'); await user.click(screen.getByText('Rename example')); expect(screen.getByRole('alert')).toHaveTextContent('non-empty'); expect(onRename).not.toHaveBeenCalled();
-    await user.type(input, '  Better title  '); await user.click(screen.getByText('Rename example')); expect(onRename).toHaveBeenCalledWith({ id: 'rename', version: 1, title: 'Better title' });
+  it('finds chats by their messages, shows where the words appear, and keeps a plain no-match notice', () => {
+    const view: FinderView = { id: 'sessions', version: 1, kind: 'sessions', state: 'ready', items: sessions, projects };
+    const props = { ...chrome, view, onQueryChange: vi.fn(), onSelect: vi.fn(), onRetry: vi.fn() };
+    const result = render(<FinderDialog {...props} query="reading timezone" />);
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    const notes = screen.getByRole('option', { name: 'Organize reading notes' });
+    // Only the word the title doesn't cover is shown in context and marked.
+    expect(notes).toHaveAccessibleDescription(/…Dates follow the reader’s timezone, newest first\.$/);
+    expect(Array.from(notes.querySelectorAll('mark'), (mark) => mark.textContent)).toEqual(['timezone']);
+    result.rerender(<FinderDialog {...props} query="keyboard" />);
+    expect(screen.getByRole('option', { name: 'Keyboard navigation' }).querySelector('mark')).toBeNull();
+    expect(screen.getByRole('option', { name: 'Refine search filters' }).querySelector('mark')).toBeNull();
+    result.rerender(<FinderDialog {...props} query="zebra" />);
+    expect(screen.queryByRole('option')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('No chats match “zebra”.');
+  });
+});
+
+describe('rename', () => {
+  it('selects the current title, counts only near the limit and validates empty and too-long titles', async () => {
+    const user = userEvent.setup(); const onRename = vi.fn();
+    const result = render(<RenameDialog {...chrome} view={chat} onRename={onRename} />);
+    const input = screen.getByLabelText<HTMLInputElement>('Chat title');
+    expect(input).toHaveFocus(); expect([input.selectionStart, input.selectionEnd]).toEqual([0, chat.title.length]);
+    expect(input).toHaveAttribute('maxlength', '256'); expect(screen.queryByText(/characters? left/)).not.toBeInTheDocument();
+    await user.clear(input); await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a title for this chat.'); expect(input).toHaveAttribute('aria-invalid', 'true'); expect(onRename).not.toHaveBeenCalled();
+    await user.type(input, '  Better title  '); await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(onRename).toHaveBeenCalledExactlyOnceWith({ id: 'chat', version: 1, title: 'Better title' });
+    result.rerender(<RenameDialog {...chrome} view={{ ...chat, version: 2, title: 'A'.repeat(220) }} onRename={onRename} />);
+    expect(screen.getByLabelText('Chat title')).toHaveAccessibleDescription('36 characters left');
+    result.rerender(<RenameDialog {...chrome} view={{ ...chat, version: 3, title: 'A'.repeat(257) }} onRename={onRename} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Titles can be up to 256 characters. Remove 1 character.');
+    await user.click(screen.getByRole('button', { name: 'Rename' })); expect(onRename).toHaveBeenCalledTimes(1);
     expect(validTitle('A'.repeat(256))).toBe(true); expect(validTitle('A'.repeat(257))).toBe(false); expect(validTitle('   ')).toBe(false);
   });
-  it('cancel never emits archive or branch intent', async () => {
-    const user = userEvent.setup(); const onIntent = vi.fn(); const onDismiss = vi.fn(); render(<ChatActionDialog onDismiss={onDismiss} action="archive" view={{ id: 'archive', version: 1, title: 'Original', state: 'ready' }} points={[]} onIntent={onIntent} />);
-    expect(screen.getByText(/Archive is not wired in RPC v1/)).toBeInTheDocument(); await user.click(screen.getByText('Cancel')); expect(onDismiss).toHaveBeenCalledTimes(1); expect(onIntent).not.toHaveBeenCalled();
+  it('explains why a running chat can’t be renamed yet', () => {
+    render(<RenameDialog {...chrome} view={{ ...chat, state: 'busy' }} onRename={vi.fn()} />);
+    expect(screen.getByRole('status')).toHaveTextContent('You can rename this chat after its run finishes or is stopped.');
+    expect(screen.getByLabelText('Chat title')).toBeDisabled(); expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
   });
-  it('dismissal does not approve; session grant appears only when advertised; double submit is guarded', async () => {
-    const user = userEvent.setup(); const onIntent = vi.fn(); const onDismiss = vi.fn(); const result = render(<PermissionDialog onDismiss={onDismiss} request={permissionCase('once', 1)} onIntent={onIntent} />);
-    expect(screen.queryByText('Allow for session')).not.toBeInTheDocument(); await user.click(screen.getByText('Dismiss unresolved')); expect(onIntent).not.toHaveBeenCalled(); expect(onDismiss).toHaveBeenCalled();
+});
+
+describe('archive and branch', () => {
+  it('states what archiving does and confirms with a neutral primary that takes focus', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn(); const onDismiss = vi.fn();
+    const result = render(<ChatActionDialog onDismiss={onDismiss} action="archive" view={chat} points={[]} onIntent={onIntent} onGoToChat={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'Archive chat?' });
+    expect(dialog).toHaveAccessibleDescription('Refine search filters');
+    expect(dialog).toHaveTextContent('Removed from Projects, Pinned and Recent.');
+    expect(dialog).toHaveTextContent('Nothing is deleted. Find it in Find a chat → Archived.');
+    expect(dialog).not.toHaveTextContent(/RPC|intent|example|preview/i);
+    const confirm = within(dialog).getByRole('button', { name: 'Archive chat' });
+    expect(confirm).toHaveAttribute('data-tone', 'primary'); expect(confirm).toHaveFocus();
+    expect(within(dialog).queryByRole('button', { name: 'Go to chat' })).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' })); expect(onDismiss).toHaveBeenCalledTimes(1); expect(onIntent).not.toHaveBeenCalled();
+    result.rerender(<ChatActionDialog key="next" onDismiss={onDismiss} action="archive" view={{ ...chat, version: 2 }} points={[]} onIntent={onIntent} />);
+    await user.click(screen.getByRole('button', { name: 'Archive chat' }));
+    expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'chat', version: 2, action: 'archive' });
+  });
+  it('links the guidance to Find a chat on Archived, with its key, and follows it once', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn(); const onFindArchived = vi.fn();
+    render(<ChatActionDialog {...chrome} action="archive" view={chat} points={[]} onIntent={onIntent} onFindArchived={onFindArchived} findShortcut="Ctrl+P" />);
+    const dialog = screen.getByRole('dialog', { name: 'Archive chat?' });
+    expect(dialog).toHaveTextContent('Nothing is deleted. Find it in Find a chat Ctrl+P → Archived.');
+    expect(within(dialog).getByRole('button', { name: 'Archive chat' })).toHaveFocus();
+    const link = within(dialog).getByRole('button', { name: 'Find a chat, Archived' });
+    await user.click(link); await user.click(link);
+    expect(onFindArchived).toHaveBeenCalledTimes(1); expect(onIntent).not.toHaveBeenCalled();
+  });
+  it('asks to stop a running chat first and offers the way back to it', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn(); const onGoToChat = vi.fn();
+    render(<ChatActionDialog {...chrome} action="archive" view={{ ...chat, state: 'busy' }} points={[]} onIntent={onIntent} onGoToChat={onGoToChat} />);
+    expect(screen.getByRole('status')).toHaveTextContent('This chat is still running. Stop the run first, then archive it.');
+    expect(screen.getByRole('button', { name: 'Archive chat' })).toBeDisabled();
+    const back = screen.getByRole('button', { name: 'Go to chat' }); expect(back).toHaveFocus();
+    await user.click(back); await user.click(back);
+    expect(onGoToChat).toHaveBeenCalledTimes(1); expect(onIntent).not.toHaveBeenCalled();
+  });
+  it('preselects the newest message, says what each branch keeps, and submits only from the button', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn();
+    render(<ChatActionDialog {...chrome} action="branch" view={chat} points={branchPoints} onIntent={onIntent} />);
+    expect(screen.getByRole('dialog', { name: 'Branch from a message' })).toBeVisible();
+    const radios = screen.getAllByRole<HTMLInputElement>('radio');
+    expect(radios.map((radio) => radio.value)).toEqual(['follow-up', 'labels', 'request']);
+    expect(radios[0]).toBeChecked(); expect(radios[0]).toHaveFocus();
+    expect(radios[0].closest('label')).toHaveTextContent('Message 3 of 3'); expect(radios[0].closest('label')).toHaveTextContent('Keeps the whole chat up to this message.');
+    expect(radios[2].closest('label')).toHaveTextContent('Message 1 of 3'); expect(radios[2].closest('label')).toHaveTextContent('The 2 later messages stay in the original.');
+    await user.keyboard('{ArrowRight}'); expect(radios[1]).toBeChecked();
+    await user.keyboard('{Enter}'); expect(onIntent).not.toHaveBeenCalled(); expect(screen.getByRole('dialog')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Create branch' }));
+    expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'chat', version: 1, action: 'branch', pointId: 'labels' });
+  });
+  it('shows the picked message in full where its one-line label was, and keeps each radio name to that line', async () => {
+    const user = userEvent.setup();
+    const whole = 'Keep the search filters when I open a result and go back.\nUse the URL so I can share the same view.';
+    const points = [{ id: 'scan', label: 'Make the search filters easier to scan.' }, { id: 'return', label: 'Keep the search filters when I open a result and go back…', text: `  ${whole}\n` }];
+    render(<ChatActionDialog {...chrome} action="branch" view={chat} points={points} onIntent={vi.fn()} />);
+    const [newest, oldest] = screen.getAllByRole<HTMLInputElement>('radio');
+    expect(newest).toBeChecked(); expect(newest).toHaveFocus();
+    expect(newest).toHaveAccessibleName('Message 2 of 2 Keep the search filters when I open a result and go back…');
+    expect(newest).toHaveAccessibleDescription('Keeps the whole chat up to this message.');
+    const full = screen.getByRole('region', { name: 'Message 2 in full' });
+    expect(full.textContent).toBe(whole); expect(full).toHaveAttribute('tabindex', '0');
+    expect(newest.closest('label')).toContainElement(full);
+    // A message its label already says in full has nothing more to show.
+    await user.keyboard('{ArrowRight}'); expect(oldest).toBeChecked();
+    expect(screen.queryByRole('region', { name: /in full$/ })).not.toBeInTheDocument();
+    expect(oldest.closest('label')).toHaveTextContent('Make the search filters easier to scan.');
+    expect(oldest).toHaveAccessibleDescription('Keeps the chat up to this message. The 1 later message stays in the original.');
+  });
+  it('shows one plain notice and no orphan legend when there is nothing to branch from', () => {
+    render(<ChatActionDialog {...chrome} action="branch" view={chat} points={[]} onIntent={vi.fn()} />);
+    expect(screen.getByRole('status')).toHaveTextContent('This chat has no messages to branch from yet.');
+    expect(screen.queryByRole('group')).not.toBeInTheDocument(); expect(screen.queryByText('Your messages')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create branch' })).toBeDisabled();
+  });
+});
+
+describe('workspace', () => {
+  const base: WorkspaceView = { id: 'workspace', version: 1, state: 'choice', selectedId: 'atlas', choices: workspaceChoices };
+  it('rejects unbound, duplicate, stale and out-of-state workspace intents', () => {
+    const intent = (action: WorkspaceIntent['action'], workspaceId?: string): WorkspaceIntent => ({ id: 'workspace', version: 1, action, workspaceId });
+    expect(validWorkspaceIntent(base, intent('choose', 'unknown'))).toBe(false);
+    expect(validWorkspaceIntent(base, { ...intent('choose', 'atlas'), version: 0 })).toBe(false);
+    expect(validWorkspaceIntent({ ...base, choices: [workspaceChoices[0], workspaceChoices[0]] }, intent('choose', 'atlas'))).toBe(false);
+    expect(validWorkspaceIntent({ ...base, state: 'ready', selectedId: 'unknown' }, intent('use'))).toBe(false);
+    expect(validWorkspaceIntent({ ...base, state: 'opening' }, intent('use'))).toBe(false);
+    expect(validWorkspaceIntent(base, intent('change'))).toBe(false);
+    expect(validWorkspaceIntent({ ...base, state: 'ready' }, intent('use'))).toBe(true);
+    expect(validWorkspaceIntent({ ...base, state: 'error' }, intent('change'))).toBe(true);
+    expect(validWorkspaceIntent({ ...base, state: 'opening' }, intent('cancel'))).toBe(true);
+  });
+  it('recovers from a failure by retrying or choosing another project, with one way to cancel opening', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn();
+    function Host() {
+      const [view, setView] = useState<WorkspaceView>({ ...base, state: 'error' });
+      return <WorkspaceDialog view={view} onDismiss={vi.fn()} onIntent={(intent) => {
+        onIntent(intent.action);
+        const state = intent.action === 'change' ? 'choice' : intent.action === 'cancel' ? 'canceled' : intent.action === 'use' ? view.state : 'opening';
+        setView({ ...view, version: view.version + 1, state, selectedId: intent.workspaceId ?? view.selectedId });
+      }} />;
+    }
+    render(<Host />);
+    expect(screen.getByRole('dialog', { name: 'Open a project' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t open'); expect(screen.getByRole('alert')).toHaveTextContent('Retry, or choose another project.');
+    expect(screen.getByRole('button', { name: 'Retry' })).toHaveAttribute('data-tone', 'primary');
+    expect(screen.queryByText(/Folder picker|example|workspace/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Choose another project' }));
+    expect(screen.getByRole('button', { name: /^Atlas/ })).toHaveTextContent('Current');
+    await user.click(screen.getByRole('button', { name: /^Notebook/ }));
+    expect(screen.getByRole('status')).toHaveTextContent('Notebook'); expect(screen.getByRole('status')).toHaveTextContent('Opening');
+    const actions = screen.getAllByRole('button').filter((button) => button.textContent && button.getAttribute('aria-label') !== 'Close');
+    expect(actions.map((button) => button.textContent)).toEqual(['Cancel opening']);
+    await user.click(screen.getByRole('button', { name: 'Cancel opening' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Canceled');
+    expect(screen.getByRole('button', { name: 'Open Notebook' })).toBeEnabled();
+    expect(onIntent.mock.calls.flat()).toEqual(['change', 'choose', 'cancel']);
+  });
+  it('opens on the current project and moves between projects with arrow keys, Home and End', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn();
+    const choices = [...workspaceChoices, { id: 'archive', label: 'Archive', detail: '~/Archive' }];
+    render(<WorkspaceDialog {...chrome} view={{ ...base, selectedId: 'notebook', choices }} onIntent={onIntent} />);
+    const row = (name: RegExp) => within(screen.getByRole('list', { name: 'Projects' })).getByRole('button', { name });
+    expect(row(/^Notebook/)).toHaveFocus(); expect(row(/^Notebook/)).toHaveAttribute('aria-current', 'true');
+    await user.keyboard('{ArrowDown}'); expect(row(/^Archive/)).toHaveFocus();
+    await user.keyboard('{ArrowDown}'); expect(row(/^Atlas/)).toHaveFocus();
+    await user.keyboard('{ArrowUp}'); expect(row(/^Archive/)).toHaveFocus();
+    await user.keyboard('{Home}'); expect(row(/^Atlas/)).toHaveFocus();
+    await user.keyboard('{End}'); expect(row(/^Archive/)).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'workspace', version: 1, action: 'choose', workspaceId: 'archive' });
+  });
+  it('offers the ready project as the primary action', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn();
+    render(<WorkspaceDialog {...chrome} view={{ ...base, state: 'ready' }} onIntent={onIntent} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Ready');
+    await user.click(screen.getByRole('button', { name: 'Use Atlas' }));
+    expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'workspace', version: 1, action: 'use', workspaceId: undefined });
+  });
+});
+
+describe('request dialogs', () => {
+  it('titles the dialog with the request, starts on Deny, leaves dismissal undecided and guards a double decision', async () => {
+    const user = userEvent.setup(); const onIntent = vi.fn(); const onDismiss = vi.fn();
+    const result = render(<PermissionDialog onDismiss={onDismiss} request={permissionCase('once', 1)} onIntent={onIntent} />);
+    const dialog = screen.getByRole('dialog', { name: 'Run the search filter tests?' });
+    expect(within(dialog).getAllByRole('heading')).toHaveLength(1);
+    expect(dialog).toHaveAccessibleDescription('Closing leaves this request waiting for your decision.');
+    expect(within(dialog).getByRole('button', { name: 'Deny' })).toHaveFocus();
+    expect(dialog).toHaveTextContent('npm test -- search-filters');
+    expect(screen.queryByRole('button', { name: 'Allow for this session' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Decide later' })); expect(onIntent).not.toHaveBeenCalled(); expect(onDismiss).toHaveBeenCalled();
     result.rerender(<PermissionDialog onDismiss={onDismiss} request={permissionCase('session', 2)} onIntent={onIntent} />);
-    await user.dblClick(screen.getByText('Allow for session')); expect(onIntent).toHaveBeenCalledTimes(1); expect(onIntent).toHaveBeenCalledWith({ id: 'review-permission', version: 2, kind: 'permission', decision: 'allow_session' }); expect(screen.queryByText(/Allow always/i)).not.toBeInTheDocument();
+    await user.dblClick(screen.getByRole('button', { name: 'Allow for this session' }));
+    expect(onIntent).toHaveBeenCalledExactlyOnceWith({ id: 'review-permission', version: 2, kind: 'permission', decision: 'allow_session' });
+    expect(screen.queryByText(/Allow always/i)).not.toBeInTheDocument();
   });
   it.each(['pending', 'submitted', 'error', 'stale', 'closed', 'invalid', 'duplicate'])('fails closed for %s requests', (scenario) => {
     const onIntent = vi.fn(); render(<PermissionDialog {...chrome} request={permissionCase(scenario, 1)} onIntent={onIntent} />);
-    for (const button of within(screen.getByRole('dialog')).queryAllByRole('button', { name: /Allow once|Allow for session|^Deny$/ })) expect(button).toBeDisabled(); expect(onIntent).not.toHaveBeenCalled();
+    for (const button of within(screen.getByRole('dialog')).queryAllByRole('button', { name: /Allow once|Allow for this session|^Deny$/ })) expect(button).toBeDisabled(); expect(onIntent).not.toHaveBeenCalled();
+  });
+  it('titles a question dialog with the question and starts on the first answer', () => {
+    render(<QuestionDialog {...chrome} request={questionCase('single', 1)} onIntent={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'How should the result be presented?' });
+    expect(within(dialog).getAllByRole('heading')).toHaveLength(1);
+    expect(within(dialog).getAllByRole('radio')[0]).toHaveFocus();
+  });
+  it('offers Retry for a question that failed to load, only when the host can reload it, and asks once', async () => {
+    const user = userEvent.setup(); const onRetry = vi.fn(); const onIntent = vi.fn();
+    const result = render(<QuestionDialog {...chrome} request={questionCase('error', 1)} onIntent={onIntent} />);
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    result.rerender(<QuestionDialog {...chrome} request={questionCase('error', 1)} onIntent={onIntent} onRetry={onRetry} />);
+    const dialog = screen.getByRole('dialog'); expect(within(dialog).queryByRole('radio')).not.toBeInTheDocument();
+    await user.dblClick(within(dialog).getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledTimes(1); expect(onIntent).not.toHaveBeenCalled();
   });
   it('clears secret drafts when the supplied state goes stale without changing identity', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn(); const request = questionCase('secret', 1);
     const result = render(<QuestionDialog {...chrome} request={request} onIntent={onIntent} />);
-    await user.type(screen.getByLabelText('Dummy secret answer'), 'ephemeral-demo');
+    await user.type(screen.getByLabelText('Access token'), 'ephemeral-demo');
     result.rerender(<QuestionDialog {...chrome} request={{ ...request, state: 'stale' }} onIntent={onIntent} />);
-    expect(screen.getByLabelText('Dummy secret answer')).toHaveValue(''); expect(screen.getByText('Submit answer')).toBeDisabled(); expect(onIntent).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Access token')).toHaveValue(''); expect(screen.getByRole('button', { name: 'Submit answer' })).toBeDisabled(); expect(onIntent).not.toHaveBeenCalled();
   });
   it('cancel clears a custom answer and emits cancellation only', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn(); render(<QuestionDialog {...chrome} request={questionCase('custom', 1)} onIntent={onIntent} />);
-    await user.type(screen.getByLabelText('Custom example answer'), 'unrecorded custom text'); await user.click(screen.getByText('Cancel question'));
-    expect(screen.getByLabelText('Custom example answer')).toHaveValue(''); expect(onIntent).toHaveBeenCalledWith({ id: 'review-question', version: 1, kind: 'question-cancel' });
+    await user.type(screen.getByLabelText('Describe the format'), 'unrecorded custom text'); await user.click(screen.getByRole('button', { name: 'Cancel question' }));
+    expect(screen.getByLabelText('Describe the format')).toHaveValue(''); expect(onIntent).toHaveBeenCalledWith({ id: 'review-question', version: 1, kind: 'question-cancel' });
   });
   it('clears a masked answer and excludes custom/secret content from receipts', async () => {
     const user = userEvent.setup(); const onIntent = vi.fn(); const result = render(<QuestionDialog {...chrome} request={questionCase('secret', 1)} onIntent={onIntent} />);
-    const input = screen.getByLabelText('Dummy secret answer'); expect(input).toHaveAttribute('type', 'password'); await user.type(input, 'dummy-only-value'); await user.click(screen.getByText('Submit answer'));
+    const input = screen.getByLabelText('Access token'); expect(input).toHaveAttribute('type', 'password'); await user.type(input, 'dummy-only-value'); await user.click(screen.getByRole('button', { name: 'Submit answer' }));
     expect(input).toHaveValue(''); expect(onIntent).toHaveBeenCalledWith({ id: 'review-question', version: 1, kind: 'question-answer' }); expect(JSON.stringify(onIntent.mock.calls)).not.toContain('dummy-only-value');
-    result.rerender(<QuestionDialog {...chrome} request={questionCase('secret', 2)} onIntent={onIntent} />); expect(screen.getByLabelText('Dummy secret answer')).toHaveValue('');
+    result.rerender(<QuestionDialog {...chrome} request={questionCase('secret', 2)} onIntent={onIntent} />); expect(screen.getByLabelText('Access token')).toHaveValue('');
   });
 });

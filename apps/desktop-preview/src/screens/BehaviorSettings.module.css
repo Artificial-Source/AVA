@@ -1,39 +1,58 @@
-.intro { margin: 0 0 24px; max-width: 620px; color: var(--muted); font-size: 13px; line-height: 1.7; }
-.group { min-width: 0; padding: 0; margin: 24px 0 0; border: 0; }
-.group > legend { padding: 0 0 3px; color: var(--body); font-size: 12px; font-weight: 550; }
-.group input[type='checkbox'] { accent-color: var(--text); }
-.reset { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--edge); }
-.reset p, .hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
-.reset button { font-size: 12px; }
-.toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 20px 0; }
-.toolbar > :first-child { flex: 1; margin: 0; }
-.list { list-style: none; padding: 0; margin: 0; }
-.shortcut { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px 16px; padding: 17px 0; border-bottom: 1px solid var(--edge); }
-.shortcut strong { display: block; color: var(--text); font-size: 13px; font-weight: 500; }
-.shortcut small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.65; }
-.binding { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
-.binding button { font-size: 11px; padding: 7px 9px; }
-.binding kbd { font: 11px/1.5 var(--mono); }
-.recording { grid-column: 1 / -1; padding: 14px; border: 1px solid var(--edge-bright); border-radius: 6px; background: var(--surface-raised); }
-.recording > p { margin: 0 0 10px; font-size: 12px; line-height: 1.65; color: var(--body); }
-.error { margin: 8px 0; color: var(--status-stopped-failed); font-size: 12px; line-height: 1.65; }
-.sample { min-width: 0; margin: 24px 0 0; padding: 18px; border: 1px solid var(--edge); border-radius: 7px; background: var(--canvas); }
-.sample > figcaption, .sample > h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; color: var(--muted); font-size: 11px; font-weight: 500; }
-.sample > p { color: var(--body); font-size: var(--prose-size, 15px); line-height: var(--prose-spacing, 1.7); }
-.sample pre { max-width: 100%; overflow-x: auto; margin: 10px 0; padding: 12px; background: var(--code); border: 1px solid var(--edge); border-radius: 4px; font: 11px/1.8 var(--mono); color: var(--body); white-space: pre; }
+.group { min-width: 0; padding: 0; margin: var(--space-6) 0 0; border: 0; }
+.group:first-child { margin-top: 0; }
+.group > legend { padding: 0 0 3px; color: var(--body); font-size: var(--type-meta); font-weight: 550; }
+/* One hairline above a page footer: the last row's own border. */
+.reset { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-3); margin-top: var(--space-8); }
+.reset p { flex: 1; min-width: 180px; margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.65; }
+
+/* Shortcuts: one keycap per action, which is also its recorder. */
+.shortcutTable { width: 100%; border-collapse: collapse; }
+.shortcutRow > * { padding: var(--space-3) 0; border-bottom: 1px solid var(--edge); vertical-align: middle; }
+.shortcutRow:has(+ .problemRow) > * { border-bottom-color: transparent; }
+.shortcutRow > th { width: 100%; padding-right: var(--space-4); text-align: left; font-weight: 400; }
+.shortcutRow > th span { display: block; color: var(--text); font-size: var(--type-control); font-weight: 500; }
+.shortcutRow > th small { display: block; margin-top: 2px; color: var(--muted); font-size: var(--type-meta); line-height: 1.5; }
+.shortcutRow > td { white-space: nowrap; }
+.keycap { display: inline-flex; align-items: center; justify-content: center; min-width: 112px; min-height: 30px; padding: 0 var(--space-3); border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--surface-control); box-shadow: inset 0 -1px 0 var(--edge-bright); color: var(--text); font-size: var(--type-meta); cursor: pointer; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), border-color var(--motion-feedback-duration) var(--motion-ease-out); }
+.keycap kbd { font: var(--type-meta)/1 var(--mono); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.keycap:hover:not(:disabled) { background: var(--surface-control-hover); }
+.keycap:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.keycap[data-state='unassigned'] { border-style: dashed; background: transparent; box-shadow: none; color: var(--muted); }
+.keycap[data-state='recording'] { border-color: var(--text); background: var(--surface-raised); box-shadow: none; }
+.keycap:disabled { opacity: .55; cursor: not-allowed; }
+/* Unassign and Reset exist only when they apply, and show on row hover or focus. */
+.rowActions { display: flex; gap: 2px; padding-left: var(--space-2); }
+.rowActions .rowAction { min-height: 30px; padding: 0 var(--space-2); border-color: transparent; background: transparent; color: var(--muted); font-size: var(--type-meta); opacity: 0; transition: opacity var(--motion-feedback-duration) var(--motion-ease-out); }
+.rowActions .rowAction:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.shortcutRow:hover .rowAction, .shortcutRow:focus-within .rowAction { opacity: 1; }
+@media (hover: none) { .rowActions .rowAction { opacity: 1; } }
+.problemRow > td { padding: 0 0 var(--space-3); border-bottom: 1px solid var(--edge); }
+.problem { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+/* How to record, said once above the groups it explains. */
+.recordHint { margin: var(--space-6) 0 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+.recordHint + .group { margin-top: var(--space-3); }
+/* Built-in keys: flat chips with no button affordance, so they never pass for the recorders above. */
+.fixedKey { display: inline-flex; align-items: center; min-height: 26px; padding: 0 var(--space-2); border: 1px solid var(--edge); border-radius: var(--radius-chip); color: var(--body); font: var(--type-meta)/1 var(--mono); letter-spacing: .02em; font-variant-numeric: tabular-nums; vertical-align: middle; }
+
+.sample { min-width: 0; margin: var(--space-6) 0 0; padding: 18px; border: 1px solid var(--edge); border-radius: var(--radius-surface); background: var(--canvas); }
+.sample > figcaption, .sample > h3 { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 14px; color: var(--muted); font-size: var(--type-caption); font-weight: 500; }
+.sample > p { color: var(--body); font-size: var(--prose-size, var(--type-prose)); line-height: var(--prose-spacing, 1.7); }
+.sample pre { max-width: 100%; overflow-x: auto; margin: 10px 0; padding: var(--space-3); background: var(--code); border: 1px solid var(--edge); border-radius: var(--radius-chip); font: var(--type-meta)/1.6 var(--mono); color: var(--body); white-space: pre; }
 .sample pre[data-wrap='true'] { white-space: pre-wrap; overflow-wrap: anywhere; }
-.sample details { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.sample summary { cursor: pointer; }
-.channelControls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.channelControls label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--body); }
-.volume { display: flex; align-items: center; gap: 12px; }
+.sample details { margin-top: var(--space-3); color: var(--muted); font-size: var(--type-meta); line-height: 1.7; }
+/* 24px summary target; the matching negative margin keeps the sample's rhythm. */
+.sample summary { margin-block: -2px; padding-block: 2px; cursor: pointer; }
+.channelControls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.channelControls label { display: flex; align-items: center; gap: 6px; min-height: 24px; font-size: var(--type-meta); color: var(--body); }
+.volume { display: flex; align-items: center; gap: var(--space-3); }
 .volume input { width: 130px; max-width: 100%; accent-color: var(--text); }
-.volume output { min-width: 3ch; font-size: 12px; font-variant-numeric: tabular-nums; }
-.testControls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.testControls label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--body); font-size: 12px; }
-.testResult { margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--edge); color: var(--body); font-size: 12px; line-height: 1.7; }
-.numbers { width: 100px; }
-.facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 20px; margin: 0; font-size: 12px; line-height: 1.65; }
+.volume > span { min-width: 4ch; font-size: var(--type-meta); font-variant-numeric: tabular-nums; }
+.soundStatus { margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+.soundStatus:empty { margin: 0; }
+.soundStatus[data-failed] { color: var(--danger-text); }
+.outcome { margin: var(--space-4) 0 0; padding-top: 14px; border-top: 1px solid var(--edge); color: var(--body); font-size: var(--type-meta); line-height: 1.7; }
+.numberField { display: grid; justify-items: end; gap: var(--space-2); max-width: 260px; text-align: right; }
+.facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3) var(--space-5); margin: 0; font-size: var(--type-meta); line-height: 1.65; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; color: var(--text); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-@media (max-width: 700px) { .shortcut { grid-template-columns: minmax(0, 1fr); } .binding { justify-content: flex-start; } .sample { padding: 14px; } }
+@media (max-width: 700px) { .sample { padding: 14px; } .numberField { justify-items: start; text-align: left; } .rowActions { padding-left: 0; } }

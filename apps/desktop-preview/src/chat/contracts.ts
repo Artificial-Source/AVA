@@ -35,6 +35,8 @@ export type ToolView = Readonly<{
   resource?: ToolResource;
   output?: Readonly<{ text: string; truncated: boolean }>;
   changes?: readonly ToolChangeView[];
+  // Reported failure cause, shown first on a failed row. Absent means AVA gave no reason.
+  error?: string;
 }>;
 
 export type RequestIdentity = Readonly<{ id: string; version: number }>;
@@ -45,7 +47,14 @@ export type PermissionView = RequestIdentity & Readonly<{
   state: RequestState;
   title: string;
   summary: string;
+  // Who is asking, e.g. "AVA" or a subagent name.
+  requester?: string;
+  // Exact action and target, shown verbatim in monospace.
+  action?: string;
   target?: string;
+  // One consequence line per advertised choice; missing lines fall back to plain defaults.
+  scopes?: Partial<Record<PermissionDecision, string>>;
+  reason?: string;
   decisions: readonly PermissionDecision[];
   sessionAllowed: boolean;
   error?: string;
@@ -70,9 +79,9 @@ export type QuestionAnswer = Readonly<{ selectedIds: readonly string[]; customTe
 export type QuestionIntent = RequestIdentity & Readonly<{ answer: QuestionAnswer }>;
 
 export type RunView =
-  | Readonly<{ state: 'error'; code: string }>
+  | Readonly<{ state: 'error'; code: string; message?: string }>
   | Readonly<{ state: 'retrying'; attempt: number; cause: string }>
-  | Readonly<{ state: 'cancel-requested' | 'canceled' | 'completed' }>;
+  | Readonly<{ state: 'running' | 'cancel-requested' | 'canceled' | 'completed' }>;
 
 export type ReferenceOption = Choice & Readonly<{ kind: string }>;
 export type ComposerView = Readonly<{
@@ -89,10 +98,19 @@ export type ComposerView = Readonly<{
   contextUsage?: ContextUsageView;
 }>;
 
-export type ChangeExcerpt = Readonly<{ id: string; filename: string; description: string; before: string; after: string }>;
+// One file change as both the transcript and Changes render it: a unified diff with a path/count header.
+export type ChangeEntryView = Readonly<{
+  id: string;
+  path: string;
+  status: 'modified' | 'added' | 'deleted';
+  added?: number;
+  removed?: number;
+  description?: string;
+  diff: ToolChangeView['diff'];
+}>;
 export type ChangeReviewState =
   | Readonly<{ state: 'loading' }>
   | Readonly<{ state: 'empty'; message: string }>
   | Readonly<{ state: 'error'; message: string }>
-  | Readonly<{ state: 'ready'; changes: readonly ChangeExcerpt[] }>
-  | Readonly<{ state: 'stale'; changes: readonly ChangeExcerpt[]; message: string }>;
+  | Readonly<{ state: 'ready'; changes: readonly ChangeEntryView[] }>
+  | Readonly<{ state: 'stale'; changes: readonly ChangeEntryView[]; message: string }>;

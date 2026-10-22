@@ -7,7 +7,10 @@ const tokens = readFileSync('src/styles/tokens.css', 'utf8');
 
 describe('bounded inherited appearance styles', () => {
   it('preserves default prose and width and never exposes an oversized reading preset or changes code/status tokens', () => {
-    expect(conversation).toContain('font-size: var(--prose-size, 15px); line-height: var(--prose-spacing, 1.7);');
+    expect(conversation).toMatch(/font-size: var\(--prose-size, var\(--type-prose(?:, 1\.0714rem)?\)\); line-height: var\(--prose-spacing, 1\.7\);/);
+    expect(tokens).toContain('font-size: 14px;'); expect(tokens).toContain('--type-prose: 1.0714rem;'); expect(tokens).toContain('--type-title: 1.2143rem;');
+    const proseSizes = [...appearance.matchAll(/--prose-size:\s*([^;]+);/g)].map((match) => match[1]);
+    expect(proseSizes).toEqual(['var(--type-ui)', 'var(--type-title)']);
     expect(tokens).toContain('--reading-width: 780px;');
     const widths = [...appearance.matchAll(/--reading-width:\s*(\d+)px/g)].map((match) => Number(match[1]));
     expect(widths).toEqual([620, 700]); expect(widths.every((width) => width <= 780)).toBe(true);

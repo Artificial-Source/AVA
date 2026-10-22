@@ -1,23 +1,21 @@
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; }
-body { color: var(--text); background: var(--canvas); accent-color: #dedede; }
-::selection { color: #ffffff; background: #484848; }
+body { color: var(--text); background: var(--canvas); accent-color: var(--primary-fill); }
+::selection { color: var(--on-selection); background: var(--selection-fill); }
 button, textarea, select { font: inherit; }
 button { border: none; cursor: pointer; }
 button, textarea, select { -webkit-tap-highlight-color: transparent; }
 button { transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), color var(--motion-feedback-duration) var(--motion-ease-out); }
 button, select, textarea { color: inherit; }
-button:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid #eeeeee; outline-offset: 2px; }
+button:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 svg { display: block; flex-shrink: 0; }
 code, pre { font-family: var(--mono); }
-option { background: #262626; color: var(--text); }
-option:checked { background: #454545; color: var(--text); }
+option { background: var(--surface-control); color: var(--text); }
+option:checked { background: var(--selection-fill); color: var(--text); }
 a { color: var(--text); }
-* { scrollbar-width: thin; scrollbar-color: #a0a0a070 transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 .material { position: relative; background: var(--glass-sheen), var(--glass-fill); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); }
 .srOnly { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.iconButton { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 5px; color: var(--muted); background: transparent; }
-.iconButton:hover { background: var(--hover); color: var(--text); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }

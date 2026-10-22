@@ -7,6 +7,7 @@ import { CheckIcon } from '@phosphor-icons/react/dist/csr/Check';
 import { PlusIcon } from '@phosphor-icons/react/dist/csr/Plus';
 import { XIcon } from '@phosphor-icons/react/dist/csr/X';
 import { StopIcon } from '@phosphor-icons/react/dist/csr/Stop';
+import { IconButton } from '../../ui/Button';
 import type { ComposerView } from '../contracts';
 import { validChoices } from '../requestValidation';
 import { ContextMeter, type ContextTarget } from './ContextMeter';
@@ -15,14 +16,16 @@ import modelButtonStyles from './ModelChoiceButton.module.css';
 
 interface ComposerCopy {
   context: string;
+  /** Optional helper line under the picker heading; empty hides it. */
   contextDescription: string;
   addContext: string;
   attachedContext: string;
   contextTitle: string;
-  referencePrefix: string;
   modelTitle: string;
   sendTitle: string;
   stop: string;
+  /** Tooltip for Stop; defaults to the Stop label. */
+  stopTitle: string;
 }
 
 interface ChatComposerProps {
@@ -30,6 +33,10 @@ interface ChatComposerProps {
   idPrefix?: string;
   modelMark?: ReactNode;
   copy?: Partial<ComposerCopy>;
+  /** Short explanation per mode id, exposed as the mode control's description. */
+  modeDescriptions?: Readonly<Record<string, string>>;
+  /** aria-keyshortcuts values for app-level chords that reach these controls. */
+  keyShortcuts?: Readonly<{ model?: string; stop?: string }>;
   onDraftChange: (draft: string) => void;
   onModelChange: (id: string) => void;
   onOpenModel?: () => void;
@@ -44,13 +51,15 @@ interface ChatComposerProps {
   enterBehavior?: 'send' | 'newline';
 }
 
+type ActionMode = 'send' | 'stop';
+
 const defaultCopy: ComposerCopy = {
-  context: 'Context references', contextDescription: 'References supplied by the host. This control does not open or upload files.',
-  addContext: 'Add context', attachedContext: 'Attached context', contextTitle: 'Choose supplied context references',
-  referencePrefix: 'Supplied', modelTitle: 'Available models', sendTitle: 'Send message · Ctrl/Cmd+Enter', stop: 'Request stop',
+  context: 'Context references', contextDescription: '',
+  addContext: 'Add context', attachedContext: 'Attached context', contextTitle: 'Add context',
+  modelTitle: 'Choose model', sendTitle: 'Send message · Ctrl/Cmd+Enter', stop: 'Request stop', stopTitle: '',
 };
 
-export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, onDraftChange, onModelChange, onOpenModel, onModeChange, onExpandedChange, onAddReference, onRemoveReference, onSend, onStop, onOpenContext, contextTarget, enterBehavior = 'newline' }: ChatComposerProps) {
+export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, modeDescriptions, keyShortcuts, onDraftChange, onModelChange, onOpenModel, onModeChange, onExpandedChange, onAddReference, onRemoveReference, onSend, onStop, onOpenContext, contextTarget, enterBehavior = 'newline' }: ChatComposerProps) {
   const generatedId = useId();
   const prefix = idPrefix ?? generatedId;
   const id = (name: string) => prefix ? `${prefix}-${name}` : name;
@@ -63,10 +72,19 @@ export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, on
   const validMode = modeOptions.some((option) => option.id === view.modeId);
   const working = view.runState === 'running';
   const canSend = !working && Boolean(onSend) && Boolean(view.draft.trim()) && validModel && validMode;
+  const actionMode: ActionMode = working ? 'stop' : 'send';
+  // Native disabled only when the action cannot exist here; an empty draft stays focusable (aria-disabled).
+  const actionUnavailable = working ? !onStop : !onSend || !validModel || !validMode;
+  const modeDescription = validMode ? modeDescriptions?.[view.modeId] : undefined;
+  const modeSummary = modeDescriptions ? modeOptions.flatMap((mode) => modeDescriptions[mode.id] ? [`${mode.label}: ${modeDescriptions[mode.id]}`] : []).join('\n') : '';
   const [contextOpen, setContextOpen] = useState(false);
   const composing = useRef(false);
   const addRef = useRef<HTMLButtonElement>(null);
   const expandRef = useRef<HTMLButtonElement>(null);
+  // Send and Stop share one button so keyboard focus survives the switch. These refs keep a press,
+  // or a double-click, that began as one action from completing as the other.
+  const pressedAs = useRef<ActionMode | null>(null);
+  const clickSequenceAs = useRef<ActionMode | null>(null);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,7 +126,7 @@ export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, on
         {contextOpen ? (
           <div id={id('fixture-context')} className={styles.contextPicker} data-shortcuts-blocked role="region" aria-label={copy.context}>
             <h2>{copy.context}</h2>
-            <p>{copy.contextDescription}</p>
+            {copy.contextDescription ? <p>{copy.contextDescription}</p> : null}
             <div className={styles.contextOptions}>
               {contextReferences.map((reference, index) => {
                 const attached = contextIds.includes(reference.id);
@@ -136,7 +154,7 @@ export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, on
               const reference = contextReferences.find((entry) => entry.id === id)!;
               return (
                 <li key={id} data-context-id={id}>
-                  <span title={`${copy.referencePrefix} ${reference.kind} reference`}>{reference.label}</span>
+                  <span title={`${reference.label} (${reference.kind})`}>{reference.label}</span>
                   <button type="button" aria-label={`Remove ${reference.label} context`} onClick={() => {
                     if (contextIds.includes(id)) onRemoveReference(id);
                     addRef.current?.focus();
@@ -159,26 +177,24 @@ export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, on
         />
         <div className={styles.controls}>
           <div className={styles.tools}>
-            <button
+            <IconButton
               ref={addRef}
-              className="iconButton"
-              type="button"
-              aria-label={copy.addContext}
+              variant="quiet"
+              label={copy.addContext}
               aria-expanded={contextOpen}
               aria-controls={contextOpen ? id('fixture-context') : undefined}
               title={copy.contextTitle}
               onClick={() => setContextOpen(!contextOpen)}
-            ><PlusIcon size={17} aria-hidden="true" /></button>
-            <button
+            ><PlusIcon size={17} aria-hidden="true" /></IconButton>
+            <IconButton
               ref={expandRef}
-              className="iconButton"
-              type="button"
-              aria-label={view.expanded ? 'Collapse draft' : 'Expand draft'}
+              variant="quiet"
+              label={view.expanded ? 'Collapse draft' : 'Expand draft'}
               aria-expanded={view.expanded}
               aria-controls={id('message-draft')}
-              title={view.expanded ? 'Collapse draft · Escape' : 'Expand draft within the conversation'}
+              title={view.expanded ? 'Collapse draft · Escape' : 'Expand draft'}
               onClick={() => onExpandedChange(!view.expanded)}
-            >{view.expanded ? <ArrowsInSimpleIcon size={16} aria-hidden="true" /> : <ArrowsOutSimpleIcon size={16} aria-hidden="true" />}</button>
+            >{view.expanded ? <ArrowsInSimpleIcon size={16} aria-hidden="true" /> : <ArrowsOutSimpleIcon size={16} aria-hidden="true" />}</IconButton>
           </div>
           <div className={styles.modelPicker}>
             <>{modelMark ?? <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true"><path d="M8 2 14 8 8 14 2 8Z" /></svg>}</>
@@ -189,6 +205,7 @@ export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, on
               type="button"
               title={copy.modelTitle}
               aria-haspopup="dialog"
+              aria-keyshortcuts={keyShortcuts?.model}
               onClick={onOpenModel}
             >{modelOptions.find((option) => option.id === view.modelId)?.label ?? 'Select model'}</button> : <select
               id={id('model-choice')}
@@ -210,6 +227,8 @@ export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, on
             <select
               id={id('mode-choice')}
               value={validMode ? view.modeId : ''}
+              title={modeSummary || undefined}
+              aria-describedby={modeDescription ? id('mode-description') : undefined}
               onChange={(event) => {
                 const mode = event.currentTarget.value;
                 if (modeOptions.some((option) => option.id === mode)) onModeChange(mode);
@@ -218,20 +237,40 @@ export function ChatComposer({ view, idPrefix, modelMark, copy: suppliedCopy, on
               {!validMode ? <option value="" disabled>Select mode</option> : null}
               {modeOptions.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
             </select>
+            {modeDescription ? <span id={id('mode-description')} className="srOnly">{modeDescription}</span> : null}
             <CaretDownIcon size={11} className={styles.selectCaret} aria-hidden="true" />
           </div>
           {view.contextUsage && onOpenContext ? <ContextMeter view={validModel && view.contextUsage.profile.modelId === view.modelId ? view.contextUsage : undefined} target={contextTarget} onOpen={onOpenContext} /> : null}
-          {working ? (
-            <button key="stop" className={styles.stop} type="button" disabled={!onStop} onClick={(event) => { event.preventDefault(); if (working) onStop?.(); }}>
-              <StopIcon size={13} aria-hidden="true" />
-              {copy.stop}
-            </button>
-          ) : (
-            <button key="send" className={styles.send} type="submit" disabled={!canSend} aria-keyshortcuts={enterBehavior === 'send' ? 'Enter Control+Enter Meta+Enter' : 'Control+Enter Meta+Enter'} title={copy.sendTitle}>
-              Send
-              <ArrowUpIcon size={15} aria-hidden="true" />
-            </button>
-          )}
+          <button
+            className={styles.action}
+            data-mode={actionMode}
+            type={working ? 'button' : 'submit'}
+            disabled={actionUnavailable}
+            aria-disabled={!actionUnavailable && !working && !canSend ? true : undefined}
+            aria-keyshortcuts={working ? keyShortcuts?.stop : enterBehavior === 'send' ? 'Enter Control+Enter Meta+Enter' : 'Control+Enter Meta+Enter'}
+            title={working ? copy.stopTitle || copy.stop : copy.sendTitle}
+            onPointerDown={(event) => { if (event.button === 0) pressedAs.current = actionMode; }}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              // A held key must not repeat Stop into Send (or Send into Stop).
+              if (event.repeat) event.preventDefault();
+              else pressedAs.current = actionMode;
+            }}
+            onBlur={() => { pressedAs.current = null; }}
+            onClick={(event) => {
+              const pressed = pressedAs.current;
+              pressedAs.current = null;
+              const switched = pressed !== null && pressed !== actionMode || event.detail > 1 && clickSequenceAs.current !== actionMode;
+              if (event.detail <= 1) clickSequenceAs.current = actionMode;
+              // Cancel the native submit before any synchronous run-state change can retarget it.
+              if (switched || working || !canSend) event.preventDefault();
+              if (!switched && working) onStop?.();
+            }}
+          >
+            {working ? <StopIcon size={13} aria-hidden="true" /> : null}
+            <span>{working ? copy.stop : 'Send'}</span>
+            {working ? null : <ArrowUpIcon size={15} aria-hidden="true" />}
+          </button>
         </div>
       </form>
     </footer>

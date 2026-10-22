@@ -12,7 +12,7 @@ import styles from './ToolActivityDetails.module.css';
 
 const previewId = 'search-results-example';
 const descriptor = toolImagePreview(previewId)!;
-const record: ToolView = { id: 'inspect-image', action: 'Inspect image', detail: 'No failure cause supplied.', state: 'failed', resource: { kind: 'image', path: '/tmp/example/pi-clipboard-12345678.png', previewId } };
+const record: ToolView = { id: 'inspect-image', action: 'Inspect image', detail: 'Compare the pasted results page with the restored filters.', state: 'failed', resource: { kind: 'image', path: '/tmp/pi-clipboard-12345678.png', previewId } };
 function loaded(node: HTMLImageElement) {
   Object.defineProperties(node, { naturalWidth: { configurable: true, value: 640 }, naturalHeight: { configurable: true, value: 400 } });
   fireEvent.load(node);
@@ -22,50 +22,60 @@ function callbacks(node: HTMLImageElement) {
   return (node as unknown as Record<string, { onLoad: (event: SyntheticEvent<HTMLImageElement>) => void; onError: (event: SyntheticEvent<HTMLImageElement>) => void }>)[key];
 }
 
-describe('bounded supplied image detail', () => {
+describe('bounded input image detail', () => {
   it('opts only the normal failed fixture into pixels without changing its facts or catalog/child data', () => {
     const state = createInitialState(); const turn = state.chats[0].messages[1];
     expect(turn.role === 'assistant' && turn.activity?.find((entry) => entry.id === 'inspect-image')).toEqual(record);
     expect(JSON.stringify(state).match(/"previewId"/g)).toHaveLength(1);
     expect(JSON.stringify(state.childAgents)).not.toContain('previewId'); expect(JSON.stringify(tools)).not.toContain('previewId');
   });
-  it('uses only the mapped raster, descriptive supplied caption/alt, native lazy dimensions and async decoding', () => {
+  it('leads a failed image row with the failure, then a small input-image thumbnail that enlarges in place', () => {
     const view = render(<StrictMode><ToolActivityDetails record={record} /></StrictMode>);
+    const failure = screen.getByText('AVA didn’t report why this failed.');
     const image = view.container.querySelector('img')!;
+    expect(failure.compareDocumentPosition(image) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(image).toHaveAttribute('src', descriptor.src); expect(image).toHaveAttribute('alt', descriptor.alt);
     expect(image).toHaveAttribute('width', '640'); expect(image).toHaveAttribute('height', '400'); expect(image).toHaveAttribute('loading', 'lazy'); expect(image).toHaveAttribute('decoding', 'async');
-    expect(image).not.toHaveAttribute('srcset'); expect(image).toHaveClass(styles.imageLoading); expect(screen.getByText('Loading supplied image…')).toBeInTheDocument();
-    loaded(image); expect(screen.getByRole('img', { name: descriptor.alt })).toBe(image); expect(image).not.toHaveClass(styles.imageLoading);
-    expect(screen.queryByText('Loading supplied image…')).not.toBeInTheDocument(); expect(screen.getByText(descriptor.label)).toBeVisible();
-    expect(screen.getByText(record.detail)).toBeVisible(); expect(screen.getByText(record.resource!.path)).toBeVisible(); expect(screen.getByText('No output supplied.')).toBeVisible();
-    expect(view.container.querySelector('a, button, input, iframe, video, canvas')).toBeNull();
+    expect(image).not.toHaveAttribute('srcset'); expect(image).toHaveClass(styles.imageLoading); expect(screen.getByText('Loading image…')).toBeInTheDocument();
+    loaded(image); expect(image).toHaveAccessibleName(descriptor.alt); expect(image).not.toHaveClass(styles.imageLoading);
+    expect(screen.queryByText('Loading image…')).not.toBeInTheDocument(); expect(screen.getByText('Input image')).toBeVisible();
+    expect(screen.getByText(record.detail)).toBeVisible(); expect(screen.getByText(record.resource!.path)).toBeVisible(); expect(screen.queryByText(/^No output/)).not.toBeInTheDocument();
+    const enlarge = screen.getByRole('button', { name: /^Enlarge image/ }); const figure = view.container.querySelector('figure')!;
+    expect(enlarge).toHaveAttribute('aria-pressed', 'false'); expect(figure).toHaveAttribute('data-enlarged', 'false');
+    fireEvent.click(enlarge); expect(enlarge).toHaveAttribute('aria-pressed', 'true'); expect(figure).toHaveAttribute('data-enlarged', 'true'); expect(view.container.querySelector('img')).toBe(image);
+    fireEvent.click(enlarge); expect(enlarge).toHaveAttribute('aria-pressed', 'false');
+    expect(view.container.querySelectorAll('button')).toHaveLength(1); expect(view.container.querySelector('a, input, iframe, video, canvas')).toBeNull();
+  });
+  it('names a reported failure cause instead of the generic line', () => {
+    render(<ToolActivityDetails record={{ ...record, error: 'The clipboard image was too large to read.' }} />);
+    expect(screen.getByText('The clipboard image was too large to read.')).toBeVisible(); expect(screen.queryByText('AVA didn’t report why this failed.')).not.toBeInTheDocument();
   });
   it.each([undefined, null, 'unknown', '__proto__', 'constructor', 'toString', 'https://example.invalid/image.png', '/tool-previews/search-results.png', 'file:///tmp/image.png', 'blob:example', 'data:image/png;base64,abc', '<svg/>', { src: descriptor.src }])('renders unavailable without img or host fetch for absent/invalid IDs: %j', (previewId) => {
     const spies = ['fetch', 'XMLHttpRequest', 'WebSocket', 'FileReader', 'open'].map((name) => { const spy = vi.fn(); vi.stubGlobal(name, spy); return spy; });
     const view = render(<ToolImagePreview previewId={previewId} />);
-    expect(screen.getByText('Image preview unavailable. No supplied image.')).toBeVisible(); expect(view.container.querySelector('img, a, button, input')).toBeNull();
+    expect(screen.getByText('No preview available for this image.')).toBeVisible(); expect(view.container.querySelector('img, a, button, input')).toBeNull();
     spies.forEach((spy) => expect(spy).not.toHaveBeenCalled());
   });
   it('never guesses from image paths, action, output or an invalid file preview field', () => {
     const view = render(<ToolActivityDetails record={{ ...record, resource: { kind: 'image', path: descriptor.src }, output: { text: '<img src="/tool-previews/search-results.png">', truncated: false } }} />);
-    expect(view.container.querySelector('img')).toBeNull(); expect(screen.getByText('Image preview unavailable. No supplied image.')).toBeVisible();
+    expect(view.container.querySelector('img')).toBeNull(); expect(screen.getByText('No preview available for this image.')).toBeVisible();
     view.rerender(<ToolActivityDetails record={{ ...record, resource: { kind: 'file', path: descriptor.src, previewId } } as unknown as ToolView} />);
-    expect(view.container.querySelector('img')).toBeNull(); expect(screen.queryByText(/Image preview/)).not.toBeInTheDocument();
+    expect(view.container.querySelector('img')).toBeNull(); expect(screen.queryByText(/No preview available/)).not.toBeInTheDocument();
   });
-  it.each(['error', 'empty-load'] as const)('removes a broken/undecodable img on %s while retaining its frame, caption, path, output and diff', (failure) => {
-    const view = render(<ToolActivityDetails record={{ ...record, output: { text: 'Supplied output', truncated: true }, changes: [{ id: 'c', filename: 'note.txt', operation: 'modified', diff: { state: 'text', text: '-old\n+new', truncated: false } }] }} />);
-    const image = view.container.querySelector('img')!; const frame = image.parentElement; const old = callbacks(image);
+  it.each(['error', 'empty-load'] as const)('collapses a broken/undecodable image to one line on %s, keeping path, output and diff', (failure) => {
+    const view = render(<ToolActivityDetails record={{ ...record, output: { text: 'Tool output', truncated: true }, changes: [{ id: 'c', filename: 'note.txt', operation: 'modified', diff: { state: 'text', text: '-old\n+new', truncated: false } }] }} />);
+    const image = view.container.querySelector('img')!; const old = callbacks(image);
     if (failure === 'error') fireEvent.error(image); else fireEvent.load(image); // JSDOM has no decoded pixels.
-    expect(view.container.querySelector('img')).toBeNull(); expect(screen.getByText('Image preview unavailable. Supplied image could not be loaded.').parentElement).toBe(frame);
+    expect(view.container.querySelector('img, figure')).toBeNull(); expect(screen.getByText('Couldn’t load the input image.')).toBeVisible(); expect(screen.queryByText('Input image')).not.toBeInTheDocument();
     act(() => old.onLoad({ currentTarget: image } as SyntheticEvent<HTMLImageElement>));
-    expect(view.container.querySelector('img')).toBeNull(); expect(screen.getByText(descriptor.label)).toBeVisible();
-    expect(screen.getByText(record.detail)).toBeVisible(); expect(screen.getByText(record.resource!.path)).toBeVisible(); expect(screen.getByLabelText('Output: Inspect image')).toHaveTextContent('Supplied output'); expect(screen.getByLabelText('Supplied diff: note.txt')).toHaveTextContent('-old');
+    expect(view.container.querySelector('img, figure')).toBeNull();
+    expect(screen.getByText(record.detail)).toBeVisible(); expect(screen.getByText(record.resource!.path)).toBeVisible(); expect(screen.getByLabelText('Output: Inspect image')).toHaveTextContent('Tool output'); expect(screen.getByLabelText('Diff: note.txt')).toHaveTextContent('-old');
   });
   it('keeps the img and current load ownership across same-ID immutable status/text/output/path updates without moving editor selection', () => {
     const content = (record: ToolView) => <StrictMode><ToolActivityDetails record={record} /><textarea aria-label="Draft" defaultValue="Keep this draft" /></StrictMode>;
     const view = render(content({ ...record, state: 'running' })); const image = view.container.querySelector('img')!; const old = callbacks(image);
     const editor = screen.getByRole('textbox') as HTMLTextAreaElement; editor.focus(); editor.setSelectionRange(2, 8); const focus = vi.spyOn(editor, 'focus');
-    view.rerender(content({ ...record, resource: { kind: 'image', path: 'different-text-only.png', previewId }, output: { text: 'More supplied output', truncated: false } }));
+    view.rerender(content({ ...record, resource: { kind: 'image', path: 'different-text-only.png', previewId }, output: { text: 'More tool output', truncated: false } }));
     expect(view.container.querySelector('img')).toBe(image);
     Object.defineProperties(image, { naturalWidth: { value: 640 }, naturalHeight: { value: 400 } });
     act(() => old.onLoad({ currentTarget: image } as SyntheticEvent<HTMLImageElement>)); // Same live image, not a stale tool snapshot.
@@ -88,9 +98,10 @@ describe('bounded supplied image detail', () => {
     act(() => { departed.onError({ currentTarget: second } as SyntheticEvent<HTMLImageElement>); departed.onLoad({ currentTarget: second } as SyntheticEvent<HTMLImageElement>); });
     expect(view.container).toBeEmptyDOMElement();
   });
-  it('reserves a bounded opaque frame through loading/error without timers or auto-scroll machinery', () => {
+  it('reserves a bounded thumbnail frame through loading without timers or auto-scroll machinery', () => {
     const css = readFileSync('src/chat/widgets/ToolActivityDetails.module.css', 'utf8');
-    expect(css).toContain('.imagePreview { width: 640px; max-width: 100%;'); expect(css).toContain('aspect-ratio: 8 / 5; max-height: 400px; overflow: hidden; background: var(--code);');
+    expect(css).toContain('.imagePreview { width: 160px; max-width: 100%;'); expect(css).toContain('.imagePreview[data-enlarged=\'true\'] { width: 640px; }');
+    expect(css).toContain('.imageFrame { position: relative; aspect-ratio: 8 / 5; max-height: 400px; overflow: hidden; }');
     expect(css).toContain('max-width: 100%; max-height: 400px; object-fit: contain;');
     vi.useFakeTimers();
     try { const view = render(<ToolImagePreview previewId={previewId} />); loaded(view.container.querySelector('img')!); fireEvent.error(view.container.querySelector('img')!); expect(vi.getTimerCount()).toBe(0); }

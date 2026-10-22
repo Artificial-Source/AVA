@@ -1,0 +1,50 @@
+/* Provider list: a search, then one row per provider, its status and at most one action.
+   Columns line up across both groups; narrow containers move status under the name. */
+.directory { display: grid; gap: var(--space-6); }
+/* Doubled class outranks the shared field margin; grid gap owns the rhythm. */
+.directory.directory > * { margin-block: 0; }
+.groupTitle { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--type-meta); font-weight: 500; }
+.list { container-type: inline-size; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--edge); }
+.row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 10.5rem 7rem; grid-template-areas: 'mark identity status action'; align-items: center; column-gap: var(--space-4); min-height: 60px; padding: var(--space-3) var(--space-1); border-bottom: 1px solid var(--edge); color: var(--text); }
+.row > [data-provider-mark] { grid-area: mark; }
+.identity { grid-area: identity; display: grid; gap: 2px; min-width: 0; }
+.name { color: var(--text); font-size: var(--type-control); font-weight: 500; line-height: 20px; overflow-wrap: anywhere; }
+.id { color: var(--quiet); font: var(--type-caption)/16px var(--mono); overflow-wrap: anywhere; }
+.status { grid-area: status; display: grid; justify-items: start; gap: 2px; min-width: 0; }
+.cause { color: var(--muted); font-size: var(--type-caption); line-height: 16px; overflow-wrap: anywhere; }
+.action { grid-area: action; justify-self: end; }
+@container (max-width: 34rem) {
+  .row { grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: 'mark identity action' 'mark status action'; row-gap: var(--space-1); }
+  .row > [data-provider-mark] { align-self: start; margin-top: 2px; }
+}
+
+/* Connect flow. The step's actions live in the dialog footer, so nothing here
+   needs to clear a bar. */
+.flow { display: grid; gap: var(--space-5); }
+.step { display: grid; gap: var(--space-5); }
+/* Doubled class outranks the shared field margin; grid gap owns the rhythm. */
+.step.step > * { margin-block: 0; }
+.lead { margin: 0; max-width: 60ch; color: var(--body); font-size: var(--type-ui); line-height: 1.6; }
+.note { margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.6; }
+.providerLine { display: flex; align-items: center; gap: var(--space-3); padding: 10px var(--space-4); border: 1px solid var(--edge); border-radius: var(--radius-surface); background: var(--fill-subtle); color: var(--text); }
+.providerLine code { flex: 1; min-width: 0; color: var(--muted); font: var(--type-meta)/1.5 var(--mono); overflow-wrap: anywhere; }
+
+.methods { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.method { display: grid; grid-template-columns: 32px minmax(0, 1fr) 14px; align-items: center; gap: var(--space-3); width: 100%; padding: var(--space-3) var(--space-4); border: 1px solid var(--edge); border-radius: var(--radius-surface); background: transparent; color: var(--body); text-align: left; transition: background-color var(--motion-feedback-duration) var(--motion-ease-out), border-color var(--motion-feedback-duration) var(--motion-ease-out); }
+.method:hover { background: var(--hover-strong); border-color: var(--edge-bright); }
+.method:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.method strong { display: block; color: var(--text); font-size: var(--type-control); font-weight: 500; line-height: 20px; }
+.method small { display: block; margin-top: 2px; color: var(--muted); font-size: var(--type-meta); line-height: 1.5; }
+.method > svg { color: var(--quiet); }
+.methodIcon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-control); background: var(--surface-control); color: var(--text); }
+
+.code { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.code code { padding: 10px var(--space-4); border: 1px solid var(--edge-bright); border-radius: var(--radius-control); background: var(--code); color: var(--text); font: 500 var(--type-title)/1.2 var(--mono); letter-spacing: .12em; user-select: all; }
+.expiry { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.5; }
+.expiry svg { flex-shrink: 0; }
+
+.bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.barEnd { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); margin-inline-start: auto; }
+
+@media (prefers-reduced-motion: reduce) { .method { transition: none; } }
+:global([data-motion='reduced']) .method { transition: none; }

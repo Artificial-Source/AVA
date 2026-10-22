@@ -1,6 +1,20 @@
 # AVA Desktop
 
-**Current mock revision 20:** [inline tool image preview](tool-image-preview.md)
+**Current mock revision 21:** [critique refinement](critique-refinement.md) fixes all
+P1 and P2 findings with trust moments first, the familiar monochrome look and one
+preview banner. Independent reviewer scores (baseline → after round 1 → final,
+out of 40): main chat **24 → 28 → 30**, in-chat widgets **24 → 28 → 33**,
+Settings **22 → 30 → 33**, models & providers **22 → 26 → 32**, finder & dialogs
+**22 → 29 → 34**, whole product **27 → 28 → 30**; all final scores are **Good**
+(28–35). The baseline technical audit is **14/20**, not re-run. Typecheck,
+**988 tests / 68 files** (`--maxWorkers=6`) and the build passed; the entry is
+**427.38 kB raw / 130.39 kB gzip** under the unchanged 500,000-byte cap.
+The detector found no sub-11px app text; browser checks covered **1440×900 and
+1024×700**. The scope records both corrective rounds and heavy-load test limits.
+This remains browser-only and visit-local, with no real backend/provider/auth.
+Earlier “current” labels and complete acceptance bodies below remain dated history.
+
+**Earlier mock revision 20:** [inline tool image preview](tool-image-preview.md)
 embeds explicitly supplied pixels within expanded Inspect image details. Responsive
 containment and truthful missing/load-error states preserve existing tool status,
 disclosures and draft/reading authority. Main passed 834 tests / 42 Chrome checks;

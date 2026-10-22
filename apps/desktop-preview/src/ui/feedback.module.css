@@ -1,0 +1,19 @@
+/* Shared feedback: list notices and field validation. Every state carries an
+   icon and words; only errors add color (--danger-text). */
+.notice { display: flex; align-items: flex-start; gap: var(--space-3, 12px); padding-block: var(--space-4, 16px); color: var(--muted); font-size: var(--type-control, .9286rem); line-height: 20px; }
+.noticeIcon { display: inline-flex; flex-shrink: 0; margin-block-start: 2px; }
+.noticeBody { display: grid; justify-items: start; gap: var(--space-3, 12px); min-width: 0; }
+.noticeMessage { margin: 0; max-width: 64ch; overflow-wrap: anywhere; }
+.notice[data-state='error'] { color: var(--danger-text, var(--status-stopped-failed)); }
+
+/* Loading glyph only; the static icon remains under either reduced-motion source. */
+.spin { animation: noticeSpin 1.2s linear infinite; }
+@keyframes noticeSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+:global([data-motion='reduced']) .spin { animation: none; }
+
+/* FormField marks its wrapper; any control outside one can opt in with .invalidControl. */
+.formField :is(input, select, textarea)[aria-invalid='true'],
+.invalidControl[aria-invalid='true'] { border-color: var(--danger-text, var(--status-stopped-failed)); }
+.fieldError { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--danger-text, var(--status-stopped-failed)); font-size: var(--type-meta, .8571rem); line-height: 20px; overflow-wrap: anywhere; }
+.fieldError > svg { margin-block-start: 3px; }
