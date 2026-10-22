@@ -26,6 +26,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 #include <sys/stat.h>
 
 namespace ava::tests::app_rpc_test {
@@ -72,7 +73,7 @@ void test_app_rpc_direct_run_command_permission_reply_executes_and_audits()
     input_buffer.push("{\"id\":\"allow\",\"type\":\"permission_reply\",\"request_id\":\"" + *request_id +
                       "\",\"correlation_id\":\"cmd-allow\",\"decision\":\"allow\",\"reason\":\"approved direct rpc\"}\n");
   }
-  bool const completed = output_buffer.wait_contains("\"output\":\"rpc-direct\"", std::chrono::seconds(2));
+  bool const completed = wait_for_rpc_response(output_buffer, "cmd-allow", std::chrono::seconds(2));
   input_buffer.close();
   rpc_thread.join();
 
@@ -128,7 +129,7 @@ void test_app_rpc_direct_run_command_permission_denial_blocks_execution()
   });
 
   std::string const secret = "RPC_DENIED_COMMAND_SECRET_SENTINEL";
-  input_buffer.push("{\"id\":\"cmd-deny\",\"type\":\"run_bash\",\"command\":\"printf " + secret + "\"}\n");
+  input_buffer.push("{\"id\":\"cmd-deny\",\"type\":\"run_bash\",\"command\":\"printf " + secret + " > denied.txt\"}\n");
   bool const permission_requested = output_buffer.wait_contains("\"name\":\"permission_requested\"", std::chrono::seconds(2));
   auto const request_id = rpc_string_field_from_output(output_buffer.str(), "resolver_request_id");
   expect(permission_requested && request_id && output_buffer.str().find(secret) != std::string::npos,
@@ -138,7 +139,7 @@ void test_app_rpc_direct_run_command_permission_denial_blocks_execution()
     input_buffer.push("{\"id\":\"deny\",\"type\":\"permission_reply\",\"request_id\":\"" + *request_id +
                       "\",\"correlation_id\":\"cmd-deny\",\"decision\":\"deny\",\"reason\":\"not approved\"}\n");
   }
-  bool const denied = output_buffer.wait_contains("command requires permission", std::chrono::seconds(2));
+  bool const denied = wait_for_rpc_response(output_buffer, "cmd-deny", std::chrono::seconds(2));
   input_buffer.close();
   rpc_thread.join();
 
@@ -154,9 +155,14 @@ void test_app_rpc_direct_run_command_permission_denial_blocks_execution()
   expect(result.has_value(), "RPC direct command denial loop completes successfully");
   auto const session_secret_absent =
       entries && std::ranges::all_of(*entries, [&](ava::session::SessionEntry const& entry) { return entry.data_json.find(secret) == std::string::npos; });
-  expect(denied && jsonl.find("\"id\":\"cmd-deny\"") != std::string::npos && jsonl.find("\"tool\":\"bash\"") != std::string::npos &&
-             count_substrings(jsonl, secret) == 1,
-         "RPC direct command denial keeps the argument only in its permission prompt, not its reply diagnostics");
+  auto const denied_response = rpc_response_line(jsonl, "cmd-deny").value_or("");
+  auto const command_result = ava::core::json::object_field(denied_response, "result");
+  auto const timeline = command_result ? ava::core::json::objects_in_array_field(*command_result, "tool_timeline") : std::vector<std::string>{};
+  bool const bash_failed = std::ranges::any_of(timeline, [](std::string const& entry) {
+    return ava::core::json::string_field(entry, "tool") == "bash" && ava::core::json::string_field(entry, "status") == "error";
+  });
+  expect_all("RPC direct denial returns its failed bash result without leaking command arguments",
+             {{"terminal response", denied}, {"bash error status", bash_failed}, {"argument only in permission prompt", count_substrings(jsonl, secret) == 1}});
   expect(!std::filesystem::exists(workspace / "denied.txt"), "RPC direct command denial blocks process execution before side effects");
   expect(audited_deny && session_secret_absent, "RPC direct command denial persists redacted session audits without command arguments");
 }

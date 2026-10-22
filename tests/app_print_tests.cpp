@@ -2,7 +2,10 @@
 #include "tests/support/agent_loop_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/http/transport.h"
 #include "ava/process/supervisor.h"
 #include "ava/app/command_tools.h"
@@ -365,6 +368,24 @@ void test_headless_permission_policy()
   expect(read_only_webfetch && *read_only_webfetch == ava::permissions::PermissionResolution::Deny, "headless read-only policy denies network prompts");
   expect(read_only_websearch && *read_only_websearch == ava::permissions::PermissionResolution::Deny,
          "headless read-only policy denies network search prompts");
+  for (auto const* prompt : {&skill_prompt, &task_prompt, &mcp_prompt, &plugin_execute_prompt, &plugin_tool_prompt, &plugin_command_execute_prompt,
+                             &plugin_command_prompt, &plugin_event_execute_prompt, &plugin_event_prompt})
+  {
+    auto const decision = read_only_resolver(*prompt);
+    expect(decision && *decision == ava::permissions::PermissionResolution::Deny, "read-only policy denies non-file operation for " + prompt->tool_name);
+  }
+
+  auto directory_prompt = search_prompt;
+  directory_prompt.tool_name = "list_directory";
+  ava::app::HeadlessPermissionPolicyOptions directory_options;
+  if (!require(ava::app::add_headless_allowed_tools(directory_options, "list_directory").has_value(), "list_directory allow-tool parses"))
+    return;
+  auto const directory_resolver = ava::app::build_headless_permission_resolver(directory_options);
+  auto const directory_allowed = directory_resolver(directory_prompt);
+  expect(directory_allowed && *directory_allowed == ava::permissions::PermissionResolution::Allow, "list_directory allows directory search");
+  directory_prompt.operation = ava::permissions::Operation::EditFile;
+  auto const directory_write = directory_resolver(directory_prompt);
+  expect(directory_write && *directory_write == ava::permissions::PermissionResolution::Deny, "list_directory does not allow edits");
 
   ava::app::HeadlessPermissionPolicyOptions tool_options;
   auto tools_added = ava::app::add_headless_allowed_tools(tool_options, "glob,grep,mcp,plugin,read_file,skill,task,webfetch,websearch");
@@ -481,6 +502,25 @@ void test_headless_permission_policy()
          "headless allow-tool plugin requires plugin operation families");
   expect(plugin_operation_wrong_tool_name && *plugin_operation_wrong_tool_name == ava::permissions::PermissionResolution::Deny,
          "headless allow-tool plugin requires exact plugin prompt tool names");
+  for (auto const* name : {"mcp_discovery", "mcp_tools", "mcp_demo_echo"})
+  {
+    for (auto const operation : {ava::permissions::Operation::McpServerLaunch, ava::permissions::Operation::McpServerConnect,
+                                 ava::permissions::Operation::McpToolCall, ava::permissions::Operation::McpResourceRead})
+    {
+      auto prompt = mcp_prompt;
+      prompt.tool_name = name;
+      prompt.operation = operation;
+      auto const allowed = tool_resolver(prompt);
+      auto const denied = read_only_resolver(prompt);
+      expect_all("MCP group policy for " + std::string(name) + " operation " + std::to_string(static_cast<int>(operation)),
+                 {{"mcp group allows", allowed && *allowed == ava::permissions::PermissionResolution::Allow},
+                  {"read-only denies", denied && *denied == ava::permissions::PermissionResolution::Deny}});
+      prompt.operation = ava::permissions::Operation::EditFile;
+      auto const wrong_operation = tool_resolver(prompt);
+      expect(wrong_operation && *wrong_operation == ava::permissions::PermissionResolution::Deny,
+             "MCP group does not allow edits disguised as " + std::string(name));
+    }
+  }
 
   auto invalid_allow = ava::app::add_headless_allow_policy(tool_options, "nope");
   auto invalid_tool = ava::app::add_headless_allowed_tools(tool_options, "glob,nope");
@@ -661,10 +701,7 @@ void test_app_print_mode_uses_headless_permission_policy()
   auto const outside_path = root / "outside.txt";
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
-  {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside print policy";
-  }
+  write_test_file(outside_path, "outside print policy");
 
   ava::app::runtime::OpenContext open_context;
   open_context.workspace_dir = workspace;
@@ -721,10 +758,7 @@ void test_app_print_mode_default_permission_denial_is_actionable()
   auto const outside_path = root / "outside.txt";
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
-  {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside print deny";
-  }
+  write_test_file(outside_path, "outside print deny");
 
   ava::app::runtime::OpenContext open_context;
   open_context.workspace_dir = workspace;
@@ -765,13 +799,22 @@ void test_app_print_mode_default_permission_denial_is_actionable()
   std::ostringstream err;
   auto result = ava::app::run_print_prompt(*unlocked_session_result, "read outside without permission policy", provider, transport, run_options, out, err);
   auto const diagnostic = err.str();
-  expect(result && result->final_text == "denied handled" && result->tool_calls == 1,
-         "print mode continues the turn after returning a denied tool result to the provider");
-  expect(diagnostic.find("permission_denied: tool requires permission") != std::string::npos && diagnostic.find("request_id: permreq_") != std::string::npos &&
-             diagnostic.find("resolution_reason: print mode denied permission by default") != std::string::npos &&
-             diagnostic.find("inspect: /permissions audit show permreq_") != std::string::npos &&
-             diagnostic.find("diagnose: /permissions diagnose permreq_") != std::string::npos,
-         "print mode emits actionable permission denial diagnostics to stderr");
+  expect_all("print mode emits actionable permission denial diagnostics to stderr",
+             {{"permission denial", diagnostic.find("permission_denied: tool requires permission") != std::string::npos},
+              {"request id", diagnostic.find("request_id: permreq_") != std::string::npos},
+              {"default-deny reason", diagnostic.find("resolution_reason: print mode denied permission by default") != std::string::npos},
+              {"audit command", diagnostic.find("inspect: /permissions audit show permreq_") != std::string::npos},
+              {"diagnose command", diagnostic.find("diagnose: /permissions diagnose permreq_") != std::string::npos}});
+  if (!require(result.has_value(), "denied read finishes with a tool error result"))
+    return;
+  expect_eq(result->final_text, std::string("denied handled"), "print mode continues after the denied tool result");
+  expect_eq(result->tool_calls, std::size_t{1}, "print mode attempts exactly one denied read");
+  expect_eq(transport.requests().size(), std::size_t{2}, "denied read sends one continuation");
+  expect_eq(result->tool_timeline.size(), std::size_t{1}, "denied read has one timeline result");
+  if (transport.requests().size() == 2 && result->tool_timeline.size() == 1)
+    expect_all("denied read never forwards the file contents",
+               {{"private content absent", transport.requests()[1].body.find("outside print deny") == std::string::npos},
+                {"tool failed", result->tool_timeline.front().status == ava::agent::ToolTimelineStatus::Error}});
 }
 
 void test_runtime_ava_authority_roots_are_shared_with_direct_tool_context()
@@ -898,7 +941,7 @@ void test_app_print_mode_uses_persistent_permission_rules()
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside-print-rule.txt";
-  write_app_test_file(outside_path, "outside print persistent rule note");
+  write_test_file(outside_path, "outside print persistent rule note");
 
   ava::app::runtime::OpenContext open_context;
   open_context.workspace_dir = workspace;
@@ -945,16 +988,25 @@ void test_app_print_mode_uses_persistent_permission_rules()
   CRITICAL_AREA_CONTINUE_W(session);
 
   auto entries = session_w->store.load();
-  auto audits = entries ? permission_entries(*entries) : std::vector<ava::session::SessionEntry>{};
+  if (!require(entries.has_value(), "persistent print permission audit reloads"))
+    return;
+  auto const audits = permission_entries(*entries);
   bool persistent_audited = false;
   for (auto const& audit : audits)
   {
     persistent_audited = persistent_audited || (ava::core::json::string_field(audit.data_json, "resolution_source") == "persistent_rule" &&
+                                                ava::core::json::string_field(audit.data_json, "resolution") == "allow" &&
                                                 ava::core::json::string_field(audit.data_json, "rule_id") == added->rule_id);
   }
-  expect(result && result->final_text == "persistent print allowed" && result->tool_calls == 1,
-         "print mode applies matching persistent permission rules before deny fallback");
+  if (!require(result.has_value(), "persistent print permission prompt completes"))
+    return;
+  expect_eq(result->final_text, std::string("persistent print allowed"), "persistent rule permits continuation");
+  expect_eq(result->tool_calls, std::size_t{1}, "persistent rule executes exactly one read");
   expect(persistent_audited, "print mode persistent permission decisions are audited with the matching rule id");
+  expect_eq(transport.requests().size(), std::size_t{2}, "persistent allow sends one continuation");
+  if (transport.requests().size() == 2)
+    expect(transport.requests()[1].body.find("outside print persistent rule note") != std::string::npos,
+           "persistent allow actually reads and forwards the approved file");
 }
 
 void test_app_print_mode_refreshes_expired_oauth_before_provider_request()
@@ -1052,6 +1104,7 @@ void test_app_print_offline_fails_before_auth_refresh_or_provider_request()
 
 void test_app_connect_provider_credentials_headlessly()
 {
+  ScopedEnvVar moonshot_provider_key("MOONSHOT_API_KEY", std::nullopt);
   ScopedStdinTerminalState terminal_state;
   auto const root = create_empty_root("app-connect-provider-credentials");
 
@@ -1101,6 +1154,7 @@ void test_app_connect_provider_credentials_headlessly()
              invalid_env_err.str().find("sk-should-not-be-echoed") == std::string::npos,
          "headless provider connect rejects invalid env names without echoing secrets");
 
+  ScopedEnvVar missing_key("SKSHOULDNOTBEECHOED", std::nullopt);
   std::istringstream missing_env_input;
   std::ostringstream missing_env_out;
   std::ostringstream missing_env_err;
@@ -1123,6 +1177,20 @@ void test_app_connect_provider_credentials_headlessly()
       empty_stdin_input, empty_stdin_out, empty_stdin_err);
   expect(empty_stdin_exit == 1 && empty_stdin_out.str().empty() && empty_stdin_err.str().find("credential stdin was empty") != std::string::npos,
          "headless provider connect rejects empty stdin credentials");
+  auto after_empty = ava::config::provider_credential_for_request(paths, "anthropic", transport);
+  expect(after_empty && after_empty->has_value() && (*after_empty)->access_token == "anthropic-api-key",
+         "empty headless connect does not overwrite the existing credential");
+  std::istringstream whitespace_input(" \t \r\n");
+  std::ostringstream whitespace_out;
+  std::ostringstream whitespace_err;
+  auto const whitespace_exit = ava::app::run_connect_provider_credential(
+      paths, {.provider_id = "anthropic", .credential_type = ava::app::ConnectCredentialType::ApiKey, .env_var = std::nullopt}, whitespace_input,
+      whitespace_out, whitespace_err);
+  expect_all("whitespace headless connect rejects the secret",
+             {{"failure status", whitespace_exit == 1}, {"no success output", whitespace_out.str().empty()}, {"diagnostic", !whitespace_err.str().empty()}});
+  auto after_whitespace = ava::config::provider_credential_for_request(paths, "anthropic", transport);
+  expect(after_whitespace && after_whitespace->has_value() && (*after_whitespace)->access_token == "anthropic-api-key",
+         "whitespace headless connect preserves the existing credential");
 
   auto const wizard_root = create_empty_root("app-connect-provider-wizard");
   auto const wizard_paths = app_test_paths(wizard_root);
@@ -1174,6 +1242,9 @@ void test_app_connect_provider_credentials_headlessly()
       cancelled_wizard_input, cancelled_wizard_out, cancelled_wizard_err);
   expect(cancelled_wizard_exit == 1 && cancelled_wizard_err.str().find("provider login cancelled") != std::string::npos,
          "interactive provider wizard cancels on standalone escape without waiting for more input");
+  auto after_cancel = ava::config::provider_credential_for_request(wizard_paths, "anthropic", transport);
+  expect(after_cancel && after_cancel->has_value() && (*after_cancel)->access_token == "wizard-api-key",
+         "cancelling the provider wizard preserves the existing credential");
 
   std::istringstream arrow_wizard_input("\x1b[B\narrow-api-key\n");
   std::ostringstream arrow_wizard_out;
@@ -1330,13 +1401,16 @@ void test_app_print_read_only_rejects_committed_directory_symlink_escape()
   auto const outside = root / "outside";
   std::filesystem::create_directories(workspace);
   std::filesystem::create_directories(outside);
-  write_app_test_file(workspace / "inside.txt", "PRINT-INSIDE-CONTROL-28\n");
-  write_app_test_file(outside / "note.txt", "PRINT-OUTSIDE-CONTENT-28\n");
-  write_app_test_file(outside / "outside-listing-marker-28.txt", "outside listing\n");
+  write_test_file(workspace / "inside.txt", "PRINT-INSIDE-CONTROL-28\n");
+  write_test_file(outside / "note.txt", "PRINT-OUTSIDE-CONTENT-28\n");
+  write_test_file(outside / "outside-listing-marker-28.txt", "outside listing\n");
   std::error_code link_error;
   std::filesystem::create_directory_symlink("../outside", workspace / "link", link_error);
   if (link_error == std::errc::operation_not_supported)
+  {
+    request_skip("committed directory symlink print test requires symlink support");
     return;
+  }
   expect(!link_error, "print fixture creates a relative directory symlink that can be checked into Git");
   if (link_error)
     return;
@@ -1356,7 +1430,7 @@ void test_app_print_read_only_rejects_committed_directory_symlink_escape()
                                                                            {"GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z"}});
       if (!owner || !environment)
         return false;
-      auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      auto const deadline = ava::tests::now_plus_seconds(5);
       auto reservation = supervisor.reserve(*owner, ava::process::ProcessRoleV1::Mcp, {.execution_deadline = deadline});
       if (!reservation)
         return false;
@@ -1451,8 +1525,8 @@ void test_app_print_write_rejects_ancestor_swap_after_permission()
   auto const outside = root / "outside";
   std::filesystem::create_directories(workspace / "parent");
   std::filesystem::create_directories(outside);
-  write_app_test_file(workspace / "parent" / "note.txt", "inside original\n");
-  write_app_test_file(outside / "note.txt", "outside original\n");
+  write_test_file(workspace / "parent" / "note.txt", "inside original\n");
+  write_test_file(outside / "note.txt", "outside original\n");
   ava::app::runtime::OpenContext open_context;
   open_context.workspace_dir = workspace;
   open_context.current_dir = workspace;
@@ -1506,7 +1580,7 @@ void test_app_print_patch_rejects_contained_symlink_target()
   std::filesystem::create_directories(workspace);
   auto const target = workspace / "original.txt";
   auto const link = workspace / "alias.txt";
-  write_app_test_file(target, "original text\n");
+  write_test_file(target, "original text\n");
   expect(::chmod(target.c_str(), 0644) == 0, "print patch fixture gives the original target a known non-executable mode");
   std::error_code link_error;
   std::filesystem::create_symlink("original.txt", link, link_error);
@@ -1551,6 +1625,7 @@ void test_app_print_patch_rejects_contained_symlink_target()
 
 void run_app_print_tests()
 {
+  HermeticTestEnvironment environment("app-print-env-");
   test_app_print_prompt_merging();
   test_invocation_signal_policy_mapping();
   test_parallel_read_search_cli_flags();

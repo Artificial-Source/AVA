@@ -10,6 +10,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+from cli_test_support import isolated_environment
 
 from timeout_support import test_timeout
 
@@ -67,7 +68,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="ava-rpc-contract-") as temporary:
         temp = pathlib.Path(temporary)
-        env = os.environ.copy()
+        env = isolated_environment(temp)
         env.update(
             {
                 "HOME": str(temp / "home"),
@@ -100,6 +101,16 @@ def main() -> int:
             fail(f"real get_protocol wire output drifted: status={wire.returncode} stdout={wire.stdout!r} stderr={wire.stderr!r}")
 
         for case in framing["cases"]:
+            input_bytes = bytes.fromhex(case["input_hex"])
+            inbound = input_bytes.split(b"\n")
+            if inbound[-1] == b"":
+                inbound.pop()
+            if case.get("strip_single_trailing_cr", False):
+                if not any(record.endswith(b"\r") for record in inbound):
+                    fail(f"framing case {case['name']} does not exercise its CR stripping contract")
+                inbound = [record[:-1] if record.endswith(b"\r") else record for record in inbound]
+            if "records" in case and [record.decode("utf-8") for record in inbound] != case["records"]:
+                fail(f"framing case {case['name']} inbound records drifted")
             run = subprocess.run(
                 [str(args.ava), "--rpc", "--offline"],
                 input=bytes.fromhex(case["input_hex"]),
@@ -115,11 +126,16 @@ def main() -> int:
                 records = [json.loads(line) for line in decoded.splitlines()]
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 fail(f"real framing case {case['name']} emitted invalid UTF-8/JSON: {error}")
-            expected_record_count = len(case.get("records", [""]))
+            expected_record_count = case.get("recoverable_errors", len(case.get("records", [""])))
             if run.returncode != 0 or len(records) != expected_record_count:
                 fail(f"real framing case {case['name']} drifted: status={run.returncode} records={records!r} stderr={run.stderr!r}")
-            if any(record.get("id") != "" or record.get("error", {}).get("code") != "invalid_request" for record in records):
-                fail(f"real framing case {case['name']} did not recover with empty-id invalid_request: {records!r}")
+            if case.get("accepted", False) and (input_bytes.endswith(b"\n") or not records):
+                fail(f"framing case {case['name']} did not exercise an accepted unterminated final record")
+            expected_id = case.get("recoverable_error_id", "")
+            expected_code = case.get("error_code", "invalid_request")
+            if any(record.get("id") != expected_id or record.get("success") is not False or record.get("error", {}).get("code") != expected_code
+                   for record in records):
+                fail(f"real framing case {case['name']} did not recover with {expected_id!r}/{expected_code}: {records!r}")
     return 0
 
 

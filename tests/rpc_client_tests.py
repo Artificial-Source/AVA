@@ -9,6 +9,9 @@ import pathlib
 import queue
 import sys
 import threading
+import tempfile
+from fake_provider import RpcTombstoneServer
+from timeout_support import test_timeout
 from typing import Any
 
 
@@ -17,35 +20,30 @@ def fake_command(source: str) -> list[str]:
 
 
 def test_timeout_tombstone(AvaRpcClient: type[Any]) -> None:
-    server = r'''
-import json, sys, time
-first = json.loads(sys.stdin.readline())
-time.sleep(0.12)
-print(json.dumps({"id": first["id"], "type": "response", "success": True, "result": {"generation": 1}}), flush=True)
-print(json.dumps({"schema_version": 1, "event_id": "late", "name": "late_response_sent", "type": "late_response_sent", "payload": {}}), flush=True)
-second = json.loads(sys.stdin.readline())
-print(json.dumps({"id": second["id"], "type": "response", "success": True, "result": {"generation": 2}}), flush=True)
-'''
-    client = AvaRpcClient(fake_command(server))
-    try:
-        try:
-            client.request("get_state", request_id="reused", timeout=0.02)
-            raise AssertionError("timed request unexpectedly completed")
-        except queue.Empty:
-            pass
-        try:
-            client.request("get_state", request_id="reused", timeout=0.2)
-            raise AssertionError("timed-out id was reusable before its late response")
-        except ValueError as error:
-            assert "already pending" in str(error)
-        event = client.events.get(timeout=2)
-        assert event["name"] == "late_response_sent"
-        assert client.request("get_state", request_id="reused", timeout=2) == {"generation": 2}
-        assert client.close(timeout=2) == 0
-    finally:
-        if client.process.poll() is None:
-            client.process.kill()
-            client.process.wait()
+    with tempfile.TemporaryDirectory(prefix="ava-rpc-tombstone-") as temporary:
+        with RpcTombstoneServer(temporary) as server:
+            client = AvaRpcClient(server.command)
+            try:
+                try:
+                    client.request("get_state", request_id="reused", timeout=test_timeout(0.02))
+                    raise AssertionError("timed request unexpectedly completed")
+                except queue.Empty:
+                    pass
+                server.wait_for_request()
+                try:
+                    client.request("get_state", request_id="reused", timeout=test_timeout(2))
+                    raise AssertionError("timed-out id was reusable before its late response")
+                except ValueError:
+                    pass
+                server.release_response()
+                event = client.events.get(timeout=test_timeout(5))
+                assert event["name"] == "late_response_sent"
+                assert client.request("get_state", request_id="reused", timeout=test_timeout(5)) == {"generation": 2}
+                assert client.close(timeout=test_timeout(5)) == 0
+            finally:
+                if client.process.poll() is None:
+                    client.process.kill()
+                    client.process.wait(timeout=test_timeout(5))
 
 
 def test_resolver_cancel_race_isolated(AvaRpcClient: type[Any], RpcError: type[BaseException]) -> None:
@@ -83,7 +81,7 @@ while True:
 
     def permission_hook(_event: dict[str, Any]) -> str:
         hook_started.set()
-        assert release_hook.wait(2)
+        assert release_hook.wait(test_timeout(5))
         return "allow"
 
     client = AvaRpcClient(fake_command(server), on_permission=permission_hook)
@@ -92,13 +90,13 @@ while True:
 
     def prompt_request() -> None:
         try:
-            prompt_result.append(client.request("prompt", request_id="prompt", message="edit", timeout=2))
+            prompt_result.append(client.request("prompt", request_id="prompt", message="edit", timeout=test_timeout(5)))
         except BaseException as error:
             prompt_result.append(error)
 
     def unrelated_request() -> None:
         try:
-            other_result.append(client.request("get_protocol", request_id="other", timeout=2))
+            other_result.append(client.request("get_protocol", request_id="other", timeout=test_timeout(5)))
         except BaseException as error:
             other_result.append(error)
 
@@ -106,13 +104,13 @@ while True:
     other_thread = threading.Thread(target=unrelated_request)
     try:
         prompt_thread.start()
-        assert hook_started.wait(2)
+        assert hook_started.wait(test_timeout(5))
         other_thread.start()
-        canceled = client.request("cancel", request_id="cancel", timeout=2)
+        canceled = client.request("cancel", request_id="cancel", timeout=test_timeout(5))
         assert canceled["active_run"] is True
         release_hook.set()
-        prompt_thread.join(2)
-        other_thread.join(2)
+        prompt_thread.join(test_timeout(5))
+        other_thread.join(test_timeout(5))
         assert not prompt_thread.is_alive() and not other_thread.is_alive()
         assert prompt_result and isinstance(prompt_result[0], RpcError)
         assert other_result == [{"protocol_version": 1}]
@@ -121,14 +119,16 @@ while True:
             raise AssertionError("benign late resolver rejection was reported as a hook error")
         except queue.Empty:
             pass
-        assert client.close(timeout=2) == 0
+        assert client.close(timeout=test_timeout(5)) == 0
     finally:
         release_hook.set()
-        prompt_thread.join(2)
-        other_thread.join(2)
+        if prompt_thread.ident is not None:
+            prompt_thread.join(test_timeout(5))
+        if other_thread.ident is not None:
+            other_thread.join(test_timeout(5))
         if client.process.poll() is None:
             client.process.kill()
-            client.process.wait()
+            client.process.wait(timeout=test_timeout(5))
 
 
 def test_hook_failure_queue_does_not_poison_request(AvaRpcClient: type[Any]) -> None:
@@ -141,20 +141,92 @@ print(json.dumps({"schema_version": 1, "event_id": "question", "request_id": pro
 print(json.dumps({"id": prompt["id"], "type": "response", "success": True, "result": {"final_text": "still completed"}}), flush=True)
 '''
     callback_errors: list[BaseException] = []
+    callback_completed = threading.Event()
+
+    def on_hook_error(error: BaseException) -> None:
+        callback_errors.append(error)
+        callback_completed.set()
 
     def broken_hook(_event: dict[str, Any]) -> None:
         raise ValueError("hook failed independently")
 
-    client = AvaRpcClient(fake_command(server), on_question=broken_hook, on_hook_error=callback_errors.append)
+    client = AvaRpcClient(fake_command(server), on_question=broken_hook, on_hook_error=on_hook_error)
     try:
-        assert client.request("prompt", request_id="prompt", message="ask", timeout=2)["final_text"] == "still completed"
-        error = client.hook_errors.get(timeout=2)
+        assert client.request("prompt", request_id="prompt", message="ask", timeout=test_timeout(5))["final_text"] == "still completed"
+        error = client.hook_errors.get(timeout=test_timeout(5))
+        assert callback_completed.wait(test_timeout(5)), "hook error callback did not complete"
         assert isinstance(error, ValueError) and callback_errors == [error]
-        assert client.close(timeout=2) == 0
+        assert client.close(timeout=test_timeout(5)) == 0
     finally:
         if client.process.poll() is None:
             client.process.kill()
-            client.process.wait()
+            client.process.wait(timeout=test_timeout(5))
+
+
+def test_timeout_then_eof_settles_pending_requests(AvaRpcClient: type[Any]) -> None:
+    server = r'''
+import json, sys
+json.loads(sys.stdin.readline())
+json.loads(sys.stdin.readline())
+print(json.dumps({"name": "pending_received", "type": "pending_received", "payload": {}}), flush=True)
+json.loads(sys.stdin.readline())
+'''
+    client = AvaRpcClient(fake_command(server))
+    outcome: list[BaseException | dict[str, Any]] = []
+
+    def pending_request() -> None:
+        try:
+            outcome.append(client.request("get_state", request_id="pending", timeout=test_timeout(5)))
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = threading.Thread(target=pending_request)
+    try:
+        try:
+            client.request("get_state", request_id="timed-out", timeout=test_timeout(0.02))
+            raise AssertionError("withheld request unexpectedly completed")
+        except queue.Empty:
+            pass
+        worker.start()
+        assert client.events.get(timeout=test_timeout(5))["name"] == "pending_received"
+        client.send({"id": "release-eof", "type": "exit"})
+        worker.join(test_timeout(5))
+        assert not worker.is_alive(), "EOF left a pending request blocked"
+        assert len(outcome) == 1 and isinstance(outcome[0], EOFError), outcome
+        assert client.close(timeout=test_timeout(5)) == 0
+        for request_id in ("timed-out", "fresh"):
+            try:
+                client.request("get_state", request_id=request_id, timeout=test_timeout(5))
+                raise AssertionError(f"closed client admitted {request_id}")
+            except RuntimeError:
+                pass
+    finally:
+        if client.process.poll() is None:
+            client.process.kill()
+            client.process.wait(timeout=test_timeout(5))
+        if worker.ident is not None:
+            worker.join(test_timeout(5))
+
+
+def test_closed_server_stdin_reports_broken_pipe(AvaRpcClient: type[Any]) -> None:
+    server = r'''
+import json, os
+os.close(0)
+print(json.dumps({"name": "stdin_closed", "type": "stdin_closed", "payload": {}}), flush=True)
+'''
+    client = AvaRpcClient(fake_command(server))
+    try:
+        assert client.events.get(timeout=test_timeout(5))["name"] == "stdin_closed"
+        try:
+            client.request("get_state", request_id="broken-pipe", timeout=test_timeout(5))
+            raise AssertionError("request write succeeded after the server closed stdin")
+        except BrokenPipeError:
+            pass
+        assert client.close(timeout=test_timeout(5)) == 0
+    finally:
+        if client.process.poll() is None:
+            client.process.kill()
+            client.process.wait(timeout=test_timeout(5))
 
 
 def main() -> int:
@@ -167,6 +239,8 @@ def main() -> int:
     test_timeout_tombstone(AvaRpcClient)
     test_resolver_cancel_race_isolated(AvaRpcClient, RpcError)
     test_hook_failure_queue_does_not_poison_request(AvaRpcClient)
+    test_timeout_then_eof_settles_pending_requests(AvaRpcClient)
+    test_closed_server_stdin_reports_broken_pipe(AvaRpcClient)
     return 0
 
 

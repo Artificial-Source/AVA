@@ -9,6 +9,7 @@
 #include "ava/app/rpc/output.h"
 #include "ava/app/rpc/protocol.h"
 #include "ava/app/rpc/resolvers.h"
+#include "ava/app/rpc/run_state.h"
 #include "ava/app/rpc/serialization.h"
 #include "ava/app/rpc/serialization_json.h"
 #include "ava/app/rpc_mode.h"
@@ -306,25 +307,25 @@ void test_app_rpc_parsing_and_response_serialization()
          "RPC parser preserves Pi-style inline image upload objects");
 
   auto invalid_uploaded_image = ava::app::parse_rpc_command_line(R"JSON({"id":"img-upload-bad","type":"prompt","message":"look","images":["bad"]})JSON");
-  expect(!invalid_uploaded_image && invalid_uploaded_image.error().message() == "RPC images must be an array of image objects",
+  expect(!invalid_uploaded_image && invalid_uploaded_image.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects non-object inline image upload entries");
 
   auto missing_upload_data = ava::app::parse_rpc_command_line(
       R"JSON({"id":"img-upload-missing","type":"prompt","message":"look","images":[{"type":"image","mimeType":"image/png"}]})JSON");
-  expect(!missing_upload_data && missing_upload_data.error().message() == "RPC images entries require data",
+  expect(!missing_upload_data && missing_upload_data.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects inline image uploads without data");
 
   auto invalid_upload_type = ava::app::parse_rpc_command_line(
       R"JSON({"id":"img-upload-type","type":"prompt","message":"look","images":[{"type":"file","data":"QUJD","mimeType":"image/png"}]})JSON");
-  expect(!invalid_upload_type && invalid_upload_type.error().message() == "RPC images entries must have type image",
+  expect(!invalid_upload_type && invalid_upload_type.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects inline image upload entries with non-image type");
 
   auto invalid_image_prompt = ava::app::parse_rpc_command_line(R"JSON({"id":"img-bad","type":"prompt","message":"look","attachments":["ok.png",2]})JSON");
-  expect(!invalid_image_prompt && invalid_image_prompt.error().message() == "RPC attachments must be an array of strings",
+  expect(!invalid_image_prompt && invalid_image_prompt.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects non-string prompt attachment path entries");
 
   auto empty_image_prompt = ava::app::parse_rpc_command_line(R"JSON({"id":"img-empty","type":"prompt","message":"look","attachments":[""]})JSON");
-  expect(!empty_image_prompt && empty_image_prompt.error().message() == "RPC attachments entries must be non-empty",
+  expect(!empty_image_prompt && empty_image_prompt.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects empty prompt attachment paths");
 
   auto reply = ava::app::parse_rpc_command_line(R"JSON({"id":"reply","type":"permission_reply","request_id":"permission_1",)JSON"
@@ -342,15 +343,15 @@ void test_app_rpc_parsing_and_response_serialization()
          "RPC parser preserves branch_from_entry_id for session fork commands");
 
   auto empty_branch = ava::app::parse_rpc_command_line(R"JSON({"id":"fork","type":"fork_session","branch_from_entry_id":""})JSON");
-  expect(!empty_branch && empty_branch.error().message() == "fork_session branch_from_entry_id must be non-empty when provided",
+  expect(!empty_branch && empty_branch.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects empty explicit branch_from_entry_id for session fork commands");
 
   auto non_string_session = ava::app::parse_rpc_command_line(R"JSON({"id":"summary","type":"summarize_branch","session_id":123})JSON");
-  expect(!non_string_session && non_string_session.error().message() == "RPC session_id must be a string",
+  expect(!non_string_session && non_string_session.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects non-string session selectors for session mutation commands");
 
   auto non_string_session_name = ava::app::parse_rpc_command_line(R"JSON({"id":"fork","type":"fork_session","session_name":123})JSON");
-  expect(!non_string_session_name && non_string_session_name.error().message() == "RPC session_name must be a string",
+  expect(!non_string_session_name && non_string_session_name.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects non-string session names for session mutation commands");
 
   auto branch_summary = ava::app::parse_rpc_command_line(R"JSON({"id":"summary","type":"summarize_branch","branch_root_entry_id":"entry_1",)JSON"
@@ -363,7 +364,7 @@ void test_app_rpc_parsing_and_response_serialization()
          "RPC parser preserves summarize_branch source range, summary text, and provenance fields");
 
   auto invalid_branch_summary = ava::app::parse_rpc_command_line(R"JSON({"id":"summary","type":"summarize_branch","summary":"bad\u001b"})JSON");
-  expect(!invalid_branch_summary && invalid_branch_summary.error().message() == "RPC text field contains invalid character",
+  expect(!invalid_branch_summary && invalid_branch_summary.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects control bytes in branch summary text");
 
   auto plugin_command_object_args = ava::app::parse_rpc_command_line(
@@ -378,20 +379,20 @@ void test_app_rpc_parsing_and_response_serialization()
 
   auto invalid_plugin_command_args = ava::app::parse_rpc_command_line(
       R"JSON({"id":"plugin","type":"run_plugin_command","plugin_id":"com.example.tool","name":"status","arguments":"not json"})JSON");
-  expect(!invalid_plugin_command_args && invalid_plugin_command_args.error().message() == "RPC string arguments must contain a JSON object",
+  expect(!invalid_plugin_command_args && invalid_plugin_command_args.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects string plugin command arguments that are not JSON objects");
 
   auto non_object_plugin_command_args =
       ava::app::parse_rpc_command_line(R"JSON({"id":"plugin","type":"run_plugin_command","plugin_id":"com.example.tool","name":"status","arguments":123})JSON");
-  expect(!non_object_plugin_command_args && non_object_plugin_command_args.error().message() == "RPC arguments must be an object",
+  expect(!non_object_plugin_command_args && non_object_plugin_command_args.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects non-object plugin command arguments instead of silently defaulting");
 
   auto wait_job = ava::app::parse_rpc_command_line(R"JSON({"id":"wait-job","type":"wait_job","job_id":"job_123","timeout_ms":45000})JSON");
   expect(wait_job && wait_job->job_id == "job_123" && wait_job->timeout_ms == 45000, "RPC parser preserves strict job wait fields for handler clamping");
   auto invalid_job_id = ava::app::parse_rpc_command_line(R"JSON({"id":"job","type":"get_job","job_id":42})JSON");
-  expect(!invalid_job_id && invalid_job_id.error().message() == "RPC job_id must be a string", "RPC parser rejects wrong-typed job identifiers");
+  expect(!invalid_job_id && invalid_job_id.error().category() == ava::core::ErrorCategory::InvalidArgument, "RPC parser rejects wrong-typed job identifiers");
   auto invalid_job_timeout = ava::app::parse_rpc_command_line(R"JSON({"id":"job","type":"wait_job","job_id":"job_123","timeout_ms":"1"})JSON");
-  expect(!invalid_job_timeout && invalid_job_timeout.error().message() == "RPC timeout_ms must be an integer",
+  expect(!invalid_job_timeout && invalid_job_timeout.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects wrong-typed job wait timeouts");
 
   auto direct_run_command = ava::app::parse_rpc_command_line(R"JSON({"id":"cmd","type":"run_command","command":"printf rpc-direct"})JSON");
@@ -399,15 +400,15 @@ void test_app_rpc_parsing_and_response_serialization()
          "RPC parser preserves direct command execution payloads");
 
   auto invalid_direct_run_command = ava::app::parse_rpc_command_line(R"JSON({"id":"cmd","type":"run_command","command":123})JSON");
-  expect(!invalid_direct_run_command && invalid_direct_run_command.error().message() == "RPC command must be a string",
+  expect(!invalid_direct_run_command && invalid_direct_run_command.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects non-string direct command execution payloads");
 
   auto malformed_with_string_prefix = ava::app::parse_rpc_command_line(R"JSON({"id":"bad","type":"summarize_branch","session_id":"session_a" garbage})JSON");
-  expect(!malformed_with_string_prefix && malformed_with_string_prefix.error().message() == "malformed RPC JSON object",
+  expect(!malformed_with_string_prefix && malformed_with_string_prefix.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects malformed JSON even when a string prefix is parseable");
 
   auto clone_with_branch_from = ava::app::parse_rpc_command_line(R"JSON({"id":"clone","type":"clone_session","branch_from_entry_id":"entry_1"})JSON");
-  expect(!clone_with_branch_from && clone_with_branch_from.error().message() == "clone_session does not support branch_from_entry_id",
+  expect(!clone_with_branch_from && clone_with_branch_from.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects misleading branch_from_entry_id on clone_session");
 
   auto unrelated_with_command_specific_fields = ava::app::parse_rpc_command_line(
@@ -417,27 +418,28 @@ void test_app_rpc_parsing_and_response_serialization()
          "RPC parser ignores command-specific session and grant fields on unrelated commands");
 
   auto invalid_grant_revoke = ava::app::parse_rpc_command_line(R"JSON({"id":"revoke","type":"permission_grant_revoke","grant_id":"bad grant"})JSON");
-  expect(!invalid_grant_revoke && invalid_grant_revoke.error().message() == "RPC identifier contains invalid character",
+  expect(!invalid_grant_revoke && invalid_grant_revoke.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser validates grant_id only for permission_grant_revoke");
 
   auto invalid_selected_options = ava::app::parse_rpc_command_line(R"JSON({"id":"bad","type":"question_reply","selected_options":["ok",2]})JSON");
-  expect(!invalid_selected_options && invalid_selected_options.error().message() == "RPC selected_options must be an array of strings",
+  expect(!invalid_selected_options && invalid_selected_options.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects non-string selected_options entries");
 
   auto oversized_reason = ava::app::parse_rpc_command_line("{\"id\":\"reply\",\"type\":\"permission_reply\",\"reason\":\"" +
                                                            std::string(ava::app::rpc::kMaxRpcReasonBytes + 1, 'x') + "\"}");
-  expect(!oversized_reason && oversized_reason.error().message() == "RPC text field is too long",
+  expect(!oversized_reason && oversized_reason.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects oversized text fields before emitting resolver events");
 
   auto control_reason = ava::app::parse_rpc_command_line(R"JSON({"id":"reply","type":"permission_reply","reason":"bad\u001b"})JSON");
-  expect(!control_reason && control_reason.error().message() == "RPC text field contains invalid character",
+  expect(!control_reason && control_reason.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects control bytes in free-text resolver reasons");
 
   auto malformed = ava::app::parse_rpc_command_line("{\"id\":\"bad\",\"type\":\"prompt\"");
   expect(!malformed && malformed.error().category() == ava::core::ErrorCategory::InvalidArgument, "RPC parser rejects malformed JSON object lines");
 
-  auto oversized_id = ava::app::parse_rpc_command_line("{\"id\":\"" + std::string(257, 'x') + "\",\"type\":\"prompt\"}");
-  expect(!oversized_id && oversized_id.error().message() == "RPC identifier is too long", "RPC parser rejects oversized request identifiers before queueing");
+  auto oversized_id = ava::app::parse_rpc_command_line("{\"id\":\"" + std::string(ava::app::rpc::kMaxRpcIdentifierBytes + 1, 'x') + "\",\"type\":\"prompt\"}");
+  expect(!oversized_id && oversized_id.error().category() == ava::core::ErrorCategory::InvalidArgument,
+         "RPC parser rejects oversized request identifiers before queueing");
 
   auto const success = ava::app::serialize_rpc_success_jsonl("a\"b", "{\"value\":1}");
   expect(success == "{\"id\":\"a\\\"b\",\"type\":\"response\",\"success\":true,\"result\":{\"value\":1}}\n",
@@ -446,6 +448,114 @@ void test_app_rpc_parsing_and_response_serialization()
   auto const error = ava::app::serialize_rpc_error_jsonl("e1", ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "bad \"request\""));
   expect(error.find("\"success\":false") != std::string::npos && error.find("bad \\\"request\\\"") != std::string::npos && error.ends_with('\n'),
          "RPC error response serializes JSONL error details");
+}
+
+void test_app_rpc_protocol_bounds()
+{
+  using namespace ava::app::rpc;
+  // Test the accepting edge as well as rejection: an always-rejecting parser is
+  // not a valid implementation of any of these bounded fields.
+  auto text_boundary = [](std::string_view type, std::string_view field, std::size_t limit) {
+    auto request = [&](std::size_t size) {
+      return ava::app::parse_rpc_command_line("{\"id\":\"edge\",\"type\":\"" + std::string(type) + "\",\"" + std::string(field) + "\":\"" +
+                                              std::string(size, 'x') + "\"}");
+    };
+    auto accepted = request(limit);
+    auto rejected = request(limit + 1);
+    expect_all("RPC byte boundary for " + std::string(type) + "." + std::string(field),
+               {{"limit accepted", accepted.has_value()},
+                {"limit+1 rejected", !rejected},
+                {"invalid argument", !rejected && rejected.error().category() == ava::core::ErrorCategory::InvalidArgument}});
+  };
+  text_boundary("permission_rule_add", "command", kMaxRpcRuleCommandBytes);
+  text_boundary("permission_rule_add", "target_path", kMaxRpcRulePathBytes);
+  text_boundary("export_html", "outputPath", kMaxRpcExportPathBytes);
+  text_boundary("set_session_name", "session_name", kMaxRpcSessionNameBytes);
+  text_boundary("fork_session", "branch_from_entry_id", kMaxRpcEntryIdBytes);
+  text_boundary("summarize_branch", "branch_root_entry_id", kMaxRpcEntryIdBytes);
+  text_boundary("summarize_branch", "branch_tip_entry_id", kMaxRpcEntryIdBytes);
+  text_boundary("summarize_branch", "summary", kMaxRpcBranchSummaryBytes);
+  text_boundary("question_reply", "answer", kMaxRpcQuestionAnswerBytes);
+  text_boundary("question_reply", "selected", kMaxRpcQuestionAnswerBytes);
+  text_boundary("validate_plugin", "path", kMaxRpcRulePathBytes);
+  text_boundary("install_plugin", "path", kMaxRpcRulePathBytes);
+
+  auto array_boundary = [](std::string_view type, std::string_view field, std::size_t count_limit, std::size_t byte_limit) {
+    auto request = [&](std::size_t count, std::size_t bytes) {
+      std::string json = "{\"id\":\"edge\",\"type\":\"" + std::string(type) + "\",\"" + std::string(field) + "\":[";
+      for (std::size_t index = 0; index < count; ++index)
+      {
+        if (index)
+          json += ',';
+        json += "\"" + std::string(bytes, 'x') + "\"";
+      }
+      return ava::app::parse_rpc_command_line(json + "]}");
+    };
+    auto count_edge = request(count_limit, 1);
+    auto count_over = request(count_limit + 1, 1);
+    auto byte_edge = request(1, byte_limit);
+    auto byte_over = request(1, byte_limit + 1);
+    expect_all("RPC array boundary for " + std::string(field),
+               {{"count limit accepted", count_edge.has_value()},
+                {"count overflow rejected", !count_over},
+                {"count error category", !count_over && count_over.error().category() == ava::core::ErrorCategory::InvalidArgument},
+                {"byte limit accepted", byte_edge.has_value()},
+                {"byte overflow rejected", !byte_over},
+                {"byte error category", !byte_over && byte_over.error().category() == ava::core::ErrorCategory::InvalidArgument}});
+  };
+  array_boundary("set_session_labels", "labels", kMaxRpcSessionLabels, kMaxRpcSessionLabelBytes);
+  array_boundary("question_reply", "selected_options", kMaxRpcQuestionSelectedOptions, kMaxRpcQuestionAnswerBytes);
+  array_boundary("prompt", "attachments", kMaxRpcPromptAttachments, kMaxRpcPromptAttachmentPathBytes);
+  auto mixed_images = [](std::size_t uploads) {
+    std::string json = "{\"id\":\"mixed\",\"type\":\"prompt\",\"attachments\":[";
+    for (std::size_t index = 0; index < kMaxRpcPromptAttachments - 1; ++index)
+    {
+      if (index)
+        json += ',';
+      json += "\"screen.png\"";
+    }
+    json += "],\"images\":[";
+    for (std::size_t index = 0; index < uploads; ++index)
+    {
+      if (index)
+        json += ',';
+      json += "{\"type\":\"image\",\"data\":\"QUJD\",\"mimeType\":\"image/png\"}";
+    }
+    return ava::app::parse_rpc_command_line(json + "]}");
+  };
+  auto mixed_edge = mixed_images(1);
+  auto mixed_over = mixed_images(2);
+  expect_all("RPC prompt image count combines path attachments and inline uploads",
+             {{"combined limit accepted", mixed_edge.has_value()},
+              {"combined overflow rejected", !mixed_over},
+              {"invalid argument", !mixed_over && mixed_over.error().category() == ava::core::ErrorCategory::InvalidArgument}});
+
+  for (std::string_view type : {"steer", "follow_up"})
+  {
+    RpcRunState state;
+    set_active_run(state, RpcRunKind::Prompt, "parent");
+    auto& queue = type == "steer" ? state.steering_messages : state.follow_up_messages;
+    auto full = queue_rpc_message(queue, state, std::string(type), "full", std::string(kMaxRpcQueuedMessageBytes, 'x'));
+    auto excess = queue_rpc_message(queue, state, std::string(type), "excess", "x");
+    expect_all("RPC " + std::string(type) + " aggregate queued-byte boundary",
+               {{"limit accepted", full.has_value()},
+                {"overflow rejected", !excess},
+                {"rejection preserves queue", queue.size() == 1 && queue.front().message.size() == kMaxRpcQueuedMessageBytes}});
+    RpcRunState oversize_state;
+    set_active_run(oversize_state, RpcRunKind::Prompt, "parent");
+    auto& oversize_queue = type == "steer" ? oversize_state.steering_messages : oversize_state.follow_up_messages;
+    auto oversize = queue_rpc_message(oversize_queue, oversize_state, std::string(type), "oversize", std::string(kMaxRpcQueuedMessageBytes + 1, 'x'));
+    expect(!oversize && oversize_queue.empty(), "RPC rejects an oversized individual " + std::string(type) + " without enqueueing it");
+  }
+  auto const exact = queued_message_payload_json(std::string(kMaxRpcQueueEventMessageBytes, 'x'));
+  auto const truncated = queued_message_payload_json(std::string(kMaxRpcQueueEventMessageBytes - 1, 'x') + "\xe2\x82\xac");
+  expect_eq(ava::core::json::string_field(exact, "message").value_or("").size(), kMaxRpcQueueEventMessageBytes,
+            "RPC queue event retains a message at the byte limit");
+  expect_all("RPC queue event truncates at a valid UTF-8 boundary",
+             {{"no truncation at limit", exact.find("\"message_truncated\"") == std::string::npos},
+              {"truncation marker", truncated.find("\"message_truncated\":true") != std::string::npos},
+              {"valid UTF-8", ava::core::json::is_valid_utf8(truncated)},
+              {"partial code point omitted", ava::core::json::string_field(truncated, "message").value_or("").size() == kMaxRpcQueueEventMessageBytes - 1}});
 }
 
 void test_app_rpc_identifier_validation()
@@ -458,19 +568,19 @@ void test_app_rpc_identifier_validation()
          "RPC parser allows practical dotted, dashed, underscored, and slash-delimited identifiers");
 
   auto control = ava::app::parse_rpc_command_line(R"JSON({"id":"bad\u001f","type":"prompt"})JSON");
-  expect(!control && control.error().message() == "RPC identifier contains invalid character", "RPC parser rejects escaped control bytes in identifiers");
+  expect(!control && control.error().category() == ava::core::ErrorCategory::InvalidArgument, "RPC parser rejects escaped control bytes in identifiers");
 
   std::string del_line = R"JSON({"id":"bad)JSON";
   del_line.push_back(static_cast<char>(0x7F));
   del_line += R"JSON(","type":"prompt"})JSON";
   auto del = ava::app::parse_rpc_command_line(del_line);
-  expect(!del && del.error().message() == "RPC identifier contains invalid character", "RPC parser rejects DEL bytes in identifiers");
+  expect(!del && del.error().category() == ava::core::ErrorCategory::InvalidArgument, "RPC parser rejects DEL bytes in identifiers");
 
   auto whitespace = ava::app::parse_rpc_command_line(R"JSON({"id":"bad id","type":"prompt"})JSON");
-  expect(!whitespace && whitespace.error().message() == "RPC identifier contains invalid character", "RPC parser rejects ASCII whitespace in identifiers");
+  expect(!whitespace && whitespace.error().category() == ava::core::ErrorCategory::InvalidArgument, "RPC parser rejects ASCII whitespace in identifiers");
 
   auto metachar = ava::app::parse_rpc_command_line(R"JSON({"id":"ok","type":"inspect_plugin","plugin_id":"bad;id"})JSON");
-  expect(!metachar && metachar.error().message() == "RPC identifier contains invalid character",
+  expect(!metachar && metachar.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects command-ambiguous metacharacters in slash-command identifiers");
 
   auto path = ava::app::parse_rpc_command_line(R"JSON({"id":"path-ok","type":"validate_plugin","path":"./plugins/bad; path.json"})JSON");
@@ -480,7 +590,7 @@ void test_app_rpc_identifier_validation()
   escaped_control_path += "\\u001f";
   escaped_control_path += R"JSON(bad"})JSON";
   auto control_path = ava::app::parse_rpc_command_line(escaped_control_path);
-  expect(!control_path && control_path.error().message() == "RPC text field contains invalid character", "RPC parser rejects control bytes in path fields");
+  expect(!control_path && control_path.error().category() == ava::core::ErrorCategory::InvalidArgument, "RPC parser rejects control bytes in path fields");
 }
 
 void test_app_rpc_production_catalog_and_golden_contract()
@@ -569,8 +679,10 @@ void test_app_rpc_contract_validation_regressions()
   invalid_utf8.push_back(static_cast<char>(0xC3));
   invalid_utf8 += R"JSON("})JSON";
   auto invalid = ava::app::parse_rpc_command_line(invalid_utf8);
-  expect(!invalid && invalid.error().message() == "RPC request is not valid UTF-8", "RPC parser validates UTF-8 before JSON extraction");
+  expect(!invalid && invalid.error().category() == ava::core::ErrorCategory::InvalidArgument, "RPC parser validates UTF-8 before JSON extraction");
 
+  if (!require(!invalid, "RPC invalid UTF-8 fixture produces an error to serialize"))
+    return;
   auto const invalid_response = ava::app::serialize_rpc_error_jsonl("", invalid.error());
   expect(invalid_response.find("\"code\":\"invalid_request\"") != std::string::npos &&
              std::ranges::all_of(invalid_response, [](char ch) { return static_cast<unsigned char>(ch) < 0x80U; }),

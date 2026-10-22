@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from fake_provider import FakeProvider, launch_fake_provider
+from cli_test_support import isolated_environment
 from timeout_support import test_timeout
 
 
@@ -39,6 +40,9 @@ def main() -> int:
     from ava_rpc_client import AvaRpcClient, RpcError  # pylint: disable=import-error,import-outside-toplevel
 
     root = args.root.absolute()
+    root.parent.mkdir(parents=True, exist_ok=True)
+    temporary = tempfile.TemporaryDirectory(prefix="ava-rpc-e2e-", dir=root.parent)
+    root = pathlib.Path(temporary.name)
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
     clients: list[AvaRpcClient] = []
@@ -46,16 +50,7 @@ def main() -> int:
     worker_threads: list[threading.Thread] = []
 
     def base_environment(case: pathlib.Path) -> dict[str, str]:
-        env = os.environ.copy()
-        env.update(
-            {
-                "HOME": str(case / "home"),
-                "XDG_CONFIG_HOME": str(case / "config"),
-                "XDG_STATE_HOME": str(case / "state"),
-                "XDG_DATA_HOME": str(case / "data"),
-                "NO_COLOR": "1",
-            }
-        )
+        env = isolated_environment(case)
         for directory in ("home", "config/ava", "state", "data", "workspace"):
             (case / directory).mkdir(parents=True, exist_ok=True)
         (case / "config/ava").chmod(0o700)
@@ -151,6 +146,8 @@ def main() -> int:
             AvaRpcClient([str(args.ava), "--rpc"], cwd=str(case / "workspace"), env=env, on_permission=allow_permission)
         )
         result = client.request("prompt", request_id="tool-prompt", message="write target", timeout=test_timeout(8))
+        # The shared provider uses the same terminal text for allow and deny;
+        # the created file, not that canned text, proves execution was allowed.
         assert result["final_text"] == "after permission deny" and target.read_text(encoding="utf-8") == "rpc new\n"
         assert permission_events and permission_events[0]["payload"]["operation"] == "edit"
         try:
@@ -228,12 +225,10 @@ def main() -> int:
         worker_threads.append(compact_thread)
         compact_thread.start()
         provider.wait_for_request(1, "delayed compact provider request", timeout=test_timeout(5))
-        cancel_started = time.monotonic()
         canceled = client.request("cancel", request_id="compact-cancel-request", timeout=test_timeout(2))
-        compact_thread.join(timeout=1.2)
-        cancel_elapsed = time.monotonic() - cancel_started
+        compact_thread.join(timeout=test_timeout(5))
         assert canceled["active_run"] is True
-        assert not compact_thread.is_alive() and cancel_elapsed < 1.2
+        assert not compact_thread.is_alive(), "compaction cancellation waited for the still-gated provider response"
         assert len(compact_outcome) == 1 and isinstance(compact_outcome[0], RpcError)
         assert compact_outcome[0].error["code"] == "canceled"
         provider.release_request(1)
@@ -252,6 +247,7 @@ def main() -> int:
             provider.stop()
         for thread in worker_threads:
             thread.join(timeout=3)
+        temporary.cleanup()
 
 
 if __name__ == "__main__":

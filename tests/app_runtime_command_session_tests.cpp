@@ -14,6 +14,7 @@
 #include "ava/session/validation.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -40,6 +41,20 @@ void app_command_dispatcher_session_part(ava::app::runtime::session_ts& unlocked
   auto session_path = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.session_path(); };
   auto load_entries = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.load(); };
   auto append_owned = [&](ava::session::SessionEntry entry) { return ava::app::runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry)); };
+  auto seeded_compaction = ava::session::make_manual_compaction_entry({.summary = "Session export fixture summary",
+                                                                       .instructions = "Export the explicit checkpoint",
+                                                                       .config = ava::session::default_compaction_config(),
+                                                                       .estimated_tokens = 0,
+                                                                       .threshold_tokens = 0,
+                                                                       .retained_tokens = 0,
+                                                                       .trigger = "manual",
+                                                                       .recent_context = {},
+                                                                       .recent_context_omitted = false});
+  if (!require(seeded_compaction.has_value(), "session command fixture creates its own compaction checkpoint"))
+    return;
+  auto checkpoint_appended = append_owned(std::move(*seeded_compaction));
+  if (!require(checkpoint_appended.has_value(), "session command fixture appends its own compaction checkpoint"))
+    return;
 
   auto exported = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/export"});
   expect(exported && exported->handled && !exported->output.empty() && exported->output[0].find("# AVA Session Export") != std::string::npos &&
@@ -128,6 +143,8 @@ void app_command_dispatcher_session_part(ava::app::runtime::session_ts& unlocked
   auto const import_symlink_path = workspace / "symlink-import.jsonl";
   std::error_code symlink_error;
   std::filesystem::create_symlink(empty_import_path.filename(), import_symlink_path, symlink_error);
+  if (!require(!symlink_error, "create import rejection symlink fixture: " + symlink_error.message()))
+    return;
   if (!symlink_error)
   {
     auto symlink_import = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/import symlink-import.jsonl --confirm"});
@@ -138,7 +155,10 @@ void app_command_dispatcher_session_part(ava::app::runtime::session_ts& unlocked
   }
 
   auto const fifo_import_path = workspace / "fifo-import.jsonl";
-  if (::mkfifo(fifo_import_path.c_str(), 0600) == 0)
+  int const fifo_created = ::mkfifo(fifo_import_path.c_str(), 0600);
+  if (!require(fifo_created == 0, "create import rejection FIFO fixture: " + std::error_code(errno, std::generic_category()).message()))
+    return;
+  if (fifo_created == 0)
   {
     auto fifo_import = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/import fifo-import.jsonl --confirm"});
     expect(fifo_import && fifo_import->handled && !fifo_import->output.empty() &&

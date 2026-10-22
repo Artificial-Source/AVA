@@ -1,6 +1,9 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/process/supervisor.h"
 #include "ava/app/command_jobs.h"
 #include "ava/app/command_registry.h"
@@ -25,6 +28,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -52,8 +56,12 @@ ava::app::runtime::session_ts open_test_session(std::filesystem::path const& roo
   expect(application_scope.has_value(), "command registry fixture owns application process authority");
   if (application_scope)
     options.application_process_scope = std::move(*application_scope);
+  if (!require(application_scope.has_value(), "registry fixture requires explicit process authority"))
+    throw std::runtime_error(application_scope.error().format());
   auto unlocked_session_result = ava::app::runtime::Session::open(options);
   expect(unlocked_session_result.has_value(), "command registry test opens runtime session");
+  if (!require(unlocked_session_result.has_value(), "registry fixture must open before accessing its session"))
+    throw std::runtime_error(unlocked_session_result.error().format());
   return std::move(*unlocked_session_result);
 }
 
@@ -128,8 +136,8 @@ void test_prompt_commands_load_project_global_and_expand_arguments()
   write_app_test_file(paths.ava_config_dir / "commands" / "review.md", "---\ndescription: Global review\n---\nGlobal $1\n");
   write_app_test_file(workspace / ".ava" / "commands" / "review.md",
                       "---\ndescription: Project review\nargument-hint: <topic>\n---\nProject $1 $2 $@ $ARGUMENTS ${@:2}\n");
-  write_app_test_file(workspace / ".ava" / "commands" / "ship.md", "Ship $$ $1 ${@:2:1}\n");
-  write_app_test_file(workspace / ".ava" / "commands" / "defaults.md", "Default ${1:-release} ${2:-notes}\n");
+  write_test_file(workspace / ".ava" / "commands" / "ship.md", "Ship $$ $1 ${@:2:1}\n");
+  write_test_file(workspace / ".ava" / "commands" / "defaults.md", "Default ${1:-release} ${2:-notes}\n");
 
   auto unlocked_session = open_test_session(root, workspace);
   auto registry = ava::app::load_command_registry(unlocked_session, ava::app::CommandRegistryOptions{.include_mcp_prompts = false});
@@ -165,8 +173,7 @@ void test_skill_commands_are_registry_entries_and_permissioned_prompts()
   auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(trusted.has_value(),
          trusted ? "command registry skill test trusts project" : "command registry skill test trusts project: " + trusted.error().format());
-  write_app_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md",
-                      "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
+  write_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md", "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
 
   auto unlocked_session = open_test_session(root, workspace);
   auto registry = ava::app::load_command_registry(unlocked_session);
@@ -197,7 +204,7 @@ void test_plugin_commands_are_registry_entries()
   expect(trusted.has_value(),
          trusted ? "command registry plugin test trusts project" : "command registry plugin test trusts project: " + trusted.error().format());
   auto const plugin_dir = workspace / ".ava" / "plugins" / "com.example.cmd";
-  write_app_test_file(plugin_dir / "plugin.json", app_test_plugin_manifest_json("com.example.cmd", "Command Plugin"));
+  write_test_file(plugin_dir / "plugin.json", app_test_plugin_manifest_json("com.example.cmd", "Command Plugin"));
 
   auto unlocked_session = open_test_session(root, workspace);
   auto enabled = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/plugins enable com.example.cmd"});
@@ -212,6 +219,7 @@ void test_plugin_commands_are_registry_entries()
 
 void test_mcp_prompts_are_registry_entries_and_permissioned_prompts()
 {
+  static_cast<void>(require(!std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty(), "registry MCP fixture executable is configured"));
   if (std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty())
     return;
 
@@ -478,30 +486,30 @@ void test_project_trust_gates_project_resource_commands()
   std::filesystem::create_directories(workspace);
   ScopedEnvVar home("HOME", (root / "home").string());
   ScopedEnvVar xdg_config("XDG_CONFIG_HOME", paths.config_home.string());
-  write_app_test_file(paths.ava_config_dir / "commands" / "global.md", "Global command $1\n");
-  write_app_test_file(paths.ava_config_dir / "APPEND_SYSTEM.md", "Global append instruction.\n");
-  write_app_test_file(workspace / "AGENTS.md", "Project AGENTS context still loads while untrusted.\n");
-  write_app_test_file(workspace / ".ava" / "SYSTEM.md", "Project system replacement.\n");
-  write_app_test_file(workspace / ".ava" / "APPEND_SYSTEM.md", "Project append instruction.\n");
-  write_app_test_file(workspace / ".ava" / "commands" / "local.md", "Local project command $1\n");
-  write_app_test_file(workspace / ".ava" / "skills" / "local-skill" / "SKILL.md",
-                      "---\nname: local-skill\ndescription: Local project skill\n---\nLocal skill body\n");
-  write_app_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "plugin.json",
-                      "{\n"
-                      "  \"schema_version\": 1,\n"
-                      "  \"id\": \"com.example.local\",\n"
-                      "  \"name\": \"Local Plugin\",\n"
-                      "  \"version\": \"0.1.0\",\n"
-                      "  \"api_version\": \"ava.plugin.v1\",\n"
-                      "  \"description\": \"local plugin\",\n"
-                      "  \"entrypoint\": {\"command\": \"node\", \"args\": [\"plugin.js\"]},\n"
-                      "  \"capabilities\": [\"commands\"],\n"
-                      "  \"contributes\": {\n"
-                      "    \"commands\": [{\"name\": \"todo\", \"description\": \"Local todo\"}],\n"
-                      "    \"prompts\": [{\"name\": \"review\", \"description\": \"Local review\", \"path\": \"prompts/review.md\"}],\n"
-                      "    \"skills\": [{\"name\": \"triage\", \"description\": \"Local triage\", \"path\": \"skills/triage.md\"}]\n"
-                      "  }\n"
-                      "}");
+  write_test_file(paths.ava_config_dir / "commands" / "global.md", "Global command $1\n");
+  write_test_file(paths.ava_config_dir / "APPEND_SYSTEM.md", "Global append instruction.\n");
+  write_test_file(workspace / "AGENTS.md", "Project AGENTS context still loads while untrusted.\n");
+  write_test_file(workspace / ".ava" / "SYSTEM.md", "Project system replacement.\n");
+  write_test_file(workspace / ".ava" / "APPEND_SYSTEM.md", "Project append instruction.\n");
+  write_test_file(workspace / ".ava" / "commands" / "local.md", "Local project command $1\n");
+  write_test_file(workspace / ".ava" / "skills" / "local-skill" / "SKILL.md",
+                  "---\nname: local-skill\ndescription: Local project skill\n---\nLocal skill body\n");
+  write_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "plugin.json",
+                  "{\n"
+                  "  \"schema_version\": 1,\n"
+                  "  \"id\": \"com.example.local\",\n"
+                  "  \"name\": \"Local Plugin\",\n"
+                  "  \"version\": \"0.1.0\",\n"
+                  "  \"api_version\": \"ava.plugin.v1\",\n"
+                  "  \"description\": \"local plugin\",\n"
+                  "  \"entrypoint\": {\"command\": \"node\", \"args\": [\"plugin.js\"]},\n"
+                  "  \"capabilities\": [\"commands\"],\n"
+                  "  \"contributes\": {\n"
+                  "    \"commands\": [{\"name\": \"todo\", \"description\": \"Local todo\"}],\n"
+                  "    \"prompts\": [{\"name\": \"review\", \"description\": \"Local review\", \"path\": \"prompts/review.md\"}],\n"
+                  "    \"skills\": [{\"name\": \"triage\", \"description\": \"Local triage\", \"path\": \"skills/triage.md\"}]\n"
+                  "  }\n"
+                  "}");
   write_app_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "prompts" / "review.md", "Local plugin prompt\n");
   write_app_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "skills" / "triage.md", "Local plugin skill\n");
 
@@ -520,6 +528,7 @@ void test_project_trust_gates_project_resource_commands()
   auto registry = ava::app::load_command_registry(unlocked_session, ava::app::CommandRegistryOptions{.include_mcp_prompts = false});
   expect(find_entry(registry, "/global") != nullptr && find_entry(registry, "/local") == nullptr && find_entry(registry, "/skill:local-skill") == nullptr,
          "untrusted sessions load global prompt commands but skip project prompt and skill commands");
+  expect(find_entry(registry, "/plugin:com.example.local:todo") == nullptr, "untrusted registry excludes project plugin commands");
   auto context_before = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/context"});
   expect(context_before && context_before->handled && !context_before->output.empty() &&
              context_before->output[0].find("project_trust=unknown project_resources=skipped") != std::string::npos &&
@@ -547,6 +556,7 @@ void test_project_trust_gates_project_resource_commands()
   registry = ava::app::load_command_registry(unlocked_session, ava::app::CommandRegistryOptions{.include_mcp_prompts = false});
   expect(find_entry(registry, "/local") != nullptr && find_entry(registry, "/skill:local-skill") != nullptr,
          "trusted sessions expose project prompt and skill commands");
+  expect(find_entry(registry, "/plugin:com.example.local:todo") != nullptr, "trusted registry exposes project plugin commands");
   auto local = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/local topic"});
   expect(local && local->handled && local->prompt_message && local->prompt_message->find("Local project command topic") != std::string::npos,
          "trusted project prompt commands can be invoked");
@@ -566,11 +576,12 @@ void test_project_trust_gates_project_resource_commands()
 
   auto const global_append = paths.ava_config_dir / "APPEND_SYSTEM.md";
   auto const symlink_target = root / "outside-append.md";
-  write_app_test_file(symlink_target, "outside append\n");
+  write_test_file(symlink_target, "outside append\n");
   std::error_code symlink_setup_error;
   std::filesystem::remove(global_append, symlink_setup_error);
   symlink_setup_error.clear();
   std::filesystem::create_symlink(symlink_target, global_append, symlink_setup_error);
+  expect(!symlink_setup_error, "failed-reload fixture creates the global prompt symlink: " + symlink_setup_error.message());
   if (!symlink_setup_error)
   {
     auto denied_with_bad_prompt = ava::app::set_project_trust_decision(paths, workspace, false);
@@ -586,13 +597,14 @@ void test_project_trust_gates_project_resource_commands()
     expect(system_prompt().empty(), "/reload trust removes all prior project prompt authority when untrusted reconstruction needs a fail-closed fallback");
     std::error_code restore_error;
     std::filesystem::remove(global_append, restore_error);
-    write_app_test_file(global_append, "Global append instruction.\n");
+    write_test_file(global_append, "Global append instruction.\n");
 
     auto trusted_again = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/trust project"});
     std::error_code second_symlink_error;
     std::filesystem::remove(global_append, second_symlink_error);
     second_symlink_error.clear();
     std::filesystem::create_symlink(symlink_target, global_append, second_symlink_error);
+    expect(!second_symlink_error, "reload-all fixture creates the global prompt symlink: " + second_symlink_error.message());
     if (!second_symlink_error)
     {
       auto denied_for_all = ava::app::set_project_trust_decision(paths, workspace, false);
@@ -604,16 +616,16 @@ void test_project_trust_gates_project_resource_commands()
                  system_prompt().empty(),
              "/reload all uses the untrusted transaction, reports fail-closed prompt reconstruction, and never reports a later stale prompt reload");
       std::filesystem::remove(global_append, restore_error);
-      write_app_test_file(global_append, "Global append instruction.\n");
+      write_test_file(global_append, "Global append instruction.\n");
     }
     else
     {
-      write_app_test_file(global_append, "Global append instruction.\n");
+      write_test_file(global_append, "Global append instruction.\n");
     }
   }
   else
   {
-    write_app_test_file(global_append, "Global append instruction.\n");
+    write_test_file(global_append, "Global append instruction.\n");
   }
 
   auto denied = ava::app::set_project_trust_decision(paths, workspace, false);
@@ -631,6 +643,7 @@ void test_project_trust_gates_project_resource_commands()
   registry = ava::app::load_command_registry(unlocked_session, ava::app::CommandRegistryOptions{.include_mcp_prompts = false});
   expect(find_entry(registry, "/local") == nullptr && find_entry(registry, "/skill:local-skill") == nullptr,
          "/reload trust removes project prompt and skill commands after denial");
+  expect(find_entry(registry, "/plugin:com.example.local:todo") == nullptr, "/reload trust removes project plugin commands after denial");
 }
 
 void test_jobs_command_reads_owned_session_history_after_reopen_path()
@@ -1013,6 +1026,7 @@ void test_jobs_active_run_binding_overlays_captured_history()
 
 void test_passive_command_lookup_does_not_start_mcp_and_submission_resolves_once()
 {
+  static_cast<void>(require(!std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty(), "passive MCP fixture executable is configured"));
   if (std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty())
     return;
 
@@ -1025,10 +1039,9 @@ void test_passive_command_lookup_does_not_start_mcp_and_submission_resolves_once
   ScopedEnvVar home("HOME", private_home.string());
   auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(trusted.has_value(), trusted ? "MCP resolve test trusts project" : "MCP resolve test trusts project: " + trusted.error().format());
-  write_app_test_file(workspace / ".ava" / "mcp.json",
-                      mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[]", mcp_event_log_env_json(event_log)));
-  write_app_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md",
-                      "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
+  write_test_file(workspace / ".ava" / "mcp.json",
+                  mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[]", mcp_event_log_env_json(event_log)));
+  write_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md", "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
 
   auto unlocked_session = open_test_session(root, workspace);
 
@@ -1095,6 +1108,7 @@ void test_passive_command_lookup_does_not_start_mcp_and_submission_resolves_once
 
 void test_mcp_prompt_listing_failures_are_diagnostics_not_unknown()
 {
+  static_cast<void>(require(!std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty(), "MCP failure fixture executable is configured"));
   if (std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty())
     return;
 
@@ -1108,7 +1122,10 @@ void test_mcp_prompt_listing_failures_are_diagnostics_not_unknown()
   expect(trusted.has_value(), trusted ? "MCP list-failure test trusts project" : "MCP list-failure test trusts project: " + trusted.error().format());
 
   write_app_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH));
-  auto denied_session = open_test_session(root, workspace);
+  auto denied_session_result = open_runtime_session_for_test(root, workspace, ava::agent::Mode::Plan, true);
+  if (!require(denied_session_result.has_value(), "denied MCP listing session opens"))
+    return;
+  auto& denied_session = *denied_session_result;
   auto denied = ava::app::resolve_command_registry_entry(denied_session, "/release-notes", deny_all_permissions());
   expect(!denied && denied.error().code() != ava::core::ErrorCode::Canceled && denied.error().message().find("permission_denied") != std::string::npos,
          denied ? "denied MCP listing must not report success" : "denied MCP listing reports the permission diagnostic");
@@ -1126,8 +1143,11 @@ void test_mcp_prompt_listing_failures_are_diagnostics_not_unknown()
     auto canceled_trusted = ava::app::set_project_trust_decision(canceled_paths, canceled_workspace, true);
     expect(canceled_trusted.has_value(),
            canceled_trusted ? "canceled-name denial test trusts project" : "canceled-name denial test trusts project: " + canceled_trusted.error().format());
-    write_app_test_file(canceled_workspace / ".ava" / "mcp.json", app_test_mcp_config_json("canceled-demo", "Canceled Demo", AVA_FAKE_MCP_SERVER_PATH));
-    auto canceled_name_session = open_test_session(canceled_root, canceled_workspace);
+    write_test_file(canceled_workspace / ".ava" / "mcp.json", app_test_mcp_config_json("canceled-demo", "Canceled Demo", AVA_FAKE_MCP_SERVER_PATH));
+    auto canceled_name_session_result = open_runtime_session_for_test(canceled_root, canceled_workspace, ava::agent::Mode::Plan, true);
+    if (!require(canceled_name_session_result.has_value(), "canceled-name MCP session opens"))
+      return;
+    auto& canceled_name_session = *canceled_name_session_result;
     auto denied_canceled_name = ava::app::resolve_command_registry_entry(canceled_name_session, "/release-notes", deny_all_permissions());
     expect(!denied_canceled_name && denied_canceled_name.error().code() != ava::core::ErrorCode::Canceled &&
                denied_canceled_name.error().message().find("permission_denied") != std::string::npos,
@@ -1135,45 +1155,54 @@ void test_mcp_prompt_listing_failures_are_diagnostics_not_unknown()
                                 : "denied MCP listing for id/path containing canceled stays a permission failure, not cancellation");
   }
 
-  write_app_test_file(workspace / ".ava" / "mcp.json", mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[\"exit-initialize\"]"));
-  auto failed_session = open_test_session(root, workspace);
+  write_test_file(workspace / ".ava" / "mcp.json", mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[\"exit-initialize\"]"));
+  auto failed_session_result = open_runtime_session_for_test(root, workspace, ava::agent::Mode::Plan, true);
+  if (!require(failed_session_result.has_value(), "exiting MCP server session opens"))
+    return;
+  auto& failed_session = *failed_session_result;
   auto failed = ava::app::resolve_command_registry_entry(failed_session, "/release-notes", allow_all_permissions());
-  expect(!failed && (failed.error().message().find("closed") != std::string::npos || failed.error().message().find("exit") != std::string::npos),
-         failed ? "failed MCP listing must not report success" : "failed MCP listing reports the actual diagnostic");
+  if (!require(!failed, "exiting MCP server must not resolve a prompt"))
+    return;
+  // Discovery preserves the MCP error as a formatted diagnostic, not its category.
+  expect_eq(failed.error().category(), ava::core::ErrorCategory::Unknown, "discovery exposes its diagnostic error category");
+  expect_eq(failed.error().code(), ava::core::ErrorCode::Unspecified, "server exit remains a non-cancellation discovery failure");
+  auto const& failure_message = failed.error().message();
+  expect_eq(failure_message.substr(0, failure_message.find('\n')), std::string("tool: MCP server closed before response"),
+            "discovery reports the exiting server's exact protocol failure");
 
-  auto cancel_session = open_test_session(root, workspace);
+  auto cancel_session_result = open_runtime_session_for_test(root, workspace, ava::agent::Mode::Plan, true);
+  if (!require(cancel_session_result.has_value(), "pre-canceled MCP session opens"))
+    return;
+  auto& cancel_session = *cancel_session_result;
   write_app_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH));
   auto canceled = ava::app::resolve_command_registry_entry(cancel_session, "/release-notes", allow_all_permissions(), [] { return true; });
   expect(!canceled && canceled.error().code() == ava::core::ErrorCode::Canceled && canceled.error().message().find("canceled") != std::string::npos,
          canceled ? "pre-canceled MCP listing must not succeed" : "cancellation during listing is surfaced as canceled rather than unknown");
 
   auto const marker = root / "slow-list.pgid";
-  write_app_test_file(workspace / ".ava" / "mcp.json",
-                      mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH,
-                                             "[\"slow-prompts-list-marker\",\"" + ava::core::json::escape(marker.generic_string()) + "\"]"));
-  auto slow_session = open_test_session(root, workspace);
-  std::atomic<bool> cancel{false};
-  std::jthread watcher([&] {
-    for (int attempt = 0; attempt < 40; ++attempt)
-    {
-      if (std::filesystem::exists(marker))
-      {
-        cancel.store(true);
-        return;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
+  write_test_file(workspace / ".ava" / "mcp.json",
+                  mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH,
+                                         "[\"slow-prompts-list-marker\",\"" + ava::core::json::escape(marker.generic_string()) + "\"]"));
+  auto slow_session_result = open_runtime_session_for_test(root, workspace, ava::agent::Mode::Plan, true);
+  if (!require(slow_session_result.has_value(), "in-flight cancellation MCP session opens"))
+    return;
+  auto& slow_session = *slow_session_result;
+  auto const deadline = ava::tests::now_plus_seconds(5);
+  bool listing_observed = false;
+  auto listing_canceled = ava::app::resolve_command_registry_entry(slow_session, "/release-notes", allow_all_permissions(), [&] {
+    listing_observed = listing_observed || std::filesystem::exists(marker);
+    return listing_observed || std::chrono::steady_clock::now() >= deadline;
   });
-  auto listing_canceled = ava::app::resolve_command_registry_entry(slow_session, "/release-notes", allow_all_permissions(), [&] { return cancel.load(); });
-  expect(!listing_canceled && listing_canceled.error().message().find("canceled") != std::string::npos,
-         listing_canceled ? "in-flight MCP listing cancel must not resolve an entry"
-                          : "cancellation during prompts/list is surfaced rather than falling through as unknown");
+  expect_all(
+      "cancellation occurs after the fake server observes prompts/list",
+      {{"listing reached", listing_observed}, {"cancellation code", !listing_canceled && listing_canceled.error().code() == ava::core::ErrorCode::Canceled}});
 }
 
 }  // namespace
 
 void run_app_command_registry_tests()
 {
+  HermeticTestEnvironment environment("app-registry-env-");
   test_prompt_commands_load_project_global_and_expand_arguments();
   test_skill_commands_are_registry_entries_and_permissioned_prompts();
   test_plugin_commands_are_registry_entries();

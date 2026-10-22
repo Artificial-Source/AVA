@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/app_rpc_test_cases.h"
+#include "tests/support/app_rpc_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
@@ -77,18 +78,18 @@ void test_app_rpc_model_commands()
       ava::app::run_rpc_loop(unlocked_session, open_context, provider, transport, ava::app::runtime::RunOptions{}, in, out, ava::app::rpc::RpcInputWake{});
   auto const jsonl = out.str();
   expect(result.has_value(), "RPC model command loop completes successfully");
-  expect(jsonl.find("\"id\":\"list\"") != std::string::npos && jsonl.find("\"models\"") != std::string::npos &&
-             jsonl.find("claude-sonnet-4-5") != std::string::npos,
-         "RPC list_models returns configured model catalog");
-  expect(jsonl.find("\"id\":\"set\"") != std::string::npos && jsonl.find("\"provider\":\"anthropic\"") != std::string::npos &&
-             jsonl.find("\"model\":\"claude-sonnet-4-5\"") != std::string::npos,
-         "RPC set_model returns updated Anthropic state");
-  expect(jsonl.find("\"id\":\"state\"") != std::string::npos && jsonl.find("\"model\":\"claude-sonnet-4-5\"") != std::string::npos,
-         "RPC get_state reflects selected model after set_model");
-  expect(jsonl.find("\"id\":\"stats\"") != std::string::npos && jsonl.find("\"model_change\":1") != std::string::npos,
-         "RPC get_session_stats reports model_change count");
-  expect(jsonl.find("\"id\":\"cycle\"") != std::string::npos && jsonl.find("\"provider\":\"deepseek\"") != std::string::npos,
-         "RPC cycle_model advances to the next configured provider model");
+  auto const listed = rpc_response_line(jsonl, "list").value_or("");
+  auto const selected = rpc_response_line(jsonl, "set").value_or("");
+  auto const state = rpc_response_line(jsonl, "state").value_or("");
+  auto const stats = rpc_response_line(jsonl, "stats").value_or("");
+  auto const cycled = rpc_response_line(jsonl, "cycle").value_or("");
+  expect_all("RPC model commands return their own catalog and selected state",
+             {{"list catalog", listed.find("claude-sonnet-4-5") != std::string_view::npos},
+              {"set provider", selected.find("\"provider\":\"anthropic\"") != std::string_view::npos},
+              {"set model", selected.find("\"model\":\"claude-sonnet-4-5\"") != std::string_view::npos},
+              {"get_state model", state.find("\"model\":\"claude-sonnet-4-5\"") != std::string_view::npos},
+              {"model change count", stats.find("\"model_change\":1") != std::string_view::npos},
+              {"cycle provider", cycled.find("\"provider\":\"deepseek\"") != std::string_view::npos}});
   SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
   expect(session_w->model_selection_r()->model.provider_id == "deepseek", "RPC cycle_model updates active session model");
   auto previous = ava::app::rpc::previous_runtime_model(session_w);
@@ -148,18 +149,23 @@ void test_app_rpc_reasoning_commands()
   SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
   auto const jsonl = out.str();
   expect(result.has_value(), "RPC reasoning command loop completes successfully");
-  expect(jsonl.find("\"id\":\"set\"") != std::string::npos && jsonl.find("\"reasoning_enabled\":true") != std::string::npos &&
-             jsonl.find("\"reasoning_level\":\"medium\"") != std::string::npos,
-         "RPC set_reasoning returns enabled reasoning state");
-  expect(jsonl.find("\"id\":\"state\"") != std::string::npos && jsonl.find("\"reasoning_level\":\"medium\"") != std::string::npos,
-         "RPC get_state reflects selected reasoning");
-  expect(jsonl.find("\"id\":\"invalid\"") != std::string::npos && jsonl.find("reasoning level is not supported") != std::string::npos,
-         "RPC set_reasoning reports invalid reasoning levels");
-  expect(jsonl.find("\"id\":\"set-off\"") != std::string::npos && jsonl.find("\"id\":\"state-off\"") != std::string::npos &&
-             jsonl.rfind("\"reasoning_enabled\":false") != std::string::npos,
-         "RPC set_reasoning off clears reasoning state instead of storing an active off selection");
-  expect(jsonl.find("\"id\":\"clear\"") != std::string::npos && jsonl.rfind("\"reasoning_enabled\":false") != std::string::npos,
-         "RPC clear_reasoning disables reasoning state");
+  for (std::string_view id : {"set", "state"})
+  {
+    auto const response = rpc_response_line(jsonl, id).value_or("");
+    expect_all("RPC reasoning state for " + std::string(id), {{"enabled", response.find("\"reasoning_enabled\":true") != std::string_view::npos},
+                                                              {"selected level", response.find("\"reasoning_level\":\"medium\"") != std::string_view::npos}});
+  }
+  auto const invalid = rpc_response_line(jsonl, "invalid").value_or("");
+  expect(invalid.find("\"success\":false") != std::string_view::npos && invalid.find("\"code\":\"invalid_request\"") != std::string_view::npos,
+         "RPC set_reasoning rejects unsupported levels with invalid_request");
+  for (std::string_view id : {"set-off", "state-off", "clear"})
+  {
+    auto const response = rpc_response_line(jsonl, id).value_or("");
+    expect_all("RPC " + std::string(id) + " disables reasoning rather than storing off",
+               {{"disabled", response.find("\"reasoning_enabled\":false") != std::string_view::npos},
+                {"no active level", response.find("\"reasoning_level\"") == std::string_view::npos}});
+  }
+  expect_eq(count_substrings(jsonl, "\"reasoning_level\":\"off\""), std::size_t{0}, "RPC never stores off as an active reasoning level");
   expect(!session_r->model_selection_r()->reasoning, "RPC clear_reasoning updates active session state");
 
   auto entries = session_r->store.load();
@@ -203,13 +209,16 @@ void test_app_rpc_reasoning_model_serialization_exposes_resolved_maps()
   auto const jsonl = out.str();
 
   expect(result.has_value(), "RPC reasoning serialization loop completes successfully");
-  expect(jsonl.find("\"id\":\"models\"") != std::string::npos && jsonl.find("\"raw_reasoning_levels\"") != std::string::npos &&
-             jsonl.find("\"reasoning_level_map\":{") != std::string::npos && jsonl.find("\"xhigh\":\"max\"") != std::string::npos &&
-             jsonl.find("\"minimal\":null") != std::string::npos,
-         "RPC list_models exposes raw levels plus resolved reasoning map policy");
-  expect(jsonl.find("\"id\":\"set\"") != std::string::npos && jsonl.find("\"reasoning_level\":\"xhigh\"") != std::string::npos &&
-             jsonl.find("\"reasoning_provider_level\":\"max\"") != std::string::npos && jsonl.find("\"id\":\"state\"") != std::string::npos,
-         "RPC get_state exposes provider-level reasoning rewrites when they differ from user-facing levels");
+  auto const models = rpc_response_line(jsonl, "models").value_or("");
+  auto const state = rpc_response_line(jsonl, "state").value_or("");
+  expect_all("RPC list_models exposes its raw levels and resolved reasoning policy",
+             {{"raw levels", models.find("\"raw_reasoning_levels\"") != std::string_view::npos},
+              {"resolved map", models.find("\"reasoning_level_map\":{") != std::string_view::npos},
+              {"xhigh rewrite", models.find("\"xhigh\":\"max\"") != std::string_view::npos},
+              {"minimal disabled", models.find("\"minimal\":null") != std::string_view::npos}});
+  expect_all("RPC get_state exposes the selected user and provider reasoning levels",
+             {{"user level", state.find("\"reasoning_level\":\"xhigh\"") != std::string_view::npos},
+              {"provider level", state.find("\"reasoning_provider_level\":\"max\"") != std::string_view::npos}});
 
   auto entries = session_r->store.load();
   auto const persisted_provider_level = entries && std::ranges::any_of(*entries, [](ava::session::SessionEntry const& entry) {
@@ -395,6 +404,7 @@ void test_app_rpc_protocol_version_and_session_commands()
       "{\"id\":\"stats\",\"type\":\"get_session_stats\"}\n"
       "{\"id\":\"validate\",\"type\":\"validate_session\"}\n"
       "{\"id\":\"new\",\"type\":\"new_session\"}\n"
+      "{\"id\":\"new-state\",\"type\":\"get_state\"}\n"
       "{\"id\":\"switch\",\"type\":\"switch_session\",\"session_id\":\"" +
       initial_id + "\"}\n");
   std::ostringstream out;
@@ -438,8 +448,15 @@ void test_app_rpc_protocol_version_and_session_commands()
   expect(jsonl.find("\"id\":\"validate\"") != std::string::npos && jsonl.find("\"ok\":true") != std::string::npos &&
              jsonl.find("\"error_count\":0") != std::string::npos,
          "RPC validate_session reports a clean replay audit for the active session");
-  expect(jsonl.find("\"id\":\"new\"") != std::string::npos && jsonl.find("\"created\":true") != std::string::npos,
-         "RPC new_session creates and switches to a new active session");
+  auto const new_response = rpc_response_line(jsonl, "new").value_or("");
+  auto const new_state = rpc_response_line(jsonl, "new-state").value_or("");
+  auto const new_result = ava::core::json::object_field(new_response, "result");
+  auto const state_result = ava::core::json::object_field(new_state, "result");
+  auto const new_id = new_result ? ava::core::json::string_field(*new_result, "session_id") : std::nullopt;
+  auto const active_new_id = state_result ? ava::core::json::string_field(*state_result, "session_id") : std::nullopt;
+  expect_all("RPC new_session creates and activates a distinct session", {{"created", new_response.find("\"created\":true") != std::string_view::npos},
+                                                                          {"new identity", new_id && *new_id != initial_id},
+                                                                          {"activated identity", new_id && active_new_id && *new_id == *active_new_id}});
   SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
   expect(session_r->store.session_id() == initial_id && jsonl.find("\"id\":\"switch\"") != std::string::npos,
          "RPC switch_session switches back to the requested session");
@@ -552,7 +569,7 @@ void test_app_rpc_protocol_version_and_resolver_reply_errors()
       "{\"id\":\"reply-missing\",\"type\":\"permission_reply\"}\n"
       "{\"id\":\"bad-version-type\",\"type\":\"get_state\",\"protocol_version\":\"1\"}\n"
       "{\"id\":\"oversized-reply\",\"type\":\"permission_reply\",\"request_id\":\"" +
-      std::string(257, 'r') +
+      std::string(ava::app::rpc::kMaxRpcIdentifierBytes + 1, 'r') +
       "\",\"correlation_id\":\"p1\",\"decision\":\"allow\"}\n"
       "{\"id\":\"reply\",\"type\":\"question_reply\",\"request_id\":\"question_1\",\"correlation_id\":\"p1\","
       "\"answer\":\"ok\"}\n"
@@ -564,12 +581,15 @@ void test_app_rpc_protocol_version_and_resolver_reply_errors()
       ava::app::run_rpc_loop(unlocked_session, open_context, provider, transport, ava::app::runtime::RunOptions{}, in, out, ava::app::rpc::RpcInputWake{});
   auto const jsonl = out.str();
   expect(result.has_value(), "RPC protocol error loop recovers after unsupported commands");
-  expect(jsonl.find("unsupported RPC protocol version") != std::string::npos && jsonl.find("RPC protocol_version must be an integer") != std::string::npos &&
-             jsonl.find("permission_reply requires request_id") != std::string::npos && jsonl.find("\"id\":\"oversized-reply\"") != std::string::npos &&
-             jsonl.find("RPC identifier is too long") != std::string::npos &&
-             jsonl.find("RPC resolver reply has no matching pending request") != std::string::npos && jsonl.find("\"id\":\"state\"") != std::string::npos &&
-             jsonl.find("\"success\":true") != std::string::npos,
-         "RPC version and resolver reply errors are in-band and recoverable");
+  for (std::string_view id : {"bad-version", "reply-missing", "bad-version-type", "oversized-reply", "reply"})
+  {
+    auto const response = rpc_response_line(jsonl, id).value_or("");
+    expect_all("RPC rejects " + std::string(id) + " without terminating the loop",
+               {{"failed response", response.find("\"success\":false") != std::string_view::npos},
+                {"stable code", response.find("\"code\":\"invalid_request\"") != std::string_view::npos}});
+  }
+  auto const recovered = rpc_response_line(jsonl, "state").value_or("");
+  expect(recovered.find("\"success\":true") != std::string_view::npos, "RPC serves get_state after version and resolver errors");
 }
 
 void test_app_rpc_mcp_command_responses()
@@ -691,45 +711,103 @@ void test_app_rpc_command_responses_for_context_compact_export()
                     "{\"id\":\"plugin-inspect\",\"type\":\"inspect_plugin\",\"plugin_id\":\"com.example.rpc\"}\n"
                     "{\"id\":\"plugin-validate\",\"type\":\"validate_plugin\",\"path\":\".ava/plugins/com.example.rpc/plugin.json\"}\n" +
                     "{\"id\":\"plugin-install\",\"type\":\"install_plugin\",\"path\":\"" + ava::core::json::escape(rpc_install_source.generic_string()) +
-                    "\"}\n"
-                    "{\"id\":\"plugin-remove\",\"type\":\"remove_plugin\",\"plugin_id\":\"com.example.rpcinstall\"}\n"
-                    "{\"id\":\"plugin-failures\",\"type\":\"plugin_failures\"}\n"
-                    "{\"id\":\"ctx\",\"type\":\"context\"}\n"
-                    "{\"id\":\"read\",\"type\":\"invoke_command\",\"name\":\"read\",\"command_arguments\":\"AGENTS.md\"}\n"
-                    "{\"id\":\"cmp\",\"type\":\"compact\",\"instructions\":\"remember rpc facts\"}\n");
-  bool const compacted = output_buffer.wait_contains("compaction summary recorded", std::chrono::seconds(2));
+                    "\"}\n");
+  bool const installed = wait_for_rpc_response(output_buffer, "plugin-install", std::chrono::seconds(2));
+  expect_all("RPC plugin installation publishes the installed manifest before removal",
+             {{"installation completed", installed},
+              {"installed manifest exists", std::filesystem::exists(paths.ava_config_dir / "plugins" / "com.example.rpcinstall" / "plugin.json")}});
+  input_buffer.push(
+      "{\"id\":\"plugin-remove\",\"type\":\"remove_plugin\",\"plugin_id\":\"com.example.rpcinstall\"}\n"
+      "{\"id\":\"plugin-failures\",\"type\":\"plugin_failures\"}\n"
+      "{\"id\":\"ctx\",\"type\":\"context\"}\n"
+      "{\"id\":\"read\",\"type\":\"invoke_command\",\"name\":\"read\",\"command_arguments\":\"AGENTS.md\"}\n"
+      "{\"id\":\"cmp\",\"type\":\"compact\",\"instructions\":\"remember rpc facts\"}\n");
+  bool const compacted = wait_for_rpc_response(output_buffer, "cmp", std::chrono::seconds(2));
   input_buffer.push(
       "{\"id\":\"exp\",\"type\":\"export\"}\n"
       "{\"id\":\"exp-html\",\"type\":\"export_html\"}\n"
       "{\"id\":\"exp-html-file\",\"type\":\"export_html\",\"outputPath\":\"rpc-session.html\"}\n");
-  bool const exported = output_buffer.wait_contains("\"id\":\"exp-html-file\"", std::chrono::seconds(2));
+  bool const exported = wait_for_rpc_response(output_buffer, "exp-html-file", std::chrono::seconds(2));
   input_buffer.close();
   rpc_thread.join();
   auto const jsonl = output_buffer.str();
   std::ifstream exported_html_file(workspace / "rpc-session.html", std::ios::binary);
   std::ostringstream exported_html_text;
   exported_html_text << exported_html_file.rdbuf();
-  expect(result.has_value() && compacted && exported, "RPC context/compact/export loop completes successfully");
-  expect(jsonl.find("\"id\":\"plugins\"") != std::string::npos && jsonl.find("com.example.rpc") != std::string::npos &&
-             jsonl.find("\"id\":\"plugin-enable\"") != std::string::npos && jsonl.find("No plugin process was started") != std::string::npos &&
-             jsonl.find("\"id\":\"plugin-inspect\"") != std::string::npos && jsonl.find("status: enabled") != std::string::npos &&
-             jsonl.find("\"id\":\"plugin-validate\"") != std::string::npos && jsonl.find("Valid plugin manifest") != std::string::npos &&
-             jsonl.find("\"id\":\"plugin-install\"") != std::string::npos &&
-             jsonl.find("Installed global plugin com.example.rpcinstall") != std::string::npos && jsonl.find("\"id\":\"plugin-remove\"") != std::string::npos &&
-             jsonl.find("Removed global plugin com.example.rpcinstall") != std::string::npos &&
-             !std::filesystem::exists(paths.ava_config_dir / "plugins" / "com.example.rpcinstall") &&
-             jsonl.find("\"id\":\"plugin-failures\"") != std::string::npos && jsonl.find("com.example.rpcbad") != std::string::npos &&
-             jsonl.find("\"id\":\"ctx\"") != std::string::npos && jsonl.find("AGENTS.md") != std::string::npos &&
-             jsonl.find("\"id\":\"read\"") != std::string::npos && jsonl.find("\"tool_timeline\"") != std::string::npos &&
-             jsonl.find("\"structured_result\":{\"schema_version\":1") != std::string::npos && jsonl.find("\"tool\":\"read\"") != std::string::npos &&
-             jsonl.find("\"id\":\"cmp\"") != std::string::npos && jsonl.find("\"name\":\"compaction_start\"") != std::string::npos &&
-             jsonl.find("\"name\":\"compaction_end\"") != std::string::npos && jsonl.find("compaction summary recorded") != std::string::npos &&
-             jsonl.find("\"id\":\"exp\"") != std::string::npos && jsonl.find("# AVA Session Export") != std::string::npos &&
-             jsonl.find("remember rpc facts") != std::string::npos && jsonl.find("\"id\":\"exp-html\"") != std::string::npos &&
-             jsonl.find("<!doctype html>") != std::string::npos && jsonl.find("\"id\":\"exp-html-file\"") != std::string::npos &&
-             jsonl.find("format: html") != std::string::npos && exported_html_text.str().find("<!doctype html>") != std::string::npos &&
-             exported_html_text.str().find("# AVA Session Export") != std::string::npos,
-         "RPC command responses expose dispatcher output plus Pi-style export_html records");
+  expect_all("RPC context/compact/export loop completes", {{"loop", result.has_value()}, {"compaction", compacted}, {"export", exported}});
+  for (std::string_view id : {"plugins", "plugin-enable", "plugin-inspect", "plugin-validate", "plugin-install", "plugin-remove", "plugin-failures", "ctx",
+                              "read", "cmp", "exp", "exp-html", "exp-html-file"})
+  {
+    auto const response = rpc_response_line(jsonl, id).value_or("");
+    expect(response.find("\"success\":true") != std::string_view::npos, "RPC " + std::string(id) + " returns its successful command response");
+  }
+  auto const plugins = rpc_response_line(jsonl, "plugins").value_or("");
+  auto const inspected = rpc_response_line(jsonl, "plugin-inspect").value_or("");
+  auto const failures = rpc_response_line(jsonl, "plugin-failures").value_or("");
+  auto const context = rpc_response_line(jsonl, "ctx").value_or("");
+  auto const read = rpc_response_line(jsonl, "read").value_or("");
+  auto const exported_markdown = rpc_response_line(jsonl, "exp").value_or("");
+  auto const exported_html = rpc_response_line(jsonl, "exp-html").value_or("");
+  expect_all("RPC command responses carry their own dispatcher results",
+             {{"plugin catalog", plugins.find("com.example.rpc") != std::string_view::npos},
+              {"plugin enabled status", inspected.find("enabled") != std::string_view::npos},
+              {"plugin failure identity", failures.find("com.example.rpcbad") != std::string_view::npos},
+              {"removed plugin absent", !std::filesystem::exists(paths.ava_config_dir / "plugins" / "com.example.rpcinstall")},
+              {"context source", context.find("AGENTS.md") != std::string_view::npos},
+              {"read timeline", read.find("\"tool_timeline\"") != std::string_view::npos},
+              {"read structured result", read.find("\"structured_result\":{\"schema_version\":1") != std::string_view::npos},
+              {"read tool", read.find("\"tool\":\"read\"") != std::string_view::npos},
+              {"compaction starts", jsonl.find("\"name\":\"compaction_start\"") != std::string::npos},
+              {"compaction ends", jsonl.find("\"name\":\"compaction_end\"") != std::string::npos},
+              {"markdown export", exported_markdown.find("# AVA Session Export") != std::string_view::npos},
+              {"export retains facts", exported_markdown.find("remember rpc facts") != std::string_view::npos},
+              {"inline HTML", exported_html.find("<!doctype html>") != std::string_view::npos},
+              {"written HTML", exported_html_text.str().find("<!doctype html>") != std::string::npos},
+              {"written session content", exported_html_text.str().find("# AVA Session Export") != std::string::npos}});
+}
+
+void test_app_rpc_message_entry_count_boundary()
+{
+  auto root = ScopedTestDirectory::create_unique(temp_root(), "rpc-message-count-");
+  auto const workspace = root / "workspace";
+  auto opened = open_runtime_session_for_test(root.path(), workspace);
+  if (!require(opened.has_value(), "RPC message count fixture opens runtime session"))
+    return;
+  auto& session = *opened;
+  for (std::size_t index = 0; index < ava::app::rpc::kMaxRpcMessagesEntries; ++index)
+  {
+    auto appended = ava::app::runtime::session_ts::wat(session)->append_owned(ava::session::SessionEntry{.id = "count_" + std::to_string(index),
+                                                                                                         .parent_id = "",
+                                                                                                         .type = ava::session::EntryType::UserMessage,
+                                                                                                         .timestamp = ava::session::now_timestamp(),
+                                                                                                         .data_json = "{\"text\":\"small\"}",
+                                                                                                         .version = ava::session::kCurrentSessionEntryVersion});
+    if (!require(appended.has_value(), "RPC message count fixture appends entry " + std::to_string(index)))
+      return;
+  }
+  auto exact = ava::app::runtime::session_ts::rat(session)->messages_result_json();
+  if (!require(exact.has_value(), "RPC serializes exact-limit message history"))
+    return;
+  expect_all("RPC message count accepts the full entry limit without truncation",
+             {{"count", ava::core::json::integer_field(*exact, "message_count") == static_cast<long long>(ava::app::rpc::kMaxRpcMessagesEntries)},
+              {"not truncated", exact->find("\"truncated\":false") != std::string::npos},
+              {"last entry retained", exact->find("\"id\":\"count_" + std::to_string(ava::app::rpc::kMaxRpcMessagesEntries - 1) + "\"") != std::string::npos}});
+  auto appended = ava::app::runtime::session_ts::wat(session)->append_owned(ava::session::SessionEntry{.id = "count_overflow",
+                                                                                                       .parent_id = "",
+                                                                                                       .type = ava::session::EntryType::UserMessage,
+                                                                                                       .timestamp = ava::session::now_timestamp(),
+                                                                                                       .data_json = "{\"text\":\"overflow\"}",
+                                                                                                       .version = ava::session::kCurrentSessionEntryVersion});
+  if (!require(appended.has_value(), "RPC message count fixture appends one excess entry"))
+    return;
+  auto over = ava::app::runtime::session_ts::rat(session)->messages_result_json();
+  if (!require(over.has_value(), "RPC serializes over-limit message history"))
+    return;
+  expect_all("RPC message count omits only the excess entry and reports truncation",
+             {{"count", ava::core::json::integer_field(*over, "message_count") == static_cast<long long>(ava::app::rpc::kMaxRpcMessagesEntries)},
+              {"truncated", over->find("\"truncated\":true") != std::string::npos},
+              {"excess omitted", over->find("count_overflow") == std::string::npos},
+              {"byte budget not exhausted", over->size() < ava::app::rpc::kMaxRpcMessagesResponseBytes}});
 }
 
 }  // namespace ava::tests::app_rpc_test

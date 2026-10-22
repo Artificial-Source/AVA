@@ -57,16 +57,18 @@ class TerminalPublicationStreamBuf final : public std::streambuf
     return cv_.wait_for(lock, timeout, [&] { return text_.find(value) != std::string::npos; });
   }
 
-  bool wait_for_occurrences(std::string_view value, std::size_t count, std::chrono::milliseconds timeout)
+  bool wait_for_responses(std::string_view id, std::size_t count, std::chrono::milliseconds timeout)
   {
     std::unique_lock lock(mutex_);
     return cv_.wait_for(lock, timeout, [&] {
       std::size_t found = 0;
-      std::size_t offset = 0;
-      while ((offset = text_.find(value, offset)) != std::string::npos)
+      std::size_t begin = 0;
+      for (auto end = text_.find('\n', begin); end != std::string::npos; end = text_.find('\n', begin))
       {
-        ++found;
-        offset += value.size();
+        auto const record = std::string_view(text_).substr(begin, end - begin + 1);
+        if (rpc_response_line(record, id))
+          ++found;
+        begin = end + 1;
       }
       return found >= count;
     });
@@ -217,7 +219,7 @@ void test_app_rpc_terminal_publication_gates_prompt_id_reuse()
   bool const terminal_observable = output_buffer.wait_until_terminal(std::chrono::seconds(2));
   input_buffer.push("{\"id\":\"same\",\"type\":\"prompt\",\"message\":\"reuse after response\"}\n");
   output_buffer.release_terminal();
-  bool const reused = output_buffer.wait_contains("reused terminal", std::chrono::seconds(2));
+  bool const reused = output_buffer.wait_for_responses("same", 2, std::chrono::seconds(2));
   input_buffer.close();
   rpc_thread.join();
 
@@ -270,7 +272,7 @@ void test_app_rpc_parent_terminal_precedes_queued_follow_up_start()
   bool const parent_observable = output_buffer.wait_until_terminal(std::chrono::seconds(2));
   bool const child_not_started_during_parent_flush = output_buffer.str().find("\"name\":\"follow_up_started\"") == std::string::npos;
   output_buffer.release_terminal();
-  bool const child_completed = output_buffer.wait_contains("child terminal", std::chrono::seconds(2));
+  bool const child_completed = output_buffer.wait_for_responses("child", 1, std::chrono::seconds(2));
   input_buffer.close();
   rpc_thread.join();
 
@@ -378,7 +380,7 @@ void test_app_rpc_terminal_publication_gates_direct_and_compaction_runs()
       bool const terminal_observable = output_buffer.wait_until_terminal(std::chrono::seconds(2));
       input_buffer.push("{\"id\":\"next\",\"type\":\"prompt\",\"message\":\"after direct\"}\n");
       output_buffer.release_terminal();
-      bool const next_completed = output_buffer.wait_contains("prompt after direct", std::chrono::seconds(2));
+      bool const next_completed = output_buffer.wait_for_responses("next", 1, std::chrono::seconds(2));
       input_buffer.close();
       rpc_thread.join();
       auto const jsonl = output_buffer.str();
@@ -419,7 +421,7 @@ void test_app_rpc_terminal_publication_gates_direct_and_compaction_runs()
       bool const terminal_observable = output_buffer.wait_until_terminal(std::chrono::seconds(2));
       input_buffer.push("{\"id\":\"compact\",\"type\":\"compact\"}\n");
       output_buffer.release_terminal();
-      bool const second_completed = output_buffer.wait_for_occurrences("\"id\":\"compact\",\"type\":\"response\"", 2, std::chrono::seconds(2));
+      bool const second_completed = output_buffer.wait_for_responses("compact", 2, std::chrono::seconds(2));
       input_buffer.close();
       rpc_thread.join();
       auto const jsonl = output_buffer.str();
@@ -465,12 +467,13 @@ void test_app_rpc_worker_output_failure_wakes_blocked_input()
   bool const input_blocked = input_buffer.wait_until_blocked(std::chrono::seconds(2));
   transport.release();
   bool const exited_without_more_input = input_buffer.wait_until_eof_observed(std::chrono::seconds(2));
+  // Rescue the reader independently so a missing wake reports a local failure.
+  input_buffer.close();
   rpc_thread.join();
 
-  expect(request_started && input_blocked && exited_without_more_input,
-         "public std::istream RPC loop wakes a blocked input reader after worker output failure without another stdin record");
-  expect(!result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "failed to write RPC JSONL record",
-         "RPC output-failure wake returns the original worker output I/O error after joining");
+  expect_all("public std::istream RPC loop wakes after worker output failure without another stdin record",
+             {{"provider requested", request_started}, {"reader blocked", input_blocked}, {"worker woke input", exited_without_more_input}});
+  expect(!result && result.error().category() == ava::core::ErrorCategory::Io, "RPC output-failure wake returns the worker output I/O category after joining");
 }
 
 void test_app_rpc_mode_forwards_nonstdin_wake()

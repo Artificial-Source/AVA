@@ -1,6 +1,9 @@
 #include "sys.h"
+#include "tests/support/app_rpc_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/event/events.h"
 #include "ava/app/headless_policy.h"
@@ -15,6 +18,7 @@
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -30,6 +34,16 @@
 namespace {
 
 using namespace ava::tests;
+
+std::string wait_for_pending_permission(ThreadSafeStringBuf& output, ava::app::rpc::PendingResolverState& pending)
+{
+  if (!require(output.wait_contains("\"name\":\"permission_requested\"", std::chrono::seconds(5)), "RPC resolver publishes its permission request"))
+    return {};
+  std::lock_guard lock(pending.mutex);
+  if (!require(!pending.permission_requests.empty(), "RPC published permission request remains pending until its reply"))
+    return {};
+  return pending.permission_requests.begin()->first;
+}
 
 class ResolverPublicationStreamBuf final : public std::streambuf
 {
@@ -379,8 +393,7 @@ void test_app_rpc_permission_policy_auto_allows_before_resolver_event()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside permission note";
+    write_test_file(outside_path, "outside permission note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -412,6 +425,7 @@ void test_app_rpc_permission_policy_auto_allows_before_resolver_event()
 
   input_buffer.push("{\"id\":\"p1\",\"type\":\"prompt\",\"message\":\"read outside\"}\n");
   bool const completed = output_buffer.wait_contains("after policy allow", std::chrono::seconds(2));
+  expect(wait_for_rpc_response(output_buffer, "p1", std::chrono::seconds(2)), "RPC auto-allowed prompt reaches its terminal response before EOF");
   input_buffer.close();
   rpc_thread.join();
 
@@ -431,13 +445,11 @@ void test_app_rpc_permission_reply_allow_and_deny_flows()
     auto const paths = app_test_paths(root);
     std::filesystem::create_directories(workspace);
     {
-      std::ofstream file(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-      file << "rpc permission note";
+      write_test_file(workspace / "note.txt", "rpc permission note");
     }
     auto const outside_path = root / "outside.txt";
     {
-      std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-      file << "outside permission note";
+      write_test_file(outside_path, "outside permission note");
     }
 
     ava::app::runtime::OpenContext open_context;
@@ -472,16 +484,24 @@ void test_app_rpc_permission_reply_allow_and_deny_flows()
     input_buffer.push("{\"id\":\"reply\",\"type\":\"permission_reply\",\"request_id\":\"" + resolver_request_id +
                       "\",\"correlation_id\":\"p1\",\"decision\":\"" + decision_text + "\"" + reply_reason_json + "}\n");
     bool const completed = output_buffer.wait_contains("after " + decision_text, std::chrono::seconds(2));
+    expect(wait_for_rpc_response(output_buffer, "p1", std::chrono::seconds(2)), "RPC permission " + decision_text + " prompt reaches its terminal response");
     input_buffer.close();
     rpc_thread.join();
 
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     auto const jsonl = output_buffer.str();
     expect(result.has_value() && completed, "RPC permission reply loop exits successfully");
-    expect(jsonl.find("\"id\":\"reply\"") != std::string::npos && jsonl.find("\"success\":true") != std::string::npos &&
-               jsonl.find("after " + decision_text) != std::string::npos && jsonl.find("\"name\":\"permission_replied\"") != std::string::npos &&
-               jsonl.find("\"decision\":\"" + decision_text + "\"") != std::string::npos,
-           "RPC permission " + decision_text + " reply emits a reply event and unblocks the run");
+    auto const reply_response = rpc_response_line(jsonl, "reply").value_or("");
+    auto const prompt_response = rpc_response_line(jsonl, "p1").value_or("");
+    expect_all("RPC permission " + decision_text + " reply unblocks its run",
+               {{"reply success", reply_response.find("\"success\":true") != std::string_view::npos},
+                {"prompt answer", prompt_response.find("after " + decision_text) != std::string_view::npos},
+                {"reply event", jsonl.find("\"name\":\"permission_replied\"") != std::string::npos},
+                {"decision", jsonl.find("\"decision\":\"" + decision_text + "\"") != std::string::npos},
+                {"second provider request", transport.requests().size() == 2}});
+    if (transport.requests().size() == 2)
+      expect_eq(transport.requests()[1].body.find("outside permission note") != std::string::npos, decision == "allow",
+                "RPC permission " + decision_text + " controls whether protected file content reaches the provider");
     if (decision == "deny")
     {
       expect(jsonl.find("\"reason\":\"not approved for this run\"") != std::string::npos,
@@ -505,8 +525,7 @@ void test_app_rpc_permission_reply_session_grant_flow()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside grant note";
+    write_test_file(outside_path, "outside grant note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -541,16 +560,37 @@ void test_app_rpc_permission_reply_session_grant_flow()
   input_buffer.push("{\"id\":\"reply\",\"type\":\"permission_reply\",\"request_id\":\"" + resolver_request_id +
                     "\",\"correlation_id\":\"p1\",\"decision\":\"allow_session\"}\n");
   input_buffer.push("{\"id\":\"p2\",\"type\":\"follow_up\",\"message\":\"read outside again\"}\n");
-  bool const first_completed = output_buffer.wait_contains("first grant done", std::chrono::seconds(2));
+  bool const first_completed = wait_for_rpc_response(output_buffer, "p1", std::chrono::seconds(2));
   input_buffer.push("{\"id\":\"grants\",\"type\":\"permission_grants\"}\n");
-  bool const grant_listed = output_buffer.wait_contains("\"grant_id\":\"permgrant_", std::chrono::seconds(2));
-  bool const second_completed = output_buffer.wait_contains("second grant done", std::chrono::seconds(2));
+  bool const grant_listed = wait_for_rpc_response(output_buffer, "grants", std::chrono::seconds(2));
+  bool const second_completed = wait_for_rpc_response(output_buffer, "p2", std::chrono::seconds(2));
+  auto const grant_output = output_buffer.str();
+  auto const grant_response = rpc_response_line(grant_output, "grants").value_or("");
+  auto const grant_id = extract_json_string_field(grant_response, "grant_id");
+  expect(!grant_id.empty(), "RPC grant listing returns the grant identity for revocation");
+  input_buffer.push("{\"id\":\"revoke\",\"type\":\"permission_grant_revoke\",\"grant_id\":\"" + grant_id + "\"}\n");
+  input_buffer.push("{\"id\":\"revoke-again\",\"type\":\"permission_grant_revoke\",\"grant_id\":\"" + grant_id + "\"}\n");
+  input_buffer.push("{\"id\":\"after-revoke\",\"type\":\"permission_grants\"}\n");
+  expect(wait_for_rpc_response(output_buffer, "after-revoke", std::chrono::seconds(2)), "RPC grant revocation and listing complete");
   input_buffer.close();
   rpc_thread.join();
 
   SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
   auto const jsonl = output_buffer.str();
+  auto const revoked = rpc_response_line(jsonl, "revoke").value_or("");
+  auto const unknown = rpc_response_line(jsonl, "revoke-again").value_or("");
+  auto const after_revoke = rpc_response_line(jsonl, "after-revoke").value_or("");
+  expect_all("RPC grant revocation removes the grant and rejects repeated revocation",
+             {{"revoked", revoked.find("\"revoked\":true") != std::string_view::npos},
+              {"revoked identity", !grant_id.empty() && revoked.find(grant_id) != std::string_view::npos},
+              {"unknown rejected", unknown.find("\"code\":\"invalid_request\"") != std::string_view::npos},
+              {"grant absent", after_revoke.find("\"grants\":[]") != std::string_view::npos}});
   expect(result.has_value() && first_completed && grant_listed && second_completed, "RPC permission session grant loop exits successfully");
+  expect_all("RPC grant list correlates its session, operation, and exact target",
+             {{"grant identity", !grant_id.empty()},
+              {"session", grant_response.find("\"session_id\":\"" + session_r->store.session_id() + "\"") != std::string_view::npos},
+              {"operation", grant_response.find("\"operation\":\"read\"") != std::string_view::npos},
+              {"target", grant_response.find("\"target_path\":\"" + outside_path.string() + "\"") != std::string_view::npos}});
   expect(count_substrings(jsonl, "\"name\":\"permission_requested\"") == 1 && jsonl.find("\"payload_type\":\"permission\"") != std::string::npos &&
              jsonl.find("\"decision\":\"allow_session\"") != std::string::npos && jsonl.find("\"id\":\"grants\"") != std::string::npos &&
              jsonl.find("\"session_id\":\"" + session_r->store.session_id() + "\"") != std::string::npos &&
@@ -626,22 +666,21 @@ void test_app_rpc_session_grants_are_exact_session_scoped_and_cannot_override_de
   expect(matched && *matched == ava::permissions::PermissionResolution::AllowSessionGrant,
          "a session grant authorizes a matching stable workspace recipe rather than an execution fingerprint");
 
-  auto wait_for_permission_request = [&] {
-    bool const published = output_buffer.wait_contains("\"name\":\"permission_requested\"", std::chrono::seconds(5));
-    std::lock_guard lock(pending_state.mutex);
-    return published && !pending_state.permission_requests.empty() ? pending_state.permission_requests.begin()->first : std::string();
-  };
-
   {
     std::lock_guard lock(pending_state.mutex);
     pending_state.permission_session_grants.front().session_id = "session_other";
   }
   std::optional<ava::core::Result<ava::permissions::PermissionResolutionDecision>> mismatched;
   ava::core::JoinThread resolver_thread = ava::core::JoinThread::create("resolver_thread", [&] { mismatched = resolver(prompt); });
-  auto const resolver_request_id = wait_for_permission_request();
+  auto const resolver_request_id = wait_for_pending_permission(output_buffer, pending_state);
   auto denied = resolver_request_id.empty()
                     ? ava::core::VoidResult(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing permission request")))
                     : ava::app::rpc::resolve_permission_reply(pending_state, resolver_request_id, "prompt_1", "deny");
+  if (resolver_request_id.empty())
+  {
+    run_state.cancel_requested.store(true);
+    static_cast<void>(ava::app::rpc::cancel_pending_resolvers(output, pending_state));
+  }
   resolver_thread.join();
   expect(!resolver_request_id.empty() && denied && mismatched && *mismatched && **mismatched == ava::permissions::PermissionResolution::Deny,
          "a grant from another session cannot authorize an otherwise matching repository test invocation");
@@ -652,10 +691,15 @@ void test_app_rpc_session_grants_are_exact_session_scoped_and_cannot_override_de
   }
   std::optional<ava::core::Result<ava::permissions::PermissionResolutionDecision>> one_shot;
   ava::core::JoinThread one_shot_thread = ava::core::JoinThread::create("one_shot_thread", [&] { one_shot = resolver(prompt); });
-  auto const one_shot_request_id = wait_for_permission_request();
+  auto const one_shot_request_id = wait_for_pending_permission(output_buffer, pending_state);
   auto one_shot_allowed = one_shot_request_id.empty()
                               ? ava::core::VoidResult(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing permission request")))
                               : ava::app::rpc::resolve_permission_reply(pending_state, one_shot_request_id, "prompt_1", "allow");
+  if (one_shot_request_id.empty())
+  {
+    run_state.cancel_requested.store(true);
+    static_cast<void>(ava::app::rpc::cancel_pending_resolvers(output, pending_state));
+  }
   one_shot_thread.join();
   expect(!one_shot_request_id.empty() && one_shot_allowed && one_shot && *one_shot && **one_shot == ava::permissions::PermissionResolution::Allow,
          "a one-shot approval authorizes the requested repository test invocation");
@@ -737,20 +781,19 @@ void test_app_rpc_command_one_shot_blocks_reusable_grants()
 
   auto resolver = ava::app::rpc::make_rpc_permission_resolver(pending_state, output, run_state, unlocked_session, nullptr, "prompt_os");
 
-  auto wait_for_permission_request = [&] {
-    bool const published = output_buffer.wait_contains("\"name\":\"permission_requested\"", std::chrono::seconds(5));
-    std::lock_guard lock(pending_state.mutex);
-    return published && !pending_state.permission_requests.empty() ? pending_state.permission_requests.begin()->first : std::string();
-  };
-
   // First invocation: reply with allow_session. Because the command is
   // one-shot only, no session grant must be created.
   std::optional<ava::core::Result<ava::permissions::PermissionResolutionDecision>> first_result;
   ava::core::JoinThread first_thread = ava::core::JoinThread::create("first_thread", [&] { first_result = resolver(prompt); });
-  auto const first_request_id = wait_for_permission_request();
+  auto const first_request_id = wait_for_pending_permission(output_buffer, pending_state);
   auto first_reply = first_request_id.empty()
                          ? ava::core::VoidResult(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing first permission request")))
                          : ava::app::rpc::resolve_permission_reply(pending_state, first_request_id, "prompt_os", "allow_session");
+  if (first_request_id.empty())
+  {
+    run_state.cancel_requested.store(true);
+    static_cast<void>(ava::app::rpc::cancel_pending_resolvers(output, pending_state));
+  }
   first_thread.join();
   bool no_grant_after_first = false;
   {
@@ -765,10 +808,15 @@ void test_app_rpc_command_one_shot_blocks_reusable_grants()
   // called again and create a fresh pending request.
   std::optional<ava::core::Result<ava::permissions::PermissionResolutionDecision>> second_result;
   ava::core::JoinThread second_thread = ava::core::JoinThread::create("second_thread", [&] { second_result = resolver(prompt); });
-  auto const second_request_id = wait_for_permission_request();
+  auto const second_request_id = wait_for_pending_permission(output_buffer, pending_state);
   auto second_reply = second_request_id.empty()
                           ? ava::core::VoidResult(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing second permission request")))
                           : ava::app::rpc::resolve_permission_reply(pending_state, second_request_id, "prompt_os", "allow");
+  if (second_request_id.empty())
+  {
+    run_state.cancel_requested.store(true);
+    static_cast<void>(ava::app::rpc::cancel_pending_resolvers(output, pending_state));
+  }
   second_thread.join();
   bool no_grant_after_second = false;
   {
@@ -873,13 +921,13 @@ void test_app_rpc_persistent_permission_rule_lifecycle()
   ava::core::JoinThread rpc_thread = ava::core::JoinThread::create("rpc_thread", [&] {
     result = ava::app::run_rpc_loop(unlocked_session, open_context, provider, transport, runtime_options, in, out, [&] noexcept { input_buffer.close(); });
   });
-  auto const rpc_timeout = std::chrono::seconds(30);
+  auto const rpc_timeout = std::chrono::seconds(5);
 
   input_buffer.push(
       "{\"id\":\"bad-rule\",\"type\":\"permission_rule_add\",\"action\":\"allow\","
       "\"target_path\":\"" +
       outside_path.string() + "\",\"reason\":\"missing operation\"}\n");
-  bool const invalid_rejected = output_buffer.wait_contains("permission_rule_add requires operation", rpc_timeout);
+  bool const invalid_rejected = wait_for_rpc_response(output_buffer, "bad-rule", rpc_timeout);
   input_buffer.push(
       "{\"id\":\"add-rule\",\"type\":\"permission_rule_add\",\"action\":\"allow\","
       "\"operation\":\"read\",\"target_path\":\"" +
@@ -887,19 +935,57 @@ void test_app_rpc_persistent_permission_rule_lifecycle()
   bool const added = output_buffer.wait_contains("\"name\":\"permission_rule_added\"", rpc_timeout);
   auto const rule_id = extract_json_string_field(output_buffer.str(), "rule_id");
   input_buffer.push("{\"id\":\"rules\",\"type\":\"permission_rules\"}\n");
-  bool const listed =
-      output_buffer.wait_contains("\"id\":\"rules\"", rpc_timeout) && output_buffer.wait_contains("\"rule_id\":\"" + rule_id + "\"", rpc_timeout);
+  bool const listed = wait_for_rpc_response(output_buffer, "rules", rpc_timeout);
   input_buffer.push("{\"id\":\"p1\",\"type\":\"prompt\",\"message\":\"read outside via persistent rule\"}\n");
-  bool const completed = output_buffer.wait_contains("persistent rule allow done", rpc_timeout) && output_buffer.wait_contains("\"id\":\"p1\"", rpc_timeout) &&
-                         output_buffer.wait_contains("\"success\":true", rpc_timeout);
+  bool const completed = wait_for_rpc_response(output_buffer, "p1", rpc_timeout);
   input_buffer.push("{\"id\":\"remove-rule\",\"type\":\"permission_rule_remove\",\"rule_id\":\"" + rule_id + "\"}\n");
-  bool const removed = output_buffer.wait_contains("\"name\":\"permission_rule_removed\"", rpc_timeout);
+  bool const removed = wait_for_rpc_response(output_buffer, "remove-rule", rpc_timeout);
+  bool const removal_event = output_buffer.wait_for_record(
+      [&rule_id](std::string_view record) {
+        if (ava::core::json::string_field(record, "name") != "permission_rule_removed" || ava::core::json::string_field(record, "request_id") != "remove-rule")
+          return false;
+        auto const payload = ava::core::json::object_field(record, "payload").value_or("{}");
+        auto const rule = ava::core::json::object_field(payload, "rule").value_or("{}");
+        return payload.find("\"removed\":true") != std::string::npos && ava::core::json::string_field(rule, "rule_id") == rule_id;
+      },
+      rpc_timeout);
   input_buffer.close();
   rpc_thread.join();
 
   SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
 
   auto const jsonl = output_buffer.str();
+  auto const invalid_response = rpc_response_line(jsonl, "bad-rule").value_or("");
+  auto const invalid_error = ava::core::json::object_field(invalid_response, "error").value_or("{}");
+  expect_all("RPC malformed persistent rule is rejected with invalid_request",
+             {{"failed response", invalid_response.find("\"success\":false") != std::string_view::npos},
+              {"stable code", ava::core::json::string_field(invalid_error, "code") == "invalid_request"}});
+  auto const added_response = rpc_response_line(jsonl, "add-rule").value_or("");
+  auto const added_result = ava::core::json::object_field(added_response, "result").value_or("{}");
+  auto const added_rule = ava::core::json::object_field(added_result, "rule").value_or("{}");
+  expect_all("RPC persistent rule addition returns the published rule",
+             {{"successful response", added_response.find("\"success\":true") != std::string_view::npos},
+              {"published rule identity", !rule_id.empty() && ava::core::json::string_field(added_rule, "rule_id") == rule_id}});
+  auto const listed_response = rpc_response_line(jsonl, "rules").value_or("");
+  auto const listed_result = ava::core::json::object_field(listed_response, "result").value_or("{}");
+  auto const listed_rules = ava::core::json::objects_in_array_field(listed_result, "rules");
+  bool const expected_rule_listed = std::ranges::any_of(
+      listed_rules, [&rule_id](std::string const& rule) { return !rule_id.empty() && ava::core::json::string_field(rule, "rule_id") == rule_id; });
+  expect_all("RPC persistent rule listing includes the added rule",
+             {{"successful response", listed_response.find("\"success\":true") != std::string_view::npos}, {"expected rule identity", expected_rule_listed}});
+  auto const prompt_response = rpc_response_line(jsonl, "p1").value_or("");
+  auto const prompt_result = ava::core::json::object_field(prompt_response, "result").value_or("{}");
+  expect_all("RPC persistent rule permits the prompt to return its expected answer",
+             {{"successful response", prompt_response.find("\"success\":true") != std::string_view::npos},
+              {"expected answer", ava::core::json::string_field(prompt_result, "final_text") == "persistent rule allow done"}});
+  auto const removed_response = rpc_response_line(jsonl, "remove-rule").value_or("");
+  auto const removed_result = ava::core::json::object_field(removed_response, "result").value_or("{}");
+  auto const removed_rule = ava::core::json::object_field(removed_result, "rule").value_or("{}");
+  expect_all("RPC persistent rule removal returns and emits removal of the expected rule",
+             {{"successful response", removed_response.find("\"success\":true") != std::string_view::npos},
+              {"removed flag", removed_result.find("\"removed\":true") != std::string::npos},
+              {"removed rule identity", !rule_id.empty() && ava::core::json::string_field(removed_rule, "rule_id") == rule_id},
+              {"correlated removal event", removal_event}});
   auto entries = session_r->store.load();
   auto audits = entries ? permission_entries(*entries) : std::vector<ava::session::SessionEntry>{};
   bool persistent_audited = false;
@@ -918,8 +1004,13 @@ void test_app_rpc_persistent_permission_rule_lifecycle()
   expect(listed, "listed");
   expect(completed, "completed");
   expect(removed, "removed");
-  expect(result.has_value() && invalid_rejected && added && !rule_id.empty() && listed && completed && removed,
-         "RPC persistent permission rule add/list/apply/remove flow completes");
+  expect_all("RPC persistent permission rule add/list/apply/remove flow completes", {{"loop", result.has_value()},
+                                                                                     {"invalid rule rejected", invalid_rejected},
+                                                                                     {"rule added", added},
+                                                                                     {"rule id", !rule_id.empty()},
+                                                                                     {"rule listed", listed},
+                                                                                     {"prompt completed", completed},
+                                                                                     {"rule removed", removed}});
   // expect(false, "Forced failure");
   expect(jsonl.find("\"name\":\"permission_requested\"") == std::string::npos && persistent_audited,
          "persistent permission rules resolve matching RPC permission prompts without resolver events and are audited");
@@ -963,15 +1054,20 @@ void test_app_rpc_question_reply_flow()
   input_buffer.push("{\"id\":\"reply\",\"type\":\"question_reply\",\"request_id\":\"" + resolver_request_id +
                     "\",\"correlation_id\":\"p1\",\"answer\":\"custom ok\"}\n");
   bool const completed = output_buffer.wait_contains("question done", std::chrono::seconds(2));
+  expect(wait_for_rpc_response(output_buffer, "p1", std::chrono::seconds(2)), "RPC question prompt reaches its terminal response before EOF");
   input_buffer.close();
   rpc_thread.join();
 
   auto const jsonl = output_buffer.str();
   expect(result.has_value() && completed, "RPC question reply loop exits successfully");
-  expect(jsonl.find("\"id\":\"reply\"") != std::string::npos && jsonl.find("\"success\":true") != std::string::npos &&
-             jsonl.find("question done") != std::string::npos && jsonl.find("\"payload_type\":\"question\"") != std::string::npos &&
-             jsonl.find("\"name\":\"question_replied\"") != std::string::npos && jsonl.find("\"answer\":\"custom ok\"") != std::string::npos,
-         "RPC question reply emits a reply event and unblocks question tool");
+  auto const reply_response = rpc_response_line(jsonl, "reply").value_or("");
+  auto const prompt_response = rpc_response_line(jsonl, "p1").value_or("");
+  expect_all("RPC question reply emits its event and unblocks the matching prompt",
+             {{"reply success", reply_response.find("\"success\":true") != std::string_view::npos},
+              {"answer", prompt_response.find("question done") != std::string_view::npos},
+              {"question event", jsonl.find("\"payload_type\":\"question\"") != std::string::npos},
+              {"reply event", jsonl.find("\"name\":\"question_replied\"") != std::string::npos},
+              {"custom text", jsonl.find("\"answer\":\"custom ok\"") != std::string::npos}});
 }
 
 void test_app_rpc_question_reply_selected_option_flow()
@@ -1011,21 +1107,26 @@ void test_app_rpc_question_reply_selected_option_flow()
   expect(requested && !resolver_request_id.empty(), "RPC selected question reply observes request event");
   input_buffer.push("{\"id\":\"bad\",\"type\":\"question_reply\",\"request_id\":\"" + resolver_request_id +
                     "\",\"correlation_id\":\"p1\",\"selected\":\"no\"}\n");
-  bool const rejected = output_buffer.wait_contains("question_reply selected option is not valid", std::chrono::seconds(2));
+  bool const rejected = wait_for_rpc_response(output_buffer, "bad", std::chrono::seconds(2));
   input_buffer.push("{\"id\":\"reply\",\"type\":\"question_reply\",\"request_id\":\"" + resolver_request_id +
                     "\",\"correlation_id\":\"p1\",\"selected\":\"yes\"}\n");
   bool const completed = output_buffer.wait_contains("selected question done", std::chrono::seconds(2));
+  expect(wait_for_rpc_response(output_buffer, "p1", std::chrono::seconds(2)), "RPC selected question prompt reaches its terminal response before EOF");
   input_buffer.close();
   rpc_thread.join();
 
   auto const jsonl = output_buffer.str();
   expect(result.has_value() && rejected && completed, "RPC selected question reply loop exits successfully");
-  expect(jsonl.find("\"id\":\"bad\"") != std::string::npos && jsonl.find("question_reply selected option is not valid") != std::string::npos,
-         "RPC selected question reply rejects invalid selected option without resolving request");
-  expect(jsonl.find("\"id\":\"reply\"") != std::string::npos && jsonl.find("\"success\":true") != std::string::npos &&
-             jsonl.find("selected question done") != std::string::npos && jsonl.find("\"name\":\"question_replied\"") != std::string::npos &&
-             jsonl.find("\"selected\":\"yes\"") != std::string::npos,
-         "RPC selected question reply emits a reply event and unblocks question tool");
+  auto const rejected_response = rpc_response_line(jsonl, "bad").value_or("");
+  auto const reply_response = rpc_response_line(jsonl, "reply").value_or("");
+  auto const prompt_response = rpc_response_line(jsonl, "p1").value_or("");
+  expect(rejected_response.find("\"code\":\"invalid_request\"") != std::string_view::npos,
+         "RPC selected question reply rejects an invalid option without resolving the pending request");
+  expect_all("RPC selected question reply unblocks the matching question",
+             {{"reply success", reply_response.find("\"success\":true") != std::string_view::npos},
+              {"prompt answer", prompt_response.find("selected question done") != std::string_view::npos},
+              {"reply event", jsonl.find("\"name\":\"question_replied\"") != std::string::npos},
+              {"selected option", jsonl.find("\"selected\":\"yes\"") != std::string::npos}});
 }
 
 void test_app_rpc_question_reply_selected_options_flow()
@@ -1065,29 +1166,137 @@ void test_app_rpc_question_reply_selected_options_flow()
   expect(requested && !resolver_request_id.empty(), "RPC multi question reply observes request event");
   input_buffer.push("{\"id\":\"bad\",\"type\":\"question_reply\",\"request_id\":\"" + resolver_request_id +
                     "\",\"correlation_id\":\"p1\",\"selected_options\":[\"alpha\",\"alpha\"]}\n");
-  bool const duplicate_rejected = output_buffer.wait_contains("question_reply selected_options contains duplicate values", std::chrono::seconds(2));
+  bool const duplicate_rejected = wait_for_rpc_response(output_buffer, "bad", std::chrono::seconds(2));
   input_buffer.push("{\"id\":\"reply\",\"type\":\"question_reply\",\"request_id\":\"" + resolver_request_id +
                     "\",\"correlation_id\":\"p1\",\"selected_options\":[\"alpha\",\"beta\"],"
                     "\"answer\":\"Use both\"}\n");
-  bool const completed = output_buffer.wait_contains("multi question done", std::chrono::seconds(2));
+  bool const completed = wait_for_rpc_response(output_buffer, "p1", std::chrono::seconds(2));
   input_buffer.close();
   rpc_thread.join();
 
   auto const jsonl = output_buffer.str();
   expect(result.has_value() && duplicate_rejected && completed, "RPC multi question reply loop exits successfully");
   expect(jsonl.find("\"multiple\":true") != std::string::npos, "RPC multi question reply request preserves multi-select metadata");
-  expect(jsonl.find("\"id\":\"bad\"") != std::string::npos && jsonl.find("question_reply selected_options contains duplicate values") != std::string::npos,
-         "RPC multi question reply rejects duplicate selected options without resolving request");
-  expect(jsonl.find("\"id\":\"reply\"") != std::string::npos && jsonl.find("\"success\":true") != std::string::npos &&
-             jsonl.find("multi question done") != std::string::npos && jsonl.find("\"name\":\"question_replied\"") != std::string::npos &&
-             jsonl.find("\"selected_options\":[\"alpha\",\"beta\"]") != std::string::npos && jsonl.find("\"answer\":\"Use both\"") != std::string::npos,
-         "RPC multi question reply emits selections, custom text, and unblocks question tool");
+  auto const rejected_response = rpc_response_line(jsonl, "bad").value_or("");
+  auto const reply_response = rpc_response_line(jsonl, "reply").value_or("");
+  auto const prompt_response = rpc_response_line(jsonl, "p1").value_or("");
+  expect(rejected_response.find("\"code\":\"invalid_request\"") != std::string_view::npos,
+         "RPC multi question reply rejects duplicate selected options without resolving the pending request");
+  expect_all("RPC multi question reply publishes its selections and unblocks the matching prompt",
+             {{"reply success", reply_response.find("\"success\":true") != std::string_view::npos},
+              {"prompt answer", prompt_response.find("multi question done") != std::string_view::npos},
+              {"reply event", jsonl.find("\"name\":\"question_replied\"") != std::string::npos},
+              {"selections", jsonl.find("\"selected_options\":[\"alpha\",\"beta\"]") != std::string::npos},
+              {"custom text", jsonl.find("\"answer\":\"Use both\"") != std::string::npos}});
+}
+
+void test_app_rpc_grant_clear_and_foreign_identity_isolation()
+{
+  ava::app::rpc::PendingResolverState current;
+  ava::app::rpc::PendingResolverState other;
+  auto grant = [](std::string id, std::string session) {
+    return ava::app::rpc::PermissionSessionGrant{.grant_id = std::move(id),
+                                                 .permission_request_id = {},
+                                                 .session_id = std::move(session),
+                                                 .operation = ava::permissions::Operation::ReadFile,
+                                                 .mode = ava::agent::Mode::Build,
+                                                 .tool_name = "read_file",
+                                                 .target_path = {},
+                                                 .command = {},
+                                                 .command_recipe_key = {},
+                                                 .command_recipe_display = {},
+                                                 .reason = {},
+                                                 .risk = ava::permissions::PermissionRisk::Low};
+  };
+  current.permission_session_grants.push_back(grant("grant_a", "session_a"));
+  current.permission_session_grants.push_back(grant("grant_b", "session_a"));
+  other.permission_session_grants.push_back(grant("grant_other", "session_other"));
+  auto foreign = ava::app::rpc::permission_session_grant_revoke_result_json(current, "grant_other");
+  expect_all("RPC foreign grant identity cannot mutate another connection's grant set",
+             {{"rejected", !foreign && foreign.error().category() == ava::core::ErrorCategory::InvalidArgument},
+              {"current retained", current.permission_session_grants.size() == 2},
+              {"other retained", other.permission_session_grants.size() == 1}});
+  auto const cleared = ava::app::rpc::permission_session_grants_clear_result_json(current);
+  expect_all("RPC clearing grants removes every current grant without affecting another connection",
+             {{"reported count", ava::core::json::integer_field(cleared, "cleared") == 2},
+              {"current empty", current.permission_session_grants.empty()},
+              {"serialized empty", ava::app::rpc::permission_session_grants_result_json(current) == "{\"grants\":[]}"},
+              {"other retained", other.permission_session_grants.size() == 1}});
+  auto const cleared_again = ava::app::rpc::permission_session_grants_clear_result_json(current);
+  expect_eq(ava::core::json::integer_field(cleared_again, "cleared").value_or(-1), 0LL, "RPC clearing an empty grant set is idempotent");
+}
+
+void test_app_rpc_grants_clear_requires_permission_again()
+{
+  auto root = ScopedTestDirectory::create_unique(temp_root(), "rpc-clear-grants-");
+  auto const workspace = root / "workspace";
+  auto const outside = root / "outside.txt";
+  write_test_file(outside, "GRANT_CLEAR_PRIVATE_CONTENT");
+  auto opened = open_runtime_session_for_test(root.path(), workspace);
+  if (!require(opened.has_value(), "RPC grant clearing fixture opens a runtime session"))
+    return;
+  auto& session = *opened;
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = app_test_paths(root.path());
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport({sse_response(read_file_call_sse(outside.generic_string(), "before_clear")), sse_response(final_text_sse("before clear")),
+                                       sse_response(read_file_call_sse(outside.generic_string(), "after_clear")), sse_response(final_text_sse("after clear"))});
+  ava::app::runtime::RunOptions options;
+  options.access_token = "token";
+  BlockingInputBuf input_buffer;
+  std::istream input(&input_buffer);
+  ThreadSafeStringBuf output_buffer;
+  std::ostream output(&output_buffer);
+  ava::core::VoidResult result;
+  auto worker = ava::core::JoinThread::create("rpc_clear_grants", [&] {
+    result = ava::app::run_rpc_loop(session, context, provider, transport, options, input, output, [&] noexcept { input_buffer.close(); });
+  });
+  input_buffer.push("{\"id\":\"first\",\"type\":\"prompt\",\"message\":\"read outside\"}\n");
+  bool const first_requested = output_buffer.wait_contains("\"name\":\"permission_requested\"", std::chrono::seconds(2));
+  auto const first_id = extract_last_json_string_field(output_buffer.str(), "resolver_request_id");
+  input_buffer.push("{\"id\":\"allow\",\"type\":\"permission_reply\",\"request_id\":\"" + first_id +
+                    "\",\"correlation_id\":\"first\",\"decision\":\"allow_session\"}\n");
+  bool const first_completed = wait_for_rpc_response(output_buffer, "first", std::chrono::seconds(2));
+  input_buffer.push("{\"id\":\"clear\",\"type\":\"permission_grants_clear\"}\n");
+  input_buffer.push("{\"id\":\"listed\",\"type\":\"permission_grants\"}\n");
+  bool const listed = wait_for_rpc_response(output_buffer, "listed", std::chrono::seconds(2));
+  // Distinguish a new read from content legitimately retained from the first run.
+  write_test_file(outside, "GRANT_CLEAR_AFTER_CLEAR_CONTENT");
+  input_buffer.push("{\"id\":\"second\",\"type\":\"prompt\",\"message\":\"read outside after clear\"}\n");
+  bool const requested_again = output_buffer.wait_contains("\"name\":\"permission_requested\"", std::chrono::seconds(2));
+  auto const second_id = extract_last_json_string_field(output_buffer.str(), "resolver_request_id");
+  input_buffer.push("{\"id\":\"deny\",\"type\":\"permission_reply\",\"request_id\":\"" + second_id +
+                    "\",\"correlation_id\":\"second\",\"decision\":\"deny\"}\n");
+  bool const second_completed = wait_for_rpc_response(output_buffer, "second", std::chrono::seconds(2));
+  input_buffer.close();
+  worker.join();
+  auto const jsonl = output_buffer.str();
+  auto const cleared = rpc_response_line(jsonl, "clear").value_or("");
+  auto const grants = rpc_response_line(jsonl, "listed").value_or("");
+  auto const second = rpc_response_line(jsonl, "second").value_or("");
+  expect_all("RPC permission_grants_clear removes a real grant and requires a fresh decision for the same file",
+             {{"loop", result.has_value()},
+              {"first permission", first_requested},
+              {"first prompt", first_completed},
+              {"cleared one", cleared.find("\"cleared\":1") != std::string_view::npos},
+              {"empty list", listed && grants.find("\"grants\":[]") != std::string_view::npos},
+              {"fresh permission", requested_again && !second_id.empty() && second_id != first_id},
+              {"second prompt", second_completed && second.find("\"success\":true") != std::string_view::npos},
+              {"two permission events", count_substrings(jsonl, "\"name\":\"permission_requested\"") == 2},
+              {"provider requests", transport.requests().size() == 4}});
+  if (transport.requests().size() == 4)
+    expect_all("RPC grant clearing preserves the allowed read but blocks newly denied file content",
+               {{"allowed read reached provider", transport.requests()[1].body.find("GRANT_CLEAR_PRIVATE_CONTENT") != std::string::npos},
+                {"denied new content absent", transport.requests()[3].body.find("GRANT_CLEAR_AFTER_CLEAR_CONTENT") == std::string::npos}});
 }
 
 }  // namespace
 
 void run_app_rpc_resolver_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("ava-rpc-resolver-");
   test_app_rpc_resolver_payload_builders_preserve_wire_shapes();
   test_app_rpc_resolver_output_failure_callback_preserves_lock_order();
   test_app_rpc_resolver_publication_linearizes_permission_and_question_cancellation();
@@ -1095,6 +1304,8 @@ void run_app_rpc_resolver_tests()
   test_app_rpc_permission_policy_auto_allows_before_resolver_event();
   test_app_rpc_permission_reply_allow_and_deny_flows();
   test_app_rpc_permission_reply_session_grant_flow();
+  test_app_rpc_grant_clear_and_foreign_identity_isolation();
+  test_app_rpc_grants_clear_requires_permission_again();
   test_app_rpc_session_grants_are_exact_session_scoped_and_cannot_override_deny();
   test_app_rpc_command_one_shot_blocks_reusable_grants();
   test_app_rpc_permission_request_includes_mutation_diff_preview();

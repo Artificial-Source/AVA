@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/app_rpc_test_cases.h"
+#include "tests/support/app_rpc_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
@@ -156,8 +157,8 @@ void test_app_rpc_posix_line_reader_wake_eof_and_fd_lifetime()
     close(error_fds[1]);
   }
   auto const after = fd_count();
-  expect(framing_ok && races_ok && error_outcome_ok,
-         "RPC POSIX line reader preserves framing and synchronously classifies EOF, final records, wake cancellation, and errors");
+  ava::tests::expect_all("RPC POSIX line reader framing and terminal outcomes",
+                         {{"framing", framing_ok}, {"wake/EOF classification", races_ok}, {"I/O error category", error_outcome_ok}});
   expect(!before || !after || *before == *after, "RPC POSIX line reader wake pipes do not leak file descriptors");
 }
 
@@ -198,11 +199,18 @@ void test_app_rpc_stream_line_reader_terminal_outcomes()
   ava::app::rpc::StreamRpcLineReader error_reader(error_input, ava::app::rpc::RpcInputWake{});
   auto read_error = error_reader.read_line(line, [&outcomes](RpcInputTerminalOutcome outcome) { outcomes.push_back(outcome); });
 
-  expect(empty_eof && !*empty_eof && final_record_read && final_eof && !*final_eof && normal_record_silent && canceled_while_partial && canceled &&
-             !*canceled && !read_error && read_error.error().category() == ava::core::ErrorCategory::Io &&
-             outcomes == std::vector<RpcInputTerminalOutcome>{RpcInputTerminalOutcome::Eof, RpcInputTerminalOutcome::EofWithFinalRecord,
-                                                              RpcInputTerminalOutcome::Eof, RpcInputTerminalOutcome::Canceled, RpcInputTerminalOutcome::Error},
-         "RPC stream line reader synchronously classifies empty EOF, final records, cancellation, and input errors");
+  ava::tests::expect_all(
+      "RPC stream reader synchronously classifies terminal outcomes",
+      {{"empty EOF", empty_eof && !*empty_eof},
+       {"final record", final_record_read},
+       {"final EOF", final_eof && !*final_eof},
+       {"ordinary record is nonterminal", normal_record_silent},
+       {"partial cancellation", canceled_while_partial},
+       {"canceled read", canceled && !*canceled},
+       {"I/O error", !read_error && read_error.error().category() == ava::core::ErrorCategory::Io},
+       {"ordered terminal callbacks",
+        outcomes == std::vector<RpcInputTerminalOutcome>{RpcInputTerminalOutcome::Eof, RpcInputTerminalOutcome::EofWithFinalRecord,
+                                                         RpcInputTerminalOutcome::Eof, RpcInputTerminalOutcome::Canceled, RpcInputTerminalOutcome::Error}}});
 }
 
 void test_app_rpc_stream_reader_wake_badbit_is_canceled()
@@ -221,8 +229,11 @@ void test_app_rpc_stream_reader_wake_badbit_is_canceled()
   reader.cancel();
   reader_thread.join();
 
-  expect(blocked && in.bad() && result && !*result && outcomes == std::vector<RpcInputTerminalOutcome>{RpcInputTerminalOutcome::Canceled},
-         "RPC stream reader classifies a wake-induced bad stream as canceled rather than an input I/O error");
+  ava::tests::expect_all("RPC stream reader classifies wake-induced badbit as cancellation",
+                         {{"blocked before wake", blocked},
+                          {"wake sets badbit", in.bad()},
+                          {"no record", result && !*result},
+                          {"canceled callback", outcomes == std::vector<RpcInputTerminalOutcome>{RpcInputTerminalOutcome::Canceled}}});
 }
 
 void test_app_rpc_unterminated_final_command_executes()
@@ -281,10 +292,13 @@ void test_app_rpc_newline_terminated_oversized_line_recovers()
   auto result = ava::app::run_rpc_loop(unlocked_session, open_context, provider, transport, runtime_options, in, out, ava::app::rpc::RpcInputWake{});
   auto const jsonl = out.str();
 
-  expect(result && count_substrings(jsonl, "\"id\":\"\",\"type\":\"response\",\"success\":false") == 1 &&
-             jsonl.find("RPC request line is too large") != std::string::npos &&
-             jsonl.find("\"id\":\"protocol\",\"type\":\"response\",\"success\":true") != std::string::npos,
-         "RPC newline-terminated oversized line is recoverable and the next valid record executes");
+  auto const rejected = rpc_response_line(jsonl, "").value_or("");
+  auto const recovered = rpc_response_line(jsonl, "protocol").value_or("");
+  expect_all("RPC newline-terminated oversized line is recoverable and the next command executes",
+             {{"loop completes", result.has_value()},
+              {"one rejected record", count_substrings(jsonl, "\"id\":\"\",\"type\":\"response\",\"success\":false") == 1},
+              {"invalid_request code", rejected.find("\"code\":\"invalid_request\"") != std::string_view::npos},
+              {"following command succeeds", recovered.find("\"success\":true") != std::string_view::npos}});
 }
 
 }  // namespace ava::tests::app_rpc_test

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/app_runtime_test_declarations.h"
+#include "tests/support/test_env.h"
 
 using namespace ava::tests::app_runtime_tests;
 
@@ -18,6 +19,9 @@ void run_app_event_serialization_tests()
 
 void run_app_runtime_tests()
 {
+  if (run_app_runtime_lease_child())
+    return;
+  ava::tests::HermeticTestEnvironment environment("ava-app-runtime-");
   test_debug_session_mutex_tracks_current_thread();
   test_extension_resource_policy_derives_synthetic_paths_and_trust();
   test_app_runtime_open_session_and_context_prompt();
@@ -66,12 +70,13 @@ void run_app_runtime_tests()
   test_app_session_new_resume_commands();
   test_app_session_metadata_commands();
   test_application_catalog_cache_reuses_workspace_and_session_indexes();
-  test_application_catalog_coordinator_serializes_refresh_and_snapshot();
+  test_application_catalog_coordinator_publishes_coherent_generation();
   test_application_catalog_current_session_incremental_refresh();
   test_request_projection_validates_committed_v4_history();
   test_unlocked_data_access_and_notifications();
   test_runtime_model_switch_accepts_committed_openai_responses_reasoning();
   test_app_runtime_model_switch_persists_and_reopens();
+  test_app_runtime_session_lease_reacquired_after_owner_death();
   test_app_runtime_model_switch_projects_incompatible_history_at_request_time();
   test_app_runtime_reasoning_selection_persists_and_requests();
   test_app_runtime_branch_construction_failure_rolls_back_created_file();

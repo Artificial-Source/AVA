@@ -1,5 +1,7 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/process/supervisor.h"
 #include "ava/app/commands.h"
@@ -13,6 +15,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,8 +39,12 @@ ava::app::runtime::session_ts open_test_session(std::filesystem::path const& roo
   expect(application_scope.has_value(), "interactive command fixture owns application process authority");
   if (application_scope)
     options.application_process_scope = std::move(*application_scope);
+  if (!require(application_scope.has_value(), "interactive fixture requires explicit process authority"))
+    throw std::runtime_error(application_scope.error().format());
   auto unlocked_session_result = ava::app::runtime::Session::open(options);
   expect(unlocked_session_result.has_value(), "interactive command test opens runtime session");
+  if (!require(unlocked_session_result.has_value(), "interactive fixture must open before accessing its session"))
+    throw std::runtime_error(unlocked_session_result.error().format());
   return std::move(*unlocked_session_result);
 }
 
@@ -129,6 +136,7 @@ void test_interactive_unknown_and_builtin_slash_behavior()
 
 void test_interactive_mcp_prompt_submission_resolves_once()
 {
+  static_cast<void>(require(!std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty(), "interactive MCP fixture executable is configured"));
   if (std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty())
     return;
 
@@ -141,9 +149,8 @@ void test_interactive_mcp_prompt_submission_resolves_once()
   ScopedEnvVar home("HOME", private_home.string());
   auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(trusted.has_value(), trusted ? "interactive MCP test trusts project" : "interactive MCP test trusts project: " + trusted.error().format());
-  write_app_test_file(workspace / ".ava" / "mcp.json", mcp_config_with_event_log(AVA_FAKE_MCP_SERVER_PATH, event_log));
-  write_app_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md",
-                      "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
+  write_test_file(workspace / ".ava" / "mcp.json", mcp_config_with_event_log(AVA_FAKE_MCP_SERVER_PATH, event_log));
+  write_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md", "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
 
   auto unlocked_session = open_test_session(root, workspace);
   ava::app::interactive_internal::InteractiveState state{.unlocked_session = unlocked_session};
@@ -184,6 +191,7 @@ void test_interactive_mcp_prompt_submission_resolves_once()
 
 void run_app_interactive_tests()
 {
+  HermeticTestEnvironment environment("app-interactive-env-");
   test_display_settings_command_classification_includes_cursor();
   test_interactive_unknown_and_builtin_slash_behavior();
   test_interactive_mcp_prompt_submission_resolves_once();

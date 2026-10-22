@@ -1,8 +1,11 @@
 #include "sys.h"
 #include "tests/app_rpc_test_cases.h"
+#include "tests/support/app_rpc_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
+#include "ava/process/scope.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/rpc_mode.h"
 #include "ava/app/runtime.h"
@@ -11,8 +14,6 @@
 #include "ava/agent/background_job_registry.h"
 #include "ava/agent/subagent_job.h"
 #include "ava/plugin/enablement.h"
-#include "ava/process/scope.h"
-#include "ava/process/supervisor.h"
 #include "ava/session/attachments.h"
 #include "ava/session/record.h"
 #include "ava/session/session_metadata.h"
@@ -77,11 +78,15 @@ void test_app_rpc_malformed_line_recovery_and_unknown_command()
       ava::app::run_rpc_loop(unlocked_session, open_context, provider, transport, ava::app::runtime::RunOptions{}, in, out, ava::app::rpc::RpcInputWake{});
   auto const jsonl = out.str();
   expect(result.has_value(), "RPC loop continues after malformed and unknown commands");
-  expect(std::count(jsonl.begin(), jsonl.end(), '\n') == 3 && jsonl.find("\"id\":\"\"") != std::string::npos &&
-             jsonl.find("malformed RPC JSON object") != std::string::npos && jsonl.find("\"id\":\"s1\"") != std::string::npos &&
-             jsonl.find("\"session_id\":\"") != std::string::npos && jsonl.find("\"id\":\"u1\"") != std::string::npos &&
-             jsonl.find("unknown RPC command type") != std::string::npos,
-         "RPC loop writes error responses and recovers for subsequent JSONL records");
+  auto const malformed = rpc_response_line(jsonl, "").value_or("");
+  auto const state = rpc_response_line(jsonl, "s1").value_or("");
+  auto const unknown = rpc_response_line(jsonl, "u1").value_or("");
+  expect_all("RPC loop writes correlated errors and recovers for the following command",
+             {{"three responses", std::count(jsonl.begin(), jsonl.end(), '\n') == 3},
+              {"malformed code", malformed.find("\"code\":\"invalid_request\"") != std::string_view::npos},
+              {"state session", state.find("\"session_id\":\"") != std::string_view::npos},
+              {"state success", state.find("\"success\":true") != std::string_view::npos},
+              {"unknown code", unknown.find("\"code\":\"invalid_request\"") != std::string_view::npos}});
 }
 
 void test_app_rpc_plugin_command_has_no_tui_authority()
@@ -222,10 +227,14 @@ void test_app_rpc_state_list_sessions_and_open_session()
 
   auto const jsonl = out.str();
   expect(result.has_value(), "RPC state/list/open loop completes successfully");
-  expect(jsonl.find("\"id\":\"state\"") != std::string::npos && jsonl.find(second_id) != std::string::npos &&
-             jsonl.find("\"id\":\"list\"") != std::string::npos && jsonl.find(first_id) != std::string::npos &&
-             jsonl.find("\"id\":\"open\"") != std::string::npos,
-         "RPC state, list_sessions, and open_session return session metadata");
+  auto const state = rpc_response_line(jsonl, "state").value_or("");
+  auto const listed = rpc_response_line(jsonl, "list").value_or("");
+  auto const opened = rpc_response_line(jsonl, "open").value_or("");
+  expect_all("RPC state, list_sessions, and open_session return their own session metadata",
+             {{"state active session", state.find(second_id) != std::string_view::npos},
+              {"list includes first", listed.find(first_id) != std::string_view::npos},
+              {"list includes second", listed.find(second_id) != std::string_view::npos},
+              {"open requested session", opened.find(first_id) != std::string_view::npos}});
   expect(second_r->store.session_id() == first_id, "RPC open_session switches the active runtime session");
 }
 
@@ -247,6 +256,7 @@ void test_app_rpc_job_controls_are_active_safe_and_redacted()
     return;
   ava::app::runtime::session_ts& unlocked_session(*unlocked_session_result);
 
+  expect(static_cast<bool>(ava::app::runtime::session_ts::rat(unlocked_session)->subagent_coordinator()), "RPC job fixture requires a subagent coordinator");
   if (!ava::app::runtime::session_ts::rat(unlocked_session)->subagent_coordinator())
     return;
 
@@ -340,14 +350,24 @@ void test_app_rpc_job_controls_are_active_safe_and_redacted()
   input_buffer.push("{\"id\":\"promote\",\"type\":\"promote_job\",\"job_id\":\"" + promotable_id + "\"}\n");
   input_buffer.push("{\"id\":\"cancel-job\",\"type\":\"cancel_job\",\"job_id\":\"" + cancelable_id + "\"}\n");
   input_buffer.push("{\"id\":\"failed-result\",\"type\":\"get_job_result\",\"job_id\":\"" + failed_id + "\"}\n");
-  bool const controls_completed = output_buffer.wait_contains("\"id\":\"failed-result\"", std::chrono::seconds(2));
+  bool const controls_completed = wait_for_rpc_response(output_buffer, "failed-result", std::chrono::seconds(2));
   auto active_output = output_buffer.str();
-  expect(controls_completed && active_output.find("\"id\":\"promote\"") != std::string::npos &&
-             active_output.find("\"was_promoted\":true") != std::string::npos && active_output.find("\"id\":\"cancel-job\"") != std::string::npos &&
-             active_output.find("\"timed_out\":true") != std::string::npos && active_output.find("\"code\":\"job_not_ready\"") != std::string::npos &&
-             active_output.find("\"message\":\"subagent job failed\"") != std::string::npos && active_output.find("rpc-secret") == std::string::npos &&
-             active_output.find("raw provider body") == std::string::npos && active_output.find("\"code\":\"active_run\"") == std::string::npos,
-         "RPC job status, wait, result, cancel, and promote remain active-safe and redact provider/error context");
+  auto const promoted = rpc_response_line(active_output, "promote").value_or("");
+  auto const waited = rpc_response_line(active_output, "wait").value_or("");
+  auto const not_ready = rpc_response_line(active_output, "not-ready").value_or("");
+  auto const failed_result = rpc_response_line(active_output, "failed-result").value_or("");
+  auto const canceled_job = rpc_response_line(active_output, "cancel-job").value_or("");
+  expect_all("RPC job controls remain active-safe and redact provider/error context",
+             {{"all controls processed", controls_completed},
+              {"promotion", promoted.find("\"was_promoted\":true") != std::string_view::npos},
+              {"wait times out", waited.find("\"timed_out\":true") != std::string_view::npos},
+              {"unfinished result", not_ready.find("\"code\":\"job_not_ready\"") != std::string_view::npos},
+              {"failed job state", failed_result.find("\"state\":\"failed\"") != std::string_view::npos},
+              {"failed job category", failed_result.find("\"error_category\":\"provider\"") != std::string_view::npos},
+              {"cancel accepted", canceled_job.find("\"success\":true") != std::string_view::npos},
+              {"secret redacted", active_output.find("rpc-secret") == std::string::npos},
+              {"provider body redacted", active_output.find("raw provider body") == std::string::npos},
+              {"active-safe", active_output.find("\"code\":\"active_run\"") == std::string::npos}});
 
   promoted_state->finish();
   static_cast<void>(coordinator->wait(owner, promotable_id, std::chrono::seconds(1)));

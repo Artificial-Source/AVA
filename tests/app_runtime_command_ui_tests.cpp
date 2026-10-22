@@ -1047,6 +1047,7 @@ void test_startup_overview_snapshot_bounds_order_redaction()
              first.compact_line.find("AGENTS.md") == std::string::npos && first.compact_line.find("/private") == std::string::npos &&
              first.compact_line.find("\x1b") == std::string::npos,
          "compact overview card never includes private leaves, paths, secrets, or terminal controls");
+  expect(first.model.empty(), "path-like model labels are redacted from the overview snapshot");
   expect(first.instruction_source_count == context_sources.size(),
          "overview reports the truthful instruction-source total without pretending the work cap is the total");
   expect(first.compact_line.find(std::to_string(context_sources.size()) + " ctx") != std::string::npos &&
@@ -1094,11 +1095,14 @@ void test_startup_overview_snapshot_bounds_order_redaction()
 
   auto bound = ava::tui::parse_key_bindings_json(R"({"app.overview.toggle":"F6"})");
   expect(bound.has_value(), "overview toggle keybinding parses");
+  if (!require(bound.has_value(), "overview toggle fixture has parsed key bindings"))
+    return;
   input.key_bindings = &(*bound);
   input.model = "safe-model";
   auto const with_key = build_startup_overview_snapshot(input);
   expect(with_key.overview_toggle_keys == "F6" && with_key.compact_line.find("F6") != std::string::npos /*&& with_key.model == "safe-model"*/,
          "overview key hints and compact chrome refresh from effective bindings and refreshed snapshot fields");
+  expect_eq(with_key.model, std::string("safe-model"), "overview snapshot retains safe public model labels");
 
   // Session titles/ids are never part of the overview surface (privacy).
   auto overview_view = ava::tui::overview_select_list_view(first);

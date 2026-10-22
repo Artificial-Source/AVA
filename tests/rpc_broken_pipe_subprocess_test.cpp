@@ -1,16 +1,17 @@
+#include "sys.h"
+#include "support/process_test_support.h"
+#include "support/test_env.h"
+#include "support/test_harness.h"
 #include "support/test_timeout.h"
+#include "ava/core/UniqueFd.h"
 
 #include <cerrno>
-#include <chrono>
 #include <csignal>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
-#include <thread>
-#include <vector>
-#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -34,51 +35,27 @@ std::optional<std::size_t> fd_count()
   return count;
 }
 
-void close_fd(int& fd)
+struct Pipe
 {
-  if (fd >= 0)
-  {
-    close(fd);
-    fd = -1;
-  }
-}
+  ava::core::UniqueFd reader;
+  ava::core::UniqueFd writer;
 
-bool write_all(int fd, std::string const& text)
-{
-  std::size_t offset = 0;
-  while (offset < text.size())
+  bool open()
   {
-    auto const written = write(fd, text.data() + offset, text.size() - offset);
-    if (written > 0)
-    {
-      offset += static_cast<std::size_t>(written);
-      continue;
-    }
-    if (written < 0 && errno == EINTR)
-      continue;
-    return false;
+    int descriptors[2];
+    if (::pipe(descriptors) != 0)
+      return false;
+    reader.reset(descriptors[0]);
+    writer.reset(descriptors[1]);
+    return true;
   }
-  return true;
-}
 
-std::string read_all(int fd)
-{
-  std::string result;
-  char buffer[4096];
-  while (true)
+  void close()
   {
-    auto const bytes = read(fd, buffer, sizeof(buffer));
-    if (bytes > 0)
-    {
-      result.append(buffer, static_cast<std::size_t>(bytes));
-      continue;
-    }
-    if (bytes < 0 && errno == EINTR)
-      continue;
-    break;
+    reader.reset();
+    writer.reset();
   }
-  return result;
-}
+};
 
 int fail(std::string const& message)
 {
@@ -88,32 +65,23 @@ int fail(std::string const& message)
 
 }  // namespace
 
-int main()
+namespace {
+
+int run_closed_pipe_test(bool close_stdout)
 {
   auto const before_fds = fd_count();
-  auto root = std::filesystem::temp_directory_path() / ("ava-rpc-broken-pipe-" + std::to_string(static_cast<long long>(getpid())));
-  std::error_code error;
-  std::filesystem::remove_all(root, error);
+  ava::tests::HermeticTestEnvironment environment("ava-rpc-broken-pipe-");
+  ScopedEnvVar no_color("NO_COLOR", "1");
+  auto const& root = environment.root();
   auto const workspace = root / "workspace";
-  auto const home = root / "home";
-  auto const config = root / "config";
-  auto const state = root / "state";
-  auto const data = root / "data";
-  std::filesystem::create_directories(workspace, error);
-  std::filesystem::create_directories(home, error);
-  std::filesystem::create_directories(config, error);
-  std::filesystem::create_directories(state, error);
-  std::filesystem::create_directories(data, error);
-  if (error)
-    return fail("could not create isolated RPC test directories: " + error.message());
-
-  int stdin_pipe[2] = {-1, -1};
-  int stdout_pipe[2] = {-1, -1};
-  int stderr_pipe[2] = {-1, -1};
-  if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0)
+  std::filesystem::create_directories(workspace);
+  Pipe input;
+  Pipe output;
+  Pipe errors;
+  if (!input.open() || !output.open() || !errors.open())
     return fail("could not create subprocess pipes: " + std::string(std::strerror(errno)));
 
-  pid_t const child = fork();
+  pid_t const child = ::fork();
   if (child < 0)
     return fail("could not fork ava: " + std::string(std::strerror(errno)));
   if (child == 0)
@@ -121,79 +89,68 @@ int main()
     struct sigaction default_sigpipe{};
     default_sigpipe.sa_handler = SIG_DFL;
     sigemptyset(&default_sigpipe.sa_mask);
-    static_cast<void>(sigaction(SIGPIPE, &default_sigpipe, nullptr));
-
-    static_cast<void>(dup2(stdin_pipe[0], STDIN_FILENO));
-    static_cast<void>(dup2(stdout_pipe[1], STDOUT_FILENO));
-    static_cast<void>(dup2(stderr_pipe[1], STDERR_FILENO));
-    close_fd(stdin_pipe[0]);
-    close_fd(stdin_pipe[1]);
-    close_fd(stdout_pipe[0]);
-    close_fd(stdout_pipe[1]);
-    close_fd(stderr_pipe[0]);
-    close_fd(stderr_pipe[1]);
-
-    static_cast<void>(setenv("HOME", home.c_str(), 1));
-    static_cast<void>(setenv("XDG_CONFIG_HOME", config.c_str(), 1));
-    static_cast<void>(setenv("XDG_STATE_HOME", state.c_str(), 1));
-    static_cast<void>(setenv("XDG_DATA_HOME", data.c_str(), 1));
-    static_cast<void>(setenv("NO_COLOR", "1", 1));
-    if (chdir(workspace.c_str()) != 0)
+    if (::sigaction(SIGPIPE, &default_sigpipe, nullptr) != 0 || ::dup2(input.reader.get(), STDIN_FILENO) < 0 ||
+        ::dup2(output.writer.get(), STDOUT_FILENO) < 0 || ::dup2(errors.writer.get(), STDERR_FILENO) < 0)
       _exit(126);
-    execl(AVA_EXE_PATH, AVA_EXE_PATH, "--rpc", "--offline", static_cast<char*>(nullptr));
+    input.close();
+    output.close();
+    errors.close();
+    if (::chdir(workspace.c_str()) != 0)
+      _exit(126);
+    ::execl(AVA_EXE_PATH, AVA_EXE_PATH, "--rpc", "--offline", static_cast<char*>(nullptr));
     _exit(127);
   }
+  ava::tests::ScopedChild owner(child);
+  struct sigaction ignore_sigpipe{};
+  ignore_sigpipe.sa_handler = SIG_IGN;
+  sigemptyset(&ignore_sigpipe.sa_mask);
+  if (::sigaction(SIGPIPE, &ignore_sigpipe, nullptr) != 0)
+    return fail("could not protect harness pipe writes: " + std::string(std::strerror(errno)));
+  input.reader.reset();
+  output.writer.reset();
+  errors.writer.reset();
+  if (close_stdout)
+    output.reader.reset();
+  else
+    errors.reader.reset();
+  std::string const request = close_stdout ? "{\"id\":\"broken-pipe\",\"type\":\"prompt\",\"message\":\"trigger worker response\"}\n"
+                                           : "{\"id\":\"stderr-closed\",\"type\":\"get_protocol\"}\n";
+  bool const request_written = write_all_to_descriptor_for_test(input.writer.get(), request.data(), request.size());
+  if (!close_stdout)
+    input.writer.reset();
 
-  close_fd(stdin_pipe[0]);
-  close_fd(stdout_pipe[1]);
-  close_fd(stderr_pipe[1]);
-  close_fd(stdout_pipe[0]);
-
-  std::string const request = "{\"id\":\"broken-pipe\",\"type\":\"prompt\",\"message\":\"trigger worker response\"}\n";
-  bool const request_written = write_all(stdin_pipe[1], request);
-
-  int status = 0;
-  bool exited = false;
   auto const deadline = ava::tests::now_plus_seconds(5);
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    auto const waited = waitpid(child, &status, WNOHANG);
-    if (waited == child)
-    {
-      exited = true;
-      break;
-    }
-    if (waited < 0 && errno != EINTR)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  if (!exited)
-  {
-    static_cast<void>(kill(child, SIGKILL));
-    static_cast<void>(waitpid(child, &status, 0));
-  }
-
-  close_fd(stdin_pipe[1]);
-  auto const stderr_text = read_all(stderr_pipe[0]);
-  close_fd(stderr_pipe[0]);
-  std::filesystem::remove_all(root, error);
+  auto const status = owner.wait_until(deadline);
+  input.writer.reset();
+  std::string captured;
+  bool const observed = close_stdout
+                            ? ava::tests::read_until(errors.reader.get(), captured, "failed to write RPC JSONL record", ava::tests::now_plus_seconds(2))
+                            : ava::tests::read_until(output.reader.get(), captured, "\"id\":\"stderr-closed\",\"type\":\"response\",\"success\":true",
+                                                     ava::tests::now_plus_seconds(2));
+  output.close();
+  errors.close();
   auto const after_fds = fd_count();
-
+  auto const scenario = close_stdout ? std::string("closed stdout") : std::string("closed stderr");
   if (!request_written)
-    return fail("could not write the worker-triggering request while stdin remained open");
-  if (!exited)
-    return fail("ava did not terminate within five seconds after its stdout reader closed");
-  if (!WIFEXITED(status) || WEXITSTATUS(status) != 1)
-  {
-    if (WIFSIGNALED(status))
-      return fail("ava terminated from signal " + std::to_string(WTERMSIG(status)) + "; stderr: " + stderr_text);
-    return fail("ava did not exit 1; status=" + std::to_string(status) + "; stderr: " + stderr_text);
-  }
-  if (stderr_text.find("failed to write RPC JSONL record") == std::string::npos)
-    return fail("ava exit 1 did not include the RPC output I/O diagnostic; stderr: " + stderr_text);
+    return fail(scenario + ": could not write the request");
+  if (!status)
+    return fail(scenario + ": ava did not terminate; captured: " + captured);
+  int const expected_exit = close_stdout ? 1 : 0;
+  if (!WIFEXITED(*status) || WEXITSTATUS(*status) != expected_exit)
+    return fail(scenario + ": unexpected exit; raw status=" + std::to_string(*status) + "; captured: " + captured);
+  if (!observed)
+    return fail(scenario + ": missing " + (close_stdout ? "output I/O diagnostic" : "successful protocol response") + "; captured: " + captured);
   if (before_fds && after_fds && *before_fds != *after_fds)
     return fail("subprocess regression leaked parent file descriptors: before=" + std::to_string(*before_fds) + " after=" + std::to_string(*after_fds));
-
-  std::cout << "PASS: ava ignored SIGPIPE, woke blocked stdin, joined its worker, reported RPC output I/O failure, and exited 1 without fd leaks\n";
+  std::cout << "PASS: " << scenario << " preserves the expected RPC outcome without fd leaks\n";
   return 0;
+}
+
+}  // namespace
+
+int main()
+{
+  int const stdout_status = run_closed_pipe_test(true);
+  int const stderr_status = run_closed_pipe_test(false);
+  return stdout_status != 0 ? stdout_status : (stderr_status != 0 ? stderr_status : (ava::tests::failures() != 0 ? 1 : 0));
 }

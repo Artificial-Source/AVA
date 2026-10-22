@@ -1,7 +1,9 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/process_test_support.h"
 #include "tests/support/runtime_event_test_support.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
@@ -26,6 +28,7 @@
 #include "ava/permissions/permission.h"
 #include "ava/provider/openai_provider.h"
 #include "ava/context/context_loader.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/json.h"
 #include "ava/core/result.h"
 
@@ -45,6 +48,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -56,18 +61,6 @@ namespace ava::tests::app_runtime_tests {
 
 using namespace ava::tests;
 using namespace std::chrono_literals;
-
-bool wait_for_app_plugin_path(std::filesystem::path const& path, std::chrono::milliseconds timeout = 2s)
-{
-  auto const deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    if (std::filesystem::exists(path))
-      return true;
-    std::this_thread::sleep_for(10ms);
-  }
-  return std::filesystem::exists(path);
-}
 
 std::string shell_single_quoted(std::string_view value)
 {
@@ -115,16 +108,19 @@ std::string app_plugin_resource_manifest_json(std::string_view id, std::string_v
          "}";
 }
 
-std::string app_plugin_event_cancel_manifest_json()
+std::string app_plugin_event_cancel_manifest_json(std::filesystem::path const& observed, std::filesystem::path const& release,
+                                                  std::filesystem::path const& side_effect)
 {
-  return R"({
+  return std::string(R"({
   "schema_version": 1,
   "id": "com.example.run-cancel-event",
   "name": "Run cancellation event fixture",
   "version": "0.1.0",
   "api_version": "ava.plugin.v1",
   "description": "runtime run cancellation fixture",
-  "entrypoint": {"command": "/bin/sh", "args": ["hook.sh"]},
+  "entrypoint": {"command": ")") +
+         ava::core::json::escape(AVA_FAKE_PLUGIN_CHILD_PATH) + R"(", "args": ["event-hook-gated", ")" + ava::core::json::escape(observed.string()) + R"(", ")" +
+         ava::core::json::escape(release.string()) + R"(", ")" + ava::core::json::escape(side_effect.string()) + R"("]},
   "capabilities": ["event_hooks"],
   "contributes": {"event_hooks": [{"event": "session.start"}]}
 })";
@@ -840,7 +836,7 @@ void test_runtime_plugin_event_hook_uses_admitted_run_cancellation_scope()
 {
   if (ava::process::platform_support_v1() != ava::process::PlatformSupportV1::Posix)
   {
-    expect(true, "runtime plugin event cancellation is intentionally unsupported on this platform");
+    request_skip("runtime plugin event cancellation requires POSIX process support");
     return;
   }
   auto const root = create_empty_root("app-runtime-plugin-event-run-cancel");
@@ -849,26 +845,14 @@ void test_runtime_plugin_event_hook_uses_admitted_run_cancellation_scope()
   auto const plugin_dir = workspace / ".ava" / "plugins" / "com.example.run-cancel-event";
   auto const observed_marker = root / "event-observed";
   auto const side_effect_marker = root / "post-cancel-side-effect";
+  auto const release_fifo = root / "event-release";
   std::filesystem::create_directories(workspace);
 
   auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
   expect(trusted.has_value(), trusted ? "runtime event cancellation fixture trusts project plugins" : trusted.error().format());
-  write_app_test_file(plugin_dir / "plugin.json", app_plugin_event_cancel_manifest_json());
-  write_app_test_file(plugin_dir / "hook.sh",
-                      "#!/bin/sh\n"
-                      "IFS= read -r initialize || exit 2\n"
-                      "printf '%s\\n' '{\"id\":\"ava_1\",\"type\":\"initialized\",\"api_version\":\"ava.plugin.v1\","
-                      "\"plugin_version\":\"1.0\",\"contributions\":{}}'\n"
-                      "IFS= read -r event || exit 3\n"
-                      "printf observed > " +
-                          shell_single_quoted(observed_marker.string()) +
-                          "\n"
-                          "sleep 1\n"
-                          "printf side-effect > " +
-                          shell_single_quoted(side_effect_marker.string()) +
-                          "\n"
-                          "printf '%s\\n' '{\"id\":\"ava_2\",\"type\":\"event.observed\",\"ok\":true}'\n"
-                          "while IFS= read -r line; do :; done\n");
+  if (!require(::mkfifo(release_fifo.c_str(), 0600) == 0, "create event-hook release FIFO"))
+    return;
+  write_test_file(plugin_dir / "plugin.json", app_plugin_event_cancel_manifest_json(observed_marker, release_fifo, side_effect_marker));
   auto enabled = ava::plugin::set_plugin_enabled(paths.ava_state_dir / "plugin-enablement.json", workspace, "com.example.run-cancel-event", true,
                                                  ava::plugin::PluginScope::Project);
   expect(enabled.has_value(), enabled ? "runtime event cancellation fixture enables its plugin" : enabled.error().format());
@@ -877,7 +861,7 @@ void test_runtime_plugin_event_hook_uses_admitted_run_cancellation_scope()
   auto application_scope = ava::process::ProcessScopeV1::application(supervisor);
   expect(application_scope.has_value(),
          application_scope ? "runtime event cancellation fixture creates application process scope" : application_scope.error().format());
-  if (!trusted || !enabled || !application_scope)
+  if (!require(trusted.has_value() && enabled.has_value() && application_scope.has_value(), "event cancellation prerequisites are ready"))
     return;
 
   ava::app::runtime::OpenContext open_context;
@@ -887,7 +871,7 @@ void test_runtime_plugin_event_hook_uses_admitted_run_cancellation_scope()
   open_context.application_process_scope = *application_scope;
   auto session = ava::app::runtime::Session::open(open_context);
   expect(session.has_value(), session ? "runtime event cancellation fixture opens a scoped session" : session.error().format());
-  if (!session)
+  if (!require(session.has_value(), "event cancellation session is ready"))
     return;
 
   std::shared_ptr<ava::app::SessionRunController> controller;
@@ -902,19 +886,34 @@ void test_runtime_plugin_event_hook_uses_admitted_run_cancellation_scope()
   options.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
     return ava::permissions::PermissionResolution::Allow;
   };
+  ava::core::UniqueFd observed_events(::inotify_init1(IN_CLOEXEC | IN_NONBLOCK));
+  if (!require(observed_events && ::inotify_add_watch(observed_events.get(), root.c_str(), IN_CLOSE_WRITE) >= 0,
+               "watch event-hook acknowledgement before launching the prompt"))
+    return;
 
   auto run = std::async(std::launch::async, [&] { return ava::app::run_prompt(*session, "cancel the event hook", provider, transport, options); });
-  bool const hook_observed = wait_for_app_plugin_path(observed_marker);
+  struct StopRunOnExit
+  {
+    ava::process::Supervisor& supervisor;
+    ava::process::ProcessScopeV1 const& scope;
+    bool active = true;
+    ~StopRunOnExit()
+    {
+      if (active)
+        static_cast<void>(supervisor.request_stop(scope.owner_prefix(), ava::process::TerminationReasonV1::ApplicationShutdown, now_plus_seconds(5)));
+    }
+  } stop_on_exit{*supervisor, *application_scope, true};
+  std::string observed_event_bytes;
+  bool const hook_observed = read_until(observed_events.get(), observed_event_bytes, "event-observed", now_plus_seconds(5));
   auto stopped = controller ? controller->request_stop()
                             : ava::core::Result<bool>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing run controller")));
-  bool const prompt_settlement = run.wait_for(2s) == std::future_status::ready;
+  bool const prompt_settlement = run.wait_until(now_plus_seconds(5)) == std::future_status::ready;
   if (!prompt_settlement)
   {
-    static_cast<void>(supervisor->request_stop(application_scope->owner_prefix(), ava::process::TerminationReasonV1::ApplicationShutdown,
-                                               std::chrono::steady_clock::now() + 2s));
+    static_cast<void>(supervisor->request_stop(application_scope->owner_prefix(), ava::process::TerminationReasonV1::ApplicationShutdown, now_plus_seconds(5)));
   }
   auto run_result = run.get();
-  std::this_thread::sleep_for(1100ms);
+  stop_on_exit.active = false;
 
   auto snapshot = supervisor->snapshot();
   std::vector<ava::process::ProcessSnapshotRecordV1> plugin_records;
@@ -924,12 +923,24 @@ void test_runtime_plugin_event_hook_uses_admitted_run_cancellation_scope()
   bool const canceled_once = plugin_records.size() == 1 && plugin_records.front().state == ava::process::ProcessStateV1::Finished &&
                              plugin_records.front().reason == ava::process::TerminationReasonV1::Canceled &&
                              plugin_records.front().cleanup == ava::process::CleanupStateV1::Complete && plugin_records.front().settlement_count == 1;
-  expect(hook_observed && stopped && *stopped && prompt_settlement && !run_result && canceled_once && snapshot.live_records == 0 &&
-             !std::filesystem::exists(side_effect_marker) && transport.requests().empty(),
-         "SessionRunController stop alone cancels a hanging event hook in the admitted run scope with one complete Plugin settlement and no later side effect");
+  errno = 0;
+  ava::core::UniqueFd release_writer(::open(release_fifo.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC));
+  int const release_error = errno;
+  if (release_writer)
+    expect_eq(::write(release_writer.get(), "x", 1), ssize_t{1}, "release a still-live event child so failure cleanup can settle it");
+  expect_all("run cancellation settles the gated event hook before it can execute a side effect",
+             {{"event acknowledged", hook_observed},
+              {"stop admitted", stopped && *stopped},
+              {"prompt settled", prompt_settlement},
+              {"prompt canceled", !run_result},
+              {"one complete canceled plugin settlement", canceled_once},
+              {"no live supervisor records", snapshot.live_records == 0},
+              {"terminated child closed release gate", !release_writer && release_error == ENXIO},
+              {"no side effect", !std::filesystem::exists(side_effect_marker)},
+              {"no provider request", transport.requests().empty()}});
 
   supervisor->stop_accepting();
-  auto const shutdown = supervisor->shutdown(std::chrono::steady_clock::now() + 2s);
+  auto const shutdown = supervisor->shutdown(now_plus_seconds(5));
   expect(shutdown.complete, "runtime event cancellation fixture leaves Supervisor cleanup complete");
 }
 

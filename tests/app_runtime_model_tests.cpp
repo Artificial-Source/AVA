@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/app/commands.h"
@@ -8,8 +10,8 @@
 #include "ava/app/rpc/input.h"
 #include "ava/app/rpc_mode.h"
 #include "ava/app/runtime.h"
-#include "ava/app/runtime/RunOptions.h"
 #include "ava/app/runtime/OpenContext.h"
+#include "ava/app/runtime/RunOptions.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime/UnlockedData.h"
 #include "ava/app/runtime_model.h"
@@ -28,6 +30,7 @@
 
 #include <algorithm>
 #include <concepts>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +42,7 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #ifndef AVA_FAKE_MCP_SERVER_PATH
@@ -48,6 +52,141 @@
 namespace ava::tests::app_runtime_tests {
 
 using namespace ava::tests;
+
+namespace {
+class RuntimeLeaseInvocation
+{
+ public:
+  RuntimeLeaseInvocation(std::filesystem::path const& root, std::filesystem::path const& workspace, std::string const& session_id, std::string_view mode)
+  {
+    for (auto** entry = ::environ; entry && *entry; ++entry)
+      if (!std::string_view(*entry).starts_with("AVA_TEST_RUNTIME_LEASE_"))
+        environment_.emplace_back(*entry);
+    environment_.push_back("AVA_TEST_RUNTIME_LEASE_ROOT=" + root.string());
+    environment_.push_back("AVA_TEST_RUNTIME_LEASE_WORKSPACE=" + workspace.string());
+    environment_.push_back("AVA_TEST_RUNTIME_LEASE_SESSION_ID=" + session_id);
+    environment_.push_back("AVA_TEST_RUNTIME_LEASE_MODE=" + std::string(mode));
+    for (auto& variable : environment_)
+      environment_pointers_.push_back(variable.data());
+    environment_pointers_.push_back(nullptr);
+  }
+  RuntimeLeaseInvocation(RuntimeLeaseInvocation const&) = delete;
+  RuntimeLeaseInvocation& operator=(RuntimeLeaseInvocation const&) = delete;
+
+  [[noreturn]] void exec(int ready_descriptor = -1) const noexcept
+  {
+    if (ready_descriptor >= 0 && ::dup2(ready_descriptor, STDOUT_FILENO) < 0)
+      ::_exit(126);
+    char* const arguments[] = {const_cast<char*>("ava_tests"), const_cast<char*>("app_runtime"), nullptr};
+    ::execve("/proc/self/exe", arguments, environment_pointers_.data());
+    ::_exit(127);
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  std::vector<std::string> environment_;
+  std::vector<char*> environment_pointers_;
+};
+
+pid_t spawn_runtime_lease_child(std::filesystem::path const& root, std::filesystem::path const& workspace, std::string const& session_id, std::string_view mode,
+                                int ready_descriptor = -1)
+{
+  RuntimeLeaseInvocation const invocation(root, workspace, session_id, mode);
+  pid_t const child = ::fork();
+  if (child == 0)
+    invocation.exec(ready_descriptor);
+  return child;
+}
+}  // namespace
+
+bool run_app_runtime_lease_child()
+{
+  char const* mode = std::getenv("AVA_TEST_RUNTIME_LEASE_MODE");
+  if (!mode)
+    return false;
+  char const* root = std::getenv("AVA_TEST_RUNTIME_LEASE_ROOT");
+  char const* workspace = std::getenv("AVA_TEST_RUNTIME_LEASE_WORKSPACE");
+  char const* session_id = std::getenv("AVA_TEST_RUNTIME_LEASE_SESSION_ID");
+  if (!require(root && workspace && session_id && std::filesystem::path(root).is_absolute() && std::filesystem::path(workspace).is_absolute(),
+               "fresh-process lease helper receives complete absolute fixture paths"))
+    return true;
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = app_test_paths(root);
+  auto opened = ava::app::runtime::Session::open(context, {.sessionless = false,
+                                                           .requested_session_id = std::string(session_id),
+                                                           .fork_session_id = std::nullopt,
+                                                           .initial_session_name = std::nullopt,
+                                                           .continue_last_session = false,
+                                                           .initial_reasoning_level = std::nullopt,
+                                                           .expected_original_cwd = std::nullopt});
+  if (std::string_view(mode) == "contend")
+  {
+    expect(!opened && opened.error().category() == ava::core::ErrorCategory::Session, "fresh runtime startup rejects the independently owned session lease");
+    return true;
+  }
+  if (!require(std::string_view(mode) == "hold" || std::string_view(mode) == "acquire", "fresh-process lease helper recognizes its mode") ||
+      !require(opened.has_value(), opened ? "fresh runtime acquires the session lease" : opened.error().format()))
+    return true;
+  if (std::string_view(mode) == "hold")
+  {
+    constexpr std::string_view ready = "AVA_LEASE_OWNER_READY\n";
+    if (!require(write_all_to_descriptor_for_test(STDOUT_FILENO, ready.data(), ready.size()), "lease owner acknowledges acquisition"))
+      return true;
+    auto const deadline = now_plus_seconds(30);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      auto const remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+      int const timeout = static_cast<int>(std::clamp<std::chrono::milliseconds::rep>(remaining, 0, std::numeric_limits<int>::max()));
+      if (::poll(nullptr, 0, timeout) < 0 && errno != EINTR)
+        break;
+    }
+    expect(false, "independent lease owner exceeded its lifetime watchdog before the parent terminated it");
+  }
+  return true;
+}
+
+void test_app_runtime_session_lease_reacquired_after_owner_death()
+{
+  auto const root = create_empty_root("app-runtime-lease-owner-death");
+  auto const workspace = root / "workspace";
+  auto session = open_runtime_session_for_test(root, workspace);
+  if (!require(session.has_value(), "owner-death fixture creates a persistent runtime session"))
+    return;
+  auto const session_id = ava::app::runtime::session_ts::rat(*session)->store.session_id();
+  session = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "release seed owner"));
+  int descriptors[2];
+  if (!require(::pipe2(descriptors, O_CLOEXEC) == 0, "create fresh lease owner's acknowledgement pipe"))
+    return;
+  ava::core::UniqueFd ready_read(descriptors[0]);
+  ava::core::UniqueFd ready_write(descriptors[1]);
+  ScopedChild owner(spawn_runtime_lease_child(root, workspace, session_id, "hold", ready_write.get()));
+  ready_write.reset();
+  if (!require(owner.pid() > 0, "exec an independent session lease owner"))
+    return;
+  std::string output;
+  if (!require(read_until(ready_read.get(), output, "AVA_LEASE_OWNER_READY\n", now_plus_seconds(10)), "independent owner holds the lease before termination"))
+    return;
+  ScopedChild contender(spawn_runtime_lease_child(root, workspace, session_id, "contend"));
+  if (!require(contender.pid() > 0, "exec an independent contender while the owner remains alive"))
+    return;
+  auto const contender_status = contender.wait_until(now_plus_seconds(10));
+  if (!require(contender_status && WIFEXITED(*contender_status) && WEXITSTATUS(*contender_status) == 0,
+               "a fresh contender rejects the held lease before owner death"))
+    return;
+  if (!require(::kill(owner.pid(), SIGKILL) == 0, "terminate the exact owned lease process without orderly runtime teardown"))
+    return;
+  auto const owner_status = owner.wait_until(now_plus_seconds(10));
+  if (!require(owner_status && WIFSIGNALED(*owner_status) && WTERMSIG(*owner_status) == SIGKILL, "collect the deliberately terminated lease owner"))
+    return;
+  ScopedChild successor(spawn_runtime_lease_child(root, workspace, session_id, "acquire"));
+  if (!require(successor.pid() > 0, "exec a fresh lease successor after owner death"))
+    return;
+  auto const status = successor.wait_until(now_plus_seconds(10));
+  expect(status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0, "a fresh runtime reacquires the persisted session after independent owner death");
+}
 
 namespace {
 
@@ -493,11 +632,12 @@ void test_app_runtime_model_switch_persists_and_reopens()
                                                                      .expected_original_cwd = std::nullopt});
     _exit(!contested && contested.error().message().find("already owned") != std::string::npos ? 0 : 1);
   }
-  int contender_status = 0;
-  if (contender > 0)
-    static_cast<void>(waitpid(contender, &contender_status, 0));
-  expect(contender > 0 && WIFEXITED(contender_status) && WEXITSTATUS(contender_status) == 0,
-         "TUI/print/RPC-style runtime owners contend on the same cross-process session lease");
+  ScopedChild contender_owner(contender);
+  auto const contender_status = contender_owner.wait_until(now_plus_seconds(10));
+  expect_all("cross-process runtime contender reports lease rejection",
+             {{"child launched", contender > 0},
+              {"child collected", contender_status.has_value()},
+              {"lease rejected", contender_status && WIFEXITED(*contender_status) && WEXITSTATUS(*contender_status) == 0}});
   unlocked_session_result = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "runtime owner released for reopen test"));
   auto unlocked_reopened_result = ava::app::runtime::Session::open(reopen_context, {.sessionless = false,
                                                                    .requested_session_id = session_id,

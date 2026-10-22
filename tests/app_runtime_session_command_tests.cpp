@@ -695,8 +695,11 @@ void test_app_session_metadata_commands()
 
   CRITICAL_AREA_END_W(session);
   auto duplicate_labels = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/labels auth auth"});
-  expect(!duplicate_labels && duplicate_labels.error().message() == "session labels must be unique",
-         "slash /labels reuses backend metadata validation for duplicate labels");
+  expect_all("slash /labels rejects duplicate labels through backend metadata validation",
+             {{"invalid argument category", !duplicate_labels && duplicate_labels.error().category() == ava::core::ErrorCategory::InvalidArgument},
+              {"labels field", !duplicate_labels && std::ranges::any_of(duplicate_labels.error().context(), [](auto const& context) {
+                 return context.key == "field" && context.value == "labels";
+               })}});
 
   auto tree = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/tree auth"});
   CRITICAL_AREA_CONTINUE_W(session);

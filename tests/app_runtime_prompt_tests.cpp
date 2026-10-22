@@ -2,7 +2,9 @@
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/runtime_event_test_support.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/event/events.h"
 #include "ava/http/transport.h"
 #include "ava/observability/run_observer.h"
@@ -32,6 +34,7 @@
 #include "ava/permissions/permission.h"
 #include "ava/provider/openai_provider.h"
 #include "ava/provider/provider.h"
+#include "ava/lsp/configured_provider.h"
 #include "ava/core/error.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
@@ -202,6 +205,28 @@ void test_app_run_prompt_isolates_ambient_extensions()
 
   auto const ambient_mcp_name = ava::mcp::mcp_model_tool_name("ambient_canary", "echo");
   write_app_test_file(paths.ava_config_dir / "mcp.json", app_test_mcp_config_json("ambient_canary", "Ambient MCP canary", AVA_FAKE_MCP_SERVER_PATH));
+  auto const project_mcp_name = ava::mcp::mcp_model_tool_name("project_ambient_canary", "echo");
+  write_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("project_ambient_canary", "Project ambient MCP canary", AVA_FAKE_MCP_SERVER_PATH));
+  write_test_file(workspace / ".ava" / "lsp.json", std::string(R"({"version":1,"servers":[{"id":"ambient-lsp-canary","argv":[")") +
+                                                       ava::core::json::escape(AVA_FAKE_LSP_SERVER_PATH) + R"("],"file_extensions":[".cpp"]}]})");
+  auto lsp_fixture_anchors = ava::core::AnchorSet::open({workspace});
+  if (!require(lsp_fixture_anchors && (*lsp_fixture_anchors)->find_anchor(workspace),
+               lsp_fixture_anchors ? "ambient isolation fixture opens its workspace anchor" : lsp_fixture_anchors.error().format()))
+    return;
+  auto const lsp_fixture = ava::lsp::inspect_configured_lsp_provider({.global_config_file = paths.ava_config_dir / "lsp.json",
+                                                                      .project_config_file = workspace / ".ava" / "lsp.json",
+                                                                      .workspace_root = workspace,
+                                                                      .anchor_set = *lsp_fixture_anchors,
+                                                                      .mode = ava::core::Mode::Build,
+                                                                      .permission_resolver = nullptr,
+                                                                      .builtin_discovery = {}});
+  for (auto const& diagnostic : lsp_fixture.configs)
+    if (!require(!diagnostic.error, diagnostic.error ? "ambient isolation LSP fixture: " + diagnostic.error->format()
+                                                     : "ambient isolation LSP fixture inspects " + diagnostic.scope + " configuration"))
+      return;
+  if (!require(lsp_fixture.server_count == 1,
+               "ambient isolation fixture loads exactly one project LSP server; found " + std::to_string(lsp_fixture.server_count)))
+    return;
 
   auto diagnostics = ava::plugin::collect_plugin_diagnostics(
       ava::plugin::PluginDiscoveryOptions{.global_plugins_dir = paths.ava_config_dir / "plugins", .project_plugins_dir = workspace / ".ava" / "plugins"},
@@ -270,7 +295,7 @@ void test_app_run_prompt_isolates_ambient_extensions()
   run_options.exact_builtin_tool_names = std::vector<std::string>{"read_file", "list_directory"};
   auto result = ava::app::run_prompt(unlocked_session, "isolated prompt", provider, transport, run_options);
   expect(result && result->final_text == "isolated answer", "ambient-extension-free runtime prompt completes through the fake transport");
-  if (!result || transport.requests().size() != 1)
+  if (!require(result.has_value() && transport.requests().size() == 1, "isolated prompt records exactly one provider request"))
     return;
 
   auto const& request = transport.requests()[0].body;
@@ -290,6 +315,10 @@ void test_app_run_prompt_isolates_ambient_extensions()
          "isolated runtime request omits enabled ambient plugin model tools");
   expect(request.find(ambient_mcp_name) == std::string::npos,
          "isolated runtime request does not fall back to ambient MCP when session MCP is explicitly empty");
+  expect_all("isolated exact request excludes project MCP and ambient LSP resources",
+             {{"project MCP", request.find(project_mcp_name) == std::string::npos},
+              {"LSP schemas", request.find(R"("name":"lsp_)") == std::string::npos},
+              {"LSP configuration", request.find("ambient-lsp-canary") == std::string::npos}});
   expect(request.find("\"name\":\"read_file\"") != std::string::npos && request.find("\"name\":\"list_directory\"") != std::string::npos &&
              request.find("\"name\":\"write_file\"") == std::string::npos,
          "isolated runtime exact composition preserves requested builtins and omits non-exact builtins");
@@ -336,6 +365,11 @@ void test_app_run_prompt_isolates_ambient_extensions()
                isolated_request.body.find("ACP_PLUGIN_SKILL_CANARY_1b64") == std::string::npos &&
                isolated_request.body.find("ACP_PLUGIN_SKILL_BODY_CANARY_a53f") == std::string::npos,
            "every generic isolated request omits ambient MCP schema and global/plugin skill catalog and body canaries");
+    expect_all("generic isolated request excludes trusted-project MCP and LSP capabilities",
+               {{"project MCP", isolated_request.body.find(project_mcp_name) == std::string::npos},
+                {"LSP diagnostics", isolated_request.body.find(R"("name":"lsp_diagnostics")") == std::string::npos},
+                {"LSP symbols", isolated_request.body.find(R"("name":"lsp_workspace_symbols")") == std::string::npos},
+                {"LSP configuration", isolated_request.body.find("ambient-lsp-canary") == std::string::npos}});
   }
   if (!generic_transport.requests().empty())
   {
@@ -567,16 +601,9 @@ void test_clear_trust_retires_only_for_effective_untrusted_state()
   expect(ava::app::set_project_trust_decision(paths, ancestor, true) && ava::app::set_project_trust_decision(paths, workspace, true),
          "clear-effective fixture starts with trusted ancestor and exact trusted decision");
 
-  ava::app::runtime::OpenContext context;
-  context.workspace_dir = workspace;
-  context.current_dir = workspace;
-  context.paths = paths;
-  auto opened = ava::app::runtime::Session::open(context);
-  if (!opened)
-  {
-    expect(false, "clear-effective fixture opens");
+  auto opened = open_runtime_session_for_test(root, workspace);
+  if (!require(opened.has_value(), "clear-effective fixture opens"))
     return;
-  }
   auto& session = *opened;
   auto inherited_controller = ava::app::runtime::session_ts::rat(session)->run_controller();
   auto inherited_clear = ava::app::run_command(session, ava::app::CommandRequest{.command = "/trust clear"});
@@ -699,13 +726,13 @@ void test_post_persistence_publication_failure_leaves_reopen_required()
   expect(ava::app::set_project_trust_decision(paths, workspace, true).has_value(), "publication-failure fixture starts trusted");
 
   auto coordinator = ava::agent::SubagentCoordinator::create();
-  if (!coordinator)
+  if (!require(coordinator.has_value(), coordinator ? "publication-failure fixture creates coordinator" : coordinator.error().format()))
     return;
   auto manager =
       ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .revocation_before_publication_for_test = []() -> ava::core::VoidResult {
                                                    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "injected publication failure"));
                                                  }});
-  if (!manager)
+  if (!require(manager.has_value(), manager ? "publication-failure fixture creates delivery manager" : manager.error().format()))
     return;
   ava::app::runtime::OpenContext context;
   context.workspace_dir = workspace;
@@ -714,7 +741,7 @@ void test_post_persistence_publication_failure_leaves_reopen_required()
   context.subagent_coordinator = *coordinator;
   context.subagent_delivery_manager = *manager;
   auto opened = ava::app::runtime::Session::open(context);
-  if (!opened)
+  if (!require(opened.has_value(), opened ? "publication-failure fixture opens session" : opened.error().format()))
     return;
   auto& session = *opened;
   auto old_controller = ava::app::runtime::session_ts::rat(session)->run_controller();
@@ -1941,8 +1968,21 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
 
     [[nodiscard]] ava::core::Result<std::string> read_text_file(std::filesystem::path const& path, ava::tools::ToolIoCancelCallback) const override
     {
-      std::lock_guard lock(*mutex_);
+      std::unique_lock lock(*mutex_);
       log_->push_back("read:" + path.filename().string());
+      if (++initial_reads_ <= 2)
+      {
+        ++active_reads_;
+        peak_active_reads_ = std::max(peak_active_reads_, active_reads_);
+        changed_.notify_all();
+        if (!changed_.wait_until(lock, now_plus_seconds(5), [&] { return initial_reads_ >= 2; }))
+        {
+          read_gate_timed_out_ = true;
+          --active_reads_;
+          return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "parallel read fixture never admitted its second reader"));
+        }
+        --active_reads_;
+      }
       auto found = files_.find(path);
       if (found == files_.end())
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "injected exact file is missing"));
@@ -1957,6 +1997,11 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
       files_[path] = std::string(content);
       return {};
     }
+    [[nodiscard]] bool initial_reads_overlapped() const
+    {
+      std::lock_guard lock(*mutex_);
+      return initial_reads_ >= 2 && peak_active_reads_ == 2 && !read_gate_timed_out_;
+    }
 
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
@@ -1964,6 +2009,11 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
     std::shared_ptr<std::vector<std::string>> log_;
     std::shared_ptr<std::mutex> mutex_;
     mutable std::map<std::filesystem::path, std::string> files_;
+    mutable std::condition_variable changed_;
+    mutable std::size_t initial_reads_ = 0;
+    mutable std::size_t active_reads_ = 0;
+    mutable std::size_t peak_active_reads_ = 0;
+    mutable bool read_gate_timed_out_ = false;
   };
 
   auto function_call_sse = [](std::string_view id, std::string_view name, std::string_view arguments_json) {
@@ -1990,6 +2040,7 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   ava::tests::FakeTransport transport(
       {sse_response(function_call_sse("call_read", "read_file", R"({"path":"notes.txt"})") +
+                    function_call_sse("call_extra_read", "read_file", R"({"path":"extra.txt"})") +
                     function_call_sse("call_list", "list_directory", R"({"path":".","max_entries":20})") +
                     function_call_sse("call_glob", "glob", R"({"pattern":"*.txt"})") +
                     function_call_sse("call_grep", "grep", R"({"pattern":"alpha","include":"*.txt","literal":true})") + "data: [DONE]\n\n"),
@@ -2017,8 +2068,10 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
   };
 
   auto result = ava::app::run_prompt(*unlocked_session_result, "parallel read search", provider, transport, run_options);
-  expect(result && result->final_text == "parallel bridge done" && result->tool_calls == 6,
-         "parallel read/search RunOptions bridge completes the eligible batch, mutation barrier, and post-read");
+  expect_all("parallel read/search bridge overlaps eligible reads and completes the mutation barrier",
+             {{"prompt completed", result && result->final_text == "parallel bridge done"},
+              {"all seven tools dispatched", result && result->tool_calls == 7},
+              {"two reads simultaneously in flight", exact->initial_reads_overlapped()}});
 
   std::vector<std::string> call_ids;
   std::vector<std::string> result_ids;
@@ -2029,8 +2082,9 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
     else if (auto const* tool_result = ava::tests::runtime_event_as<ava::event::ToolResultEvent>(event))
       result_ids.push_back(tool_result->payload.call_id);
   }
-  expect(call_ids == std::vector<std::string>({"call_read", "call_list", "call_glob", "call_grep", "call_write", "call_post_read"}) && result_ids == call_ids,
-         "runtime ToolStart/ToolResult keep original provider-call order and exact tool-result IDs");
+  auto const expected_ids = std::vector<std::string>{"call_read", "call_extra_read", "call_list", "call_glob", "call_grep", "call_write", "call_post_read"};
+  expect_all("runtime publishes every tool lifecycle in provider-call order",
+             {{"start IDs", call_ids == expected_ids}, {"result IDs", result_ids == expected_ids}});
 
   auto snapshot = [&] {
     std::lock_guard lock(*log_mutex);
@@ -2063,8 +2117,7 @@ void test_app_run_prompt_parallel_read_search_groups_eligible_tools_and_honors_b
   }
   expect(mutated_visible, "post-mutation read observes barrier-visible written content");
 
-  ava::app::runtime::OpenContext deny_context = open_context;
-  auto deny_session = ava::app::runtime::Session::open(deny_context);
+  auto deny_session = open_runtime_session_for_test(root, workspace, ava::agent::Mode::Build);
   expect(deny_session.has_value(), "parallel denial test opens a separate session");
   if (!deny_session)
     return;

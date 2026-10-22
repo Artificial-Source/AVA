@@ -5,6 +5,8 @@ namespace ava::tests::app_rpc_test {
 void test_app_rpc_prompt_payload_serialization();
 void test_app_rpc_prompt_result_tool_timeline_golden_payloads();
 void test_app_rpc_parsing_and_response_serialization();
+void test_app_rpc_protocol_bounds();
+void test_app_rpc_message_entry_count_boundary();
 void test_app_rpc_identifier_validation();
 void test_app_rpc_prompt_with_fake_transport_streams_events();
 void test_app_rpc_offline_allows_local_protocol_and_rejects_prompt_before_provider_request();

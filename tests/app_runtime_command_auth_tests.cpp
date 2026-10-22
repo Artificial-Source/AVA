@@ -182,6 +182,31 @@ void app_command_dispatcher_auth_part(ava::app::runtime::session_ts& unlocked_se
                                            }});
   expect(connect_cancel && connect_cancel->handled && connect_cancel->output.empty(),
          "command dispatcher /connect treats modal cancellation as a silent close");
+  auto const anthropic_after_cancel = ava::config::provider_credential_for_request(paths, "anthropic", credential_transport);
+  auto const openai_after_cancel = ava::config::load_openai_credential(paths);
+  expect_all("canceling /connect leaves existing credentials unchanged",
+             {{"anthropic", anthropic_after_cancel && *anthropic_after_cancel && (**anthropic_after_cancel).access_token == "slash-back-api-key"},
+              {"openai", openai_after_cancel && *openai_after_cancel && (**openai_after_cancel).access_token == "slash-openai-modal-api-key"}});
+  for (std::string const& secret : {std::string{}, std::string(" \t\n")})
+  {
+    auto rejected_connect =
+        ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/connect anthropic",
+                                                                         .event_sink = nullptr,
+                                                                         .permission_resolver = nullptr,
+                                                                         .question_resolver =
+                                                                             [secret](ava::agent::QuestionPrompt const&) {
+                                                                               return ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = secret};
+                                                                             },
+                                                                         .compaction_summary_generator = nullptr,
+                                                                         .cancel_requested = nullptr,
+                                                                         .plugin_ui_capability = nullptr,
+                                                                         .propagate_compaction_errors = false,
+                                                                         .hotkeys = {}});
+    auto const credential = ava::config::provider_credential_for_request(paths, "anthropic", credential_transport);
+    expect_all("empty or whitespace /connect secret is rejected without replacing the stored credential",
+               {{"handled rejection", rejected_connect && rejected_connect->handled && !rejected_connect->output.empty()},
+                {"unchanged credential", credential && *credential && (**credential).access_token == "slash-back-api-key"}});
+  }
 
   bool saw_openai_secret_prompt = false;
   auto connect_openai_api = ava::app::run_command(

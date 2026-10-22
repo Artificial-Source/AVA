@@ -604,11 +604,7 @@ void test_app_runtime_process_scope_lifecycle()
            "session resource move and swap semantics retain the replacement session scope");
   }
 
-  ava::app::runtime::OpenContext legacy_context;
-  legacy_context.workspace_dir = workspace;
-  legacy_context.current_dir = workspace;
-  legacy_context.paths = paths;
-  auto legacy_result = ava::app::runtime::Session::open(legacy_context);
+  auto legacy_result = open_runtime_session_for_test(root, workspace);
   expect(legacy_result.has_value(),
          legacy_result ? "legacy non-spawning adapter remains constructible without process authority" : legacy_result.error().format());
   if (legacy_result)

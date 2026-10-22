@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/app/command_catalog.h"
 #include "ava/app/command_palette.h"
@@ -41,9 +42,7 @@ using namespace ava::tests;
 
 void test_application_catalog_cache_reuses_workspace_and_session_indexes()
 {
-  auto const root = temp_root() / "application-catalog-cache";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto const root = create_empty_root("application-catalog-cache");
   auto const workspace = root / "workspace";
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
@@ -184,11 +183,9 @@ void test_application_catalog_cache_reuses_workspace_and_session_indexes()
          "application branch-summary mapping forwards exact fixed enums and labels but drops backend reason, path, provider, and generated payload text");
 }
 
-void test_application_catalog_coordinator_serializes_refresh_and_snapshot()
+void test_application_catalog_coordinator_publishes_coherent_generation()
 {
-  auto const root = temp_root() / "application-catalog-coordinator";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto const root = create_empty_root("application-catalog-coordinator");
   auto const workspace = root / "workspace";
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
@@ -216,17 +213,29 @@ void test_application_catalog_coordinator_serializes_refresh_and_snapshot()
   std::mutex mutex;
   std::condition_variable changed;
   bool walker_started = false;
-  bool display_refresh_started = false;
-  bool snapshot_started = false;
   bool release_walker = false;
   bool refresh_finished = false;
-  std::thread refresh([&]() {
+  std::future<void> display_refresh;
+  std::future<ava::app::ApplicationCatalogCache> snapshot_future;
+  std::jthread refresh;
+  struct WalkerRelease
+  {
+    std::mutex& mutex;
+    std::condition_variable& changed;
+    bool& released;
+    ~WalkerRelease()
+    {
+      std::lock_guard lock(mutex);
+      released = true;
+      changed.notify_all();
+    }
+  } release_on_exit{mutex, changed, release_walker};
+  refresh = std::jthread([&]() {
     catalog.refresh_workspace(unlocked_session, {}, [&](ava::app::runtime::session_ts const&) {
       std::unique_lock lock(mutex);
       walker_started = true;
       changed.notify_all();
-      if (!changed.wait_for(lock, std::chrono::seconds(2), [&] { return release_walker; }))
-        return std::vector<ava::app::WorkspacePathCandidate>{};
+      changed.wait(lock, [&] { return release_walker; });
       return std::vector<ava::app::WorkspacePathCandidate>{ava::app::WorkspacePathCandidate{.value = "new.cpp", .description = "new file", .directory = false}};
     });
     std::lock_guard lock(mutex);
@@ -236,35 +245,16 @@ void test_application_catalog_coordinator_serializes_refresh_and_snapshot()
 
   {
     std::unique_lock lock(mutex);
-    expect(changed.wait_for(lock, std::chrono::seconds(2), [&] { return walker_started; }), "catalog refresh reaches the deterministic blocked workspace walk");
+    if (!require(changed.wait_until(lock, now_plus_seconds(5), [&] { return walker_started; }), "catalog refresh reaches its persistent workspace gate"))
+      return;
   }
-  auto display_refresh = std::async(std::launch::async, [&] {
-    {
-      std::lock_guard lock(mutex);
-      display_refresh_started = true;
-      changed.notify_all();
-    }
+  // Exercise coherent publication across overlapping operations. Without a lock
+  // acquisition observer, worker scheduling alone cannot prove mutex exclusion.
+  display_refresh = std::async(std::launch::async, [&] {
+    // Overlaps the gated workspace walk.
     catalog.refresh_values(unlocked_session, {});
   });
-  {
-    std::unique_lock lock(mutex);
-    expect(changed.wait_for(lock, std::chrono::seconds(2), [&] { return display_refresh_started; }),
-           "overlapping display refresh reaches the catalog operation boundary");
-  }
-  auto const display_refresh_serialized = display_refresh.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
-  auto snapshot_future = std::async(std::launch::async, [&] {
-    {
-      std::lock_guard lock(mutex);
-      snapshot_started = true;
-      changed.notify_all();
-    }
-    return catalog.snapshot();
-  });
-  {
-    std::unique_lock lock(mutex);
-    expect(changed.wait_for(lock, std::chrono::seconds(2), [&] { return snapshot_started; }), "overlapping snapshot reaches the catalog operation boundary");
-  }
-  auto const snapshot_serialized = snapshot_future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready;
+  snapshot_future = std::async(std::launch::async, [&] { return catalog.snapshot(); });
 
   {
     std::lock_guard lock(mutex);
@@ -273,28 +263,34 @@ void test_application_catalog_coordinator_serializes_refresh_and_snapshot()
   }
   {
     std::unique_lock lock(mutex);
-    expect(changed.wait_for(lock, std::chrono::seconds(2), [&] { return refresh_finished; }), "catalog refresh completes before its finite deadline");
+    if (!require(changed.wait_until(lock, now_plus_seconds(5), [&] { return refresh_finished; }),
+                 "catalog workspace refresh finishes after explicit gate release"))
+      return;
   }
   refresh.join();
-  auto const display_refresh_finished = display_refresh.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
-  if (display_refresh_finished)
-    display_refresh.get();
-  auto const snapshot_finished = snapshot_future.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
-  auto during = snapshot_finished ? snapshot_future.get() : ava::app::ApplicationCatalogCache{};
-  auto after = catalog.snapshot();
-  expect(display_refresh_serialized && snapshot_serialized && display_refresh_finished && snapshot_finished && during.workspace_path_candidates.size() == 1 &&
-             during.workspace_path_candidates.front().value == "new.cpp" && during.file_references.size() == 1 &&
-             during.file_references.front().value == "new.cpp" && after.workspace_path_candidates.size() == 1 &&
-             after.workspace_path_candidates.front().value == "new.cpp" && after.file_references.size() == 1 &&
-             after.file_references.front().value == "new.cpp" && after.operations.workspace_walks == 2 && after.operations.value_refreshes == 3,
-         "submit, display refresh, and snapshot operations serialize before one coherent locked catalog generation is published");
+  bool const display_refresh_finished = display_refresh.wait_until(now_plus_seconds(5)) == std::future_status::ready;
+  bool const snapshot_finished = snapshot_future.wait_until(now_plus_seconds(5)) == std::future_status::ready;
+  expect_all("overlapping catalog operations finish", {{"display refresh", display_refresh_finished}, {"snapshot", snapshot_finished}});
+  if (!display_refresh_finished || !snapshot_finished)
+    return;
+  display_refresh.get();
+  auto const during = snapshot_future.get();
+  auto const after = catalog.snapshot();
+  auto const has_new_workspace = [](auto const& snapshot) {
+    return snapshot.workspace_path_candidates.size() == 1 && snapshot.workspace_path_candidates.front().value == "new.cpp" &&
+           snapshot.file_references.size() == 1 && snapshot.file_references.front().value == "new.cpp";
+  };
+  expect_all("overlapping refresh and snapshot publish a coherent workspace generation",
+             {{"overlapping snapshot", has_new_workspace(during)},
+              {"final snapshot", has_new_workspace(after)},
+              {"one additional workspace generation", after.workspace_catalog_generation == initial_delivery.workspace_catalog_generation + 1},
+              {"two workspace walks", after.operations.workspace_walks == 2},
+              {"all three value refreshes retained", after.operations.value_refreshes == 3}});
 }
 
 void test_application_catalog_current_session_incremental_refresh()
 {
-  auto const root = temp_root() / "application-catalog-current-session";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto const root = create_empty_root("application-catalog-current-session");
   auto const workspace = root / "workspace";
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);

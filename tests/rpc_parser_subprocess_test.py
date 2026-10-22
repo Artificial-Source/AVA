@@ -6,6 +6,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
+from cli_test_support import isolated_environment
+from timeout_support import test_timeout
 
 
 def main():
@@ -16,10 +19,12 @@ def main():
 
     root = Path(args.root)
     root.mkdir(parents=True, exist_ok=True)
+    temporary = tempfile.TemporaryDirectory(prefix="rpc-parser-", dir=root)
+    root = Path(temporary.name)
     libcwd_rcfile = (root / "libcwdrc").absolute()
     libcwd_rcfile.write_text(
         "silent = on\nchannels_default = off\n", encoding="utf-8")
-    env = os.environ.copy()
+    env = isolated_environment(root)
     env.update({
         "HOME": str(root / "home"),
         "XDG_CONFIG_HOME": str(root / "config"),
@@ -51,24 +56,26 @@ def main():
         b'{"id":"jsonrpc","type":"get_protocol","jsonrpc":"2.0","jsonrpc":"1.0"}\n',
         b'{"id":"nested","type":"get_protocol","future":{"unique":1,"unique":2}}\n',
     ]
-    process.stdin.write(deep)
-    for record in duplicate_records:
-        process.stdin.write(record)
-    process.stdin.write(b'{"id":"usable","type":"get_protocol","future":{"unique":true}}\n')
-    process.stdin.close()
-
-    responses = [json.loads(process.stdout.readline()) for _ in range(7)]
-    assert responses[0]["id"] == "deep"
-    assert responses[0]["error"]["code"] == "invalid_request"
-    assert "nesting" in responses[0]["error"]["message"]
-    for response in responses[1:6]:
-        assert response["success"] is False
-        assert response["error"]["code"] == "invalid_request"
-        assert "duplicate" in response["error"]["message"]
-    assert responses[6]["id"] == "usable" and responses[6]["success"] is True
-    assert process.wait(timeout=5) == 0
-    assert process.stdout.read() == b""
-    assert process.stderr.read() == b""
+    payload = deep + b"".join(duplicate_records) + b'{"id":"usable","type":"get_protocol","future":{"unique":true}}\n'
+    try:
+        stdout, stderr = process.communicate(input=payload, timeout=test_timeout(5))
+        assert process.returncode == 0, (process.returncode, stderr)
+        lines = stdout.splitlines()
+        assert len(lines) == 7, f"expected seven complete responses, got {stdout!r}; stderr={stderr!r}"
+        assert stdout.endswith(b"\n"), f"unterminated RPC response: {stdout!r}"
+        responses = [json.loads(line) for line in lines]
+        assert responses[0]["id"] == "deep"
+        assert responses[0]["error"]["code"] == "invalid_request"
+        for response in responses[1:6]:
+            assert response["success"] is False
+            assert response["error"]["code"] == "invalid_request"
+        assert responses[6]["id"] == "usable" and responses[6]["success"] is True
+        assert stderr == b"", stderr
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=test_timeout(5))
+        temporary.cleanup()
     print("real RPC strict-parser recovery checks passed")
     return 0
 

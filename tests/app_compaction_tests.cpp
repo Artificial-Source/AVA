@@ -2,6 +2,8 @@
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/runtime_event_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/observability/run_observer.h"
@@ -35,6 +37,36 @@
 namespace {
 
 using namespace ava::tests;
+
+struct CompactionHistorySnapshot
+{
+  explicit CompactionHistorySnapshot(ava::session::SessionStore const& store) : bytes(app_read_binary_file(store.session_path()))
+  {
+    auto entries = store.load();
+    if (!require(entries.has_value(), "capture readable compaction history"))
+      throw std::runtime_error(entries.error().format());
+    entry_count = entries->size();
+    if (!require(std::ranges::any_of(*entries, [](auto const& entry) { return entry.type == ava::session::EntryType::UserMessage; }),
+                 "compaction failure fixture contains source history"))
+      throw std::runtime_error("compaction history fixture is empty");
+    if (!require(!bytes.empty(), "capture nonempty session bytes for compaction failure"))
+      throw std::runtime_error("compaction history fixture bytes are unavailable");
+  }
+
+  void expect_unchanged(ava::session::SessionStore const& store) const
+  {
+    auto entries = store.load();
+    if (!require(entries.has_value(), "reload compaction history after failure"))
+      return;
+    expect_eq(entries->size(), entry_count, "failed compaction preserves every history entry");
+    expect_eq(app_read_binary_file(store.session_path()), bytes, "failed compaction preserves exact history bytes");
+  }
+
+  std::string bytes;
+  std::size_t entry_count = 0;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
 
 class ThrowingRunObserver final : public ava::observability::RunObserver
 {
@@ -359,6 +391,17 @@ void test_app_compact_provider_failure_leaves_session_untouched()
 
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
+  if (!require(session_w
+                   ->append_owned({.id = "provider_failure_source",
+                                   .parent_id = "",
+                                   .type = ava::session::EntryType::UserMessage,
+                                   .timestamp = ava::session::now_timestamp(),
+                                   .data_json = R"({"text":"preserve provider failure source"})",
+                                   .version = ava::session::kCurrentSessionEntryVersion})
+                   .has_value(),
+               "seed provider failure history"))
+    return;
+  CompactionHistorySnapshot const before(session_w->store);
 
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   ava::tests::FakeTransport transport({ava::http::HttpResponse{.status_code = 500, .headers = {}, .body = "{\"error\":{\"message\":\"boom\"}}"}});
@@ -382,6 +425,7 @@ void test_app_compact_provider_failure_leaves_session_untouched()
          "provider-backed /compact reports fixed local failure status without a provider body diagnostic");
   expect(entries && std::ranges::none_of(*entries, [](ava::session::SessionEntry const& entry) { return entry.type == ava::session::EntryType::Compaction; }),
          "provider-backed /compact failure leaves session without compaction entry");
+  before.expect_unchanged(session_w->store);
 }
 
 void test_compaction_observation_preserves_cancellation_callback_contract()
@@ -476,6 +520,7 @@ void test_app_auto_compaction_provider_cancellation_leaves_session_untouched()
                                                                        .type = ava::session::EntryType::UserMessage,
                                                                        .timestamp = ava::session::now_timestamp(),
                                                                        .data_json = "{\"text\":\"" + std::string(420, 'c') + "\"}"}));
+  CompactionHistorySnapshot const before(session_w->store);
 
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   CancelAfterRequestTransport transport(ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "{\"output_text\":\"CANCELED SUMMARY\"}"});
@@ -490,9 +535,10 @@ void test_app_auto_compaction_provider_cancellation_leaves_session_untouched()
   CRITICAL_AREA_CONTINUE_W(session);
 
   auto entries = session_w->store.load();
-  expect(!result && result.error().message() == "agent loop canceled", "auto compaction reports cancellation raised during the provider summary request");
+  expect(!result && result.error().code() == ava::core::ErrorCode::Canceled, "auto compaction reports cancellation raised during the provider summary request");
   expect(transport.requests().size() == 1, "canceled auto compaction dispatches only the summary request");
   expect(entries && count_compaction_entries(*entries) == 0, "canceled auto compaction leaves no partial compaction entry");
+  before.expect_unchanged(session_w->store);
 }
 
 void test_app_compact_oversized_summary_leaves_session_untouched()
@@ -503,10 +549,7 @@ void test_app_compact_oversized_summary_leaves_session_untouched()
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
   std::filesystem::create_directories(paths.ava_config_dir);
-  {
-    std::ofstream file(paths.compaction_file, std::ios::binary | std::ios::trunc);
-    file << "{\"max_summary_bytes\":8}";
-  }
+  write_test_file(paths.compaction_file, R"({"max_summary_bytes":8})");
 
   ava::app::runtime::OpenContext open_context;
   open_context.workspace_dir = workspace;
@@ -519,6 +562,17 @@ void test_app_compact_oversized_summary_leaves_session_untouched()
 
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
+  if (!require(session_w
+                   ->append_owned({.id = "oversized_summary_source",
+                                   .parent_id = "",
+                                   .type = ava::session::EntryType::UserMessage,
+                                   .timestamp = ava::session::now_timestamp(),
+                                   .data_json = R"({"text":"preserve oversized summary source"})",
+                                   .version = ava::session::kCurrentSessionEntryVersion})
+                   .has_value(),
+               "seed oversized summary history"))
+    return;
+  CompactionHistorySnapshot const before(session_w->store);
 
   CRITICAL_AREA_END_W(session);
   auto compact = ava::app::run_command(
@@ -532,6 +586,7 @@ void test_app_compact_oversized_summary_leaves_session_untouched()
          "/compact reports oversized generated summary");
   expect(entries && std::ranges::none_of(*entries, [](ava::session::SessionEntry const& entry) { return entry.type == ava::session::EntryType::Compaction; }),
          "oversized generated summary leaves session without compaction entry");
+  before.expect_unchanged(session_w->store);
 }
 
 void test_app_compact_cancellation_before_append_leaves_session_untouched()
@@ -553,6 +608,17 @@ void test_app_compact_cancellation_before_append_leaves_session_untouched()
 
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
   CRITICAL_AREA_BEGIN_W(session);
+  if (!require(session_w
+                   ->append_owned({.id = "canceled_summary_source",
+                                   .parent_id = "",
+                                   .type = ava::session::EntryType::UserMessage,
+                                   .timestamp = ava::session::now_timestamp(),
+                                   .data_json = R"({"text":"preserve canceled summary source"})",
+                                   .version = ava::session::kCurrentSessionEntryVersion})
+                   .has_value(),
+               "seed canceled summary history"))
+    return;
+  CompactionHistorySnapshot const before(session_w->store);
 
   bool cancel = false;
   CRITICAL_AREA_END_W(session);
@@ -568,8 +634,10 @@ void test_app_compact_cancellation_before_append_leaves_session_untouched()
                                 .propagate_compaction_errors = true});
   CRITICAL_AREA_CONTINUE_W(session);
   auto entries = session_w->store.load();
-  expect(!compact && compact.error().message() == "agent loop canceled", "manual compaction observes cancellation before appending the generated summary");
+  expect(!compact && compact.error().code() == ava::core::ErrorCode::Canceled,
+         "manual compaction observes cancellation before appending the generated summary");
   expect(entries && count_compaction_entries(*entries) == 0, "manual compaction cancellation leaves no partial compaction entry");
+  before.expect_unchanged(session_w->store);
 }
 
 void test_app_compaction_prompt_builder_sections()
@@ -810,16 +878,13 @@ void test_app_manual_compaction_uses_only_active_context()
 
 void test_app_cross_provider_compaction_requires_process_scope()
 {
-  auto const root = temp_root() / "app-compact-cross-provider-no-scope";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto const root = create_empty_root("app-compact-cross-provider-no-scope");
   auto const workspace = root / "workspace";
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
 
-  auto const* prior_key = std::getenv("ANTHROPIC_API_KEY");
-  auto const saved_key = prior_key ? std::optional<std::string>(prior_key) : std::nullopt;
-  setenv("ANTHROPIC_API_KEY", "test-anthropic-key", 1);
+  ScopedEnvVar key("ANTHROPIC_API_KEY", "test-anthropic-key");
+  ScopedEnvVar endpoint("ANTHROPIC_BASE_URL", "https://compaction.anthropic.example.test");
 
   ava::app::runtime::OpenContext options;
   options.workspace_dir = workspace;
@@ -829,10 +894,6 @@ void test_app_cross_provider_compaction_requires_process_scope()
   expect(unlocked_session_result.has_value(), "cross-provider missing-scope test opens runtime session");
   if (!unlocked_session_result)
   {
-    if (saved_key)
-      setenv("ANTHROPIC_API_KEY", saved_key->c_str(), 1);
-    else
-      unsetenv("ANTHROPIC_API_KEY");
     return;
   }
 
@@ -850,41 +911,27 @@ void test_app_cross_provider_compaction_requires_process_scope()
   auto generated = entries && config
                        ? ava::app::generate_compaction_summary(unlocked_session, *entries, *config, "", 1, active_provider, transport, run_options)
                        : ava::core::Result<std::string>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "invalid test setup")));
-  if (saved_key)
-    setenv("ANTHROPIC_API_KEY", saved_key->c_str(), 1);
-  else
-    unsetenv("ANTHROPIC_API_KEY");
 
-  expect(!generated && generated.error().message() == "compaction process authority is unavailable" && transport.requests().empty(),
+  expect(!generated && generated.error().category() == ava::core::ErrorCategory::Configuration && transport.requests().empty(),
          "cross-provider compaction without captured session process authority fails before auth or provider transport dispatch");
 }
 
 void test_app_compact_honors_cross_provider_selection()
 {
-  auto const root = temp_root() / "app-compact-cross-provider";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto const root = create_empty_root("app-compact-cross-provider");
   auto const workspace = root / "workspace";
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
   std::filesystem::create_directories(paths.ava_config_dir);
-  {
-    std::ofstream file(paths.compaction_file, std::ios::binary | std::ios::trunc);
-    file << R"({"provider":"anthropic","model":"claude-sonnet-4-5","auto_threshold_tokens":0})";
-  }
-  auto const* prior_key = std::getenv("ANTHROPIC_API_KEY");
-  auto const saved_key = prior_key ? std::optional<std::string>(prior_key) : std::nullopt;
-  setenv("ANTHROPIC_API_KEY", "test-anthropic-key", 1);
+  write_test_file(paths.compaction_file, R"({"provider":"anthropic","model":"claude-sonnet-4-5","auto_threshold_tokens":0})");
+  ScopedEnvVar key("ANTHROPIC_API_KEY", "test-anthropic-key");
+  ScopedEnvVar endpoint("ANTHROPIC_BASE_URL", "https://compaction.anthropic.example.test");
 
   auto supervisor = std::make_shared<ava::process::Supervisor>();
   auto process_scope = ava::process::ProcessScopeV1::application(supervisor);
   expect(process_scope.has_value(), "cross-provider /compact test creates explicit process authority");
   if (!process_scope)
   {
-    if (saved_key)
-      setenv("ANTHROPIC_API_KEY", saved_key->c_str(), 1);
-    else
-      unsetenv("ANTHROPIC_API_KEY");
     return;
   }
 
@@ -897,10 +944,6 @@ void test_app_compact_honors_cross_provider_selection()
   expect(unlocked_session_result.has_value(), "cross-provider /compact test opens runtime session");
   if (!unlocked_session_result)
   {
-    if (saved_key)
-      setenv("ANTHROPIC_API_KEY", saved_key->c_str(), 1);
-    else
-      unsetenv("ANTHROPIC_API_KEY");
     return;
   }
 
@@ -927,20 +970,26 @@ void test_app_compact_honors_cross_provider_selection()
                         return ava::app::generate_compaction_summary(unlocked_session, entries, config, instructions, estimated_tokens, active_provider, transport,
                                                                       run_options);
                       }});
-  if (saved_key)
-    setenv("ANTHROPIC_API_KEY", saved_key->c_str(), 1);
-  else
-    unsetenv("ANTHROPIC_API_KEY");
 
   CRITICAL_AREA_CONTINUE_W(session);
   auto entries = session_w->store.load();
   auto const compaction = entries ? latest_compaction_entry(*entries) : std::nullopt;
   auto const process_snapshot = supervisor->snapshot();
-  expect(compact && transport.requests().size() == 1 && transport.requests().front().url.find("anthropic.com") != std::string::npos &&
+  expect(compact && transport.requests().size() == 1 && transport.requests().front().url == "https://compaction.anthropic.example.test/v1/messages" &&
              transport.requests().front().body.find("claude-sonnet-4-5") != std::string::npos && compaction && process_snapshot.records.empty() &&
              ava::core::json::string_field(compaction->data_json, "provider") == "anthropic" &&
              ava::core::json::string_field(compaction->data_json, "model") == "claude-sonnet-4-5",
          "/compact isolates credential transport and dispatches only the exact configured cross-provider summary model");
+  expect_eq(transport.requests().size(), std::size_t{1}, "cross-provider summary dispatches exactly one request");
+  if (transport.requests().size() == 1)
+  {
+    auto const& request = transport.requests().front();
+    expect_eq(request.url, std::string("https://compaction.anthropic.example.test/v1/messages"), "cross-provider summary uses the fixture endpoint");
+    auto const key_header = request.headers.find("x-api-key");
+    expect_all("summary uses Anthropic credentials rather than the active OpenAI credential",
+               {{"Anthropic API key", key_header != request.headers.end() && key_header->second == "test-anthropic-key"},
+                {"no OpenAI authorization", !request.headers.contains("Authorization")}});
+  }
 }
 
 void test_app_auto_compaction_appends_summary_and_rebuilds_context()
@@ -1079,10 +1128,7 @@ void test_app_auto_compaction_recent_context_truncates_utf8_safely()
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
   std::filesystem::create_directories(paths.ava_config_dir);
-  {
-    std::ofstream file(paths.compaction_file, std::ios::binary | std::ios::trunc);
-    file << "{\"auto_threshold_tokens\":1,\"keep_recent_tokens\":20,\"keep_recent_messages\":8}";
-  }
+  write_test_file(paths.compaction_file, R"({"auto_threshold_tokens":1,"keep_recent_tokens":40,"keep_recent_messages":8})");
 
   ava::app::runtime::OpenContext open_context;
   open_context.workspace_dir = workspace;
@@ -1100,8 +1146,10 @@ void test_app_auto_compaction_recent_context_truncates_utf8_safely()
     model_selection.model.context_window_tokens = 1000;
   });
 
-  std::string emoji_tail;
-  for (int index = 0; index < 80; ++index) emoji_tail += "\xF0\x9F\x98\x80";
+  // The 160-byte limit leaves 63 bytes of message content after both markers
+  // and the role label: it cuts one byte into the second four-byte code point.
+  std::string const emoji = "\xF0\x9F\x98\x80";
+  std::string const emoji_tail = std::string(58, 'a') + emoji + emoji + std::string(160, 'b');
   static_cast<void>(session_w->append_owned(ava::session::SessionEntry{.id = "entry_utf8_budget",
                                                                        .parent_id = "",
                                                                        .type = ava::session::EntryType::UserMessage,
@@ -1125,10 +1173,13 @@ void test_app_auto_compaction_recent_context_truncates_utf8_safely()
   auto const recent_context = compaction ? ava::core::json::string_field(compaction->data_json, "recent_context") : std::optional<std::string>{};
   expect(result && result->final_text == "utf8 answer", "recent context UTF-8 prompt succeeds");
   auto const marker_end = recent_context ? recent_context->find('\n') : std::string::npos;
-  bool const suffix_starts_on_codepoint = recent_context && marker_end != std::string::npos && marker_end + 1 < recent_context->size() &&
-                                          (static_cast<unsigned char>((*recent_context)[marker_end + 1]) & 0xC0U) != 0x80U;
-  expect(recent_context && recent_context->find("recent context tail truncated") != std::string::npos && suffix_starts_on_codepoint,
-         "recent context truncation starts UTF-8 suffix on a code point boundary");
+  std::string const tail_marker = "[AVA: recent context tail truncated; completed prefix omitted]\n";
+  if (!require(recent_context.has_value(), "UTF-8 compaction persists retained context"))
+    return;
+  expect_eq(marker_end, tail_marker.size() - 1, "retained context begins with its complete omission marker");
+  expect(ava::core::json::is_valid_utf8(*recent_context), "all retained compaction context is valid UTF-8");
+  expect_eq(*recent_context, tail_marker + "user:\n" + std::string(58, 'a') + emoji + "\n[AVA: plain text truncated]",
+            "truncation preserves the complete first emoji and omits the split second emoji");
 }
 
 void test_app_auto_compaction_explicit_zero_disables()
@@ -1139,10 +1190,7 @@ void test_app_auto_compaction_explicit_zero_disables()
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
   std::filesystem::create_directories(paths.ava_config_dir);
-  {
-    std::ofstream file(paths.compaction_file, std::ios::binary | std::ios::trunc);
-    file << "{\"auto_threshold_tokens\":0}";
-  }
+  write_test_file(paths.compaction_file, R"({"auto_threshold_tokens":0})");
 
   ava::app::runtime::OpenContext open_context;
   open_context.workspace_dir = workspace;
@@ -1208,6 +1256,7 @@ void test_app_auto_compaction_uses_default_threshold_without_context_window_meta
 
   auto const config = ava::session::default_compaction_config();
   auto const threshold = ava::session::effective_auto_threshold_tokens(config, std::nullopt);
+  expect_eq(threshold, std::size_t{80'000}, "default auto threshold is independently pinned to 80 percent of 100000 tokens");
   static_cast<void>(session_w->append_owned(ava::session::SessionEntry{.id = "entry_default_threshold_big",
                                                                        .parent_id = "",
                                                                        .type = ava::session::EntryType::UserMessage,
@@ -1232,6 +1281,80 @@ void test_app_auto_compaction_uses_default_threshold_without_context_window_meta
   expect(entries && count_compaction_entries(*entries) == 1, "default threshold auto compaction appends a compaction entry without model context metadata");
   expect(transport.requests().size() == 2 && transport.requests()[1].body.find("\"content\":\"default threshold prompt\"") != std::string::npos,
          "default threshold auto compaction keeps the active prompt as a normal user message");
+}
+
+void test_app_auto_compaction_exact_threshold_boundaries()
+{
+  // Pin both the documented default and a small explicit override independently
+  // of effective_auto_threshold_tokens. Include the active prompt's three tokens
+  // so the final automatic checkpoint is exactly at, or one below, the limit.
+  for (bool const explicit_threshold : {false, true})
+    for (bool const at_threshold : {false, true})
+    {
+      auto const root =
+          create_empty_root(std::string("app-auto-boundary-") + (explicit_threshold ? "explicit-" : "default-") + (at_threshold ? "at" : "below"));
+      auto const workspace = root / "workspace";
+      std::size_t const threshold = explicit_threshold ? 32 : 80'000;
+      if (explicit_threshold)
+        write_test_file(app_test_paths(root).compaction_file, R"({"auto_threshold_tokens":32})");
+      auto opened = open_runtime_session_for_test(root, workspace);
+      if (!require(opened.has_value(), "threshold boundary fixture opens"))
+        return;
+      auto& unlocked_session = *opened;
+      CRITICAL_AREA_BEGIN_W(session);
+      session_w->model_selection().change([](auto& selection) { selection.model.context_window_tokens = std::nullopt; });
+      std::size_t const expected_tokens = threshold - (at_threshold ? 0 : 1);
+      std::size_t const seed_tokens = expected_tokens - 3;
+      std::string const seed_json = "{\"text\":\"" + std::string(seed_tokens * 4 - 11, 'x') + "\"}";
+      expect_eq(ava::session::estimate_tokens(seed_json), seed_tokens, "history fixture has the independently specified token size");
+      expect_eq(ava::session::estimate_tokens(R"({"text":"x"})"), std::size_t{3}, "active prompt contributes three tokens");
+      if (!require(session_w
+                       ->append_owned({.id = "boundary_source",
+                                       .parent_id = "",
+                                       .type = ava::session::EntryType::UserMessage,
+                                       .timestamp = ava::session::now_timestamp(),
+                                       .data_json = seed_json,
+                                       .version = ava::session::kCurrentSessionEntryVersion})
+                       .has_value(),
+                   "seed threshold boundary history"))
+        return;
+      ava::provider::OpenAIProvider const provider("https://api.example.test");
+      std::vector<ava::http::HttpResponse> responses;
+      if (at_threshold)
+        responses.push_back({.status_code = 200, .headers = {}, .body = R"({"output_text":"BOUNDARY SUMMARY"})"});
+      responses.push_back(sse_response(final_text_sse("boundary answer")));
+      FakeTransport transport(std::move(responses));
+      ava::app::runtime::RunOptions options;
+      options.access_token = "token";
+      std::size_t starts = 0;
+      std::size_t observed_threshold = 0;
+      std::size_t observed_estimated = 0;
+      options.event_sink = [&](ava::event::RuntimeEvent const& event) -> ava::core::VoidResult {
+        if (auto const* start = runtime_event_as<ava::event::CompactionStartEvent>(event))
+        {
+          ++starts;
+          observed_threshold = start->payload.threshold_tokens;
+          observed_estimated = start->payload.estimated_tokens;
+        }
+        return {};
+      };
+      CRITICAL_AREA_END_W(session);
+      auto result = ava::app::run_prompt(unlocked_session, "x", provider, transport, options);
+      CRITICAL_AREA_CONTINUE_W(session);
+      auto entries = session_w->store.load();
+      if (!require(result.has_value(), result ? "threshold boundary prompt completes" : "threshold boundary prompt: " + result.error().format()) ||
+          !require(entries.has_value(), "threshold boundary history reloads"))
+        return;
+      expect_eq(result->final_text, std::string("boundary answer"), "threshold boundary returns the provider answer");
+      expect_eq(transport.requests().size(), at_threshold ? std::size_t{2} : std::size_t{1}, "only reaching the threshold dispatches a summary request");
+      expect_eq(count_compaction_entries(*entries), at_threshold ? std::size_t{1} : std::size_t{0}, "only reaching the threshold commits compaction");
+      expect_eq(starts, at_threshold ? std::size_t{1} : std::size_t{0}, "compaction events match the boundary decision");
+      if (at_threshold && starts == 1)
+      {
+        expect_eq(observed_threshold, threshold, "compaction reports the independent configured threshold");
+        expect_eq(observed_estimated, threshold, "compaction starts at equality, not above the threshold");
+      }
+    }
 }
 
 void test_app_auto_compaction_retries_stale_snapshot_before_append()
@@ -1332,6 +1455,7 @@ void test_app_auto_compaction_repeated_stale_snapshot_fails_without_append()
                                                                        .type = ava::session::EntryType::UserMessage,
                                                                        .timestamp = ava::session::now_timestamp(),
                                                                        .data_json = "{\"text\":\"" + std::string(420, 's') + "\"}"}));
+  CompactionHistorySnapshot const before(session_w->store);
 
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   MutatingSummaryTransport transport(session_w->owner_append_route_1(),
@@ -1352,6 +1476,20 @@ void test_app_auto_compaction_repeated_stale_snapshot_fails_without_append()
          "auto compaction returns a clear stale snapshot error after bounded retries are exhausted");
   expect(transport.requests().size() == 2, "repeated stale auto compaction stops after two summary attempts");
   expect(entries && count_compaction_entries(*entries) == 0, "repeated stale auto compaction appends no summary from stale snapshots");
+  if (require(entries.has_value(), "repeated staleness reloads the fixture history"))
+  {
+    expect_eq(entries->size(), before.entry_count + 2, "repeated staleness adds only the two intentional concurrent changes");
+    auto const bytes = app_read_binary_file(session_w->store.session_path());
+    expect(bytes.starts_with(before.bytes), "repeated staleness preserves every pre-existing history byte");
+    if (entries->size() == before.entry_count + 2)
+      for (std::size_t index = 0; index < 2; ++index)
+      {
+        auto const& entry = (*entries)[before.entry_count + index];
+        expect_eq(entry.id, "entry_concurrent_change_" + std::to_string(index + 1), "stale snapshot suffix contains the expected concurrent writer");
+        expect_eq(entry.type, ava::session::EntryType::UserMessage, "stale snapshot suffix contains only concurrent user entries");
+        expect_eq(entry.data_json, std::string(R"({"text":"concurrent change"})"), "stale snapshot suffix has no compaction-side writes");
+      }
+  }
 }
 
 void test_app_context_overflow_compacts_and_retries_once_successfully()
@@ -1454,6 +1592,19 @@ void test_app_context_overflow_compaction_failure_leaves_no_partial_entry()
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
 
   CRITICAL_AREA_BEGIN_W(session);
+  if (!require(session_w
+                   ->append_owned({.id = "overflow_failure_source",
+                                   .parent_id = "",
+                                   .type = ava::session::EntryType::UserMessage,
+                                   .timestamp = ava::session::now_timestamp(),
+                                   .data_json = R"({"text":"preserve overflow failure source"})",
+                                   .version = ava::session::kCurrentSessionEntryVersion})
+                   .has_value(),
+               "seed overflow failure history"))
+    return;
+  CompactionHistorySnapshot const before(session_w->store);
+  auto const history_path = session_w->store.session_path();
+  std::optional<std::string> before_summary;
 
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   ava::tests::FakeTransport transport(
@@ -1461,6 +1612,11 @@ void test_app_context_overflow_compaction_failure_leaves_no_partial_entry()
        ava::http::HttpResponse{.status_code = 429, .headers = {}, .body = "{\"error\":{\"message\":\"summary quota exhausted\"}}"}});
   ava::app::runtime::RunOptions run_options;
   run_options.access_token = "token";
+  run_options.event_sink = [&](ava::event::RuntimeEvent const& event) -> ava::core::VoidResult {
+    if (runtime_event_as<ava::event::CompactionStartEvent>(event))
+      before_summary = app_read_binary_file(history_path);
+    return {};
+  };
 
   CRITICAL_AREA_END_W(session);
 
@@ -1469,12 +1625,19 @@ void test_app_context_overflow_compaction_failure_leaves_no_partial_entry()
   CRITICAL_AREA_CONTINUE_W(session);
 
   auto entries = session_w->store.load();
-  expect(!result && result.error().message() == "context overflow compaction failed", "context overflow returns clear compaction failure");
+  expect(!result && result.error().category() == ava::core::ErrorCategory::Provider, "context overflow returns a provider compaction failure");
   expect(!result && result.error().format().find("compaction_provider_status: 429") != std::string::npos &&
              result.error().format().find("summary quota exhausted") == std::string::npos,
          "context overflow compaction failure preserves only allowlisted provider status metadata");
   expect(transport.requests().size() == 2, "failed context overflow compaction does not retry provider call");
   expect(entries && count_compaction_entries(*entries) == 0, "failed context overflow compaction leaves no partial compaction entry");
+  if (require(before_summary.has_value(), "overflow failure reaches the summary transaction") &&
+      require(entries.has_value(), "overflow failure reloads history"))
+  {
+    expect_eq(app_read_binary_file(history_path), *before_summary, "failed overflow summary preserves exact pre-summary history bytes");
+    expect_eq(entries->size(), before.entry_count + 1, "overflow failure appends only the active user prompt");
+    expect(before_summary->starts_with(before.bytes), "overflow recovery preserves all pre-existing history bytes");
+  }
 }
 
 void test_app_non_overflow_provider_error_does_not_compact_or_retry()
@@ -1646,6 +1809,7 @@ void test_app_context_overflow_retry_is_bounded()
 
 void run_app_compaction_tests()
 {
+  HermeticTestEnvironment environment("app-compaction-env-");
   test_shared_compaction_transaction();
   test_app_compact_provider_summary_success();
   test_app_compact_rejects_replaced_current_session_history();
@@ -1669,6 +1833,7 @@ void run_app_compaction_tests()
   test_app_auto_compaction_explicit_zero_disables();
   test_app_auto_compaction_uses_default_threshold_without_context_window_metadata();
   test_app_auto_compaction_retries_stale_snapshot_before_append();
+  test_app_auto_compaction_exact_threshold_boundaries();
   test_app_auto_compaction_repeated_stale_snapshot_fails_without_append();
   test_app_context_overflow_compacts_and_retries_once_successfully();
   test_app_context_overflow_compaction_failure_leaves_no_partial_entry();

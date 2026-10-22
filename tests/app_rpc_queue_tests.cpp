@@ -1,6 +1,9 @@
 #include "sys.h"
+#include "tests/support/app_rpc_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/app/rpc/input.h"
@@ -42,10 +45,15 @@ void test_app_rpc_follow_up_transition_state_machine_is_atomic()
   }
   auto canceled = ava::app::rpc::transition_after_prompt_terminal_response(canceled_state);
   ava::app::rpc::complete_terminal_publication(canceled_state, "parent");
-  expect(queued && cancellation.deferred_to_terminal_publication && cancellation.deferred_follow_up_count == 1 && retained_during_publication &&
-             canceled.kind == RpcFollowUpTransitionKind::Skipped && !canceled.follow_up && canceled.cleared.follow_up_messages.size() == 1 &&
-             canceled.cleared.follow_up_messages.front().request_id == "child" && !ava::app::rpc::active_run(canceled_state),
-         "RPC cancellation during parent publication retains the child and parent identity until the post-flush transition skips it");
+  expect_all("RPC cancellation retains publication identity until the post-flush transition skips the child",
+             {{"queued", queued.has_value()},
+              {"deferred", cancellation.deferred_to_terminal_publication},
+              {"deferred child count", cancellation.deferred_follow_up_count == 1},
+              {"identity retained", retained_during_publication},
+              {"skipped", canceled.kind == RpcFollowUpTransitionKind::Skipped},
+              {"not activated", !canceled.follow_up},
+              {"cleared child", canceled.cleared.follow_up_messages.size() == 1 && canceled.cleared.follow_up_messages.front().request_id == "child"},
+              {"parent inactive", !ava::app::rpc::active_run(canceled_state)}});
 
   ava::app::rpc::RpcRunState admitted_state;
   ava::app::rpc::set_active_run(admitted_state, RpcRunKind::Prompt, "parent");
@@ -58,9 +66,12 @@ void test_app_rpc_follow_up_transition_state_machine_is_atomic()
   }
   auto activated = ava::app::rpc::transition_after_prompt_terminal_response(admitted_state);
   ava::app::rpc::complete_terminal_publication(admitted_state, "parent");
-  expect(admitted && child_shared_until_flush && activated.kind == RpcFollowUpTransitionKind::Activated && activated.follow_up &&
-             activated.follow_up->request_id == "child" && ava::app::rpc::active_prompt_run(admitted_state),
-         "RPC follow-up remains shared until a successful parent flush then is atomically popped and activated");
+  expect_all("RPC follow-up remains shared until a successful flush then atomically activates",
+             {{"queued", admitted.has_value()},
+              {"shared until flush", child_shared_until_flush},
+              {"activated", activated.kind == RpcFollowUpTransitionKind::Activated},
+              {"child identity", activated.follow_up && activated.follow_up->request_id == "child"},
+              {"active prompt", ava::app::rpc::active_prompt_run(admitted_state)}});
 
   ava::app::rpc::RpcRunState deactivated_state;
   ava::app::rpc::set_active_run(deactivated_state, RpcRunKind::Prompt, "parent");
@@ -68,9 +79,11 @@ void test_app_rpc_follow_up_transition_state_machine_is_atomic()
   auto deactivated = ava::app::rpc::transition_after_prompt_terminal_response(deactivated_state);
   ava::app::rpc::complete_terminal_publication(deactivated_state, "parent");
   auto late = ava::app::rpc::queue_rpc_message(deactivated_state.follow_up_messages, deactivated_state, "follow_up", "late", "too late");
-  expect(deactivated.kind == RpcFollowUpTransitionKind::Deactivated && !ava::app::rpc::active_run(deactivated_state) && !late &&
-             late.error().message() == "RPC command requires an active prompt",
-         "RPC empty-run deactivation and a late follow-up admission have one deterministic lock order with no orphaned queue item");
+  expect_all("RPC deactivation rejects late follow-up admission without an orphaned queue item",
+             {{"deactivated", deactivated.kind == RpcFollowUpTransitionKind::Deactivated},
+              {"inactive", !ava::app::rpc::active_run(deactivated_state)},
+              {"late rejected", !late},
+              {"invalid argument", !late && late.error().category() == ava::core::ErrorCategory::InvalidArgument}});
 
   ava::app::rpc::RpcRunState final_record_state;
   ava::app::rpc::set_active_run(final_record_state, RpcRunKind::Prompt, "parent");
@@ -151,6 +164,7 @@ void test_app_rpc_cancel_affects_subsequent_prompt()
   bool const state_reported_cancel = output_buffer.wait_contains("\"cancel_requested\":true", std::chrono::seconds(2));
   input_buffer.push("{\"id\":\"prompt\",\"type\":\"prompt\",\"message\":\"should run\"}\n");
   bool const completed = output_buffer.wait_contains("prompt after cancel", std::chrono::seconds(2));
+  expect(wait_for_rpc_response(output_buffer, "prompt", std::chrono::seconds(2)), "RPC prompt after cancel reaches its terminal response before EOF");
   input_buffer.close();
   rpc_thread.join();
   auto const jsonl = output_buffer.str();
@@ -171,13 +185,11 @@ void test_app_rpc_active_prompt_cancel_unblocks_pending_permission()
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
   {
-    std::ofstream file(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-    file << "rpc cancel note";
+    write_test_file(workspace / "note.txt", "rpc cancel note");
   }
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside cancel note";
+    write_test_file(outside_path, "outside cancel note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -229,8 +241,7 @@ void test_app_rpc_steer_applies_before_next_provider_request()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside steer note";
+    write_test_file(outside_path, "outside steer note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -286,8 +297,7 @@ void test_app_rpc_follow_up_runs_after_active_prompt()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside follow note";
+    write_test_file(outside_path, "outside follow note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -403,8 +413,7 @@ void test_app_rpc_steer_after_follow_up_started_targets_follow_up()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside follow steer note";
+    write_test_file(outside_path, "outside follow steer note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -469,8 +478,7 @@ void test_app_rpc_queue_limit_rejects_new_items()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside queue limit note";
+    write_test_file(outside_path, "outside queue limit note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -499,7 +507,7 @@ void test_app_rpc_queue_limit_rejects_new_items()
   input_buffer.push("{\"id\":\"p1\",\"type\":\"prompt\",\"message\":\"read before limit\"}\n");
   bool const requested = output_buffer.wait_contains("\"name\":\"permission_requested\"", std::chrono::seconds(2));
   expect(requested, "RPC queue limit test observes active permission wait");
-  for (int index = 0; index < 65; ++index)
+  for (std::size_t index = 0; index <= ava::app::rpc::kMaxRpcQueuedMessages; ++index)
   {
     input_buffer.push("{\"id\":\"s" + std::to_string(index) + "\",\"type\":\"steer\",\"message\":\"queued steer\"}\n");
   }
@@ -511,9 +519,14 @@ void test_app_rpc_queue_limit_rejects_new_items()
 
   auto const jsonl = output_buffer.str();
   expect(result.has_value(), "RPC queue limit loop exits successfully");
-  expect(count_substrings(jsonl, "\"name\":\"steer_queued\"") == 64 && jsonl.find("\"id\":\"s64\"") != std::string::npos &&
-             jsonl.find("RPC queued message limit exceeded") != std::string::npos && jsonl.find("\"cleared_steer\":64") != std::string::npos,
-         "RPC queue limit accepts bounded entries, rejects the next steer, and cancel clears the bounded queue");
+  auto const rejected_response = rpc_response_line(jsonl, "s" + std::to_string(ava::app::rpc::kMaxRpcQueuedMessages)).value_or("");
+  auto const canceled_response = rpc_response_line(jsonl, "cancel").value_or("");
+  expect_all(
+      "RPC queue limit rejects the next entry and cancellation clears the bounded queue",
+      {{"accepted entries", count_substrings(jsonl, "\"name\":\"steer_queued\"") == ava::app::rpc::kMaxRpcQueuedMessages},
+       {"rejected overflow", rejected_response.find("\"success\":false") != std::string_view::npos},
+       {"stable overflow code", rejected_response.find("\"code\":\"invalid_request\"") != std::string_view::npos},
+       {"cleared entries", canceled_response.find("\"cleared_steer\":" + std::to_string(ava::app::rpc::kMaxRpcQueuedMessages)) != std::string_view::npos}});
 }
 
 void test_app_rpc_eof_clears_queued_follow_up_without_running()
@@ -525,8 +538,7 @@ void test_app_rpc_eof_clears_queued_follow_up_without_running()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside eof note";
+    write_test_file(outside_path, "outside eof note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -579,8 +591,7 @@ void test_app_rpc_cancel_clears_queued_steer_and_follow_up()
   std::filesystem::create_directories(workspace);
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside cancel queue note";
+    write_test_file(outside_path, "outside cancel queue note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -748,13 +759,11 @@ void test_app_rpc_active_prompt_rejects_second_prompt_and_session_switch()
   auto const paths = app_test_paths(root);
   std::filesystem::create_directories(workspace);
   {
-    std::ofstream file(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-    file << "rpc active reject note";
+    write_test_file(workspace / "note.txt", "rpc active reject note");
   }
   auto const outside_path = root / "outside.txt";
   {
-    std::ofstream file(outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside reject note";
+    write_test_file(outside_path, "outside reject note");
   }
 
   ava::app::runtime::OpenContext open_context;
@@ -777,6 +786,7 @@ void test_app_rpc_active_prompt_rejects_second_prompt_and_session_switch()
   std::ostream out(&output_buffer);
   ava::core::VoidResult result;
   ava::app::runtime::session_ts unlocked_session(std::move(*session));
+  auto const initial_session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
   ava::core::JoinThread rpc_thread = ava::core::JoinThread::create("rpc_thread", [&] {
     result = ava::app::run_rpc_loop(unlocked_session, open_context, provider, transport, runtime_options, in, out, [&] noexcept { input_buffer.close(); });
   });
@@ -788,22 +798,30 @@ void test_app_rpc_active_prompt_rejects_second_prompt_and_session_switch()
   input_buffer.push("{\"id\":\"new\",\"type\":\"new_session\"}\n");
   input_buffer.push("{\"id\":\"switch\",\"type\":\"switch_session\",\"session_id\":\"" + ava::app::runtime::session_ts::rat(*unlocked_other_result)->store.session_id() + "\"}\n");
   input_buffer.push("{\"id\":\"messages\",\"type\":\"get_messages\"}\n");
+  for (std::string_view id : {"p2", "new", "switch", "messages"})
+    expect(wait_for_rpc_response(output_buffer, id, std::chrono::seconds(2)), "RPC active-run rejection completes for " + std::string(id));
   input_buffer.push("{\"id\":\"cancel\",\"type\":\"cancel\"}\n");
   input_buffer.close();
   rpc_thread.join();
 
   auto const jsonl = output_buffer.str();
   expect(result.has_value(), "RPC active reject loop exits successfully");
-  expect(jsonl.find("\"id\":\"p2\"") != std::string::npos && jsonl.find("\"id\":\"new\"") != std::string::npos &&
-             jsonl.find("\"id\":\"switch\"") != std::string::npos && jsonl.find("\"id\":\"messages\"") != std::string::npos &&
-             jsonl.find("RPC command is unavailable while a prompt is active") != std::string::npos,
-         "RPC rejects active-run mutations and session materialization queries");
+  for (std::string_view id : {"p2", "new", "switch", "messages"})
+  {
+    auto const response = rpc_response_line(jsonl, id).value_or("");
+    expect_all("RPC rejects active-run command " + std::string(id), {{"failed response", response.find("\"success\":false") != std::string_view::npos},
+                                                                     {"active_run code", response.find("\"code\":\"active_run\"") != std::string_view::npos}});
+  }
+  expect_eq(count_substrings(jsonl, "\"code\":\"active_run\""), std::size_t{4}, "RPC rejects all four active-run commands");
+  expect_eq(ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(), initial_session_id,
+            "RPC rejected session mutations preserve the active session");
 }
 
 }  // namespace
 
 void run_app_rpc_queue_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("ava-rpc-queue-");
   test_app_rpc_follow_up_transition_state_machine_is_atomic();
   test_app_rpc_cancel_affects_subsequent_prompt();
   test_app_rpc_active_prompt_cancel_unblocks_pending_permission();

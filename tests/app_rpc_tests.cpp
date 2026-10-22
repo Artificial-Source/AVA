@@ -1,8 +1,12 @@
 #include "sys.h"
 #include "tests/app_rpc_test_cases.h"
+#include "tests/support/test_env.h"
 
 void run_app_rpc_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("ava-app-rpc-");
+  ava::tests::app_rpc_test::test_app_rpc_protocol_bounds();
+  ava::tests::app_rpc_test::test_app_rpc_message_entry_count_boundary();
   ava::tests::app_rpc_test::test_app_rpc_prompt_payload_serialization();
   ava::tests::app_rpc_test::test_app_rpc_prompt_result_tool_timeline_golden_payloads();
   ava::tests::app_rpc_test::test_app_rpc_parsing_and_response_serialization();
