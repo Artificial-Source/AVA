@@ -535,7 +535,7 @@ ava::core::Result<CommandResult> run_import_command(runtime::session_ts& unlocke
   }
   if (auto replaced = runtime::Session::replace_with(unlocked_session, *unlocked_opened_result); !replaced)
     return std::unexpected(std::move(replaced.error()));
-  auto const imported_session_id = runtime::session_ts::rat(unlocked_session)->store.session_id();
+  auto const imported_session_id = runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
   result.session_tree_changed = true;
   add_output(result, "imported session " + imported_session_id + " from " + import_path.string() + "\n  entries: " + std::to_string(entries->size()) +
                          "\n  switched to " + imported_session_id);

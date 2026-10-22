@@ -447,7 +447,7 @@ void run_tui_modal_tests_part_3()
              !ava::tui::question_option_for_screen_position(single_click_snapshot, single_beta_row + 1, 81),
          "question dock hit testing rejects transcript and outside columns");
   auto retained_drawer_dock = single_click_snapshot;
-  retained_drawer_dock.sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test"};
+  retained_drawer_dock.sidebar = ava::tui::SidebarSnapshot{};
   retained_drawer_dock.sidebar_drawer_visible = true;
   auto const retained_drawer_dock_frame = ava::tui::render_composer(frontend.frontend(), retained_drawer_dock);
   auto const retained_drawer_beta_row = static_cast<std::size_t>(
@@ -674,7 +674,7 @@ void run_tui_modal_tests_part_3()
              std::ranges::none_of(modal_click_frame, [](std::string const& line) { return line.find("\x1b[7m") != std::string::npos; }),
          "question modal hit testing maps only its shared option rows and uses no reverse-video selection bar");
   auto retained_drawer_modal = modal_click_snapshot;
-  retained_drawer_modal.sidebar = ava::tui::SidebarSnapshot{.session_id = "session_test"};
+  retained_drawer_modal.sidebar = ava::tui::SidebarSnapshot{};
   retained_drawer_modal.sidebar_drawer_visible = true;
   auto const retained_drawer_modal_frame = ava::tui::render_composer(frontend.frontend(), retained_drawer_modal);
   auto const retained_drawer_modal_beta_row = static_cast<std::size_t>(
@@ -688,7 +688,6 @@ void run_tui_modal_tests_part_3()
   rail_modal_click.width = 176;
   rail_modal_click.sidebar = ava::tui::SidebarSnapshot{
       .activity = {ava::tui::SidebarActivityItem{.id = "active", .label = "rail-must-not-render", .status = ava::tui::ToolTimelineStatus::Running}},
-      .session_id = "session_test",
       .mode = "build",
       //.provider = "openai",
       //.model = "gpt-5.5"
@@ -856,12 +855,9 @@ void run_tui_modal_tests_part_3()
       .height = 22,
       .sidebar = ava::tui::SidebarSnapshot{
           .activity = {ava::tui::SidebarActivityItem{.id = "connect", .label = "rail-connect", .status = ava::tui::ToolTimelineStatus::Running}},
-          .session_id = "session_test",
           .mode = "build",
           //.provider = "openai",
           //.model = "gpt-5.5",
-          .workspace = "/workspace",
-          .git_branch = "develop",
           .version = "0.32",
           .context_source_count = 1}};
   auto const sidebar_modal_frame = ava::tui::render_composer(frontend.frontend(), sidebar_modal_snapshot);

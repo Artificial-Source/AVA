@@ -1,7 +1,7 @@
 #include "sys.h"
 #include "tests/session_test_declarations.h"
 #include "tests/support/test_harness.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 
 #include <climits>
 #include <cmath>

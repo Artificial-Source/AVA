@@ -1,4 +1,7 @@
 #include "sys.h"
+#ifdef CWDEBUG
+#include "ava/debug/debug_ostream_operators.h"  // Must be included immediately after "sys.h".
+#endif
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -43,6 +46,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include "debug.h"
 
 namespace ava::tui {
 using runtime_input::printable_jump_target;
@@ -225,13 +229,13 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
-  terminal_context.apply_cursor_settings(options.cursor);
+  terminal_context.apply_cursor_settings(options.initial_display_settings.cursor);
   // Probe the direct terminal background once after enter and before first paint.
   // No re-probe on suspend/resume and no late theme flip after presentation starts.
   TerminalBackgroundDetectionGuard terminal_background_detection;
   maybe_probe_terminal_background_appearance(terminal_context);
 
-  RuntimePresentationState presentation_state(options);
+  RuntimePresentationState presentation_state(this, options);
   auto& snapshot = presentation_state.snapshot;
   auto& sidebar = presentation_state.sidebar;
   auto& command_session_grants = presentation_state.command_session_grants;
@@ -246,11 +250,6 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
         coordinator->shutdown(*snapshot);
     }
   } plugin_ui_shutdown{&plugin_ui, &snapshot};
-
-  auto refresh_token_status = [&]() { presentation_state.refresh_token_status(options); };
-  auto refresh_active_context_status = [&]() { presentation_state.refresh_active_context_status(options); };
-  refresh_token_status();
-  refresh_active_context_status();
 
   bool terminal_write_failed = false;
   bool terminal_signal_received = false;
@@ -285,8 +284,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
   } branch_summary_ui;
   bool branch_summary_exit_ready = false;
   auto apply_runtime_state_snapshot = [&](TuiRuntimeStateSnapshot state) {
-    // Shared path with active-run: apply DTO then rebuild any open overview in place.
-    apply_runtime_state_snapshot_with_overview_sync(options, presentation_state, active_select_list, std::move(state));
+    // Shared path with active-run; popup-only facts remain local and untouched.
+    apply_runtime_state_snapshot_preserving_popups(options, presentation_state, std::move(state));
   };
   SettingsNavigationState settings_nav;
   bool settings_session_open = false;
@@ -985,10 +984,17 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
       };
       auto apply_opened_session_snapshot = [&](TuiRuntimeStateSnapshot state, bool) {
         auto status = state.status;
+        auto const committed_session_id = options.read_committed_session_id ? options.read_committed_session_id() : std::string{};
         static_cast<void>(apply_runtime_state_snapshot_with_presentation_transition(options, presentation_state, draft_state, renderer, transcript_search,
-                                                                                    subagent_workspace, active_select_list, std::move(state)));
+                                                                                    subagent_workspace, active_select_list, std::move(committed_session_id),
+                                                                                    std::move(state)));
         if (!status.empty())
           settle_local_command_status(snapshot, std::move(status));
+      };
+      auto synchronize_committed_session = [&]() {
+        auto const committed_session_id = options.read_committed_session_id ? options.read_committed_session_id() : std::string{};
+        return apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
+                                                  std::move(committed_session_id));
       };
       if (input_result.action == SelectListInputAction::Redraw && snapshot.select_list)
       {
@@ -1094,10 +1100,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
             }
             else
             {
-              options.key_bindings = std::move(reloaded->key_bindings);
-              snapshot.active_run_hint = active_run_hint_for(options.key_bindings);
-              // Success feedback stays on the transient status surface from the applied DTO.
-              apply_runtime_state_snapshot(std::move(reloaded->state));
+              presentation_state.apply_local_key_bindings(options, std::move(*reloaded));
+              snapshot.status = "keybindings reloaded";
             }
           }
         }
@@ -1136,6 +1140,26 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
         {
           snapshot.status = "settings action unavailable from this row";
           do_beep(terminal_context);
+        }
+        else if (settings_nav.in_display() && options.on_local_display_settings_action)
+        {
+          auto const confirm_token = selected_value;
+          clear_settings_preview();
+          auto selected = options.on_local_display_settings_action(confirm_token);
+          if (selected)
+          {
+            auto status = selected->status;
+            presentation_state.apply_local_display_settings(options, std::move(selected->settings));
+            begin_settings_preview_baseline();
+            rebuild_settings_view(settings_nav.section, current_query, current_selected);
+            snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
+          }
+          else
+          {
+            snapshot.status = selected.error().format();
+            begin_settings_preview_baseline();
+            do_beep(terminal_context);
+          }
         }
         else if (options.on_settings_selected)
         {
@@ -1451,6 +1475,7 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           }
           else
           {
+            static_cast<void>(synchronize_committed_session());
             snapshot.status = opened.error().format();
             do_beep(terminal_context);
           }
@@ -1527,6 +1552,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
         }
         auto const resolved_list = active_select_list;
         snapshot.select_list.reset();
+        if (resolved_list == ActiveSelectList::Overview)
+          snapshot.startup_overview.reset();
         active_select_list = ActiveSelectList::None;
         session_archive_confirmation.reset();
         if (input_result.action == SelectListInputAction::Cancel)
@@ -1588,10 +1615,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
             }
             else
             {
-              options.key_bindings = std::move(reloaded->key_bindings);
-              snapshot.active_run_hint = active_run_hint_for(options.key_bindings);
-              // Success feedback stays on the transient status surface from the applied DTO.
-              apply_runtime_state_snapshot(std::move(reloaded->state));
+              presentation_state.apply_local_key_bindings(options, std::move(*reloaded));
+              snapshot.status = "keybindings reloaded";
             }
           }
         }
@@ -1637,19 +1662,17 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           }
           else
           {
+            static_cast<void>(synchronize_committed_session());
             snapshot.status = selected.error().format();
             do_beep(terminal_context);
           }
         }
         else if (resolved_list == ActiveSelectList::ForkUserTurn && options.on_fork_user_turn_selected)
         {
-          auto const presentation_session_id = snapshot.session_id;
-          auto const presentation_session_path = presentation_state.sidebar.session_path;
-          UserTurnForkSelectionDecision decision;
           if (selected_value.empty())
           {
-            decision =
-                evaluate_fork_user_turn_selection(selected_value, presentation_session_id, presentation_session_path, options.on_fork_user_turn_selected);
+            snapshot.status = "selected user turn is unavailable";
+            do_beep(terminal_context);
           }
           else
           {
@@ -1661,20 +1684,21 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
               terminal_write_failed = true;
               break;
             }
-            decision =
-                evaluate_fork_user_turn_selection(selected_value, presentation_session_id, presentation_session_path, options.on_fork_user_turn_selected);
-          }
-          if (decision.action == UserTurnForkSelectionAction::ApplyOpenedSession && decision.opened_snapshot)
-          {
-            // Same transition boundary as session open: clear the prior
-            // transcript only when session identity actually changed.
-            apply_opened_session_snapshot(std::move(*decision.opened_snapshot), true);
-          }
-          else
-          {
-            snapshot.status = std::move(decision.status);
-            if (decision.beep)
+            auto opened = options.on_fork_user_turn_selected(selected_value);
+            if (opened)
+            {
+              // Same transition boundary as session open; transition authority
+              // comes from the committed backend identity callback, not this DTO.
+              apply_opened_session_snapshot(std::move(*opened), true);
+            }
+            else
+            {
+              // A fork may commit before an ancillary catalog refresh reports a
+              // warning/failure. Reconcile committed identity on either result.
+              static_cast<void>(synchronize_committed_session());
+              snapshot.status = opened.error().format();
               do_beep(terminal_context);
+            }
           }
         }
         else if (resolved_list == ActiveSelectList::CopyUserTurn && options.on_read_user_turn_text)
@@ -1683,6 +1707,25 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           settle_local_command_status(snapshot, decision.status);
           if (decision.beep)
             do_beep(terminal_context);
+        }
+        else if (resolved_list == ActiveSelectList::Settings && settings_nav.in_display() && options.on_local_display_settings_action)
+        {
+          clear_settings_preview();
+          auto selected = options.on_local_display_settings_action(selected_value);
+          if (selected)
+          {
+            auto status = selected->status;
+            presentation_state.apply_local_display_settings(options, std::move(selected->settings));
+            begin_settings_preview_baseline();
+            rebuild_settings_view(settings_nav.section);
+            snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
+          }
+          else
+          {
+            snapshot.status = selected.error().format();
+            begin_settings_preview_baseline();
+            do_beep(terminal_context);
+          }
         }
         else if (resolved_list == ActiveSelectList::Settings && options.on_settings_selected)
         {
@@ -2617,5 +2660,17 @@ ava::core::Result<TuiRuntimeStateSnapshot> dispatch_tui_selector_authority(Compo
     snapshot.status = result.error().format();
   return result;
 }
+
+#ifdef CWDEBUG
+void TuiRuntimeOptions::print_on(std::ostream& os) const
+{
+  LIBCWD_USING_OSTREAM_PRELUDE;
+  os << '{' << "app_version:" << app_version << ", initial_status:" << initial_status << ", initial_transcript:" << initial_transcript
+     << ", slash_commands:{...}"
+     << ", slash_catalog_generation:" << slash_catalog_generation << ", file_references:" << file_references
+     << ", workspace_catalog_generation:" << workspace_catalog_generation << ", initial_todos:" << initial_todos
+     << ", initial_display_settings:" << initial_display_settings << ", mermaid_render:" << mermaid_render << ", key_bindings:{...}" << '}';
+}
+#endif
 
 }  // namespace ava::tui

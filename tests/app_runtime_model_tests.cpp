@@ -4,7 +4,6 @@
 #include "tests/support/process_test_support.h"
 #include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
-#include "ava/http/transport.h"
 #include "ava/app/commands.h"
 #include "ava/app/reasoning_controls.h"
 #include "ava/app/rpc/input.h"
@@ -13,11 +12,13 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/RunOptions.h"
 #include "ava/app/runtime/Session.h"
-#include "ava/app/runtime/UnlockedData.h"
 #include "ava/app/runtime_model.h"
 #include "ava/app/runtime_reasoning.h"
 #include "ava/agent/message_builder.h"
 #include "ava/config/model_config.h"
+#include "ava/frontend/FrontEnd.h"
+#include "ava/frontend/UnlockedData.h"
+#include "ava/http/transport.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/attachments.h"
 #include "ava/session/record.h"
@@ -155,7 +156,7 @@ void test_app_runtime_session_lease_reacquired_after_owner_death()
   auto session = open_runtime_session_for_test(root, workspace);
   if (!require(session.has_value(), "owner-death fixture creates a persistent runtime session"))
     return;
-  auto const session_id = ava::app::runtime::session_ts::rat(*session)->store.session_id();
+  auto const session_id = ava::app::runtime::session_ts::rat(*session)->store.options_r()->session_id;
   session = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "release seed owner"));
   int descriptors[2];
   if (!require(::pipe2(descriptors, O_CLOEXEC) == 0, "create fresh lease owner's acknowledgement pipe"))
@@ -190,14 +191,14 @@ void test_app_runtime_session_lease_reacquired_after_owner_death()
 
 namespace {
 
-class CallbackFrontEnd final : public ava::app::frontend::FrontEnd
+class CallbackFrontEnd final : public ava::frontend::FrontEnd
 {
  public:
-  std::function<void(ava::app::frontend::DataListIndex)> on_data_changed;
+  std::function<void(ava::frontend::DataListIndex)> on_data_changed;
 
   void initialize_frontend_state(app::runtime::SessionConstReadAccess const&) override { }
 
-  void data_changed(ava::app::frontend::DataListIndex index) override
+  void data_changed(ava::frontend::DataListIndex index) override
   {
     if (on_data_changed)
       on_data_changed(index);
@@ -210,7 +211,7 @@ class CallbackFrontEnd final : public ava::app::frontend::FrontEnd
 
 void test_unlocked_data_access_and_notifications()
 {
-  using data_type = ava::app::runtime::UnlockedData<std::string>;
+  using data_type = ava::frontend::UnlockedData<std::string>;
   static_assert(std::derived_from<data_type::wat, data_type::rat>);
   static_assert(std::derived_from<data_type::wat, data_type::crat>);
   static_assert(std::move_constructible<data_type::wat>);
@@ -219,7 +220,7 @@ void test_unlocked_data_access_and_notifications()
   data_type data(&frontend, "seven");
   int notifications = 0;
   std::string observed_value;
-  frontend.on_data_changed = [&](ava::app::frontend::DataListIndex) {
+  frontend.on_data_changed = [&](ava::frontend::DataListIndex) {
     ++notifications;
     data_type::crat data_r(std::as_const(data));
     observed_value = *data_r;
@@ -567,7 +568,7 @@ void test_app_runtime_model_switch_persists_and_reopens()
     expect(model_selection_r->scoped_model_cycle && model_selection_r->scoped_model_cycle->size() == 2 &&
                (*model_selection_r->scoped_model_cycle)[0] == "anthropic/claude-test" && (*model_selection_r->scoped_model_cycle)[1] == "openai/gpt-5.5",
            "runtime session restores persisted scoped model cycle");
-    session_id = session_w->store.session_id();
+    session_id = session_w->store.options_r()->session_id;
   }
 
   auto model = ava::app::resolve_runtime_model(paths, "anthropic", "claude-test");
@@ -1057,7 +1058,7 @@ void test_app_runtime_reasoning_selection_persists_and_requests()
   std::string session_id;
   {
     CRITICAL_AREA_BEGIN_W(session);
-    session_id = session_w->store.session_id();
+    session_id = session_w->store.options_r()->session_id;
 
     auto selected = session_w->set_reasoning(ava::app::runtime::ReasoningSelection{.level = " low ", .budget_tokens = std::nullopt, .display = ""});
     {
@@ -1266,7 +1267,7 @@ void test_app_runtime_branch_construction_failure_rolls_back_created_file()
     expect(seed_source_attachment(unlocked_source), "TUI rollback test seeds an active source with a copyable attachment");
     {
       SCOPED_CRITICAL_AREA_W(source_w, unlocked_source);
-      source_id = source_w->store.session_id();
+      source_id = source_w->store.options_r()->session_id;
       source_path = source_w->store.session_path();
       std::filesystem::create_directories(paths.models_file);
     }
@@ -1285,7 +1286,7 @@ void test_app_runtime_branch_construction_failure_rolls_back_created_file()
     auto source_contender = ava::session::SessionLease::acquire(source_path);
     {
       SCOPED_CRITICAL_AREA_R(source_r, *unlocked_source_result);
-      source_id_unchanged = source_r->store.session_id() == source_id;
+      source_id_unchanged = source_r->store.options_r()->session_id == source_id;
     }
     expect(!forked && created_id && forked.error().message().find("rollback") == std::string::npos &&
                forked.error().format().find("rollback_attachment_disposition: preserved") != std::string::npos && destination_jsonl_removed &&
@@ -1315,7 +1316,7 @@ void test_app_runtime_branch_construction_failure_rolls_back_created_file()
     expect(seed_source_attachment(*unlocked_source_result), "startup fork rollback test seeds a source with a copyable attachment");
     {
       SCOPED_CRITICAL_AREA_W(source_w, *unlocked_source_result);
-      source_id = source_w->store.session_id();
+      source_id = source_w->store.options_r()->session_id;
       source_path = source_w->store.session_path();
     }
     auto const source_bytes = app_read_binary_file(source_path);
@@ -1378,7 +1379,7 @@ void test_app_runtime_initial_reasoning_level_option()
       ava::app::runtime::ModelSelection_ts::crat model_selection_r = session_w->model_selection_r();
       expect(model_selection_r->reasoning && model_selection_r->reasoning->level == "high", "runtime startup applies initial reasoning level");
     }
-    session_id = session_w->store.session_id();
+    session_id = session_w->store.options_r()->session_id;
 
     auto entries = session_w->store.load();
     expect(entries.has_value(), "runtime startup reasoning test reloads session entries");

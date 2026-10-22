@@ -2,7 +2,7 @@
 #include "Data.h"
 #include "FrontEnd.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 Data::Data(FrontEnd* frontend) : frontend_(frontend), index_(frontend->register_data(this))
 {
@@ -33,4 +33,4 @@ void Data::print_members(std::ostream& os, char const* prefix) const
 }
 #endif
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

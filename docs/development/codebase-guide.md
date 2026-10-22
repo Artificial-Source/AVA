@@ -69,9 +69,6 @@ for one-shot selectors, `runtime/RunOptions.h`, `session_run_controller.h`,
 `tui/interactive_tui.cpp`, and `interactive.h`. Protocol implementations live under
 `app/rpc/` and `app/acp/`. `app::Application` derives from `core::Application`,
 which owns the application-scoped memory page pool and its `VectorAllocator<char>`.
-`app/frontend/FrontEnd.h` uses that allocator for registered frontend data, and
-`tui/terminal/GraphemeSurface.h` uses its rebound allocator for terminal surface
-vectors; these are production consumers, not a performance claim.
 
 **Belongs here:** composition and lifecycle policy involving several lower
 modules; translation between shared runtime behavior and a frontend contract.
@@ -225,6 +222,26 @@ in `app/runtime_event_adapters.*`.
 
 **Nearest tests:** `events_tests.cpp`, `app_event_serialization_tests.cpp`, and
 `tests/golden/runtime-events-v1/`.
+
+### `frontend/`
+
+**Owns:** the frontend-neutral registered data contract: `Data`/`FrontEnd`
+registration, `UnlockedData` thread-safe value wrappers, and `DisplayString`
+projections of app runtime state (model selection, agent selection, directories,
+Git branch, session identity, session statistics, prompt mode/context sources).
+
+**Key entry points:** `FrontEnd.h`, `Data.h`, `UnlockedData.h`,
+`ModelSelection.h`, and `SessionStats.h`.
+
+**Belongs here:** change-tracked display state that any frontend observes after
+the runtime refreshes it. `session/` wraps its options and statistics in
+`UnlockedData`, and the headers read `app/runtime/` state types directly.
+
+**Does not belong here:** terminal rendering, input handling, protocol framing,
+or any runtime mutation; frontends refresh and render, the runtime owns changes.
+
+**Nearest tests:** `app_runtime_model_tests.cpp` and the TUI frontend coverage in
+`tui_*_tests.cpp`.
 
 ### `http/`
 

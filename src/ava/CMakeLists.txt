@@ -4,6 +4,7 @@ set(AVA_BACKEND_LIBRARIES
   ava_context
   ava_core
   ava_event
+  ava_frontend
   ava_diagnostics
   ava_http
   ava_command
@@ -27,6 +28,7 @@ add_subdirectory(context)
 add_subdirectory(core)
 add_subdirectory(process)
 add_subdirectory(event)
+add_subdirectory(frontend)
 add_subdirectory(http)
 add_subdirectory(diagnostics)
 add_subdirectory(command)

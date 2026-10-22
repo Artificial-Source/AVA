@@ -253,7 +253,7 @@ void test_app_rpc_protocol_version_and_session_commands()
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  auto initial_id = session_w->store.session_id();
+  auto initial_id = session_w->store.options_r()->session_id;
   auto appended_metadata = session_w->append_metadata_1(std::move(metadata_update));
 
   auto appended_user = session_w->append_owned(ava::session::SessionEntry{.id = "entry_user",
@@ -458,7 +458,7 @@ void test_app_rpc_protocol_version_and_session_commands()
                                                                           {"new identity", new_id && *new_id != initial_id},
                                                                           {"activated identity", new_id && active_new_id && *new_id == *active_new_id}});
   SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-  expect(session_r->store.session_id() == initial_id && jsonl.find("\"id\":\"switch\"") != std::string::npos,
+  expect(session_r->store.options_r()->session_id == initial_id && jsonl.find("\"id\":\"switch\"") != std::string::npos,
          "RPC switch_session switches back to the requested session");
 }
 

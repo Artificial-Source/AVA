@@ -33,45 +33,6 @@ std::string attach_soft_status_warning(std::string status, std::string_view warn
   return attached;
 }
 
-UserTurnForkSelectionDecision evaluate_fork_user_turn_selection(
-    std::string_view selected_entry_id, std::string_view presentation_session_id, std::string_view presentation_session_path,
-    std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view entry_id)> const& on_fork_user_turn_selected)
-{
-  if (selected_entry_id.empty())
-  {
-    return UserTurnForkSelectionDecision{
-        .action = UserTurnForkSelectionAction::MissingSelection, .status = "no user turn selected", .beep = true, .clear_transcript = false};
-  }
-  if (!on_fork_user_turn_selected)
-  {
-    return UserTurnForkSelectionDecision{
-        .action = UserTurnForkSelectionAction::AuthorityFailure, .status = "fork-from selection unavailable", .beep = true, .clear_transcript = false};
-  }
-
-  auto selected = on_fork_user_turn_selected(selected_entry_id);
-  if (!selected)
-  {
-    return UserTurnForkSelectionDecision{
-        .action = UserTurnForkSelectionAction::AuthorityFailure, .status = selected.error().format(), .beep = true, .clear_transcript = false};
-  }
-
-  // Defense in depth: never clear transcript/presentation over an unchanged
-  // session authority even if a callback returns handled success without switch.
-  if (selected->session_id == presentation_session_id && selected->session_path == presentation_session_path)
-  {
-    auto status = selected->status.empty() ? std::string("fork-from did not switch sessions") : first_inline_status_line(std::move(selected->status));
-    return UserTurnForkSelectionDecision{
-        .action = UserTurnForkSelectionAction::NoSessionTransition, .status = std::move(status), .beep = true, .clear_transcript = false};
-  }
-
-  auto status = selected->status;
-  return UserTurnForkSelectionDecision{.action = UserTurnForkSelectionAction::ApplyOpenedSession,
-                                       .opened_snapshot = std::move(*selected),
-                                       .status = std::move(status),
-                                       .beep = false,
-                                       .clear_transcript = true};
-}
-
 UserTurnCopySelectionDecision evaluate_copy_user_turn_selection(
     std::string_view selected_entry_id, std::function<ava::core::Result<std::string>(std::string_view entry_id)> const& on_read_user_turn_text,
     std::function<bool(std::string_view text)> const& copy_to_clipboard)

@@ -5,7 +5,7 @@
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
 #include "ava/app/runtime/Session.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/context/context_loader.h"
 #include "ava/lsp/configured_provider.h"
 #include "ava/core/fingerprint.h"
@@ -262,7 +262,7 @@ std::string compact_cwd_label(std::filesystem::path const& cwd, std::filesystem:
   return shorten_middle(std::move(text), 48);
 }
 
-std::string known_values_text(ava::session::SessionStats const& stats)
+std::string known_values_text(ava::session::Stats const& stats)
 {
   std::ostringstream output;
   bool wrote_any = false;
@@ -275,7 +275,7 @@ std::string known_values_text(ava::session::SessionStats const& stats)
   return wrote_any ? output.str() : std::string("unavailable");
 }
 
-std::string estimated_bytes_text(ava::session::SessionStats const& stats)
+std::string estimated_bytes_text(ava::session::Stats const& stats)
 {
   std::ostringstream output;
   bool wrote_any = false;
@@ -285,7 +285,7 @@ std::string estimated_bytes_text(ava::session::SessionStats const& stats)
   return wrote_any ? output.str() : std::string("unavailable");
 }
 
-std::string cost_text(ava::session::SessionStats const& stats)
+std::string cost_text(ava::session::Stats const& stats)
 {
   if (stats.cost_complete)
     return stats.total_cost_usd ? format_cost_usd(*stats.total_cost_usd) : "unavailable";
@@ -296,12 +296,12 @@ std::string cost_text(ava::session::SessionStats const& stats)
   return "incomplete (" + std::to_string(stats.unknown_cost_entries) + " unknown)";
 }
 
-std::string format_session_stats_text(runtime::session_ts const& unlocked_session, ava::session::SessionStats const& stats)
+std::string format_session_stats_text(runtime::session_ts const& unlocked_session, ava::session::Stats const& stats)
 {
   SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
   std::ostringstream output;
   output << "Session stats\n";
-  output << "  session: " << shorten_middle(session_r->store.session_id(), 32) << "   entries: " << stats.entry_count << '\n';
+  output << "  session: " << shorten_middle(session_r->store.options_r()->session_id, 32) << "   entries: " << stats.entry_count << '\n';
   runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
   output << "  model: " << model_selection_r->model.provider_id << '/' << model_selection_r->model.model_id
          << "   mode: " << ava::agent::to_string(session_r->mode())
@@ -326,7 +326,7 @@ std::string format_session_stats_text(runtime::session_ts const& unlocked_sessio
   output << "  cost: " << cost_text(stats) << "   usage entries exact/estimated " << stats.exact_usage_entries << '/' << stats.estimated_usage_entries << '\n';
 
   output << "\nHints:\n";
-  output << "  export: /export   resume: ava --session " << session_r->store.session_id();
+  output << "  export: /export   resume: ava --session " << session_r->store.options_r()->session_id;
   return output.str();
 }
 

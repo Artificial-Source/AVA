@@ -447,7 +447,7 @@ void load_mcp_prompt_commands(RegistryBuilder& builder, runtime::session_ts& unl
                                 return runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry));
                               },
                               .process_scope = session_process_scope,
-                              .session_id = session_r->store.session_id(),
+                              .session_id = session_r->store.options_r()->session_id,
                               .provider_id = model_selection_r->model.provider_id,
                               .model_id = model_selection_r->model.model_id,
                               .current_dir = session_r->current_dir()};

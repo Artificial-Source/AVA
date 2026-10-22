@@ -5,6 +5,7 @@
 #include "plugin_event_hooks.h"
 #include "runtime/ExtensionResourcePolicy.h"
 #include "runtime/Session.h"
+#include "runtime/SessionStatisticsPublication.h"
 #include "runtime_compaction.h"
 #include "runtime_event_adapters.h"
 #include "runtime_prompt.h"
@@ -17,8 +18,8 @@
 #include "ava/diagnostics/runtime_diagnostics.h"
 #include "ava/event/events.h"
 #include "ava/http/curl_transport.h"
-#include "ava/agent/agent_loop_session.h"
 #include "ava/agent/agent_config.h"
+#include "ava/agent/agent_loop_session.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/provider/catalog.h"
@@ -26,6 +27,7 @@
 #include "ava/lsp/configured_provider.h"
 #include "ava/core/error.h"
 #include "ava/core/ids.h"
+#include "utils/at_scope_end.h"
 
 #include <functional>
 #include <memory>
@@ -42,27 +44,44 @@
 
 namespace ava::app {
 
+namespace {
+
+// Explain how to restore prompt execution after a trust change revoked the old prompt but reconstruction failed.
+ava::core::Error prompt_unavailable_error()
+{
+  auto error = ava::core::Error(ava::core::ErrorCategory::Configuration, "runtime system prompt is unavailable because its last reconstruction failed");
+  error.with_context("recovery", "fix the prompt configuration and run /reload prompts before submitting another prompt");
+  return error;
+}
+
+} // namespace
+
 ava::core::Result<runtime::PromptState> select_runtime_prompt_state(runtime::session_ts const& unlocked_session, ava::agent::Mode mode)
 {
-  ava::config::XdgPaths paths;
-  ava::config::ModelInfo model;
-  std::filesystem::path workspace_dir;
-  std::filesystem::path current_dir;
-  bool include_project_resources;
-  runtime::PromptOverrides prompt_overrides;
-  std::optional<ava::agent::AgentDefinition> selected_primary_agent;
+  struct PromptStateInputs
   {
+    ava::config::XdgPaths paths;
+    ava::config::ModelInfo model;
+    std::filesystem::path workspace_dir;
+    std::filesystem::path current_dir;
+    bool include_project_resources;
+    runtime::PromptOverrides prompt_overrides;
+    ava::agent::AgentDefinition selected_primary_agent;
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+  auto inputs = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
-    paths = session_r->paths();
-    model = session_r->model_selection_r()->model;
-    workspace_dir = session_r->workspace_dir();
-    current_dir = session_r->current_dir();
-    include_project_resources = project_resources_trusted(session_r->project_trust());
-    prompt_overrides = session_r->prompt_overrides();
-    selected_primary_agent = session_r->selected_primary_agent();
-  }
-  return runtime::load_runtime_prompt_state(paths, model, mode, workspace_dir, current_dir, include_project_resources, prompt_overrides,
-                                            selected_primary_agent);
+    auto selection_r = session_r->agent_selection_r();
+    return PromptStateInputs{.paths = session_r->paths(),
+                             .model = session_r->model_selection_r()->model,
+                             .workspace_dir = session_r->workspace_dir(),
+                             .current_dir = session_r->current_dir(),
+                             .include_project_resources = project_resources_trusted(session_r->project_trust()),
+                             .prompt_overrides = session_r->prompt_overrides(),
+                             .selected_primary_agent = session_r->selected_primary_agent(selection_r)};
+  }();
+  return runtime::load_runtime_prompt_state(inputs.paths, inputs.model, mode, inputs.workspace_dir, inputs.current_dir, inputs.include_project_resources,
+                                            inputs.prompt_overrides, inputs.selected_primary_agent);
 }
 
 ava::core::VoidResult validate_run_options(runtime::RunOptions const& options)
@@ -99,6 +118,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_prompt(runtime::session_ts& u
 
   CRITICAL_AREA_BEGIN_R(session);
 
+  if (session_r->prompt_readiness() != runtime::PromptReadiness::Ready)
+    return std::unexpected(prompt_unavailable_error());
   if (session_r->is_offline() || options.offline)
     return std::unexpected(offline_provider_error("prompt"));
   if (!session_r->run_controller())
@@ -172,29 +193,36 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
         manager->release_parent_if_unused(session_id, *generation);
     }
   } refresh;
+  // Declared before guard so controller completion or abandonment settles every
+  // committed write before statistics inspect the final append generation. The
+  // refresh is best-effort: preserve the primary run result and last valid stats,
+  // then retry failed statistics work at the next relevant backend boundary.
+  auto statistics_refresh = at_scope_end([&unlocked_session] { static_cast<void>(runtime::refresh_session_statistics(unlocked_session)); });
   ActiveRunGuard guard = std::move(incoming_guard);
 
   std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics_copy;
   std::optional<ava::process::ProcessScopeV1> session_process_scope_copy;
   std::optional<ava::process::ProcessScopeV1> run_process_scope;
   std::optional<ava::core::Error> run_process_scope_error;
+  bool prompt_is_ready = false;
   {
     SCOPED_CRITICAL_AREA_R(admitted_session_r, unlocked_session);
     diagnostics_copy = admitted_session_r->diagnostics();
     session_process_scope_copy = admitted_session_r->session_process_scope();
-    if (session_process_scope_copy)
+    prompt_is_ready = admitted_session_r->prompt_readiness() == runtime::PromptReadiness::Ready;
+  }
+  if (prompt_is_ready && session_process_scope_copy)
+  {
+    auto derived = session_process_scope_copy->run();
+    if (derived)
     {
-      auto derived = session_process_scope_copy->run();
-      if (derived)
-      {
-        run_process_scope = std::move(*derived);
-      }
-      else
-      {
-        auto error = ava::core::Error(ava::core::ErrorCategory::Configuration, "failed to derive runtime tool process authority");
-        error.with_context("cause", derived.error().message());
-        run_process_scope_error = std::move(error);
-      }
+      run_process_scope = std::move(*derived);
+    }
+    else
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::Configuration, "failed to derive runtime tool process authority");
+      error.with_context("cause", derived.error().message());
+      run_process_scope_error = std::move(error);
     }
   }
 
@@ -214,6 +242,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
     return std::unexpected(std::move(error));
   };
 
+  if (!prompt_is_ready)
+    return fail_run(prompt_unavailable_error());
   if (auto valid = validate_run_options(options); !valid)
     return fail_run(std::move(valid.error()));
   if (run_process_scope_error)
@@ -234,13 +264,12 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
       launch_reasoning_level = model_selection_r->reasoning->level;
     // Normalize immutable private presentation before parent/coordinator locks.
     // Model/provider ids and provider-specific reasoning fields never enter it.
-    return ava::agent::SubagentLaunchDisplay::normalized(ava::config::proven_configured_model_display_name(model_selection_r->model),
-                                                         launch_reasoning_level);
+    return ava::agent::SubagentLaunchDisplay::normalized(ava::config::proven_configured_model_display_name(model_selection_r->model), launch_reasoning_level);
   }();
 
   auto const run_controller_copy = session_r->run_controller();
 
-  std::string const session_id_copy = session_r->store.session_id();
+  std::string const session_id_copy = session_r->store.options_r()->session_id;
   std::string const provider_id_copy = session_r->model_selection_r()->model.provider_id;
   bool const offline_copy = session_r->is_offline() || options.offline;
 
@@ -372,9 +401,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     return ava::event::RuntimeEvent{
         ava::event::RuntimeEventMetadata{.timestamp = ava::session::now_timestamp(), .session_id = session_id_copy},
-        ava::event::SessionStartEvent{
-            .payload = ava::event::SessionPayload{
-                .mode = session_r->mode(), .provider = provider_id_copy, .model = session_r->model_selection_r()->model.model_id}}};
+        ava::event::SessionStartEvent{.payload = ava::event::SessionPayload{
+                                          .mode = session_r->mode(), .provider = provider_id_copy, .model = session_r->model_selection_r()->model.model_id}}};
   }();
 
   if (auto emitted = ava::event::emit_event(event_sink, start_event); !emitted)
@@ -460,6 +488,11 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
+    std::size_t selected_max_tool_iterations = ava::agent::AgentLoopOptions{}.max_tool_iterations;
+    {
+      auto agent_selection_r = session_r->agent_selection_r();
+      selected_max_tool_iterations = agent_selection_r->selected_primary_agent.max_tool_iterations.value_or(selected_max_tool_iterations);
+    }
     loop.emplace(ava::agent::AgentLoopOptions{
         .workspace_dir = session_r->workspace_dir(),
         .current_dir = session_r->current_dir(),
@@ -486,6 +519,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
         .credential_type = options.openai_oauth && options.credential_type == "bearer" ? "oauth" : options.credential_type,
         .openai_oauth = options.openai_oauth,
         .openai_account_id = options.openai_account_id,
+        .max_tool_iterations = selected_max_tool_iterations,
         .tool_resources =
             ava::agent::ToolResourceOptions{
                 .include_project_resources = include_project_resources,
@@ -525,7 +559,7 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
             [&runtime_event_metadata, &event_sink, &sink_error](ava::agent::ToolTimelineEntry const& entry) {
               if (sink_error)
                 return;
-            // Capture metadata before mapping payload fields, matching the old base-event path.
+              // Capture metadata before mapping payload fields, matching the old base-event path.
               auto metadata = runtime_event_metadata();
               if (auto emitted = ava::event::emit_event(event_sink, runtime_event_from_tool_timeline_entry(std::move(metadata), entry)); !emitted)
               {
@@ -571,9 +605,8 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
           return runtime::compact_runtime_context(unlocked_session, std::move(read_authority), trigger, provider, *runtime_transport, runtime_options,
                                                   replayed_user_messages);
         },
-        .child_compaction_blueprint =
-            ava::agent::ChildContextCompactionBlueprint{
-                .config = *child_compaction_config, .context_window_tokens = model_selection_r->model.context_window_tokens},
+        .child_compaction_blueprint = ava::agent::ChildContextCompactionBlueprint{.config = *child_compaction_config,
+                                                                                  .context_window_tokens = model_selection_r->model.context_window_tokens},
         .background_provider_factory = [&provider_catalog = provider_catalog_copy, &paths = paths_copy,
                                         &provider_id = provider_id_copy]() -> ava::core::Result<std::unique_ptr<ava::provider::Provider>> {
           auto ensured = ava::provider::ensure_provider_catalog(provider_catalog, paths);

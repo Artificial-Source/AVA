@@ -134,6 +134,7 @@ links in each module's `CMakeLists.txt` and the enforced include policy in
 | `diagnostics` | private bounded artifacts, safe failures and support records | raw secrets/provider payload publication |
 | `agent` | provider/tool iteration, message projection, tool registry/dispatch, scheduling, subagents/jobs | CLI/protocol/TUI policy or direct session-path reacquisition |
 | `app` | composition root, runtime session, commands, run lifecycle, frontend adapters, RPC/ACP services | low-level reusable primitives |
+| `frontend` | registered frontend data: `FrontEnd`/`Data` registration, `UnlockedData` wrappers, change-tracked display projections of runtime state | rendering, input, protocol framing, runtime mutation |
 | `tui`, `tui/terminal` | semantic terminal state, composer/input/rendering; ncurses terminal lifecycle and cells | provider/session/tool implementations |
 | `debug` | libcwd-only formatting/debug support | product behavior or required release functionality |
 

@@ -95,7 +95,7 @@ ava::tools::ToolContext prompt_file_reference_context(runtime::session_ts& unloc
                       session_r->mode(),
                       session_r->anchor_set(),
                       session_r->ava_authority_roots_1(),
-                      session_r->store.session_id(),
+                      session_r->store.options_r()->session_id,
                       model_selection_r->model.provider_id,
                       model_selection_r->model.model_id,
                       session_r->current_dir()};

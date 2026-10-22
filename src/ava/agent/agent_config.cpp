@@ -14,6 +14,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include "debug.h"
 
 namespace ava::agent {
 namespace {
@@ -308,6 +309,18 @@ void discover_from_root(std::vector<AgentDefinition>& subagents, std::vector<Age
 
 }  // namespace
 
+std::string_view to_string(AgentToolPreset preset) noexcept
+{
+  switch (preset)
+  {
+    case AgentToolPreset::Inherit:
+      return "inherit";
+    case AgentToolPreset::ReadOnly:
+      return "read-only";
+  }
+  return "inherit";
+}
+
 std::string_view to_string(AgentDefinitionProvenance provenance) noexcept
 {
   switch (provenance)
@@ -355,6 +368,62 @@ std::vector<AgentDefinition> builtin_subagents()
                           .system_prompt = "You are AVA's explore subagent. Read, list, and search files only. Return concise findings to the parent agent.",
                           .tool_preset = AgentToolPreset::ReadOnly,
                           .provenance = AgentDefinitionProvenance::Builtin}};
+}
+
+// 1. Configuration exists that defines agents: each agent has a name to identify it
+// (e.g. "coder", "planner" and "analyst" in this opencode configuration) and links that to a model, variant, provider etc.
+// The struct `AgentDefinition`:
+// ```
+// struct AgentDefinition
+// {
+//   std::string name;
+//   std::string description;
+//   std::string system_prompt;
+//   AgentToolPreset tool_preset = AgentToolPreset::Inherit;
+//   std::optional<std::size_t> max_tool_iterations = std::nullopt;
+//   bool hidden = false;
+//   AgentDefinitionProvenance provenance = AgentDefinitionProvenance::Unknown;
+//   std::filesystem::path path = {};
+// ```
+// only contains the name, not the `model` and `variant`. But then again, we don't need it to be, as long as `name` is
+// equal to one of the configured agents "coder, "planner" or "analyst"; then that defines the agent and what model
+// etc. is configured for that agent can be found elsewhere I presume.
+//
+// 2. If `ava` is started with `--agent <name>` where `<name>` is an existing (configured) agent, namely "coder", "planner" or "analyst",
+// then the right `AgentDefinition` *is* known in advance, the canonical copy is initialized as such and the `FrontEnd` can obtain the
+// `name` of that agent by calling `refresh_agent`. That returns a `std::string const&` to something copied from `SelectedAgentMetadata::name`
+// which in turn is copied from `ava::app::runtime::AgentSelection::selected_primary_agent.name` aka `ava::agent::AgentDefinition::name`.
+// Thus, that returns "<name>".
+//
+// 3. If `ava` is started *without* `--agent` -- and the user types a messages and submits that by hitting Enter, then that message is
+// sent to ONE of those three agents, correct? Because, it *is* sent, and those are the only three configured agents (in this example).
+// Whether that is a default from a "default-primary-agent" config somewhere, or stored as part of a running session that is being resumed,
+// I don't care - which agent it is established and it is going to be one of the primary agents "coder", "planner" or "analyst".
+//
+// The task is: determine which agent that will be *before* the user submits a message, and initialize the canonical copy in Session
+// as if --agent <that-name> had been provided.
+//
+// The new
+// ```
+// AgentDefinition builtin_ava_agent()
+// {
+//   return AgentDefinition{.name = "ava",
+// ```
+// makes up a non-existing name "ava". That doesn't make sense: we need to know what agent the next message will be sent to, which is
+// going to be one of the existing primary agents: "coder", "planner" or "analyst". We need to know that in order to diplay that name in the UI.
+// Providing a dummy place-holder with name "ava" would I'd think show "ava" as the name of the selected agent that the next message
+// will go to in the UI, which is incorrect.
+//
+AgentDefinition builtin_ava_agent()
+{
+  Dout(dc::warning, "CALLING builtin_ava_agent() - THIS MUST BE REPLACED / FIXED.");
+  return AgentDefinition{.name = "none",
+                         .description = "AVA's normal execution policy.",
+                         .system_prompt = {},
+                         .tool_preset = AgentToolPreset::Inherit,
+                         .max_tool_iterations = std::nullopt,
+                         .hidden = false,
+                         .provenance = AgentDefinitionProvenance::Builtin};
 }
 
 std::vector<std::filesystem::path> default_global_agent_dirs()

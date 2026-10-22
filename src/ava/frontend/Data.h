@@ -3,7 +3,7 @@
 #include "ava/core/Application.h"
 #include "utils/Vector.h"
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 // Forward declaration.
 class Data;
@@ -68,4 +68,4 @@ class Data
   AVA_PRINT_ON_MEMBERS
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

@@ -172,7 +172,7 @@ ava::core::Result<std::string_view> acp_stop_reason(ava::core::RuntimeTerminalOu
 }
 
 AcpSessionHost::AcpSessionHost(runtime::session_ts&& unlocked_session, AcpSessionOptions options)
-    : unlocked_session_(std::move(unlocked_session)), options_(std::move(options)), session_id_(session_r()->store.session_id())
+    : unlocked_session_(std::move(unlocked_session)), options_(std::move(options)), session_id_(session_r()->store.options_r()->session_id)
 {
   options_.run_options.exact_file_access.reset();
   options_.run_options.command_executor.reset();
@@ -195,7 +195,7 @@ std::string const& AcpSessionHost::session_id() const noexcept
   return session_id_;
 }
 
-std::filesystem::path const& AcpSessionHost::current_dir(runtime::session_ts::crat const& session_r) const noexcept
+std::filesystem::path AcpSessionHost::current_dir(runtime::session_ts::crat const& session_r) const
 {
   return session_r->current_dir();
 }
@@ -661,7 +661,7 @@ ava::core::VoidResult AcpSessionHost::close()
     std::lock_guard lock(mutex_);
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session_);
     delivery_manager = session_r->subagent_delivery_manager();
-    parent_session_id = session_r->store.session_id();
+    parent_session_id = session_r->store.options_r()->session_id;
     closing_ = true;
     permission_grants_.clear();
     if (active_prompt_ && session_r->run_controller())
@@ -823,7 +823,7 @@ void AcpSessionRegistry::release_insertion() noexcept
 
 ava::core::Result<std::shared_ptr<AcpSessionHost>> AcpSessionRegistry::insert_reserved(runtime::session_ts&& unlocked_session)
 {
-  auto const session_id = runtime::session_ts::rat(unlocked_session)->store.session_id();
+  auto const session_id = runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
   auto host = std::make_shared<AcpSessionHost>(std::move(unlocked_session), options_);
   std::lock_guard lock(mutex_);
   if (pending_insertions_ == 0)

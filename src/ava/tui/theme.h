@@ -61,6 +61,14 @@ struct TuiThemeInfo
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+// Resolve configured theme, custom_theme palette, and optional detected_background using environment precedence.
+// Reads no frontend storage and applies no changes, so headless configuration reporting can use it safely.
+[[nodiscard]] TuiThemeInfo resolve_tui_theme(std::optional<std::string> const& configured, std::optional<TuiCustomTheme> const& custom_theme,
+                                             std::optional<TerminalBackgroundAppearance> detected_background = std::nullopt);
+
+// Theme access below is TUI-thread-only, including configuration, previews, and terminal-background detection.
+// Backend workers persist configuration without reading or mutating this presentation state.
+// Apply theme and its optional custom_theme palette locally; environment overrides still take precedence.
 void set_tui_config_theme(std::optional<std::string> theme, std::optional<TuiCustomTheme> custom_theme = std::nullopt);
 // Presentation-only theme overlay for settings preview. Does not write config.
 // Cleared by cancel/confirm/modal replacement/runtime exit. NO_COLOR still wins.

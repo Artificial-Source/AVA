@@ -736,7 +736,7 @@ void test_gemini_default_model_signature_history_roundtrip()
            "Gemini builtin-model continuation replays the matching signature after real assistant persistence, tool dispatch, and history reconstruction");
   }
 
-  auto restarted = ava::session::SessionStore::open(workspace, store.session_id(), fixture.root / "sessions");
+  auto restarted = ava::session::SessionStore::open(workspace, store.options_session_id_copy(), fixture.root / "sessions");
   expect(restarted.has_value(), "Gemini signed default-model history reopens from disk");
   if (!restarted)
     return;

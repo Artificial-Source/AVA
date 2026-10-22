@@ -29,6 +29,7 @@ SCANNED_MODULES = (
     "plugin",
     "lsp",
     "event",
+    "frontend",
     "app",
     "app_common",
     "tui",
@@ -48,6 +49,7 @@ RECOGNIZED_FIRST_PARTY_ROOTS = frozenset(
         "debug",
         "diagnostics",
         "event",
+        "frontend",
         "http",
         "lsp",
         "mcp",
@@ -65,7 +67,8 @@ ALLOWED = {
     "app": (SCANNED_MODULE_SET | {"app_common"}) - {"app"},
     "agent": frozenset({"config", "http", "provider", "session", "tools", "permissions", "mcp", "plugin", "process"}),
     "provider": frozenset({"config", "http"}),
-    "session": frozenset({"config"}),
+    # session_store.h and Stats.h wrap their options/statistics in frontend::UnlockedData.
+    "session": frozenset({"config", "frontend"}),
     "tools": frozenset({"http", "lsp", "permissions", "process"}),
     "config": frozenset({"http"}),
     "http": frozenset({"process"}),
@@ -76,12 +79,11 @@ ALLOWED = {
     "event": frozenset({"core", "debug"}),
     "process": frozenset({"core", "debug"}),
     "app_common": frozenset({"core", "debug"}),
-    "tui": frozenset({"agent", "app_common", "config", "core", "debug", "event", "permissions", "session"}),
+    # Registered frontend data projects app runtime state for every frontend to observe.
+    "frontend": frozenset({"agent", "app", "config", "session"}),
+    "tui": frozenset({"agent", "app_common", "config", "core", "debug", "event", "frontend", "permissions", "session"}),
 }
 APP_COMMON_PATHS = frozenset({"app/terminal_text.cpp", "app/terminal_text.h"})
-# Frontends consume the base interface and understand the concrete model data contract.
-# Both remain app-owned; neither belongs to the core-only AVA::app_common target.
-APP_FRONTEND_CONTRACT_INCLUDES = frozenset({"ava/app/frontend/FrontEnd.h", "ava/app/frontend/ModelSelection.h"})
 SOURCE_SUFFIXES = frozenset({".h", ".hpp", ".cpp"})
 IGNORED_TREE_NAMES = frozenset({"build", "generated", "reference", "tests", "vendor"})
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:<([^>]+)>|"([^"]+)")')
@@ -155,9 +157,8 @@ def collect_edges(source: Path) -> list[tuple[str, int, str, str, str, str]]:
                 if target is None or target == module or not is_policy_target(module, target):
                     continue
                 app_tui_seam = module == "app" and target == "tui" and relative.startswith("src/ava/app/tui/")
-                tui_frontend_contract = module == "tui" and target == "app" and literal in APP_FRONTEND_CONTRACT_INCLUDES
                 forbidden_app_tui = module == "app" and target == "tui" and not app_tui_seam
-                if target == "<noncanonical>" or forbidden_app_tui or (target not in ALLOWED[module] and not app_tui_seam and not tui_frontend_contract):
+                if target == "<noncanonical>" or forbidden_app_tui or (target not in ALLOWED[module] and not app_tui_seam):
                     edges.append((relative, line_number, source_kind(path), module, target, literal))
     return sorted(edges)
 
@@ -299,11 +300,22 @@ class ModuleDependencyRulesSelfTest(unittest.TestCase):
 
     def test_tui_app_contracts_are_exactly_governed(self) -> None:
         self.assertEqual(self.run_check('#include "ava/app/terminal_text.h"\n', [], module="tui"), [])
-        self.assertEqual(self.run_check('#include "ava/app/frontend/FrontEnd.h"\n', [], module="tui"), [])
-        self.assertEqual(self.run_check('#include "ava/app/frontend/ModelSelection.h"\n', [], module="tui"), [])
+        self.assertEqual(self.run_check('#include "ava/frontend/FrontEnd.h"\n', [], module="tui"), [])
         self.assertEqual(
             self.run_check('#include "ava/app/command_palette.h"\n', [], module="tui"),
             ["src/ava/tui/fixture.cpp:1: implementation tui -> app (ava/app/command_palette.h)"],
+        )
+
+    def test_frontend_and_session_edges_are_exactly_governed(self) -> None:
+        self.assertEqual(self.run_check('#include "ava/app/runtime/Session.h"\n', [], module="frontend"), [])
+        self.assertEqual(self.run_check('#include "ava/frontend/UnlockedData.h"\n', [], module="session"), [])
+        self.assertEqual(
+            self.run_check('#include "ava/tui/composer.h"\n', [], module="frontend"),
+            ["src/ava/frontend/fixture.cpp:1: implementation frontend -> tui (ava/tui/composer.h)"],
+        )
+        self.assertEqual(
+            self.run_check('#include "ava/frontend/FrontEnd.h"\n', [], module="agent"),
+            ["src/ava/agent/fixture.cpp:1: implementation agent -> frontend (ava/frontend/FrontEnd.h)"],
         )
 
     def test_backend_cannot_depend_on_app_common(self) -> None:

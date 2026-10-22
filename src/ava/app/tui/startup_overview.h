@@ -62,6 +62,10 @@ struct StartupOverviewBuildInput
                                                                                 ava::tui::TuiKeyBindings const& key_bindings,
                                                                                 ava::tui::TuiThemeInfo const& theme);
 
+// Build backend-derived overview facts without reading frontend theme or
+// binding state. The TUI composes those local hints when it applies the DTO.
+[[nodiscard]] ava::tui::StartupOverviewSnapshot build_startup_overview_snapshot(runtime::session_ts const& session);
+
 // First configured OverviewToggle key display, or empty when unbound.
 [[nodiscard]] std::string startup_overview_toggle_keys_display(ava::tui::TuiKeyBindings const& bindings);
 

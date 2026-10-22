@@ -25,9 +25,6 @@ using utils::has_print_on::operator<<;
 namespace runtime {
 using utils::has_print_on::operator<<;
 } // namespace runtime
-namespace frontend {
-using utils::has_print_on::operator<<;
-} // namespace runtime
 } // namespace app
 
 namespace command {
@@ -60,6 +57,10 @@ using utils::has_print_on::operator<<;
 namespace event {
 using utils::has_print_on::operator<<;
 } // namespace event
+
+namespace frontend {
+using utils::has_print_on::operator<<;
+} // namespace runtime
 
 namespace lsp {
 using utils::has_print_on::operator<<;

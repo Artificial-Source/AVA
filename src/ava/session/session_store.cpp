@@ -33,9 +33,12 @@ namespace ava::session {
 
 namespace detail {
 
+// Hash workspace_dir using the historical absolute, lexical normalization semantics.
+// Already-absolute runtime paths need no lookup of the process working directory.
 std::string project_key(std::filesystem::path const& workspace_dir)
 {
-  auto const normalized = std::filesystem::absolute(workspace_dir).lexically_normal().string();
+  auto const normalized_path = workspace_dir.is_absolute() ? workspace_dir.lexically_normal() : std::filesystem::absolute(workspace_dir).lexically_normal();
+  auto const normalized = normalized_path.string();
   std::uint64_t hash = 14695981039346656037ULL;
   for (unsigned char const ch : normalized)
   {
@@ -207,7 +210,11 @@ void SessionLease::swap(SessionLease& other)
   std::swap(created_, other.created_);
 }
 
-using detail::project_key;
+// Share path derivation with display projections without granting access to store contents or authority.
+std::filesystem::path session_path_for_options(SessionStoreOptions const& options)
+{
+  return options.root_dir / detail::project_key(options.workspace_dir) / (options.session_id + ".jsonl");
+}
 
 SessionStore::SessionStore(SessionStoreOptions options) : options_(std::move(options)), observation_attachment_(std::make_shared<ObservationAttachment>())
 {
@@ -218,14 +225,81 @@ SessionStore::SessionStore(SessionStoreOptions options, std::shared_ptr<Ephemera
 {
 }
 
-std::string const& SessionStore::session_id() const noexcept
+// A copied store gets a fresh unregistered options wrapper but keeps the implicit-copy behavior of
+// sharing ephemeral content and observation attachment state and copying all deterministic test seams.
+SessionStore::SessionStore(SessionStore const& other)
+    : options_(*other.options_r()),
+      ephemeral_state_(other.ephemeral_state_),
+      observation_attachment_(other.observation_attachment_),
+      before_append_identity_check_for_test_(other.before_append_identity_check_for_test_),
+      after_append_write_for_test_(other.after_append_write_for_test_),
+      after_lease_bound_read_for_test_(other.after_lease_bound_read_for_test_),
+      append_write_for_test_(other.append_write_for_test_),
+      fail_persistent_append_target_allocation_for_test_(other.fail_persistent_append_target_allocation_for_test_),
+      fail_persistent_read_authority_allocation_for_test_(other.fail_persistent_read_authority_allocation_for_test_),
+      before_recovery_quarantine_publication_for_test_(other.before_recovery_quarantine_publication_for_test_),
+      after_recovery_quarantine_publication_for_test_(other.after_recovery_quarantine_publication_for_test_),
+      before_created_file_rollback_detach_for_test_(other.before_created_file_rollback_detach_for_test_),
+      after_created_file_rollback_detach_for_test_(other.after_created_file_rollback_detach_for_test_)
 {
-  return options_.session_id;
+}
+
+SessionStore& SessionStore::operator=(SessionStore const& other)
+{
+  if (&other != this)
+  {
+    // Stage all potentially throwing copies before changing the destination, then update store
+    // handles before options assignment publishes through a possibly registered destination wrapper.
+    SessionStore copy(other);
+    *this = std::move(copy);
+  }
+  return *this;
+}
+
+SessionStore::SessionStore(SessionStore&& other)
+    : options_(std::move(other.options_)),
+      ephemeral_state_(std::move(other.ephemeral_state_)),
+      observation_attachment_(std::move(other.observation_attachment_)),
+      before_append_identity_check_for_test_(std::move(other.before_append_identity_check_for_test_)),
+      after_append_write_for_test_(std::move(other.after_append_write_for_test_)),
+      after_lease_bound_read_for_test_(std::move(other.after_lease_bound_read_for_test_)),
+      append_write_for_test_(std::move(other.append_write_for_test_)),
+      fail_persistent_append_target_allocation_for_test_(other.fail_persistent_append_target_allocation_for_test_),
+      fail_persistent_read_authority_allocation_for_test_(other.fail_persistent_read_authority_allocation_for_test_),
+      before_recovery_quarantine_publication_for_test_(std::move(other.before_recovery_quarantine_publication_for_test_)),
+      after_recovery_quarantine_publication_for_test_(std::move(other.after_recovery_quarantine_publication_for_test_)),
+      before_created_file_rollback_detach_for_test_(std::move(other.before_created_file_rollback_detach_for_test_)),
+      after_created_file_rollback_detach_for_test_(std::move(other.after_created_file_rollback_detach_for_test_))
+{
+}
+
+SessionStore& SessionStore::operator=(SessionStore&& other)
+{
+  if (&other != this)
+  {
+    // Move every handle and test seam first. Assigning options last preserves the destination
+    // wrapper's mutex/registration and publishes only after the store's associated state is coherent.
+    ephemeral_state_ = std::move(other.ephemeral_state_);
+    observation_attachment_ = std::move(other.observation_attachment_);
+    before_append_identity_check_for_test_ = std::move(other.before_append_identity_check_for_test_);
+    after_append_write_for_test_ = std::move(other.after_append_write_for_test_);
+    after_lease_bound_read_for_test_ = std::move(other.after_lease_bound_read_for_test_);
+    append_write_for_test_ = std::move(other.append_write_for_test_);
+    fail_persistent_append_target_allocation_for_test_ = other.fail_persistent_append_target_allocation_for_test_;
+    fail_persistent_read_authority_allocation_for_test_ = other.fail_persistent_read_authority_allocation_for_test_;
+    before_recovery_quarantine_publication_for_test_ = std::move(other.before_recovery_quarantine_publication_for_test_);
+    after_recovery_quarantine_publication_for_test_ = std::move(other.after_recovery_quarantine_publication_for_test_);
+    before_created_file_rollback_detach_for_test_ = std::move(other.before_created_file_rollback_detach_for_test_);
+    after_created_file_rollback_detach_for_test_ = std::move(other.after_created_file_rollback_detach_for_test_);
+    options_ = std::move(other.options_);
+  }
+  return *this;
 }
 
 std::filesystem::path SessionStore::session_path() const
 {
-  return options_.root_dir / project_key(options_.workspace_dir) / (options_.session_id + ".jsonl");
+  auto const options_r = this->options_r();
+  return session_path_for_options(*options_r);
 }
 
 bool SessionStore::is_ephemeral() const noexcept
@@ -248,7 +322,7 @@ std::uint64_t SessionStore::set_run_observation(std::shared_ptr<ava::observabili
     // append/load snapshot and SessionTraceScope construction no-throw.
     auto prepared_context = std::make_shared<ava::observability::TraceContext>(context);
     if (prepared_context->session_id.empty())
-      prepared_context->session_id = session_id();
+      prepared_context->session_id = options_r()->session_id;
     auto prepared_observation = observation;
 
     std::lock_guard lock(observation_attachment_->mutex);
@@ -295,7 +369,7 @@ void SessionStore::clear_run_observation(std::uint64_t generation) noexcept
 
 SessionStore SessionStore::detached_copy_for_background_persistence() const
 {
-  return SessionStore(options_, ephemeral_state_);
+  return SessionStore(*options_r(), ephemeral_state_);
 }
 
 void SessionStore::set_before_append_identity_check_for_test(std::function<void()> hook)

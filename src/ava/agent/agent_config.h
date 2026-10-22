@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/agent/agent_definition_types.h"
 #include "ava/agent/tool_visibility.h"
 #include "ava/core/result.h"
 
@@ -12,23 +13,6 @@
 #include <vector>
 
 namespace ava::agent {
-
-// Selects whether an agent inherits its caller's tool visibility or is narrowed to read-only tools.
-enum class AgentToolPreset
-{
-  Inherit,
-  ReadOnly,
-};
-
-enum class AgentDefinitionProvenance
-{
-  Unknown,
-  Builtin,
-  Global,
-  Project,
-};
-
-[[nodiscard]] std::string_view to_string(AgentDefinitionProvenance provenance) noexcept;
 
 struct AgentDefinition
 {
@@ -44,10 +28,13 @@ struct AgentDefinition
   // Primary definitions retain prompt text and a source path. Keep generated diagnostics from printing either; expose only bounded selection metadata.
   void print_on(std::ostream& os) const
   {
-    os << "{name_bytes:" << name.size() << ",tool_preset:" << (tool_preset == AgentToolPreset::ReadOnly ? "read-only" : "inherit") << ",hidden:" << hidden
-       << ",provenance:" << to_string(provenance) << '}';
+    os << "{name_bytes:" << name.size() <<
+        ", tool_preset:" << (tool_preset == AgentToolPreset::ReadOnly ? "read-only" : "inherit") <<
+        ", hidden:" << hidden <<
+        ", provenance:" << to_string(provenance) << '}';
   }
 
+  // We have a custom print_on.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -87,6 +74,8 @@ struct AgentLoadResult
 
 // Returns whether name is a non-empty, bounded agent identifier containing only supported characters and separators.
 [[nodiscard]] bool valid_agent_name(std::string_view name);
+// FIXME: delete this place-holder. Instead we need to determine with real, existing primary agent is the default at start up.
+[[nodiscard]] AgentDefinition builtin_ava_agent();
 [[nodiscard]] std::vector<AgentDefinition> builtin_subagents();
 // Returns the ordered global directories searched for agent definition files.
 [[nodiscard]] std::vector<std::filesystem::path> default_global_agent_dirs();

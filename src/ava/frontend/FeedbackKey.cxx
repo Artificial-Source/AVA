@@ -5,7 +5,7 @@
 #include <iomanip>
 #endif
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 #ifdef CWDEBUG
 void FeedbackKey::print_on(std::ostream& os) const
@@ -17,4 +17,4 @@ void FeedbackKey::print_on(std::ostream& os) const
 }
 #endif
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

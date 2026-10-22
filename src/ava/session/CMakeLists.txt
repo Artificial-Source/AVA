@@ -32,6 +32,7 @@ target_include_directories(ava_session
 target_link_libraries(ava_session
   PUBLIC
     AVA::core
+    AVA::frontend
     AVA::observability
   PRIVATE
     AVA::diagnostics

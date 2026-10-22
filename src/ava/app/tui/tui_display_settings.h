@@ -154,14 +154,12 @@ struct TuiDisplaySettingsWatchState
 [[nodiscard]] std::optional<bool> normalize_tui_cursor_blink_setting(std::string_view value);
 [[nodiscard]] std::string_view tui_cursor_style_name(ava::tui::terminal::CursorStyle style) noexcept;
 [[nodiscard]] std::string tui_cursor_setting_usage();
-[[nodiscard]] std::string active_tui_theme_summary();
 [[nodiscard]] ava::core::Result<ava::tui::TuiCustomTheme> load_tui_custom_theme_file(std::filesystem::path const& path);
 [[nodiscard]] ava::core::Result<ava::tui::TuiCustomTheme> load_tui_custom_theme(ava::config::XdgPaths const& paths, std::string_view name);
 [[nodiscard]] TuiCustomThemeDiscoveryResult discover_tui_custom_themes(ava::config::XdgPaths const& paths);
 [[nodiscard]] std::vector<TuiCustomThemeSummary> available_tui_custom_themes(ava::config::XdgPaths const& paths);
 [[nodiscard]] ava::core::Result<DisplaySettingsDocument> load_display_settings_document(ava::config::XdgPaths const& paths);
 [[nodiscard]] ava::core::Result<TuiDisplaySettings> load_tui_display_settings(ava::config::XdgPaths const& paths);
-[[nodiscard]] ava::core::Result<TuiDisplaySettings> apply_tui_display_settings(ava::config::XdgPaths const& paths);
 [[nodiscard]] ava::core::Result<TuiDisplaySettingsWatchState> load_tui_display_settings_watch_state(ava::config::XdgPaths const& paths);
 [[nodiscard]] bool tui_display_settings_watch_state_changed(TuiDisplaySettingsWatchState const& previous, TuiDisplaySettingsWatchState const& current);
 // Field-specific setters update or erase only the owned key and preserve every other field.

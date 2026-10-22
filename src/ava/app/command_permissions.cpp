@@ -534,7 +534,7 @@ std::string format_permission_audit(std::vector<ava::session::SessionEntry> cons
 {
   static constexpr std::size_t kMaxDisplayedAuditRows = 50;
 
-  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.session_id();
+  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id;
   std::ostringstream output;
   output << "Permission audit:\n";
   output << "  session: " << sanitize_inline_text(session_id) << "\n";
@@ -591,7 +591,7 @@ std::string format_permission_audit_export(std::vector<ava::session::SessionEntr
 {
   static constexpr std::size_t kMaxDisplayedAuditRows = 50;
 
-  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.session_id();
+  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id;
   std::ostringstream output;
   output << "Permission audit export:\n";
   output << "  session: " << sanitize_inline_text(session_id) << "\n";
@@ -697,7 +697,7 @@ std::string format_summary_counts(std::string_view label, std::unordered_map<std
 std::string format_permission_audit_summary(std::vector<ava::session::SessionEntry> const& entries, runtime::session_ts const& unlocked_session,
                                             std::string_view query)
 {
-  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.session_id();
+  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id;
   std::ostringstream output;
   output << "Permission audit summary:\n";
   output << "  session: " << sanitize_inline_text(session_id) << "\n";
@@ -803,7 +803,7 @@ void append_audit_detail_field(std::ostringstream& output, std::string_view labe
 std::string format_permission_audit_detail(std::vector<ava::session::SessionEntry> const& entries, runtime::session_ts const& unlocked_session,
                                            std::string_view selector)
 {
-  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.session_id();
+  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id;
   std::ostringstream output;
   output << "Permission audit detail:\n";
   output << "  session: " << sanitize_inline_text(session_id) << "\n";

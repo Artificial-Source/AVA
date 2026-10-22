@@ -11,37 +11,6 @@
 
 namespace ava::tui {
 
-// Narrow pure/testable Enter-resolution seam for the ForkUserTurn selector.
-// No generic modal framework: this only decides fork-from presentation effects
-// after the selector has already cleared.
-enum class UserTurnForkSelectionAction
-{
-  MissingSelection,
-  AuthorityFailure,
-  NoSessionTransition,
-  ApplyOpenedSession,
-};
-
-struct UserTurnForkSelectionDecision
-{
-  UserTurnForkSelectionAction action = UserTurnForkSelectionAction::MissingSelection;
-  std::optional<TuiRuntimeStateSnapshot> opened_snapshot = std::nullopt;
-  std::string status = {};
-  bool beep = false;
-  // True only when the presentation must adopt a new session authority and drop
-  // the prior transcript. Unchanged/no-transition and failures keep transcript.
-  bool clear_transcript = false;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Invokes on_fork_user_turn_selected with the stable selected entry id when
-// non-empty. Defensively refuses to treat same session_id+session_path success
-// as an opened-session transition so a no-op cannot wipe the transcript.
-[[nodiscard]] UserTurnForkSelectionDecision evaluate_fork_user_turn_selection(
-    std::string_view selected_entry_id, std::string_view presentation_session_id, std::string_view presentation_session_path,
-    std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view entry_id)> const& on_fork_user_turn_selected);
-
 enum class UserTurnCopySelectionAction
 {
   MissingSelection,

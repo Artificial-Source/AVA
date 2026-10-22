@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from tui_smoke_helpers import (
-    ACTIVE_CONTEXT_STATUS_PATTERN,
+    ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN,
     SmokeContext,
     assert_screen_absent_for,
     capture,
@@ -31,7 +31,7 @@ def _assert_drawer_frame(screen: str, width: int, height: int, label: str) -> li
         raise RuntimeError(f"{label} did not show the session overview title\nscreen:\n{screen}")
     if "live session" in screen or screen.count("Activity") > 1:
         raise RuntimeError(f"{label} duplicated the automatic side rail\nscreen:\n{screen}")
-    if not lines[height - 2].startswith("│  Type a message...") or not lines[height - 1].startswith("│  GPT-5.5 · ctx "):
+    if not lines[height - 2].startswith("│  Type a message...") or not lines[height - 1].startswith("│  GPT-5.5 · agent none · ctx "):
         raise RuntimeError(f"{label} did not retain the full-width quiet composer on rows {height - 2}/{height - 1}\nscreen:\n{screen}")
     if any(len(line) > width for line in lines):
         raise RuntimeError(f"{label} exceeded the {width}-column capture bound\nscreen:\n{screen}")
@@ -135,11 +135,11 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
         raise RuntimeError(f"fresh TUI startup created an onboarding marker: {onboarding_marker}")
     footer_lines = [line for line in initial.splitlines() if "GPT-5.5" in line and "ctx " in line]
     footer_text = footer_lines[-1].removeprefix("│  ").strip() if footer_lines else ""
-    if not re.fullmatch(rf"GPT-5\.5 · ctx {ACTIVE_CONTEXT_STATUS_PATTERN}", footer_text) or any(
+    if not re.fullmatch(rf"GPT-5\.5 · agent none · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}", footer_text) or any(
         marker in footer_text for marker in ("Build", "OpenAI", "cwd ", "git ", "entries ")
     ):
         raise RuntimeError(
-            "composer footer did not contain only the model name and active context usage\n"
+            "composer footer did not contain only the model, selected agent, and active context usage\n"
             f"screen:\n{initial}"
         )
     save_evidence(root, "startup-ready-composer", initial)
@@ -155,7 +155,7 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
         settled = wait_for(
             tmux_exe,
             session,
-            rf"(?m)\A(?:[^\n]*\n){{{input_row}}}{inset}│  Type a message\.\.\.[^\n]*\n{inset}│  GPT-5\.5 · ctx {ACTIVE_CONTEXT_STATUS_PATTERN}[^\n]*(?:\n|\Z)",
+            rf"(?m)\A(?:[^\n]*\n){{{input_row}}}{inset}│  Type a message\.\.\.[^\n]*\n{inset}│  GPT-5\.5 · agent none · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}[^\n]*(?:\n|\Z)",
             f"{label} target composer/footer rows {input_row}/{footer_row}",
         )
         settled_lines = settled.splitlines()
@@ -206,9 +206,9 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
         canvas_width = width - 39 if sidebar_expected else min(width, 120)
         settled_footer = settled_lines[height - 1][canvas_left + 3 : canvas_left + canvas_width]
         settled_footer = settled_footer.strip()
-        if not re.fullmatch(rf"GPT-5\.5 · ctx {ACTIVE_CONTEXT_STATUS_PATTERN}", settled_footer):
+        if not re.fullmatch(rf"GPT-5\.5 · agent none · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}", settled_footer):
             raise RuntimeError(
-                f"{name} footer did not contain only the idle model name and active context usage\nscreen:\n{settled}"
+                f"{name} footer did not contain only the idle model, selected agent, and active context usage\nscreen:\n{settled}"
             )
         if sidebar_expected:
             main_width = width - 39
@@ -627,7 +627,7 @@ def scenario_main_startup_trust_keybinds(ctx: SmokeContext) -> None:
     trust_project = wait_for(
         tmux_exe,
         session,
-        rf"GPT-5\.5\s+·\s+ctx {ACTIVE_CONTEXT_STATUS_PATTERN}",
+        rf"GPT-5\.5\s+·\s+agent none\s+·\s+ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}",
         "composer footer active context meter after project trust reload",
     )
     save_evidence(root, "footer-active-context-meter-refreshed", trust_project)

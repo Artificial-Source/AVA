@@ -768,8 +768,11 @@ void test_app_rpc_utf8_recovery_and_framing()
   std::string invalid_state;
   {
     SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
-    session_w->invocation_inputs().workspace_dir = std::filesystem::path(invalid_component);
-    session_w->invocation_inputs().current_dir = std::filesystem::path(invalid_component);
+    {
+      ava::app::runtime::Directories_ts::wat directories_w(session_w->directories());
+      directories_w->workspace_dir = std::filesystem::path(invalid_component);
+      directories_w->current_dir = std::filesystem::path(invalid_component);
+    }
     invalid_state = session_w->state_result_json_1(false);
   }
   auto const invalid_path = ava::app::rpc::string_field_json("path", invalid_component);

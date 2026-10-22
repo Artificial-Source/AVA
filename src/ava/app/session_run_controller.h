@@ -94,6 +94,23 @@ struct RunSnapshot
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
+// Controller-owned identity for statistics work. committed_append_generation
+// counts successful transactions; append_order_generation is odd while the
+// serialized append target is being mutated.
+struct SessionStatisticsMutationIdentity
+{
+  std::uint64_t committed_append_generation = 0;
+  std::uint64_t append_order_generation = 0;
+  // Advances when persistence enters a partial/unknown state. Successful
+  // recovery retains the new value because recover() may truncate history.
+  std::uint64_t persistence_invalidation_generation = 0;
+  bool persistence_failure_latched = false;
+
+  bool operator==(SessionStatisticsMutationIdentity const& other) const = default;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
 inline constexpr std::size_t kMaxSessionRunCommands = 64;
 inline constexpr std::size_t kMaxSessionRunCommandBytes = 64 * 1024;
 inline constexpr std::size_t kMaxSessionAppendQueueEntries = 256;
@@ -205,6 +222,13 @@ class SessionRunController
   // before Completing; terminal/duplicate requests are bounded no-ops.
   [[nodiscard]] ava::core::Result<bool> request_stop(StopReason reason = StopReason::UserCanceled);
   [[nodiscard]] RunSnapshot snapshot() const;
+  // Return the committed count and in-flight append order from the controller's
+  // single state lock. Conditional no-ops do not advance the committed count.
+  [[nodiscard]] SessionStatisticsMutationIdentity statistics_mutation_identity() const;
+  // Invoke publish synchronously under the controller state lock only when
+  // expected is still current and no target append is in flight. publish must
+  // not call controller APIs; callers may already own the Session lock.
+  [[nodiscard]] bool publish_if_statistics_mutation_current(SessionStatisticsMutationIdentity expected, std::function<void()> const& publish);
 
   // Compatibility owner route for notifications that are not tied to a run.
   // It is still session-bound, serialized, and rejects once terminal/closed.

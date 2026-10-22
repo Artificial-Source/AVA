@@ -235,6 +235,10 @@ struct ActiveRunGuard::State
   std::deque<std::string> outcome_order;
   std::shared_ptr<ava::core::Error const> persistence_failure;
   std::uint64_t persistence_failure_generation = 0;
+  // Actual successful append transactions are the mutation source for statistics publication.
+  std::uint64_t committed_append_generation = 0;
+  // Even values are stable boundaries; odd values cover target mutation and its result ordering.
+  std::uint64_t append_order_generation = 0;
   std::shared_ptr<ava::core::Error const> append_exception_fallback = make_append_exception_fallback();
   std::shared_ptr<ava::core::Error const> conditional_rejection_fallback = make_conditional_rejection_fallback();
   std::shared_ptr<ava::session::SessionAppendTarget> append_target;
@@ -541,6 +545,30 @@ RunSnapshot SessionRunController::snapshot() const
           .outcome = state_->outcome ? *state_->outcome : std::nullopt};
 }
 
+SessionStatisticsMutationIdentity SessionRunController::statistics_mutation_identity() const
+{
+  std::lock_guard lock(state_->mutex);
+  return {.committed_append_generation = state_->committed_append_generation,
+          .append_order_generation = state_->append_order_generation,
+          .persistence_invalidation_generation = state_->persistence_failure_generation,
+          .persistence_failure_latched = state_->persistence_failure != nullptr};
+}
+
+bool SessionRunController::publish_if_statistics_mutation_current(SessionStatisticsMutationIdentity expected, std::function<void()> const& publish)
+{
+  if (!publish)
+    return false;
+  std::lock_guard state_lock(state_->mutex);
+  if (state_->shutting_down || !state_->append_target || state_->persistence_failure || expected.persistence_failure_latched ||
+      (state_->append_order_generation & 1U) != 0 || state_->committed_append_generation != expected.committed_append_generation ||
+      state_->append_order_generation != expected.append_order_generation)
+    return false;
+  if (state_->persistence_failure_generation != expected.persistence_invalidation_generation)
+    return false;
+  publish();
+  return true;
+}
+
 ava::core::VoidResult SessionRunController::append_for_generation(std::shared_ptr<ActiveRunGuard::State> const& state, std::uint64_t generation,
                                                                   std::vector<ava::session::SessionEntry> entries, bool owner_route,
                                                                   SessionAppendRequestKind kind, std::vector<ava::session::SessionEntry> expected,
@@ -642,6 +670,7 @@ ava::core::VoidResult SessionRunController::append_for_generation(std::shared_pt
         target = state->append_target;
         fallback = state->append_exception_fallback;
         rejection_fallback = state->conditional_rejection_fallback;
+        ++state->append_order_generation;
       }
     }
     state->appends_drained.notify_all();
@@ -654,6 +683,7 @@ ava::core::VoidResult SessionRunController::append_for_generation(std::shared_pt
     // append_commit_state, even if error-detail allocation itself fails.
     std::shared_ptr<ava::core::Error const> failure;
     std::shared_ptr<ava::core::Error const> rejection;
+    bool committed_append = false;
     try
     {
       ava::core::VoidResult persisted;
@@ -665,6 +695,7 @@ ava::core::VoidResult SessionRunController::append_for_generation(std::shared_pt
           if (!conditional.result)
             throw std::logic_error("successful conditional append has no result");
           head->branch_summary_result = std::move(*conditional.result);
+          committed_append = head->branch_summary_result->disposition == ava::session::SessionAppendDisposition::Appended;
         }
         else if (conditional.completion == ava::session::SessionAppendTarget::ConditionalAppendCompletion::RejectedBeforeAppend)
         {
@@ -692,6 +723,7 @@ ava::core::VoidResult SessionRunController::append_for_generation(std::shared_pt
           if (!conditional.result)
             throw std::logic_error("successful conditional compaction append has no result");
           head->compaction_result = *conditional.result;
+          committed_append = *head->compaction_result == ava::session::SessionCompactionAppendResult::Appended;
         }
         else if (conditional.completion == ava::session::SessionAppendTarget::ConditionalAppendCompletion::RejectedBeforeAppend)
         {
@@ -714,6 +746,7 @@ ava::core::VoidResult SessionRunController::append_for_generation(std::shared_pt
       else
       {
         persisted = head->entries.size() == 1 ? target->append(head->entries.front()) : target->append_batch(std::move(head->entries));
+        committed_append = persisted.has_value();
       }
       if (!persisted)
       {
@@ -786,8 +819,11 @@ ava::core::VoidResult SessionRunController::append_for_generation(std::shared_pt
       }
       else
       {
+        if (committed_append)
+          ++state->committed_append_generation;
         head->completion = ActiveRunGuard::State::AppendItem::Completion::Succeeded;
       }
+      ++state->append_order_generation;
       if (state->shutting_down)
       {
         if (!state->persistence_failure)

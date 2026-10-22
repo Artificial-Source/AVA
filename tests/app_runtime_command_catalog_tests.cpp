@@ -47,7 +47,7 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
                                          std::filesystem::path const& workspace, std::vector<ava::app::CommandHotkey> const& custom_hotkeys)
 {
   tui_test_support::TuiFrontEndFixture frontend;
-  auto session_id = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(); };
+  auto session_id = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id; };
   auto session_workspace_dir = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->workspace_dir(); };
   auto const slash_items = ava::app::command_catalog_slash_items_1(unlocked_session, custom_hotkeys);
   auto const file_reference_items = ava::app::file_reference_items(unlocked_session);
@@ -336,7 +336,7 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
     return ava::session::create_session_branch(
         ava::session::SessionBranchOptions{.workspace_dir = workspace,
                                            .root_dir = paths.sessions_dir,
-                                           .source_session_id = session_r->store.session_id(),
+                                           .source_session_id = session_r->store.options_r()->session_id,
                                            .branch_from_entry_id = {},
                                            .name = std::optional<std::string>("Review branch"),
                                            .labels = std::optional<std::vector<std::string>>(std::vector<std::string>{"review", "ui"}),
@@ -354,7 +354,7 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
   if (branch)
   {
     branch->lease = ava::session::SessionLease{};
-    auto const branch_session_id = branch->store.session_id();
+    auto const branch_session_id = branch->store.options_r()->session_id;
     auto target_labels =
         ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/sessions labels " + branch_session_id + " triage selected"});
     auto branch_metadata_after_labels = ava::session::load_session_metadata(branch->store);
@@ -958,7 +958,7 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
 
   auto const coordinator_snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::pair{session_r->subagent_coordinator(), session_r->store.session_id()};
+    return std::pair{session_r->subagent_coordinator(), session_r->store.options_r()->session_id};
   }();
   auto const& [coordinator, coordinator_session_id] = coordinator_snapshot;
   expect(coordinator != nullptr, "catalog human completion tests require a subagent coordinator");

@@ -5,7 +5,7 @@
 #include "ava/debug/print_members_on.h"
 #include <vector>
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 struct AgentsListSnapshot
 {
@@ -25,4 +25,4 @@ class AgentsList : public Data
   AVA_DEBUG_PRINT_MEMBERS_ON_BASE(Data)
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

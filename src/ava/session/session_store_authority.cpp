@@ -247,10 +247,9 @@ std::uint64_t hash_tip(std::string_view id, std::string_view timestamp, std::siz
 
 }  // namespace
 
-std::string const& SessionReadAuthority::session_id() const noexcept
+std::string SessionReadAuthority::session_id() const
 {
-  static std::string const kEmpty;
-  return state_ ? state_->store.session_id() : kEmpty;
+  return state_ ? state_->store.options_r()->session_id : std::string{};
 }
 
 bool SessionReadAuthority::is_ephemeral() const noexcept
@@ -594,7 +593,7 @@ SessionAppendTarget::ConditionalAppendOutcome SessionAppendTarget::append_branch
     auto identity = branch_summary_identity(entry);
     if (!identity)
       return rejected(std::move(identity.error()));
-    if ((*identity)[0] != store_.session_id())
+    if ((*identity)[0] != store_.options_r()->session_id)
     {
       return rejected(
           ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "conditional branch summary source identity does not match the append target"));

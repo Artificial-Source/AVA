@@ -273,7 +273,7 @@ ava::core::Result<SessionMetadataView> load_session_metadata(SessionStore const&
   auto entries = store.load();
   if (!entries)
     return std::unexpected(std::move(entries.error()));
-  return session_metadata_from_entries(store.session_id(), *entries);
+  return session_metadata_from_entries(store.options_r()->session_id, *entries);
 }
 
 //FIXME: the Session that store belongs to must be locked.
@@ -282,7 +282,7 @@ ava::core::Result<SessionMetadataView> load_session_metadata(SessionStore const&
   auto entries = store.load(lease);
   if (!entries)
     return std::unexpected(std::move(entries.error()));
-  return session_metadata_from_entries(store.session_id(), *entries);
+  return session_metadata_from_entries(store.options_r()->session_id, *entries);
 }
 
 ava::core::Result<SessionEntry> make_session_metadata_entry(SessionMetadataUpdate update, std::string parent_entry_id)
@@ -351,13 +351,13 @@ ava::core::Result<SessionMetadataView> append_session_metadata_impl(std::string 
 
 ava::core::Result<SessionMetadataView> append_session_metadata(SessionStore& store, SessionLease const& lease, SessionMetadataUpdate update)
 {
-  return append_session_metadata_impl(store.session_id(), store.load(lease), std::move(update),
+  return append_session_metadata_impl(store.options_session_id_copy(), store.load(lease), std::move(update),
                                       [&](SessionEntry const& entry) { return store.append(lease, entry); });
 }
 
 ava::core::Result<SessionMetadataView> append_session_metadata_ephemeral(SessionStore& store, SessionMetadataUpdate update)
 {
-  return append_session_metadata_impl(store.session_id(), store.load(), std::move(update),
+  return append_session_metadata_impl(store.options_r()->session_id, store.load(), std::move(update),
                                       [&](SessionEntry const& entry) { return store.append_ephemeral(entry); });
 }
 

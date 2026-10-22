@@ -2,7 +2,10 @@
 #include "ava/app/command_palette_projection_internal.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/session_user_turns.h"
+#include "ava/app/tui/command_hotkeys.h"
 #include "ava/app/tui/command_palette_views.h"
+#include "ava/app/tui/tui_display_settings.h"
+#include "ava/tui/command_completions.h"
 #include "ava/config/model_config.h"
 #include "ava/provider/catalog.h"
 
@@ -68,12 +71,30 @@ std::vector<tui::FileReferenceItem> project_file_reference_items(std::vector<Fil
 
 std::vector<tui::SlashCommandItem> command_catalog_slash_items(std::vector<CommandHotkey> const& hotkeys)
 {
-  return project_slash_command_items(command_catalog_records(hotkeys));
+  auto items = project_slash_command_items(command_catalog_records());
+  std::vector<tui::TuiKeyBindingHelpItem> help;
+  help.reserve(hotkeys.size());
+  for (auto const& hotkey : hotkeys)
+    help.push_back({.label = command_hotkey_primary_label(hotkey), .action = hotkey.action, .description = {}, .keys = hotkey.keys});
+  tui::compose_tui_slash_command_items(items, {}, help);
+  return items;
 }
 
+// Preserve the noncached compatibility projection by explicitly discovering
+// current local themes here, after backend records cross the app/TUI boundary.
 std::vector<tui::SlashCommandItem> command_catalog_slash_items_1(runtime::session_ts const& unlocked_session, std::vector<CommandHotkey> const& hotkeys)
 {
-  return project_slash_command_items(command_catalog_records_1(unlocked_session, hotkeys));
+  auto items = project_slash_command_items(command_catalog_records_1(unlocked_session));
+  auto const paths = runtime::session_ts::crat(unlocked_session)->paths();
+  std::vector<tui::ThemeOptionItem> themes;
+  for (auto& theme : available_tui_custom_themes(paths))
+    themes.push_back({.name = std::move(theme.name), .detail = theme.path.string(), .palette = theme.palette, .revision = std::move(theme.revision)});
+  std::vector<tui::TuiKeyBindingHelpItem> help;
+  help.reserve(hotkeys.size());
+  for (auto const& hotkey : hotkeys)
+    help.push_back({.label = command_hotkey_primary_label(hotkey), .action = hotkey.action, .description = {}, .keys = hotkey.keys});
+  tui::compose_tui_slash_command_items(items, themes, help);
+  return items;
 }
 
 std::vector<tui::FileReferenceItem> file_reference_items(runtime::session_ts const& unlocked_session)

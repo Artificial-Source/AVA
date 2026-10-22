@@ -786,7 +786,7 @@ void test_app_rpc_active_prompt_rejects_second_prompt_and_session_switch()
   std::ostream out(&output_buffer);
   ava::core::VoidResult result;
   ava::app::runtime::session_ts unlocked_session(std::move(*session));
-  auto const initial_session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id();
+  auto const initial_session_id = ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id;
   ava::core::JoinThread rpc_thread = ava::core::JoinThread::create("rpc_thread", [&] {
     result = ava::app::run_rpc_loop(unlocked_session, open_context, provider, transport, runtime_options, in, out, [&] noexcept { input_buffer.close(); });
   });
@@ -796,7 +796,7 @@ void test_app_rpc_active_prompt_rejects_second_prompt_and_session_switch()
   expect(requested, "RPC active reject test observes pending permission request");
   input_buffer.push("{\"id\":\"p2\",\"type\":\"prompt\",\"message\":\"second\"}\n");
   input_buffer.push("{\"id\":\"new\",\"type\":\"new_session\"}\n");
-  input_buffer.push("{\"id\":\"switch\",\"type\":\"switch_session\",\"session_id\":\"" + ava::app::runtime::session_ts::rat(*unlocked_other_result)->store.session_id() + "\"}\n");
+  input_buffer.push("{\"id\":\"switch\",\"type\":\"switch_session\",\"session_id\":\"" + ava::app::runtime::session_ts::rat(*unlocked_other_result)->store.options_r()->session_id + "\"}\n");
   input_buffer.push("{\"id\":\"messages\",\"type\":\"get_messages\"}\n");
   for (std::string_view id : {"p2", "new", "switch", "messages"})
     expect(wait_for_rpc_response(output_buffer, id, std::chrono::seconds(2)), "RPC active-run rejection completes for " + std::string(id));
@@ -813,7 +813,7 @@ void test_app_rpc_active_prompt_rejects_second_prompt_and_session_switch()
                                                                      {"active_run code", response.find("\"code\":\"active_run\"") != std::string_view::npos}});
   }
   expect_eq(count_substrings(jsonl, "\"code\":\"active_run\""), std::size_t{4}, "RPC rejects all four active-run commands");
-  expect_eq(ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(), initial_session_id,
+  expect_eq(ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id, initial_session_id,
             "RPC rejected session mutations preserve the active session");
 }
 

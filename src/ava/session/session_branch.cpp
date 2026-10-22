@@ -272,7 +272,7 @@ ava::core::Result<std::size_t> copy_count_for_branch(std::vector<SessionEntry> c
 
 void rollback_created_session_with_context(SessionStore const& store, SessionLease const& lease, ava::core::Error& error)
 {
-  error.with_context("created_session_id", store.session_id());
+  error.with_context("created_session_id", store.options_r()->session_id);
   if (auto removed = store.remove_created_file(lease); !removed)
   {
     error.with_context("rollback_path", store.session_path().string());
@@ -453,7 +453,7 @@ ava::core::Result<SessionBranchResult> create_session_branch(SessionBranchOption
   if (!destination_lease)
   {
     auto error = std::move(destination_lease.error());
-    error.with_context("created_session_id", created->session_id());
+    error.with_context("created_session_id", created->options_r()->session_id);
     return std::unexpected(std::move(error));
   }
 

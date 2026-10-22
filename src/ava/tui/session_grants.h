@@ -32,7 +32,7 @@ class TuiSessionGrantRegistry final
   [[nodiscard]] TuiSessionGrantInsertResult add(std::string_view session_id, ava::permissions::PermissionPrompt const& prompt);
 
   // Returns true exactly when an authoritative session id differs from the
-  // current one. The TUI calls this while applying every runtime state snapshot.
+  // current one. The TUI calls this at committed backend identity transition boundaries.
   [[nodiscard]] bool clear_for_session_transition(std::string_view current_session_id, std::string_view next_session_id) noexcept;
   [[nodiscard]] std::size_t size() const noexcept;
 

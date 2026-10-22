@@ -79,7 +79,7 @@ class AcpSessionHost
   ~AcpSessionHost();
 
   [[nodiscard]] std::string const& session_id() const noexcept;
-  [[nodiscard]] std::filesystem::path const& current_dir(runtime::session_ts::crat const& session_r) const noexcept;
+  [[nodiscard]] std::filesystem::path current_dir(runtime::session_ts::crat const& session_r) const;
   [[nodiscard]] bool accepts_images() const noexcept;
   [[nodiscard]] ava::core::Result<std::uint64_t> reserve_prompt();
   void rollback_prompt_reservation(std::uint64_t reservation) noexcept;

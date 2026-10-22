@@ -15,6 +15,7 @@ AVA is a native C++23 terminal coding agent. Treat the codebase as a small syste
 - `src/ava/config/`: XDG paths, auth storage, model configuration, prompt configuration, and OpenAI OAuth support.
 - `src/ava/http/`: neutral HTTP transport, curl, and retry contract.
 - `src/ava/event/`: typed RuntimeEvent payload, envelope, and emission ownership.
+- `src/ava/frontend/`: frontend-neutral registered data contract (`FrontEnd`, `Data`, `UnlockedData`) and change-tracked display projections of runtime state that TUI and other frontends observe; `session/` wraps options and statistics in `UnlockedData`.
 - `src/ava/provider/`: provider protocol and request/response/stream adapters for OpenAI, Anthropic, Gemini, and OpenAI-compatible services.
 - `src/ava/agent/`: agent loop, thin tool dispatch/registration/family adapters, user-question plumbing, configurable task subagents, and process-local background job registry.
 - `src/ava/command/`: canonical command planning, classification, policy, environment, and execution metadata.

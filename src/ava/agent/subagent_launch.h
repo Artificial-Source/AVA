@@ -31,8 +31,7 @@ class SubagentLaunchDisplay
   [[nodiscard]] std::string const& reasoning_label() const noexcept { return reasoning_label_; }
   [[nodiscard]] bool operator==(SubagentLaunchDisplay const&) const = default;
 
-  // Deliberately omit the model/reasoning strings from generated diagnostics.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   SubagentLaunchDisplay(std::string model_display_name, std::string reasoning_label)

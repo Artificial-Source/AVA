@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 struct CommandListEntry
 {
@@ -32,4 +32,4 @@ class CommandsList : public Data
   AVA_DEBUG_PRINT_MEMBERS_ON_BASE(Data)
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

@@ -4,7 +4,7 @@
 #include "Data.h"
 #include <vector>
 
-namespace ava::app::frontend {
+namespace ava::frontend {
 
 struct KeyInputFeedbackSnapshot
 {
@@ -43,4 +43,4 @@ class KeyInputFeedback : public Data
   AVA_DEBUG_PRINT_MEMBERS_ON_BASE(Data)
 };
 
-} // namespace ava::app::frontend
+} // namespace ava::frontend

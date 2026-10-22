@@ -870,12 +870,6 @@ std::string tui_cursor_setting_usage()
   return "usage: /cursor default|block|underline|bar [blink|steady]";
 }
 
-std::string active_tui_theme_summary()
-{
-  auto const active = ava::tui::active_tui_theme();
-  return active.name + " (" + active.badge + ")";
-}
-
 namespace {
 
 class ScopedThemeFd
@@ -1378,15 +1372,6 @@ ava::core::Result<TuiDisplaySettings> load_tui_display_settings(ava::config::Xdg
   if (!document)
     return std::unexpected(std::move(document.error()));
   return resolve_theme_into_settings(paths, std::move(*document));
-}
-
-ava::core::Result<TuiDisplaySettings> apply_tui_display_settings(ava::config::XdgPaths const& paths)
-{
-  auto settings = load_tui_display_settings(paths);
-  if (!settings)
-    return std::unexpected(std::move(settings.error()));
-  ava::tui::set_tui_config_theme(settings->theme, settings->custom_theme);
-  return settings;
 }
 
 ava::core::Result<TuiDisplaySettingsWatchState> load_tui_display_settings_watch_state(ava::config::XdgPaths const& paths)

@@ -111,7 +111,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     return DisplaySettingsReloadPollOutcome::Unchanged;
   next_display_reload_check_ = now + kDisplayReloadPollInterval;
 
-  // Preserve the app callback's optional snapshot as the explicit applied/unchanged signal.
+  // Preserve the frontend owner's optional result as the explicit applied/unchanged signal.
   // Do not infer applied state by comparing presentation values (overlays can mask them).
   auto reloaded = options_.on_maybe_reload_display_settings();
   if (!reloaded)
@@ -132,14 +132,12 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   if (!*reloaded)
     return DisplaySettingsReloadPollOutcome::Unchanged;
 
-  auto state = std::move(**reloaded);
-  auto status = state.status.empty() ? std::string("display theme auto-reloaded") : state.status;
+  auto result = std::move(**reloaded);
+  auto status = result.status.empty() ? std::string("display theme auto-reloaded") : result.status;
   {
     std::lock_guard<std::recursive_mutex> lock(renderer_.ui_mutex);
-    // Hydrate authoritative snapshot and rebuild an open overview list from the refreshed
-    // startup DTO while preserving local filter/selection. Callers still rebase/reapply any
-    // settings preview and paint exactly once afterward so the first frame is final.
-    apply_runtime_state_snapshot_with_overview_sync(options_, presentation_state_, active_select_list_, std::move(state));
+    presentation_state_.apply_local_display_settings(options_, std::move(result.settings));
+    synchronize_startup_overview_presentation(presentation_state_.snapshot, active_select_list_);
     settle_local_command_status(presentation_state_.snapshot, std::move(status));
   }
   return DisplaySettingsReloadPollOutcome::Applied;
@@ -426,16 +424,20 @@ bool RuntimeActionController::toggle_startup_overview()
   if (active_select_list_ == ActiveSelectList::Overview && snapshot.select_list)
   {
     snapshot.select_list.reset();
+    snapshot.startup_overview.reset();
     active_select_list_ = ActiveSelectList::None;
     snapshot.status = "overview closed";
     return renderer_.request_render();
   }
-  if (!snapshot.startup_overview)
+  if (!options_.read_startup_overview)
   {
     snapshot.status = "startup overview unavailable";
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return renderer_.request_render();
   }
+  // Read current backend facts exactly once for this popup lifetime. The callback
+  // returns an owning safe DTO; local display and keybinding hints are composed here.
+  presentation_state_.initialize_startup_overview(options_, options_.read_startup_overview());
   // Replace any other modal with the read-only overview; Enter/Esc close without mutation.
   snapshot.sidebar_drawer_visible = false;
   snapshot.sidebar_drawer_scroll_offset = 0;

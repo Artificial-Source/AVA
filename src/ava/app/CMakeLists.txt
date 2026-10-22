@@ -115,13 +115,12 @@ target_sources(ava_app
     "tui/startup_overview.cpp"
     "subagent_delivery_manager.cpp"
     "runtime/Session.cpp"
+    "runtime/SessionStatisticsPublication.cpp"
     "runtime/ExtensionResourcePolicy.cpp"
     "runtime/FreshnessSourceMetadata.cpp"
+    "runtime/GitBranch.cpp"
     "runtime/markdown_files.cpp"
     "runtime/command_names.cpp"
-    "frontend/Data.cxx"
-    "frontend/FeedbackKey.cxx"
-    "frontend/FrontEnd.cxx"
 )
 
 target_include_directories(ava_app

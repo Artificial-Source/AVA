@@ -18,6 +18,7 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/RunOptions.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime/SessionStatisticsPublication.h"
 #include "ava/app/runtime_retry.h"
 #include "ava/app/subagent_delivery_manager.h"
 #include "ava/agent/mode.h"
@@ -164,6 +165,74 @@ void test_debug_session_mutex_tracks_current_thread()
   } witness{first};
   AVA_ASSERT_SESSION_UNLOCKED(witness, "debug specific session mutex test boundary");
 #endif
+}
+
+void test_default_primary_is_canonical_builtin_ava_without_duplicate_prompt()
+{
+  auto const root = create_empty_root("app-runtime-default-primary");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = app_test_paths(root);
+  auto opened = ava::app::runtime::Session::open(context);
+  expect(opened.has_value(), "runtime resolves the default primary before publishing the session");
+  if (!opened)
+    return;
+
+  SCOPED_CRITICAL_AREA_R(session_r, *opened);
+  auto selection_r = session_r->agent_selection_r();
+  auto const& selected = selection_r->selected_primary_agent;
+  auto const& prompt = session_r->system_prompt();
+  auto const first_identity = prompt.find("You are AVA");
+  auto const second_identity = first_identity == std::string::npos ? std::string::npos : prompt.find("You are AVA", first_identity + 1);
+  expect(selected.name == "none" && selected.provenance == ava::agent::AgentDefinitionProvenance::Builtin &&
+             selected.tool_preset == ava::agent::AgentToolPreset::Inherit && !selected.max_tool_iterations && selected.system_prompt.empty(),
+         "the canonical default is the built-in AVA definition with inherited tools and no definition-specific iteration cap");
+  expect(
+      first_identity != std::string::npos && second_identity == std::string::npos && prompt.find("# Selected Primary Agent Instructions") == std::string::npos,
+      "the built-in AVA definition relies on the existing base prompt exactly once");
+}
+
+void test_primary_agent_tool_iteration_limit_is_applied_to_runtime_loop()
+{
+  auto const root = create_empty_root("app-runtime-primary-iteration-limit");
+  auto const workspace = root / "workspace";
+  auto const paths = app_test_paths(root);
+  std::filesystem::create_directories(workspace);
+  write_app_test_file(workspace / "note.txt", "bounded primary tool data\n");
+  write_app_test_file(paths.ava_config_dir / "agents" / "bounded-primary.md",
+                      "---\nname: bounded-primary\ndescription: Bounded primary.\nmode: primary\nmax_tool_iterations: 1\n---\nUse tools when needed.\n");
+
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = paths;
+  context.requested_primary_agent = "bounded-primary";
+  auto opened = ava::app::runtime::Session::open(context);
+  expect(opened.has_value(), "runtime opens a primary definition with a tool-iteration limit");
+  if (!opened)
+    return;
+
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport({ava::http::HttpResponse{
+      .status_code = 200,
+      .headers = {},
+      .body = "data: {\"type\":\"response.function_call.added\",\"call_id\":\"call_read\",\"name\":\"read_file\"}\n\n"
+              "data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"call_read\","
+              "\"delta\":\"{\\\"path\\\":\\\"note.txt\\\"}\"}\n\n"
+              "data: [DONE]\n\n",
+  }});
+  ava::app::runtime::RunOptions options;
+  options.access_token = "fake";
+  options.permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    return ava::permissions::PermissionResolution::Allow;
+  };
+  auto result = ava::app::run_prompt(*opened, "read the note repeatedly", provider, transport, options);
+  expect(result && result->outcome == ava::core::RuntimeTerminalOutcome::MaxTurnRequests && result->tool_iterations == 1 && transport.requests().size() == 1,
+         "the selected primary definition stops the parent loop at its configured tool-round limit");
 }
 
 void test_app_run_prompt_isolates_ambient_extensions()
@@ -453,9 +522,10 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   };
   auto expect_project_selection = [&](std::string_view canary, ava::agent::AgentToolPreset preset, std::string_view label) {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    auto const& selected = session_r->selected_primary_agent();
-    expect(selected && selected->provenance == ava::agent::AgentDefinitionProvenance::Project && selected->tool_preset == preset &&
-               selected->system_prompt.find(canary) != std::string::npos && session_r->requested_primary_agent() == std::optional<std::string>(kAgentName) &&
+    auto selection_r = session_r->agent_selection_r();
+    auto const& selected = selection_r->selected_primary_agent;
+    expect(selected.provenance == ava::agent::AgentDefinitionProvenance::Project && selected.tool_preset == preset &&
+               selected.system_prompt.find(canary) != std::string::npos && session_r->requested_primary_agent() == std::optional<std::string>(kAgentName) &&
                session_r->system_prompt().find(canary) != std::string::npos &&
                session_r->ambient_extension_free_system_prompt().find(canary) != std::string::npos &&
                session_r->system_prompt().find(kGlobalCanary) == std::string::npos && restricted_tools_are_retained(session_r->tool_visibility()),
@@ -463,10 +533,12 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   };
   auto expect_project_authority_absent = [&](bool expect_global_fallback, std::string_view label) {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    auto const& selected = session_r->selected_primary_agent();
-    bool const selection_safe = expect_global_fallback ? selected && selected->provenance == ava::agent::AgentDefinitionProvenance::Global &&
-                                                             selected->system_prompt.find(kGlobalCanary) != std::string::npos
-                                                       : !selected;
+    auto selection_r = session_r->agent_selection_r();
+    auto const& selected = selection_r->selected_primary_agent;
+    bool const selection_safe = expect_global_fallback ? selected.provenance == ava::agent::AgentDefinitionProvenance::Global &&
+                                                             selected.system_prompt.find(kGlobalCanary) != std::string::npos
+                                                       : selected.name == "none" && selected.provenance == ava::agent::AgentDefinitionProvenance::Builtin &&
+                                                             selected.tool_preset == ava::agent::AgentToolPreset::Inherit;
     auto const prompts_safe = [&](std::string const& prompt) {
       return prompt.find(kInitialProjectCanary) == std::string::npos && prompt.find(kReselectedProjectCanary) == std::string::npos &&
              prompt.find(kReloadedProjectCanary) == std::string::npos &&
@@ -500,7 +572,7 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   expect(!remove_global_error, "project-primary revocation fixture removes its global fallback before clear");
   auto cleared = run_trust("/trust clear", "/trust clear succeeds when the requested project-only primary becomes unavailable");
   expect(cleared && cleared->output[0].find("decision=unknown") != std::string::npos, "/trust clear reports the applied unknown decision");
-  expect_project_authority_absent(false, "/trust clear falls back to no primary while retaining the previous effective tool restriction");
+  expect_project_authority_absent(false, "/trust clear falls back to the built-in AVA primary while retaining the previous effective tool restriction");
 
   auto replacement_result = ava::app::runtime::Session::create_like(unlocked_session, {});
   expect(replacement_result.has_value(),
@@ -510,7 +582,11 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   if (replacement_result)
   {
     SCOPED_CRITICAL_AREA_R(replacement_r, *replacement_result);
-    expect(!replacement_r->selected_primary_agent() && replacement_r->requested_primary_agent() == std::optional<std::string>(kAgentName) &&
+    auto replacement_selection_r = replacement_r->agent_selection_r();
+    auto const& replacement_selection = replacement_selection_r->selected_primary_agent;
+    expect(replacement_selection.name == "none" && replacement_selection.provenance == ava::agent::AgentDefinitionProvenance::Builtin &&
+               replacement_selection.tool_preset == ava::agent::AgentToolPreset::Inherit &&
+               replacement_r->requested_primary_agent() == std::optional<std::string>(kAgentName) &&
                replacement_r->system_prompt().find(kInitialProjectCanary) == std::string::npos &&
                replacement_r->system_prompt().find(kReselectedProjectCanary) == std::string::npos &&
                replacement_r->tool_visibility().mode == ava::agent::ToolVisibilityMode::Default && replacement_r->tool_visibility().included_tools.empty(),
@@ -573,9 +649,9 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   if (inverse_opened)
   {
     SCOPED_CRITICAL_AREA_R(session_r, *inverse_opened);
-    inverse_starts_broad = session_r->selected_primary_agent() &&
-                           session_r->selected_primary_agent()->provenance == ava::agent::AgentDefinitionProvenance::Project &&
-                           session_r->tool_visibility().included_tools.empty();
+    auto selection_r = session_r->agent_selection_r();
+    inverse_starts_broad =
+        selection_r->selected_primary_agent.provenance == ava::agent::AgentDefinitionProvenance::Project && session_r->tool_visibility().included_tools.empty();
   }
   auto inverse_denied = inverse_opened ? ava::app::run_command(*inverse_opened, ava::app::CommandRequest{.command = "/trust deny"})
                                        : ava::core::Result<ava::app::CommandResult>(std::unexpected(inverse_opened.error()));
@@ -583,8 +659,8 @@ void test_project_primary_revocation_removes_authority_without_broadening_tools(
   if (inverse_opened)
   {
     SCOPED_CRITICAL_AREA_R(session_r, *inverse_opened);
-    inverse_narrowed = session_r->selected_primary_agent() &&
-                       session_r->selected_primary_agent()->provenance == ava::agent::AgentDefinitionProvenance::Global &&
+    auto selection_r = session_r->agent_selection_r();
+    inverse_narrowed = selection_r->selected_primary_agent.provenance == ava::agent::AgentDefinitionProvenance::Global &&
                        restricted_tools_are_retained(session_r->tool_visibility());
   }
   expect(inverse_opened && inverse_starts_broad && inverse_denied && inverse_narrowed,
@@ -1032,7 +1108,7 @@ void test_workspace_revocation_retires_retained_sessions_transactionally()
   {
     SCOPED_CRITICAL_AREA_R(session_r, *session_a);
     controller_a = session_r->run_controller();
-    session_a_id = session_r->store.session_id();
+    session_a_id = session_r->store.options_r()->session_id;
     stale_owner_route = session_r->owner_append_route_1();
     expect(session_r->system_prompt().find(kProjectCanary) != std::string::npos &&
                session_r->ambient_extension_free_system_prompt().find(kProjectCanary) != std::string::npos,
@@ -1165,7 +1241,7 @@ void test_app_run_prompt_sources_private_launch_display_from_runtime_invocation(
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  auto const session_id = session_w->store.session_id();
+  auto const session_id = session_w->store.options_r()->session_id;
 
   auto task_response = [](std::string_view call_id) {
     return ava::http::HttpResponse{.status_code = 200,
@@ -1333,6 +1409,8 @@ void test_app_run_prompt_emits_events()
       .status_code = 200,
       .headers = {},
       .body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"runtime answer\"}\n\n"
+              "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,"
+              "\"output_tokens\":3,\"total_tokens\":5}}}\n\n"
               "data: [DONE]\n\n",
   }});
   std::vector<ava::event::RuntimeEvent> events;
@@ -1356,9 +1434,24 @@ void test_app_run_prompt_emits_events()
   expect(transport.requests().size() == 1 && transport.requests()[0].body.find("runtime run context") != std::string::npos,
          "runtime run_prompt sends context-augmented system prompt to provider");
   auto entries = ava::app::runtime::session_ts::rat(*unlocked_session_result)->store.load();
+  auto const canonical_stats = *ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r();
   expect(entries && entries->size() == 4 && (*entries)[1].type == ava::session::EntryType::UserMessage &&
              (*entries)[2].type == ava::session::EntryType::AssistantOutputItem && (*entries)[3].type == ava::session::EntryType::AssistantTurnCommit,
          "runtime run_prompt persists one committed v4 assistant turn in the runtime session");
+  expect(canonical_stats.input_tokens == std::optional<long long>{2} && canonical_stats.output_tokens == std::optional<long long>{3} &&
+             canonical_stats.total_tokens == std::optional<long long>{5},
+         "runtime completion publishes final committed provider usage without a frontend refresh request");
+
+  auto const work_before_unavailable_prompt = ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result);
+  {
+    ava::app::runtime::session_ts::wat session_w(*unlocked_session_result);
+    session_w->resolve_prompt_state().readiness = ava::app::runtime::PromptReadiness::Unavailable;
+  }
+  ava::tests::FakeTransport unavailable_transport({});
+  auto unavailable = ava::app::run_prompt(*unlocked_session_result, "must not run", provider, unavailable_transport, run_options);
+  expect(!unavailable && unavailable_transport.requests().empty() &&
+             ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result) == work_before_unavailable_prompt,
+         "prompt-unavailable rejection performs no generic statistics computation");
 }
 
 void test_app_run_prompt_expands_file_references()
@@ -1624,9 +1717,7 @@ void test_app_run_prompt_observation_shares_context_across_compaction_and_retry(
 
   CRITICAL_AREA_BEGIN_W(session);
 
-  session_w->model_selection().change([](auto& model_selection) {
-    model_selection.model.context_window_tokens = 100;
-  });
+  session_w->model_selection().change([](auto& model_selection) { model_selection.model.context_window_tokens = 100; });
   auto seeded = session_w->append_owned({.id = "observed-old-context",
                                          .parent_id = "",
                                          .type = ava::session::EntryType::UserMessage,
@@ -1691,7 +1782,7 @@ void test_app_run_prompt_observation_shares_context_across_compaction_and_retry(
   std::ifstream session_file(session_w->store.session_path(), std::ios::binary);
   std::string session_json((std::istreambuf_iterator<char>(session_file)), std::istreambuf_iterator<char>());
   auto messages_json = session_w->messages_result_json();
-  auto prompt_json = ava::app::rpc::prompt_result_json(session_w->store.session_id(), *result);
+  auto prompt_json = ava::app::rpc::prompt_result_json(session_w->store.options_r()->session_id, *result);
   auto state_json = session_w->state_result_json_1(false);
   auto has_observer_fields = [](std::string_view json) {
     return json.find("agent.run_start") != std::string_view::npos || json.find("transport.attempt_result") != std::string_view::npos ||
@@ -1861,6 +1952,8 @@ void test_app_run_prompt_event_sink_failure_cancels_before_next_provider_call()
   expect(unlocked_session_result.has_value(), "runtime event sink failure test opens session");
   if (!unlocked_session_result)
     return;
+  auto const initial_statistics_work = ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result);
+  auto const initial_entry_count = ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r()->entry_count;
 
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   ava::tests::FakeTransport transport({ava::http::HttpResponse{
@@ -1895,6 +1988,33 @@ void test_app_run_prompt_event_sink_failure_cancels_before_next_provider_call()
   expect(!result && result.error().category() == ava::core::ErrorCategory::Io && result.error().message() == "event sink failed",
          "runtime returns the event sink write failure");
   expect(transport.requests().size() == 1, "event sink failure cancels before the next provider request");
+  auto const failed_stats = *ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r();
+  expect(failed_stats.entry_count > initial_entry_count &&
+             ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result) == initial_statistics_work + 1,
+         "failed admitted run publishes its committed writes exactly once at terminal settlement");
+
+  ava::tests::FakeTransport cancel_transport({ava::http::HttpResponse{
+      .status_code = 200,
+      .headers = {},
+      .body = "data: {\"type\":\"response.function_call.added\",\"call_id\":\"call_cancel\",\"name\":\"read_file\"}\n\n"
+              "data: {\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"call_cancel\",\"delta\":\"{\\\"path\\\":\\\"note.txt\\\"}\"}\n\n"
+              "data: [DONE]\n\n",
+  }});
+  bool cancel_requested = false;
+  ava::app::runtime::RunOptions cancel_options;
+  cancel_options.access_token = "token";
+  cancel_options.cancel_requested = [&] { return cancel_requested; };
+  cancel_options.event_sink = [&](ava::event::RuntimeEvent const& event) {
+    if (event.type() == ava::event::RuntimeEventType::ToolStart)
+      cancel_requested = true;
+    return ava::core::VoidResult{};
+  };
+  auto const work_before_cancel = ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result);
+  auto canceled = ava::app::run_prompt(*unlocked_session_result, "read then cancel", provider, cancel_transport, cancel_options);
+  auto const canceled_stats = *ava::app::runtime::session_ts::rat(*unlocked_session_result)->session_stats_r();
+  expect(!canceled && canceled.error().code() == ava::core::ErrorCode::Canceled && canceled_stats.entry_count > failed_stats.entry_count &&
+             ava::app::runtime::session_statistics_refresh_work_count(*unlocked_session_result) == work_before_cancel + 1,
+         "canceled admitted run publishes committed writes exactly once at terminal settlement");
 }
 
 void test_app_run_prompt_rejects_invalid_parallel_read_search_options()

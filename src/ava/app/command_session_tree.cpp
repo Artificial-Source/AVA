@@ -117,9 +117,9 @@ ava::core::Result<CommandResult> run_sessions_rename_command(runtime::session_ts
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "session rename target was not resolved"));
 
   CRITICAL_AREA_BEGIN_W(session);
-  if (requested_session_id == session_w->store.session_id())
+  if (requested_session_id == session_w->store.options_r()->session_id)
   {
-    target_id = session_w->store.session_id();
+    target_id = session_w->store.options_r()->session_id;
     metadata = session_w->append_metadata_1(std::move(update));
     CRITICAL_AREA_END_W(session);
   }
@@ -130,7 +130,7 @@ ava::core::Result<CommandResult> run_sessions_rename_command(runtime::session_ts
     if (!unlocked_target_result)
       return std::unexpected(std::move(unlocked_target_result.error()));
     SCOPED_CRITICAL_AREA_W(target_w, *unlocked_target_result);
-    target_id = target_w->store.session_id();
+    target_id = target_w->store.options_r()->session_id;
     metadata = target_w->append_metadata_1(std::move(update));
   }
   if (!metadata)
@@ -174,8 +174,8 @@ ava::core::Result<CommandResult> run_sessions_labels_command(runtime::session_ts
     auto metadata = target_w->load_metadata();
     if (!metadata)
       return std::unexpected(std::move(metadata.error()));
-    auto text = metadata->labels.empty() ? std::string("session " + target_w->store.session_id() + " labels: <none>")
-                                         : std::string("session " + target_w->store.session_id() + " labels: " + labels_text(metadata->labels));
+    auto text = metadata->labels.empty() ? std::string("session " + target_w->store.options_r()->session_id + " labels: <none>")
+                                         : std::string("session " + target_w->store.options_r()->session_id + " labels: " + labels_text(metadata->labels));
     text += "\nusage: /sessions labels <id> <label...|--clear>";
     add_output(result, std::move(text));
     return result;
@@ -192,7 +192,7 @@ ava::core::Result<CommandResult> run_sessions_labels_command(runtime::session_ts
   ava::session::SessionMetadataUpdate update;
   update.labels = next_labels;
   update.actor = "tui";
-  std::string const target_id = target_w->store.session_id();
+  std::string const target_id = target_w->store.options_r()->session_id;
   auto metadata = target_w->append_metadata_1(std::move(update));
   if (!metadata)
     return std::unexpected(std::move(metadata.error()));
@@ -221,7 +221,7 @@ ava::core::Result<CommandResult> run_sessions_archive_command(runtime::session_t
     return result;
   }
   auto const requested_session_id = parts.front();
-  if (requested_session_id == runtime::session_ts::rat(unlocked_session)->store.session_id())
+  if (requested_session_id == runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id)
   {
     add_output(result, "Cannot archive the active session. Switch sessions first.");
     return result;
@@ -246,7 +246,7 @@ ava::core::Result<CommandResult> run_sessions_archive_command(runtime::session_t
     return std::unexpected(std::move(current_metadata.error()));
   if (current_metadata->archived == archived)
   {
-    add_output(result, "session " + target_w->store.session_id() + (archived ? " already archived" : " is not archived"));
+    add_output(result, "session " + target_w->store.options_r()->session_id + (archived ? " already archived" : " is not archived"));
     return result;
   }
 
@@ -258,7 +258,7 @@ ava::core::Result<CommandResult> run_sessions_archive_command(runtime::session_t
     return std::unexpected(std::move(metadata.error()));
 
   result.session_tree_changed = true;
-  add_output(result, "session " + target_w->store.session_id() + (metadata->archived ? " archived" : " unarchived"));
+  add_output(result, "session " + target_w->store.options_r()->session_id + (metadata->archived ? " archived" : " unarchived"));
   return result;
 }
 
@@ -321,7 +321,7 @@ ava::core::Result<CommandResult> run_sessions_command(runtime::session_ts& unloc
   CRITICAL_AREA_BEGIN_W(session);
   auto const workspace_dir_copy = session_w->workspace_dir();
   auto const sessions_dir_copy = session_w->paths().sessions_dir;
-  auto const session_id_copy = session_w->store.session_id();
+  auto const session_id_copy = session_w->store.options_r()->session_id;
   CRITICAL_AREA_END_W(session);
 
   auto tree = ava::session::build_session_tree(workspace_dir_copy, sessions_dir_copy, session_id_copy);

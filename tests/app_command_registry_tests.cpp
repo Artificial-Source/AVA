@@ -2,6 +2,7 @@
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/session_test_support.h"
 #include "tests/support/test_env.h"
+#include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/process/supervisor.h"
@@ -17,6 +18,7 @@
 #include "ava/session/session_store.h"
 #include "ava/session/subagent_job_history.h"
 #include "ava/permissions/permission.h"
+#include "ava/provider/openai_provider.h"
 #include "ava/core/error.h"
 #include "ava/core/json.h"
 
@@ -45,13 +47,15 @@ namespace {
 
 using namespace ava::tests;
 
-ava::app::runtime::session_ts open_test_session(std::filesystem::path const& root, std::filesystem::path const& workspace)
+ava::app::runtime::session_ts open_test_session(std::filesystem::path const& root, std::filesystem::path const& workspace,
+                                                std::optional<std::string> requested_primary_agent = std::nullopt)
 {
   auto paths = app_test_paths(root);
   ava::app::runtime::OpenContext options;
   options.workspace_dir = workspace;
   options.current_dir = workspace;
   options.paths = paths;
+  options.requested_primary_agent = std::move(requested_primary_agent);
   auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
   expect(application_scope.has_value(), "command registry fixture owns application process authority");
   if (application_scope)
@@ -296,7 +300,7 @@ void test_builtin_session_alias_registers_as_current_stats_command()
   auto invalid_wait = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/jobs wait job_missing nope"});
   auto const job_snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::pair{session_r->subagent_coordinator(), session_r->store.session_id()};
+    return std::pair{session_r->subagent_coordinator(), session_r->store.options_r()->session_id};
   }();
   auto active_wait = ava::app::run_jobs_command(job_snapshot.first, job_snapshot.second, "wait job_missing 10", true);
   auto active_result = ava::app::run_jobs_command(job_snapshot.first, job_snapshot.second, "result job_missing", true);
@@ -322,7 +326,7 @@ void test_interactive_jobs_human_output_keeps_public_json_contract()
   auto unlocked_session = open_test_session(root, workspace);
   auto const session_snapshot = [&] {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    return std::pair{session_r->subagent_coordinator(), session_r->store.session_id()};
+    return std::pair{session_r->subagent_coordinator(), session_r->store.options_r()->session_id};
   }();
   auto const& [coordinator, session_id] = session_snapshot;
   expect(coordinator != nullptr, "interactive jobs human-output test requires a coordinator");
@@ -486,34 +490,36 @@ void test_project_trust_gates_project_resource_commands()
   std::filesystem::create_directories(workspace);
   ScopedEnvVar home("HOME", (root / "home").string());
   ScopedEnvVar xdg_config("XDG_CONFIG_HOME", paths.config_home.string());
-  write_test_file(paths.ava_config_dir / "commands" / "global.md", "Global command $1\n");
-  write_test_file(paths.ava_config_dir / "APPEND_SYSTEM.md", "Global append instruction.\n");
-  write_test_file(workspace / "AGENTS.md", "Project AGENTS context still loads while untrusted.\n");
-  write_test_file(workspace / ".ava" / "SYSTEM.md", "Project system replacement.\n");
-  write_test_file(workspace / ".ava" / "APPEND_SYSTEM.md", "Project append instruction.\n");
-  write_test_file(workspace / ".ava" / "commands" / "local.md", "Local project command $1\n");
-  write_test_file(workspace / ".ava" / "skills" / "local-skill" / "SKILL.md",
-                  "---\nname: local-skill\ndescription: Local project skill\n---\nLocal skill body\n");
-  write_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "plugin.json",
-                  "{\n"
-                  "  \"schema_version\": 1,\n"
-                  "  \"id\": \"com.example.local\",\n"
-                  "  \"name\": \"Local Plugin\",\n"
-                  "  \"version\": \"0.1.0\",\n"
-                  "  \"api_version\": \"ava.plugin.v1\",\n"
-                  "  \"description\": \"local plugin\",\n"
-                  "  \"entrypoint\": {\"command\": \"node\", \"args\": [\"plugin.js\"]},\n"
-                  "  \"capabilities\": [\"commands\"],\n"
-                  "  \"contributes\": {\n"
-                  "    \"commands\": [{\"name\": \"todo\", \"description\": \"Local todo\"}],\n"
-                  "    \"prompts\": [{\"name\": \"review\", \"description\": \"Local review\", \"path\": \"prompts/review.md\"}],\n"
-                  "    \"skills\": [{\"name\": \"triage\", \"description\": \"Local triage\", \"path\": \"skills/triage.md\"}]\n"
-                  "  }\n"
-                  "}");
+  write_app_test_file(paths.ava_config_dir / "commands" / "global.md", "Global command $1\n");
+  write_app_test_file(paths.ava_config_dir / "APPEND_SYSTEM.md", "Global append instruction.\n");
+  write_app_test_file(paths.ava_config_dir / "agents" / "trust-canary.md",
+                      "---\nname: trust-canary\ndescription: Trust transition canary.\nmode: primary\n---\nGLOBAL_PRIMARY_TRUST_CANARY_4b31\n");
+  write_app_test_file(workspace / "AGENTS.md", "Project AGENTS context still loads while untrusted.\n");
+  write_app_test_file(workspace / ".ava" / "SYSTEM.md", "Project system replacement.\n");
+  write_app_test_file(workspace / ".ava" / "APPEND_SYSTEM.md", "Project append instruction.\n");
+  write_app_test_file(workspace / ".ava" / "commands" / "local.md", "Local project command $1\n");
+  write_app_test_file(workspace / ".ava" / "skills" / "local-skill" / "SKILL.md",
+                      "---\nname: local-skill\ndescription: Local project skill\n---\nLocal skill body\n");
+  write_app_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "plugin.json",
+                      "{\n"
+                      "  \"schema_version\": 1,\n"
+                      "  \"id\": \"com.example.local\",\n"
+                      "  \"name\": \"Local Plugin\",\n"
+                      "  \"version\": \"0.1.0\",\n"
+                      "  \"api_version\": \"ava.plugin.v1\",\n"
+                      "  \"description\": \"local plugin\",\n"
+                      "  \"entrypoint\": {\"command\": \"node\", \"args\": [\"plugin.js\"]},\n"
+                      "  \"capabilities\": [\"commands\"],\n"
+                      "  \"contributes\": {\n"
+                      "    \"commands\": [{\"name\": \"todo\", \"description\": \"Local todo\"}],\n"
+                      "    \"prompts\": [{\"name\": \"review\", \"description\": \"Local review\", \"path\": \"prompts/review.md\"}],\n"
+                      "    \"skills\": [{\"name\": \"triage\", \"description\": \"Local triage\", \"path\": \"skills/triage.md\"}]\n"
+                      "  }\n"
+                      "}");
   write_app_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "prompts" / "review.md", "Local plugin prompt\n");
   write_app_test_file(workspace / ".ava" / "plugins" / "com.example.local" / "skills" / "triage.md", "Local plugin skill\n");
 
-  auto unlocked_session = open_test_session(root, workspace);
+  auto unlocked_session = open_test_session(root, workspace, std::string("trust-canary"));
   auto system_prompt = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->system_prompt(); };
   auto project_trust = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->project_trust(); };
 
@@ -591,13 +597,49 @@ void test_project_trust_gates_project_resource_commands()
     auto failed_reload = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/reload trust"});
     expect(failed_reload && failed_reload->handled && !failed_reload->output.empty() && failed_reload->output[0].find("trust: error") != std::string::npos &&
                failed_reload->output[0].find("freshness source is not a regular file") != std::string::npos &&
-               failed_reload->output[0].find("authority_state: project authority removed with fail-closed empty prompt") != std::string::npos &&
+               failed_reload->output[0].find("authority_state: project authority removed with fail-closed unavailable prompt") != std::string::npos &&
                project_trust().decision == ava::app::ProjectTrustDecision::Denied,
            "/reload trust applies an untrusted authority state even when dependent prompt reconstruction fails");
     expect(system_prompt().empty(), "/reload trust removes all prior project prompt authority when untrusted reconstruction needs a fail-closed fallback");
+    bool retained_global_selection = false;
+    bool prompt_unavailable = false;
+    {
+      auto session_r = ava::app::runtime::session_ts::rat(unlocked_session);
+      auto selection_r = session_r->agent_selection_r();
+      retained_global_selection = selection_r->selected_primary_agent.name == "trust-canary" &&
+                                  selection_r->selected_primary_agent.system_prompt.find("GLOBAL_PRIMARY_TRUST_CANARY_4b31") != std::string::npos;
+      prompt_unavailable = session_r->prompt_readiness() == ava::app::runtime::PromptReadiness::Unavailable;
+    }
+    ava::provider::OpenAIProvider const provider("https://api.example.test");
+    ava::tests::FakeTransport blocked_transport({});
+    ava::app::runtime::RunOptions run_options;
+    run_options.access_token = "fake";
+    auto blocked_run = ava::app::run_prompt(unlocked_session, "must not run without a reconstructed prompt", provider, blocked_transport, run_options);
+    expect(retained_global_selection && prompt_unavailable && !blocked_run &&
+               blocked_run.error().message().find("runtime system prompt is unavailable") != std::string::npos && blocked_transport.requests().empty(),
+           "failed trust prompt reconstruction retains the permitted global selection but blocks provider execution");
+    auto controller = ava::app::runtime::session_ts::rat(unlocked_session)->run_controller();
+    auto admitted = controller->admit({.request_id = "unavailable-prompt-admitted"});
+    ava::tests::FakeTransport admitted_transport({});
+    auto admitted_run = admitted ? ava::app::run_admitted_prompt(unlocked_session, "admitted prompt must also fail", provider, admitted_transport, run_options,
+                                                                 std::move(*admitted))
+                                 : ava::core::Result<ava::agent::AgentLoopResult>(std::unexpected(admitted.error()));
+    expect(!admitted_run && admitted_run.error().message().find("runtime system prompt is unavailable") != std::string::npos &&
+               admitted_transport.requests().empty() && !controller->snapshot().active,
+           "the admitted runtime path completes its guard and rejects an unavailable prompt before provider execution");
     std::error_code restore_error;
     std::filesystem::remove(global_append, restore_error);
-    write_test_file(global_append, "Global append instruction.\n");
+    write_app_test_file(global_append, "Global append instruction.\n");
+    auto recovered_prompt = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/reload prompts"});
+    ava::tests::FakeTransport recovered_transport({ava::http::HttpResponse{
+        .status_code = 200,
+        .headers = {},
+        .body = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"prompt recovered\"}\n\ndata: [DONE]\n\n",
+    }});
+    auto recovered_run = ava::app::run_prompt(unlocked_session, "run after prompt recovery", provider, recovered_transport, run_options);
+    expect(recovered_prompt && recovered_run && recovered_run->final_text == "prompt recovered" && recovered_transport.requests().size() == 1 &&
+               ava::app::runtime::session_ts::rat(unlocked_session)->prompt_readiness() == ava::app::runtime::PromptReadiness::Ready,
+           "a successful prompt reload clears the unavailable state and permits the next provider request");
 
     auto trusted_again = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/trust project"});
     std::error_code second_symlink_error;
@@ -658,7 +700,7 @@ void test_jobs_command_reads_owned_session_history_after_reopen_path()
     ava::agent::SessionAppendSink owner;
     {
       SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-      session_id = session_r->store.session_id();
+      session_id = session_r->store.options_r()->session_id;
       owner = session_r->owner_append_route_1();
     }
     ava::session::SubagentJobHistoryRecord completed;
@@ -707,7 +749,7 @@ void test_jobs_command_reads_owned_session_history_after_reopen_path()
   {
     SCOPED_CRITICAL_AREA_R(session_r, *reopened);
     coordinator = session_r->subagent_coordinator();
-    expect(session_r->store.session_id() == session_id, "reopen keeps the exact session identity");
+    expect(session_r->store.options_r()->session_id == session_id, "reopen keeps the exact session identity");
   }
   expect(coordinator && coordinator->list(session_id).empty(), "reopen uses a fresh empty coordinator and does not rehydrate jobs");
   auto listed = ava::app::run_command(*reopened, ava::app::CommandRequest{.command = "/jobs list"});
@@ -895,7 +937,7 @@ void test_jobs_live_cancel_survives_historical_read_failure()
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
     coordinator = session_r->subagent_coordinator();
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
     owner = session_r->owner_append_route_1();
   }
   expect(coordinator && owner, "read-failure fixture has coordinator and owner append");
@@ -941,7 +983,7 @@ void test_jobs_active_run_binding_overlays_captured_history()
   ava::agent::SessionAppendSink owner;
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
     owner = session_r->owner_append_route_1();
   }
   ava::session::SubagentJobHistoryRecord completed;

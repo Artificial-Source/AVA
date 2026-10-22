@@ -103,7 +103,7 @@ struct ToolTimelineItem
   std::string spill_path = {};
   bool spill_truncated = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 enum class TuiToolIndexOrigin
@@ -139,7 +139,7 @@ struct TranscriptItem
   std::string stream_id = {};
   bool append_only_stream = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // TUI-only local command presentation. The title is a sanitized command token;
@@ -235,7 +235,7 @@ struct ComposerFrame
   std::vector<std::string> lines;
   std::vector<TerminalGraphicOverlay> graphics;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct SlashCommandArgumentCompletion
@@ -259,14 +259,9 @@ struct SidebarSnapshot
   std::vector<SidebarActivityItem> activity = {};
   std::vector<SidebarModifiedFile> modified_files = {};
   std::vector<TodoItem> todos = {};
-  std::string session_id = {};
   std::string mode = {};
-  std::string workspace = {};
-  std::string git_branch = {};
   std::string version = {};
-  std::optional<std::string> token_status = std::nullopt;
   std::optional<std::size_t> context_source_count = std::nullopt;
-  std::string session_path = {};
   std::optional<std::size_t> session_entry_count = std::nullopt;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -623,8 +618,6 @@ struct ComposerSnapshot
   bool processing = false;
   ActiveRunHint active_run_hint = {};
   std::size_t spinner_frame = 0;
-  std::optional<std::string> token_status = std::nullopt;
-  std::optional<std::string> active_context_status = std::nullopt;
   std::optional<std::size_t> context_source_count = std::nullopt;
   std::vector<TranscriptItem> transcript;
   std::size_t transcript_generation = 0;

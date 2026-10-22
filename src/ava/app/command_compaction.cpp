@@ -17,10 +17,11 @@ namespace {
 
 ava::event::RuntimeEventMetadata command_event_metadata(runtime::session_ts const& unlocked_session)
 {
-  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.session_id();
+  runtime::session_ts::crat session_r(unlocked_session);
+  auto const options_r(session_r->store.options_r());
   return ava::event::RuntimeEventMetadata{
       .timestamp = ava::session::now_timestamp(),
-      .session_id = session_id,
+      .session_id = options_r->session_id
   };
 }
 

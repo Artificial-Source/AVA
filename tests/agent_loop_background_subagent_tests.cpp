@@ -114,7 +114,7 @@ void test_agent_loop_background_task_starts_child_session()
     expect(transport.requests()[1].body.find("\\\"job_id\\\":\\\"job_") != std::string::npos, "parent continuation receives coordinator job id");
   }
 
-  auto running_jobs = coordinator->list(store.session_id());
+  auto running_jobs = coordinator->list(store.options_r()->session_id);
   expect(running_jobs.size() == 1 && running_jobs.front().job.execution == ava::agent::SubagentExecutionState::Running &&
              running_jobs.front().job.identity.child_session_id.starts_with("session_"),
          "background task appears as running in the coordinator");
@@ -162,13 +162,13 @@ void test_agent_loop_background_task_starts_child_session()
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing background job"));
   if (!running_jobs.empty())
   {
-    completed = coordinator->wait(store.session_id(), running_jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
+    completed = coordinator->wait(store.options_r()->session_id, running_jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
   }
   expect(completed && completed->job.execution == ava::agent::SubagentExecutionState::Completed && completed->job.summary == "background child",
          "background task transitions to completed in the coordinator");
   auto result_snapshot =
       completed
-          ? coordinator->result(store.session_id(), completed->job.identity.job_id)
+          ? coordinator->result(store.options_r()->session_id, completed->job.identity.job_id)
           : ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing")));
   expect(
       result_snapshot && result_snapshot->job.execution == ava::agent::SubagentExecutionState::Completed && result_snapshot->job.summary == "background child",
@@ -254,11 +254,11 @@ void test_agent_loop_background_resume_preserves_history_and_owner_authority()
        sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"launched\"}\n\ndata: [DONE]\n\n")});
   ava::agent::AgentLoop owner_loop(make_options(owner));
   auto launch_result = owner_loop.run_turn("launch child", owner, provider, launch_transport);
-  auto jobs = coordinator->list(owner.session_id());
+  auto jobs = coordinator->list(owner.options_r()->session_id);
   ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot> first =
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing launched job"));
   if (!jobs.empty())
-    first = coordinator->wait(owner.session_id(), jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
+    first = coordinator->wait(owner.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
   expect(launch_result && first && first->job.execution == ava::agent::SubagentExecutionState::Completed,
          "background child completes before durable task_id resume");
   if (!first)
@@ -301,13 +301,13 @@ void test_agent_loop_background_resume_preserves_history_and_owner_authority()
   ava::tests::FakeTransport resume_transport({sse_response(tool_call_sse("call_owner_resume", "task", resume_json) + "data: [DONE]\n\n"),
                                               sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"resume queued\"}\n\ndata: [DONE]\n\n")});
   auto resume_result = owner_loop.run_turn("resume my child", owner, provider, resume_transport);
-  auto resumed_jobs = coordinator->list(owner.session_id());
+  auto resumed_jobs = coordinator->list(owner.options_r()->session_id);
   ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot> second =
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing resumed job"));
   if (resumed_jobs.size() == 2)
   {
     auto const& resumed = resumed_jobs.front().job.identity.job_id == first->job.identity.job_id ? resumed_jobs.back() : resumed_jobs.front();
-    second = coordinator->wait(owner.session_id(), resumed.job.identity.job_id, std::chrono::milliseconds(1000));
+    second = coordinator->wait(owner.options_r()->session_id, resumed.job.identity.job_id, std::chrono::milliseconds(1000));
   }
   std::vector<ava::http::HttpRequest> requests;
   {
@@ -374,7 +374,7 @@ void test_agent_loop_dispatcher_steering_reaches_blocked_child_fifo_once()
   auto launch = loop.run_turn("launch steering target", parent, provider, launch_transport);
   expect(launch && child_state->wait_for_requests(1, std::chrono::milliseconds(1000)),
          "real background task reaches a blocked child provider request before steering");
-  auto jobs = coordinator->list(parent.session_id());
+  auto jobs = coordinator->list(parent.options_r()->session_id);
   if (jobs.empty())
   {
     expect(false, "blocked steering child is published in coordinator");
@@ -389,7 +389,7 @@ void test_agent_loop_dispatcher_steering_reaches_blocked_child_fifo_once()
        sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"both steering messages queued\"}\n\ndata: [DONE]\n\n")});
   auto steered = loop.run_turn("steer the child twice", parent, provider, steer_transport);
   child_state->release_success();
-  auto completed = coordinator->wait(parent.session_id(), job_id, std::chrono::milliseconds(1000));
+  auto completed = coordinator->wait(parent.options_r()->session_id, job_id, std::chrono::milliseconds(1000));
   auto requests = child_state->requests_snapshot();
 
   auto child_store = ava::session::SessionStore::open(workspace, jobs.front().job.identity.child_session_id, session_root);
@@ -473,7 +473,7 @@ void test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint()
            "data: [DONE]\n\n"),
        sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"summarizer running\"}\n\ndata: [DONE]\n\n")});
   auto launched = loop.run_turn("launch child that compacts", parent, provider, parent_transport);
-  auto jobs = coordinator->list(parent.session_id());
+  auto jobs = coordinator->list(parent.options_r()->session_id);
   bool const summary_request_blocked = child_state->wait_for_requests(1, std::chrono::milliseconds(1000));
   if (jobs.empty())
   {
@@ -481,9 +481,9 @@ void test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint()
     child_state->release_success();
     return;
   }
-  auto const canceled = coordinator->cancel(parent.session_id(), jobs.front().job.identity.job_id);
+  auto const canceled = coordinator->cancel(parent.options_r()->session_id, jobs.front().job.identity.job_id);
   auto const cancel_observed = child_state->wait_for_cancel(std::chrono::milliseconds(1000));
-  auto terminal = coordinator->wait(parent.session_id(), jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
+  auto terminal = coordinator->wait(parent.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
   auto child_store = ava::session::SessionStore::open(workspace, jobs.front().job.identity.child_session_id, session_root);
   auto child_entries =
       child_store
@@ -550,19 +550,19 @@ void test_agent_loop_background_task_failure_is_isolated_to_child()
   auto result = loop.run_turn("delegate failing background", store, provider, transport);
   expect(result && result->final_text == "queued failure" && result->tool_calls == 1, "agent loop can queue a background task that later fails");
 
-  auto jobs = coordinator->list(store.session_id());
+  auto jobs = coordinator->list(store.options_r()->session_id);
   expect(jobs.size() == 1, "failed background task is registered with the coordinator");
   ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot> failed =
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing background job"));
   if (!jobs.empty())
   {
-    failed = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
+    failed = coordinator->wait(store.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
   }
   expect(failed && failed->job.execution == ava::agent::SubagentExecutionState::Failed && failed->job.error && *failed->job.error == "subagent job failed" &&
              failed->job.error_category && *failed->job.error_category == "provider",
          "failed background task is marked failed with sanitized coordinator public error state");
   auto result_snapshot =
-      failed ? coordinator->result(store.session_id(), failed->job.identity.job_id)
+      failed ? coordinator->result(store.options_r()->session_id, failed->job.identity.job_id)
              : ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing")));
   expect(result_snapshot && result_snapshot->job.execution == ava::agent::SubagentExecutionState::Failed && result_snapshot->job.error &&
              *result_snapshot->job.error == "subagent job failed",
@@ -650,20 +650,20 @@ void test_agent_loop_background_task_cancel_requests_child_cancellation()
 
   auto result = loop.run_turn("delegate cancelable background", store, provider, transport);
   expect(result && result->final_text == "queued cancel" && result->tool_calls == 1, "agent loop can queue a cancelable background task");
-  auto jobs = coordinator->list(store.session_id());
+  auto jobs = coordinator->list(store.options_r()->session_id);
   expect(jobs.size() == 1 && jobs.front().job.execution == ava::agent::SubagentExecutionState::Running, "cancelable background task is running in coordinator");
   expect(background_state->wait_for_request(std::chrono::milliseconds(1000)), "cancel test background child reaches provider transport");
   if (!jobs.empty())
   {
-    auto canceled = coordinator->cancel(store.session_id(), jobs.front().job.identity.job_id);
+    auto canceled = coordinator->cancel(store.options_r()->session_id, jobs.front().job.identity.job_id);
     background_state->notify();
     expect(canceled && canceled->job.cancel_requested, "background coordinator cancel requests stop");
     expect(background_state->wait_for_cancel(std::chrono::milliseconds(1000)), "background child transport observes cancellation");
-    auto final = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
+    auto final = coordinator->wait(store.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::milliseconds(1000));
     expect(final && final->job.execution == ava::agent::SubagentExecutionState::Canceled, "background coordinator marks canceled child jobs canceled");
     expect(final && !final->job.error, "background coordinator canceled job snapshots do not carry failure errors");
     auto result_snapshot =
-        final ? coordinator->result(store.session_id(), final->job.identity.job_id)
+        final ? coordinator->result(store.options_r()->session_id, final->job.identity.job_id)
               : ava::core::Result<ava::agent::SubagentCoordinatorJobSnapshot>(std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "missing")));
     expect(result_snapshot && result_snapshot->job.execution == ava::agent::SubagentExecutionState::Canceled,
            "canceled background task result remains queryable through the coordinator");
@@ -756,11 +756,11 @@ void test_agent_loop_provider_native_canceled_tasks()
     }
     if (coordinator)
     {
-      auto jobs = coordinator->list(store.session_id());
+      auto jobs = coordinator->list(store.options_r()->session_id);
       expect(jobs.size() == 1, "native-cancel child has exactly one coordinator job");
       if (jobs.empty())
         continue;
-      auto terminal = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::seconds(1));
+      auto terminal = coordinator->wait(store.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::seconds(1));
       if (provider_error)
       {
         expect(terminal && terminal->job.execution == ava::agent::SubagentExecutionState::Failed && !terminal->job.cancel_requested &&
@@ -936,7 +936,7 @@ void test_agent_loop_background_task_publishes_inspection_source()
 
   auto result = loop.run_turn("delegate background inspect", store, provider, transport);
   expect(result && result->final_text == "queued", "background inspect parent turn completes");
-  auto jobs = coordinator->list(store.session_id());
+  auto jobs = coordinator->list(store.options_r()->session_id);
   expect(jobs.size() == 1, "background inspect job is published");
   if (jobs.empty())
     return;
@@ -945,7 +945,7 @@ void test_agent_loop_background_task_publishes_inspection_source()
 
   // While the child is running, the coordinated source must already expose the
   // committed user prompt prefix without leaking session paths through inspect.
-  auto live = coordinator->inspect(store.session_id(), jobs.front().job.identity.job_id);
+  auto live = coordinator->inspect(store.options_r()->session_id, jobs.front().job.identity.job_id);
   expect(live && !(*live)->unavailable && !(*live)->terminal && !(*live)->messages.empty(),
          "coordinated background task publishes an inspection source before completion");
   if (live && !(*live)->messages.empty())
@@ -962,10 +962,10 @@ void test_agent_loop_background_task_publishes_inspection_source()
   }
 
   background_state->release_success();
-  auto terminal = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::seconds(2));
+  auto terminal = coordinator->wait(store.options_r()->session_id, jobs.front().job.identity.job_id, std::chrono::seconds(2));
   expect(terminal && !terminal->timed_out && terminal->job.execution == ava::agent::SubagentExecutionState::Completed,
          "background inspect child reaches terminal completion");
-  auto frozen = coordinator->inspect(store.session_id(), jobs.front().job.identity.job_id);
+  auto frozen = coordinator->inspect(store.options_r()->session_id, jobs.front().job.identity.job_id);
   expect(frozen && (*frozen)->terminal && !(*frozen)->unavailable, "terminal background child freezes a path-free inspection frame");
   if (frozen)
   {

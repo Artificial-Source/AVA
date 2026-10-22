@@ -56,7 +56,7 @@ std::string read_line_summary(ava::tools::TextOutput const& output)
 ava::core::VoidResult emit_tool_event(runtime::session_ts const& unlocked_session, ava::event::RuntimeEventSink const& sink,
                                      ava::agent::ToolTimelineEntry const& entry)
 {
-  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.session_id();
+  auto const session_id = runtime::session_ts::crat(unlocked_session)->store.options_r()->session_id;
   ava::event::RuntimeEventMetadata metadata{
       .timestamp = ava::session::now_timestamp(),
       .session_id = session_id,
@@ -163,7 +163,7 @@ ava::tools::ToolContext make_tool_context(runtime::session_ts& unlocked_session,
                       session_r->anchor_set(),
                       session_r->ava_authority_roots_1(),
                       session_r->session_process_scope(),
-                      session_r->store.session_id(),
+                      session_r->store.options_r()->session_id,
                       model_selection_r->model.provider_id,
                       model_selection_r->model.model_id,
                       session_r->current_dir()};

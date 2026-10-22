@@ -6,7 +6,7 @@
 #include "ava/session/export.h"
 #include "ava/session/session_branch.h"
 #include "ava/session/session_tree.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/session/validation.h"
 #include "ava/core/error.h"
 

@@ -18,7 +18,7 @@
 #include "ava/session/export.h"
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/provider/openai_provider.h"
 #include "ava/provider/provider_utils.h"
 #include "ava/core/json.h"
@@ -1568,7 +1568,7 @@ void test_app_context_overflow_compacts_and_retries_once_successfully()
   expect(entries && std::ranges::count_if(*entries, ava::session::is_internal_replay_user_message) == 1,
          "context overflow compaction stores active prompt replay as an internal user message");
   auto const markdown = entries ? ava::session::format_session_markdown(*entries) : std::string{};
-  auto const stats = entries ? ava::session::compute_session_stats(*entries) : ava::core::Result<ava::session::SessionStats>(ava::session::SessionStats{});
+  auto const stats = entries ? ava::session::compute_session_stats(*entries) : ava::core::Result<ava::session::Stats>(ava::session::Stats{});
   expect(markdown.find("internal_replay") == std::string::npos && count_substrings(markdown, "overflow prompt") == 1 && stats->counts.user_message == 1,
          "consumer-facing export and stats hide internal active prompt replays");
 }

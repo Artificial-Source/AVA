@@ -1,22 +1,28 @@
 #pragma once
 
-#include "BasePromptMetadata.h"
-#include "ContextSourceMetadata.h"
-#include "FreshnessSourceMetadata.h"
+#include "AgentSelection.h"
+#include "Directories.h"
+#include "GitBranch.h"
+#include "InvocationInputs.h"
+#include "ModelSelection.h"
 #include "OpenContext.h"
 #include "PromptOverrides.h"
 #include "ReasoningSelection.h"
+#include "ResolvedPromptState.h"
 #include "SessionLifecycleRequest.h"
+#include "SessionResources.h"
+#include "SessionStatisticsPublication.h"
+#include "TrustState.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/project_trust.h"
 #include "ava/app/runtime/session_ts.h"
-#include "ava/app/runtime/UnlockedData.h"
 #include "ava/app/session_run_controller.h"
-#include "ava/agent/agent_loop.h"
 #include "ava/agent/agent_config.h"
+#include "ava/agent/agent_loop.h"
 #include "ava/mcp/config.h"
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"
+#include "ava/session/Stats.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/AnchorSet.h"
@@ -46,133 +52,6 @@ namespace ava::app::runtime {
 
 struct PromptState;
 
-// Invocation inputs.
-//
-// Mirrors of OpenContext describing how this session was opened. None of
-// these are restored from the store on resume; each is sourced from the
-// OpenContext of the current process invocation.
-//
-struct InvocationInputs
-{
-  std::filesystem::path workspace_dir;
-  std::filesystem::path current_dir;
-  // Invocation-requested visibility is retained separately so a replacement can re-resolve primary policy from the original CLI boundary.
-  ava::agent::ToolVisibilityOptions requested_tool_visibility = {};
-  ava::agent::ToolVisibilityOptions tool_visibility = {};
-  // Keep bounded selection intent separately from the currently permitted, provenance-carrying definition.
-  std::optional<std::string> requested_primary_agent = std::nullopt;
-  std::optional<ava::agent::AgentDefinition> selected_primary_agent = std::nullopt;
-  ava::config::XdgPaths paths;
-  bool sessionless;
-  bool is_offline_ = false;
-  // Additional writable directories beyond workspace_dir (e.g., user-configured paths).
-  // These are opened as anchor descriptors at startup and made available to tools via ToolContext::anchor_set.
-  std::vector<std::filesystem::path> additional_writable_dirs = {};
-  // Resolved once at open time and reused by every runtime history reader.
-  ava::session::SessionReadLimits session_read_limits = ava::session::legacy_unbounded_session_read_limits();
-  PromptOverrides prompt_overrides = {};
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Resolved prompt state.
-//
-// The agent mode and assembled prompt material currently in effect for the
-// session: base-prompt metadata, contributing context and freshness sources,
-// the ordinary system prompt, and its ambient-extension-free runtime variant.
-// This whole bundle is recomputed
-// whenever the mode or model changes (see apply_prompt_state and
-// switch_model) and is otherwise the session's live resolved state.
-//
-// It is field-compatible with the transient PromptState returned by
-// load_runtime_prompt_state, which apply_prompt_state moves into this
-// member as a single object rather than copying fields one at a time.
-struct ResolvedPromptState
-{
-  ava::agent::Mode mode = ava::agent::Mode::Build;
-  BasePromptMetadata base_prompt;
-  std::vector<ContextSourceMetadata> context_sources;
-  std::vector<FreshnessSourceMetadata> freshness_sources;
-  std::string system_prompt;
-  std::string ambient_extension_free_system_prompt;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Model selection.
-//
-// The active model and its derived/user-selected companions: the resolved
-// ModelInfo, the latest reasoning selection, and the optional scoped model
-// rotation. `model` and `reasoning` are re-derived on resume (model from the
-// persisted entries, reasoning from the last assistant turn); all three are
-// runtime-mutable: model/reasoning change on /models, scoped_model_cycle on
-// /models scope commands.
-struct ModelSelection
-{
-  ava::config::ModelInfo model;
-  std::optional<ReasoningSelection> reasoning = std::nullopt;
-  std::optional<std::vector<std::string>> scoped_model_cycle = std::nullopt;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-using ModelSelection_ts = UnlockedData<ModelSelection>;
-
-// Trust state.
-//
-// The project trust decision loaded for this session. Mutated when the user
-// adjusts trust (/trust commands); otherwise stable for the session lifetime.
-struct TrustState
-{
-  ProjectTrustState project_trust;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Session resources.
-//
-// Process-held live infrastructure bound to this process: the cross-process
-// lease, pre-opened anchor descriptors, the run controller and append target,
-// the bound read authority for detached capsules, and the shared
-// application-scoped services (subagent coordinator/delivery, title
-// coordinator, diagnostics, MCP config). These cannot round-trip through
-// disk; the three app-scoped services are rebound by Session::replace_with
-// and mcp_config is set once at ACP session setup.
-struct SessionResources
-{
-  // Persistent runtime owners hold a cross-process lease for the complete session lifetime.
-  ava::session::SessionLease lease;
-  // One generated session owner, when explicit application process authority
-  // was supplied. Copies representing this same runtime session share it.
-  std::optional<ava::process::ProcessScopeV1> session_process_scope = std::nullopt;
-  // Pre-opened anchor descriptors for all writable directories. Opened once
-  // at session creation and shared across all prompts and subagent loops.
-  std::shared_ptr<ava::core::AnchorSet> anchor_set = nullptr;
-  std::shared_ptr<SessionRunController> run_controller = nullptr;
-  // Immutable append target bound into the controller-owned serialized routes.
-  // Tests and retained runtime capsules may inspect/copy it, but mutations flow
-  // through the controller so append failures remain latched.
-  std::shared_ptr<ava::session::SessionAppendTarget> append_target = nullptr;
-  // Detached retained capsules bind reads to the exact original leased inode
-  // without reacquiring the pathname. Ordinary visible sessions leave this
-  // empty and derive an authority from their owned lease.
-  std::optional<ava::session::SessionReadAuthority> bound_read_authority = std::nullopt;
-  // Shared application process state. Direct coordinator injection remains a
-  // compatibility seam; production sessions use the delivery manager.
-  std::shared_ptr<ava::agent::SubagentCoordinator> subagent_coordinator = nullptr;
-  std::shared_ptr<ava::app::SubagentDeliveryManager> subagent_delivery_manager = nullptr;
-  std::shared_ptr<ava::app::SessionTitleCoordinator> session_title_coordinator = nullptr;
-  std::shared_ptr<ava::diagnostics::RuntimeDiagnostics> diagnostics = nullptr;
-  // Null uses normal global/project discovery; non-null is immutable session-local MCP composition.
-  std::shared_ptr<ava::mcp::McpConfig const> mcp_config = nullptr;
-  // Exact application-scoped provider catalog pinned for this session's lifetime.
-  std::shared_ptr<ava::provider::ProviderCatalog const> provider_catalog = nullptr;
-
-  void swap(SessionResources& other);
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
 // Old aggregate for Session.
 // This class holds members that are still initialized by a designated initializer list.
 //
@@ -181,18 +60,26 @@ struct SessionResources
 // along which this aggregate is expected to be decomposed into smaller types.
 struct Session_aggregate_base
 {
-  InvocationInputs invocation_inputs_;          // Do NOT use this variable name outside of this file!
-  ResolvedPromptState resolved_prompt_state_;   // Do NOT use this variable name outside of this file!
-  ModelSelection_ts model_selection_;           // Do NOT use this variable name outside of this file!
-  TrustState trust_state_;                      // Do NOT use this variable name outside of this file!
-  SessionResources resources_;                  // Do NOT use this variable name outside of this file!
+  // DO NOT USE any of these members outside of this file except with a designated initializer for Session.
+  InvocationInputs invocation_inputs_;
+  AgentSelection_ts agent_selection_;
+  Directories_ts directories_;
+  ResolvedPromptState resolved_prompt_state_;
+  ModelSelection_ts model_selection_;
+  session::Stats_ts session_stats_;
+  // Coalescing and mutation identity for the adjacent canonical statistics.
+  std::shared_ptr<SessionStatisticsPublicationState> session_statistics_publication_;
+  GitBranch_ts git_branch_;
+  TrustState trust_state_;
+  SessionResources resources_;
 
   // ===========================================================================
   // Persistent session identity.
   // `store` is the session's on-disk identity (a durable content handle);
   // `created` records whether this Session was freshly created vs resumed.
   // Resolved model/reasoning live in `model_selection_` above and are
-  // projected back out of the persisted entries on resume.
+  // initially projected back out of the persisted entries on resume, after
+  // which model_selection_ becomes the canonical current model/reasoning used.
   // ===========================================================================
   ava::session::SessionStore store;
   bool created = false;                         // True when this is a freshly created session rather than a resumed one.
@@ -292,19 +179,33 @@ class Session : protected Session_aggregate_base
 
   // Accessors.
 
-  // Base class accessors.
-  //
-  // The non-const overload is used to replace the whole bundle on mode/model changes;
-  // the const overload lets callers copy it out of a const Session without naming the member directly.
-
-  InvocationInputs& invocation_inputs() { return invocation_inputs_; }
+  // Deliberately expose invocation inputs read-only: callers may not mutate these construction-time members.
+  // The sole exception is effective tool visibility, which has its own mutable tool_visibility() accessor.
   InvocationInputs const& invocation_inputs() const { return invocation_inputs_; }
+
+  AgentSelection_ts& agent_selection() { return agent_selection_; }
+  AgentSelection_ts const& agent_selection() const { return agent_selection_; }
+
+  Directories_ts& directories() { return directories_; }
+  Directories_ts const& directories() const { return directories_; }
 
   ResolvedPromptState& resolve_prompt_state() { return resolved_prompt_state_; }
   ResolvedPromptState const& resolve_prompt_state() const { return resolved_prompt_state_; }
 
+  PromptModeAndContextSources_ts& prompt_mode_and_context_sources() { return resolved_prompt_state_.mode_and_context_sources; }
+  PromptModeAndContextSources_ts const& prompt_mode_and_context_sources() const { return resolved_prompt_state_.mode_and_context_sources; }
+
   ModelSelection_ts& model_selection() { return model_selection_; }
   ModelSelection_ts const& model_selection() const { return model_selection_; }
+
+  session::Stats_ts& session_stats() { return session_stats_; }
+  session::Stats_ts const& session_stats() const { return session_stats_; }
+
+  // Return the session-owned coordinator used only by the backend statistics publisher.
+  std::shared_ptr<SessionStatisticsPublicationState> const& session_statistics_publication_state() const { return session_statistics_publication_; }
+
+  GitBranch_ts& git_branch() { return git_branch_; }
+  GitBranch_ts const& git_branch() const { return git_branch_; }
 
   TrustState& trust_state() { return trust_state_; }
   TrustState const& trust_state() const { return trust_state_; }
@@ -313,29 +214,47 @@ class Session : protected Session_aggregate_base
   SessionResources const& resources() const { return resources_; }
 
   // Invocation inputs.
-  std::filesystem::path const& workspace_dir() const { return invocation_inputs_.workspace_dir; }
-  std::filesystem::path const& current_dir() const noexcept { return invocation_inputs_.current_dir; }
+  std::filesystem::path workspace_dir() const { return Directories_ts::crat(directories_)->workspace_dir; }
+  std::filesystem::path current_dir() const { return Directories_ts::crat(directories_)->current_dir; }
+  // Access effective tool visibility; mutation requires the caller to retain Session write access.
+  ava::agent::ToolVisibilityOptions& tool_visibility() { return invocation_inputs_.tool_visibility; }
   ava::agent::ToolVisibilityOptions const& tool_visibility() const { return invocation_inputs_.tool_visibility; }
   std::optional<std::string> const& requested_primary_agent() const { return invocation_inputs_.requested_primary_agent; }
-  std::optional<ava::agent::AgentDefinition> const& selected_primary_agent() const { return invocation_inputs_.selected_primary_agent; }
   ava::config::XdgPaths const& paths() const { return invocation_inputs_.paths; }
   bool sessionless() const { return invocation_inputs_.sessionless; }
 
   // Resolved prompt state.
-  ava::agent::Mode mode() const { return resolved_prompt_state_.mode; }
+  PromptReadiness prompt_readiness() const { return resolved_prompt_state_.readiness; }
+  ava::agent::Mode mode() const { return PromptModeAndContextSources_ts::crat(resolved_prompt_state_.mode_and_context_sources)->mode; }
   BasePromptMetadata const& base_prompt() const { return resolved_prompt_state_.base_prompt; }
-  std::vector<ContextSourceMetadata> const& context_sources() const { return resolved_prompt_state_.context_sources; }
+  std::vector<ContextSourceMetadata> context_sources() const
+  {
+    return PromptModeAndContextSources_ts::crat(resolved_prompt_state_.mode_and_context_sources)->context_sources;
+  }
   std::vector<FreshnessSourceMetadata> const& freshness_sources() const { return resolved_prompt_state_.freshness_sources; }
   std::string const& system_prompt() const { return resolved_prompt_state_.system_prompt; }
   std::string const& ambient_extension_free_system_prompt() const { return resolved_prompt_state_.ambient_extension_free_system_prompt; }
   bool is_offline() const { return invocation_inputs_.is_offline_; }
-  std::vector<std::filesystem::path> const& additional_writable_dirs() const { return invocation_inputs_.additional_writable_dirs; }
+  std::vector<std::filesystem::path> additional_writable_dirs() const { return Directories_ts::crat(directories_)->additional_writable_dirs; }
   // Resolved once at open time and reused by every runtime history reader.
   ava::session::SessionReadLimits const& session_read_limits() const { return invocation_inputs_.session_read_limits; }
   PromptOverrides const& prompt_overrides() const { return invocation_inputs_.prompt_overrides; }
 
   // Return read-access type for the ModelSelection object.
   ModelSelection_ts::crat model_selection_r() const { return ModelSelection_ts::crat{model_selection_}; }
+
+  // Return read access to the canonical primary-agent definition. References into the definition must not outlive this guard.
+  AgentSelection_ts::crat agent_selection_r() const { return AgentSelection_ts::crat{agent_selection_}; }
+
+  [[nodiscard]] ava::agent::AgentDefinition const& selected_primary_agent(AgentSelection_ts::crat const& agent_selection_r) const
+  {
+    return agent_selection_r->selected_primary_agent;
+  }
+
+  // Return read-access type for the canonical session statistics.
+  session::Stats_ts::crat session_stats_r() const { return session::Stats_ts::crat{session_stats_}; }
+  // Return write-access type for the canonical session statistics.
+  session::Stats_ts::wat session_stats_w() { return session::Stats_ts::wat{session_stats_}; }
 
   // Trust state.
   ProjectTrustState const& project_trust() const { return trust_state_.project_trust; }
@@ -355,7 +274,8 @@ class Session : protected Session_aggregate_base
   std::shared_ptr<ava::provider::ProviderCatalog const> const& provider_catalog() const { return resources_.provider_catalog; }
 
   // Convenience accessor that returns ProviderCatalog::build_builtins_only() if no provider_catalog is set.
-  std::shared_ptr<ava::provider::ProviderCatalog const> ensure_provider_catalog() const {
+  std::shared_ptr<ava::provider::ProviderCatalog const> ensure_provider_catalog() const
+  {
     return resources_.provider_catalog ? resources_.provider_catalog : ava::provider::ProviderCatalog::build_builtins_only();
   }
 
@@ -462,14 +382,16 @@ class Session : protected Session_aggregate_base
   // `prompt_state` is consumed. This locked mutation primitive always succeeds.
   [[nodiscard]] ava::core::VoidResult apply_prompt_state(PromptState prompt_state);
 
-  // Apply prompt_state to unlocked_session, release its write lock, then synchronously refresh retained parent configuration.
+  // Apply prompt_state to unlocked_session, release its write lock, then refresh
+  // retained parent configuration before statistics. Both refreshes are attempted;
+  // parent authority failure takes precedence over ancillary statistics failure.
   [[nodiscard]] static ava::core::VoidResult apply_prompt_state_and_refresh(session_ts& unlocked_session, PromptState prompt_state);
 
   // Atomically publish a trust transition with its permitted primary definition, sticky effective tool visibility, and reconstructed prompt state, then
-  // refresh retained parent configuration after releasing the session lock.
+  // refresh retained parent configuration and statistics after releasing the
+  // session lock. Both are attempted; parent authority failure takes precedence.
   [[nodiscard]] static ava::core::VoidResult apply_trust_prompt_state_and_refresh(session_ts& unlocked_session, ProjectTrustState project_trust,
-                                                                                  std::optional<ava::agent::AgentDefinition> selected_primary_agent,
-                                                                                  PromptState prompt_state);
+                                                                                  ava::agent::AgentDefinition selected_primary_agent, PromptState prompt_state);
 
   // Switch the active model to `model`, re-deriving the prompt state for the
   // current mode and clearing any active reasoning selection.

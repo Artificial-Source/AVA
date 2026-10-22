@@ -12,8 +12,10 @@
 #include "ava/app/rpc_mode.h"
 #include "ava/app/runtime.h"
 #include "ava/app/runtime/ExtensionResourcePolicy.h"
+#include "ava/app/runtime/GitBranch.h"
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/runtime/SessionStatisticsPublication.h"
 #include "ava/app/subagent_delivery_manager.h"
 #include "ava/app/tui/interactive_tui_internal.h"
 #include "ava/agent/agent_loop_session.h"
@@ -33,16 +35,23 @@
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <sys/stat.h>
@@ -128,6 +137,8 @@ void test_app_runtime_open_session_and_context_prompt()
     CRITICAL_AREA_BEGIN_R(session);
     expect(session_r->created && session_r->mode() == ava::agent::Mode::Plan && session_r->model_selection_r()->model.model_id == "gpt-5.5",
            "runtime session records created state, mode, and model");
+    expect(session_r->workspace_dir() == workspace && session_r->current_dir() == current,
+           "runtime session preserves distinct canonical workspace-root and current-directory paths");
     CRITICAL_AREA_END_R(session);
     auto const resource_policy = ava::app::runtime::make_extension_resource_policy_1(unlocked_session);
     expect(!resource_policy.include_project_resources && resource_policy.plugin_discovery.global_plugins_dir == paths.ava_config_dir / "plugins" &&
@@ -148,7 +159,7 @@ void test_app_runtime_open_session_and_context_prompt()
                (*entries)[0].data_json.find("\"context_sources\":3") != std::string::npos,
            "runtime session appends session_start on creation");
 
-    session_id = session_r->store.session_id();
+    session_id = session_r->store.options_r()->session_id;
   }
   ava::app::runtime::OpenContext reopen_context;
   reopen_context.workspace_dir = workspace;
@@ -168,7 +179,7 @@ void test_app_runtime_open_session_and_context_prompt()
   if (unlocked_reopened_result)
   {
     SCOPED_CRITICAL_AREA_R(reopened_r, *unlocked_reopened_result);
-    expect(!reopened_r->created && reopened_r->store.session_id() == session_id,
+    expect(!reopened_r->created && reopened_r->store.options_r()->session_id == session_id,
            "runtime session resolves requested session id prefixes without creating a new session");
     auto reopened_entries = reopened_r->store.load();
     expect(reopened_entries && reopened_entries->size() == 1, "runtime reopened session does not append another session_start");
@@ -225,7 +236,7 @@ void test_app_runtime_preserves_legacy_subagent_job_tree()
            "real runtime session constructs its application coordinator and delivery manager against the seeded XDG state root");
     auto coordinator = session_w->subagent_coordinator();
     auto manager = session_w->subagent_delivery_manager();
-    std::string session_id = session_w->store.session_id();
+    std::string session_id = session_w->store.options_r()->session_id;
     CRITICAL_AREA_END_W(session);
 
     auto started = coordinator->start(session_id, ava::agent::SubagentJobMode::Foreground, {.child_session_id = "child_runtime_legacy"}, [](auto const&) {
@@ -264,28 +275,7 @@ void test_app_runtime_preserves_legacy_subagent_job_tree()
       "real runtime construction, coordinator use, delivery-manager shutdown, and session shutdown leave the legacy tree byte-for-byte and metadata unchanged");
 }
 
-void test_app_active_context_status_format_semantics()
-{
-  using ava::app::interactive_internal::format_active_context_status_value;
-
-  expect(format_active_context_status_value(0, 100'000) == "0 (0.0%)" && format_active_context_status_value(0, std::nullopt) == "~0" &&
-             format_active_context_status_value(0, 0) == "~0" && format_active_context_status_value(0, -1) == "~0",
-         "active context status formats zero tokens with known percent and unknown-window tilde count");
-  expect(format_active_context_status_value(1, 100'000) == "1 (<0.1%)" && format_active_context_status_value(99, 100'000) == "99 (<0.1%)" &&
-             format_active_context_status_value(100, 100'000) == "100 (0.1%)",
-         "active context status preserves the sub-tenth percent boundary");
-  expect(format_active_context_status_value(999, 10'000) == "999 (10.0%)" && format_active_context_status_value(1'000, 10'000) == "1k (10.0%)" &&
-             format_active_context_status_value(1'200, 10'000) == "1.2k (12.0%)" && format_active_context_status_value(150'300, 272'000) == "150.3k (55.3%)" &&
-             format_active_context_status_value(1'000'000, 2'000'000) == "1m (50.0%)" &&
-             format_active_context_status_value(1'200'000, 2'000'000) == "1.2m (60.0%)",
-         "active context status keeps raw sub-1k counts and one-decimal k/m compact counts");
-  expect(format_active_context_status_value(150'300, std::nullopt) == "~150.3k" && format_active_context_status_value(12'000, std::nullopt) == "~12k",
-         "active context status preserves the unknown-window tilde count fallback exactly");
-  expect(format_active_context_status_value(200'000, 100'000) == "200k (200.0%)" && format_active_context_status_value(150'300, 100'000) == "150.3k (150.3%)",
-         "active context status reports over-window percentages without clamping");
-}
-
-void test_app_active_context_status_tracks_compaction_projection()
+void test_app_token_status_tracks_compaction_projection()
 {
   auto const root = create_empty_root("app-active-context-status");
   auto const workspace = root / "workspace";
@@ -302,78 +292,27 @@ void test_app_active_context_status_tracks_compaction_projection()
   if (!unlocked_session_result)
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
-  CRITICAL_AREA_BEGIN_W(session);
-
-  session_w->model_selection().change([](auto& model_selection){
-    model_selection.model.context_window_tokens = 272'000;
-  });
-  auto expected_status = [&](std::size_t active_tokens) {
-    auto const system_prompt_tokens = ava::session::estimate_tokens(session_w->system_prompt());
-    auto const total = active_tokens + system_prompt_tokens;
-    auto const display =
-        total > static_cast<std::size_t>(std::numeric_limits<long long>::max()) ? std::numeric_limits<long long>::max() : static_cast<long long>(total);
-    return ava::app::interactive_internal::format_active_context_status_value(display,
-                                                                               session_w->model_selection_r()->model.context_window_tokens);
-  };
-
-  CRITICAL_AREA_END_W(session);
-  auto const initial_status = ava::app::interactive_internal::active_context_status_for_session(unlocked_session);
-  CRITICAL_AREA_CONTINUE_W(session);
-  auto authority = session_w->read_authority_1();
-  auto entries = authority ? authority->load() : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(authority.error()));
-  auto const initial_tokens =
-      entries ? ava::session::estimate_active_context_tokens(*entries) : ava::core::Result<std::size_t>(std::unexpected(entries.error()));
-  expect(initial_status && initial_tokens && *initial_status == expected_status(*initial_tokens) && initial_status->find('(') != std::string::npos &&
-             initial_status->find('%') != std::string::npos && !initial_status->starts_with('~'),
-         "active context status uses compact count plus percent when the model window is known");
-
-  session_w->model_selection().change([](auto& model_selection){
-    model_selection.model.context_window_tokens = std::nullopt;
-  });
-  CRITICAL_AREA_END_W(session);
-  auto const unknown_status = ava::app::interactive_internal::active_context_status_for_session(unlocked_session);
-  CRITICAL_AREA_CONTINUE_W(session);
-  auto const unknown_expected = initial_tokens
-                                    ? std::optional<std::string>{ava::app::interactive_internal::format_active_context_status_value(
-                                          static_cast<long long>(*initial_tokens + ava::session::estimate_tokens(session_w->system_prompt())), std::nullopt)}
-                                    : std::nullopt;
-  expect(unknown_status && unknown_expected && *unknown_status == *unknown_expected && unknown_status->starts_with('~') &&
-             unknown_status->find('%') == std::string::npos,
-         "active context status falls back to tilde compact count when the model window is unknown");
-  session_w->model_selection().change([](auto& model_selection){
-    model_selection.model.context_window_tokens = 272'000;
-  });
-
-  auto const appended_user = session_w->append_target()->append(ava::session::SessionEntry{.id = "active-context-user",
-                                                                                           .parent_id = "",
-                                                                                           .type = ava::session::EntryType::UserMessage,
-                                                                                           .timestamp = "2026-01-01T00:00:00Z",
-                                                                                           .data_json = "{\"text\":\"" + std::string(50'000, 'x') + "\"}"});
-  CRITICAL_AREA_END_W(session);
-  auto const grown_status = appended_user ? ava::app::interactive_internal::active_context_status_for_session(unlocked_session) : std::nullopt;
-  CRITICAL_AREA_CONTINUE_W(session);
-  auto grown_authority = session_w->read_authority_1();
-  auto grown_entries =
-      grown_authority ? grown_authority->load() : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(grown_authority.error()));
-  auto const grown_tokens =
-      grown_entries ? ava::session::estimate_active_context_tokens(*grown_entries) : ava::core::Result<std::size_t>(std::unexpected(grown_entries.error()));
-
+  auto const initial_statistics_work = ava::app::runtime::session_statistics_refresh_work_count(unlocked_session);
+  auto run_controller = ava::app::runtime::session_ts::rat(unlocked_session)->run_controller();
+  auto const appended_user = run_controller->append(ava::session::SessionEntry{.id = "active-context-user",
+                                                                               .parent_id = "",
+                                                                               .type = ava::session::EntryType::UserMessage,
+                                                                               .timestamp = "2026-01-01T00:00:00Z",
+                                                                               .data_json = "{\"text\":\"" + std::string(50'000, 'x') + "\"}"});
   ava::session::ManualCompactionRequest compaction_request;
   compaction_request.summary = "condensed history";
   compaction_request.config = ava::session::default_compaction_config();
   compaction_request.estimated_tokens = 12'500;
   auto compaction = ava::session::make_manual_compaction_entry(std::move(compaction_request));
-  auto const appended_compaction =
-      compaction ? session_w->append_target()->append(std::move(*compaction)) : ava::core::VoidResult(std::unexpected(compaction.error()));
-  auto const appended_recent = appended_compaction ? session_w->append_target()->append(ava::session::SessionEntry{.id = "active-context-recent",
-                                                                                                                   .parent_id = "",
-                                                                                                                   .type = ava::session::EntryType::UserMessage,
-                                                                                                                   .timestamp = "2026-01-01T00:00:01Z",
-                                                                                                                   .data_json = "{\"text\":\"recent\"}"})
+  auto const appended_compaction = compaction ? run_controller->append(std::move(*compaction)) : ava::core::VoidResult(std::unexpected(compaction.error()));
+  auto const appended_recent = appended_compaction ? run_controller->append(ava::session::SessionEntry{.id = "active-context-recent",
+                                                                                                       .parent_id = "",
+                                                                                                       .type = ava::session::EntryType::UserMessage,
+                                                                                                       .timestamp = "2026-01-01T00:00:01Z",
+                                                                                                       .data_json = "{\"text\":\"recent\"}"})
                                                    : ava::core::VoidResult(std::unexpected(appended_compaction.error()));
-  CRITICAL_AREA_END_W(session);
-  auto const compacted_status = appended_recent ? ava::app::interactive_internal::active_context_status_for_session(unlocked_session) : std::nullopt;
-  CRITICAL_AREA_CONTINUE_W(session);
+  auto const refreshed = ava::app::runtime::refresh_session_statistics(unlocked_session);
+  SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
   auto compacted_authority = session_w->read_authority_1();
   auto compacted_entries = compacted_authority ? compacted_authority->load()
                                                : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(compacted_authority.error()));
@@ -381,15 +320,188 @@ void test_app_active_context_status_tracks_compaction_projection()
                                                : ava::core::Result<std::size_t>(std::unexpected(compacted_entries.error()));
   auto const complete_tokens = compacted_entries ? ava::session::estimate_session_tokens(*compacted_entries)
                                                  : ava::core::Result<std::size_t>(std::unexpected(compacted_entries.error()));
-  CRITICAL_AREA_END_W(session);
-  auto const cumulative_token_status = ava::app::interactive_internal::token_status_for_session(unlocked_session);
-  CRITICAL_AREA_CONTINUE_W(session);
-  expect(initial_status && appended_user && grown_status && grown_tokens && compaction && appended_compaction && appended_recent && compacted_status &&
-             active_tokens && complete_tokens && *grown_status != *initial_status && *grown_status == expected_status(*grown_tokens) &&
-             *compacted_status != *grown_status && *compacted_status == expected_status(*active_tokens) && *active_tokens < *complete_tokens &&
-             grown_status->find('(') != std::string::npos && compacted_status->find('(') != std::string::npos &&
-             (!cumulative_token_status || *cumulative_token_status != *grown_status),
-         "active context status grows with committed history, follows the compaction-active projection, and stays separate from cumulative token status");
+  auto const canonical_active_tokens = session_w->session_stats_r()->active_context_tokens;
+  auto const cumulative_tokens = session_w->session_stats_r()->total_tokens;
+  auto const canonical_system_prompt_tokens = session_w->session_stats_r()->system_prompt_tokens;
+  auto const expected_system_prompt_tokens = ava::session::estimate_tokens(session_w->system_prompt());
+  expect(appended_user && compaction && appended_compaction && appended_recent && refreshed && compacted_entries && active_tokens && complete_tokens &&
+             canonical_active_tokens == std::optional<std::size_t>{*active_tokens} &&
+             canonical_system_prompt_tokens == std::optional<std::size_t>{expected_system_prompt_tokens} && *active_tokens < *complete_tokens &&
+             !cumulative_tokens,
+         "token refresh publishes compaction-aware retained history and the system prompt separately without repurposing cumulative provider usage");
+  auto const published_stats = *session_w->session_stats_r();
+  session_w.unlock();
+
+  auto const work_after_publication = ava::app::runtime::session_statistics_refresh_work_count(unlocked_session);
+  auto exit_result = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/exit"});
+  auto const work_after_exit = ava::app::runtime::session_statistics_refresh_work_count(unlocked_session);
+  expect(initial_statistics_work == 1 && work_after_publication == initial_statistics_work + 1 && exit_result && exit_result->quit &&
+             work_after_exit == work_after_publication,
+         "initial open publishes once, batched mutations recompute once, and unchanged exit does not reload statistics");
+
+  auto final_mutation = run_controller->append(ava::session::SessionEntry{.id = "active-context-final-mutation",
+                                                                          .parent_id = "active-context-recent",
+                                                                          .type = ava::session::EntryType::Cancel,
+                                                                          .timestamp = "2026-01-01T00:00:02Z",
+                                                                          .data_json = "{}"});
+  auto const session_path = ava::app::runtime::session_ts::rat(unlocked_session)->store.session_path();
+  write_app_test_file(session_path, "{malformed session history\n");
+  auto failed_refresh = ava::app::runtime::refresh_session_statistics(unlocked_session);
+  auto const stats_after_failure = *ava::app::runtime::session_ts::rat(unlocked_session)->session_stats_r();
+  expect(final_mutation.has_value(), "statistics failure fixture commits a final mutation before its read failure");
+  expect(!failed_refresh, "statistics publication reports a session read failure");
+  expect(stats_after_failure == published_stats, "statistics read failure preserves the last valid whole value instead of fabricated zeroes");
+}
+
+void test_app_statistics_invalidate_partial_append_recovery()
+{
+  auto const root = create_empty_root("app-statistics-partial-recovery");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+
+  ava::app::runtime::OpenContext options;
+  options.workspace_dir = workspace;
+  options.current_dir = workspace;
+  options.paths = app_test_paths(root);
+  auto store = ava::session::SessionStore::create(workspace, options.paths.sessions_dir);
+  auto lease = store ? ava::session::SessionLease::create_and_acquire(store->session_path())
+                     : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
+  auto seeded = store && lease ? store->append(*lease, ava::session::SessionEntry{.id = "statistics-recovery-seed",
+                                                                                  .parent_id = "",
+                                                                                  .type = ava::session::EntryType::UserMessage,
+                                                                                  .timestamp = "2026-10-22T00:00:00Z",
+                                                                                  .data_json = "{\"text\":\"seed\"}"})
+                               : ava::core::VoidResult(std::unexpected(lease ? store.error() : lease.error()));
+  auto fail_writes = std::make_shared<std::atomic_bool>(true);
+  auto write_calls = std::make_shared<std::atomic_int>(0);
+  if (store)
+  {
+    store->set_append_write_for_test([fail_writes, write_calls](int fd, std::string_view bytes) -> ssize_t {
+      if (!fail_writes->load(std::memory_order_acquire))
+        return ::write(fd, bytes.data(), bytes.size());
+      if (write_calls->fetch_add(1, std::memory_order_acq_rel) == 0)
+        return ::write(fd, bytes.data(), std::min<std::size_t>(1, bytes.size()));
+      errno = EIO;
+      return -1;
+    });
+  }
+  auto session = seeded ? ava::app::runtime::Session::open_owned(options, *store, *lease, false)
+                        : ava::core::Result<ava::app::runtime::session_ts>(std::unexpected(seeded.error()));
+  expect(session.has_value(), session ? "statistics recovery fixture opens a session" : session.error().format());
+  if (!session)
+    return;
+
+  auto const valid_stats = *ava::app::runtime::session_ts::rat(*session)->session_stats_r();
+  auto const initial_work = ava::app::runtime::session_statistics_refresh_work_count(*session);
+  auto controller = ava::app::runtime::session_ts::rat(*session)->run_controller();
+
+  auto failed = controller->append(ava::session::SessionEntry{.id = "statistics-partial",
+                                                              .parent_id = "",
+                                                              .type = ava::session::EntryType::UserMessage,
+                                                              .timestamp = "2026-10-22T00:00:00Z",
+                                                              .data_json = "{\"text\":\"partial\"}"});
+  auto blocked_refresh = ava::app::runtime::refresh_session_statistics(*session);
+  auto const stats_while_broken = *ava::app::runtime::session_ts::rat(*session)->session_stats_r();
+  auto const broken_identity = controller->statistics_mutation_identity();
+  fail_writes->store(false, std::memory_order_release);
+  auto recovered = controller->reset_persistence_failure();
+  auto refreshed = ava::app::runtime::refresh_session_statistics(*session);
+  auto const recovered_stats = *ava::app::runtime::session_ts::rat(*session)->session_stats_r();
+  auto const recovered_identity = controller->statistics_mutation_identity();
+
+  expect(!failed && !blocked_refresh && stats_while_broken == valid_stats && broken_identity.persistence_failure_latched &&
+             broken_identity.persistence_invalidation_generation == 1,
+         "partial append failure rejects publication and preserves the last valid statistics value");
+  expect(recovered && refreshed && !recovered_identity.persistence_failure_latched &&
+             recovered_identity.committed_append_generation == broken_identity.committed_append_generation &&
+             recovered_identity.persistence_invalidation_generation == broken_identity.persistence_invalidation_generation && recovered_stats == valid_stats &&
+             ava::app::runtime::session_statistics_refresh_work_count(*session) == initial_work + 1,
+         "successful recovery invalidates coalescing and recomputes repaired history without mislabeling the failed append as committed");
+}
+
+void test_app_statistics_reject_stale_work_across_session_replacement()
+{
+  using namespace std::chrono_literals;
+  auto const root = create_empty_root("app-statistics-stale-replacement");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = app_test_paths(root);
+  auto current = ava::app::runtime::Session::open(context);
+  expect(current.has_value(), current ? "stale statistics fixture opens current session" : current.error().format());
+  if (!current)
+    return;
+  auto current_controller = ava::app::runtime::session_ts::rat(*current)->run_controller();
+  auto appended = current_controller->append(ava::session::SessionEntry{.id = "stale-statistics-entry",
+                                                                        .parent_id = "",
+                                                                        .type = ava::session::EntryType::UserMessage,
+                                                                        .timestamp = "2026-10-22T00:00:00Z",
+                                                                        .data_json = "{\"text\":\"old session\"}"});
+
+  auto replacement_context = ava::app::runtime::session_ts::rat(*current)->replacement_open_context({});
+  replacement_context.prompt_overrides.system_prompt = "replacement statistics prompt";
+  auto replacement = ava::app::runtime::Session::open(replacement_context);
+  expect(replacement.has_value(), replacement ? "stale statistics fixture opens replacement session" : replacement.error().format());
+  if (!appended || !replacement)
+    return;
+  auto const replacement_id = ava::app::runtime::session_ts::rat(*replacement)->store.options_session_id_copy();
+  auto replacement_controller = ava::app::runtime::session_ts::rat(*replacement)->run_controller();
+  auto replacement_append = replacement_controller->append(ava::session::SessionEntry{.id = "replacement-statistics-entry",
+                                                                                      .parent_id = "",
+                                                                                      .type = ava::session::EntryType::UserMessage,
+                                                                                      .timestamp = "2026-10-22T00:00:01Z",
+                                                                                      .data_json = "{\"text\":\"replacement session\"}"});
+  auto const stale_replacement_stats = *ava::app::runtime::session_ts::rat(*replacement)->session_stats_r();
+
+  std::mutex hook_mutex;
+  std::condition_variable hook_cv;
+  bool read_completed = false;
+  bool release_read = false;
+  {
+    ava::app::runtime::session_ts::wat current_w(*current);
+    current_w->store.set_after_lease_bound_read_for_test([&] {
+      std::unique_lock lock(hook_mutex);
+      read_completed = true;
+      hook_cv.notify_all();
+      static_cast<void>(hook_cv.wait_for(lock, 3s, [&] { return release_read; }));
+    });
+  }
+
+  auto stale_refresh = std::async(std::launch::async, [&] { return ava::app::runtime::refresh_session_statistics(*current); });
+  {
+    std::unique_lock lock(hook_mutex);
+    expect(hook_cv.wait_for(lock, 3s, [&] { return read_completed; }), "stale statistics fixture reaches the post-read publication gate");
+  }
+  auto replacement_future = std::async(std::launch::async, [&] { return ava::app::runtime::Session::replace_with(*current, *replacement); });
+  bool replacement_committed = false;
+  auto const replacement_deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < replacement_deadline)
+  {
+    if (ava::app::runtime::session_ts::rat(*current)->store.options_session_id_copy() == replacement_id)
+    {
+      replacement_committed = true;
+      break;
+    }
+    std::this_thread::sleep_for(10ms);
+  }
+  {
+    std::lock_guard lock(hook_mutex);
+    release_read = true;
+  }
+  hook_cv.notify_all();
+  auto replaced = replacement_future.get();
+  auto stale_result = stale_refresh.get();
+
+  auto const installed_id = ava::app::runtime::session_ts::rat(*current)->store.options_session_id_copy();
+  auto const installed_prompt = ava::app::runtime::session_ts::rat(*current)->system_prompt();
+  auto const installed_stats = *ava::app::runtime::session_ts::rat(*current)->session_stats_r();
+  expect(replacement_append && replacement_committed && replaced && stale_result && installed_id == replacement_id &&
+             installed_stats.entry_count > stale_replacement_stats.entry_count &&
+             installed_stats.system_prompt_tokens == std::optional<std::size_t>{ava::session::estimate_tokens(installed_prompt)},
+         "replacement refreshes its canonical statistics while stale old-session work cannot overwrite replacement identity, target, or prompt");
 }
 
 void test_app_runtime_no_session_mode()
@@ -431,7 +543,7 @@ void test_app_runtime_no_session_mode()
   expect(listed && listed->empty(), "runtime no-session mode does not appear in persisted session listings");
 
   auto requested_result = ava::app::runtime::Session::open(open_context, {.sessionless = true,
-                                                                          .requested_session_id = session_w->store.session_id(),
+                                                                          .requested_session_id = session_w->store.options_r()->session_id,
                                                                           .fork_session_id = std::nullopt,
                                                                           .initial_session_name = std::nullopt,
                                                                           .continue_last_session = false,
@@ -554,6 +666,14 @@ void test_app_runtime_process_scope_lifecycle()
   if (!first_result)
     return;
 
+  {
+    SCOPED_CRITICAL_AREA_W(first_w, *first_result);
+    first_w->session_stats().change([](ava::session::Stats& stats) {
+      stats.active_context_tokens = 321;
+      stats.system_prompt_tokens = 123;
+    });
+  }
+
   std::optional<ava::process::ProcessScopeV1> first_session_scope;
   ava::app::runtime::OpenContext replacement_context;
   {
@@ -567,9 +687,19 @@ void test_app_runtime_process_scope_lifecycle()
     if (duplicate && authority)
     {
       auto detached = first_r->create_detached_state(std::move(*duplicate), std::move(*authority), first_r->subagent_delivery_manager());
+      ava::session::Stats_ts::crat detached_stats_r(detached.session_stats_);
+      ava::app::runtime::Directories_ts::crat detached_directories_r(detached.directories_);
+      ava::app::runtime::Directories_ts::crat source_directories_r(first_r->directories());
+      ava::app::runtime::GitBranch_ts::crat detached_branch_r(detached.git_branch_);
+      ava::app::runtime::GitBranch_ts::crat source_branch_r(first_r->git_branch());
       expect(detached.resources_.session_process_scope && first_session_scope && same_owner(*detached.resources_.session_process_scope, *first_session_scope) &&
-                 &detached.resources_.session_process_scope->supervisor() == supervisor.get(),
-             "detached state for the same runtime session shares its existing process scope");
+                 &detached.resources_.session_process_scope->supervisor() == supervisor.get() &&
+                 detached_stats_r->active_context_tokens == std::optional<std::size_t>{321} &&
+                 detached_stats_r->system_prompt_tokens == std::optional<std::size_t>{123} &&
+                 detached_directories_r->workspace_dir == source_directories_r->workspace_dir &&
+                 detached_directories_r->current_dir == source_directories_r->current_dir && *detached_branch_r == *source_branch_r &&
+                 detached.session_stats_.frontend() == nullptr && detached.directories_.frontend() == nullptr && detached.git_branch_.frontend() == nullptr,
+             "detached state copies token, directory, and branch state without inheriting frontend registration and shares its existing process scope");
     }
 
     replacement_context = first_r->replacement_open_context({});
@@ -653,7 +783,7 @@ void test_app_runtime_session_startup_options()
 
     expect(unlocked_named_result.has_value() && named_r->created, "runtime opens a named startup session");
 
-    named_session_id = named_r->store.session_id();
+    named_session_id = named_r->store.options_r()->session_id;
     auto named_metadata = ava::session::load_session_metadata(named_r->store);
     expect(named_metadata && named_metadata->name == "named startup" && named_metadata->actor == "cli", "runtime startup --name records session metadata");
     named_entries = named_r->store.load();
@@ -680,7 +810,7 @@ void test_app_runtime_session_startup_options()
     auto custom_sessions = ava::session::SessionStore::list_sessions(workspace, custom_paths.sessions_dir);
     expect(default_sessions && default_sessions->size() == 1 && default_sessions->front().session_id == named_session_id,
            "runtime custom session directory leaves default session listing unchanged");
-    expect(custom_sessions && custom_sessions->size() == 1 && custom_sessions->front().session_id == custom_r->store.session_id(),
+    expect(custom_sessions && custom_sessions->size() == 1 && custom_sessions->front().session_id == custom_r->store.options_r()->session_id,
            "runtime custom session directory has its own session listing");
   }
 
@@ -716,7 +846,7 @@ void test_app_runtime_session_startup_options()
   if (unlocked_forked_result)
   {
     SCOPED_CRITICAL_AREA_R(forked_r, *unlocked_forked_result);
-    expect(forked_r->created && forked_r->store.session_id() != named_session_id, "runtime --fork creates a new session from a source prefix");
+    expect(forked_r->created && forked_r->store.options_r()->session_id != named_session_id, "runtime --fork creates a new session from a source prefix");
     auto fork_metadata = ava::session::load_session_metadata(forked_r->store);
     expect(fork_metadata && fork_metadata->name == "forked startup" && fork_metadata->parent_session_id == named_session_id &&
                fork_metadata->source_session_id == named_session_id && fork_metadata->branch_origin == "fork" && fork_metadata->actor == "cli" &&
@@ -762,6 +892,44 @@ void test_app_runtime_session_startup_options()
   expect(!fork_no_session_result && fork_no_session_result.error().message().find("no-session") != std::string::npos, "runtime rejects --fork with no-session");
 }
 
+void test_app_runtime_git_branch_observation_and_refresh()
+{
+  auto const root = create_empty_root("app-runtime-git-branch");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace / ".git");
+  {
+    std::ofstream head(workspace / ".git" / "HEAD");
+    head << "ref: refs/heads/feature/initial\n";
+  }
+
+  ava::app::runtime::OpenContext context;
+  context.workspace_dir = workspace;
+  context.current_dir = workspace;
+  context.paths = app_test_paths(root);
+  context.offline = true;
+  auto session = ava::app::runtime::Session::open(context, {.sessionless = true});
+  expect(session.has_value(), session ? "runtime session observes initial git branch" : session.error().format());
+  if (!session)
+    return;
+
+  auto initial = *ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch());
+  auto const unchanged = ava::app::runtime::refresh_git_branch(*session);
+  {
+    std::ofstream head(workspace / ".git" / "HEAD");
+    head << "ref: refs/heads/feature/changed\n";
+  }
+  auto const changed = ava::app::runtime::refresh_git_branch(*session);
+  auto refreshed = *ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch());
+
+  {
+    std::ofstream head(workspace / ".git" / "HEAD");
+    head << "0123456789abcdef0123456789abcdef\n";
+  }
+  expect(initial == "feature/initial" && !unchanged && changed && refreshed == "feature/changed" &&
+             ava::app::runtime::observe_git_branch(workspace) == "0123456789ab",
+         "git branch observation preserves textual refs, detached truncation, and change-only publication");
+}
+
 void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
 {
   for (std::string const mode : {"exact", "prefix", "continue"})
@@ -786,7 +954,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
     std::filesystem::path session_path;
     {
       SCOPED_CRITICAL_AREA_R(seeded_r, *unlocked_seeded_result);
-      session_id = seeded_r->store.session_id();
+      session_id = seeded_r->store.options_r()->session_id;
       session_path = seeded_r->store.session_path();
     }
     auto const valid_bytes = app_read_binary_file(session_path);
@@ -811,7 +979,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
       SCOPED_CRITICAL_AREA_R(resumed_r, *unlocked_resumed_result);
       auto loaded = unlocked_resumed_result ? resumed_r->store.load()
                                             : ava::core::Result<std::vector<ava::session::SessionEntry>>(std::unexpected(unlocked_resumed_result.error()));
-      expect(unlocked_resumed_result && resumed_r->store.session_id() == session_id && loaded && loaded->size() == 1 &&
+      expect(unlocked_resumed_result && resumed_r->store.options_r()->session_id == session_id && loaded && loaded->size() == 1 &&
                  app_read_binary_file(session_path) == valid_bytes,
              "runtime " + mode + " resume acquires the lease, quarantines the torn tail, and then loads validated history");
     }
@@ -835,7 +1003,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
   std::filesystem::path source_path;
   {
     SCOPED_CRITICAL_AREA_R(source_r, *unlocked_source_result);
-    source_id = source_r->store.session_id();
+    source_id = source_r->store.options_r()->session_id;
     source_path = source_r->store.session_path();
   }
   auto const valid_source_bytes = app_read_binary_file(source_path);
@@ -895,7 +1063,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
   std::filesystem::path byte_limited_path;
   {
     SCOPED_CRITICAL_AREA_R(byte_limited_r, *unlocked_byte_limited_seed_result);
-    byte_limited_id = byte_limited_r->store.session_id();
+    byte_limited_id = byte_limited_r->store.options_r()->session_id;
     byte_limited_path = byte_limited_r->store.session_path();
   }
   auto byte_limited_bytes = app_read_binary_file(byte_limited_path);
@@ -929,7 +1097,7 @@ void test_app_runtime_recovers_torn_tail_before_resume_and_startup_fork()
   std::filesystem::path entry_limited_path;
   {
     SCOPED_CRITICAL_AREA_W(entry_limited_w, *unlocked_entry_limited_seed_result);
-    entry_limited_id = entry_limited_w->store.session_id();
+    entry_limited_id = entry_limited_w->store.options_r()->session_id;
     entry_limited_path = entry_limited_w->store.session_path();
     auto appended_entry = entry_limited_w->append_owned(ava::session::SessionEntry{.id = "bounded_second_entry",
                                                                                    .parent_id = "",
@@ -979,7 +1147,7 @@ void test_app_runtime_reconciles_committed_function_calls_on_resume()
   std::string session_id;
   {
     SCOPED_CRITICAL_AREA_R(seeded_r, *unlocked_seeded_result);
-    session_id = seeded_r->store.session_id();
+    session_id = seeded_r->store.options_r()->session_id;
   }
   auto function = [](std::string id, std::string call_id, std::size_t sequence) {
     auto data = ava::session::serialize_assistant_output_item_data_json(ava::session::AssistantOutputItem{
@@ -1112,7 +1280,7 @@ void test_app_runtime_reconciles_committed_function_calls_on_resume()
                                                                                                                     .usage_json = std::nullopt});
   {
     SCOPED_CRITICAL_AREA_W(zero_result_w, *unlocked_zero_result_seed_result);
-    zero_result_session_id = zero_result_w->store.session_id();
+    zero_result_session_id = zero_result_w->store.options_r()->session_id;
     auto zero_committed = zero_result_w->append_owned(function("zero-result-function", "zero-result-call", 0));
     zero_committed = zero_committed ? zero_result_w->append_owned(ava::session::SessionEntry{.id = "zero-result-commit",
                                                                                              .parent_id = "",
@@ -1161,7 +1329,7 @@ void test_app_runtime_reconciles_committed_function_calls_on_resume()
   ava::core::VoidResult invalid_result;
   {
     SCOPED_CRITICAL_AREA_W(invalid_w, *unlocked_invalid_seed_result);
-    invalid_session_id = invalid_w->store.session_id();
+    invalid_session_id = invalid_w->store.options_r()->session_id;
     invalid_session_path = invalid_w->store.session_path();
     invalid_committed = invalid_w->append_owned(function("invalid-window-function", "invalid-window-call", 0));
     invalid_committed = invalid_committed ? invalid_w->append_owned(ava::session::SessionEntry{.id = "invalid-window-commit",
@@ -1272,8 +1440,9 @@ void test_app_runtime_cli_prompt_overrides()
     expect(switched_mode && switched_mode->handled && session_w->mode() == ava::agent::Mode::Build &&
                session_w->system_prompt().find("cli system prompt") != std::string::npos &&
                session_w->system_prompt().find("cli append prompt two") != std::string::npos &&
-               session_w->system_prompt().find("Implement changes directly") == std::string::npos,
-           "mode reloads preserve cli system prompt overrides");
+               session_w->system_prompt().find("Implement changes directly") == std::string::npos &&
+               session_w->session_stats_r()->system_prompt_tokens == std::optional<std::size_t>{ava::session::estimate_tokens(session_w->system_prompt())},
+           "mode reloads preserve cli system prompt overrides and publish the replacement prompt estimate");
   }
 }
 

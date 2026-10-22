@@ -299,7 +299,9 @@ target_link_libraries(ava_debug
     AVA::terminal       # typeinfo/vtable for terminal types used by print_members
     AVA::agent          # ava::agent::to_string
     AVA::app            # ava::app::runtime::to_string
+    AVA::frontend       # ava::app::frontend::FeedbackKey::print_on
     AVA::lsp            # ava::lsp::to_string
+    AVA::provider       # Generated provider enum printers call ava::provider::to_string.
     AVA::tui            # ava::tui::to_string
 )
 

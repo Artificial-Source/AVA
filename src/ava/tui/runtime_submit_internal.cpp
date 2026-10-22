@@ -291,7 +291,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
           else if (auto reloaded = options_.on_reload_display_settings())
           {
             auto status = reloaded->status.empty() ? std::string("display theme reloaded") : reloaded->status;
-            presentation_state_.apply_runtime_state_snapshot(options_, std::move(*reloaded));
+            presentation_state_.apply_local_display_settings(options_, std::move(reloaded->settings));
             settle_local_command_status(snapshot, std::move(status));
           }
           else
@@ -307,8 +307,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         }
         else if (auto reloaded = options_.on_reload_key_bindings())
         {
-          options_.key_bindings = std::move(reloaded->key_bindings);
-          presentation_state_.apply_runtime_state_snapshot(options_, std::move(reloaded->state));
+          presentation_state_.apply_local_key_bindings(options_, std::move(*reloaded));
           settle_local_command_status(snapshot, "keybindings reloaded");
         }
         else
@@ -322,6 +321,24 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         }
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
+    }
+    if (runtime_commands::local_display_settings_command(submitted) && options_.on_local_display_settings_action)
+    {
+      push_history(input_history, submitted);
+      auto applied = options_.on_local_display_settings_action(submitted);
+      if (!applied)
+      {
+        open_command_error(snapshot, submitted, applied.error().format());
+        ava::core::Application::instance().terminal_context().beep();
+      }
+      else
+      {
+        presentation_state_.apply_local_display_settings(options_, std::move(applied->settings));
+        settle_local_command_completion(snapshot, submitted, std::move(applied->output));
+      }
+      if (!renderer_.render())
+        return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
+      return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
     if (submitted == "/hotkeys" || submitted == "/keybindings")
     {
@@ -354,8 +371,14 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (submitted == "/settings")
     {
       push_history(input_history, submitted);
-      presentation_state_.refresh_token_status(options_);
-      presentation_state_.refresh_active_context_status(options_);
+      if (active_select_list_ == ActiveSelectList::Overview)
+        snapshot.startup_overview.reset();
+      // Workspace trust is popup-only. Refresh it once at initialization so a
+      // close/reopen observes backend changes without ordinary snapshot transport.
+      if (options_.read_project_trust)
+        snapshot.project_trust = options_.read_project_trust();
+      else
+        snapshot.project_trust.reset();
       auto settings_snapshot = snapshot;
       settings_snapshot.sidebar = sidebar;
       snapshot.select_list = settings_select_list_view(settings_snapshot, options_.key_bindings);

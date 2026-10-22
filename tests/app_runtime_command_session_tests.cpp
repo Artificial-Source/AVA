@@ -10,7 +10,7 @@
 #include "ava/session/export.h"
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
-#include "ava/session/stats.h"
+#include "ava/session/Stats.h"
 #include "ava/session/validation.h"
 
 #include <algorithm>
@@ -37,7 +37,7 @@ using namespace ava::tests;
 // store, active imported session, and appended test records while exercising command dispatch.
 void app_command_dispatcher_session_part(ava::app::runtime::session_ts& unlocked_session, std::filesystem::path const& workspace)
 {
-  auto session_id = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.session_id(); };
+  auto session_id = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id; };
   auto session_path = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.session_path(); };
   auto load_entries = [&] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.load(); };
   auto append_owned = [&](ava::session::SessionEntry entry) { return ava::app::runtime::session_ts::wat(unlocked_session)->append_owned(std::move(entry)); };

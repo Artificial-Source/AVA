@@ -224,7 +224,7 @@ void test_acp_retained_resume_validates_cwd_and_limits()
   auto original = runtime::Session::open_at(context, workspace, nested);
   if (!ava::tests::require(original.has_value(), "ACP retained fixture opens original nested session"))
     return;
-  auto const id = runtime::session_ts::rat(*original)->store.session_id();
+  auto const id = runtime::session_ts::rat(*original)->store.options_r()->session_id;
   auto controller = runtime::session_ts::rat(*original)->run_controller();
   struct PendingJob
   {
@@ -388,7 +388,7 @@ void test_acp_prompt_close_cycles_release_parents()
       break;
     auto published = (*manager)->refresh_parent(*source, {});
     expect(published.has_value(), "ACP close-only fixture publishes within the one-parent cap");
-    auto const id = runtime::session_ts::rat(*source)->store.session_id();
+    auto const id = runtime::session_ts::rat(*source)->store.options_r()->session_id;
     auto resumed =
         service.handle_request(Request{.id = std::int64_t(5),
                                        .method = "session/resume",
@@ -930,7 +930,7 @@ void test_acp_session_list_pagination_and_snapshot_bounds()
   ava::tests::expect_all("session/list positively filters by the persisted original cwd",
                          {{"one matching session", filtered_items.size() == 1},
                           {"exact matching identity",
-                           filtered_items.size() == 1 && ava::core::json::string_field(filtered_items.front(), "sessionId") == nested_store->session_id()},
+                           filtered_items.size() == 1 && ava::core::json::string_field(filtered_items.front(), "sessionId") == nested_store->options_r()->session_id},
                           {"reported cwd", filtered_items.size() == 1 && ava::core::json::string_field(filtered_items.front(), "cwd") == nested.string()},
                           {"no continuation", filtered && !ava::core::json::string_field(*filtered, "nextCursor")}});
   auto invalid_cursor =

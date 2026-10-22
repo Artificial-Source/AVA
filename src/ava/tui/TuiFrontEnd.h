@@ -1,7 +1,13 @@
 #pragma once
 
-#include "ava/app/frontend/FrontEnd.h"
-#include "ava/app/frontend/ModelSelection.h"
+#include "ava/frontend/AgentSelection.h"
+#include "ava/frontend/Directories.h"
+#include "ava/frontend/FrontEnd.h"
+#include "ava/frontend/GitBranch.h"
+#include "ava/frontend/ModelSelection.h"
+#include "ava/frontend/PromptModeAndContextSources.h"
+#include "ava/frontend/SessionIdentity.h"
+#include "ava/frontend/SessionStats.h"
 
 // For OLD API
 #include "ava/tui/runtime.h"    // TuiRuntimeOptions
@@ -10,20 +16,23 @@ namespace ava::tui {
 
 struct TuiRuntimeOptions;
 
-class TuiFrontEnd : public app::frontend::FrontEnd
+class TuiFrontEnd : public frontend::FrontEnd
 {
  private:
-  app::frontend::ModelSelection model_selection_;
+  frontend::AgentSelection agent_selection_;
+  frontend::ModelSelection model_selection_;
+  frontend::PromptModeAndContextSources prompt_metadata_;
+  frontend::SessionStats session_stats_;
+  frontend::Directories directories_;
+  frontend::GitBranch git_branch_;
+  frontend::SessionIdentity session_identity_;
 
  public:
-  TuiFrontEnd() : model_selection_(this) { }
+  // Explicitly connect session percentages to this frontend's model projection.
+  TuiFrontEnd();
 
   // Implement virtual function of FrontEnd.
-  void initialize_frontend_state(app::runtime::session_ts::crat const& session_r) override
-  {
-    // Initialize our frontend state objects.
-    model_selection_.initialize(&session_r->model_selection());
-  }
+  void initialize_frontend_state(app::runtime::session_ts::crat const& session_r) override;
 
   // Launch the terminal user interface (TUI) using runtime options `options`.
   // Called by ava::app::interactive_internal::run_tui after registering all frontend::Data objects.
@@ -33,17 +42,23 @@ class TuiFrontEnd : public app::frontend::FrontEnd
 
   // Schedule a refresh on the frontend of the registered Data object identified by `index`.
   // Called from Data::notify() on the notifying backend thread when that object's data was changed.
-  void data_changed(app::frontend::DataListIndex index) override;
+  void data_changed(frontend::DataListIndex index) override;
 
   // Accessors.
 
-  app::frontend::ModelSelection& model_selection() { return model_selection_; }
-  app::frontend::ModelSelection const& model_selection() const { return model_selection_; }
+  frontend::AgentSelection& agent_selection() { return agent_selection_; }
+  frontend::ModelSelection& model_selection() { return model_selection_; }
+  frontend::ModelSelection const& model_selection() const { return model_selection_; }
+  frontend::PromptModeAndContextSources& prompt_metadata() { return prompt_metadata_; }
+  frontend::SessionStats& session_stats() { return session_stats_; }
+  frontend::SessionStats const& session_stats() const { return session_stats_; }
+  frontend::Directories& directories() { return directories_; }
+  frontend::GitBranch& git_branch() { return git_branch_; }
+  frontend::SessionIdentity& session_identity() { return session_identity_; }
 
   // OLD API
   [[nodiscard]] int run_interactive_composer(TuiRuntimeOptions options);
 
-  // No members yet.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

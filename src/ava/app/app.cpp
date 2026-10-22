@@ -113,7 +113,7 @@ void print_exit_card(ava::app::runtime::session_ts const& unlocked_session, int 
     std::cout << muted << "History: " << reset << "not saved (--no-session)\n";
     return;
   }
-  std::cout << muted << "Resume: " << reset << "ava --session " << session_r->store.session_id() << '\n';
+  std::cout << muted << "Resume: " << reset << "ava --session " << session_r->store.options_r()->session_id << '\n';
   std::cout << muted << "Saved:  " << reset << session_r->store.session_path().string() << '\n';
 }
 

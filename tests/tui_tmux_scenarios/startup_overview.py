@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from tui_smoke_helpers import (
-    ACTIVE_CONTEXT_STATUS_PATTERN,
+    ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN,
     SmokeContext,
     capture,
     save_evidence,
@@ -65,7 +65,7 @@ def scenario_startup_overview(ctx: SmokeContext) -> None:
     if not footer_lines:
         raise RuntimeError(f"composer footer missing from startup frame\nscreen:\n{initial}")
     footer_text = footer_lines[-1].removeprefix("│  ").strip()
-    if not re.fullmatch(rf"GPT-5\.5 · ctx {ACTIVE_CONTEXT_STATUS_PATTERN}", footer_text):
+    if not re.fullmatch(rf"GPT-5\.5 · agent none · ctx {ACTIVE_CONTEXT_TOKEN_COUNT_PATTERN}", footer_text):
         raise RuntimeError(f"startup chrome changed the quiet composer footer\nscreen:\n{initial}")
     save_evidence(root, "startup-no-overview-chrome", initial)
 

@@ -30,6 +30,7 @@ enum class ReloadTarget
 [[nodiscard]] bool shell_helper_submission(std::string_view submitted);
 [[nodiscard]] bool exact_command(std::string_view submitted, std::string_view command);
 [[nodiscard]] bool session_switching_command(std::string_view submitted);
+[[nodiscard]] bool local_display_settings_command(std::string_view submitted);
 [[nodiscard]] std::optional<std::string> reload_command_argument(std::string_view submitted);
 [[nodiscard]] std::optional<std::string> copy_command_argument(std::string_view submitted);
 [[nodiscard]] std::optional<std::string> stash_command_argument(std::string_view submitted);

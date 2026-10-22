@@ -279,6 +279,30 @@ void test_session_run_controller_generation_and_cancel_precedence()
          "an accepted stop remains authoritative over a racing provider terminal error");
 }
 
+void test_session_run_controller_committed_append_generation_rejects_stale_publication()
+{
+  ava::app::SessionRunController controller(ephemeral_controller_target());
+  bool published = false;
+  auto const initial_identity = controller.statistics_mutation_identity();
+  expect(initial_identity.committed_append_generation == 0 && initial_identity.append_order_generation == 0 &&
+             controller.publish_if_statistics_mutation_current(initial_identity, [&] { published = true; }) && published,
+         "controller accepts publication at its exact initial append generation");
+
+  auto appended = controller.append(ava::session::SessionEntry{.id = "statistics-generation-entry",
+                                                               .parent_id = "",
+                                                               .type = ava::session::EntryType::UserMessage,
+                                                               .timestamp = "2026-10-22T00:00:00Z",
+                                                               .data_json = "{\"text\":\"committed\"}"});
+  bool stale_published = false;
+  bool current_published = false;
+  auto const current_identity = controller.statistics_mutation_identity();
+  auto const stale_accepted = controller.publish_if_statistics_mutation_current(initial_identity, [&] { stale_published = true; });
+  auto const current_accepted = controller.publish_if_statistics_mutation_current(current_identity, [&] { current_published = true; });
+  expect(appended && current_identity.committed_append_generation == 1 && current_identity.append_order_generation == 2 && !stale_accepted &&
+             !stale_published && current_accepted && current_published,
+         "actual append advances mutation identity and serialized validation rejects stale statistics work");
+}
+
 ava::session::SessionEntry append_entry(std::string id)
 {
   return ava::session::SessionEntry{
@@ -323,7 +347,7 @@ ava::session::SessionEntry branch_summary_entry(ava::session::SessionStore const
                                     .parent_id = std::move(parent_id),
                                     .type = ava::session::EntryType::BranchSummary,
                                     .timestamp = ava::session::now_timestamp(),
-                                    .data_json = "{\"schema_version\":1,\"summary\":\"summary\",\"source_session_id\":\"" + store.session_id() +
+                                    .data_json = "{\"schema_version\":1,\"summary\":\"summary\",\"source_session_id\":\"" + store.options_r()->session_id +
                                                  "\",\"branch_root_entry_id\":\"" + root_id + "\",\"branch_tip_entry_id\":\"" + tip_id +
                                                  "\",\"provider\":\"test\",\"model\":\"test\",\"reason\":\"test\"}"};
 }
@@ -2644,6 +2668,9 @@ void run_session_run_controller_tests()
   if (!run_controller_case(test_session_run_controller_distinct_concurrent_admissions_have_one_winner, "distinct concurrent admissions"))
     return;
   if (!run_controller_case(test_session_run_controller_generation_and_cancel_precedence, "test_session_run_controller_generation_and_cancel_precedence"))
+    return;
+  if (!run_controller_case(test_session_run_controller_committed_append_generation_rejects_stale_publication,
+                           "test_session_run_controller_committed_append_generation_rejects_stale_publication"))
     return;
   if (!run_controller_case(test_session_run_controller_owner_and_generation_routes, "test_session_run_controller_owner_and_generation_routes"))
     return;

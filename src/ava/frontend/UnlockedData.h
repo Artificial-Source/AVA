@@ -1,14 +1,14 @@
 #pragma once
 
-#include "ava/app/frontend/Data.h"
-#include "ava/app/frontend/FrontEnd.h"
-#include "ava/app/runtime/UnlockedDataPolicy.h"
+#include "UnlockedDataPolicy.h"
+#include "Data.h"
 #include "threadsafe/threadsafe.h"
 #include "utils/macros.h"
 #include <utility>
 #include "debug.h"
 
-namespace ava::app::runtime {
+namespace ava::frontend {
+class FrontEnd;
 
 // Moving an object derived from an `UnlockedData` must behave as follows:
 //
@@ -73,7 +73,7 @@ namespace ava::app::runtime {
 //   });
 
 template<typename T>
-class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPolicy<T>>, public frontend::Data
+class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPolicy<T>>, public Data
 {
  public:
   using policy_type = detail::PrimitiveDataPolicy<T>;
@@ -85,8 +85,8 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
   // Construct an UnlockedData object in its final place; this registers the object with `frontend`.
   // Passing nullptr for `frontend` is reserved for application modes that don't have a frontend at all.
   template<typename... Args>
-  UnlockedData(frontend::FrontEnd* frontend, Args&&... args) :
-    unlocked_type(std::forward<Args>(args)...), frontend::Data(frontend)
+  UnlockedData(FrontEnd* frontend, Args&&... args) :
+    unlocked_type(std::forward<Args>(args)...), Data(frontend)
   {
   }
 
@@ -95,7 +95,7 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
 
   // Construct an unregistered object from value-constructor arguments.
   template<typename FirstArg, typename... Rest>
-  requires (!std::is_convertible_v<FirstArg&&, frontend::FrontEnd*>)
+  requires (!std::is_convertible_v<FirstArg&&, FrontEnd*>)
   UnlockedData(FirstArg&& first, Rest&&... rest) :
     unlocked_type(std::forward<FirstArg>(first), std::forward<Rest>(rest)...)
   {
@@ -107,8 +107,10 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
   template<typename F>
   void change(F&& update)
   {
+    DoutEntering(dc::frontend, "UnlockedData<" << libcwd::type_info_of<T>().demangled_name() << ">::change()");
     wat write_access(*this);
     std::invoke(std::forward<F>(update), *write_access);
+    Dout(dc::frontend, "Updated to " << *write_access);
   }
 
   // This object requires a custom print_on.
@@ -117,7 +119,7 @@ class UnlockedData : protected threadsafe::Unlocked<T, detail::PrimitiveDataPoli
 #ifdef CWDEBUG
   void print_on(std::ostream& os) const
   {
-    os << static_cast<frontend::Data const&>(*this) << "@" << (void*)static_cast<unlocked_type const*>(this);
+    os << static_cast<Data const&>(*this) << "@" << (void*)static_cast<unlocked_type const*>(this);
   }
 #endif
 
@@ -150,7 +152,7 @@ UnlockedData<T>::UnlockedData(UnlockedData&& orig) :
   unlocked_type(std::move(as_unlocked(orig)))
 {
   // Move-construct from a registered object is not allowed.
-  ASSERT(!static_cast<frontend::Data const&>(orig).is_registered());
+  ASSERT(!static_cast<Data const&>(orig).is_registered());
 }
 
 template<typename T>
@@ -172,4 +174,4 @@ UnlockedData<T>& UnlockedData<T>::operator=(UnlockedData&& orig)
   return *this;
 }
 
-} // namespace ava::app::runtime
+} // namespace ava::frontend
