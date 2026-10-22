@@ -1,5 +1,8 @@
 #pragma once
 
+#include "tests/support/test_timeout.h"
+
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <filesystem>
@@ -15,6 +18,8 @@ namespace ava::test {
 
 inline bool process_group_exists(pid_t pgid)
 {
+  if (pgid <= 0)
+    return false;
   errno = 0;
   if (::kill(-pgid, 0) == 0)
     return true;
@@ -26,6 +31,8 @@ inline bool process_group_exists(pid_t pgid)
 // property directly when procfs is available.
 inline std::optional<bool> process_group_has_non_zombie_member(pid_t pgid)
 {
+  if (pgid <= 0)
+    return false;
   std::error_code error;
   std::filesystem::directory_iterator entry("/proc", error);
   if (error)
@@ -51,7 +58,7 @@ inline std::optional<bool> process_group_has_non_zombie_member(pid_t pgid)
     long long parent_pid = 0;
     long long process_group = 0;
     fields >> state >> parent_pid >> process_group;
-    if (fields && process_group == pgid && state != 'Z' && state != 'X')
+    if (fields && process_group == pgid && state != 'Z' && state != 'X' && state != 'x')
       return true;
   }
   return error ? std::nullopt : std::optional<bool>{false};
@@ -64,15 +71,23 @@ inline bool process_group_has_live_member(pid_t pgid)
   return process_group_exists(pgid);
 }
 
-inline bool wait_for_process_group_exit(pid_t pgid)
+// The default positive wait honors the shared runtime timeout policy. Explicit
+// deadlines let callers share one cleanup budget across several groups.
+inline bool wait_for_process_group_exit(pid_t pgid, std::chrono::steady_clock::time_point deadline = ava::tests::now_plus_seconds(1))
 {
-  for (int index = 0; index < 100; ++index)
+  if (pgid <= 0)
   {
-    if (!process_group_has_live_member(pgid))
-      return true;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    errno = EINVAL;
+    return false;
   }
-  return !process_group_has_live_member(pgid);
+  while (process_group_has_live_member(pgid))
+  {
+    auto const now = std::chrono::steady_clock::now();
+    if (now >= deadline)
+      return false;
+    std::this_thread::sleep_until(std::min(deadline, now + std::chrono::milliseconds(10)));
+  }
+  return true;
 }
 
 }  // namespace ava::test

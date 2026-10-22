@@ -13,8 +13,17 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
+
+// Bash containment intentionally denies the /proc task scan that LeakSanitizer
+// performs at exit. Disable leak scanning only in this subprocess fixture;
+// ASan/UBSan instrumentation and the test runner's leak checks remain enabled.
+extern "C" char const* __asan_default_options()
+{
+  return "detect_leaks=0";
+}
 
 #if defined(_WIN32)
 int main()
@@ -127,6 +136,73 @@ int create_exec_marker(char const* path) noexcept
   return written && closed ? 0 : 7;
 }
 
+// Bash closes inherited descriptors, so this fixture opens its own private
+// report files/FIFO. Readiness acknowledges handler installation, not a delay.
+sig_atomic_t volatile term_receipt_fd = -1;
+
+[[noreturn]] void record_term_and_exit(int) noexcept
+{
+  bool const written = write_text(static_cast<int>(term_receipt_fd), "TERM\n");
+  _exit(written ? 0 : 6);
+}
+
+int bash_signal_tree(char const* disposition, char const* lifetime, char const* state_path, char const* receipt_path, char const* ready_path) noexcept
+{
+  int acknowledged[2];
+  if (::pipe(acknowledged) != 0)
+    return 4;
+  auto const child = ::fork();
+  if (child < 0)
+  {
+    ::close(acknowledged[0]);
+    ::close(acknowledged[1]);
+    return 4;
+  }
+  if (child == 0)
+  {
+    ::close(acknowledged[0]);
+    ::alarm(kWatchdogSeconds);
+    term_receipt_fd = ::open(receipt_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    struct sigaction action{};
+    action.sa_handler = std::string_view(disposition) == "ignore" ? SIG_IGN : record_term_and_exit;
+    ::sigemptyset(&action.sa_mask);
+    sigset_t unblocked;
+    ::sigemptyset(&unblocked);
+    if (term_receipt_fd < 0 || ::sigaction(SIGTERM, &action, nullptr) != 0 || ::sigprocmask(SIG_SETMASK, &unblocked, nullptr) != 0 ||
+        !write_text(acknowledged[1], "1"))
+      _exit(5);
+    ::close(acknowledged[1]);
+    wait_forever();
+  }
+  ::close(acknowledged[1]);
+  bool const installed = read_control_byte(acknowledged[0]);
+  ::close(acknowledged[0]);
+  std::array<char, 64> state{};
+  auto group = std::to_chars(state.data(), state.data() + state.size(), ::getpgrp());
+  *group.ptr++ = ' ';
+  auto descendant = std::to_chars(group.ptr, state.data() + state.size(), child);
+  *descendant.ptr++ = '\n';
+  int const state_fd = installed ? ::open(state_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600) : -1;
+  bool const recorded = state_fd >= 0 && write_all(state_fd, state.data(), static_cast<std::size_t>(descendant.ptr - state.data()));
+  if (state_fd >= 0)
+    ::close(state_fd);
+  int const ready_fd = recorded ? ::open(ready_path, O_WRONLY | O_CLOEXEC) : -1;
+  bool const ready = ready_fd >= 0 && write_text(ready_fd, "READY\n");
+  if (ready_fd >= 0)
+    ::close(ready_fd);
+  if (!ready)
+  {
+    ::kill(child, SIGKILL);
+    while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR)
+    {
+    }
+    return 5;
+  }
+  if (std::string_view(lifetime) == "exit")
+    return 0;
+  wait_forever();
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -149,6 +225,20 @@ int main(int argc, char** argv)
     control_fd = parse_descriptor(argument, "--control-fd=", control_fd);
   }
 
+  if (mode == "bash-signal-tree")
+    return argc == 7 ? bash_signal_tree(argv[2], argv[3], argv[4], argv[5], argv[6]) : 2;
+  if (mode == "no-child-processes")
+  {
+    int status = 0;
+    pid_t child;
+    do
+      child = ::waitpid(-1, &status, WNOHANG);
+    while (child < 0 && errno == EINTR);
+    bool const no_children = child < 0 && errno == ECHILD;
+    if (!write_text(status_fd, no_children ? "no-unexpected-children\n" : "unexpected-child-wait-authority\n"))
+      return 3;
+    return no_children ? 0 : 6;
+  }
   if (mode == "normal")
     return 0;
   if (mode == "nonzero")

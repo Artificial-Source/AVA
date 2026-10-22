@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -45,7 +46,7 @@ enum class Mode
   CwdMarker,
   TermIgnoringDescendantDiagnostics,
   LeaderExitsFirstDiagnostics,
-  LeaderExitsAfterMarkerDiagnostics,
+  GatedExitDiagnostics,
   SlowDidOpenDefinition,
 };
 
@@ -56,6 +57,7 @@ struct Options
   std::string descendant_marker_path;
   std::string launch_marker_path;
   std::string environment_marker_path;
+  std::string exit_gate_path;
   bool builtin_clangd = false;
 };
 
@@ -215,11 +217,11 @@ Options parse_options(int argc, char** argv)
       options.marker_path = argv[++index];
       options.descendant_marker_path = argv[++index];
     }
-    if (std::strcmp(argv[index], "--leader-exits-after-marker-diagnostics-markers") == 0 && index + 2 < argc)
+    if (std::strcmp(argv[index], "--gated-exit-diagnostics-marker") == 0 && index + 2 < argc)
     {
-      options.mode = Mode::LeaderExitsAfterMarkerDiagnostics;
+      options.mode = Mode::GatedExitDiagnostics;
       options.marker_path = argv[++index];
-      options.descendant_marker_path = argv[++index];
+      options.exit_gate_path = argv[++index];
     }
     if (std::strcmp(argv[index], "--slow-did-open-definition") == 0)
       options.mode = Mode::SlowDidOpenDefinition;
@@ -409,11 +411,21 @@ void respond_diagnostics(long long id, Options const& options, std::string_view 
     spawn_term_ignoring_descendant(options);
     _exit(23);
   }
-  if (mode == Mode::LeaderExitsAfterMarkerDiagnostics)
+  if (mode == Mode::GatedExitDiagnostics)
   {
-    spawn_term_ignoring_descendant(options);
-    usleep(500000);
-    _exit(23);
+    int const gate = open(options.exit_gate_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (gate < 0)
+      _exit(2);
+    write_process_group_marker(options.marker_path);
+    char release{};
+    ssize_t received;
+    do
+    {
+      received = read(gate, &release, sizeof(release));
+    }
+    while (received < 0 && errno == EINTR);
+    close(gate);
+    _exit(received == 1 && release == 'X' ? 23 : 2);
   }
   if (mode == Mode::SleepDiagnostics || mode == Mode::SleepDiagnosticsMarker)
   {

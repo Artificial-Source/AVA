@@ -1,6 +1,10 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/http/transport.h"
+#include "ava/process/supervisor.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 
@@ -51,6 +55,43 @@ ava::config::XdgPaths app_test_paths(std::filesystem::path const& root)
                                .sessions_dir = sessions};
 }
 
+ava::core::Result<ava::app::runtime::session_ts> open_runtime_session_for_test(std::filesystem::path const& root, std::filesystem::path const& workspace,
+                                                                               ava::agent::Mode mode, bool with_process_scope)
+{
+  try
+  {
+    std::filesystem::create_directories(workspace);
+    ava::app::runtime::OpenContext context;
+    context.workspace_dir = workspace;
+    context.current_dir = workspace;
+    context.paths = app_test_paths(root);
+    context.mode = mode;
+    if (with_process_scope)
+    {
+      // The scope and returned session share ownership of the process authority.
+      auto scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+      if (!scope)
+      {
+        expect(false, "runtime fixture process authority: " + scope.error().format());
+        return std::unexpected(std::move(scope.error()));
+      }
+      context.application_process_scope = std::move(*scope);
+    }
+    auto session = ava::app::runtime::Session::open(context);
+    if (!session)
+    {
+      expect(false, "runtime fixture session open: " + session.error().format());
+      return std::unexpected(std::move(session.error()));
+    }
+    return session;
+  }
+  catch (std::filesystem::filesystem_error const& error)
+  {
+    expect(false, "runtime fixture filesystem setup: " + std::string(error.what()));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, error.what()));
+  }
+}
+
 std::string app_test_plugin_manifest_json(std::string_view id, std::string_view name)
 {
   return std::string("{\n") +
@@ -82,9 +123,7 @@ std::string app_test_mcp_config_json(std::string_view id, std::string_view name,
 
 void write_app_test_file(std::filesystem::path const& path, std::string const& text)
 {
-  std::filesystem::create_directories(path.parent_path());
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file << text;
+  write_session_test_binary_file(path, text);
 }
 
 std::string app_read_binary_file(std::filesystem::path const& path)
@@ -156,6 +195,24 @@ bool ThreadSafeStringBuf::wait_contains(std::string_view value, std::chrono::mil
   bool found = cv_.wait_for(lock, timeout, [&] { return (pos = text_.find(value, search_pos_)) != std::string::npos; });
   search_pos_ = found ? pos + value.length() : text_.length();
   return found;
+}
+
+bool ThreadSafeStringBuf::wait_for_record(std::function<bool(std::string_view)> const& predicate, std::chrono::milliseconds timeout)
+{
+  std::unique_lock lock(mutex_);
+  std::size_t offset = 0;
+  return cv_.wait_until(lock, now_plus_seconds(timeout), [&] {
+    for (;;)
+    {
+      auto const end = text_.find('\n', offset);
+      if (end == std::string::npos)
+        return false;
+      auto const record = std::string_view(text_).substr(offset, end - offset);
+      offset = end + 1;
+      if (predicate(record))
+        return true;
+    }
+  });
 }
 
 int ThreadSafeStringBuf::overflow(int ch)

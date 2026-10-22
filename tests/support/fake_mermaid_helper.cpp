@@ -1,19 +1,30 @@
 #include "sys.h"
+#include "process_gate.h"
+
+// Prefix options: --control-socket PATH connects a test-owned Unix listener;
+// gate 0 acknowledges initialized helper readiness, and group-timeout also opens
+// gate 1 after its descendant has installed its signal disposition. --pid-file
+// PATH records this helper's pid before readiness. No inherited FD is required.
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <fcntl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -52,11 +63,29 @@ std::string read_stdin()
   }
 }
 
+bool announce_ready(std::optional<ava::test::ProcessGateSet>& control, bool descendant)
+{
+  if (!control)
+    return true;
+  try
+  {
+    if (descendant)
+      control->open(1);
+    control->open(0);
+    return true;
+  }
+  catch (std::exception const& error)
+  {
+    std::cerr << "helper readiness failed: " << error.what() << '\n';
+    return false;
+  }
+}
+
 void ignore_signal(int)
 {
 }
 
-int group_timeout(std::filesystem::path const& pid_file)
+int group_timeout(std::filesystem::path const& pid_file, std::optional<ava::test::ProcessGateSet>& control)
 {
   struct sigaction parent_action{};
   parent_action.sa_handler = ignore_signal;
@@ -64,16 +93,42 @@ int group_timeout(std::filesystem::path const& pid_file)
   if (::sigaction(SIGTERM, &parent_action, nullptr) != 0)
     return 91;
 
+  std::array<int, 2> ready_pipe{};
+  if (::pipe2(ready_pipe.data(), O_CLOEXEC) != 0)
+    return 92;
   auto const child = ::fork();
   if (child < 0)
+  {
+    ::close(ready_pipe[0]);
+    ::close(ready_pipe[1]);
     return 92;
+  }
   if (child == 0)
   {
+    ::close(ready_pipe[0]);
+    control.reset();
     struct sigaction child_action{};
     child_action.sa_handler = SIG_DFL;
     ::sigemptyset(&child_action.sa_mask);
-    static_cast<void>(::sigaction(SIGTERM, &child_action, nullptr));
+    if (::sigaction(SIGTERM, &child_action, nullptr) != 0 || !write_all(ready_pipe[1], "r"))
+      ::_exit(95);
+    ::close(ready_pipe[1]);
     for (;;) static_cast<void>(::pause());
+  }
+  ::close(ready_pipe[1]);
+  char ready = 0;
+  ssize_t count;
+  do
+    count = ::read(ready_pipe[0], &ready, 1);
+  while (count < 0 && errno == EINTR);
+  ::close(ready_pipe[0]);
+  if (count != 1 || ready != 'r')
+  {
+    static_cast<void>(::kill(child, SIGKILL));
+    while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR)
+    {
+    }
+    return 95;
   }
 
   {
@@ -83,8 +138,19 @@ int group_timeout(std::filesystem::path const& pid_file)
     if (!output)
     {
       static_cast<void>(::kill(child, SIGKILL));
+      while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR)
+      {
+      }
       return 93;
     }
+  }
+  if (!announce_ready(control, true))
+  {
+    static_cast<void>(::kill(child, SIGKILL));
+    while (::waitpid(child, nullptr, 0) < 0 && errno == EINTR)
+    {
+    }
+    return 96;
   }
   int status = 0;
   while (::waitpid(child, &status, 0) < 0)
@@ -120,20 +186,60 @@ bool write_sized_output(std::size_t size)
 
 int main(int argc, char** argv)
 {
+  std::optional<ava::test::ProcessGateSet> control;
+  std::filesystem::path pid_file;
   int index = 1;
-  if (argc > 3 && std::string_view(argv[index]) == "--count")
+  while (index < argc)
   {
-    std::ofstream count(argv[index + 1], std::ios::binary | std::ios::app);
-    count << 'x';
-    count.flush();
-    if (!count)
-      return 89;
-    index += 2;
+    std::string_view const option(argv[index]);
+    if (option != "--count" && option != "--control-socket" && option != "--pid-file")
+      break;
+    if (++index >= argc)
+      return 88;
+    char const* value = argv[index++];
+    if (option == "--count")
+    {
+      std::ofstream count(value, std::ios::binary | std::ios::app);
+      count << 'x';
+      count.close();
+      if (!count)
+        return 89;
+    }
+    else if (option == "--pid-file")
+      pid_file = value;
+    else
+    {
+      sockaddr_un address{};
+      address.sun_family = AF_UNIX;
+      auto const length = std::strlen(value);
+      if (length == 0 || length >= sizeof(address.sun_path) || control)
+        return 70;
+      std::memcpy(address.sun_path, value, length + 1);
+      int const descriptor = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+      if (descriptor < 0)
+        return 70;
+      if (::connect(descriptor, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
+      {
+        ::close(descriptor);
+        return 70;
+      }
+      control.emplace(descriptor);
+    }
   }
   if (index >= argc)
     return 88;
   std::string_view const mode(argv[index++]);
   auto const input = read_stdin();
+  if (!pid_file.empty())
+  {
+    std::ofstream output(pid_file, std::ios::binary | std::ios::trunc);
+    output << ::getpid() << '\n';
+    output.close();
+    if (!output)
+      return 69;
+  }
+  if (mode != "group-timeout" && !announce_ready(control, false))
+    return 68;
 
   if (mode == "echo")
     return write_all(STDOUT_FILENO, input) ? 0 : 87;
@@ -168,7 +274,7 @@ int main(int argc, char** argv)
     for (;;) static_cast<void>(::pause());
   }
   if (mode == "group-timeout")
-    return index < argc ? group_timeout(argv[index]) : 83;
+    return index < argc ? group_timeout(argv[index], control) : 83;
   if (mode == "output-size")
     return index < argc && write_sized_output(static_cast<std::size_t>(std::stoull(argv[index]))) ? 0 : 82;
   if (mode == "invalid-utf8")

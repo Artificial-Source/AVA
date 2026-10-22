@@ -383,6 +383,11 @@ void run_suite(TestSuite const& suite, int master_fd = -1)
   }
 
   int const failures = ava::tests::failures();
+  if (failures == 0 && ava::tests::skip_requested() && !ava::tests::all_cases_skipped())
+  {
+    std::cout << suite.name << " tests passed with " << ava::tests::skipped_case_count() << " skipped case(s)\n";
+    return;
+  }
   if (failures == 0 && ava::tests::skip_requested())
   {
     std::cout << suite.name << " tests skipped: " << ava::tests::skip_message() << '\n';
@@ -554,6 +559,7 @@ int finalize_test_run(bool report_all_passed, bool allow_skip)
     std::cerr << failures << " test failure(s)\n";
     return 1;
   }
+  allow_skip = allow_skip && ava::tests::all_cases_skipped();
   if (allow_skip && ava::tests::skip_requested())
     return 77;
   if (report_all_passed)

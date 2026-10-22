@@ -1,11 +1,9 @@
 #pragma once
 
+#include "tests/support/process_test_support.h"
 #include "tests/support/test_harness.h"
-#include "tests/support/test_timeout.h"
 #include "ava/debug/print_members_on.h"
-#include "ava/core/UniqueFd.h"
 
-#include <algorithm>
 #include <array>
 #include <bit>
 #include <cerrno>
@@ -14,15 +12,12 @@
 #include <cstdint>
 #include <expected>
 #include <functional>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
-#include <poll.h>
-#include <signal.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -30,69 +25,34 @@
 
 namespace ava::tests {
 
-// Exit 77 denotes an unavailable child-only test facility, not a failed assertion.
-inline void expect_child_success(std::expected<int, int> const& status, std::string_view message,
-                                 std::string_view skip_reason = "syscall errno injection is unavailable")
+enum class ChildTestOutcome
+{
+  Passed,
+  Failed,
+  Skipped
+};
+
+// Exit 77 is an unavailable child-only facility, not an assertion. Use the
+// returned outcome for case-local guards; skip_requested() is suite-wide.
+inline ChildTestOutcome expect_child_success(std::expected<int, int> const& status, std::string_view message,
+                                             std::string_view skip_reason = "syscall errno injection is unavailable",
+                                             std::source_location location = std::source_location::current())
 {
   if (status && WIFEXITED(*status) && WEXITSTATUS(*status) == 77)
   {
-    request_skip(std::string(skip_reason));
-    return;
+    request_skip(message, skip_reason);
+    return ChildTestOutcome::Skipped;
   }
-  expect(status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0, std::string(message));
-}
-
-// Return raw wait status, or nullopt with errno set. A timeout kills the child
-// (and optionally its process group) and reaps it before returning ETIMEDOUT.
-[[nodiscard]] inline std::optional<int> wait_child_until(pid_t child, std::chrono::steady_clock::time_point deadline, bool process_group = false)
-{
-  if (child <= 0)
+  bool const passed = status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0;
+  if (passed)
+    expect(true, std::string(message));
+  else
   {
-    errno = EINVAL;
-    return std::nullopt;
+    std::string diagnostic = detail::assertion_message(message, location);
+    diagnostic += status ? ": wait status=" + std::to_string(*status) : ": wait errno=" + std::to_string(status.error());
+    expect(false, diagnostic);
   }
-  ava::core::UniqueFd notification;
-#ifdef SYS_pidfd_open
-  notification.reset(static_cast<int>(::syscall(SYS_pidfd_open, child, 0)));
-#endif
-  int status = 0;
-  int error_number = ETIMEDOUT;
-  while (true)
-  {
-    auto const waited = ::waitpid(child, &status, WNOHANG);
-    if (waited == child)
-      return status;
-    if (waited < 0 && errno != EINTR)
-    {
-      int const wait_error = errno;
-      notification.reset();
-      errno = wait_error;
-      return std::nullopt;
-    }
-    auto const remaining = deadline - std::chrono::steady_clock::now();
-    if (remaining <= std::chrono::steady_clock::duration::zero())
-      break;
-    auto const remaining_ms = std::chrono::ceil<std::chrono::milliseconds>(remaining).count();
-    // pidfds block until exit. Older kernels or restricted environments retain
-    // a bounded 10 ms fallback instead of waking the runner every millisecond.
-    auto const maximum_wait = notification ? std::numeric_limits<int>::max() : 10;
-    int const timeout = static_cast<int>(std::min<std::chrono::milliseconds::rep>(remaining_ms, maximum_wait));
-    pollfd descriptor{.fd = notification.get(), .events = POLLIN, .revents = 0};
-    if (::poll(notification ? &descriptor : nullptr, notification ? 1U : 0U, timeout) < 0 && errno != EINTR)
-    {
-      error_number = errno;
-      break;
-    }
-  }
-  if (process_group)
-    static_cast<void>(::kill(-child, SIGKILL));
-  static_cast<void>(::kill(child, SIGKILL));
-  while (::waitpid(child, &status, 0) < 0 && errno == EINTR)
-  {
-  }
-  notification.reset();
-  errno = error_number;
-  return std::nullopt;
+  return passed ? ChildTestOutcome::Passed : ChildTestOutcome::Failed;
 }
 
 // Match the low 32 bits of one syscall argument, or all values except value.
@@ -119,7 +79,10 @@ struct SyscallErrno
 // Multiple rules support distinct errors for different arguments of one syscall.
 // errno zero deliberately simulates a successful syscall with a zero result.
 // An empty rule span runs an unfiltered child with the same bounded wait/reaping.
-[[nodiscard]] inline std::expected<int, int> run_in_child_with_syscall_errno(std::span<SyscallErrno const> rules, std::function<int()> const& body)
+// Supply a shared absolute deadline when the child has its own readiness/cleanup
+// watchdogs; the outer budget must leave time for those failure paths to finish.
+[[nodiscard]] inline std::expected<int, int> run_in_child_with_syscall_errno(std::span<SyscallErrno const> rules, std::function<int()> const& body,
+                                                                             std::chrono::steady_clock::time_point deadline = now_plus_seconds(5))
 {
   for (auto const& rule : rules)
   {
@@ -156,7 +119,7 @@ struct SyscallErrno
     ::_exit(body());
   }
 
-  auto const status = wait_child_until(child, now_plus_seconds(5));
+  auto const status = wait_child_until(child, deadline);
   if (!status)
     return std::unexpected(errno);
   return *status;

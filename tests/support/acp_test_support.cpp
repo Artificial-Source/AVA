@@ -2,10 +2,12 @@
 #include "tests/support/acp_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/test_timeout.h"
 #include "ava/http/transport.h"
 #include "ava/app/acp/codec.h"
 #include "ava/provider/registry.h"
 #include "ava/core/error.h"
+#include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/result.h"
 #include "ava/app/runtime/Session.h"
@@ -42,7 +44,11 @@ ava::app::acp::ReadRecord MemoryTransport::read_record()
   state_->cv.notify_all();
   state_->cv.wait(lock, [&] { return state_->canceled || state_->eof || !state_->input.empty(); });
   if (state_->canceled)
+  {
+    state_->read_canceled = true;
+    state_->cv.notify_all();
     return {.status = ava::app::acp::ReadRecordStatus::Canceled, .record = {}, .diagnostic = {}};
+  }
   if (!state_->input.empty())
   {
     auto record = std::move(state_->input.front());
@@ -113,13 +119,17 @@ void close_input(std::shared_ptr<MemoryTransportState> const& state)
 void wait_reader(std::shared_ptr<MemoryTransportState> const& state)
 {
   std::unique_lock lock(state->mutex);
-  static_cast<void>(state->cv.wait_for(lock, 2s, [&] { return state->read_waiting; }));
+  bool const ready = state->cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return state->read_waiting; });
+  lock.unlock();
+  expect(ready, "ACP memory transport reader reaches read_record before the readiness watchdog");
 }
 
 void wait_writer(std::shared_ptr<MemoryTransportState> const& state)
 {
   std::unique_lock lock(state->mutex);
-  static_cast<void>(state->cv.wait_for(lock, 2s, [&] { return state->write_waiting; }));
+  bool const ready = state->cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return state->write_waiting; });
+  lock.unlock();
+  expect(ready, "ACP memory transport writer reaches write_record before the readiness watchdog");
 }
 
 bool wait_for_write_attempts(std::shared_ptr<MemoryTransportState> const& state, std::size_t expected)
@@ -137,6 +147,100 @@ bool output_has_code(std::optional<std::string> const& output, int code)
     return false;
   auto const* error = std::get_if<ava::app::acp::ErrorResponse>(&*decoded);
   return error != nullptr && error->error.code == code;
+}
+struct ReaderBarrier::State
+{
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::string token = ava::core::make_id("reader-barrier");
+  std::int64_t submitted = 0;
+  std::int64_t acknowledged = 0;
+};
+
+ReaderBarrier::ReaderBarrier(ava::app::acp::JsonRpcPeer& peer, ava::app::acp::ControlNotificationHandler handler) : state_(std::make_shared<State>())
+{
+  peer.set_control_notification_handler([state = state_, handler = std::move(handler)](ava::app::acp::Notification const& notification) {
+    if (notification.params_json && ava::core::json::string_field(*notification.params_json, "test_reader_barrier") == state->token)
+    {
+      auto const sequence = ava::core::json::integer_field(*notification.params_json, "sequence");
+      if (sequence)
+      {
+        std::lock_guard lock(state->mutex);
+        state->acknowledged = *sequence;
+        state->cv.notify_all();
+      }
+      return;
+    }
+    if (handler)
+      handler(notification);
+  });
+}
+
+bool ReaderBarrier::synchronize(std::shared_ptr<MemoryTransportState> const& state, std::chrono::milliseconds timeout)
+{
+  std::unique_lock lock(state_->mutex);
+  auto const sequence = ++state_->submitted;
+  feed(state, "{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\",\"params\":{\"test_reader_barrier\":\"" + ava::core::json::escape(state_->token) +
+                  "\",\"sequence\":" + std::to_string(sequence) + "}}");
+  return state_->cv.wait_until(lock, ava::tests::now_plus_seconds(timeout), [&] { return state_->acknowledged >= sequence; });
+}
+
+bool synchronize_writer(ava::app::acp::JsonRpcPeer& peer, std::shared_ptr<MemoryTransportState> const& state, std::chrono::milliseconds timeout)
+{
+  auto const method = ava::core::make_id("test/writer-barrier");
+  if (!peer.send_notification(method, std::string("{}")))
+    return false;
+  std::unique_lock lock(state->mutex);
+  return state->cv.wait_until(lock, ava::tests::now_plus_seconds(timeout), [&] {
+    auto const probe =
+        std::ranges::find_if(state->output, [&](std::string const& record) { return ava::core::json::string_field(record, "method") == method; });
+    if (probe == state->output.end())
+      return false;
+    state->output.erase(probe);
+    return true;
+  });
+}
+
+namespace {
+
+ava::app::acp::AgentServiceOptions fixture_options(std::filesystem::path const& root, std::filesystem::path const& workspace,
+                                                   ava::app::acp::AgentServiceOptions options, bool with_tools)
+{
+  std::filesystem::create_directories(workspace);
+  if (with_tools)
+    configure_acp_tool_test_model(root);
+  else
+    configure_acp_test_model(root);
+  options.paths = ava::tests::app_test_paths(root);
+  options.launch_root = workspace;
+  if (options.agent_version.empty())
+    options.agent_version = "1";
+  return options;
+}
+
+}  // namespace
+
+ScopedAgentService::ScopedAgentService(std::string_view name, ava::app::acp::AgentServiceOptions initial_options, bool with_tools)
+    : root(ScopedTestDirectory::create_unique(temp_root(), name)),
+      workspace(root / "workspace"),
+      options(fixture_options(root.path(), workspace, std::move(initial_options), with_tools)),
+      service(options)
+{
+}
+
+ScopedAgentService::ScopedAgentService(ScopedTestDirectory owned_root, ava::app::acp::AgentServiceOptions initial_options)
+    : root(std::move(owned_root)), workspace(initial_options.launch_root), options(std::move(initial_options)), service(options)
+{
+}
+
+ScopedAgentService::~ScopedAgentService()
+{
+  service.shutdown();
+}
+
+ava::app::acp::RequestResult ScopedAgentService::initialize(std::int64_t id, std::optional<std::string> capabilities_json)
+{
+  return service.handle_request(capabilities_json ? initialize_request_with_capabilities(std::move(*capabilities_json), id) : initialize_request(id), {});
 }
 
 void configure_acp_test_model(std::filesystem::path const& root)

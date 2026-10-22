@@ -28,8 +28,9 @@
 namespace ava::tests {
 namespace {
 int failures_value = 0;
-bool skip_requested_value = false;
-std::string skip_message_value;
+std::mutex assertion_mutex;
+std::size_t assertions_value = 0;
+std::vector<std::pair<std::string, std::string>> skipped_cases;
 } // namespace
 
 int& failure_count()
@@ -39,29 +40,94 @@ int& failure_count()
 
 int failures()
 {
+  std::lock_guard lock(assertion_mutex);
   return failures_value;
 }
 
 void clear_skip()
 {
-  skip_requested_value = false;
-  skip_message_value.clear();
+  std::lock_guard lock(assertion_mutex);
+  skipped_cases.clear();
+  assertions_value = 0;
 }
 
-void request_skip(std::string message)
+void request_skip(std::string message, std::source_location location)
 {
-  skip_requested_value = true;
-  skip_message_value = std::move(message);
+  request_skip(location.function_name(), message);
+}
+
+void request_skip(std::string_view case_name, std::string_view reason)
+{
+  std::lock_guard lock(assertion_mutex);
+  skipped_cases.emplace_back(case_name, reason);
+  std::cout << "SKIP: " << case_name << ": " << reason << std::endl;
 }
 
 bool skip_requested()
 {
-  return skip_requested_value;
+  std::lock_guard lock(assertion_mutex);
+  return !skipped_cases.empty();
 }
 
 std::string skip_message()
 {
-  return skip_message_value;
+  std::lock_guard lock(assertion_mutex);
+  std::string message;
+  for (auto const& [name, reason] : skipped_cases)
+  {
+    if (!message.empty())
+      message += "; ";
+    message += name + ": " + reason;
+  }
+  return message;
+}
+
+bool all_cases_skipped()
+{
+  std::lock_guard lock(assertion_mutex);
+  return !skipped_cases.empty() && assertions_value == 0;
+}
+
+std::size_t skipped_case_count()
+{
+  std::lock_guard lock(assertion_mutex);
+  return skipped_cases.size();
+}
+
+std::size_t assertion_count()
+{
+  std::lock_guard lock(assertion_mutex);
+  return assertions_value;
+}
+
+std::string detail::assertion_message(std::string_view message, std::source_location location)
+{
+  return std::string(message) + " [" + location.file_name() + ":" + std::to_string(location.line()) + "]";
+}
+
+bool require(bool condition, std::string const& message, std::source_location location)
+{
+  if (condition)
+    expect(true, message);
+  else
+    expect(false, detail::assertion_message(message, location));
+  return condition;
+}
+
+void expect_all(std::string const& message, std::initializer_list<std::pair<std::string_view, bool>> conditions, std::source_location location)
+{
+  std::string diagnostic;
+  for (auto const& [name, condition] : conditions)
+  {
+    if (condition)
+      continue;
+    if (diagnostic.empty())
+      diagnostic = detail::assertion_message(message, location);
+    diagnostic += "\n  ";
+    diagnostic += name;
+    diagnostic += "=false";
+  }
+  expect(diagnostic.empty(), diagnostic.empty() ? message : diagnostic);
 }
 }  // namespace ava::tests
 
@@ -111,6 +177,8 @@ bool is_zero_width_codepoint(char32_t codepoint)
 
 void expect(bool condition, std::string const& message)
 {
+  std::lock_guard lock(ava::tests::assertion_mutex);
+  ++ava::tests::assertions_value;
   if (!condition)
   {
     std::cerr << "FAIL: " << message << '\n';
@@ -438,18 +506,29 @@ ScopedEnvVar::ScopedEnvVar(std::string name, std::string value) : name_(std::mov
   {
     previous_ = current;
   }
-  setenv(name_.c_str(), value.c_str(), 1);
+  if (::setenv(name_.c_str(), value.c_str(), 1) != 0)
+    throw std::system_error(errno, std::generic_category(), "set test environment variable " + name_);
+}
+
+ScopedEnvVar::ScopedEnvVar(std::string name, std::nullopt_t) : name_(std::move(name))
+{
+  if (char const* current = std::getenv(name_.c_str()))
+    previous_ = current;
+  if (::unsetenv(name_.c_str()) != 0)
+    throw std::system_error(errno, std::generic_category(), "unset test environment variable " + name_);
 }
 
 ScopedEnvVar::~ScopedEnvVar()
 {
   if (previous_)
   {
-    setenv(name_.c_str(), previous_->c_str(), 1);
+    if (::setenv(name_.c_str(), previous_->c_str(), 1) != 0)
+      expect(false, "restore test environment variable " + name_ + ": " + std::generic_category().message(errno));
   }
   else
   {
-    unsetenv(name_.c_str());
+    if (::unsetenv(name_.c_str()) != 0)
+      expect(false, "restore unset test environment variable " + name_ + ": " + std::generic_category().message(errno));
   }
 }
 

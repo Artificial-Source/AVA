@@ -24,6 +24,12 @@ answers one command per stdin line: ``wait <index> <timeout>``,
 requests; ``stop`` is cancellation/error cleanup. The broker owns provider
 cleanup on EOF, signal, and finish failure, so no orphan provider or helper
 process survives its caller.
+
+RPC-client timeout tests may instead use ``with RpcTombstoneServer(root) as
+server`` and launch ``AvaRpcClient(server.command)``. After the first request
+times out, ``server.wait_for_request()`` acknowledges that it reached the fake;
+``server.release_response()`` releases its late response. The client owns its
+child process; close/kill it before leaving the server's socket-owning context.
 """
 
 from __future__ import annotations
@@ -35,6 +41,11 @@ import signal
 import subprocess
 import sys
 import time
+import json
+import socket
+import tempfile
+from timeout_support import test_timeout
+from cli_test_support import terminate_process_group
 
 from process_gate import PROCESS_GATE_FD_ENV, ProcessGateSet, create_process_gate_pair
 from test_timing_trace import timed_operation, timing_poll
@@ -131,29 +142,21 @@ class FakeProvider:
 
     @timed_operation("cleanup", label_argument="prefix", default_label="fake provider cleanup")
     def stop(self) -> None:
-        """Terminate the provider process group and close every owned channel."""
+        """Stop executable group members, reap the leader, and close owned channels."""
 
         if self._stopped:
             return
         self._stopped = True
-        if self.process.poll() is None:
+        try:
+            # A reaped leader does not imply its private group has no surviving
+            # descendants. Shared cleanup ignores zombies and bounds TERM/KILL.
+            terminate_process_group(self.process.pid)
+        finally:
             try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                self.process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    self.process.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    pass
-        self._close_streams()
-        self.gates.close()
+                self.process.wait(timeout=test_timeout(3.0))
+            finally:
+                self._close_streams()
+                self.gates.close()
 
 
 @timed_operation("setup", label_argument="prefix", default_label="fake provider startup")
@@ -329,7 +332,99 @@ def run_broker(argv: list[str]) -> int:
             reply(f"error {_one_line(error)}")
 
 
+class RpcTombstoneServer:
+    """Own the private control socket for one parent-gated fake RPC server.
+
+    ``command`` is compatible with the unmodified RPC client's Popen boundary:
+    no inherited descriptors or environment changes are required. Calls on one
+    instance must be serialized. Socket closure wakes a blocked fake, but the
+    caller still owns client/process cleanup.
+    """
+
+    def __init__(self, directory: str | pathlib.Path) -> None:
+        self._directory = tempfile.TemporaryDirectory(prefix="rpc-gates-", dir=directory)
+        self._socket_path = pathlib.Path(self._directory.name) / "control.sock"
+        self._listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._gates: ProcessGateSet | None = None
+        try:
+            self._listener.bind(str(self._socket_path))
+            self._listener.listen(1)
+        except BaseException:
+            self.close()
+            raise
+
+    @property
+    def command(self) -> list[str]:
+        """Return the fake's argv for AvaRpcClient; it withholds response one."""
+
+        return [sys.executable, "-u", str(pathlib.Path(__file__).resolve()),
+                "rpc-tombstone", "--control-socket", str(self._socket_path)]
+
+    def wait_for_request(self, timeout: float = 8.0) -> None:
+        """Acknowledge first-request consumption without allowing a response."""
+
+        deadline = time.monotonic() + test_timeout(timeout)
+        if self._gates is None:
+            self._listener.settimeout(max(0.0, deadline - time.monotonic()))
+            endpoint, _ = self._listener.accept()
+            self._gates = ProcessGateSet(endpoint)
+        self._gates.wait(0, max(0.0, deadline - time.monotonic()))
+
+    def release_response(self) -> None:
+        """Release response one only after wait_for_request has acknowledged it."""
+
+        if self._gates is None:
+            raise RuntimeError("wait_for_request must precede release_response")
+        self._gates.open(0)
+
+    def close(self) -> None:
+        """Close owned endpoints and remove the private socket directory."""
+
+        if self._gates is not None:
+            self._gates.close()
+            self._gates = None
+        self._listener.close()
+        self._directory.cleanup()
+
+    def __enter__(self) -> RpcTombstoneServer:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
+def run_rpc_tombstone(argv: list[str]) -> int:
+    """Read two RPC requests, explicitly gate the first, and label generations."""
+
+    parser = argparse.ArgumentParser(prog="fake_provider.py rpc-tombstone")
+    parser.add_argument("--control-socket", required=True)
+    args = parser.parse_args(argv)
+    endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        endpoint.connect(args.control_socket)
+    except BaseException:
+        endpoint.close()
+        raise
+    gates = ProcessGateSet(endpoint)
+    try:
+        first = json.loads(sys.stdin.readline())
+        gates.open(0)
+        gates.wait(0, test_timeout(30.0))
+        print(json.dumps({"id": first["id"], "type": "response", "success": True,
+                          "result": {"generation": 1}}), flush=True)
+        print(json.dumps({"schema_version": 1, "event_id": "late", "name": "late_response_sent",
+                          "type": "late_response_sent", "payload": {}}), flush=True)
+        second = json.loads(sys.stdin.readline())
+        print(json.dumps({"id": second["id"], "type": "response", "success": True,
+                          "result": {"generation": 2}}), flush=True)
+        return 0
+    finally:
+        gates.close()
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "rpc-tombstone":
+        return run_rpc_tombstone(argv[1:])
     if argv and argv[0] == "broker":
         return run_broker(argv[1:])
     print(__doc__, file=sys.stderr)

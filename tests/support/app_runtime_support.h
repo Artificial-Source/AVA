@@ -1,5 +1,6 @@
 #pragma once
 #include "ava/http/transport.h"
+#include "ava/app/runtime/Session.h"
 #include "ava/agent/agent_loop_session.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/session/session_store.h"
@@ -9,6 +10,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <streambuf>
@@ -23,6 +25,15 @@ std::string app_test_plugin_manifest_json(std::string_view id, std::string_view 
 std::string app_test_mcp_config_json(std::string_view id, std::string_view name, std::string_view command);
 void write_app_test_file(std::filesystem::path const& path, std::string const& text);
 std::string app_read_binary_file(std::filesystem::path const& path);
+
+// Opens a fresh persistent session under root using isolated XDG paths and the
+// supplied workspace. Optional process authority is owned through the returned
+// session. Records setup/open failures with expect() and returns the real error;
+// callers must guard the Result before dereferencing it.
+[[nodiscard]] ava::core::Result<ava::app::runtime::session_ts> open_runtime_session_for_test(std::filesystem::path const& root,
+                                                                                             std::filesystem::path const& workspace,
+                                                                                             ava::agent::Mode mode = ava::agent::Mode::Plan,
+                                                                                             bool with_process_scope = false);
 
 class BlockingInputBuf final : public std::streambuf
 {
@@ -50,6 +61,10 @@ class ThreadSafeStringBuf final : public std::streambuf
  public:
   std::string str() const;
   bool wait_contains(std::string_view value, std::chrono::milliseconds timeout);
+  // Non-consuming wait over complete newline-terminated records, independent of
+  // wait_contains's cursor. The predicate runs under the buffer lock and must
+  // neither retain the borrowed record nor call back into this buffer.
+  [[nodiscard]] bool wait_for_record(std::function<bool(std::string_view)> const& predicate, std::chrono::milliseconds timeout);
 
  protected:
   int overflow(int ch) override;

@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "test_timeout.h"
 
 #include <algorithm>
 #include <array>
@@ -251,7 +252,8 @@ int main(int argc, char** argv)
     auto const gate = "/tmp/ava-curl-stream-gate-" + token;
     write_response_head(STDERR_FILENO, 200, "OK");
     static_cast<void>(write_all(STDOUT_FILENO, "incremental accepted body before gate|"));
-    for (int index = 0; index < 400 && ::access(gate.c_str(), F_OK) != 0; ++index)
+    auto const gate_deadline = ava::tests::now_plus_seconds(10);
+    while (::access(gate.c_str(), F_OK) != 0 && std::chrono::steady_clock::now() < gate_deadline)
       std::this_thread::sleep_for(5ms);
     if (::access(gate.c_str(), F_OK) != 0)
       return 69;
@@ -407,7 +409,12 @@ int main(int argc, char** argv)
     idle_forever();
   if (url.find("/term-refusal") != std::string::npos)
   {
-    static_cast<void>(::signal(SIGTERM, SIG_IGN));
+    if (::signal(SIGTERM, SIG_IGN) == SIG_ERR)
+      return 67;
+    // Supervisor-accounted stdout acknowledges installed TERM refusal, not
+    // merely process launch, so cancellation tests can prove KILL escalation.
+    if (!write_all(STDOUT_FILENO, "term-refusal-ready\n"))
+      return 67;
     idle_forever();
   }
   if (url.find("/descendant") != std::string::npos)

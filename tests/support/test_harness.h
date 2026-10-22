@@ -12,25 +12,80 @@
 #include <cstdio>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
+#include <source_location>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace ava::tests {
+// Legacy reference access is only safe with no concurrent assertions. Prefer failures().
 int& failure_count();
 int failures();
+// Reset per-suite skip records and assertion accounting after all workers join.
 void clear_skip();
-void request_skip(std::string message);
+// Every request is printed immediately, with the caller's function as its case name.
+void request_skip(std::string message, std::source_location location = std::source_location::current());
+void request_skip(std::string_view case_name, std::string_view reason);
 bool skip_requested();
 std::string skip_message();
+// Sticky skip_requested() is for legacy capability guards; only this query decides exit 77.
+bool all_cases_skipped();
+std::size_t skipped_case_count();
+std::size_t assertion_count();
 }  // namespace ava::tests
 
+// Assertions, failure snapshots and skip recording are synchronized across worker threads.
 void expect(bool condition, std::string const& message);
+
+namespace ava::tests {
+// Record one assertion and return its condition, so failed fixture setup can stop the case.
+[[nodiscard]] bool require(bool condition, std::string const& message, std::source_location location = std::source_location::current());
+// One failure per compound assertion, naming every false member; conditions are eagerly evaluated.
+void expect_all(std::string const& message, std::initializer_list<std::pair<std::string_view, bool>> conditions,
+                std::source_location location = std::source_location::current());
+
+namespace detail {
+std::string assertion_message(std::string_view message, std::source_location location);
+
+template <typename T>
+void print_assertion_value(std::ostream& output, T const& value)
+{
+  if constexpr (std::is_enum_v<T>)
+    output << static_cast<std::underlying_type_t<T>>(value);
+  else
+    output << std::boolalpha << value;
+}
+}  // namespace detail
+
+// Compare once; on mismatch print the location and both streamable (or enum) values.
+template <typename Actual, typename Expected>
+void expect_eq(Actual const& actual, Expected const& expected, std::string const& message, std::source_location location = std::source_location::current())
+{
+  bool equal;
+  if constexpr (std::is_integral_v<Actual> && std::is_integral_v<Expected>)
+    equal = std::cmp_equal(+actual, +expected);
+  else
+    equal = actual == expected;
+  if (equal)
+  {
+    expect(true, message);
+    return;
+  }
+  std::ostringstream diagnostic;
+  diagnostic << detail::assertion_message(message, location) << "\n  actual: ";
+  detail::print_assertion_value(diagnostic, actual);
+  diagnostic << "\n  expected: ";
+  detail::print_assertion_value(diagnostic, expected);
+  expect(false, diagnostic.str());
+}
+}  // namespace ava::tests
 
 bool read_exact_from_descriptor_for_test(int descriptor, void* buffer, std::size_t byte_count) noexcept;
 bool write_all_to_descriptor_for_test(int descriptor, void const* buffer, std::size_t byte_count) noexcept;
@@ -59,6 +114,9 @@ class ScopedEnvVar
 {
  public:
   ScopedEnvVar(std::string name, std::string value);
+  // nullopt unsets the variable; both constructors restore its exact prior state.
+  // Environment mutation is process-global: construct/destroy before/after worker lifetimes.
+  ScopedEnvVar(std::string name, std::nullopt_t);
 
   ScopedEnvVar(ScopedEnvVar const&) = delete;
   ScopedEnvVar& operator=(ScopedEnvVar const&) = delete;
