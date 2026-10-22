@@ -4,6 +4,7 @@
 #include "ava/agent/stream_bridge.h"
 #include "ava/agent/agent_config.h"
 #include "ava/agent/tool_timeline.h"
+#include "ava/tools/secure_workspace.h"
 
 #include <expected>
 #include <string>
@@ -101,6 +102,19 @@ ava::core::VoidResult AgentTurnExecutor::initialize_tools()
       .subagents = subagents_,
   };
   auto& tool_context = *tool_context_storage_;
+  // Every model dispatcher (TUI, print, RPC, ACP, and child loops) shares one
+  // descriptor-anchored workspace root. Built-in file tools then resolve
+  // lexically in-workspace paths beneath that descriptor, so neither a
+  // committed escaping symlink nor an ancestor swap after the permission
+  // check can redirect them outside the workspace.
+  auto secure_workspace = ava::tools::SecureWorkspace::open(tool_context.workspace_dir);
+  if (!secure_workspace)
+  {
+    auto error = std::move(secure_workspace.error());
+    error.with_context("operation", "open descriptor-anchored workspace for model file tools");
+    return std::unexpected(std::move(error));
+  }
+  tool_context.secure_workspace = std::move(*secure_workspace);
   if (options_.observation && options_.observation->enabled())
   {
     try

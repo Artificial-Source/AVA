@@ -38,7 +38,6 @@ using detail::has_append_commit_state;
 using detail::parse_strict_session_record;
 using detail::path_io_error;
 using detail::same_file_identity;
-using detail::ScopedFd;
 using detail::with_append_commit_state;
 
 bool append_committed_to_leased_inode(ava::core::Error const& error)
@@ -162,10 +161,10 @@ ava::core::Result<SessionReadAuthority> SessionReadAuthority::create_persistent(
     if (name.empty())
       return std::unexpected(path_io_error("persistent read authority has no basename", authority_path));
 
-    ScopedFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     if (parent_fd.get() < 0)
       return std::unexpected(path_io_error("failed to anchor persistent read authority directory", parent_path, errno));
-    ScopedFd name_fd(::openat(parent_fd.get(), name.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC));
+    ava::core::UniqueFd name_fd(::openat(parent_fd.get(), name.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC));
     if (name_fd.get() < 0)
       return std::unexpected(path_io_error("failed to inspect persistent read authority target", authority_path, errno));
 
@@ -411,10 +410,10 @@ ava::core::Result<std::shared_ptr<SessionAppendTarget>> SessionAppendTarget::cre
   auto const name = path.filename().string();
   if (name.empty())
     return std::unexpected(path_io_error("persistent append target has no basename", path));
-  ScopedFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+  ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
   if (parent_fd.get() < 0)
     return std::unexpected(path_io_error("failed to anchor persistent append target directory", parent_path, errno));
-  ScopedFd name_fd(::openat(parent_fd.get(), name.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC));
+  ava::core::UniqueFd name_fd(::openat(parent_fd.get(), name.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC));
   if (name_fd.get() < 0)
     return std::unexpected(path_io_error("failed to inspect persistent append target", path, errno));
   struct stat lease_status{};

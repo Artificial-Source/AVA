@@ -1,8 +1,10 @@
 #include "sys.h"
+#include "tests/support/agent_loop_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/command_tools.h"
 #include "ava/app/connect_openai.h"
 #include "ava/app/headless_policy.h"
@@ -17,12 +19,17 @@
 #include "ava/provider/openai_provider.h"
 #include "ava/core/json.h"
 
+#include <algorithm>
+#include <chrono>
 #include <climits>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
@@ -86,8 +93,7 @@ void test_invocation_signal_policy_mapping()
     expect(signal_policy_for(mode) == InvocationSignalPolicy::SharedBits, "blocking noninteractive modes use shared signal bits");
   expect(signal_policy_for(InvocationMode::ImmediateOutput) == InvocationSignalPolicy::Default,
          "immediate output and parser errors use conventional default signal dispositions");
-  expect(signal_policy_for(InvocationMode::Interactive) == InvocationSignalPolicy::Deferred,
-         "interactive frontends retain deferred signal activation");
+  expect(signal_policy_for(InvocationMode::Interactive) == InvocationSignalPolicy::Deferred, "interactive frontends retain deferred signal activation");
 
   char const* print_argv[] = {"ava", "--session-dir", "/path/that/need/not/exist", "--print", "hello"};
   auto print = ava::app::parse_command_line(5, print_argv);
@@ -114,6 +120,115 @@ void test_invocation_signal_policy_mapping()
   expect(connect && connect->provider == "openai" && connect->source == ava::app::ConnectCredentialSource::HeadlessOAuth &&
              ava::app::invocation_mode(login) == InvocationMode::Connect,
          "auth login alias resolves completely to connect mode before dispatch");
+}
+
+void test_parallel_read_search_cli_flags()
+{
+  auto expect_immediate = [](ava::app::CommandLineInvocation const& invocation, int status, std::string_view needle, std::string_view message) {
+    auto const* output = std::get_if<ava::app::ImmediateInvocation>(&invocation);
+    expect(output && output->status == status && output->stderr_output && output->text.find(std::string(needle)) != std::string::npos, std::string(message));
+  };
+  auto expect_runtime = [](ava::app::CommandLineInvocation const& invocation, ava::app::RuntimeFrontend frontend, bool enabled, std::size_t workers,
+                           std::string_view message) {
+    auto const* command = std::get_if<ava::app::RuntimeInvocation>(&invocation);
+    expect(command && command->frontend == frontend && command->parallel_read_search_tools == enabled && command->parallel_read_search_max_workers == workers,
+           std::string(message));
+  };
+
+  char const* print_argv[] = {"ava", "--print", "hello"};
+  expect_runtime(ava::app::parse_command_line(3, print_argv), ava::app::RuntimeFrontend::Print, false, 4,
+                 "print mode defaults keep parallel read/search disabled with max workers 4");
+
+  char const* rpc_argv[] = {"ava", "--rpc"};
+  expect_runtime(ava::app::parse_command_line(2, rpc_argv), ava::app::RuntimeFrontend::Rpc, false, 4,
+                 "RPC mode defaults keep parallel read/search disabled with max workers 4");
+
+  char const* print_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools"};
+  expect_runtime(ava::app::parse_command_line(4, print_enable_argv), ava::app::RuntimeFrontend::Print, true, 4,
+                 "print mode accepts --parallel-read-search-tools with default max workers 4");
+
+  char const* rpc_enable_argv[] = {"ava", "--rpc", "--parallel-read-search-tools"};
+  expect_runtime(ava::app::parse_command_line(3, rpc_enable_argv), ava::app::RuntimeFrontend::Rpc, true, 4,
+                 "RPC mode accepts --parallel-read-search-tools with default max workers 4");
+
+  char const* order_argv[] = {"ava", "--parallel-read-search-tools", "--print", "hello", "--parallel-read-search-max-workers", "2"};
+  expect_runtime(ava::app::parse_command_line(6, order_argv), ava::app::RuntimeFrontend::Print, true, 2,
+                 "parallel read/search flags are accepted before --print");
+
+  char const* rpc_order_argv[] = {"ava", "--parallel-read-search-max-workers", "1", "--rpc", "--parallel-read-search-tools"};
+  expect_runtime(ava::app::parse_command_line(5, rpc_order_argv), ava::app::RuntimeFrontend::Rpc, true, 1,
+                 "max-workers may appear before the enabling flag and --rpc");
+
+  char const* mode_rpc_argv[] = {"ava", "--mode", "rpc", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "4"};
+  expect_runtime(ava::app::parse_command_line(6, mode_rpc_argv), ava::app::RuntimeFrontend::Rpc, true, 4, "--mode rpc accepts the public parallel opt-in");
+
+  for (char const* workers : {"1", "4"})
+  {
+    char const* endpoint_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", workers};
+    expect_runtime(ava::app::parse_command_line(6, endpoint_argv), ava::app::RuntimeFrontend::Print, true, static_cast<std::size_t>(workers[0] - '0'),
+                   "parallel max-workers accepts 1 and 4 inclusive");
+  }
+
+  char const* missing_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers"};
+  expect_immediate(ava::app::parse_command_line(5, missing_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+                   "missing max-workers value is rejected");
+
+  char const* option_value_argv[] = {"ava", "--print", "hello", "--parallel-read-search-max-workers", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(5, option_value_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+                   "max-workers followed by another option is treated as a missing value");
+
+  for (char const* bad : {"0", "5", "01", "+2", "-1", "2.0", "abc", ""})
+  {
+    char const* bad_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", bad};
+    expect_immediate(ava::app::parse_command_line(6, bad_argv), 2, "--parallel-read-search-max-workers requires an integer from 1 to 4",
+                     "malformed or out-of-bounds max-workers values are rejected");
+  }
+
+  char const* workers_without_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-max-workers", "2"};
+  expect_immediate(ava::app::parse_command_line(5, workers_without_enable_argv), 2, "--parallel-read-search-max-workers requires --parallel-read-search-tools",
+                   "max-workers without the enabling flag is rejected");
+
+  char const* duplicate_enable_argv[] = {"ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(5, duplicate_enable_argv), 2, "--parallel-read-search-tools may be specified only once",
+                   "duplicate enabling flags are rejected");
+
+  char const* duplicate_workers_argv[] = {
+      "ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "2", "--parallel-read-search-max-workers", "2"};
+  expect_immediate(ava::app::parse_command_line(8, duplicate_workers_argv), 2, "--parallel-read-search-max-workers may be specified only once",
+                   "duplicate max-workers values are rejected");
+
+  char const* conflict_workers_argv[] = {
+      "ava", "--print", "hello", "--parallel-read-search-tools", "--parallel-read-search-max-workers", "2", "--parallel-read-search-max-workers", "3"};
+  expect_immediate(ava::app::parse_command_line(8, conflict_workers_argv), 2, "--parallel-read-search-max-workers has conflicting values",
+                   "conflicting max-workers values are rejected");
+
+  char const* interactive_argv[] = {"ava", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(2, interactive_argv), 2, "--parallel-read-search-tools is only supported with --print or --rpc",
+                   "interactive mode rejects the public parallel opt-in");
+
+  char const* connect_after_argv[] = {"ava", "--parallel-read-search-tools", "connect", "openai"};
+  expect_immediate(ava::app::parse_command_line(4, connect_after_argv), 2, "--parallel-read-search-tools is only supported with --print or --rpc",
+                   "connect after the public parallel opt-in is rejected");
+
+  char const* connect_before_argv[] = {"ava", "connect", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(3, connect_before_argv), 2, "unknown connect option",
+                   "connect rejects the public parallel opt-in as an unknown connect option");
+
+  char const* doctor_argv[] = {"ava", "doctor", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(3, doctor_argv), 2, "Usage: ava doctor [--json]", "doctor rejects extra parallel opt-in flags");
+
+  char const* acp_argv[] = {"ava", "--acp", "--parallel-read-search-tools"};
+  expect_immediate(ava::app::parse_command_line(3, acp_argv), 2, "--acp is a standalone mode", "ACP standalone validation rejects the public parallel opt-in");
+
+  char const* acp_before_help_argv[] = {"ava", "--parallel-read-search-tools", "--help", "--acp"};
+  expect_immediate(ava::app::parse_command_line(4, acp_before_help_argv), 2, "--acp is a standalone mode",
+                   "ACP standalone validation retains precedence over help when parallel flags are present");
+
+  char const* help_after_argv[] = {"ava", "--parallel-read-search-tools", "--help"};
+  auto help = ava::app::parse_command_line(3, help_after_argv);
+  auto const* help_output = std::get_if<ava::app::ImmediateInvocation>(&help);
+  expect(help_output && help_output->kind == ava::app::ImmediateOutputKind::Help && help_output->status == 0,
+         "help retains precedence when it is reached after the parallel opt-in flag");
 }
 
 void test_headless_permission_policy()
@@ -1202,12 +1317,243 @@ void test_app_print_json_mode_streams_provider_deltas_before_final_message()
          "print json mode emits streaming message deltas before final assistant message");
 }
 
+void test_app_print_read_only_rejects_committed_directory_symlink_escape()
+{
+  std::string const git = ::access("/usr/bin/git", X_OK) == 0 ? "/usr/bin/git" : "/bin/git";
+  if (::access(git.c_str(), X_OK) != 0)
+  {
+    ava::tests::request_skip("committed directory symlink print test requires Git at /usr/bin/git or /bin/git");
+    return;
+  }
+  auto const root = create_empty_root("app-print-committed-symlink");
+  auto const workspace = root / "workspace";
+  auto const outside = root / "outside";
+  std::filesystem::create_directories(workspace);
+  std::filesystem::create_directories(outside);
+  write_app_test_file(workspace / "inside.txt", "PRINT-INSIDE-CONTROL-28\n");
+  write_app_test_file(outside / "note.txt", "PRINT-OUTSIDE-CONTENT-28\n");
+  write_app_test_file(outside / "outside-listing-marker-28.txt", "outside listing\n");
+  std::error_code link_error;
+  std::filesystem::create_directory_symlink("../outside", workspace / "link", link_error);
+  if (link_error == std::errc::operation_not_supported)
+    return;
+  expect(!link_error, "print fixture creates a relative directory symlink that can be checked into Git");
+  if (link_error)
+    return;
+
+  {
+    ava::process::Supervisor supervisor;
+    auto application = ava::process::OwnerPathV1::application();
+    expect(application.has_value(), "committed-symlink fixture creates supervised process ownership");
+    if (!application)
+      return;
+    auto run_git = [&](std::vector<std::string> arguments) {
+      auto owner = application->operation();
+      auto environment = ava::process::make_mcp_environment_v1(workspace, {{"HOME", root.string()},
+                                                                           {"GIT_CONFIG_NOSYSTEM", "1"},
+                                                                           {"GIT_CONFIG_GLOBAL", "/dev/null"},
+                                                                           {"GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z"},
+                                                                           {"GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z"}});
+      if (!owner || !environment)
+        return false;
+      auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      auto reservation = supervisor.reserve(*owner, ava::process::ProcessRoleV1::Mcp, {.execution_deadline = deadline});
+      if (!reservation)
+        return false;
+      std::vector<std::string> argv{git,
+                                    "-c",
+                                    "user.name=AVA Test",
+                                    "-c",
+                                    "user.email=ava-test@example.invalid",
+                                    "-c",
+                                    "core.hooksPath=/dev/null",
+                                    "-c",
+                                    "core.fsmonitor=false",
+                                    "-c",
+                                    "commit.gpgsign=false"};
+      argv.insert(argv.end(), arguments.begin(), arguments.end());
+      auto child = supervisor.spawn(std::move(*reservation), {.executable = git,
+                                                              .argv = std::move(argv),
+                                                              .environment = std::move(*environment),
+                                                              .cwd = workspace.string(),
+                                                              .stdout_mode = ava::process::StreamModeV1::Discard,
+                                                              .stderr_mode = ava::process::StreamModeV1::Discard});
+      if (!child)
+        return false;
+      auto status = supervisor.wait(child->handle, deadline + std::chrono::seconds(1));
+      return status && status->kind == ava::process::ExitKindV1::Exited && status->exit_code == 0 &&
+             status->reason == ava::process::TerminationReasonV1::NaturalExit && status->cleanup == ava::process::CleanupStateV1::Complete;
+    };
+    bool const committed = run_git({"init", "--quiet", "--template="}) && run_git({"add", "--", "link"}) &&
+                           run_git({"commit", "--quiet", "--no-gpg-sign", "-m", "Committed outside directory symlink"});
+    expect(committed, "print fixture commits the outside-directory symlink in an isolated credential-free repository");
+    if (!committed)
+      return;
+    std::filesystem::remove(workspace / "link");
+    bool const checked_out = run_git({"checkout", "HEAD", "--", "link"});
+    expect(checked_out && std::filesystem::read_symlink(workspace / "link") == "../outside", "Git checkout restores the committed symlink");
+    if (!checked_out)
+      return;
+  }
+
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.paths = app_test_paths(root);
+  auto session = ava::app::runtime::Session::open(open_context);
+  expect(session.has_value(), "print committed-symlink fixture opens a runtime session");
+  if (!session)
+    return;
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport(
+      {sse_response(agent_loop_test::tool_call_sse("call_link_read", "read_file", R"({"path":"link/note.txt"})") +
+                    agent_loop_test::tool_call_sse("call_link_list", "list_directory", R"({"path":"link"})") +
+                    agent_loop_test::tool_call_sse("call_inside", "read_file", R"({"path":"inside.txt"})") + "data: [DONE]\n\n"),
+       sse_response(final_text_sse("escape denied"))});
+  ava::app::HeadlessPermissionPolicyOptions policy;
+  auto allowed = ava::app::add_headless_allow_policy(policy, "read-only");
+  expect(allowed.has_value(), "print committed-symlink fixture configures --allow read-only");
+  auto resolver = ava::app::build_headless_permission_resolver(policy);
+  int prompts = 0;
+  ava::app::runtime::RunOptions runtime_options;
+  runtime_options.access_token = "offline-test-token";
+  runtime_options.isolate_ambient_extensions = true;
+  runtime_options.disable_session_mcp = true;
+  runtime_options.permission_resolver = [&](auto const& prompt) {
+    ++prompts;
+    return resolver(prompt);
+  };
+  ava::app::PrintModeRunOptions const options{.runtime_options = std::move(runtime_options)};
+  std::ostringstream out;
+  std::ostringstream err;
+  auto result = ava::app::run_print_prompt(*session, "Inspect the workspace files.", provider, transport, options, out, err);
+  auto const has_status = [&](std::string_view id, ava::agent::ToolTimelineStatus status) {
+    return result && std::ranges::any_of(result->tool_timeline, [&](auto const& entry) { return entry.call_id == id && entry.status == status; });
+  };
+  expect(result && result->tool_calls == 3 && has_status("call_link_read", ava::agent::ToolTimelineStatus::Error) &&
+             has_status("call_link_list", ava::agent::ToolTimelineStatus::Error) && has_status("call_inside", ava::agent::ToolTimelineStatus::Success) &&
+             prompts == 0 && out.str() == "escape denied",
+         "print --allow read-only rejects both read and list through a committed escaping directory symlink while ordinary reads still succeed");
+  expect(transport.requests().size() == 2 && transport.requests()[1].body.find("PRINT-INSIDE-CONTROL-28") != std::string::npos,
+         "the print continuation contains the successful in-workspace control read");
+  for (auto const& request : transport.requests())
+    expect(request.body.find("PRINT-OUTSIDE-CONTENT-28") == std::string::npos && request.body.find("outside-listing-marker-28") == std::string::npos,
+           "no provider request receives outside bytes or directory entries through the committed symlink");
+  expect(out.str().find("PRINT-OUTSIDE-CONTENT-28") == std::string::npos && err.str().find("PRINT-OUTSIDE-CONTENT-28") == std::string::npos &&
+             out.str().find("outside-listing-marker-28") == std::string::npos && err.str().find("outside-listing-marker-28") == std::string::npos,
+         "print stdout and diagnostics contain no outside content or listing marker");
+}
+
+void test_app_print_write_rejects_ancestor_swap_after_permission()
+{
+  auto const root = create_empty_root("app-print-write-ancestor-swap");
+  auto const workspace = root / "workspace";
+  auto const outside = root / "outside";
+  std::filesystem::create_directories(workspace / "parent");
+  std::filesystem::create_directories(outside);
+  write_app_test_file(workspace / "parent" / "note.txt", "inside original\n");
+  write_app_test_file(outside / "note.txt", "outside original\n");
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.paths = app_test_paths(root);
+  auto session = ava::app::runtime::Session::open(open_context);
+  expect(session.has_value(), "print write-swap fixture opens a runtime session");
+  if (!session)
+    return;
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport(
+      {sse_response(write_file_call_sse("parent/note.txt", "unauthorized replacement\n")), sse_response(final_text_sse("write denied"))});
+  int prompts = 0;
+  bool swapped = false;
+  ava::app::runtime::RunOptions runtime_options;
+  runtime_options.access_token = "offline-test-token";
+  runtime_options.isolate_ambient_extensions = true;
+  runtime_options.disable_session_mcp = true;
+  runtime_options.require_explicit_file_permissions = true;
+  // Leave require_descriptor_secure_workspace at its non-ACP default. The
+  // ordinary print dispatcher must install the workspace descriptor itself.
+  runtime_options.permission_resolver =
+      [&](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    ++prompts;
+    expect(prompt.operation == ava::permissions::Operation::EditFile && prompt.target_path == workspace / "parent" / "note.txt",
+           "print write approval is requested for the original in-workspace target");
+    if (!swapped)
+    {
+      std::filesystem::rename(workspace / "parent", workspace / "original-parent");
+      std::error_code link_error;
+      std::filesystem::create_directory_symlink(outside, workspace / "parent", link_error);
+      swapped = !link_error;
+    }
+    return ava::permissions::PermissionResolution::Allow;
+  };
+  ava::app::PrintModeRunOptions const options{.runtime_options = std::move(runtime_options)};
+  std::ostringstream out;
+  std::ostringstream err;
+  auto result = ava::app::run_print_prompt(*session, "Update parent/note.txt.", provider, transport, options, out, err);
+  expect(swapped && prompts == 1 && result && result->tool_calls == 1 && result->tool_timeline.size() == 1 &&
+             result->tool_timeline.front().status == ava::agent::ToolTimelineStatus::Error && out.str() == "write denied",
+         "ordinary print execution refuses a write when its checked parent becomes an outside symlink during approval");
+  expect(app_read_binary_file(outside / "note.txt") == "outside original\n" &&
+             app_read_binary_file(workspace / "original-parent" / "note.txt") == "inside original\n",
+         "a permission-time parent swap changes neither the outside target nor the original in-workspace file");
+}
+
+void test_app_print_patch_rejects_contained_symlink_target()
+{
+  auto const root = create_empty_root("app-print-patch-contained-symlink");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  auto const target = workspace / "original.txt";
+  auto const link = workspace / "alias.txt";
+  write_app_test_file(target, "original text\n");
+  expect(::chmod(target.c_str(), 0644) == 0, "print patch fixture gives the original target a known non-executable mode");
+  std::error_code link_error;
+  std::filesystem::create_symlink("original.txt", link, link_error);
+  if (link_error == std::errc::operation_not_supported)
+    return;
+  expect(!link_error, "print patch fixture creates an in-workspace symlink");
+  if (link_error)
+    return;
+  ava::app::runtime::OpenContext open_context;
+  open_context.workspace_dir = workspace;
+  open_context.current_dir = workspace;
+  open_context.paths = app_test_paths(root);
+  auto session = ava::app::runtime::Session::open(open_context);
+  expect(session.has_value(), "print patch fixture opens a runtime session");
+  if (!session)
+    return;
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::FakeTransport transport(
+      {sse_response(
+           agent_loop_test::tool_call_sse("call_patch", "apply_patch", R"({"edits":[{"path":"alias.txt","old_text":"original","new_text":"replacement"}]})") +
+           "data: [DONE]\n\n"),
+       sse_response(final_text_sse("patch denied"))});
+  ava::app::runtime::RunOptions runtime_options;
+  runtime_options.access_token = "offline-test-token";
+  runtime_options.isolate_ambient_extensions = true;
+  runtime_options.disable_session_mcp = true;
+  ava::app::PrintModeRunOptions const options{.runtime_options = std::move(runtime_options)};
+  std::ostringstream out;
+  std::ostringstream err;
+  auto result = ava::app::run_print_prompt(*session, "Patch alias.txt.", provider, transport, options, out, err);
+  struct stat link_after{};
+  struct stat target_after{};
+  expect(result && result->tool_calls == 1 && result->tool_timeline.size() == 1 &&
+             result->tool_timeline.front().status == ava::agent::ToolTimelineStatus::Error &&
+             result->tool_timeline.front().result_summary.find("does not patch through or replace symlinks") != std::string::npos &&
+             ::lstat(link.c_str(), &link_after) == 0 && S_ISLNK(link_after.st_mode) && std::filesystem::read_symlink(link) == "original.txt" &&
+             ::stat(target.c_str(), &target_after) == 0 && (target_after.st_mode & 07777) == 0644 && app_read_binary_file(target) == "original text\n",
+         "print apply_patch rejects a contained symlink without replacing it, changing its target, or inheriting symlink permissions");
+}
+
 }  // namespace
 
 void run_app_print_tests()
 {
   test_app_print_prompt_merging();
   test_invocation_signal_policy_mapping();
+  test_parallel_read_search_cli_flags();
   test_headless_permission_policy();
   test_app_print_text_mode_outputs_final_text_only();
   test_app_print_text_mode_sanitizes_terminal_output_and_diagnostics_when_requested();
@@ -1223,4 +1569,7 @@ void run_app_print_tests()
   test_app_connect_provider_credentials_headlessly();
   test_app_print_json_mode_outputs_runtime_events();
   test_app_print_json_mode_streams_provider_deltas_before_final_message();
+  test_app_print_read_only_rejects_committed_directory_symlink_escape();
+  test_app_print_write_rejects_ancestor_swap_after_permission();
+  test_app_print_patch_rejects_contained_symlink_target();
 }

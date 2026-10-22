@@ -59,12 +59,12 @@ Root object only:
 ```json
 {
   "version": 1,
-  "providers": [ /* 0..32 entries */ ]
+  "providers": [ /* 0..128 entries */ ]
 }
 ```
 
 - `version` must be the integer `1`.
-- `providers` must be an array with at most **32** entries.
+- `providers` must be an array with at most **128** entries.
 - Unknown root members are rejected.
 - Duplicate object keys are rejected (strict JSON).
 - Maximum JSON nesting depth is **8**.

@@ -66,11 +66,6 @@ cw_option(EnableAvaSanitizers
     "Build AVA with AddressSanitizer and UndefinedBehaviorSanitizer" "${AVA_ENABLE_SANITIZERS}"
     "" OFF)
 
-# AVA_BUILD_DESKTOP_QML gates the experimental Qt Quick/QML desktop prototype
-# under src/ava/desktop (added upstream). It is declared with plain option()
-# because src/CMakeLists.txt references the AVA_BUILD_DESKTOP_QML variable name
-# directly, unlike the cw_option-based toggles above.
-option(AVA_BUILD_DESKTOP_QML "Build the experimental Qt Quick/QML desktop prototype" OFF)
 option(AVA_ENABLE_TSAN "Build AVA with ThreadSanitizer (focused coordinator tests only)" OFF)
 if(OptionEnableAvaSanitizers AND AVA_ENABLE_TSAN)
   message(FATAL_ERROR "EnableAvaSanitizers/AVA_ENABLE_SANITIZERS and AVA_ENABLE_TSAN are mutually exclusive")

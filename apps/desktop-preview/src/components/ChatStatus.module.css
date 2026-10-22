@@ -1,0 +1,26 @@
+.status {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 4px;
+  white-space: nowrap;
+  color: var(--status-unavailable);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.status[data-status='working'] { color: var(--status-working); }
+.status[data-status='completed'] { color: var(--status-completed); }
+.status[data-status='stopped'],
+.status[data-status='failed'] { color: var(--status-stopped-failed); }
+.status[data-status='approval'] { color: var(--status-attention); }
+
+.glyph { display: inline-flex; flex-shrink: 0; }
+
+/* Decorative fixture motion only; the green label stays static, without a halo. */
+.cycling { animation: workingCycle 2.4s linear infinite; }
+
+@keyframes workingCycle {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

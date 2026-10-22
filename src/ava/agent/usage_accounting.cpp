@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/agent/usage_accounting.h"
+#include "ava/core/saturating.h"
 
 #include <algorithm>
 #include <cmath>
@@ -31,6 +32,7 @@ void append_optional_integer_field(std::string& json, std::string_view key, std:
   json += std::to_string(*value);
 }
 
+// Token counts are signed; the shared core saturating_add only accepts unsigned integers.
 long long saturating_add(long long left, long long right) noexcept
 {
   constexpr auto maximum = std::numeric_limits<long long>::max();
@@ -40,12 +42,6 @@ long long saturating_add(long long left, long long right) noexcept
   if (right < 0 && left < minimum - right)
     return minimum;
   return left + right;
-}
-
-std::size_t saturating_add(std::size_t left, std::size_t right) noexcept
-{
-  constexpr auto maximum = std::numeric_limits<std::size_t>::max();
-  return right > maximum - left ? maximum : left + right;
 }
 
 long long clamped_byte_count(std::size_t value) noexcept
@@ -59,16 +55,16 @@ std::size_t output_estimate_bytes(ParsedAssistantTurn const& turn)
   std::size_t bytes = turn.text.size();
   for (auto const& reasoning : turn.reasoning_blocks)
   {
-    bytes = saturating_add(bytes, reasoning.text.size());
-    bytes = saturating_add(bytes, reasoning.signature.size());
-    bytes = saturating_add(bytes, reasoning.redacted_data.size());
-    bytes = saturating_add(bytes, reasoning.native_item_json.size());
+    bytes = ava::core::saturating_add(bytes, reasoning.text.size());
+    bytes = ava::core::saturating_add(bytes, reasoning.signature.size());
+    bytes = ava::core::saturating_add(bytes, reasoning.redacted_data.size());
+    bytes = ava::core::saturating_add(bytes, reasoning.native_item_json.size());
   }
   for (auto const& call : turn.tool_calls)
   {
-    bytes = saturating_add(bytes, call.id.size());
-    bytes = saturating_add(bytes, call.name.size());
-    bytes = saturating_add(bytes, call.arguments_json.size());
+    bytes = ava::core::saturating_add(bytes, call.id.size());
+    bytes = ava::core::saturating_add(bytes, call.name.size());
+    bytes = ava::core::saturating_add(bytes, call.arguments_json.size());
   }
   return bytes;
 }

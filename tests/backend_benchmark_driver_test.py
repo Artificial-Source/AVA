@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -88,6 +90,13 @@ class BenchmarkDriverTests(unittest.TestCase):
         FixtureCase.setUpClass()
         try:
             case = FixtureCase("test_comparison_resolves_recorded_commits_and_trees")
+            required_paths = (
+                *case.module.PROCESS_PRODUCTION_SOURCE_PATHS,
+                ".gitmodules",
+                "scripts/benchmark-backend.py",
+            )
+            source_path = "src/ava/tools/bash_tool.cpp"
+            source_original = (REPO_ROOT / source_path).read_bytes()
             with mock.patch.object(harness, "run_fixture_git", wraps=harness.run_fixture_git) as git:
                 roots = []
                 for _ in range(2):
@@ -98,8 +107,67 @@ class BenchmarkDriverTests(unittest.TestCase):
                         self.assertTrue(documents[2].exists())
                         self.assertTrue(documents[3].exists())
                         self.assertTrue(documents[4].exists())
-                    self.assertFalse(roots[-1].exists())
+                        for worktree in documents[2:]:
+                            for path in required_paths:
+                                self.assertTrue((worktree / path).exists(), path)
+                            for omitted in ("apps", "docs"):
+                                self.assertFalse((worktree / omitted).exists(), omitted)
+                            entries = case.module._scope_entries_from_git(
+                                worktree, "HEAD", required_paths, ()
+                            )
+                            for entry in entries:
+                                path = worktree / entry["path"]
+                                mode = path.lstat().st_mode
+                                if entry["mode"] == "160000":
+                                    self.assertTrue(stat.S_ISDIR(mode), path)
+                                    continue
+                                self.assertIn(entry["mode"], ("100644", "100755"), path)
+                                self.assertTrue(stat.S_ISREG(mode), path)
+                                self.assertEqual(
+                                    bool(mode & stat.S_IXUSR), entry["mode"] == "100755", path
+                                )
+                                content = path.read_bytes()
+                                blob = b"blob " + str(len(content)).encode("ascii") + b"\0" + content
+                                self.assertEqual(hashlib.sha1(blob).hexdigest(), entry["object"], path)
+                        comparison = case.module.compare_process_documents(*documents[:2])
+                        self.assertEqual(comparison["status"], "measured")
 
+                        # Leave this dirty until cleanup: the next fixture must still
+                        # match committed bytes, and neither source nor seed may change.
+                        changed = documents[2] / source_path
+                        original = changed.read_bytes()
+                        changed.write_bytes(original + b"\nprivate fixture mutation\n")
+                        comparison = case.module.compare_process_documents(*documents[:2])
+                        self.assertEqual(comparison["status"], "unsupported")
+                        self.assertIn("before.measured_checkout.current_dirty", comparison["mismatches"])
+                        self.assertIn(
+                            "before.runtime_reference.current_production_path_equality",
+                            comparison["mismatches"],
+                        )
+                        self.assertIn(
+                            "before.runtime_reference.current_production_paths_dirty",
+                            comparison["mismatches"],
+                        )
+                        self.assertEqual((REPO_ROOT / source_path).read_bytes(), source_original)
+                        self.assertEqual(
+                            case.module._git_blob_at_path(
+                                FixtureCase._comparison_seed,
+                                documents[0]["provenance"]["measured_checkout"]["commit"],
+                                source_path,
+                            )[1],
+                            original,
+                        )
+                        alternates = roots[-1].parent / "repository/.git/objects/info/alternates"
+                        self.assertEqual(
+                            alternates.read_text(encoding="utf-8").splitlines(),
+                            [str(FixtureCase._comparison_seed / ".git/objects")],
+                        )
+                    self.assertFalse(roots[-1].exists())
+                    self.assertFalse(roots[-1].parent.exists())
+
+                worktree_adds = [call.args for call in git.call_args_list if call.args[1:3] == ("worktree", "add")]
+                self.assertEqual(len(worktree_adds), 6)
+                self.assertTrue(all("--no-checkout" in args for args in worktree_adds))
                 clones = [call.args for call in git.call_args_list if len(call.args) > 1 and call.args[1] == "clone"]
                 self.assertEqual(len([args for args in clones if "--no-local" in args]), 1)
                 self.assertEqual(len([args for args in clones if "--shared" in args]), 2)
@@ -108,6 +176,7 @@ class BenchmarkDriverTests(unittest.TestCase):
                 seed = FixtureCase._comparison_seed
                 self.assertEqual(seed.parent.parent, pathlib.Path("/tmp"))
                 self.assertTrue(seed.parent.name.startswith("ava-bench-comparison-seed-"))
+                self.assertFalse((seed / ".git/objects/info/alternates").exists())
         finally:
             FixtureCase.doClassCleanups()
         self.assertFalse(seed.exists())

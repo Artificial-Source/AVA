@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="color-scheme" content="dark">
+  <title>AVA — Liquid glass desktop study</title>
+  <link rel="icon" href="data:,">
+  <style>
+    /* Standalone visual study. No app code, assets, font files, or dependencies. */
+    :root {
+      color-scheme: dark;
+      font-family: "Geist", system-ui, sans-serif;
+      font-size: 14px;
+      font-synthesis: none;
+      --ink: #151b22;
+      --text: #edf1f5;
+      --body: #d2dae3;
+      --muted: #bac7d3;
+      --quiet: #a1afbd;
+      --accent: #c4dff0;
+      --attention: #e4c394;
+      --glass-fill: rgba(29, 39, 50, .80);
+      --glass-sheen: linear-gradient(123deg, rgba(220, 236, 247, .10), transparent 35%, rgba(204, 224, 239, .025) 67%, rgba(211, 233, 249, .075));
+      --glass-edge: linear-gradient(128deg, rgba(236, 248, 255, .52), rgba(223, 240, 255, .10) 29%, rgba(208, 230, 250, .07) 64%, rgba(234, 247, 255, .29));
+      --glass-filter: blur(28px) saturate(112%);
+      --mono: "Geist Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text); background: #19222c; }
+    button, textarea { font: inherit; }
+    button { color: inherit; border: 0; cursor: pointer; }
+    button, summary, textarea { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, summary:focus-visible, textarea:focus-visible {
+      outline: 2px solid #daedfa;
+      outline-offset: 4px;
+    }
+    button:active { transform: translateY(1px); }
+    button { transition: background-color 140ms ease, color 140ms ease; }
+    svg { display: block; flex: 0 0 auto; }
+    .icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .small-icon { width: 14px; height: 14px; }
+    .symbols { position: absolute; width: 0; height: 0; overflow: hidden; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .stage { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 44px 24px; position: relative; overflow: hidden; }
+    /* Original CSS light study. Hard-edged folded planes, not image assets or blur blobs. */
+    .environment { position: absolute; inset: 0; overflow: hidden; pointer-events: none; background: linear-gradient(132deg, #485965 0%, #354653 20%, #202d38 44%, #15212d 72%, #253a49 100%); }
+    .environment::before { content: ""; position: absolute; width: 125%; height: 56%; left: -31%; top: -17%; border-radius: 0 0 53% 40%; transform: rotate(-28deg); background: linear-gradient(178deg, #7d8b92 -20%, #405460 38%, #273b49 77%, #748b99 99%, #263d4d); box-shadow: 0 2px 0 #a4b4bf45, 0 25px 65px #090f1670; }
+    .environment::after { content: ""; position: absolute; width: 115%; height: 45%; left: 9%; bottom: -31%; border-radius: 52% 48% 0 0; transform: rotate(-21deg); background: linear-gradient(180deg, #8395a14d, #324b5c 3%, #20323f 25%, #101d28); box-shadow: 0 -1px 0 #c4d5df40, 0 -20px 60px #0a172340; }
+    .app { position: relative; display: grid; grid-template-columns: 258px minmax(0, 1fr); gap: 10px; width: min(1496px, 100%); height: min(888px, calc(100dvh - 104px)); min-height: 712px; padding: 10px; border-radius: 28px; background: rgba(12, 18, 25, .26); border: 1px solid rgba(221, 236, 248, .19); box-shadow: 0 36px 90px -25px #030912b3, 0 8px 24px #07111c50, inset 0 1px 0 #d4e6f417; }
+    /* Three sibling material surfaces. No backdrop filter on the shell, content, or nested controls. */
+    .glass { position: relative; background: var(--glass-sheen), var(--glass-fill); -webkit-backdrop-filter: var(--glass-filter); backdrop-filter: var(--glass-filter); box-shadow: inset 0 1px 1px #ecf6ff12, inset 0 -1px 2px #05101c33, 0 8px 24px -14px #020914c0; }
+    .glass::before { content: ""; position: absolute; z-index: 1; inset: 0; border-radius: inherit; padding: 1px; background: var(--glass-edge); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask-composite: exclude; pointer-events: none; }
+    .glass::after { content: ""; position: absolute; inset: 2px; border-radius: inherit; box-shadow: inset 1px 0 1px #e0f0ff09, inset 0 1px 1px #f0f8ff09; pointer-events: none; }
+    .sidebar { display: flex; flex-direction: column; min-height: 0; padding: 22px 14px 14px; border-radius: 20px; }
+    .brand-row { display: flex; align-items: center; padding: 0 10px 26px; gap: 10px; }
+    .ava-mark { width: 24px; height: 24px; color: #edf5fc; }
+    .wordmark { font-size: 20px; font-weight: 600; letter-spacing: 2.7px; }
+    .brand-row .icon-button { margin-left: auto; color: var(--muted); }
+    .icon-button { width: 32px; height: 32px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--muted); }
+    .icon-button:hover { color: var(--text); background: #d6e9ff12; }
+    .transcript:focus-visible { outline: 2px solid #daedfa; outline-offset: -4px; }
+    .new-chat { display: flex; gap: 10px; align-items: center; width: 100%; padding: 11px 13px; border-radius: 12px; font-weight: 500; background: #c0d6ec12; box-shadow: inset 0 1px 0 #e6f3ff12, 0 2px 5px #07111d14; text-align: left; }
+    .new-chat:hover { background: #c0d6ec20; }
+    .new-chat .icon { color: #d6e8f5; }
+    .library { overflow-y: auto; scrollbar-width: thin; min-height: 0; padding: 0 2px 12px; margin: 0 -2px; }
+    .section-label { display: flex; align-items: center; justify-content: space-between; padding: 26px 10px 10px; color: var(--muted); font-size: 11px; letter-spacing: 1.35px; font-weight: 550; }
+    .section-label .icon-button { width: 24px; height: 24px; }
+    .project { margin-bottom: 22px; }
+    .project-heading { display: flex; width: 100%; align-items: center; gap: 9px; padding: 8px 9px; background: transparent; text-align: left; font-weight: 550; font-size: 13px; border-radius: 8px; }
+    .project-heading > .icon:first-child { color: #c4d4e2; }
+    .project-heading .chevron { margin-left: auto; color: var(--quiet); }
+    .chat-list { display: grid; gap: 3px; margin-top: 4px; }
+    .chat-row { display: flex; flex-direction: column; gap: 5px; width: 100%; text-align: left; padding: 10px 11px 10px 35px; border-radius: 11px; background: transparent; position: relative; color: #bfccd8; font-size: 13px; line-height: 18px; }
+    .chat-row:hover { background: #d5e8ff0b; }
+    .chat-row.current { color: #f0f5f9; background: linear-gradient(110deg, #d4e7f51b, #c3ddf00c); box-shadow: inset 0 1px 0 #eff8ff0f, inset 0 0 0 1px #e0efff09; }
+    .chat-row.current .chat-state { color: #d1dde8; }
+    .chat-row.current::before { content: ""; position: absolute; top: 13px; left: 12px; width: 4px; height: 12px; border-radius: 3px; background: #c5dfef; }
+    .chat-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; line-height: 15px; color: var(--muted); }
+    .chat-state .icon { width: 12px; height: 12px; }
+    .chat-state.attention { color: var(--attention); }
+    .chat-state.working { color: #c3dced; }
+    .sidebar-foot { margin-top: auto; border-top: 1px solid #dceeff13; padding: 13px 8px 0; display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; }
+    .sidebar-foot .icon { width: 16px; height: 16px; }
+    .sidebar-foot .icon-button { margin-left: auto; }
+    .workspace { display: grid; grid-template-rows: 56px minmax(0, 1fr); gap: 10px; min-width: 0; }
+    .tab-bar { border-radius: 17px; padding: 6px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .chat-tab { min-width: 0; width: 256px; height: 44px; border-radius: 12px; display: flex; align-items: center; color: var(--muted); }
+    .chat-tab.active { background: linear-gradient(110deg, #dceeff17, #dceeff0a); box-shadow: inset 0 1px 0 #f4faff0b, 0 2px 3px #050c141a; color: var(--text); }
+    .tab-label { min-width: 0; flex: 1; display: grid; gap: 1px; padding: 4px 10px 4px 13px; text-align: left; background: transparent; border-radius: 10px; }
+    .tab-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tab-project { font-size: 10px; line-height: 14px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+    .chat-tab.active .tab-project { color: #d1dde8; }
+    .tab-project .icon { color: var(--attention); width: 10px; height: 10px; }
+    .tab-close { width: 30px; height: 30px; margin-right: 5px; }
+    .tab-close .icon { width: 12px; height: 12px; }
+    .tab-bar > .icon-button { flex: 0 0 auto; }
+    .window-button { margin-left: auto; margin-right: 7px; }
+    .canvas { min-height: 0; min-width: 0; border-radius: 18px; background: var(--ink); box-shadow: 0 1px 0 #deebfa0e, inset 0 1px 0 #eaf5ff08; display: flex; flex-direction: column; overflow: hidden; }
+    .conversation-header { flex-shrink: 0; min-height: 84px; padding: 22px 30px 17px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #d5e6fa0a; }
+    h1 { font-size: 17px; font-weight: 550; letter-spacing: -.3px; margin: 0 0 5px; line-height: 23px; }
+    .context { display: flex; align-items: center; gap: 8px; color: var(--quiet); font-size: 11px; }
+    .workspace-picker { display: inline-flex; align-items: center; gap: 5px; padding: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; }
+    .workspace-picker .icon { width: 11px; height: 11px; }
+    .context-divider { color: #8292a3; }
+    .changes { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; border-radius: 10px; padding: 9px 12px; background: #d3e5fa09; box-shadow: inset 0 0 0 1px #d3e5fa14, inset 0 1px 0 #eff7ff05; font-size: 12px; color: #cbd6e1; }
+    .changes:hover { background: #d3e5fa12; }
+    .changes .icon { width: 15px; height: 15px; }
+    .transcript { min-height: 0; flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #667a8b50 transparent; padding: 27px 38px 16px; scroll-padding: 24px; }
+    .messages { width: min(100%, 758px); margin: 0 auto; font-size: 15.5px; line-height: 1.65; color: var(--body); }
+    .user-message { max-width: 620px; margin: 0 0 24px auto; }
+    .speaker-you { font-size: 11px; font-weight: 500; text-align: right; margin-bottom: 8px; padding-right: 4px; color: var(--muted); }
+    .user-bubble { padding: 14px 19px; border-radius: 17px 17px 5px 17px; background: linear-gradient(135deg, #28333e, #222c36); box-shadow: inset 0 1px 0 #dcefff0c; color: #e0e7ee; }
+    .user-bubble p { margin: 0; }
+    .agent-heading { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 600; color: #e7eff7; margin-bottom: 12px; }
+    .agent-heading .ava-mark { width: 19px; height: 19px; }
+    .agent-message p { margin: 0 0 15px; }
+    .activity { margin: 17px 0 19px; font-size: 12px; color: var(--muted); }
+    .activity summary { display: flex; align-items: center; gap: 9px; cursor: pointer; list-style: none; border-radius: 7px; width: fit-content; padding: 5px 4px 5px 0; }
+    .activity summary::-webkit-details-marker { display: none; }
+    .activity summary .disclosure { width: 13px; height: 13px; }
+    .activity[open] .disclosure { transform: rotate(90deg); }
+    .activity summary:hover { color: var(--text); }
+    .activity .activity-divider { color: #889caf; }
+    .tool-records { margin: 10px 0 6px 5px; padding: 0 0 0 20px; border-left: 1px solid #b5d0e02e; display: grid; gap: 8px; list-style: none; }
+    .tool-records code { color: #c5d7e5; font-size: 11px; }
+    .agent-message strong { font-weight: 550; color: #eaf0f5; }
+    code { font-family: var(--mono); font-size: .83em; color: #d5e4ef; }
+    p code { background: #a4c2dc0b; padding: 2px 4px; border-radius: 4px; }
+    .code-example { border: 1px solid #d8eafa13; border-radius: 10px; overflow: hidden; margin: 17px 0 16px; background: #11171e; }
+    .code-caption { display: flex; align-items: center; gap: 7px; padding: 8px 13px; color: var(--muted); font-size: 10px; border-bottom: 1px solid #d8eafa0b; }
+    .code-caption .icon { width: 13px; height: 13px; }
+    .code-language { margin-left: auto; font-family: var(--mono); font-size: 10px; }
+    pre { padding: 13px 16px; margin: 0; overflow-x: auto; font-size: 13px; line-height: 1.8; }
+    pre code { font-size: inherit; }
+    .syntax-key { color: #a9cce1; }
+    .syntax-string { color: #d3dac1; }
+    .agent-message .verification-note { color: var(--muted); font-size: 13px; margin-bottom: 0; }
+    .composer-zone { flex-shrink: 0; padding: 17px 38px 20px; position: relative; }
+    .composer-zone::before { content: ""; position: absolute; left: 0; right: 0; top: -14px; height: 15px; background: linear-gradient(transparent, var(--ink)); pointer-events: none; }
+    .composer-wrap { width: min(100%, 792px); margin: 0 auto; }
+    .composer { border-radius: 22px; padding: 17px 17px 12px; box-shadow: 0 16px 28px -13px #020710c9, inset 0 1px 2px #e5f4ff1a, inset 0 -2px 4px #06121e33; }
+    .composer textarea { display: block; width: 100%; height: 35px; min-height: 35px; resize: none; border: none; background: transparent; color: #e1eaf2; line-height: 1.5; font-size: 15px; padding: 0 3px; border-radius: 3px; }
+    .composer textarea::placeholder { color: var(--muted); opacity: 1; }
+    .composer-controls { display: flex; align-items: center; gap: 6px; margin-top: 13px; }
+    .model-picker, .mode-picker { display: inline-flex; align-items: center; gap: 7px; min-height: 31px; background: transparent; border-radius: 8px; padding: 6px 8px; font-size: 12px; color: #d5e1ed; }
+    .model-picker:hover, .mode-picker:hover { background: #e1f0ff0b; }
+    .model-picker .icon { width: 13px; height: 13px; }
+    .mode-picker { color: var(--muted); }
+    .mode-picker .icon { width: 12px; height: 12px; }
+    .control-separator { width: 1px; height: 14px; background: #d7edff20; }
+    .send { display: inline-flex; align-items: center; justify-content: center; gap: 10px; margin-left: auto; border-radius: 10px; padding: 9px 12px; background: linear-gradient(145deg, #d6e9f5, #b9d3e5); color: #172b3a; font-size: 12px; font-weight: 600; box-shadow: inset 0 1px 0 #f4fbff8c, 0 3px 8px #06132033; }
+    .send:hover { background: #deeffb; }
+    .send .icon { width: 15px; height: 15px; stroke-width: 1.8; }
+    .workspace-foot { display: flex; align-items: center; gap: 7px; color: var(--quiet); font-size: 10px; margin: 13px 5px 0; }
+    .workspace-foot .icon { width: 12px; height: 12px; }
+    .workspace-foot .branch { font-family: var(--mono); }
+    .workspace-foot .idle { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+    .caption { position: relative; display: flex; align-items: center; width: min(1496px, 100%); gap: 12px; padding: 17px 5px 0; color: #c2ced8; font-size: 10px; line-height: 18px; letter-spacing: .3px; }
+    .caption-name { font-weight: 550; letter-spacing: 1.25px; text-transform: uppercase; }
+    .caption-separator { opacity: .7; }
+    .preview-notice { color: #becbd5; }
+    .material-switch { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; color: #d5e1eb; background: transparent; padding: 3px 0 3px 8px; font-size: 10px; border-radius: 4px; }
+    .material-switch .icon { width: 13px; height: 13px; }
+    .material-switch[aria-pressed="true"] { color: #f0f7fc; }
+    /* Predictable, opaque defaults if blur is unsupported. This is not native optical glass. */
+    @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      :root { --glass-fill: #293642; --glass-sheen: none; --glass-filter: none; }
+    }
+    :root[data-material="opaque"] { --glass-fill: #293642; --glass-sheen: none; --glass-filter: none; }
+    @media (prefers-reduced-transparency: reduce) {
+      :root { --glass-fill: #293642; --glass-sheen: none; --glass-filter: none; }
+    }
+    @media (prefers-contrast: more) {
+      :root { --glass-fill: #24313e; --glass-sheen: none; --glass-filter: none; --muted: #d0deeb; --quiet: #c4d3e1; --body: #e9f0f7; --glass-edge: linear-gradient(#9aafbf, #9aafbf); }
+      .chat-row { color: #e3edf6; }
+      .chat-row.current { outline: 1px solid #b5d0e3; outline-offset: -1px; }
+      .user-bubble { color: #f2f7fc; }
+      .code-example, .changes { border: 1px solid #91a5b7; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+      button:active { transform: none; }
+    }
+    @media (max-width: 1240px) {
+      .stage { padding: 24px 22px 18px; }
+      .app { grid-template-columns: 238px minmax(0, 1fr); height: calc(100dvh - 78px); padding: 8px; gap: 8px; border-radius: 25px; }
+      .sidebar { padding-left: 11px; padding-right: 11px; }
+      .workspace { gap: 8px; }
+      .chat-tab { width: 234px; }
+      .conversation-header { padding-left: 24px; padding-right: 24px; }
+      .transcript { padding-left: 28px; padding-right: 28px; }
+      .composer-zone { padding-left: 24px; padding-right: 24px; }
+      .messages { font-size: 15px; }
+      .user-message { max-width: 555px; }
+      .caption { padding-top: 12px; }
+    }
+    @media (max-width: 980px) {
+      .app { min-width: 910px; }
+      .stage { align-items: flex-start; overflow-x: auto; }
+      .caption { min-width: 910px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Small original line icons; no external icon library or Apple symbols. -->
+  <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <symbol id="ava" viewBox="0 0 24 24"><path d="M3 19.5 11.1 4.8c.4-.7 1.4-.7 1.8 0L21 19.5M6.2 14h11.6M9.1 19.5l2.9-5 2.9 5" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="chevron" viewBox="0 0 24 24"><path d="m8 5 7 7-7 7"/></symbol>
+      <symbol id="down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="folder" viewBox="0 0 24 24"><path d="M3.5 7V5.5a1 1 0 0 1 1-1H10l2 2h7.5a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1V7ZM3.5 9h17"/></symbol>
+      <symbol id="panel" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></symbol>
+      <symbol id="working" viewBox="0 0 24 24"><path d="M19.5 8A8 8 0 1 0 20 15M16 3.8l.3 4.9 4.8-.9"/></symbol>
+      <symbol id="attention" viewBox="0 0 24 24"><path d="m10.5 3.5-7 7a2.1 2.1 0 0 0 0 3l7 7a2.1 2.1 0 0 0 3 0l7-7a2.1 2.1 0 0 0 0-3l-7-7a2.1 2.1 0 0 0-3 0ZM12 7.5v5M12 16v.1"/></symbol>
+      <symbol id="window" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M14 12h4M16 10v4"/></symbol>
+      <symbol id="changes" viewBox="0 0 24 24"><path d="M8 4H5a1.5 1.5 0 0 0-1.5 1.5v13A1.5 1.5 0 0 0 5 20h3M16 4h3a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 19 20h-3M12 3v18M6 9h3M15 14h3M16.5 12.5v3"/></symbol>
+      <symbol id="branch" viewBox="0 0 24 24"><circle cx="7" cy="5" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="7" cy="19" r="2"/><path d="M7 7v10M17 9v2a4 4 0 0 1-4 4H7"/></symbol>
+      <symbol id="file" viewBox="0 0 24 24"><path d="M13 3.5H6A1.5 1.5 0 0 0 4.5 5v14A1.5 1.5 0 0 0 6 20.5h12a1.5 1.5 0 0 0 1.5-1.5v-9L13 3.5ZM13 3.5V10h6.5M8 14h8M8 17h5"/></symbol>
+      <symbol id="layers" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5-9-5ZM3 12l9 5 9-5M3 16l9 5 9-5"/></symbol>
+      <symbol id="arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+      <symbol id="model" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3ZM4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+      <symbol id="circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4v16M12 4a8 8 0 0 1 0 16" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></symbol>
+    </defs>
+  </svg>
+  <div class="stage">
+    <div class="environment" aria-hidden="true"></div>
+    <main class="app" aria-label="AVA desktop design concept, invented example content">
+      <aside class="sidebar glass" aria-label="Projects and chats">
+        <div class="brand-row">
+          <svg class="ava-mark" aria-hidden="true"><use href="#ava"/></svg>
+          <span class="wordmark">AVA</span>
+          <button class="icon-button" type="button" data-static aria-label="Hide sidebar" title="Preview only — sidebar stays visible"><svg class="icon" aria-hidden="true"><use href="#panel"/></svg></button>
+        </div>
+        <button class="new-chat" type="button" data-static><svg class="icon" aria-hidden="true"><use href="#plus"/></svg>New chat</button>
+        <div class="section-label"><span>PROJECTS</span><button class="icon-button" type="button" data-static aria-label="Open a project"><svg class="icon small-icon" aria-hidden="true"><use href="#plus"/></svg></button></div>
+        <nav class="library" aria-label="All project chats">
+          <section class="project" aria-label="Wayfinder project">
+            <button class="project-heading" type="button" data-static aria-expanded="true"><svg class="icon" aria-hidden="true"><use href="#folder"/></svg>Wayfinder<svg class="icon small-icon chevron" aria-hidden="true"><use href="#down"/></svg></button>
+            <div class="chat-list">
+              <button class="chat-row current" type="button" data-static aria-current="page"><span>Remember search filters</span><span class="chat-state">Current chat</span></button>
+              <button class="chat-row" type="button" data-static><span>Keyboard navigation</span><span class="chat-state working"><svg class="icon" aria-hidden="true"><use href="#working"/></svg>Working</span></button>
+              <button class="chat-row" type="button" data-static><span>Simplify route config</span></button>
+            </div>
+          </section>
+          <section class="project" aria-label="Papertrail project">
+            <button class="project-heading" type="button" data-static aria-expanded="true"><svg class="icon" aria-hidden="true"><use href="#folder"/></svg>Papertrail<svg class="icon small-icon chevron" aria-hidden="true"><use href="#down"/></svg></button>
+            <div class="chat-list">
+              <button class="chat-row" type="button" data-static><span>Export date range</span><span class="chat-state attention"><svg class="icon" aria-hidden="true"><use href="#attention"/></svg>Needs approval</span></button>
+              <button class="chat-row" type="button" data-static><span>Document the import flow</span></button>
+            </div>
+          </section>
+          <section class="project" aria-label="Relay project">
+            <button class="project-heading" type="button" data-static aria-expanded="true"><svg class="icon" aria-hidden="true"><use href="#folder"/></svg>Relay<svg class="icon small-icon chevron" aria-hidden="true"><use href="#down"/></svg></button>
+            <div class="chat-list"><button class="chat-row" type="button" data-static><span>Review retry behavior</span></button></div>
+          </section>
+        </nav>
+        <div class="sidebar-foot"><svg class="icon" aria-hidden="true"><use href="#layers"/></svg><span>All projects</span><button class="icon-button" type="button" data-static aria-label="Project actions"><svg class="icon" aria-hidden="true"><use href="#more"/></svg></button></div>
+      </aside>
+      <div class="workspace">
+        <nav class="tab-bar glass" aria-label="User-chosen chat working set">
+          <div class="chat-tab active">
+            <button class="tab-label" type="button" data-static aria-current="page"><span class="tab-title">Remember search filters</span><span class="tab-project">Wayfinder</span></button>
+            <button class="icon-button tab-close" type="button" data-static aria-label="Close Remember search filters tab" title="Close tab, not the chat or its run"><svg class="icon" aria-hidden="true"><use href="#close"/></svg></button>
+          </div>
+          <div class="chat-tab">
+            <button class="tab-label" type="button" data-static><span class="tab-title">Export date range</span><span class="tab-project"><svg class="icon" aria-hidden="true"><use href="#attention"/></svg>Papertrail<span class="sr-only"> — Needs approval</span></span></button>
+            <button class="icon-button tab-close" type="button" data-static aria-label="Close Export date range tab" title="Close tab, not the chat or its run"><svg class="icon" aria-hidden="true"><use href="#close"/></svg></button>
+          </div>
+          <button class="icon-button" type="button" data-static aria-label="Add an existing chat to this working set"><svg class="icon small-icon" aria-hidden="true"><use href="#plus"/></svg></button>
+          <button class="icon-button window-button" type="button" data-static aria-label="Open another window"><svg class="icon" aria-hidden="true"><use href="#window"/></svg></button>
+        </nav>
+        <section class="canvas" aria-labelledby="conversation-title">
+          <header class="conversation-header">
+            <div>
+              <h1 id="conversation-title">Remember search filters</h1>
+              <div class="context"><button class="workspace-picker" type="button" data-static aria-label="Select workspace, Wayfinder"><span>Wayfinder</span><svg class="icon" aria-hidden="true"><use href="#down"/></svg></button><span class="context-divider">/</span><span>Chat</span></div>
+            </div>
+            <button class="changes" type="button" data-static aria-expanded="false" title="Change review is closed by default"><svg class="icon" aria-hidden="true"><use href="#changes"/></svg>Changes</button>
+          </header>
+          <div class="transcript" tabindex="0" aria-label="Example conversation">
+            <div class="messages">
+              <article class="user-message" aria-label="Your message">
+                <div class="speaker-you">You</div>
+                <div class="user-bubble"><p>Keep the search filters when I open a result and go back. Use the URL so I can share the same view.</p></div>
+              </article>
+              <article class="agent-message" aria-label="AVA response">
+                <div class="agent-heading"><svg class="ava-mark" aria-hidden="true"><use href="#ava"/></svg><span>AVA</span></div>
+                <details class="activity">
+                  <summary><svg class="icon disclosure" aria-hidden="true"><use href="#chevron"/></svg><svg class="icon small-icon" aria-hidden="true"><use href="#file"/></svg><span>Read source</span><span class="activity-divider">·</span><span>Updated search state</span></summary>
+                  <ul class="tool-records"><li>Read <code>SearchPage.tsx</code> and <code>router.ts</code></li><li>Edited <code>SearchPage.tsx</code> and <code>search-state.ts</code></li></ul>
+                </details>
+                <p>The URL now owns the <strong>query, sort order, and selected tags</strong>. Opening a result leaves that state intact, so Back returns to the same view.</p>
+                <div class="code-example" aria-label="Illustrative TypeScript excerpt">
+                  <div class="code-caption"><svg class="icon" aria-hidden="true"><use href="#file"/></svg><span>search-state.ts</span><span class="code-language">TypeScript</span></div>
+                  <pre><code><span class="syntax-key">const</span> params = <span class="syntax-key">new</span> URLSearchParams(location.search);
+<span class="syntax-key">const</span> query = params.get(<span class="syntax-string">"q"</span>) ?? <span class="syntax-string">""</span>;
+<span class="syntax-key">const</span> tags = params.getAll(<span class="syntax-string">"tag"</span>);</code></pre>
+                </div>
+                <p class="verification-note">Browser back/forward behavior still needs a manual check.</p>
+              </article>
+            </div>
+          </div>
+          <footer class="composer-zone">
+            <div class="composer-wrap">
+              <div class="composer glass">
+                <label class="sr-only" for="message">Draft message — design preview only</label>
+                <textarea id="message" spellcheck="false" rows="1">Add a regression test for returning from a result.</textarea>
+                <div class="composer-controls">
+                  <button class="model-picker" type="button" data-static aria-label="Select model, Claude Sonnet, illustrative only"><svg class="icon" aria-hidden="true"><use href="#model"/></svg><span>Claude Sonnet</span><svg class="icon small-icon" aria-hidden="true"><use href="#down"/></svg></button>
+                  <span class="control-separator" aria-hidden="true"></span>
+                  <button class="mode-picker" type="button" data-static>Build<svg class="icon" aria-hidden="true"><use href="#down"/></svg></button>
+                  <button class="send" type="button" data-static title="Preview only — no message is sent"><span>Send</span><svg class="icon" aria-hidden="true"><use href="#arrow"/></svg></button>
+                </div>
+              </div>
+              <div class="workspace-foot"><svg class="icon" aria-hidden="true"><use href="#branch"/></svg><span class="branch">main</span><span>·</span><span>Shared working copy</span><span class="idle">Ready for your next message</span></div>
+            </div>
+          </footer>
+        </section>
+      </div>
+    </main>
+    <div class="caption" aria-label="Design preview controls">
+      <span class="caption-name">AVA / Liquid glass</span><span class="caption-separator">—</span><span class="preview-notice" role="status">Dark desktop study · Example data</span>
+      <button class="material-switch" type="button" aria-pressed="false" title="Preview opaque materials; not an app setting"><svg class="icon" aria-hidden="true"><use href="#circle"/></svg><span>Opaque preview</span></button>
+    </div>
+  </div>
+  <script>
+    // Preview affordances only. No routing, persistence, network, runs, or backend.
+    const materialSwitch = document.querySelector('.material-switch');
+    materialSwitch.addEventListener('click', () => {
+      const opaque = materialSwitch.getAttribute('aria-pressed') !== 'true';
+      materialSwitch.setAttribute('aria-pressed', String(opaque));
+      document.documentElement.dataset.material = opaque ? 'opaque' : 'glass';
+    });
+    document.querySelectorAll('[data-static]').forEach(control => {
+      control.addEventListener('click', () => {
+        document.querySelector('.preview-notice').textContent = 'Visual preview only — this control is not connected.';
+      });
+    });
+  </script>
+</body>
+</html>

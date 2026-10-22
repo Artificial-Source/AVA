@@ -69,9 +69,11 @@ Supported locations are explicit and inspectable:
 - Project plugins: `.ava/plugins/<plugin-id>/plugin.json`.
 - Explicit CLI/config paths can be added later for development, but should not be the primary stable interface.
 
-Discovered executable plugins are disabled by default. AVA can inspect their manifests without starting a process, but it does not run entrypoints until the user enables the plugin. Enablement is machine-local state stored under `$XDG_STATE_HOME/ava/plugin-enablement.json`, falling back to `~/.local/state/ava/plugin-enablement.json`, keyed by canonical workspace path, plugin id, and scope.
+Discovered executable plugins are disabled by default. AVA can inspect their manifests without starting a process, but it does not run entrypoints until the user enables the plugin. Enablement is machine-local state stored under `$XDG_STATE_HOME/ava/plugin-enablement.json`, falling back to `~/.local/state/ava/plugin-enablement.json`, keyed by normalized absolute logical workspace path, plugin id, and scope. Normalization does not resolve symlink aliases, so distinct logical spellings of the same physical workspace can have separate enablement entries.
 
 `/plugins install <path>` imports a local plugin directory into the global plugin directory. The path must be a directory containing `plugin.json`, or a direct `plugin.json` path. Install validates the manifest, copies only directories and regular files, rejects symlinks and special files, leaves the plugin disabled, and never starts the entrypoint. `/plugins remove <id>` removes only disabled global plugins; project plugins remain repository files managed outside AVA.
+
+Install copying and staging cleanup operate relative to held directory descriptors, with at most 32 directory levels below the plugin root. Opened source files are rechecked so a replacement FIFO or other special file is rejected without blocking. Publication requires `renameat2(RENAME_NOREPLACE)`, refusing an existing destination atomically. If the kernel or filesystem does not support it (`EINVAL` or `ENOSYS`), installation fails with an actionable error advising a supported kernel/filesystem; there is no plain-rename fallback.
 
 ## Plugin Authoring Guide
 
@@ -102,6 +104,7 @@ Authoring checklist:
 Entrypoint behavior:
 
 - AVA launches the plugin process with the plugin directory as the child working directory.
+- The child receives the closed `ava-plugin-minimal-v1` environment: exactly `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, and `PWD` set to the logical plugin working directory. It does not inherit `HOME`, user `PATH` additions, credentials, proxies, extra locale variables, or arbitrary `AVA_*` values, and the manifest has no explicit environment field. An approved plugin cannot rely on ambient host secrets being forwarded. This environment restriction does not OS-sandbox the plugin's filesystem access.
 - AVA sends one `initialize` record before any tool, command, or event request.
 - The plugin must answer every request with one LF-delimited JSON object and echo the request `id` exactly.
 - `list`, `inspect`, `validate`, `prompts`, `prompt`, `skills`, and `skill` read metadata or static resources only; they do not start the plugin process.
@@ -309,13 +312,15 @@ Manifest rules:
 - `api_version` must match a supported AVA plugin API version.
 - The entrypoint runs with the plugin directory as its working directory. Use `/bin/sh plugin.sh` for scripts that should not depend on executable mode, or a relative path with a slash such as `./plugin` for executable files inside the plugin directory.
 - `contributes` may declare static contributions that AVA can inspect before execution.
-- Runtime registration may add dynamic contributions only after handshake and core-side validation.
+- Registered contributions come from the validated manifest in this runtime. The initialize response's `contributions` JSON is not a runtime registration channel for tools or commands; explicit capability-gated dynamic prompt/skill resource requests are a separate surface.
 - Unknown manifest fields are ignored unless they appear under a schema-controlled contribution object.
 - Invalid contributions are disabled individually when possible; invalid manifests disable the plugin.
 
 ## Plugin Protocol
 
 The plugin runner uses strict LF-delimited JSON records. Stderr is diagnostics only and is bounded. Stdout is protocol only.
+
+AVA removes JSON whitespace outside strings before sending each request, so pretty-printed, multi-line arguments still occupy one transport line. String contents and JSON escapes are preserved. A raw CR or LF inside a string is a protocol error; encode text line breaks as `\r` or `\n` JSON escapes instead.
 
 Minimum handshake:
 
@@ -564,9 +569,10 @@ Minimum regression coverage:
 ## 1.0 Decisions
 
 - Plugin manifests are JSON only for 1.0. TOML can be reconsidered later if AVA's broader config format settles on TOML.
-- Project plugin enablement is stored outside the repository by default under `$XDG_STATE_HOME/ava/plugin-enablement.json`, falling back to `~/.local/state/ava/plugin-enablement.json`. The state file is keyed by canonical workspace path and plugin id so a repository cannot enable executable plugin code for other users by committing `.ava` files.
+- Project plugin enablement is stored outside the repository by default under `$XDG_STATE_HOME/ava/plugin-enablement.json`, falling back to `~/.local/state/ava/plugin-enablement.json`. The state file is keyed by normalized absolute logical workspace path, plugin id, and scope, rather than physical canonical identity, so symlink aliases can have separate entries. A repository cannot enable executable plugin code for other users by committing `.ava` files.
 - Global plugin enablement uses the same state file with a global scope key. Explicit config may discover global plugins, but execution still requires enablement unless the plugin ships as a trusted built-in later.
 - Built-in tool names are reserved. Plugin tool model names use `plugin_<sanitized_plugin_id>_<tool_name>` by default. MCP tool model names use `mcp_<sanitized_server_id>_<tool_name>` by default. MCP resource tool names use `mcp_<sanitized_server_id>_resource_<16_hex_server_id_hash>_<16_hex_uri_hash>` so provider-visible names are bounded, stable by server id and resource URI, and do not reveal raw resource inventory before `mcp.resource.read` approval. Name collisions disable the later contribution and produce diagnostics instead of overriding a tool silently.
+  Plugin model-tool collisions are recorded as diagnostic failures visible in `/plugins failures`. Plugin/MCP registry collisions use bounded debug output in debug builds, not unconditional stderr diagnostics. The later contribution remains disabled; exact session-MCP composition still rejects a collision rather than silently changing its tool set.
 - Stdio MCP transport is required for 1.0. Streamable HTTP MCP remains strongly desired, not required.
 - Plugin process launch uses a separate permission category from shell commands. If a plugin asks AVA to run a shell command through the core service proxy, that proxied command still goes through the normal shell policy.
 - Plugin and MCP stderr capture is bounded. The initial target is an in-memory tail of the last 64 KiB per process, with larger log spill files deferred until diagnostics prove the need.

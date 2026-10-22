@@ -3,6 +3,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
 #include "ava/session/session_store_internal.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
@@ -37,32 +38,8 @@ using detail::parse_strict_session_record;
 using detail::path_io_error;
 using detail::same_directory_identity;
 using detail::same_file_identity;
-using detail::ScopedFd;
 using detail::strict_session_record_error;
 using detail::validate_read_limits;
-
-bool write_all(int fd, std::string_view bytes, int& error_number)
-{
-  std::size_t written = 0;
-  while (written < bytes.size())
-  {
-    auto const count = ::write(fd, bytes.data() + written, bytes.size() - written);
-    if (count < 0)
-    {
-      if (errno == EINTR)
-        continue;
-      error_number = errno;
-      return false;
-    }
-    if (count == 0)
-    {
-      error_number = EIO;
-      return false;
-    }
-    written += static_cast<std::size_t>(count);
-  }
-  return true;
-}
 
 ava::core::VoidResult check_recovery_cancellation(SessionCancelCallback const& cancel_requested)
 {
@@ -140,7 +117,7 @@ ava::core::Result<std::filesystem::path> quarantine_session_suffix(int parent_fd
     auto const final_path = anchored_child_diagnostic_path(parent_fd, final_name, parent_path);
     auto const temporary_path = anchored_child_diagnostic_path(parent_fd, temporary_name, parent_path);
 
-    ScopedFd quarantine_fd(::openat(parent_fd, temporary_name.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600));
+    ava::core::UniqueFd quarantine_fd(::openat(parent_fd, temporary_name.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600));
     if (quarantine_fd.get() < 0)
     {
       if (errno == EEXIST)
@@ -225,11 +202,10 @@ ava::core::Result<std::filesystem::path> quarantine_session_suffix(int parent_fd
           .with_context("link_count", std::to_string(initial_status.st_nlink));
       return abandon_prepublication(std::move(error));
     }
-    int write_error = 0;
-    if (!write_all(quarantine_fd.get(), suffix, write_error))
+    if (int const write_error = ava::core::write_all(quarantine_fd.get(), suffix); write_error != 0)
       return prepublication_io_failure("failed to write session recovery quarantine", write_error);
-    if (fdatasync(quarantine_fd.get()) != 0)
-      return prepublication_io_failure("failed to sync session recovery quarantine", errno);
+    if (int const sync_error = ava::core::fdatasync_with_restart(quarantine_fd.get()); sync_error != 0)
+      return prepublication_io_failure("failed to sync session recovery quarantine", sync_error);
     if (fstat(quarantine_fd.get(), &initial_status) != 0)
       return prepublication_io_failure("failed to re-inspect temporary session recovery quarantine", errno);
 
@@ -258,11 +234,32 @@ ava::core::Result<std::filesystem::path> quarantine_session_suffix(int parent_fd
       return abandon_prepublication(std::move(error));
     }
 
+    int publication_error = 0;
+    int empty_path_error = 0;
     if (::linkat(quarantine_fd.get(), "", parent_fd, final_name.c_str(), AT_EMPTY_PATH) != 0)
     {
-      int const error_number = errno;
-      auto failed = prepublication_io_failure("failed to publish exact session recovery quarantine inode", error_number);
-      if (error_number == EEXIST)
+      publication_error = errno;
+      if (publication_error == ENOENT || publication_error == EPERM)
+      {
+        // Older kernels require CAP_DAC_READ_SEARCH for AT_EMPTY_PATH. The
+        // link(2) procfs alternative still links this exact open descriptor.
+        empty_path_error = publication_error;
+        auto const descriptor_path = ava::core::descriptor_proc_path(quarantine_fd.get());
+        publication_error = ::linkat(AT_FDCWD, descriptor_path.c_str(), parent_fd, final_name.c_str(), AT_SYMLINK_FOLLOW) == 0 ? 0 : errno;
+      }
+    }
+    if (publication_error != 0)
+    {
+      auto error = path_io_error("failed to publish exact session recovery quarantine inode", temporary_path, publication_error);
+      if (empty_path_error != 0)
+      {
+        error.with_context("session_path", (parent_path / session_name).string())
+            .with_context("at_empty_path_cause", std::strerror(empty_path_error))
+            .with_context("proc_self_fd_cause", std::strerror(publication_error))
+            .with_context("recovery", "ensure /proc/self/fd is accessible and permits linking the open quarantine descriptor");
+      }
+      auto failed = abandon_prepublication(std::move(error));
+      if (publication_error == EEXIST)
         continue;
       return failed;
     }
@@ -300,7 +297,7 @@ ava::core::Result<std::filesystem::path> quarantine_session_suffix(int parent_fd
     }
 
     int const close_error = quarantine_fd.close_checked();
-    int const sync_error = fsync(parent_fd) == 0 ? 0 : errno;
+    int const sync_error = ava::core::fsync_with_restart(parent_fd);
     if (close_error != 0)
     {
       auto error = path_io_error("session recovery quarantine was published but its descriptor close failed", final_path, close_error);
@@ -355,11 +352,11 @@ ava::core::Result<std::optional<std::filesystem::path>> SessionStore::recover_to
   auto& append_mutex = append_mutex_for_path(path);
   std::lock_guard append_lock(append_mutex);
 
-  ScopedFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   if (parent_fd.get() < 0)
     return std::unexpected(path_io_error("failed to open the session directory for torn tail recovery", parent_path, errno));
-  ScopedFd repair_fd;
-  auto close_fd = [](ScopedFd& fd) { return fd.close_checked(); };
+  ava::core::UniqueFd repair_fd;
+  auto close_fd = [](ava::core::UniqueFd& fd) { return fd.close_checked(); };
   auto close_both_best_effort = [&] {
     static_cast<void>(close_fd(repair_fd));
     static_cast<void>(close_fd(parent_fd));
@@ -607,9 +604,9 @@ ava::core::Result<std::optional<std::filesystem::path>> SessionStore::recover_to
       close_both_best_effort();
       return std::unexpected(std::move(error));
     }
-    if (fdatasync(repair_fd.get()) != 0)
+    if (int const sync_error = ava::core::fdatasync_with_restart(repair_fd.get()); sync_error != 0)
     {
-      auto error = path_io_error("failed to sync final LF during torn tail recovery", path, errno);
+      auto error = path_io_error("failed to sync final LF during torn tail recovery", path, sync_error);
       close_both_best_effort();
       return std::unexpected(std::move(error));
     }
@@ -673,9 +670,9 @@ ava::core::Result<std::optional<std::filesystem::path>> SessionStore::recover_to
     close_both_best_effort();
     return std::unexpected(std::move(error));
   }
-  if (fdatasync(repair_fd.get()) != 0)
+  if (int const sync_error = ava::core::fdatasync_with_restart(repair_fd.get()); sync_error != 0)
   {
-    auto error = path_io_error("session tail was truncated but the source sync failed", path, errno);
+    auto error = path_io_error("session tail was truncated but the source sync failed", path, sync_error);
     error.with_context("quarantine_path", quarantined->string());
     close_both_best_effort();
     return std::unexpected(std::move(error));
@@ -837,12 +834,12 @@ ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> SessionStore::re
   auto const session_name = path.filename().string();
   auto& append_mutex = append_mutex_for_path(path);
   std::lock_guard append_lock(append_mutex);
-  ScopedFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   if (parent_fd.get() < 0)
   {
     return std::unexpected(path_io_error("failed to open the session directory for assistant-output suffix recovery", parent_path, errno));
   }
-  ScopedFd repair_fd(::openat(parent_fd.get(), session_name.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
+  ava::core::UniqueFd repair_fd(::openat(parent_fd.get(), session_name.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
   if (repair_fd.get() < 0)
   {
     auto error = path_io_error("failed to securely open the original session path for assistant-output suffix recovery", path, errno);
@@ -1117,9 +1114,9 @@ ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> SessionStore::re
     close_both_best_effort();
     return std::unexpected(std::move(error));
   }
-  if (fdatasync(repair_fd.get()) != 0)
+  if (int const sync_error = ava::core::fdatasync_with_restart(repair_fd.get()); sync_error != 0)
   {
-    auto error = path_io_error("assistant-output suffix was truncated but the source sync failed", path, errno);
+    auto error = path_io_error("assistant-output suffix was truncated but the source sync failed", path, sync_error);
     error.with_context("quarantine_path", quarantined->string());
     close_both_best_effort();
     return std::unexpected(std::move(error));

@@ -46,10 +46,16 @@ struct CommandResult
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+struct CommandRegistryEntry;
+
 [[nodiscard]] bool is_backend_command(std::string_view line) noexcept;
+// Session-aware recognition for catalog, aliases, skills, plugins, and prompt files.
+// Does not launch MCP servers; MCP prompt aliases are resolved only at submission time.
 [[nodiscard]] bool is_backend_command_1(std::string_view line, runtime::session_ts& unlocked_session);
 [[nodiscard]] std::string command_help_text(std::vector<CommandHotkey> const& hotkeys = {});
 [[nodiscard]] std::string command_hotkeys_text(std::vector<CommandHotkey> const& hotkeys = {});
 [[nodiscard]] ava::core::Result<CommandResult> run_command(runtime::session_ts& unlocked_session, CommandRequest request);
+[[nodiscard]] ava::core::Result<CommandResult> run_registry_command(runtime::session_ts& unlocked_session, CommandRequest request,
+                                                                    CommandRegistryEntry const& entry);
 
 }  // namespace ava::app

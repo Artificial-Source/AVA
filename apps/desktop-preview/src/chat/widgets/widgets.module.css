@@ -1,0 +1,20 @@
+.eyebrow { margin: 0 0 var(--space-3); color: var(--quiet); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.title { margin: 0; color: var(--text); font-size: 15px; line-height: 1.5; font-weight: 550; overflow-wrap: anywhere; }
+.description { margin: var(--space-3) 0; color: var(--body); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.scope { margin: var(--space-3) 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.state { display: block; margin: var(--space-3) 0; color: var(--quiet); font-size: 11px; line-height: 1.6; }
+.target { display: block; padding: var(--space-3); border-radius: var(--radius-control); background: var(--code); color: var(--body); font-size: 12px; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
+.fields { display: grid; gap: var(--space-3); min-width: 0; margin: var(--space-4) 0; padding: 0; border: 0; }
+.fields legend { padding: 0 0 var(--space-3); color: var(--muted); font-size: 12px; }
+.fields:disabled { opacity: .65; }
+.choice { display: flex; align-items: baseline; gap: var(--space-2); color: var(--body); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.choice input { flex-shrink: 0; }
+.field { display: grid; gap: var(--space-2); color: var(--muted); font-size: 12px; }
+.input { width: 100%; min-width: 0; min-height: var(--control-height); padding: 8px 10px; border: 1px solid var(--edge-bright); border-radius: var(--radius-control); color: var(--text); background: var(--code); font: inherit; }
+.input:focus-visible, .choice input:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.output { flex-basis: 100%; min-width: 0; }
+.output pre { max-height: 220px; overflow: auto; margin: 6px 0; padding: var(--space-3); border-radius: var(--radius-control); background: var(--code); white-space: pre-wrap; overflow-wrap: anywhere; }
+.caret { transition: transform var(--motion-panel-duration) var(--motion-ease-out); }
+.excerptToggle { margin: 0 0 var(--space-3); padding: 5px 0; background: transparent; color: var(--muted); text-align: left; font-size: 12px; }
+.excerptToggle:hover { color: var(--text); }

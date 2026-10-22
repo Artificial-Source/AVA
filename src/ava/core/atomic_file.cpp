@@ -1,5 +1,7 @@
 #include "sys.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/atomic_file.h"
+#include "ava/core/fd_io.h"
 
 #include <cerrno>
 #include <cstring>
@@ -11,36 +13,6 @@
 
 namespace ava::core {
 namespace {
-
-class ScopedFd
-{
- public:
-  explicit ScopedFd(int fd) : fd_(fd) { }
-  ScopedFd(ScopedFd const&) = delete;
-  ScopedFd& operator=(ScopedFd const&) = delete;
-  ScopedFd(ScopedFd&& other) noexcept : fd_(std::exchange(other.fd_, -1)) { }
-  ScopedFd& operator=(ScopedFd&& other) noexcept
-  {
-    if (this != &other)
-    {
-      close_if_open();
-      fd_ = std::exchange(other.fd_, -1);
-    }
-    return *this;
-  }
-  ~ScopedFd() { close_if_open(); }
-
-  [[nodiscard]] int get() const noexcept { return fd_; }
-
- private:
-  void close_if_open() noexcept
-  {
-    if (fd_ >= 0)
-      static_cast<void>(::close(fd_));
-  }
-
-  int fd_ = -1;
-};
 
 class TempPathCleanup
 {
@@ -77,9 +49,9 @@ class TempPathCleanup
   bool active_ = true;
 };
 
-std::string errno_message()
+std::string errno_message(int error_number = errno)
 {
-  return std::strerror(errno);
+  return std::strerror(error_number);
 }
 
 std::string describe(std::string_view description)
@@ -117,31 +89,21 @@ VoidResult reject_unsafe_replace_target(std::filesystem::path const& path, std::
 
 VoidResult write_all_to_fd(int fd, std::string_view body, std::filesystem::path const& path, std::string_view description)
 {
-  std::size_t offset = 0;
-  while (offset < body.size())
-  {
-    auto const written = ::write(fd, body.data() + offset, body.size() - offset);
-    if (written < 0)
-    {
-      if (errno == EINTR)
-        continue;
-      auto error = file_error(ErrorCategory::Io, "failed to write " + describe(description), path);
-      error.with_context("cause", errno_message());
-      return std::unexpected(std::move(error));
-    }
-    if (written == 0)
-      return std::unexpected(file_error(ErrorCategory::Io, describe(description) + " write made no progress", path));
-    offset += static_cast<std::size_t>(written);
-  }
-  return {};
+  int const error_number = ava::core::write_all(fd, body);
+  if (error_number == 0)
+    return {};
+  auto error = file_error(ErrorCategory::Io, "failed to write " + describe(description), path);
+  error.with_context("cause", errno_message(error_number));
+  return std::unexpected(std::move(error));
 }
 
 VoidResult fsync_fd(int fd, std::filesystem::path const& path, std::string_view description)
 {
-  if (::fsync(fd) == 0)
+  int const error_number = fsync_with_restart(fd);
+  if (error_number == 0)
     return {};
   auto error = file_error(ErrorCategory::Io, "failed to sync " + describe(description), path);
-  error.with_context("cause", errno_message());
+  error.with_context("cause", errno_message(error_number));
   return std::unexpected(std::move(error));
 }
 
@@ -150,10 +112,10 @@ void fsync_parent_best_effort(std::filesystem::path const& path)
   auto const parent = path.parent_path();
   if (parent.empty())
     return;
-  ScopedFd const dir_fd(::open(parent.c_str(), O_RDONLY | O_CLOEXEC));
+  ava::core::UniqueFd const dir_fd(::open(parent.c_str(), O_RDONLY | O_CLOEXEC));
   if (dir_fd.get() < 0)
     return;
-  static_cast<void>(::fsync(dir_fd.get()));
+  static_cast<void>(fsync_with_restart(dir_fd.get()));
 }
 
 }  // namespace
@@ -180,7 +142,7 @@ VoidResult write_text_file_atomic(std::filesystem::path const& path, std::string
   for (int attempt = 0; attempt < 100; ++attempt)
   {
     auto const temp_path = parent / (basename + ".tmp." + std::to_string(::getpid()) + "." + std::to_string(attempt));
-    ScopedFd const fd(::open(temp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, S_IRUSR | S_IWUSR));
+    ava::core::UniqueFd const fd(::open(temp_path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, S_IRUSR | S_IWUSR));
     if (fd.get() < 0)
     {
       if (errno == EEXIST)

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/permissions/permission_rules_internal.h"
+#include "ava/core/fd_io.h"
 
 #include <array>
 #include <cerrno>
@@ -19,42 +20,6 @@
 namespace ava::permissions::permission_rules_internal {
 
 constexpr std::size_t kMaxPermissionRulesFileBytes = 1024 * 1024;
-
-ScopedFd::ScopedFd() = default;
-
-ScopedFd::ScopedFd(int fd) : fd_(fd)
-{
-}
-
-ScopedFd::ScopedFd(ScopedFd&& other) noexcept : fd_(std::exchange(other.fd_, -1))
-{
-}
-
-ScopedFd& ScopedFd::operator=(ScopedFd&& other) noexcept
-{
-  if (this != &other)
-  {
-    close_if_open();
-    fd_ = std::exchange(other.fd_, -1);
-  }
-  return *this;
-}
-
-ScopedFd::~ScopedFd()
-{
-  close_if_open();
-}
-
-int ScopedFd::get() const noexcept
-{
-  return fd_;
-}
-
-void ScopedFd::close_if_open() noexcept
-{
-  if (fd_ >= 0)
-    static_cast<void>(::close(fd_));
-}
 
 namespace {
 
@@ -102,36 +67,34 @@ class TempPathCleanup final
 
 ava::core::VoidResult write_all_to_fd(int fd, std::string_view body, std::filesystem::path const& path)
 {
-  std::size_t offset = 0;
-  while (offset < body.size())
-  {
-    auto const written = ::write(fd, body.data() + offset, body.size() - offset);
-    if (written < 0)
-    {
-      auto error = rule_file_error(ava::core::ErrorCategory::Io, "failed to write permission rules file", path);
-      error.with_context("cause", errno_message());
-      return std::unexpected(std::move(error));
-    }
-    if (written == 0)
-    {
-      return std::unexpected(rule_file_error(ava::core::ErrorCategory::Io, "permission rules file write made no progress", path));
-    }
-    offset += static_cast<std::size_t>(written);
-  }
-  return {};
+  int const error_number = ava::core::write_all(fd, body);
+  if (error_number == 0)
+    return {};
+  auto error = rule_file_error(ava::core::ErrorCategory::Io, "failed to write permission rules file", path);
+  error.with_context("cause", errno_message(error_number));
+  return std::unexpected(std::move(error));
 }
 
 ava::core::VoidResult fsync_fd(int fd, std::filesystem::path const& path, std::string_view message)
 {
-  if (::fsync(fd) == 0)
+  int const error_number = ava::core::fsync_with_restart(fd);
+  if (error_number == 0)
     return {};
   auto error = rule_file_error(ava::core::ErrorCategory::Io, std::string(message), path);
-  error.with_context("cause", errno_message());
+  error.with_context("cause", errno_message(error_number));
   return std::unexpected(std::move(error));
 }
 
 ava::core::VoidResult write_rules_file_atomic(RuleDirectory const& directory, std::string_view body)
 {
+  if (body.size() > kMaxPermissionRulesFileBytes)
+  {
+    auto error = rule_file_error(ava::core::ErrorCategory::InvalidArgument, "permission rules file capacity exceeded; remove existing rules before adding more",
+                                 directory.path / directory.file_name);
+    error.with_context("max_bytes", std::to_string(kMaxPermissionRulesFileBytes));
+    error.with_context("candidate_bytes", std::to_string(body.size()));
+    return std::unexpected(std::move(error));
+  }
   if (auto checked = validate_unsafe_replace_target(directory); !checked)
     return checked;
 
@@ -139,7 +102,8 @@ ava::core::VoidResult write_rules_file_atomic(RuleDirectory const& directory, st
   for (int attempt = 0; attempt < 100; ++attempt)
   {
     auto const temp_name = directory.file_name + ".tmp." + std::to_string(::getpid()) + "." + std::to_string(attempt);
-    ScopedFd const fd(::openat(directory.fd.get(), temp_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR));
+    ava::core::UniqueFd const fd(
+        ::openat(directory.fd.get(), temp_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR));
     if (fd.get() < 0)
     {
       if (errno == EEXIST)
@@ -188,7 +152,7 @@ ava::core::VoidResult write_rules_file_atomic(RuleDirectory const& directory, st
 ava::core::Result<std::optional<std::string>> read_rules_text_if_exists(RuleDirectory const& directory)
 {
   auto const path = directory.path / directory.file_name;
-  ScopedFd const fd(::openat(directory.fd.get(), directory.file_name.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
+  ava::core::UniqueFd const fd(::openat(directory.fd.get(), directory.file_name.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
   if (fd.get() < 0)
   {
     if (errno == ENOENT)

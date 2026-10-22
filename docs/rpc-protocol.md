@@ -50,7 +50,7 @@ Every stdout record is either a response (`type:"response"`) or an event (`schem
 {"id":"client-1","type":"get_state","protocol_version":1}
 ```
 
-`id` and `type` are required non-empty strings. Command payload members are top-level. Unknown/additive members, including members belonging to another command, are ignored when their names are unique. Duplicate names are always invalid, including inside additive objects. A member recognized by the selected command is different: if present it must have the documented JSON type and valid value; wrong-typed optional members are errors, not defaults.
+`id` and `type` are required non-empty strings. Command payload members are top-level. Unknown/additive members, including members belonging only to another command, are ignored when their names are unique. Duplicate names are always invalid, including inside additive objects. A member recognized by the selected command is different: if present it must have the documented JSON type and valid value; wrong-typed optional members are errors, not defaults. A recognized member may also be forbidden: `list_jobs` recognizes `job_id` but rejects its presence rather than ignoring it.
 
 ### Success
 
@@ -93,7 +93,7 @@ Client request IDs and resolver `request_id`/`correlation_id` values are non-emp
 - Automatic subagent delivery uses an AVA-owned `automatic_delivery_...` run request identity distinct from both the coordinator's `delivery_attempt_...` identity and every client prompt request ID.
 - `event_id`, `session_id`, `run_id`, `turn_id`, `message_id`, and tool `call_id` are AVA-owned.
 
-Prompt success contains `session_id`, `final_text`, `stop_reason`, `provider_iterations`, `tool_calls`, and optional `tool_timeline`. Command-dispatch success contains `handled`, `quit`, `output`, `text`, and optional `tool_timeline`. State results contain protocol/session/workspace/mode/model/cancel/reasoning/context metadata. Lists and session/model results are bounded and additive.
+Prompt success contains `session_id`, `final_text`, `stop_reason`, `provider_iterations`, `tool_calls`, and optional `tool_timeline`. Command-dispatch success contains `handled`, `quit`, `output`, `text`, and optional `tool_timeline`. For command dispatch, `success:true` means dispatch returned a command result, not that the requested operation succeeded: denied writes and other operation failures can be reported in `output`/`text` or tool statuses. Do not treat that envelope as confirmation that a side effect occurred. State results contain protocol/session/workspace/mode/model/cancel/reasoning/context metadata. Lists and session/model results are bounded and additive.
 
 Session title queries use one effective-title rule: a manual `name` wins whenever any manual name has been persisted, including explicit empty suppression; otherwise `generated_title` is used. `list_sessions.sessions[].title` and each `session_tree.sessions[].title` serialize that effective title. Tree nodes and `session_metadata` additionally serialize `name`, `generated_title`, and `has_manual_name`, allowing clients to distinguish untitled sessions from manual-empty suppression. Automatic fallback/refinement metadata is observable through these existing query commands; protocol v1 defines no live automatic-title event.
 
@@ -112,6 +112,8 @@ Interactive slash `/jobs` is a separate human-readable surface over the same own
 List and status omit terminal `summary`, `error`, and `message`. Result requests include a bounded completed `summary`; failed results include only stable `status`, sanitized `message`, and `error_category`; canceled/interrupted results include only stable status and a sanitized message. Snapshots never expose filesystem paths, coordinator state/errors, provider bodies, commands/arguments, credentials, or formatted error context. An unfinished result returns stable `job_not_ready`.
 
 ### Permission request/reply
+
+RPC permission round-trips cover prompt execution and direct `run_bash`/`run_command` runs. The initial slash-command dispatch for `invoke_command`, and the `export`/`export_html`, plugin, and MCP command routes, run synchronously using the headless/print permission policy wrapped by persistent rules. An unmatched `Ask` on those synchronous routes is denied immediately: it does not emit `permission_requested` or wait for `permission_reply`. An applicable headless policy or persistent rule is required to allow it. If `invoke_command` returns a prompt command, the subsequent prompt run uses the RPC permission and question resolvers normally.
 
 `permission_requested.payload` includes `resolver_request_id`, optional durable `permission_request_id`, `operation`, `mode`, `target_path`, `command`, `tool_name`, `reason`, `risk`, and optional `diff_preview`/`diff_truncated`. Reply with `decision` equal to `allow`, `allow_session`, or `deny`; optional `reason` is at most 1024 bytes. `allow_session` creates an in-memory exact-match grant for this RPC process. Sealed commands bind that grant to the stable workspace recipe key supplied by backend metadata rather than raw command text; commands whose backend scope is one-shot cannot create a reusable grant. Persistent allow/deny rules are separate commands and never override built-in hard denies.
 
@@ -143,11 +145,37 @@ Session grant serialization (`permission_grants` result) includes additive `comm
 
 ### Question request/reply
 
-`question_requested.payload` includes `resolver_request_id`, `header`, `question`, option objects (`value`, `label`), and `multiple`, `allow_custom`, `secret`, `modal`, `searchable`. A single-select reply uses one of string `answer` or string `selected`. A multi-select reply may use string-array `selected_options` and, when allowed, string `answer`. Values must match current options; wrong types, duplicates, or invalid combinations do not resolve the pending question.
+`question_requested.payload` includes `resolver_request_id`, `header`, `question`, option objects (`value`, `label`), and `multiple`, `allow_custom`, `secret`, `modal`, `searchable`.
+
+- String `answer` is custom text, accepted only when `allow_custom:true`; it need not match an option. When custom text is disabled, even an `answer` equal to an option value is rejected.
+- String `selected` and string-array `selected_options` contain exact current option `value` strings, not labels. They are mutually exclusive.
+- A single-select reply uses exactly one of `answer`, `selected`, or a one-element `selected_options` array. It cannot combine custom text with an option.
+- A multi-select reply may use `selected` for one option or `selected_options` for several (including an empty array), optionally combined with `answer` when custom text is allowed; custom text alone is also accepted.
+
+Wrong types, duplicate selections, unknown option values, or invalid combinations do not resolve the pending question. Request size limits below apply to every answer/selection value.
 
 ### Images
 
 `prompt.attachments` is an array of non-empty local image paths. `prompt.images` is an array of `{"type":"image","data":"<standard-base64>","mimeType":"image/png"}` (snake-case `mime_type` is accepted when aliases agree). Combined input is at most 16 PNG/JPEG/WebP/GIF images. AVA verifies regular files/bytes, MIME/signature, limits, hash, and session-owned storage before provider use; responses/session messages expose metadata, never uploaded raw bytes.
+
+### Request text limits
+
+Limits measure decoded UTF-8 string bytes, not JSON escape spelling; the 32 MiB request-record cap also applies.
+
+| Request field | Maximum |
+| --- | ---: |
+| `question_reply.answer`, `selected`, each `selected_options[]` value | 8,192 bytes each |
+| `question_reply.selected_options` | 64 values |
+| `summarize_branch.summary` | 8,192 bytes |
+| `run_bash.command`, `run_command.command` | 8,192 bytes |
+| `export_html.outputPath` / `output_path` | 8,192 bytes |
+| `invoke_command.command_arguments` | 16 MiB |
+
+### Bounded message history
+
+`get_messages` retains eligible visible entries in source order, stopping at the first entry that would exceed either 1,000 entries or the 1 MiB serialized-result budget. It returns an oldest prefix, not a newest-history window; recent messages may be absent. Result `message_count` counts returned entries and `truncated` reports omitted eligible entries.
+
+An individual sanitized, legacy-compatible entry larger than 8,192 serialized bytes is replaced by a metadata-only envelope containing `version`, `id`, `parent_id`, `type`, `timestamp`, `truncated:true`, and `original_bytes`; it has no `data` member. These envelopes still count as returned entries, independently of result-level `truncated`. Ordered assistant detail is added only after the retained legacy-compatible entry set is selected and only when both byte budgets still fit, with the omission markers described above.
 
 ## Lifecycle, Admission, And Interleaving
 
@@ -180,11 +208,11 @@ The payload column defines recognized fields. Unless marked required, listed fie
 | `permission_rules` | No payload. Lists persistent global/workspace rules and files. |
 | `permission_rule_add` | Required strings `action`, `operation`, `reason`; optional `scope`, `mode`, `tool_name`, `target_path`/`path`, `command`, `command_recipe_key`, `recipe_display`, and boolean `critical_acknowledged`. Adds/emits a rule under backend validation. |
 | `permission_rule_remove` | Required string `rule_id`. Removes/emits a persistent rule. |
-| `get_messages` | No payload. Returns bounded visible message-like entries; hides internal replay and secrets/signatures. |
+| `get_messages` | No payload. Returns an oldest prefix of bounded visible message-like entries; hides internal replay and secrets/signatures. See [Bounded message history](#bounded-message-history). |
 | `get_session_stats` | No payload. Returns bounded entry/usage/cost/type statistics. |
 | `validate_session` | No payload. Returns replay validation issues and counts. |
 | `list_sessions` | No payload. Lists workspace sessions. |
-| `list_jobs` | No payload. Returns owner-scoped bounded public job snapshots without terminal content. |
+| `list_jobs` | No accepted payload. `job_id` is recognized but forbidden and produces `invalid_request` when present. Returns owner-scoped bounded public job snapshots without terminal content. |
 | `get_job` | Required string `job_id`. Returns one owner-scoped public status snapshot without terminal content. |
 | `wait_job` | Required string `job_id`; optional positive integer `timeout_ms`, capped at 30000 (default 1000). Returns a snapshot with `timed_out:true` when still running. |
 | `get_job_result` | Required string `job_id`. Returns bounded safe terminal content, or stable `job_not_ready`. |
@@ -209,14 +237,14 @@ The payload column defines recognized fields. Unless marked required, listed fie
 | `run_command` | Same as `run_bash`; v1 compatibility alias, not arbitrary slash dispatch. It remains supported for the lifetime of protocol v1; new clients should prefer `run_bash`. |
 | `compact` | Optional string `instructions`. Runs provider-backed `/compact`, emits lifecycle/retry events, returns command result. |
 | `export` | No payload. Returns Markdown export through command result text/output. |
-| `export_html` | Optional string `outputPath` or `output_path` (aliases must agree). Returns HTML or permissioned write summary. |
+| `export_html` | Optional string `outputPath` or `output_path` (aliases must agree). Returns HTML or a write summary under the synchronous headless permission policy, not an RPC approval round-trip. |
 | `context` | No payload. Returns loaded prompt/context source diagnostics through command result. |
 | `list_commands` | No payload. Returns unified built-in/prompt/skill/plugin/MCP command registry. |
-| `invoke_command` | Required string `name`; optional string `command_arguments`. Dispatches a named registry command; prompt commands become prompt runs. |
+| `invoke_command` | Required string `name`; optional string `command_arguments`. Dispatches a named slash/registry command synchronously under headless permission policy; returned prompt commands become RPC prompt runs. |
 | `list_plugins` | No payload. Lists local discovered plugin state. |
 | `plugin_failures` | No payload. Lists plugin diagnostics. |
 | `inspect_plugin` | Required string `plugin_id`. Returns plugin inspection output. |
-| `install_plugin` | Required string `path`. Installs a local plugin directory through permissioned plugin command handling. |
+| `install_plugin` | Required string `path`. Installs a local plugin directory through synchronous plugin command handling under headless permission policy. |
 | `remove_plugin` | Required string `plugin_id`. Removes a managed local plugin. |
 | `enable_plugin` | Required string `plugin_id`. Records enablement. |
 | `disable_plugin` | Required string `plugin_id`. Records disablement. |
@@ -225,7 +253,7 @@ The payload column defines recognized fields. Unless marked required, listed fie
 | `get_plugin_prompt` | Required strings `plugin_id`, `name`. Returns one prompt resource. |
 | `list_plugin_skills` | Required string `plugin_id`. Lists static skill resources. |
 | `get_plugin_skill` | Required strings `plugin_id`, `name`. Returns one skill resource. |
-| `run_plugin_command` | Required strings `plugin_id`, `name`; optional object `arguments` (legacy stringified object accepted). Runs through plugin permissions/events. |
+| `run_plugin_command` | Required strings `plugin_id`, `name`; optional object `arguments` (legacy stringified object accepted). Runs through synchronous plugin permissions/events under headless permission policy. |
 | `list_mcp_servers` | No payload. Lists configured stdio MCP servers. |
 | `inspect_mcp_server` | Required string `server_id`. Returns server diagnostics/config summary. |
 | `list_mcp_tools` | Required string `server_id`. Starts bounded discovery and returns tools. |

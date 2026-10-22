@@ -623,6 +623,69 @@ void test_stop_reasons_and_limits()
   }
 }
 
+void test_streaming_deadline_before_eof()
+{
+  for (bool const reject_chunk : {false, true})
+  {
+    CurlFixture fixture;
+    auto const token = "deadline-" + std::to_string(::getpid()) + (reject_chunk ? "-sink-error" : "-eof");
+    auto const gate = "/tmp/ava-curl-stream-gate-" + token;
+    errno = 0;
+    expect(::access(gate.c_str(), F_OK) == -1 && errno == ENOENT, "deadline fixture leaves the fake curl completion gate closed");
+    bool gate_entered = false;
+    bool observed_deadline = false;
+    bool gate_within_bound = false;
+    std::size_t sink_bytes = 0;
+    auto const started = std::chrono::steady_clock::now();
+    auto const observation_deadline = started + 900ms;
+    auto response = fixture.transport.send_streaming(request_for("/stream-gate-" + token, 120), [&](std::string_view chunk) -> ava::core::VoidResult {
+      gate_entered = true;
+      sink_bytes += chunk.size();
+      // Hold the caller after real body progress until the independent monitor
+      // finishes. A successful sink then reaches deadline-caused EOF before try_wait.
+      while (std::chrono::steady_clock::now() < observation_deadline)
+      {
+        auto const cycle = ava::process::testing::SupervisorTestAccess::monitor_cycle(*fixture.supervisor);
+        auto const snapshot = fixture.supervisor->snapshot();
+        auto const* record = snapshot.records.size() == 1 ? &snapshot.records.front() : nullptr;
+        if (record != nullptr && record->state == ava::process::ProcessStateV1::Finished)
+        {
+          observed_deadline = settled_record(record, ava::process::TerminationReasonV1::DeadlineExpired) && snapshot.live_records == 0;
+          break;
+        }
+        if (!ava::process::testing::SupervisorTestAccess::wait_for_monitor_cycle(*fixture.supervisor, cycle, observation_deadline))
+          break;
+      }
+      gate_within_bound = std::chrono::steady_clock::now() < observation_deadline;
+      if (reject_chunk)
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "original sink failure"));
+      return {};
+    });
+    auto const elapsed = std::chrono::steady_clock::now() - started;
+    fixture.capture_snapshot();
+    expect(gate_entered && sink_bytes > 0, "deadline EOF regression enters its sink gate with real body progress");
+    expect(observed_deadline && gate_within_bound && elapsed < 1500ms,
+           "sink gate observes the independent monitor's finished deadline within its bound and preserves the request elapsed ceiling");
+    if (reject_chunk)
+    {
+      expect(!response && response.error().category() == ava::core::ErrorCategory::Tool && response.error().code() == ava::core::ErrorCode::Unspecified &&
+                 response.error().message() == "original sink failure",
+             "a sink error returned after committed deadline settlement remains the original error");
+    }
+    else
+    {
+      expect(!response && response.error().category() == ava::core::ErrorCategory::Provider && response.error().code() == ava::core::ErrorCode::Unspecified &&
+                 response.error().message() == "curl transport deadline expired",
+             "deadline-caused EOF cannot replace the committed deadline with a missing status trailer error");
+    }
+    auto const* record = fixture.only_record();
+    expect(settled_record(record, ava::process::TerminationReasonV1::DeadlineExpired) && record->stdout_bytes >= sink_bytes && record->stderr_bytes > 0 &&
+               fixture.snapshot.live_records == 0,
+           "deadline EOF regression retains raw progress and one complete Curl settlement with no live records");
+    expect(no_waitable_immediate_child(), "deadline EOF regression leaves no waitable immediate child");
+  }
+}
+
 void test_group_cleanup_and_stderr_truncation()
 {
   {
@@ -740,6 +803,7 @@ void run_curl_transport_process_tests()
   test_streaming_incremental_gate_limits_and_cancellation();
   test_prelaunch_checkpoints_and_empty_body();
   test_stop_reasons_and_limits();
+  test_streaming_deadline_before_eof();
   test_group_cleanup_and_stderr_truncation();
   test_natural_failures_exec_failure_and_redaction();
 }

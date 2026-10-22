@@ -1,0 +1,45 @@
+.app {
+  --sidebar-width: clamp(264px, 14vw, 300px);
+  --inspector-width: clamp(304px, 17vw, 360px);
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--surface-panel);
+  color: var(--text);
+}
+
+.childNotice { padding: 30px var(--conversation-padding); color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+.app[data-page='settings'] { grid-template-columns: minmax(0, 1fr); }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 0px 44px; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--canvas); transition: grid-template-columns var(--motion-panel-duration) var(--motion-ease-out), grid-template-rows var(--motion-panel-duration) var(--motion-ease-out); }
+.workspace[data-inspector='open'] { grid-template-columns: minmax(0, 1fr) var(--inspector-width) 44px; }
+.workspace[hidden] { display: none; }
+.screenHost { display: contents; }
+.screenHost[aria-label] { display: block; grid-column: 1 / -1; grid-row: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--canvas); }
+.screenHost:focus { outline: none; }
+.settingsLoading { padding: 32px; color: var(--muted); font-size: 13px; }
+.settingsLoading h1 { color: var(--text); font-size: 22px; font-weight: 500; }
+.settingsLoading button { padding: 8px 0; color: var(--body); background: transparent; }
+.inspectorTrack { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; overflow: hidden; opacity: 1; transition: opacity var(--motion-panel-duration) var(--motion-ease-out); }
+.inspectorTrack[data-presence='closing'] { opacity: 0; }
+.chat { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--canvas); }
+
+@media (max-width: 1200px) {
+  .app { --sidebar-width: 244px; --inspector-width: 280px; }
+}
+
+@media (max-width: 1100px) {
+  .workspace, .workspace[data-inspector='open'] { grid-template-columns: minmax(0, 1fr) 44px; grid-template-rows: minmax(0, 1fr) 0px; }
+  .workspace[data-inspector='open'] { grid-template-rows: minmax(0, 1fr) min(32%, 260px); }
+  .inspectorTrack { grid-column: 1; grid-row: 2; }
+}
+
+@media (max-width: 1000px) {
+  .app { --sidebar-width: 224px; }
+}
+
+@media (max-width: 700px) {
+  .app { --sidebar-width: 182px; }
+}

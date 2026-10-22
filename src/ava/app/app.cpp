@@ -61,6 +61,7 @@ void print_help()
   std::cout << "  ava -p [@file ...] [prompt] [--json|--output json] [--allow read-only] [--allow-tool list]\n";
   std::cout << "  ava --rpc [--allow read-only] [--allow-tool list]\n";
   std::cout << "  ava --output rpc [--allow read-only] [--allow-tool list]\n";
+  std::cout << "  ava --print|--rpc [--parallel-read-search-tools] [--parallel-read-search-max-workers 1..4]\n";
   std::cout << "  ava [--trace] --acp  # ACP v1 transport with the implemented AVA session/tool profile\n\n";
   std::cout << version::kDisplayVersion << " status: backend MVP runtime with terminal, print, RPC, and ACP v1 workflows.\n";
 }
@@ -229,13 +230,18 @@ int dispatch_runtime(RuntimeInvocation command, ava::config::XdgPaths paths, cha
                                            .read_stdin = !stdin_is_tty(),
                                            .output_format = command.print_output_format,
                                            .permission_policy = std::move(command.headless_permission_policy),
+                                           .parallel_read_search_tools = command.parallel_read_search_tools,
+                                           .parallel_read_search_max_workers = command.parallel_read_search_max_workers,
                                            .provider_override = std::nullopt,
                                            .transport_override = std::nullopt},
                           std::cin, std::cout, std::cerr);
   if (command.frontend == RuntimeFrontend::Rpc)
-    return run_rpc_mode(
-        RpcModeOptions{.open_context = open_context, .lifecycle_request = lifecycle, .permission_policy = std::move(command.headless_permission_policy)},
-        std::cin, std::cout, std::cerr, rpc::RpcInputWake{});
+    return run_rpc_mode(RpcModeOptions{.open_context = open_context,
+                                       .lifecycle_request = lifecycle,
+                                       .permission_policy = std::move(command.headless_permission_policy),
+                                       .parallel_read_search_tools = command.parallel_read_search_tools,
+                                       .parallel_read_search_max_workers = command.parallel_read_search_max_workers},
+                        std::cin, std::cout, std::cerr, rpc::RpcInputWake{});
 
   auto session = runtime::Session::open(open_context, lifecycle);
   if (!session)

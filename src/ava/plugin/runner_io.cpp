@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/plugin/runner.h"
 #include "ava/plugin/runner_support.h"
+#include "ava/core/json.h"
 
 #include <algorithm>
 #include <array>
@@ -131,8 +132,14 @@ ava::core::VoidResult PluginProcess::write_record(std::string_view record, Clock
   std::string frame;
   try
   {
-    frame.reserve(record.size() + 1);
-    frame.append(record);
+    // Caller-provided JSON may be pretty-printed, but every transport record must occupy one line.
+    auto compacted = ava::core::json::compact(record);
+    if (!compacted)
+    {
+      auto error = protocol_error("plugin outbound protocol record contains an unescaped line break", manifest_);
+      return std::unexpected(fail_process(ava::process::TerminationReasonV1::ProtocolFailure, std::move(error)));
+    }
+    frame = std::move(*compacted);
     frame.push_back('\n');
   }
   catch (...)

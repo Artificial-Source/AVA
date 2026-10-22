@@ -658,7 +658,7 @@
     {
       "name": "allow_always",
       "status": "implemented",
-      "availability": "non-mutation operations whose action identity fits the complete bounded display only",
+      "availability": "non-mutation operations whose action identity fits the complete bounded display; commands additionally require backend-approved reusable scope and exact recipe authority, excluding delegated ACP terminal commands",
       "handler": "encode_permission_request_params/exact host-session grant resolver",
       "test": "ava_tests.acp/ava_cli.acp_subprocess"
     },
@@ -672,7 +672,7 @@
     {
       "name": "reject_always",
       "status": "implemented",
-      "availability": "non-mutation operations whose action identity fits the complete bounded display only",
+      "availability": "non-mutation operations whose action identity fits the complete bounded display; commands additionally require backend-approved reusable scope and exact recipe authority, excluding delegated ACP terminal commands",
       "handler": "encode_permission_request_params/exact host-session grant resolver",
       "test": "ava_tests.acp/ava_cli.acp_subprocess"
     }

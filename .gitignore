@@ -24,3 +24,8 @@ debug.out
 
 # Local reference repositories used for comparison only
 docs/reference-code/
+
+# Optional Electron desktop (Node). The C++ build does not use these paths.
+apps/desktop/node_modules/
+apps/desktop/out/
+apps/desktop/.vite/

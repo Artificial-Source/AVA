@@ -415,7 +415,8 @@ std::string serialize_trace_counter_snapshot(TraceCounterSnapshot const& snapsho
          ",\"session_failures\":" + std::to_string(snapshot.session_failures) + ",\"plugin_failures\":" + std::to_string(snapshot.plugin_failures) +
          ",\"mcp_failures\":" + std::to_string(snapshot.mcp_failures) + ",\"writer_health\":{\"complete\":" + (health.complete ? "true" : "false") +
          ",\"events_written\":" + std::to_string(health.events_written) + ",\"events_dropped\":" + std::to_string(health.events_dropped) +
-         ",\"writer_failures\":" + std::to_string(health.writer_failures) + ",\"bytes_written\":" + std::to_string(health.bytes_written) + "}}";
+         ",\"writer_failures\":" + std::to_string(health.writer_failures) + ",\"bytes_written\":" + std::to_string(health.bytes_written) +
+         ",\"delta_summaries_refused\":" + std::to_string(health.delta_summaries_refused) + "}}";
 }
 
 std::optional<TraceCounterSnapshot> parse_trace_counter_snapshot(std::string_view json) noexcept
@@ -444,19 +445,24 @@ std::optional<TraceCounterSnapshot> parse_trace_counter_snapshot(std::string_vie
     if (current)
     {
       auto const& value = (*parsed)["writer_health"];
-      if (!exact_keys(value, {"complete", "events_written", "events_dropped", "writer_failures", "bytes_written"}) || !value["complete"].is_boolean())
+      bool const legacy_health = exact_keys(value, {"complete", "events_written", "events_dropped", "writer_failures", "bytes_written"});
+      bool const current_health =
+          exact_keys(value, {"complete", "events_written", "events_dropped", "writer_failures", "bytes_written", "delta_summaries_refused"});
+      if ((!legacy_health && !current_health) || !value["complete"].is_boolean())
         return std::nullopt;
       auto events_written = unsigned_value(value["events_written"]);
       auto events_dropped = unsigned_value(value["events_dropped"]);
       auto writer_failures = unsigned_value(value["writer_failures"]);
       auto bytes_written = unsigned_value(value["bytes_written"]);
-      if (!events_written || !events_dropped || !writer_failures || !bytes_written)
+      auto delta_summaries_refused = legacy_health ? std::optional<std::uint64_t>{0} : unsigned_value(value["delta_summaries_refused"]);
+      if (!events_written || !events_dropped || !writer_failures || !bytes_written || !delta_summaries_refused)
         return std::nullopt;
       health = {.complete = value["complete"].get<bool>(),
                 .events_written = *events_written,
                 .events_dropped = *events_dropped,
                 .writer_failures = *writer_failures,
-                .bytes_written = *bytes_written};
+                .bytes_written = *bytes_written,
+                .delta_summaries_refused = *delta_summaries_refused};
     }
     return TraceCounterSnapshot{.captured_at = *captured_at,
                                 .runtime_starts = *runtime_starts,

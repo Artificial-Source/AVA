@@ -228,6 +228,8 @@ OAuth credentials refresh automatically before use when a refresh token is prese
 
 Persistent permission rules are stored owner-only outside model-writable workspace files. Global rules use `$XDG_CONFIG_HOME/ava/permission-rules.json`. Workspace-scoped rules are keyed by the normalized workspace path and written under `$XDG_CONFIG_HOME/ava/workspace-permission-rules/<workspace-hash>/permission-rules.json`; use `/permissions list` or RPC `permission_rules` as the authoritative way to inspect the exact path for a workspace. Legacy `$WORKSPACE/.ava/permission-rules.json` files are intentionally ignored for enforcement because normal file tools can edit workspace files. Storage walks absolute path components through descriptors, rejects symlinks and group/world-writable ancestors except root-owned sticky shared namespaces such as `/tmp` and current-user-owned directories whose group write is limited to a verified private primary group; world-writable non-root-sticky and non-private group-writable ancestors remain rejected. The final rules directory must be current-user-owned mode `0700` and its file mode `0600`. Writes create missing components with descriptor-relative `mkdirat`/`openat`, atomically replace through the validated parent descriptor, and fail closed on an unsafe replacement rather than silently dropping Denies. Rule storage also rejects malformed JSON, unsupported schema versions, broad path rules, and unsupported operations before prompting a fallback resolver.
 
+Each permission-rules file is capped at 1 MiB. An addition whose serialized candidate would exceed that limit is refused with a capacity error before replacement; the existing file stays intact. Remove unneeded rules before adding more.
+
 Use `/permissions list`, `/permissions explain <rule_id>`, `/permissions add ...`, `/permissions remove <rule_id>`, `/permissions audit ...`, and `/permissions diagnose ...` in interactive mode, or the matching RPC `permission_rules`, `permission_rule_add`, and `permission_rule_remove` requests for automation. Interactive list, add/remove receipts, and explain titles lead with truthful human summaries and display-only ordinals; exact `permrule_…` ids remain required for explain/remove and stay available on secondary receipt lines plus full explain detail. Rules can match exact path-oriented operations such as `read`, `search`, `edit`, and `lsp.query`, or exact command-oriented operations such as `bash`, `network.fetch`, `network.search`, `lsp.server.launch`, MCP, and plugin prompts. Task launch is prompt-free and audited unless an exact persisted task deny matches; only sensitive nested or child actions prompt. Foreground child Ask actions still use normal permission UI and background child Ask actions fail closed. Hard policy denies are never upgraded by persistent rules or headless flags.
 
 Permission-rule files now write strict `schema_version: 2`. A `bash` Allow for a sealed command must contain the exact `command_recipe_key` shown by the permission prompt or audit: use the workspace key for workspace storage and the global key for global storage. Recipe keys bind the typed recipe, sealed executable identity/origin, environment profile schema, containment profile/network mode, and preserved logical workspace where applicable; they never use session IDs, timestamps, synthetic environment paths, or environment entries. Schema-v1 files are read for compatibility, but v1 command Allows are non-authoritative while exact v1 command Denies remain active. `/permissions add ... recipe_key=<key>` and RPC `permission_rule_add` accept audited keys. Critical and raw-shell command Allows are always one-shot: new `critical_acknowledged=true` rules are rejected, and old schema-v2 exact Critical acknowledgements remain parseable only so users can inspect/remove them; they never recover execution authority. Matching Denies always take precedence.
@@ -365,11 +367,16 @@ $XDG_CONFIG_HOME/ava/prompts/<provider>/<family>/<mode>.txt
 Examples:
 
 ```text
-~/.config/ava/prompts/openai/gpt-5.5/build.txt
-~/.config/ava/prompts/openai/gpt-5.5/plan.txt
+~/.config/ava/prompts/openai/gpt-5/build.txt
+~/.config/ava/prompts/openai/gpt-5/plan.txt
 ```
 
-Context instruction files are discovered from the workspace root to the current directory. In each directory AVA loads the first present file by Pi-compatible priority: `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, then `CLAUDE.MD`. The global context file path is `$XDG_CONFIG_HOME/ava/AGENTS.md` by default and uses the same sibling fallback names when `AGENTS.md` is absent. Context files are bounded, symlink-rejected, and loaded without requiring project trust, matching their role as visible user-authored instructions.
+The built-in GPT-5.5 profile uses family `gpt-5`, not model id `gpt-5.5`, in this path.
+If no family-specific file exists, AVA tries the provider-wide
+`$XDG_CONFIG_HOME/ava/prompts/<provider>/<mode>.txt`, such as
+`~/.config/ava/prompts/openai/build.txt`, before using the built-in prompt.
+
+Context instruction files are discovered from the workspace root to the current directory. In each directory AVA loads the first present file by Pi-compatible priority: `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, then `CLAUDE.MD`. The global context file path is `$XDG_CONFIG_HOME/ava/AGENTS.md` by default and uses the same sibling fallback names when `AGENTS.md` is absent. Context files are byte-bounded regular files loaded without requiring project trust, matching their role as visible user-authored instructions. Reads are anchored beneath the selected context root rather than rejecting all symlinks; see [instruction-file containment](context-resources.md#agentsmd--claudemd-instruction-files) for the contained-symlink and fallback behavior.
 
 AVA records base prompt metadata separately from the effective provider system prompt. `/context` reports whether the selected base prompt came from an override, the source path when one exists, byte count, and a content fingerprint. Persisted JSONL `session_start` entries record the prompt override boolean plus loaded context sources; runtime/RPC `session_start` events intentionally expose only mode/provider/model. The full prompt text is owned by the effective `system_prompt` assembled from base prompt selection, `SYSTEM.md`/`APPEND_SYSTEM.md`, context files, skills, and extension resources; this avoids duplicating prompt text in runtime state.
 
@@ -398,9 +405,11 @@ ava --append-system-prompt "First extra instruction" --append-system-prompt "Sec
 `--system-prompt` replaces built-in prompts, provider/family prompt overrides,
 and `SYSTEM.md` files for the current process. Repeated
 `--append-system-prompt` values are joined with blank lines and replace
-discovered `APPEND_SYSTEM.md` files for the current process. Context files,
-prompt commands, skills, subagents, and plugin prompt/skill resources are still appended
-after the CLI prompt text.
+discovered `APPEND_SYSTEM.md` files for the current process. Selected-primary
+instructions, context files, available skill/subagent summaries, and static plugin
+prompt/skill context still follow normal composition after the CLI prompt text.
+Prompt commands remain discoverable, invokable, and freshness-tracked; their
+templates are not automatically appended to the system prompt.
 
 Prompt command template paths:
 
@@ -415,6 +424,13 @@ The filename becomes the slash command name, for example `review.md` becomes `/r
 Frontmatter can set `description`, `argument-hint`, `argument_hint`, or `hint`.
 The template body supports `$1`, `$2`, `$@`, `$ARGUMENTS`, `${1:-default}`,
 `${@:N}`, `${@:N:L}`, and `$$`.
+
+## Skills
+
+Ordinary skills are `SKILL.md` instruction bundles, distinct from subagent
+definitions and plugin-declared skills. See [skill authoring and precedence](context-resources.md#skills)
+for an example, accepted names and descriptions, the 64-KiB file cap, discovery
+roots, and same-name override order.
 
 ## Subagents
 

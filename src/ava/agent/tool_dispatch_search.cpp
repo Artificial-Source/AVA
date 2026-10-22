@@ -28,6 +28,8 @@ ToolDispatchResult glob_result(ava::tools::ToolContext const& context, ProviderT
     text += "\"" + ava::core::json::escape(result->paths[index].generic_string()) + "\"";
   }
   text += "],\"truncated\":" + tool_dispatch::json_bool(result->truncated) + ",\"total_matches\":" + std::to_string(result->total_matches);
+  if (result->skipped_paths > 0)
+    text += ",\"skipped_paths\":" + std::to_string(result->skipped_paths);
   tool_dispatch::append_spill_fields(text, result->spill_path, result->spill_truncated);
   text += "}";
   return ToolDispatchResult{.call_id = call.id, .name = call.name, .success = true, .result_text = text};
@@ -106,6 +108,8 @@ ToolDispatchResult grep_result(ava::tools::ToolContext const& context, ProviderT
             ava::core::json::escape(match.line) + "\",\"line_truncated\":" + tool_dispatch::json_bool(match.line_truncated) + "}";
   }
   text += "],\"truncated\":" + tool_dispatch::json_bool(result->truncated) + ",\"total_matches\":" + std::to_string(result->total_matches);
+  if (result->skipped_paths > 0)
+    text += ",\"skipped_paths\":" + std::to_string(result->skipped_paths);
   tool_dispatch::append_spill_fields(text, result->spill_path, result->spill_truncated);
   text += "}";
   return ToolDispatchResult{.call_id = call.id, .name = call.name, .success = true, .result_text = text};

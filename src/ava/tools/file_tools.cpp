@@ -9,13 +9,20 @@
 #include "ava/tools/tool_permission.h"
 #include "ava/tools/tool_permission_internal.h"
 #include "ava/permissions/permission_rules.h"
+#include "ava/core/AnchorOpen.h"
+#include "ava/core/AnchorSet.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/ids.h"
 #include "ava/core/path.h"
 
+#include <algorithm>
+#include <cerrno>
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <system_error>
 #include <utility>
+#include <fcntl.h>
 
 namespace ava::tools {
 
@@ -77,6 +84,100 @@ ava::core::VoidResult reject_permission_rules_file_mutation(ToolContext const& c
   error.with_context("path", normalized_absolute_path(path).string());
   error.with_context("management", "use permission_rule_add or permission_rule_remove RPC commands");
   return std::unexpected(std::move(error));
+}
+
+ava::core::Result<SecureWorkspace const*> secure_workspace_for(ToolContext const& context, std::filesystem::path const& path)
+{
+  if (!context.secure_workspace)
+  {
+    if (context.require_descriptor_secure_workspace)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "strict file tools require an open secure workspace"));
+    return nullptr;
+  }
+  if (context.require_descriptor_secure_workspace || context.secure_workspace->contains_lexical(path))
+    return context.secure_workspace.get();
+  return nullptr;
+}
+
+bool directory_is_listable(std::filesystem::path const& directory)
+{
+  ava::core::UniqueFd descriptor(::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+  return static_cast<bool>(descriptor);
+}
+
+int ReadFileHandle::fd() const noexcept
+{
+  if (auto const* external = std::get_if<ExternalFile>(&owner))
+    return external->owner.fd();
+  return std::get<SecureWorkspaceHandle>(owner).fd();
+}
+
+std::uintmax_t ReadFileHandle::size() const noexcept
+{
+  if (auto const* external = std::get_if<ExternalFile>(&owner))
+    return external->size;
+  return std::get<SecureWorkspaceHandle>(owner).size();
+}
+
+std::filesystem::path const& ReadFileHandle::path() const noexcept
+{
+  if (auto const* external = std::get_if<ExternalFile>(&owner))
+    return external->owner.absolute();
+  return std::get<SecureWorkspaceHandle>(owner).path();
+}
+
+ava::core::Result<ReadFileHandle> open_secure_read_file(ToolContext const& context, std::filesystem::path const& path)
+{
+  auto workspace = secure_workspace_for(context, path);
+  if (!workspace)
+    return std::unexpected(std::move(workspace.error()));
+  if (*workspace != nullptr)
+  {
+    auto opened = (*workspace)->open_regular_file(path);
+    if (!opened)
+      return std::unexpected(std::move(opened.error()));
+    return ReadFileHandle{.owner = std::move(*opened)};
+  }
+  if (!context.secure_workspace)
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "descriptor-anchored read requires an open secure workspace");
+    error.with_context("operation", "read_file");
+    error.with_context("path", path.string());
+    return std::unexpected(std::move(error));
+  }
+
+  auto const& root = context.secure_workspace->root();
+  auto const absolute = (path.is_absolute() ? path : root / path).lexically_normal();
+  if (std::ranges::find(absolute.native(), '\0') != absolute.native().end())
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "outside-workspace read path contains NUL");
+    error.with_context("operation", "read_file");
+    return std::unexpected(std::move(error));
+  }
+  if (!context.anchor_set)
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "outside-workspace reads require ToolContext::anchor_set");
+    error.with_context("operation", "read_file");
+    error.with_context("path", absolute.string());
+    error.with_context("setup", "open and install the workspace AnchorSet before running file tools");
+    return std::unexpected(std::move(error));
+  }
+  auto opened = ava::core::open_readable(*context.anchor_set, absolute, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+  if (!opened)
+  {
+    auto error = std::move(opened.error());
+    error.with_context("operation", "read outside-workspace file");
+    return std::unexpected(std::move(error));
+  }
+  auto status = ava::core::prepare_regular_descriptor(opened->fd());
+  if (!status)
+  {
+    auto error = ava::core::open_regular_error(status.error(), "outside-workspace file");
+    error.with_context("operation", "read_file");
+    error.with_context("path", absolute.string());
+    return std::unexpected(std::move(error));
+  }
+  return ReadFileHandle{.owner = ReadFileHandle::ExternalFile{.owner = std::move(*opened), .size = static_cast<std::uintmax_t>(status->st_size)}};
 }
 
 }  // namespace file_tools_internal
@@ -147,9 +248,12 @@ ava::core::Result<std::optional<PermissionDiffPreview>> write_permission_diff_pr
     return std::optional<PermissionDiffPreview>{};
   bool exists = false;
   auto permission_target = path;
-  if (context.secure_workspace)
+  auto workspace = file_tools_internal::secure_workspace_for(context, path);
+  if (!workspace)
+    return std::unexpected(std::move(workspace.error()));
+  if (*workspace)
   {
-    auto resolved = context.secure_workspace->resolve(path, SecureWorkspaceResolveMode::AllowMissing);
+    auto resolved = (*workspace)->resolve(path, SecureWorkspaceResolveMode::AllowMissing);
     if (!resolved)
       return std::unexpected(std::move(resolved.error()));
     exists = resolved->exists;

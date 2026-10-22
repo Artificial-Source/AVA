@@ -25,6 +25,8 @@ struct PluginBrokeredTool
   std::string source_id;
   std::string plugin_name;
   std::function<ava::tools::ToolDispatchResult(ava::tools::ToolContext const&, ava::tools::ProviderToolCall const&)> executor;
+  // Computed with /plugins diagnostics, before descriptor composition.
+  bool model_name_collision = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

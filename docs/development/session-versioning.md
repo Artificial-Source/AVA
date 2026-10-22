@@ -74,4 +74,24 @@ Before marking a release-ready session-format change complete, run the focused s
 
 ## Branch Summary Ownership
 
-For the current MVP, branch summaries are caller-supplied only. RPC `summarize_branch` stores user/client-provided text with explicit `provider`, `model`, and `reason` provenance. Provider-generated branch summaries are deferred until branch navigation UX needs them and the product can define when model calls are allowed, how they are budgeted, and how stale-session races are handled. Provider-generated compaction summaries remain separate and are already implemented through the compaction flow.
+RPC `summarize_branch` stores caller-supplied text and requires explicit
+`summary`, `provider`, `model`, and `reason` provenance; it does not generate the
+summary itself.
+
+The TUI implements provider-generated summaries of the selected direct parent's
+abandoned post-fork context through
+`BranchSummaryCoordinator` (`src/ava/app/branch_summary_coordinator.h`).
+Preparation is read-only, and a separate explicit confirmation authorizes the
+operation. Confirmation starts one absolute deadline (30 seconds by default);
+the provider/credential transport is cancellation-aware and bounded by that
+deadline. Generation requires an available selected provider/model, credentials,
+and transport authority, and is unavailable offline. Prompt projection and
+generated output are bounded; this is not an unlimited background model call.
+
+Consent binds the prepared source bytes and exact branch range. The coordinator
+revalidates them after confirmation before recovery or provider work, then
+rechecks source/current-session state before appending; changed source or branch
+state fails stale rather than silently applying the summary to another range.
+Canceling before confirmation is nonmutating. Provider-generated compaction
+summaries remain a separate flow: a branch summary preserves abandoned parent
+context rather than establishing a compaction boundary.

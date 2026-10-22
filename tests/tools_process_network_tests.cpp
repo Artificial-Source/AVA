@@ -799,16 +799,25 @@ void test_sealed_process_group_sentinel_and_grace()
 
   // A fixture that starts a background subshell with a SIGTERM handler that
   // writes a marker after a short delay, then the leader exits normally.
+  // The leader must wait for trap readiness before normal-exit group cleanup.
   auto const grace_marker = workspace / "grace-marker";
   std::filesystem::remove(grace_marker, cleanup);
+  auto const grace_ready = workspace / "grace-ready";
+  expect(::mkfifo(grace_ready.c_str(), S_IRUSR | S_IWUSR) == 0, "sentinel/grace fixture creates the readiness FIFO");
   expect(write_executable(first_bin / "grace-leader",
                           "#!/bin/sh\n"
                           "(\n"
                           "  trap 'sleep 0.1; touch " +
                               grace_marker.string() +
                               "; exit 0' TERM\n"
+                              "  printf 'ready\\n' > " +
+                              grace_ready.string() +
+                              " || exit 1\n"
                               "  while true; do sleep 0.05; done\n"
                               ") &\n"
+                              "IFS= read -r ready < " +
+                              grace_ready.string() +
+                              " && [ \"$ready\" = ready ] || exit 1\n"
                               "exit 0\n"),
          "sentinel/grace fixture creates the grace-leader executable");
 

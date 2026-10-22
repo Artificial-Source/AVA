@@ -10,7 +10,7 @@ AVA is a native C++23 terminal coding agent. Treat the codebase as a small syste
 
 ## Source Map
 
-- `src/main.cpp`: thin process entry point that initializes the application and delegates to `ava::app::run`; CLI and frontend orchestration live under `src/ava/app/`.
+- `src/main.cpp`: process composition root that constructs the application, one `process::Supervisor` and application `ProcessScopeV1`, injects the scope into `ava::app::run`, then stops admission and performs shared-deadline shutdown; CLI and frontend orchestration live under `src/ava/app/`.
 - `src/ava/core/`: shared primitives such as `Result<T>`, errors, JSON helpers, descriptor anchors, IDs, and shared Build/Plan mode.
 - `src/ava/config/`: XDG paths, auth storage, model configuration, prompt configuration, and OpenAI OAuth support.
 - `src/ava/http/`: neutral HTTP transport, curl, and retry contract.
@@ -18,6 +18,7 @@ AVA is a native C++23 terminal coding agent. Treat the codebase as a small syste
 - `src/ava/provider/`: provider protocol and request/response/stream adapters for OpenAI, Anthropic, Gemini, and OpenAI-compatible services.
 - `src/ava/agent/`: agent loop, thin tool dispatch/registration/family adapters, user-question plumbing, configurable task subagents, and process-local background job registry.
 - `src/ava/command/`: canonical command planning, classification, policy, environment, and execution metadata.
+- `src/ava/process/`: `AVA::process` Supervisor lifecycle authority, explicit application/session/run/operation scopes, exact environment and executable/cwd capabilities, launch/readiness/deadlines, settlement, and cleanup. Curl, Plugin, clipboard helpers, and MCP are migrated; Bash, LSP, Mermaid, external editor, and browser launching remain legacy-local. Preserve command approval and containment policy in their owning modules.
 - `src/ava/containment/`: Linux Landlock/seccomp command-containment planning and enforcement helpers.
 - `src/ava/app/`: application entry after `main`, runtime orchestration, CLI/TUI/print/RPC/ACP glue (including `app/acp/`), OpenAI connect flow, command dispatch, project trust, headless policy, and event adapters. The small `AVA::app_common` target currently owns the app-level terminal-text contract so app and TUI can share it without a target cycle. App/TUI catalog and keybinding projections live under `app/tui/`; this is the current integration boundary, not a claim that every historical frontend contract has already moved there.
 - `src/ava/permissions/`: backend permission policy, persistent rules, prompts, and decisions.
@@ -31,7 +32,7 @@ AVA is a native C++23 terminal coding agent. Treat the codebase as a small syste
 - `src/ava/observability/`: run observers, trace accounting, and deterministic trace validation/scoring.
 - `src/ava/debug/`: optional libcwd-backed debug channels and generated print-member support.
 - `src/ava/tui/`: custom terminal UI rendering, input handling, runtime glue, and terminal abstraction. Its live subagent workspace consumes only path-free coordinator snapshots and inspector frames; backend session/source authority remains outside TUI code.
-- `src/ava/desktop/`: optional Qt/QML desktop prototype.
+- `apps/desktop/`: optional Electron + React desktop client. Independent of the C++ build and TUI; it talks to a local Linux AVA binary over RPC v1. Nested `apps/desktop/AGENTS.md` owns that tree.
 - `tests/`: focused `ava_tests` sources and support fakes, plus CMake/Python CLI, RPC, ACP, package/release, PTY, and TUI integration tests. The split tmux harness is `tests/tui_tmux_smoke.py` plus `tests/tui_tmux_scenarios/`.
 
 ## Internal Ownership Boundaries
@@ -96,7 +97,7 @@ git --no-pager diff --check
 - No raw owning pointers, manual `new`, or manual `delete` in application code.
 - Use RAII and explicit `Result<T>`/`VoidResult` errors for fallible core APIs.
 - Keep filesystem writes behind the approved file/session/config layers.
-- Keep command execution behind the permissioned process/tool layer.
+- Keep command execution behind the permissioned process/tool layer. For migrated process families, inject `ProcessScopeV1` and use Supervisor as the sole lifecycle authority; do not add independent signal/wait/reap paths.
 - Keep destructive operations behind explicit policy checks.
 - Treat model output, terminal input, paths, JSON, session files, auth files, and shell text as untrusted.
 - Preserve actionable error context: operation, path/provider/tool name, and underlying cause.

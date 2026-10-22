@@ -1,8 +1,10 @@
 #include "sys.h"
+#include "ava/process/environment.h"
 #include "ava/mcp/config.h"
 #include "ava/config/xdg_paths.h"
 #include "ava/core/json.h"
 #include "ava/core/process_args.h"
+#include "ava/core/strict_json.h"
 
 #include <algorithm>
 #include <array>
@@ -11,6 +13,7 @@
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <nlohmann/json.hpp>
 
 namespace ava::mcp {
 namespace {
@@ -50,7 +53,8 @@ std::optional<bool> bool_field(std::string_view object, std::string_view key)
   if (!start)
     return std::nullopt;
   auto const valid_terminator = [](std::string_view value, std::size_t offset) {
-    while (offset < value.size() && std::isspace(static_cast<unsigned char>(value[offset])) != 0) ++offset;
+    while (offset < value.size() && std::isspace(static_cast<unsigned char>(value[offset])) != 0)
+      ++offset;
     return offset >= value.size() || value[offset] == ',' || value[offset] == '}';
   };
   if (object.substr(*start, 4) == "true" && valid_terminator(object, *start + 4))
@@ -118,7 +122,8 @@ ava::core::Result<std::vector<std::string>> string_array_field(std::string_view 
   std::size_t index = 1;
   while (index + 1 < array->size())
   {
-    while (index + 1 < array->size() && std::isspace(static_cast<unsigned char>((*array)[index])) != 0) ++index;
+    while (index + 1 < array->size() && std::isspace(static_cast<unsigned char>((*array)[index])) != 0)
+      ++index;
     if (index + 1 >= array->size() || (*array)[index] == ']')
       break;
     if ((*array)[index] != '"')
@@ -155,7 +160,8 @@ ava::core::Result<std::vector<std::string>> string_array_field(std::string_view 
     }
     values.push_back(std::move(*value));
     index = end + 1;
-    while (index + 1 < array->size() && std::isspace(static_cast<unsigned char>((*array)[index])) != 0) ++index;
+    while (index + 1 < array->size() && std::isspace(static_cast<unsigned char>((*array)[index])) != 0)
+      ++index;
     if (index + 1 < array->size() && (*array)[index] == ',')
     {
       ++index;
@@ -166,6 +172,36 @@ ava::core::Result<std::vector<std::string>> string_array_field(std::string_view 
     return std::unexpected(config_error("MCP config string array has invalid separator").with_context("field", std::string(key)));
   }
   return values;
+}
+
+ava::core::Result<std::vector<std::pair<std::string, std::string>>> environment_field(std::string_view server_json)
+{
+  std::vector<std::pair<std::string, std::string>> environment;
+  // The strict core validator already rejected duplicates. Decode field names
+  // with the installed JSON implementation so escaped "env" is not ignored.
+  auto const parsed = nlohmann::json::parse(server_json.begin(), server_json.end(), nullptr, false);
+  if (!parsed.is_object())
+    return std::unexpected(config_error("MCP server must be a JSON object"));
+  auto const env = parsed.find("env");
+  if (env == parsed.end())
+    return environment;
+  if (!env->is_object() || env->size() > ava::process::kMaxMcpExplicitEnvironmentEntriesV1)
+    return std::unexpected(config_error("MCP env must be a bounded object of strings"));
+
+  std::vector<ava::process::EnvironmentVariableV1> variables;
+  for (auto const& [name, value] : env->items())
+  {
+    if (!value.is_string())
+      return std::unexpected(config_error("MCP env values must be strings"));
+    auto const& text = value.get_ref<std::string const&>();
+    variables.push_back({.name = name, .value = text});
+    environment.emplace_back(name, text);
+  }
+  // Use the shared policy, not a second copy of its name/value/PATH/byte rules.
+  // Actual launch revalidates the complete environment with the actual child cwd.
+  if (!ava::process::make_mcp_environment_v1("/", variables))
+    return std::unexpected(config_error("MCP env violates the explicit process environment policy"));
+  return environment;
 }
 
 ava::core::Result<std::string> read_config_file(std::filesystem::path const& path)
@@ -306,11 +342,13 @@ ava::core::Result<McpConfig> parse_mcp_config(std::string_view json, std::filesy
 {
   if (json.size() > kMaxMcpConfigBytes)
   {
-    return std::unexpected(config_error("MCP config exceeds maximum size").with_context("max_bytes", std::to_string(kMaxMcpConfigBytes)));
+    return std::unexpected(config_error("MCP config exceeds maximum size")
+                               .with_context("config", config_path.string())
+                               .with_context("max_bytes", std::to_string(kMaxMcpConfigBytes)));
   }
   if (!ava::core::json::is_valid_object(json))
   {
-    return std::unexpected(config_error("MCP config must be a valid JSON object"));
+    return std::unexpected(config_error("MCP config must be a valid JSON object").with_context("config", config_path.string()));
   }
   if (ava::core::json::field_value_start(json, "servers") && !array_field(json, "servers"))
   {
@@ -333,6 +371,18 @@ ava::core::Result<McpConfig> parse_mcp_config(std::string_view json, std::filesy
     if (!id || !is_valid_mcp_identifier(*id))
     {
       return std::unexpected(config_error("MCP server requires a valid id").with_context("config", config_path.string()));
+    }
+    if (ava::core::validate_strict_json(server_json, ava::core::json::kMaxNestingDepth) != ava::core::StrictJsonStatus::Valid)
+    {
+      return std::unexpected(config_error("MCP server JSON must not contain duplicate fields or keys")
+                                 .with_context("config", config_path.string())
+                                 .with_context("server", *id)
+                                 .with_context("field", ava::core::json::field_value_start(server_json, "env") ? "env" : "server"));
+    }
+    auto env = environment_field(server_json);
+    if (!env)
+    {
+      return std::unexpected(std::move(env.error()).with_context("config", config_path.string()).with_context("server", *id).with_context("field", "env"));
     }
     auto command = ava::core::json::string_field(server_json, "command");
     if (!command || command->empty() || command->size() > kMaxMcpArgBytes || has_forbidden_byte(*command))
@@ -374,11 +424,13 @@ ava::core::Result<McpConfig> parse_mcp_config(std::string_view json, std::filesy
                                              .name = std::move(name),
                                              .command = std::move(*command),
                                              .args = std::move(*args),
-                                             .env = {},
+                                             .env = std::move(*env),
                                              .enabled = enabled,
                                              .scope = scope,
                                              .source_path = config_path});
   }
+  if (ava::core::validate_strict_json(json, ava::core::json::kMaxNestingDepth) != ava::core::StrictJsonStatus::Valid)
+    return std::unexpected(config_error("MCP config must be strict JSON without duplicate keys").with_context("config", config_path.string()));
   return config;
 }
 

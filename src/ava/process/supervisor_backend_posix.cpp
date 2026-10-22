@@ -43,7 +43,7 @@ int fcntl_retry(int descriptor, int operation, int value = 0) noexcept
 
 struct PreparedDescriptor
 {
-  UniqueFd descriptor;
+  ava::core::UniqueFd descriptor;
   int error_number = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -58,17 +58,17 @@ PreparedDescriptor prepare_descriptor(int raw_descriptor, std::shared_ptr<Monito
     int const move_error = errno;
     static_cast<void>(::close(descriptor_value));
     if (moved < 0)
-      return {.descriptor = UniqueFd{}, .error_number = move_error == 0 ? EIO : move_error};
+      return {.descriptor = ava::core::UniqueFd{}, .error_number = move_error == 0 ? EIO : move_error};
     descriptor_value = moved;
   }
-  UniqueFd descriptor(descriptor_value);
+  ava::core::UniqueFd descriptor(descriptor_value);
 
   telemetry->cloexec_checks.fetch_add(1, std::memory_order_relaxed);
   int descriptor_flags = fcntl_retry(descriptor.get(), F_GETFD);
   if (descriptor_flags < 0 || ((descriptor_flags & FD_CLOEXEC) == 0 && fcntl_retry(descriptor.get(), F_SETFD, descriptor_flags | FD_CLOEXEC) != 0))
   {
     telemetry->cloexec_failures.fetch_add(1, std::memory_order_relaxed);
-    return {.descriptor = UniqueFd{}, .error_number = errno == 0 ? EIO : errno};
+    return {.descriptor = ava::core::UniqueFd{}, .error_number = errno == 0 ? EIO : errno};
   }
 
   telemetry->nonblocking_checks.fetch_add(1, std::memory_order_relaxed);
@@ -76,7 +76,7 @@ PreparedDescriptor prepare_descriptor(int raw_descriptor, std::shared_ptr<Monito
   if (status_flags < 0 || ((status_flags & O_NONBLOCK) == 0 && fcntl_retry(descriptor.get(), F_SETFL, status_flags | O_NONBLOCK) != 0))
   {
     telemetry->nonblocking_failures.fetch_add(1, std::memory_order_relaxed);
-    return {.descriptor = UniqueFd{}, .error_number = errno == 0 ? EIO : errno};
+    return {.descriptor = ava::core::UniqueFd{}, .error_number = errno == 0 ? EIO : errno};
   }
   return {.descriptor = std::move(descriptor)};
 }
@@ -115,7 +115,7 @@ PidfdFailureClass classify_pidfd_error(int error_number) noexcept
 
 }  // namespace
 
-PidfdWatch::PidfdWatch(UniqueFd descriptor_value, std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept
+PidfdWatch::PidfdWatch(ava::core::UniqueFd descriptor_value, std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept
     : descriptor(std::move(descriptor_value)), telemetry(std::move(telemetry_value))
 {
   auto const current = telemetry->current_watches.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -128,7 +128,8 @@ PidfdWatch::~PidfdWatch()
   telemetry->current_watches.fetch_sub(1, std::memory_order_relaxed);
 }
 
-MonitorWake::MonitorWake(UniqueFd read_descriptor, UniqueFd write_descriptor, bool uses_eventfd, std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept
+MonitorWake::MonitorWake(ava::core::UniqueFd read_descriptor, ava::core::UniqueFd write_descriptor, bool uses_eventfd,
+                         std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept
     : read_end(std::move(read_descriptor)), write_end(std::move(write_descriptor)), eventfd(uses_eventfd), telemetry(std::move(telemetry_value))
 {
   auto const current = telemetry->current_wake_descriptors.fetch_add(descriptor_count(), std::memory_order_relaxed) + descriptor_count();
@@ -152,7 +153,7 @@ ava::core::Result<std::shared_ptr<MonitorWake>> make_monitor_wake(std::shared_pt
     {
       auto prepared = prepare_descriptor(event_descriptor, telemetry);
       if (prepared.descriptor.get() >= 0)
-        return std::make_shared<MonitorWake>(std::move(prepared.descriptor), UniqueFd{}, true, telemetry);
+        return std::make_shared<MonitorWake>(std::move(prepared.descriptor), ava::core::UniqueFd{}, true, telemetry);
     }
 #endif
 

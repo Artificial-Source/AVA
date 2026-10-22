@@ -15,7 +15,7 @@ Start with [usage](core/usage.md), then [configuration](core/configuration.md), 
 
 ## Interfaces and contracts
 
-- [Interface index](interfaces/README.md): the terminal customization guide and experimental Qt/QML prototype.
+- [Interface index](interfaces/README.md): the terminal customization guide.
 - [RPC protocol](rpc-protocol.md): normative proprietary AVA RPC v1 contract.
 - [ACP endpoint](acp.md) and [machine-readable support profile](acp-support.json): stable ACP integration contract and support declaration.
 - [Headless protocol](headless-protocol.md): normative behavior shared by print and RPC modes.
@@ -28,6 +28,10 @@ Start with [usage](core/usage.md), then [configuration](core/configuration.md), 
 - [Backend implementation ledger](history/backend-implementation-ledger.md): historical backend milestone and implementation ledger.
 
 These fixed contract paths remain at the `docs/` root (or their established schema/security locations) so external consumers do not need to follow taxonomy changes.
+
+## Desktop planning
+
+- [Desktop index](desktop/README.md): greenfield Electron planning and research. This is not a shipped UI, not a first-release host artifact, and not a baseline taken from the existing optional client in `apps/desktop/`.
 
 ## Extensions
 

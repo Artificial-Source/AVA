@@ -8,6 +8,7 @@
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
+#include "ava/core/utf8_prefix.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -135,10 +136,7 @@ bool truncate_utf8(std::string& value, std::size_t max_bytes)
 {
   if (value.size() <= max_bytes)
     return false;
-  std::size_t end = max_bytes;
-  while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0U) == 0x80U)
-    --end;
-  value.resize(end);
+  value.resize(ava::core::utf8_prefix_size(value, max_bytes));
   return true;
 }
 

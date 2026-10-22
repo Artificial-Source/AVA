@@ -145,7 +145,21 @@ ToolDispatchResult job_result(ava::tools::ToolContext const& context, ToolDispat
   if (request->action == "status")
     snapshot = services.subagent_coordinator->snapshot(context.session_id, request->job_id);
   else if (request->action == "wait")
-    snapshot = services.subagent_coordinator->wait(context.session_id, request->job_id, request->timeout);
+  {
+    auto const deadline = std::chrono::steady_clock::now() + request->timeout;
+    for (;;)
+    {
+      if (is_canceled(context))
+        return tool_error_result(call, canceled_error(call));
+      auto const remaining =
+          std::max(std::chrono::milliseconds::zero(), std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()));
+      snapshot = services.subagent_coordinator->wait(context.session_id, request->job_id, std::min(remaining, kJobWaitCancellationSlice));
+      if (is_canceled(context))
+        return tool_error_result(call, canceled_error(call));
+      if (!snapshot || !snapshot->timed_out || std::chrono::steady_clock::now() >= deadline)
+        break;
+    }
+  }
   else if (request->action == "result")
   {
     snapshot = services.subagent_coordinator->result(context.session_id, request->job_id);

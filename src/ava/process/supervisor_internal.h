@@ -24,6 +24,8 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include "ava/core/UniqueFd.h"
+
 #include <signal.h>
 #include <sys/types.h>
 #endif
@@ -49,42 +51,16 @@ inline constexpr std::size_t kMaximumPreparedLaunchBytes = 1024 * 1024;
 [[nodiscard]] ava::core::Error invalid_error(std::string message);
 [[nodiscard]] ava::core::Error io_error(std::string message, int error_number);
 [[nodiscard]] bool requestable_reason(TerminationReasonV1 reason) noexcept;
-[[nodiscard]] std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) noexcept;
 [[nodiscard]] std::uint64_t elapsed_milliseconds(Clock::time_point begin, Clock::time_point end) noexcept;
 
 struct SupervisorState;
 
 #if !defined(_WIN32)
 
-class UniqueFd final
-{
- public:
-  explicit UniqueFd(int descriptor = -1) noexcept : descriptor_(descriptor) { }
-  UniqueFd(UniqueFd const&) = delete;
-  UniqueFd& operator=(UniqueFd const&) = delete;
-  UniqueFd(UniqueFd&& other) noexcept : descriptor_(other.release()) { }
-  UniqueFd& operator=(UniqueFd&& other) noexcept
-  {
-    if (this != &other)
-      reset(other.release());
-    return *this;
-  }
-  ~UniqueFd() { reset(); }
-
-  [[nodiscard]] int get() const noexcept { return descriptor_; }
-  [[nodiscard]] int release() noexcept { return std::exchange(descriptor_, -1); }
-  void reset(int descriptor = -1) noexcept;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  int descriptor_ = -1;
-};
-
 struct Pipe
 {
-  UniqueFd read_end;
-  UniqueFd write_end;
+  ava::core::UniqueFd read_end;
+  ava::core::UniqueFd write_end;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -146,10 +122,10 @@ struct MonitorTelemetry
 
 struct PidfdWatch
 {
-  PidfdWatch(UniqueFd descriptor_value, std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept;
+  PidfdWatch(ava::core::UniqueFd descriptor_value, std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept;
   ~PidfdWatch();
 
-  UniqueFd descriptor;
+  ava::core::UniqueFd descriptor;
   std::shared_ptr<MonitorTelemetry> telemetry;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -157,15 +133,16 @@ struct PidfdWatch
 
 struct MonitorWake
 {
-  MonitorWake(UniqueFd read_descriptor, UniqueFd write_descriptor, bool uses_eventfd, std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept;
+  MonitorWake(ava::core::UniqueFd read_descriptor, ava::core::UniqueFd write_descriptor, bool uses_eventfd,
+              std::shared_ptr<MonitorTelemetry> telemetry_value) noexcept;
   ~MonitorWake();
 
   [[nodiscard]] int poll_descriptor() const noexcept { return read_end.get(); }
   [[nodiscard]] int signal_descriptor() const noexcept { return eventfd ? read_end.get() : write_end.get(); }
   [[nodiscard]] std::size_t descriptor_count() const noexcept { return eventfd ? 1U : 2U; }
 
-  UniqueFd read_end;
-  UniqueFd write_end;
+  ava::core::UniqueFd read_end;
+  ava::core::UniqueFd write_end;
   bool eventfd = false;
   std::shared_ptr<MonitorTelemetry> telemetry;
 
@@ -202,7 +179,7 @@ struct PipeEndpointState
 {
 #if !defined(_WIN32)
   explicit PipeEndpointState(int value, bool can_read, bool can_write) noexcept : descriptor(value), readable(can_read), writable(can_write) { }
-  UniqueFd descriptor;
+  ava::core::UniqueFd descriptor;
 #else
   explicit PipeEndpointState(bool can_read, bool can_write) noexcept : readable(can_read), writable(can_write) { }
 #endif

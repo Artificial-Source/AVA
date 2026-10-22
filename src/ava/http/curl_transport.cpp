@@ -908,7 +908,7 @@ class CurlRequest final
       if (read->state == ava::process::PipeIoStateV1::EndOfStream)
       {
         stdout_eof_ = true;
-        maybe_finalize_stdout(failure);
+        maybe_finalize_stdout(supervisor, handle, failure);
         endpoint.close();
         open = false;
         progressed = true;
@@ -951,10 +951,26 @@ class CurlRequest final
     return progressed;
   }
 
-  void maybe_finalize_stdout(std::optional<RequestFailure>& failure)
+  void maybe_finalize_stdout(ava::process::Supervisor& supervisor, ava::process::ProcessHandle const& handle, std::optional<RequestFailure>& failure)
   {
-    if (!stdout_eof_ || (streaming_ && !streaming_head_ && !stderr_eof_))
+    if (!stdout_eof_ || (streaming_ && !streaming_head_ && !stderr_eof_) || stdout_finalized_ || failure)
       return;
+    // The monitor can stop curl while a read or sink callback is in progress.
+    // Do not turn deadline-truncated output into a new protocol failure.
+    auto const stopped = supervisor.committed_stop_reason(handle);
+    if (!stopped)
+    {
+      auto error = protocol_error("failed to observe curl process stop; verify supervisor handle ownership and retention");
+      error.with_context("cause_category", ava::core::to_string(stopped.error().category()));
+      error.with_context("cause_code", std::to_string(static_cast<int>(stopped.error().code())));
+      set_failure(failure, ava::process::TerminationReasonV1::ProtocolFailure, std::move(error));
+      return;
+    }
+    if (*stopped == ava::process::TerminationReasonV1::DeadlineExpired)
+    {
+      set_failure(failure, ava::process::TerminationReasonV1::DeadlineExpired, deadline_error());
+      return;
+    }
     finalize_stdout(failure);
   }
 
@@ -1036,7 +1052,7 @@ class CurlRequest final
       if (read->state == ava::process::PipeIoStateV1::EndOfStream)
       {
         stderr_eof_ = true;
-        maybe_finalize_stdout(failure);
+        maybe_finalize_stdout(supervisor, handle, failure);
         endpoint.close();
         open = false;
         progressed = true;
@@ -1057,7 +1073,7 @@ class CurlRequest final
         }
         else
         {
-          maybe_finalize_stdout(failure);
+          maybe_finalize_stdout(supervisor, handle, failure);
         }
       }
       stderr_bytes_ =

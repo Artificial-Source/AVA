@@ -1,0 +1,8 @@
+.example { margin: 20px 0 16px; border: 1px solid var(--edge); border-radius: 7px; overflow: hidden; background: var(--code); }
+.caption { display: flex; align-items: center; gap: 7px; min-height: 33px; padding: 7px 13px; border-bottom: 1px solid var(--separator); color: var(--muted); font-size: 10px; }
+.language { margin-left: auto; color: var(--quiet); }
+.example pre { margin: 0; padding: 15px 17px; overflow-x: auto; color: var(--body); font-family: var(--mono); font-size: 13px; line-height: 1.8; tab-size: 2; }
+.example pre code { font-size: inherit; }
+.fallback { margin: 0; padding: 0 16px 10px; color: var(--quiet); font-size: 11px; }
+
+:global([data-code-wrap='true']) .example pre { white-space: pre-wrap; overflow-wrap: anywhere; }

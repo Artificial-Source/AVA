@@ -2,6 +2,8 @@
 #include "ava/core/thread.h"
 #include "ava/observability/run_observer.h"
 #include "ava/core/json.h"
+#include "ava/core/fd_io.h"
+#include "ava/core/saturating.h"
 
 #include <algorithm>
 #include <cctype>
@@ -587,23 +589,35 @@ void JsonlRunObserver::write_record(std::string record)
     ++dropped_;
     return;
   }
+  off_t record_start = -1;
   try
   {
     ensure_open();
     record += '\n';
-    auto n = write(fd_, record.data(), record.size());
-    if (n != static_cast<ssize_t>(record.size()))
+    record_start = ::lseek(fd_, 0, SEEK_END);
+    if (record_start < 0)
+      throw std::system_error(errno, std::generic_category(), "locate trace record rollback boundary");
+    if (auto const error = ava::core::write_all(fd_, record); error != 0)
     {
-      if (n >= 0)
-        throw std::runtime_error("short trace record write");
-      throw std::system_error(errno, std::generic_category(), "write trace record");
+      // The lifetime lock excludes other writers, so the append offset records
+      // exactly the bytes accepted before failure, including rolled-back bytes.
+      auto const record_end = ::lseek(fd_, 0, SEEK_CUR);
+      if (record_end > record_start)
+        bytes_written_ += static_cast<std::size_t>(record_end - record_start);
+      throw std::system_error(error, std::generic_category(), "write trace record");
     }
-    ++written_;
     bytes_written_ += record.size();
+    ++written_;
   }
   catch (...)
   {
     ++failures_;
+    if (record_start >= 0)
+    {
+      // The lifetime file lock excludes other trace writers during rollback.
+      static_cast<void>(ava::core::restart_on_eintr([&] { return ::ftruncate(fd_, record_start); }));
+    }
+    close_locked();
     throw;
   }
 }
@@ -614,6 +628,10 @@ void JsonlRunObserver::on_event(TraceEvent const& event)
 void JsonlRunObserver::close() noexcept
 {
   std::lock_guard lock(mutex_);
+  close_locked();
+}
+void JsonlRunObserver::close_locked() noexcept
+{
   if (closed_)
     return;
   closed_ = true;
@@ -727,12 +745,19 @@ TraceValidationResult validate_and_score_trace(std::span<TraceEvent const> event
   TraceValidationResult result;
   result.accounted_failures = accounting.callback_failures;
   result.accounted_drops = accounting.dropped_events;
-  auto const losses = accounting.callback_failures + accounting.dropped_events;
+  auto const losses = ava::core::saturating_add(accounting.callback_failures, accounting.dropped_events);
+  result.incomplete_coverage = losses != 0;
+  auto missing_boundary = [&](std::string message) {
+    result.incomplete_coverage = true;
+    auto& issues = losses != 0 ? result.coverage_gaps : result.errors;
+    issues.push_back(std::move(message));
+  };
   result.score = static_cast<unsigned>(losses >= 100 ? 0 : 100 - losses);
   struct RunState
   {
     bool started = false;
     bool terminal = false;
+    bool event_before_start = false;
   };
   std::map<std::string, RunState> runs;
   std::uint64_t previous_sequence = 0;
@@ -757,7 +782,7 @@ TraceValidationResult validate_and_score_trace(std::span<TraceEvent const> event
       continue;
     }
     if (!run.started)
-      result.errors.push_back("event occurred before run start");
+      run.event_before_start = true;
     if (event.type == TraceEventType::AgentRunTerminal)
     {
       if (event.outcome != TraceOutcome::Completed && event.outcome != TraceOutcome::Canceled && event.outcome != TraceOutcome::ProviderError &&
@@ -767,8 +792,17 @@ TraceValidationResult validate_and_score_trace(std::span<TraceEvent const> event
     }
   }
   for (auto const& [run_id, state] : runs)
+  {
+    if (state.event_before_start)
+    {
+      if (state.started)
+        result.errors.push_back("event occurred before run start");
+      else
+        missing_boundary("run is missing start");
+    }
     if (state.started && !state.terminal)
-      result.errors.push_back("run is missing terminal outcome");
+      missing_boundary("run is missing terminal outcome");
+  }
 
   if (policy)
   {
@@ -797,7 +831,7 @@ TraceValidationResult validate_and_score_trace(std::span<TraceEvent const> event
       if (has_boundary(boundary))
         satisfied += boundary == TraceRequiredBoundary::RunLifecycle ? policy->lifecycle_weight : policy->required_boundary_weight;
       else
-        result.errors.push_back("fixture " + policy->fixture_id + " is missing a required trace boundary");
+        missing_boundary("fixture " + policy->fixture_id + " is missing a required trace boundary");
     }
     if (policy->denominator == 0)
     {

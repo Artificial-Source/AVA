@@ -244,6 +244,12 @@ class Supervisor
   void stop_accepting() noexcept;
   [[nodiscard]] ava::core::Result<StopResultV1> request_stop(ProcessHandle const& handle, TerminationReasonV1 reason, ProcessDeadline deadline);
   [[nodiscard]] ava::core::Result<StopResultV1> request_stop(OwnerPathV1 const& owner_prefix, TerminationReasonV1 reason, ProcessDeadline deadline);
+  // Read-only observation of the first committed reason for an owned handle,
+  // including before settlement. No reason means no committed stop/termination;
+  // NaturalExit is a completion, not an interruption. Does not observe native
+  // process state, advance deadlines, signal, wait, or reap. Invalid, foreign,
+  // or no-longer-retained handles fail explicitly.
+  [[nodiscard]] ava::core::Result<std::optional<TerminationReasonV1>> committed_stop_reason(ProcessHandle const& handle) const;
   [[nodiscard]] ava::core::Result<ExitStatusV1> wait(ProcessHandle const& handle, ProcessDeadline deadline) const;
   [[nodiscard]] ava::core::Result<std::optional<ExitStatusV1>> try_wait(ProcessHandle const& handle) const;
   [[nodiscard]] ava::core::Result<ProcessActivityV1> wait_for_activity(ProcessHandle const& handle, std::span<PipeWatchV1 const> watches,

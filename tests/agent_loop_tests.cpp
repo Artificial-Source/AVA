@@ -30,6 +30,7 @@ void run_agent_loop_tests()
   test_agent_loop_foreground_promotion_wakes_parent_without_restarting_child();
   test_agent_loop_promoted_failure_persists_sanitized_child_error();
   test_agent_loop_task_subagent_propagates_authority_roots_to_foreground_and_background_children();
+  test_agent_loop_task_subagent_does_not_inherit_parallel_read_search_scheduling();
   test_agent_loop_task_subagent_inherits_protected_permission_rule_store();
   test_agent_loop_task_subagent_recovers_torn_child_before_resume();
   test_agent_config_loads_project_definitions();
@@ -40,6 +41,7 @@ void run_agent_loop_tests()
   test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint();
   test_agent_loop_background_task_failure_records_parent_and_child_errors();
   test_agent_loop_background_task_cancel_requests_child_cancellation();
+  test_agent_loop_provider_native_canceled_tasks();
   test_agent_loop_background_task_requires_coordinator();
   test_agent_loop_coordinator_start_failure_rolls_back_child();
   test_agent_loop_background_task_publishes_inspection_source();
@@ -76,4 +78,6 @@ void run_agent_loop_tests()
   test_agent_loop_model_auto_allow_deny_preflight_blocks_auto_allow_without_process();
   test_agent_loop_model_command_rejects_authority_workspace_before_permission_or_process();
   test_agent_loop_truncates_tool_context();
+  test_agent_loop_secure_workspace_refuses_in_workspace_symlink_escape();
+  test_agent_loop_secure_workspace_read_survives_ancestor_swap_after_permission();
 }

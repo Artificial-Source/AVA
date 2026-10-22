@@ -46,7 +46,6 @@ RECOGNIZED_FIRST_PARTY_ROOTS = frozenset(
         "context",
         "core",
         "debug",
-        "desktop",
         "diagnostics",
         "event",
         "http",

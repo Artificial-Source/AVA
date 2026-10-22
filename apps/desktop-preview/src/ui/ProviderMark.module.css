@@ -1,0 +1,4 @@
+.mark, .fallback { display: inline-block; width: 24px; height: 24px; flex: 0 0 auto; color: inherit; }
+.mark { background: currentColor; mask-size: contain; mask-position: center; mask-repeat: no-repeat; }
+.fallback { position: relative; border: 1px solid currentColor; border-radius: 5px; }
+.fallback::after { content: ''; position: absolute; inset: 7px; border: 1px solid currentColor; border-radius: 50%; }

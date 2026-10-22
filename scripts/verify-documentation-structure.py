@@ -34,6 +34,7 @@ APPROVED_DIRECTORIES = frozenset(
     {
         "core",
         "interfaces",
+        "desktop",
         "extensions",
         "operations",
         "development",
@@ -53,6 +54,7 @@ APPROVED_DIRECTORIES = frozenset(
 REQUIRED_INDEXES = (
     "docs/core/README.md",
     "docs/interfaces/README.md",
+    "docs/desktop/README.md",
     "docs/extensions/README.md",
     "docs/operations/README.md",
     "docs/development/README.md",
@@ -74,6 +76,7 @@ REQUIRED_LLMS_TARGETS = frozenset(
         "docs/README.md",
         "docs/core/README.md",
         "docs/interfaces/README.md",
+        "docs/desktop/README.md",
         "docs/extensions/README.md",
         "docs/operations/README.md",
         "docs/security/README.md",

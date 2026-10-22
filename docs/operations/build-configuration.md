@@ -22,7 +22,6 @@ Direct configuration is noncanonical unless it supplies the cache-equivalent `Be
 | `sanitize` | `build-sanitize` | Inherits `dev`; `EnableAvaSanitizers=ON` |
 | `tsan` | `build-tsan` | Inherits `dev`; `AVA_ENABLE_TSAN=ON` |
 | `release` | `build-release` | Tests on; `CMAKE_BUILD_TYPE=Release` |
-| `desktop-qml` | `build-desktop-qml` | `AVA_BUILD_DESKTOP_QML=ON`, tests off, compile commands on |
 
 There are corresponding build presets. Test presets are `dev`, `sanitize`, `release-rpc`, `sanitize-rpc`, `release-acp`, `sanitize-acp`, and `tsan`; the latter intentionally runs a focused race-sensitive subset.
 
@@ -38,7 +37,6 @@ Pass cache values at configure time, for example `cmake --preset dev -DAVA_ENABL
 | `EnableAvaSanitizers` | Compatibility-derived | Canonical AICxx/cwds option: AddressSanitizer plus UndefinedBehaviorSanitizer. |
 | `AVA_ENABLE_SANITIZERS` | `OFF` | Compatibility alias/default input for `EnableAvaSanitizers`; the canonical option wins when explicitly set. |
 | `AVA_ENABLE_TSAN` | `OFF` | Applies ThreadSanitizer to project-built objects for focused coordinator/ACP race coverage. It is mutually exclusive with ASan/UBSan. |
-| `AVA_BUILD_DESKTOP_QML` | `OFF` | Builds the experimental Qt Quick/QML desktop prototype under `src/ava/desktop`. |
 | `AVA_DEBUG_MAXLEN` | `100` | Numeric default debug-stream string truncation length; `0` means unlimited. It generates `config::ava_debug_maxlen_c`. |
 | `AVA_REQUIRE_ACP_SDK_INTEROP` | `OFF` | Requires Node and installed official SDK packages at configure/test time; fails rather than skipping when unavailable. |
 | `AVA_ENABLE_ACPX_INTEROP` | `OFF` | Enables the opt-in acpx interoperability smoke. It requires Python and the pinned Node setup. |
@@ -70,7 +68,7 @@ Use `scripts/build.sh` and `scripts/run-tests.sh`, optionally `--jobs N`. The wr
 
 ## Platform and dependency boundaries
 
-The maintained build is a Linux C++23 terminal application with wide ncurses, Boost, CMake, and Gitache/AICxx dependencies. Linux-specific containment, descriptor handling, and package/test paths are not portable promises. The QML target is explicitly experimental.
+The maintained build is a Linux C++23 terminal application with wide ncurses, Boost, CMake, and Gitache/AICxx dependencies. Linux-specific containment, descriptor handling, and package/test paths are not portable promises.
 
 | Combination | Classification |
 | --- | --- |

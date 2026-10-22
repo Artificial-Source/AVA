@@ -1088,6 +1088,56 @@ void test_ancestor_freshness_detects_mode_and_replacement()
          "inspection paths remain descriptor-bound and require containment against post-check path swaps");
 }
 
+void test_identity_bound_build_ancestor_churn_stales_tmp_parent_churn_does_not()
+{
+  CommandFixture fixture("identity-bound-build-ancestor");
+  fixture.executable("pwd");
+  auto const intent = command::CommandIntent::structured({"pwd"});
+  auto const ancestor_for = [](command::PathMetadata const& metadata, std::filesystem::path const& path) -> command::PathAncestorMetadata const* {
+    auto const found =
+        std::ranges::find_if(metadata.ancestor_metadata, [&path](command::PathAncestorMetadata const& ancestor) { return ancestor.path == path; });
+    return found == metadata.ancestor_metadata.end() ? nullptr : &*found;
+  };
+
+  auto const fake_build = fixture.root / "fake-build";
+  auto const identity_home = fake_build / "home";
+  std::filesystem::create_directories(identity_home);
+  ::chmod(fake_build.c_str(), S_IRWXU);
+  ::chmod(identity_home.c_str(), S_IRWXU);
+  auto identity_options = fixture.options();
+  identity_options.trusted_home = identity_home;
+  auto identity_plan = command::seal_command_plan(*intent, identity_options);
+  auto const* identity_build_ancestor = identity_plan ? ancestor_for(identity_plan->trusted_home_metadata(), fake_build) : nullptr;
+  auto const artifact = fake_build / "parallel-sibling-artifact";
+  std::filesystem::create_directory(artifact);
+  std::filesystem::remove(artifact);
+  auto identity_home_fresh = identity_plan
+                                 ? command::detail::trusted_home_metadata_is_fresh(identity_plan->trusted_home_metadata(), identity_plan->anchor_set())
+                                 : ava::core::Result<bool>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "no identity-bound home plan"))};
+
+  std::filesystem::path const sticky_tmp{"/tmp"};
+  struct stat tmp_status{};
+  bool const tmp_is_root_sticky = ::stat(sticky_tmp.c_str(), &tmp_status) == 0 && tmp_status.st_uid == 0 && (tmp_status.st_mode & S_ISVTX) != 0;
+  auto private_root = ScopedTestDirectory::create_unique(sticky_tmp, "ava-cli-e2e-smoke-");
+  auto const private_home = private_root.path() / "home";
+  std::filesystem::create_directory(private_home);
+  ::chmod(private_root.path().c_str(), S_IRWXU);
+  ::chmod(private_home.c_str(), S_IRWXU);
+  auto tmp_options = fixture.options();
+  tmp_options.trusted_home = private_home;
+  auto tmp_plan = command::seal_command_plan(*intent, tmp_options);
+  auto const* tmp_parent_ancestor = tmp_plan ? ancestor_for(tmp_plan->trusted_home_metadata(), sticky_tmp) : nullptr;
+  auto unrelated_parent = ScopedTestDirectory::create_unique(sticky_tmp, "ava-unrelated-build-parent-");
+  auto tmp_home_fresh = tmp_plan ? command::detail::trusted_home_metadata_is_fresh(tmp_plan->trusted_home_metadata(), tmp_plan->anchor_set())
+                                 : ava::core::Result<bool>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "no private tmp home plan"))};
+
+  expect(identity_plan && identity_build_ancestor && identity_build_ancestor->identity_bound && identity_home_fresh && !*identity_home_fresh &&
+             tmp_is_root_sticky && private_root.path().parent_path() == sticky_tmp && unrelated_parent.path().parent_path() == sticky_tmp && tmp_plan &&
+             tmp_parent_ancestor && !tmp_parent_ancestor->identity_bound && tmp_home_fresh && *tmp_home_fresh,
+         "identity-bound fake build-ancestor sibling mkdir/removal stales trusted-home freshness; identical unrelated churn under root-owned sticky /tmp does "
+         "not invalidate a private fixture whose only shared ancestor is that unbound namespace");
+}
+
 void test_stable_recipe_identity_is_scope_aware_and_secret_free()
 {
   CommandFixture fixture("stable-recipe-identity");
@@ -1359,6 +1409,7 @@ void run_command_tests()
   test_capabilities_scopes_and_standard_recipes();
   test_workspace_origin_capabilities_apply_to_every_family();
   test_ancestor_freshness_detects_mode_and_replacement();
+  test_identity_bound_build_ancestor_churn_stales_tmp_parent_churn_does_not();
   test_stable_recipe_identity_is_scope_aware_and_secret_free();
   test_credential_bearing_commands_never_mint_recipes();
   test_recipe_argument_domains_and_unavailable_containment();

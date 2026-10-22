@@ -1082,6 +1082,16 @@ ava::core::VoidResult run_rpc_loop(runtime::session_ts& unlocked_session, runtim
 int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& out, std::ostream& err, rpc::RpcInputWake wake)
 {
   ModeSignalLatch signal_latch;
+  {
+    runtime::RunOptions probe;
+    probe.parallel_read_search_tools = options.parallel_read_search_tools;
+    probe.parallel_read_search_max_workers = options.parallel_read_search_max_workers;
+    if (auto valid = validate_run_options(probe); !valid)
+    {
+      err << valid.error().format() << '\n';
+      return 2;
+    }
+  }
   auto unlocked_session_result = runtime::Session::open(options.open_context, options.lifecycle_request);
   if (!unlocked_session_result)
   {
@@ -1091,6 +1101,8 @@ int run_rpc_mode(RpcModeOptions const& options, std::istream& in, std::ostream& 
   runtime::session_ts& unlocked_session = *unlocked_session_result;
 
   runtime::RunOptions runtime_options;
+  runtime_options.parallel_read_search_tools = options.parallel_read_search_tools;
+  runtime_options.parallel_read_search_max_workers = options.parallel_read_search_max_workers;
   runtime_options.cancel_requested = [&signal_latch] { return signal_latch.poll(); };
   // The Provider is kept alive till the end of this function.
   std::unique_ptr<ava::provider::Provider> provider;

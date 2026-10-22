@@ -1,0 +1,79 @@
+:root {
+  color-scheme: dark;
+  font-family: 'Geist', 'Noto Sans', 'Liberation Sans', sans-serif;
+  font-synthesis: none;
+  font-size: 14px;
+  --mono: 'Geist Mono', 'DejaVu Sans Mono', monospace;
+  --canvas: #141414;
+  --surface-panel: #191919;
+  --surface-raised: #242424;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --radius-control: 6px;
+  --radius-surface: 8px;
+  --control-height: 36px;
+  --type-control: 13px;
+  --code: #111111;
+  --text: #eeeeee;
+  --body: #d4d4d4;
+  --muted: #b8b8b8;
+  --quiet: #a1a1a1;
+  /* Shared status glyphs and static labels only. */
+  --status-working: #8bd5a0;
+  --status-completed: #ffffff;
+  --status-stopped-failed: #efaaa5;
+  --status-attention: #e6c77d;
+  --status-unavailable: var(--muted);
+  --edge: #ffffff1a;
+  --edge-bright: #ffffff29;
+  --separator: #ffffff10;
+  --hover: #ffffff08;
+  --glass-fill: rgba(28, 28, 28, .94);
+  --glass-sheen: linear-gradient(135deg, rgba(255, 255, 255, .035), transparent 40%, rgba(255, 255, 255, .012));
+  --glass-filter: blur(24px);
+  --material-drift-display: block;
+  --motion-panel-duration: 200ms;
+  --motion-feedback-duration: 180ms;
+  --motion-ease-out: cubic-bezier(.2, .8, .2, 1);
+  --header-height: 76px;
+  --reading-width: 780px;
+  --conversation-padding: 38px;
+}
+
+[data-material='opaque'] {
+  --glass-fill: #202020;
+  --glass-sheen: linear-gradient(transparent, transparent);
+  --glass-filter: none;
+  --material-drift-display: none;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass-fill: #202020; --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass-fill: #202020; --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --material-drift-display: none; }
+}
+
+@media (prefers-contrast: more) {
+  :root { --glass-fill: #202020; --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; --muted: #d5d5d5; --quiet: #c7c7c7; --body: #eeeeee; --separator: #ffffff59; --edge: #ffffff8c; --edge-bright: #ffffff8c; }
+}
+
+@media (max-width: 1200px) {
+  :root { --conversation-padding: 28px; }
+}
+
+@media (max-width: 800px) {
+  :root { --conversation-padding: 22px; }
+}
+
+@media (max-height: 760px) {
+  :root { --header-height: 68px; }
+}

@@ -2,6 +2,7 @@
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/test_harness.h"
+#include "ava/process/supervisor.h"
 #include "ava/app/command_jobs.h"
 #include "ava/app/command_registry.h"
 #include "ava/app/commands.h"
@@ -15,8 +16,11 @@
 #include "ava/session/subagent_job_history.h"
 #include "ava/permissions/permission.h"
 #include "ava/provider/openai_provider.h"
+#include "ava/core/error.h"
+#include "ava/core/json.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -27,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -47,6 +52,10 @@ ava::app::runtime::session_ts open_test_session(std::filesystem::path const& roo
   options.current_dir = workspace;
   options.paths = paths;
   options.requested_primary_agent = std::move(requested_primary_agent);
+  auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
+  expect(application_scope.has_value(), "command registry fixture owns application process authority");
+  if (application_scope)
+    options.application_process_scope = std::move(*application_scope);
   auto unlocked_session_result = ava::app::runtime::Session::open(options);
   expect(unlocked_session_result.has_value(), "command registry test opens runtime session");
   return std::move(*unlocked_session_result);
@@ -59,6 +68,40 @@ ava::permissions::PermissionResolver allow_all_permissions(std::vector<ava::perm
       operations->push_back(prompt.operation);
     return ava::permissions::PermissionResolution::Allow;
   };
+}
+
+ava::permissions::PermissionResolver deny_all_permissions()
+{
+  return [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+    return ava::permissions::PermissionResolution::Deny;
+  };
+}
+
+std::size_t count_exact_lines(std::string const& text, std::string_view needle)
+{
+  std::size_t count = 0;
+  std::size_t pos = 0;
+  while (pos < text.size())
+  {
+    auto const end = text.find('\n', pos);
+    auto const line = std::string_view(text).substr(pos, (end == std::string::npos ? text.size() : end) - pos);
+    if (line == needle)
+      ++count;
+    pos = end == std::string::npos ? text.size() : end + 1;
+  }
+  return count;
+}
+
+std::string mcp_server_config_json(std::string_view id, std::string_view name, std::string_view command, std::string_view args_json = "[]",
+                                   std::string_view env_json = "{}")
+{
+  return std::string("{\"servers\":[{\"id\":\"") + ava::core::json::escape(id) + "\",\"name\":\"" + ava::core::json::escape(name) + "\",\"command\":\"" +
+         ava::core::json::escape(command) + "\",\"args\":" + std::string(args_json) + ",\"env\":" + std::string(env_json) + ",\"enabled\":true}]}";
+}
+
+std::string mcp_event_log_env_json(std::filesystem::path const& event_log)
+{
+  return std::string("{\"AVA_FAKE_MCP_EVENT_LOG\":\"") + ava::core::json::escape(event_log.string()) + "\"}";
 }
 
 ava::app::CommandRegistryEntry const* find_entry(ava::app::CommandRegistry const& registry, std::string_view command)
@@ -1010,6 +1053,165 @@ void test_jobs_active_run_binding_overlays_captured_history()
     static_cast<void>(coordinator->wait(session_id, live->job.identity.job_id, std::chrono::seconds(2)));
 }
 
+void test_passive_command_lookup_does_not_start_mcp_and_submission_resolves_once()
+{
+  if (std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty())
+    return;
+
+  auto const root = create_empty_root("command-registry-mcp-resolve");
+  auto const workspace = root / "workspace";
+  auto const paths = app_test_paths(root);
+  auto const event_log = root / "mcp-events.log";
+  auto const private_home = root / "home";
+  std::filesystem::create_directories(private_home);
+  ScopedEnvVar home("HOME", private_home.string());
+  auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
+  expect(trusted.has_value(), trusted ? "MCP resolve test trusts project" : "MCP resolve test trusts project: " + trusted.error().format());
+  write_app_test_file(workspace / ".ava" / "mcp.json",
+                      mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[]", mcp_event_log_env_json(event_log)));
+  write_app_test_file(workspace / ".ava" / "skills" / "release" / "SKILL.md",
+                      "---\nname: release\ndescription: Prepare release work\n---\nRelease skill body\n");
+
+  auto unlocked_session = open_test_session(root, workspace);
+
+  expect(!ava::app::command_registry_contains(unlocked_session, "/release-notes"),
+         "passive lookup does not treat undiscovered MCP prompt aliases as known commands");
+  expect(!ava::app::is_backend_command_1("/release-notes", unlocked_session), "session-aware predicate stays MCP-free for short MCP aliases");
+  expect(ava::app::command_registry_contains(unlocked_session, "/mcp:demo:release-notes"), "namespaced /mcp: tokens remain commands without discovery");
+  expect(ava::app::is_backend_command("/help") && ava::app::command_registry_contains(unlocked_session, "/skill:release") &&
+             ava::app::command_registry_contains(unlocked_session, "/release"),
+         "builtin and skill recognition stay independent of MCP discovery");
+  expect(!ava::app::command_registry_contains(unlocked_session, "/definitely-unknown-slash"), "unknown slash commands stay unknown during passive lookup");
+  expect(!std::filesystem::exists(event_log) || app_read_binary_file(event_log).empty(), "passive command recognition starts zero MCP processes");
+
+  std::vector<ava::permissions::Operation> operations;
+  auto ask = allow_all_permissions(&operations);
+  auto resolved_alias = ava::app::resolve_command_registry_entry(unlocked_session, "/release-notes AVA", ask);
+  expect(resolved_alias && *resolved_alias && (*resolved_alias)->kind == ava::app::UnifiedCommandKind::McpPrompt &&
+             (*resolved_alias)->mcp_prompt_name == "release-notes",
+         resolved_alias ? "Ask-resolver submission resolves the MCP release-notes short alias once"
+                        : "Ask-resolver submission resolves the MCP release-notes short alias once: " + resolved_alias.error().format());
+  if (!resolved_alias || !*resolved_alias)
+    return;
+  auto alias_result =
+      ava::app::run_registry_command(unlocked_session, ava::app::CommandRequest{.command = "/release-notes AVA", .permission_resolver = ask}, **resolved_alias);
+  expect(alias_result && alias_result->handled && alias_result->prompt_message && alias_result->prompt_message->find("MCP prompt for AVA") != std::string::npos,
+         "resolved MCP alias dispatches without repeating discovery");
+
+  auto log_after_alias = app_read_binary_file(event_log);
+  expect(count_exact_lines(log_after_alias, "prompts/list") == 1 && count_exact_lines(log_after_alias, "prompts/get") == 1,
+         "one short-alias submission performs exactly one prompts/list discovery and one prompt invocation");
+
+  auto resolved_namespaced = ava::app::resolve_command_registry_entry(unlocked_session, "/mcp:demo:release-notes AVA", ask);
+  expect(resolved_namespaced && *resolved_namespaced && (*resolved_namespaced)->mcp_server_id == "demo",
+         resolved_namespaced ? "namespaced MCP prompt form resolves with the caller resolver"
+                             : "namespaced MCP prompt form resolves with the caller resolver: " + resolved_namespaced.error().format());
+  if (!resolved_namespaced || !*resolved_namespaced)
+    return;
+  auto namespaced_result = ava::app::run_registry_command(
+      unlocked_session, ava::app::CommandRequest{.command = "/mcp:demo:release-notes AVA", .permission_resolver = ask}, **resolved_namespaced);
+  expect(namespaced_result && namespaced_result->prompt_message && namespaced_result->prompt_message->find("MCP prompt for AVA") != std::string::npos,
+         "namespaced MCP prompt dispatches the already-resolved entry");
+
+  auto log_after_namespaced = app_read_binary_file(event_log);
+  expect(count_exact_lines(log_after_namespaced, "prompts/list") == 2 && count_exact_lines(log_after_namespaced, "prompts/get") == 2,
+         "second namespaced submission performs one additional list and one additional get");
+  expect(std::ranges::find(operations, ava::permissions::Operation::McpServerLaunch) != operations.end() &&
+             std::ranges::find(operations, ava::permissions::Operation::McpServerConnect) != operations.end() &&
+             std::ranges::find(operations, ava::permissions::Operation::McpToolCall) != operations.end(),
+         "MCP prompt resolution and invocation keep launch, connect, and call permission audits");
+
+  auto unknown = ava::app::resolve_command_registry_entry(unlocked_session, "/definitely-unknown-slash", ask);
+  expect(unknown && !*unknown, "unknown slash commands remain genuine not-found after MCP discovery");
+  auto missing_skill = ava::app::resolve_command_registry_entry(unlocked_session, "/skill:missing", ask);
+  expect(missing_skill && !*missing_skill, missing_skill
+                                               ? "missing namespaced skills stay not-found without MCP discovery errors"
+                                               : "missing namespaced skills stay not-found without MCP discovery errors: " + missing_skill.error().format());
+  auto missing_plugin = ava::app::resolve_command_registry_entry(unlocked_session, "/plugin:missing:cmd", ask);
+  expect(missing_plugin && !*missing_plugin,
+         missing_plugin ? "missing namespaced plugins stay not-found without MCP discovery errors"
+                        : "missing namespaced plugins stay not-found without MCP discovery errors: " + missing_plugin.error().format());
+  auto help = ava::app::resolve_command_registry_entry(unlocked_session, "/help", ask);
+  expect(help && *help && (*help)->kind == ava::app::UnifiedCommandKind::Backend, "builtin /help still resolves without MCP");
+}
+
+void test_mcp_prompt_listing_failures_are_diagnostics_not_unknown()
+{
+  if (std::string_view(AVA_FAKE_MCP_SERVER_PATH).empty())
+    return;
+
+  auto const root = create_empty_root("command-registry-mcp-list-failures");
+  auto const workspace = root / "workspace";
+  auto const paths = app_test_paths(root);
+  auto const private_home = root / "home";
+  std::filesystem::create_directories(private_home);
+  ScopedEnvVar home("HOME", private_home.string());
+  auto trusted = ava::app::set_project_trust_decision(paths, workspace, true);
+  expect(trusted.has_value(), trusted ? "MCP list-failure test trusts project" : "MCP list-failure test trusts project: " + trusted.error().format());
+
+  write_app_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH));
+  auto denied_session = open_test_session(root, workspace);
+  auto denied = ava::app::resolve_command_registry_entry(denied_session, "/release-notes", deny_all_permissions());
+  expect(!denied && denied.error().code() != ava::core::ErrorCode::Canceled && denied.error().message().find("permission_denied") != std::string::npos,
+         denied ? "denied MCP listing must not report success" : "denied MCP listing reports the permission diagnostic");
+  auto denied_run = ava::app::run_command(denied_session, ava::app::CommandRequest{.command = "/release-notes", .permission_resolver = deny_all_permissions()});
+  expect(denied_run && denied_run->handled && !denied_run->output.empty() && denied_run->output[0].find("permission_denied") != std::string::npos,
+         "denied MCP listing is surfaced as a diagnostic rather than unknown");
+
+  {
+    auto const canceled_root = create_empty_root("command-registry-canceled-demo");
+    auto const canceled_workspace = canceled_root / "canceled-workspace";
+    auto const canceled_paths = app_test_paths(canceled_root);
+    auto const canceled_private_home = canceled_root / "home";
+    std::filesystem::create_directories(canceled_private_home);
+    ScopedEnvVar canceled_home("HOME", canceled_private_home.string());
+    auto canceled_trusted = ava::app::set_project_trust_decision(canceled_paths, canceled_workspace, true);
+    expect(canceled_trusted.has_value(),
+           canceled_trusted ? "canceled-name denial test trusts project" : "canceled-name denial test trusts project: " + canceled_trusted.error().format());
+    write_app_test_file(canceled_workspace / ".ava" / "mcp.json", app_test_mcp_config_json("canceled-demo", "Canceled Demo", AVA_FAKE_MCP_SERVER_PATH));
+    auto canceled_name_session = open_test_session(canceled_root, canceled_workspace);
+    auto denied_canceled_name = ava::app::resolve_command_registry_entry(canceled_name_session, "/release-notes", deny_all_permissions());
+    expect(!denied_canceled_name && denied_canceled_name.error().code() != ava::core::ErrorCode::Canceled &&
+               denied_canceled_name.error().message().find("permission_denied") != std::string::npos,
+           denied_canceled_name ? "denied MCP server whose id/path contains canceled must not succeed"
+                                : "denied MCP listing for id/path containing canceled stays a permission failure, not cancellation");
+  }
+
+  write_app_test_file(workspace / ".ava" / "mcp.json", mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH, "[\"exit-initialize\"]"));
+  auto failed_session = open_test_session(root, workspace);
+  auto failed = ava::app::resolve_command_registry_entry(failed_session, "/release-notes", allow_all_permissions());
+  expect(!failed && (failed.error().message().find("closed") != std::string::npos || failed.error().message().find("exit") != std::string::npos),
+         failed ? "failed MCP listing must not report success" : "failed MCP listing reports the actual diagnostic");
+
+  auto cancel_session = open_test_session(root, workspace);
+  write_app_test_file(workspace / ".ava" / "mcp.json", app_test_mcp_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH));
+  auto canceled = ava::app::resolve_command_registry_entry(cancel_session, "/release-notes", allow_all_permissions(), [] { return true; });
+  expect(!canceled && canceled.error().code() == ava::core::ErrorCode::Canceled && canceled.error().message().find("canceled") != std::string::npos,
+         canceled ? "pre-canceled MCP listing must not succeed" : "cancellation during listing is surfaced as canceled rather than unknown");
+
+  auto const marker = root / "slow-list.pgid";
+  write_app_test_file(workspace / ".ava" / "mcp.json",
+                      mcp_server_config_json("demo", "Demo MCP", AVA_FAKE_MCP_SERVER_PATH,
+                                             "[\"slow-prompts-list-marker\",\"" + ava::core::json::escape(marker.generic_string()) + "\"]"));
+  auto slow_session = open_test_session(root, workspace);
+  std::atomic<bool> cancel{false};
+  std::jthread watcher([&] {
+    for (int attempt = 0; attempt < 40; ++attempt)
+    {
+      if (std::filesystem::exists(marker))
+      {
+        cancel.store(true);
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  });
+  auto listing_canceled = ava::app::resolve_command_registry_entry(slow_session, "/release-notes", allow_all_permissions(), [&] { return cancel.load(); });
+  expect(!listing_canceled && listing_canceled.error().message().find("canceled") != std::string::npos,
+         listing_canceled ? "in-flight MCP listing cancel must not resolve an entry"
+                          : "cancellation during prompts/list is surfaced rather than falling through as unknown");
+}
+
 }  // namespace
 
 void run_app_command_registry_tests()
@@ -1018,6 +1220,8 @@ void run_app_command_registry_tests()
   test_skill_commands_are_registry_entries_and_permissioned_prompts();
   test_plugin_commands_are_registry_entries();
   test_mcp_prompts_are_registry_entries_and_permissioned_prompts();
+  test_passive_command_lookup_does_not_start_mcp_and_submission_resolves_once();
+  test_mcp_prompt_listing_failures_are_diagnostics_not_unknown();
   test_builtin_session_alias_registers_as_current_stats_command();
   test_interactive_jobs_human_output_keeps_public_json_contract();
   test_jobs_command_reads_owned_session_history_after_reopen_path();

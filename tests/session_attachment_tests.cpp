@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/session_test_declarations.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/agent/message_builder.h"
 #include "ava/session/attachments.h"
@@ -12,6 +13,12 @@
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
+#include <csignal>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +30,11 @@
 #include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/ptrace.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#endif
 
 namespace session_tests {
 namespace {
@@ -37,6 +49,171 @@ std::optional<std::filesystem::path> created_session_rollback_quarantine(std::fi
       return iterator->path();
   }
   return std::nullopt;
+}
+
+// Interposition state machine (one child for each FIFO/symlink replacement):
+// 1. The child requests tracing, stops for setup, then arms a watchdog and reads.
+// 2. The parent steps syscall stops until openat/openat2 is about to open the
+//    attachment, ignoring syscall exits and opens of other paths. Stored reads
+//    may use a root-relative path; imported reads use the source's full path.
+// 3. While the child is stopped at that entry, park the original inode and
+//    install the replacement. Thus no preceding pathname check can avoid it.
+// 4. After swapping, continue without syscall stepping; the reader must reject
+//    the replacement with the expected category, not block opening a FIFO.
+// 5. Reap the child and restore the original fixture before checking the result.
+// Trace failures kill/reap the child; unsupported tracing/filesystem operations
+// skip the case. The child alarm also bounds an unexpected block or broken trace.
+template <typename ReadAttachment>
+void test_attachment_replacement_before_open(std::filesystem::path const& path, ReadAttachment&& read_attachment)
+{
+#if defined(__linux__) && defined(PTRACE_GET_SYSCALL_INFO)
+  for (bool const symlink : {false, true})
+  {
+    auto const parked = std::filesystem::path(path.string() + ".before-open");
+    auto const child = ::fork();
+    expect(child >= 0, "attachment replacement regression forks a watchdog-protected reader");
+    if (child < 0)
+      return;
+    if (child == 0)
+    {
+      if (::ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) != 0)
+        ::_exit(77);
+      ::raise(SIGSTOP);
+      ::signal(SIGALRM, SIG_DFL);
+      ::alarm(5);
+      auto result = read_attachment();
+      auto const expected_category = symlink ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::InvalidArgument;
+      ::_exit(!result && result.error().category() == expected_category ? 0 : 1);
+    }
+
+    int status = 0;
+    auto const wait_child = [&] {
+      pid_t waited;
+      do
+      {
+        waited = ::waitpid(child, &status, 0);
+      }
+      while (waited < 0 && errno == EINTR);
+      return waited == child;
+    };
+    auto const kill_child = [&] {
+      static_cast<void>(::kill(child, SIGKILL));
+      static_cast<void>(wait_child());
+    };
+    if (!wait_child())
+    {
+      kill_child();
+      expect(false, "attachment replacement watchdog reader is waitable");
+      return;
+    }
+    if (WIFEXITED(status))
+    {
+      ava::tests::expect_child_success(status, "attachment replacement reader exits successfully",
+                                       "attachment replacement race requires permitted parent/child ptrace");
+      return;
+    }
+    if (!WIFSTOPPED(status) || ::ptrace(PTRACE_SETOPTIONS, child, nullptr, PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) != 0)
+    {
+      kill_child();
+      ava::tests::request_skip("attachment replacement race requires syscall tracing support");
+      return;
+    }
+
+    bool swapped = false;
+    bool original_parked = false;
+    bool trace_ok = true;
+    bool unsupported = false;
+    int signal_to_deliver = 0;
+    while (true)
+    {
+      auto const request = swapped ? PTRACE_CONT : PTRACE_SYSCALL;
+      if (::ptrace(request, child, nullptr, reinterpret_cast<void*>(static_cast<std::intptr_t>(signal_to_deliver))) != 0 || !wait_child())
+      {
+        trace_ok = false;
+        kill_child();
+        break;
+      }
+      if (WIFEXITED(status) || WIFSIGNALED(status))
+        break;
+      if (!WIFSTOPPED(status))
+      {
+        trace_ok = false;
+        kill_child();
+        break;
+      }
+      signal_to_deliver = WSTOPSIG(status);
+      if (signal_to_deliver != (SIGTRAP | 0x80))
+        continue;
+      signal_to_deliver = 0;
+
+      struct __ptrace_syscall_info info{};
+      if (::ptrace(PTRACE_GET_SYSCALL_INFO, child, sizeof(info), &info) < 0)
+      {
+        unsupported = errno == EINVAL || errno == EIO || errno == ENOSYS;
+        trace_ok = false;
+        kill_child();
+        break;
+      }
+      if (info.op != PTRACE_SYSCALL_INFO_ENTRY)
+        continue;
+      bool is_open = info.entry.nr == SYS_openat;
+#ifdef SYS_openat2
+      is_open = is_open || info.entry.nr == SYS_openat2;
+#endif
+      if (!is_open)
+        continue;
+      std::string opened_path;
+      for (std::size_t offset = 0; offset < 4096; offset += sizeof(long))
+      {
+        errno = 0;
+        auto const word = ::ptrace(PTRACE_PEEKDATA, child, reinterpret_cast<void*>(static_cast<std::uintptr_t>(info.entry.args[1]) + offset), nullptr);
+        if (word == -1 && errno != 0)
+          break;
+        std::array<char, sizeof(word)> bytes{};
+        std::memcpy(bytes.data(), &word, sizeof(word));
+        for (char const byte : bytes)
+        {
+          if (byte == '\0')
+            break;
+          opened_path += byte;
+        }
+        if (std::find(bytes.begin(), bytes.end(), '\0') != bytes.end())
+          break;
+      }
+      auto const opened = std::filesystem::path(opened_path);
+      if (opened != path && (opened.is_absolute() || opened.filename() != path.filename()))
+        continue;
+
+      original_parked = ::rename(path.c_str(), parked.c_str()) == 0;
+      swapped = original_parked && (symlink ? ::symlink(parked.c_str(), path.c_str()) == 0 : ::mkfifo(path.c_str(), 0600) == 0);
+      if (original_parked && !swapped && (errno == ENOSYS || errno == EOPNOTSUPP))
+        unsupported = true;
+      if (!swapped)
+      {
+        trace_ok = false;
+        kill_child();
+        break;
+      }
+    }
+    if (original_parked)
+    {
+      static_cast<void>(::unlink(path.c_str()));
+      expect(::rename(parked.c_str(), path.c_str()) == 0, "attachment replacement fixture restores its original regular file");
+    }
+    if (unsupported)
+    {
+      ava::tests::request_skip("attachment replacement race requires syscall tracing and FIFO/symlink filesystem support");
+      return;
+    }
+    expect(trace_ok && swapped && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+           symlink ? "attachment reader rejects a symlink installed after pathname inspection"
+                   : "attachment reader rejects a FIFO installed after pathname inspection without blocking");
+  }
+#else
+  static_cast<void>(path);
+  static_cast<void>(read_attachment);
+  ava::tests::request_skip("attachment replacement race requires Linux syscall tracing");
+#endif
 }
 
 }  // namespace
@@ -413,6 +590,8 @@ void test_image_attachment_storage_boundary()
              "image attachment storage rejects symlinked attachment roots");
     }
   }
+
+  test_attachment_replacement_before_open(attachment_path, [&] { return ava::session::load_image_attachment(*store, attachment); });
 }
 
 void test_image_attachment_import()
@@ -455,6 +634,8 @@ void test_image_attachment_import()
     auto symlink_import = ava::session::import_image_attachment(*store, link);
     expect(!symlink_import && symlink_import.error().message().find("symlink") != std::string::npos, "image attachment import rejects symlink source paths");
   }
+
+  test_attachment_replacement_before_open(image_path, [&] { return ava::session::import_image_attachment(*store, image_path); });
 }
 
 void test_created_session_rollback_is_identity_safe_and_preserves_attachments()

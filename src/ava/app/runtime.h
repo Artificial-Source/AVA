@@ -49,6 +49,8 @@ using PreparedCompactionContext = ava::agent::PreparedCompactionContext;
 [[nodiscard]] ava::core::Result<ava::config::ModelInfo> resolve_runtime_model(ava::config::XdgPaths const& paths, std::string_view provider_id,
                                                                               std::string_view model_id);
 
+[[nodiscard]] ava::core::VoidResult validate_run_options(runtime::RunOptions const& options);
+
 [[nodiscard]] ava::core::Result<ava::agent::AgentLoopResult> run_prompt(runtime::session_ts& unlocked_session, std::string const& user_message,
                                                                         ava::provider::Provider const& provider, ava::http::Transport& transport,
                                                                         runtime::RunOptions const& options);

@@ -1,23 +1,34 @@
 #include "sys.h"
 #include "tests/session_test_declarations.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
+#include "ava/session/assistant_output.h"
 #include "ava/session/attachments.h"
 #include "ava/session/record.h"
 #include "ava/session/session_store.h"
 #include "ava/session/validation.h"
 #include "ava/core/result.h"
 
+#include <algorithm>
+#include <cerrno>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace session_tests {
 void test_session_store_round_trip()
@@ -464,6 +475,155 @@ void test_session_record_round_trip()
       .data_json = "{\"text\":\"hello\"}",
   });
   expect(!too_large, "session record serializer rejects oversized records before append");
+}
+
+void test_session_store_sync_failures_are_not_committed()
+{
+  auto const root = create_empty_root("session-store-sync-failure");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  auto const has_context = [](ava::core::Error const& error, std::string_view key, std::string_view value) {
+    return std::ranges::any_of(error.context(), [&](ava::core::ErrorContext const& item) { return item.key == key && item.value == value; });
+  };
+  ava::session::SessionEntry const ordinary{.id = "durable-user",
+                                            .parent_id = "",
+                                            .type = ava::session::EntryType::UserMessage,
+                                            .timestamp = "2026-10-19T00:00:00Z",
+                                            .data_json = "{\"text\":\"durable\"}"};
+  auto item_data = ava::session::serialize_assistant_output_item_data_json(ava::session::AssistantOutputItem{
+      .assistant_turn_id = "sync-turn",
+      .sequence = 0,
+      .kind = ava::session::AssistantOutputItemKind::Text,
+      .provider_item_id = "sync-provider-item",
+      .provider_output_index = 0,
+      .payload = ava::session::AssistantOutputText{.text = "staged", .assistant_phase = ava::session::AssistantOutputTextPhase::Commentary}});
+  auto commit_data = ava::session::serialize_assistant_turn_commit_data_json(ava::session::AssistantTurnCommit{.assistant_turn_id = "sync-turn",
+                                                                                                               .item_count = 1,
+                                                                                                               .provider = "openai",
+                                                                                                               .model = "offline-test",
+                                                                                                               .finish_reason = "completed",
+                                                                                                               .usage_json = std::nullopt});
+  expect(item_data && commit_data, "sync failure fixture serializes a complete assistant transaction");
+  if (!item_data || !commit_data)
+    return;
+
+  for (bool const batch : {false, true})
+  {
+    auto store = ava::session::SessionStore::create(workspace, root / (batch ? "batch" : "single"));
+    expect(store.has_value(), "sync failure fixture creates a session store");
+    if (!store)
+      return;
+    auto lease = ava::session::SessionLease::create_and_acquire(store->session_path());
+    expect(lease.has_value(), "normal new-session creation succeeds before injected append sync failure");
+    if (!lease)
+      return;
+    auto normal_append = store->append(*lease, ordinary);
+    expect(normal_append.has_value(), "normal append succeeds before injected sync failure");
+    if (!normal_append)
+      return;
+
+    bool closed_for_sync_failure = false;
+    bool post_write_hook_called = false;
+    std::size_t writes = 0;
+    // Reuse the write seam: invalidate only the append descriptor after all
+    // bytes are written, forcing the following durability barrier to fail.
+    store->set_append_write_for_test([&](int fd, std::string_view bytes) -> ssize_t {
+      ++writes;
+      auto const count = ::write(fd, bytes.data(), bytes.size());
+      if (count > 0 && static_cast<std::size_t>(count) == bytes.size())
+        closed_for_sync_failure = ::close(fd) == 0;
+      return count;
+    });
+    store->set_after_append_write_for_test([&] { post_write_hook_called = true; });
+    auto target = ava::session::SessionAppendTarget::create_persistent(*store, *lease, ava::session::SessionReadLimits{});
+    expect(target.has_value(), "sync failure fixture creates an append authority");
+    if (!target)
+      return;
+
+    auto candidate = ordinary;
+    candidate.id = "sync-failed-user";
+    std::vector<ava::session::SessionEntry> const batch_entries{ava::session::SessionEntry{.id = "sync-output",
+                                                                                           .parent_id = "",
+                                                                                           .type = ava::session::EntryType::AssistantOutputItem,
+                                                                                           .timestamp = "2026-10-19T00:00:00Z",
+                                                                                           .data_json = *item_data},
+                                                                ava::session::SessionEntry{.id = "sync-commit",
+                                                                                           .parent_id = "",
+                                                                                           .type = ava::session::EntryType::AssistantTurnCommit,
+                                                                                           .timestamp = "2026-10-19T00:00:00Z",
+                                                                                           .data_json = *commit_data}};
+    auto appended = batch ? (*target)->append_batch(batch_entries) : (*target)->append(candidate);
+    auto blocked = (*target)->append(candidate);
+    auto entries = store->load();
+    expect(closed_for_sync_failure && !appended && appended.error().message().find("sync") != std::string::npos &&
+               has_context(appended.error(), "append_commit_state", "partial_or_unknown"),
+           "a complete write whose data sync fails reports partial_or_unknown rather than committed");
+    expect(!appended && has_context(appended.error(), "append_close_cause", std::strerror(EBADF)),
+           "sync failure preserves checked append-descriptor cleanup errors");
+    expect(!post_write_hook_called && writes == 1 && entries && entries->size() == 2,
+           "sync failure precedes post-write hooks and prevents a later batch commit record");
+    expect(!blocked, "sync failure blocks further append authority mutations until explicit recovery");
+    if (batch)
+      expect(!appended && has_context(appended.error(), "batch_persisted_entries", "0"),
+             "a batch whose first record fails data sync acknowledges no durably persisted records");
+  }
+}
+
+void test_session_lease_creation_sync_failures()
+{
+  auto const root = create_empty_root("session-lease-sync-failure");
+  auto const normal_path = root / "normal" / "ancestor" / "sessions" / "normal.jsonl";
+  auto normal = ava::session::SessionLease::create_and_acquire(normal_path);
+  expect(normal && normal->active() && std::filesystem::exists(normal_path), "normal new-session creation succeeds with newly created ancestor directories");
+
+  for (int const denied_syscall : {SYS_fdatasync, SYS_fsync})
+  {
+    auto const path = root / (denied_syscall == SYS_fdatasync ? "file-sync" : "directory-sync") / "ancestor" / "sessions" / "failed.jsonl";
+    auto const status = ava::tests::run_in_child_with_syscall_errno(denied_syscall, std::nullopt, EIO, [&] {
+      auto failed = ava::session::SessionLease::create_and_acquire(path);
+      bool const rejected = !failed && failed.error().message().find("sync") != std::string::npos && !std::filesystem::exists(path);
+      return rejected ? 0 : 2;
+    });
+    ava::tests::expect_child_success(status, denied_syscall == SYS_fdatasync
+                                                 ? "new-session creation rejects file sync failure before publication"
+                                                 : "new-session creation rejects directory sync failure and removes its published name");
+    if (ava::tests::skip_requested())
+      return;
+  }
+
+  for (auto const& [ancestor_error, create_subtree] :
+       {std::pair{EIO, false}, std::pair{EIO, true}, std::pair{EINVAL, true}, std::pair{ENOTSUP, true}, std::pair{EROFS, true}, std::pair{EACCES, true}})
+  {
+    auto const existing_ancestor = root / ("ancestor-error-" + std::to_string(ancestor_error) + (create_subtree ? "-new" : "-existing"));
+    std::filesystem::create_directories(existing_ancestor);
+    auto const path = existing_ancestor / "sessions" / "created.jsonl";
+    if (!create_subtree)
+      std::filesystem::create_directory(path.parent_path());
+    // Reserve then release the first free slot before forking. Creation's parent
+    // descriptor reuses it; its mandatory fsync stays allowed while ancestor fsyncs fail.
+    int const parent_descriptor = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    bool const reserved = parent_descriptor >= 0 && ::close(parent_descriptor) == 0;
+    expect(reserved, "ancestor sync fixture determines creation's parent descriptor");
+    if (!reserved)
+      return;
+    auto const status = ava::tests::run_in_child_with_syscall_errno(
+        SYS_fsync, ava::tests::SyscallArgumentFilter{.index = 0, .value = static_cast<std::uint32_t>(parent_descriptor), .equal = false}, ancestor_error, [&] {
+          auto created = ava::session::SessionLease::create_and_acquire(path);
+          if (ancestor_error == EIO && create_subtree)
+          {
+            bool const synced_receiving_directory =
+                !created && created.error().message() == "failed to sync session lease ancestor directory" && !std::filesystem::exists(path);
+            return synced_receiving_directory ? 0 : 2;
+          }
+          return created && created->active() && std::filesystem::exists(path) ? 0 : 2;
+        });
+    std::string const message = !create_subtree         ? "new-session creation does not sync pre-existing ancestors when no directories were created"
+                                : ancestor_error == EIO ? "new-session creation syncs the pre-existing directory that received the new subtree"
+                                                        : "new-session creation tolerates receiving-ancestor sync errno " + std::to_string(ancestor_error);
+    ava::tests::expect_child_success(status, message);
+    if (ava::tests::skip_requested())
+      return;
+  }
 }
 
 }  // namespace session_tests

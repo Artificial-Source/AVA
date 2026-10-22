@@ -7,16 +7,23 @@
 #include "ava/permissions/permission.h"
 #include "ava/core/error.h"
 #include "ava/core/path.h"
+#include "ava/core/thread.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 
@@ -49,6 +56,43 @@ class CountingDifferentContentExactFileAccess final : public ava::tools::ExactFi
  private:
   std::string content_;
 };
+
+// A delayed watchdog opens each FIFO for writing so a blocking regression fails
+// without hanging the suite. Report whether a writer actually unblocked a read;
+// ordinary scheduler delays are not a test oracle.
+template <typename Operation>
+auto run_with_fifo_watchdog(std::vector<std::filesystem::path> const& fifos, Operation&& operation)
+{
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool finished = false;
+  bool unblocked = false;
+  ava::core::JoinThread unblocker = ava::core::JoinThread::create("fifo_unblocker", [&] {
+    std::unique_lock lock(mutex);
+    if (changed.wait_for(lock, std::chrono::seconds(3), [&] { return finished; }))
+      return;
+    while (!changed.wait_for(lock, std::chrono::milliseconds(50), [&] { return finished; }))
+    {
+      for (auto const& fifo : fifos)
+      {
+        int const writer = ::open(fifo.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+        if (writer >= 0)
+        {
+          unblocked = true;
+          static_cast<void>(::close(writer));
+        }
+      }
+    }
+  });
+  auto result = std::forward<Operation>(operation)();
+  {
+    std::lock_guard lock(mutex);
+    finished = true;
+  }
+  changed.notify_all();
+  unblocker.join();
+  return std::pair{std::move(result), unblocked};
+}
 
 void test_search_tools()
 {
@@ -491,6 +535,285 @@ void test_secure_workspace_search_tools()
          "secure grep reads descriptor-anchored local bytes without consulting exact-file access");
 }
 
+void test_fifos_never_block_secure_reads_or_search()
+{
+  auto const root = create_empty_root("fifo-reads-and-search");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace / "src");
+  {
+    std::ofstream file(workspace / "src" / "real.cpp", std::ios::binary | std::ios::trunc);
+    file << "fifo needle\n";
+  }
+  auto const source_fifo = workspace / "src" / "pipe.cpp";
+  auto const ignore_fifo = workspace / ".gitignore";
+  bool const fifos_created = ::mkfifo(source_fifo.c_str(), 0600) == 0 && ::mkfifo(ignore_fifo.c_str(), 0600) == 0;
+  expect(fifos_created, "FIFO fixture creates a FIFO named like a source file and a FIFO root .gitignore");
+  if (!fifos_created)
+    return;
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "FIFO fixture anchors a secure workspace");
+  if (!secure)
+    return;
+  std::vector<std::filesystem::path> const fifos{source_fifo, ignore_fifo};
+  ava::tools::ToolContext const secure_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build, .secure_workspace = *secure};
+  ava::tools::ToolContext const plain_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build};
+
+  auto const [fifo_read, read_unblocked] = run_with_fifo_watchdog(fifos, [&] { return ava::tools::read_file(secure_context, source_fifo); });
+  expect(!fifo_read && fifo_read.error().message().find("not a regular file") != std::string::npos && !read_unblocked,
+         "secure read_file rejects a FIFO named like a source file without blocking in open");
+  auto const [fifo_edit, edit_unblocked] = run_with_fifo_watchdog(fifos, [&] { return ava::tools::edit_file(secure_context, source_fifo, "fifo", "pipe"); });
+  expect(!fifo_edit && fifo_edit.error().message().find("not a regular file") != std::string::npos && !edit_unblocked,
+         "secure edit_file rejects a FIFO without blocking in open");
+
+  auto const only_real_source = [&workspace](std::vector<std::filesystem::path> const& paths) {
+    return paths.size() == 1 && paths.front() == workspace / "src" / "real.cpp";
+  };
+  for (auto const* context : {&secure_context, &plain_context})
+  {
+    auto const label = std::string(context->secure_workspace ? "secure" : "non-secure");
+    auto const [glob, glob_unblocked] = run_with_fifo_watchdog(fifos, [&] { return ava::tools::glob_files(*context, "**/*.cpp"); });
+    expect(glob && only_real_source(glob->paths) && !glob->truncated && glob->skipped_paths == 0 && !glob_unblocked,
+           label + " glob skips a FIFO .gitignore and a FIFO source name without blocking");
+    auto const [grep, grep_unblocked] = run_with_fifo_watchdog(fifos, [&] { return ava::tools::grep_files(*context, "fifo needle", "**/*.cpp"); });
+    expect(grep && grep->matches.size() == 1 && grep->matches.front().path == workspace / "src" / "real.cpp" && !grep->truncated && !grep_unblocked,
+           label + " grep returns regular-file matches beside FIFOs without blocking");
+  }
+}
+
+void test_search_reports_unreadable_directories_as_skipped()
+{
+  // Permission bits do not restrict root, so the unreadable-directory fixture cannot exist for a privileged run.
+  if (::geteuid() == 0)
+    return;
+  auto const root = create_empty_root("search-unreadable-directory");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  auto const locked = workspace / "locked";
+  std::filesystem::create_directories(workspace / "open");
+  std::filesystem::create_directories(locked);
+  {
+    std::ofstream visible(workspace / "open" / "visible.txt", std::ios::binary | std::ios::trunc);
+    visible << "skip needle\n";
+    std::ofstream hidden(locked / "hidden.txt", std::ios::binary | std::ios::trunc);
+    hidden << "skip needle\n";
+  }
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  bool const locked_down = ::chmod(locked.c_str(), 0) == 0;
+  expect(secure.has_value() && locked_down, "unreadable-directory fixture anchors a workspace and removes all access to one subdirectory");
+  if (!secure || !locked_down)
+  {
+    static_cast<void>(::chmod(locked.c_str(), 0700));
+    return;
+  }
+  auto const spill = root / "spill";
+  std::filesystem::create_directory(spill);
+  ava::tools::ToolContext const secure_context{.workspace_dir = workspace, .spill_dir = spill, .mode = ava::agent::Mode::Build, .secure_workspace = *secure};
+  ava::tools::ToolContext const plain_context{.workspace_dir = workspace, .spill_dir = spill, .mode = ava::agent::Mode::Build};
+  auto secure_glob = ava::tools::glob_files(secure_context, "**/*.txt");
+  auto secure_grep = ava::tools::grep_files(secure_context, "skip needle", "**/*.txt");
+  auto plain_glob = ava::tools::glob_files(plain_context, "**/*.txt");
+  auto plain_grep = ava::tools::grep_files(plain_context, "skip needle", "**/*.txt");
+  static_cast<void>(::chmod(locked.c_str(), 0700));
+
+  auto const visible = workspace / "open" / "visible.txt";
+  auto const glob_reports_skip = [&visible](ava::core::Result<ava::tools::GlobResult> const& glob) {
+    return glob && glob->paths.size() == 1 && glob->paths.front() == visible && !glob->truncated && glob->skipped_paths == 1 && glob->spill_path.empty();
+  };
+  auto const grep_reports_skip = [&visible](ava::core::Result<ava::tools::GrepResult> const& grep) {
+    return grep && grep->matches.size() == 1 && grep->matches.front().path == visible && !grep->truncated && grep->skipped_paths == 1 &&
+           grep->spill_path.empty();
+  };
+  expect(glob_reports_skip(secure_glob) && grep_reports_skip(secure_grep),
+         "secure glob and grep report an unreadable subdirectory as skipped while returning the other matches");
+  expect(glob_reports_skip(plain_glob) && grep_reports_skip(plain_grep),
+         "non-secure glob and grep report an unreadable subdirectory as skipped instead of ending the walk silently");
+  expect(std::filesystem::is_empty(spill), "skipped directories alone never create search spill files");
+}
+
+void test_secure_walk_counts_vanished_entry_without_stale_errno()
+{
+  auto const root = create_empty_root("secure-walk-vanished-entry");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace);
+  {
+    std::ofstream first(workspace / "first.txt", std::ios::binary | std::ios::trunc);
+    first << "first\n";
+    std::ofstream second(workspace / "second.txt", std::ios::binary | std::ios::trunc);
+    second << "second\n";
+  }
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "vanished-entry fixture anchors a secure workspace");
+  if (!secure)
+    return;
+  std::vector<std::string> visited;
+  bool removed = false;
+  auto walked = (*secure)->visit_tree([&](ava::tools::SecureWorkspaceDirectoryEntry const& entry) -> ava::core::Result<ava::tools::SecureWorkspaceWalkAction> {
+    visited.push_back(entry.name);
+    if (!removed)
+    {
+      // readdir has already buffered both names, so the walk still reaches the removed sibling, whose fstatat fails with ENOENT. It is
+      // the last regular entry, so a stale errno would surface as a failed directory read at end of stream.
+      std::error_code remove_error;
+      removed = std::filesystem::remove(workspace / (entry.name == "first.txt" ? "second.txt" : "first.txt"), remove_error);
+    }
+    return ava::tools::SecureWorkspaceWalkAction::Continue;
+  });
+  expect(removed && walked && walked->skipped_entries == 1 && visited.size() == 1,
+         "secure walk completes and counts a sibling that vanished after readdir instead of failing on a stale errno");
+}
+
+void test_secure_grep_skips_oversized_files()
+{
+  auto const root = create_empty_root("secure-grep-oversized");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace / "data");
+  auto const huge = workspace / "data" / "huge.bin";
+  {
+    std::ofstream small(workspace / "small.txt", std::ios::binary | std::ios::trunc);
+    small << "oversize needle\n";
+    std::ofstream created(huge, std::ios::binary | std::ios::trunc);
+  }
+  std::error_code size_error;
+  std::filesystem::resize_file(huge, 11U * 1024U * 1024U, size_error);
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(!size_error && secure.has_value(), "oversized grep fixture creates an 11 MiB file and anchors a secure workspace");
+  if (size_error || !secure)
+    return;
+  auto const spill = root / "spill";
+  std::filesystem::create_directory(spill);
+  ava::tools::ToolContext const context{.workspace_dir = workspace, .spill_dir = spill, .mode = ava::agent::Mode::Build, .secure_workspace = *secure};
+
+  auto grep = ava::tools::grep_files(context, "oversize needle");
+  expect(grep && grep->matches.size() == 1 && grep->matches.front().path == workspace / "small.txt" && !grep->truncated && grep->skipped_paths == 1 &&
+             grep->spill_path.empty() && std::filesystem::is_empty(spill),
+         "secure grep reports an oversized file independently from truncation without spilling complete inline matches");
+
+  auto edited = ava::tools::edit_file(context, huge, "a", "b");
+  expect(!edited && edited.error().code() == ava::core::ErrorCode::FileSizeLimit && edited.error().message().find("edit_file") != std::string::npos,
+         "the read size limit is an identifiable error that names the refused operation");
+}
+
+void test_secure_listing_keeps_symlink_names()
+{
+  auto const root = create_empty_root("secure-list-symlink-names");
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace / "real-dir");
+  std::filesystem::create_directories(root / "outside");
+  std::ofstream(workspace / "real.txt") << "abc";
+  std::filesystem::create_directory_symlink("real-dir", workspace / "dir-link");
+  std::filesystem::create_symlink("real.txt", workspace / "file-link");
+  std::filesystem::create_directory_symlink(root / "outside", workspace / "escape-link");
+  std::filesystem::create_symlink("missing", workspace / "dangling-link");
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "symlink listing fixture opens its workspace");
+  if (!secure)
+    return;
+  ava::tools::ToolContext const context{.workspace_dir = workspace, .secure_workspace = *secure};
+  auto listing = ava::tools::list_directory(context, workspace);
+  expect(listing.has_value(), "secure directory listing succeeds with contained, escaping, and dangling links");
+  if (!listing)
+    return;
+  auto const has_entry = [&](std::string_view name, bool directory, std::uintmax_t size) {
+    return std::ranges::any_of(listing->entries, [&](auto const& entry) { return entry.name == name && entry.directory == directory && entry.size == size; });
+  };
+  expect(has_entry("dir-link", true, 0) && has_entry("file-link", false, 3), "contained symlink entries report their descriptor-inspected target types");
+  expect(has_entry("escape-link", false, 0) && has_entry("dangling-link", false, 0),
+         "escaping and dangling symlink names remain visible without following their targets");
+}
+
+void test_search_excludes_unapproved_files()
+{
+  auto const root = create_empty_root("explicit-search-permissions");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace);
+  std::ofstream(workspace / "allowed.txt") << "permission needle\n";
+  std::ofstream(workspace / "denied.txt") << "permission needle\n";
+  std::ofstream(workspace / ".env") << "permission needle\n";
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "explicit search fixture opens a descriptor workspace");
+  if (!secure)
+    return;
+
+  ava::tools::ToolContext context{
+      .workspace_dir = workspace,
+      .permission_resolver = [&](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        return prompt.target_path == workspace / "allowed.txt" ? ava::permissions::PermissionResolution::Allow : ava::permissions::PermissionResolution::Deny;
+      },
+      .auto_allow_deny_preflight = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        return ava::permissions::PermissionResolution::Allow;
+      },
+      .require_explicit_file_permissions = true,
+      .secure_workspace = *secure,
+      .require_descriptor_secure_workspace = true};
+  context.permission_tool_name = "glob";
+  auto glob = ava::tools::glob_files(context, "**/*");
+  expect(glob && glob->paths == std::vector<std::filesystem::path>{workspace / "allowed.txt"},
+         "glob omits files denied by the resolver or built-in secret policy");
+  context.permission_tool_name = "grep";
+  auto grep = ava::tools::grep_files(context, "permission needle");
+  expect(grep && grep->matches.size() == 1 && grep->matches.front().path == workspace / "allowed.txt",
+         "grep returns bytes only from approved files and omits denied and secret files");
+  context.permission_tool_name = "list_directory";
+  auto listing = ava::tools::list_directory(context, workspace);
+  expect(listing && listing->entries.size() == 1 && listing->entries.front().name == "allowed.txt",
+         "directory listing omits files denied by the resolver or built-in secret policy");
+}
+
+void test_gitignored_virtual_environment_is_excluded()
+{
+  auto const root = create_empty_root("search-ignored-venv");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace / ".venv" / "lib" / "package");
+  std::filesystem::create_directories(workspace / "src");
+  std::ofstream(workspace / ".gitignore") << ".venv/\n";
+  std::ofstream(workspace / ".venv" / "lib" / "package" / "hidden.py") << "venv needle\n";
+  std::ofstream(workspace / "src" / "visible.py") << "venv needle\n";
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "ignored virtual environment fixture opens a descriptor workspace");
+  if (!secure)
+    return;
+  for (bool const secure_mode : {false, true})
+  {
+    ava::tools::ToolContext const context{.workspace_dir = workspace, .secure_workspace = secure_mode ? *secure : nullptr};
+    auto glob = ava::tools::glob_files(context, "**/*.py");
+    auto grep = ava::tools::grep_files(context, "venv needle", "**/*.py");
+    expect(glob && glob->paths == std::vector<std::filesystem::path>{workspace / "src" / "visible.py"} && !glob->truncated && grep &&
+               grep->matches.size() == 1 && grep->matches.front().path == workspace / "src" / "visible.py" && !grep->truncated,
+           "glob and grep exclude a gitignored .venv while retaining ordinary source matches");
+  }
+}
+
+void test_nested_fifo_gitignore_does_not_block_search()
+{
+  auto const root = create_empty_root("search-nested-fifo-ignore");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace / "src");
+  std::ofstream(workspace / "src" / "visible.txt") << "nested fifo needle\n";
+  auto const fifo = workspace / "src" / ".gitignore";
+  if (::mkfifo(fifo.c_str(), 0600) != 0)
+  {
+    expect(errno == ENOSYS || errno == EOPNOTSUPP, "nested ignore FIFO setup succeeds unless FIFOs are unsupported");
+    return;
+  }
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "nested FIFO fixture opens a descriptor workspace");
+  if (!secure)
+    return;
+  std::vector<std::filesystem::path> const fifos{fifo};
+  for (bool const secure_mode : {false, true})
+  {
+    ava::tools::ToolContext const context{.workspace_dir = workspace, .secure_workspace = secure_mode ? *secure : nullptr};
+    auto const [glob, glob_unblocked] = run_with_fifo_watchdog(fifos, [&] { return ava::tools::glob_files(context, "**/*.txt"); });
+    auto const [grep, grep_unblocked] = run_with_fifo_watchdog(fifos, [&] { return ava::tools::grep_files(context, "nested fifo needle", "**/*.txt"); });
+    expect(glob && glob->paths == std::vector<std::filesystem::path>{workspace / "src" / "visible.txt"} && !glob_unblocked && grep &&
+               grep->matches.size() == 1 && grep->matches.front().path == workspace / "src" / "visible.txt" && !grep_unblocked,
+           "nested FIFO .gitignore never blocks secure or non-secure searches");
+  }
+  ava::tools::ToolContext const context{.workspace_dir = workspace, .secure_workspace = *secure};
+  auto const [read, unblocked] = run_with_fifo_watchdog(fifos, [&] { return ava::tools::read_file(context, fifo); });
+  expect(!read && read.error().message().find("not a regular file") != std::string::npos && !unblocked,
+         "secure read_file rejects an explicitly requested FIFO .gitignore without waiting for a writer");
+}
+
 }  // namespace
 
 void run_tools_search_tests()
@@ -498,4 +821,12 @@ void run_tools_search_tests()
   test_search_tools();
   test_search_gitignore_rules();
   test_secure_workspace_search_tools();
+  test_fifos_never_block_secure_reads_or_search();
+  test_search_reports_unreadable_directories_as_skipped();
+  test_secure_walk_counts_vanished_entry_without_stale_errno();
+  test_secure_grep_skips_oversized_files();
+  test_secure_listing_keeps_symlink_names();
+  test_search_excludes_unapproved_files();
+  test_gitignored_virtual_environment_is_excluded();
+  test_nested_fifo_gitignore_does_not_block_search();
 }

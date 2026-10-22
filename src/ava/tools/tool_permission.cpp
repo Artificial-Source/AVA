@@ -155,14 +155,22 @@ ava::core::VoidResult ensure_permission_impl(ToolContext const& context, ava::pe
                                              std::optional<ava::permissions::CommandPermissionMetadata> command_metadata, bool omit_policy_allow_audit)
 {
   auto permission_target = target_path;
-  if (context.secure_workspace && (operation == ava::permissions::Operation::ReadFile || operation == ava::permissions::Operation::EditFile ||
-                                   operation == ava::permissions::Operation::SearchFiles))
+  // Lexically inside paths (and every path in strict adapters) take their
+  // permission identity from the descriptor-anchored root, so a symlinked
+  // escape fails here before policy or prompts. Lexically outside paths keep
+  // the caller's spelling and the ordinary outside-workspace policy.
+  bool const file_operation = operation == ava::permissions::Operation::ReadFile || operation == ava::permissions::Operation::EditFile ||
+                              operation == ava::permissions::Operation::SearchFiles;
+  auto workspace = file_operation ? file_tools_internal::secure_workspace_for(context, target_path) : ava::core::Result<SecureWorkspace const*>(nullptr);
+  if (!workspace)
+    return std::unexpected(std::move(workspace.error()));
+  if (*workspace != nullptr)
   {
     auto const remote_read = context.exact_file_access && context.exact_file_access->supports_read_text_file();
     auto const mode = operation == ava::permissions::Operation::EditFile || (operation == ava::permissions::Operation::ReadFile && remote_read)
                           ? SecureWorkspaceResolveMode::AllowMissing
                           : SecureWorkspaceResolveMode::Existing;
-    auto resolved = context.secure_workspace->resolve(target_path, mode);
+    auto resolved = (*workspace)->resolve(target_path, mode);
     if (!resolved)
       return std::unexpected(std::move(resolved.error()));
     permission_target = std::move(resolved->absolute);

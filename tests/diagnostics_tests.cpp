@@ -18,6 +18,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -263,6 +265,24 @@ void test_phase2_typed_serialization_and_strict_parsing()
   expect(parsed_counters && parsed_counters->provider_requests == 4 && parsed_counters->mcp_failures == 6 && parsed_counters->writer_health.complete &&
              parsed_counters->writer_health.events_dropped == 8,
          "trace-counter snapshot has a strict typed round trip");
+  auto summary_counters = counters;
+  summary_counters.writer_health.delta_summaries_refused = 23;
+  auto const summary_round_trip = ava::diagnostics::parse_trace_counter_snapshot(ava::diagnostics::serialize_trace_counter_snapshot(summary_counters));
+  expect(summary_round_trip && summary_round_trip->writer_health.delta_summaries_refused == 23 && summary_round_trip->writer_health.events_dropped == 8,
+         "summary refusals round-trip independently of trace event loss");
+  auto const legacy_health = ava::diagnostics::parse_trace_counter_snapshot(
+      "{\"schema_version\":1,\"captured_at\":1,\"runtime_starts\":1,\"provider_requests\":1,\"provider_failures\":1,"
+      "\"session_failures\":1,\"plugin_failures\":1,\"mcp_failures\":1,\"writer_health\":{"
+      "\"complete\":true,\"events_written\":1,\"events_dropped\":1,\"writer_failures\":1,\"bytes_written\":1}}");
+  expect(
+      legacy_health && legacy_health->writer_health.delta_summaries_refused == 0 && legacy_parsed && legacy_parsed->writer_health.delta_summaries_refused == 0,
+      "both older counter formats load with zero summary refusals");
+  expect(!ava::diagnostics::parse_trace_counter_snapshot(
+             "{\"schema_version\":1,\"captured_at\":1,\"runtime_starts\":1,\"provider_requests\":1,\"provider_failures\":1,"
+             "\"session_failures\":1,\"plugin_failures\":1,\"mcp_failures\":1,\"writer_health\":{"
+             "\"complete\":true,\"events_written\":1,\"events_dropped\":1,\"writer_failures\":1,\"bytes_written\":1,"
+             "\"delta_summaries_refused\":-1}}"),
+         "summary refusal counters retain strict unsigned validation");
   expect(!ava::diagnostics::parse_trace_counter_snapshot(
              "{\"schema_version\":1,\"captured_at\":1,\"runtime_starts\":1,\"provider_requests\":1,\"provider_failures\":1,"
              "\"session_failures\":1,\"plugin_failures\":1,\"mcp_failures\":1,\"writer_health\":{"
@@ -606,6 +626,230 @@ void test_private_artifact_storage_uses_logical_anchors_and_rejects_unsafe_roots
   std::filesystem::remove_all(root);
 }
 
+void test_malformed_counters_recover_and_quarantine_is_bounded()
+{
+  auto const root = unique_diagnostic_root("diagnostic_counter_recovery");
+  auto const paths = diagnostic_paths(root);
+  auto const anchors = diagnostic_anchors(paths);
+  auto const directory = paths.ava_state_dir / "diagnostics";
+  ava::diagnostics::TraceCounterSnapshot const contribution{.captured_at = 1, .runtime_starts = 3, .writer_health = {.complete = true}};
+  expect(ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, contribution) == ava::diagnostics::ArtifactWriteStatus::Success,
+         "counter recovery fixture starts");
+  auto const counters = directory / "trace-counters-v1.json";
+  for (auto const& corrupt : {std::string("{broken"), std::string(65 * 1024, 'x')})
+  {
+    write_test_file(counters, corrupt);
+    expect(ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, contribution) == ava::diagnostics::ArtifactWriteStatus::Success,
+           "verified-private malformed counters are quarantined and replaced");
+    auto const recovered = ava::diagnostics::read_trace_counter_snapshot(paths, *anchors);
+    expect(recovered.record && recovered.record->runtime_starts == 3, "corruption starts a fresh aggregate");
+    auto const quarantine = directory / "trace-counters-v1.corrupt";
+    expect(std::filesystem::exists(quarantine) && std::filesystem::file_size(quarantine) <= 64 * 1024,
+           "a single bounded quarantine preserves malformed evidence");
+    auto const status = ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, contribution);
+    auto const resumed = ava::diagnostics::read_trace_counter_snapshot(paths, *anchors);
+    expect(status == ava::diagnostics::ArtifactWriteStatus::Success && resumed.record && resumed.record->runtime_starts == 6,
+           "counter aggregation resumes after recovery");
+  }
+  write_test_file(counters, "{unsafe");
+  static_cast<void>(::chmod(counters.c_str(), 0644));
+  expect(ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, contribution) == ava::diagnostics::ArtifactWriteStatus::UnsafeStorage &&
+             std::filesystem::file_size(counters) == 7,
+         "recovery never replaces unsafe counters");
+  std::filesystem::remove_all(root);
+}
+
+void test_last_failure_counts_consecutive_classifications()
+{
+  auto const root = unique_diagnostic_root("diagnostic_failure_counts");
+  auto const paths = diagnostic_paths(root);
+  auto const anchors = diagnostic_anchors(paths);
+  ava::diagnostics::LastFailureRecord record{.recorded_at = 1, .failure = ava::diagnostics::external_failure(ava::diagnostics::ComponentClass::Mcp)};
+  expect(ava::diagnostics::write_last_failure_record(paths, *anchors, record) == ava::diagnostics::ArtifactWriteStatus::Success, "first failure is persisted");
+  record.recorded_at = 2;
+  expect(ava::diagnostics::write_last_failure_record(paths, *anchors, record) == ava::diagnostics::ArtifactWriteStatus::Success,
+         "matching failure is persisted");
+  auto stored = ava::diagnostics::read_last_failure_record(paths, *anchors);
+  expect(stored.record && stored.record->occurrences == 2 && stored.record->recorded_at == 2,
+         "consecutive identical safe classifications increment occurrences and refresh the timestamp");
+  constexpr unsigned writers = 8;
+  std::array<ava::diagnostics::ArtifactWriteStatus, writers> statuses{};
+  std::vector<std::thread> threads;
+  for (unsigned i = 0; i < writers; ++i)
+    threads.emplace_back([&, i] { statuses[i] = ava::diagnostics::write_last_failure_record(paths, *anchors, record); });
+  for (auto& thread : threads)
+    thread.join();
+  stored = ava::diagnostics::read_last_failure_record(paths, *anchors);
+  expect(std::ranges::all_of(statuses, [](auto status) { return status == ava::diagnostics::ArtifactWriteStatus::Success; }) && stored.record &&
+             stored.record->occurrences == 10,
+         "locked matching failure updates lose no concurrent occurrences");
+  record.failure = ava::diagnostics::external_failure(ava::diagnostics::ComponentClass::Plugin);
+  expect(ava::diagnostics::write_last_failure_record(paths, *anchors, record) == ava::diagnostics::ArtifactWriteStatus::Success,
+         "different failure is persisted");
+  stored = ava::diagnostics::read_last_failure_record(paths, *anchors);
+  expect(stored.record && stored.record->occurrences == 1, "a different safe classification resets the consecutive count");
+  record.occurrences = std::numeric_limits<std::uint64_t>::max();
+  expect(ava::diagnostics::write_last_failure_record(paths, *anchors, record) == ava::diagnostics::ArtifactWriteStatus::Success,
+         "large matching contribution is persisted");
+  stored = ava::diagnostics::read_last_failure_record(paths, *anchors);
+  expect(stored.record && stored.record->occurrences == std::numeric_limits<std::uint64_t>::max(), "failure occurrences saturate without wrapping");
+  std::filesystem::remove_all(root);
+}
+
+void test_artifact_retention_prunes_oldest_and_stale_temporaries()
+{
+  auto const root = unique_diagnostic_root("diagnostic_retention");
+  auto const paths = diagnostic_paths(root);
+  auto const anchors = diagnostic_anchors(paths);
+  auto initial = ava::diagnostics::prepare_trace_artifact(paths, *anchors);
+  expect(initial.status == ava::diagnostics::ArtifactWriteStatus::Success, "retention trace directory starts");
+  initial.descriptor.reset();
+  std::filesystem::remove(initial.path);
+  auto const directory = paths.ava_state_dir / "diagnostics" / "traces";
+  auto const old = std::filesystem::file_time_type::clock::now() - std::chrono::hours(48);
+  for (unsigned i = 0; i < 32; ++i)
+  {
+    auto const path = directory / ("trace-v1-fixture-" + std::to_string(i) + ".jsonl");
+    write_test_file(path, "{}\n");
+    std::filesystem::last_write_time(path, old + std::chrono::seconds(i));
+  }
+  auto const stale = paths.ava_state_dir / "diagnostics" / ".diagnostic-tmp-stale";
+  auto const fresh = directory / ".diagnostic-tmp-fresh";
+  write_test_file(stale, "orphan");
+  write_test_file(fresh, "fresh");
+  std::filesystem::last_write_time(stale, old);
+  auto const active_temp = directory / ".diagnostic-tmp-active";
+  write_test_file(active_temp, "active");
+  std::filesystem::last_write_time(active_temp, old);
+  int const active_fd = ::open(active_temp.c_str(), O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+  expect(active_fd >= 0 && ::flock(active_fd, LOCK_EX | LOCK_NB) == 0, "stale active temporary is lifetime-locked");
+  auto const unsafe_temp = directory / ".diagnostic-tmp-unsafe";
+  std::filesystem::create_symlink(stale, unsafe_temp);
+  auto next = ava::diagnostics::prepare_trace_artifact(paths, *anchors);
+  expect(next.status == ava::diagnostics::ArtifactWriteStatus::Success && !std::filesystem::exists(directory / "trace-v1-fixture-0.jsonl") &&
+             std::filesystem::exists(directory / "trace-v1-fixture-1.jsonl") && !std::filesystem::exists(stale) && std::filesystem::exists(fresh),
+         "trace admission prunes the oldest at the count cap and sweeps only stale temporaries");
+  expect(std::filesystem::exists(active_temp) && std::filesystem::is_symlink(unsafe_temp), "orphan cleanup preserves active and unsafe temporary entries");
+  if (active_fd >= 0)
+    static_cast<void>(::close(active_fd));
+  next.descriptor.reset();
+  // Sparse fixtures exercise byte retention without allocating or writing 100 MiB.
+  for (auto const& entry : std::filesystem::directory_iterator(directory))
+    if (entry.path().extension() == ".jsonl")
+      std::filesystem::remove(entry.path());
+  for (unsigned i = 0; i < 10; ++i)
+  {
+    auto const path = directory / ("trace-v1-large-" + std::to_string(i) + ".jsonl");
+    write_test_file(path, "");
+    std::filesystem::resize_file(path, 10U * 1024U * 1024U);
+    std::filesystem::last_write_time(path, old + std::chrono::seconds(i));
+  }
+  next = ava::diagnostics::prepare_trace_artifact(paths, *anchors);
+  expect(next.status == ava::diagnostics::ArtifactWriteStatus::Success && !std::filesystem::exists(directory / "trace-v1-large-0.jsonl") &&
+             std::filesystem::exists(directory / "trace-v1-large-1.jsonl"),
+         "trace admission reserves one full trace and removes the oldest to respect the byte cap");
+  next.descriptor.reset();
+
+  ava::diagnostics::SupportArtifact const artifact{.generated_at = 1, .doctor = sample_doctor_report(), .trace = {}, .last_failure = {}};
+  auto publication = ava::diagnostics::publish_support_artifact(paths, *anchors, artifact);
+  expect(publication.status == ava::diagnostics::ArtifactWriteStatus::Success, "retention support directory starts");
+  std::filesystem::remove(publication.path);
+  auto const support = paths.ava_state_dir / "support";
+  for (unsigned i = 0; i < 32; ++i)
+  {
+    auto const path = support / ("ava-support-v1-fixture-" + std::to_string(i) + ".json");
+    write_test_file(path, "{}");
+    std::filesystem::last_write_time(path, old + std::chrono::seconds(i));
+  }
+  auto const support_stale = support / ".support-tmp-stale";
+  write_test_file(support_stale, "orphan");
+  std::filesystem::last_write_time(support_stale, old);
+  publication = ava::diagnostics::publish_support_artifact(paths, *anchors, artifact);
+  expect(publication.status == ava::diagnostics::ArtifactWriteStatus::Success && !std::filesystem::exists(support / "ava-support-v1-fixture-0.json") &&
+             std::filesystem::exists(support / "ava-support-v1-fixture-1.json") && !std::filesystem::exists(support_stale),
+         "support retention prunes oldest exports and stale support temporaries");
+  for (auto const& entry : std::filesystem::directory_iterator(support))
+    if (entry.path().extension() == ".json")
+      std::filesystem::remove(entry.path());
+  for (unsigned i = 0; i < 16; ++i)
+  {
+    auto const path = support / ("ava-support-v1-large-" + std::to_string(i) + ".json");
+    write_test_file(path, "");
+    std::filesystem::resize_file(path, 64U * 1024U);
+    std::filesystem::last_write_time(path, old + std::chrono::seconds(i));
+  }
+  publication = ava::diagnostics::publish_support_artifact(paths, *anchors, artifact);
+  expect(publication.status == ava::diagnostics::ArtifactWriteStatus::Success && !std::filesystem::exists(support / "ava-support-v1-large-0.json") &&
+             std::filesystem::exists(support / "ava-support-v1-large-1.json"),
+         "support retention also enforces its byte cap");
+  std::filesystem::remove_all(root);
+}
+
+void test_retention_preserves_active_and_unsafe_artifacts()
+{
+  auto const root = unique_diagnostic_root("diagnostic_retention_active");
+  auto const paths = diagnostic_paths(root);
+  auto const anchors = diagnostic_anchors(paths);
+  std::vector<ava::diagnostics::TraceArtifactPreparation> active;
+  for (unsigned i = 0; i < 10; ++i)
+    active.push_back(ava::diagnostics::prepare_trace_artifact(paths, *anchors));
+  auto refused = ava::diagnostics::prepare_trace_artifact(paths, *anchors);
+  expect(std::ranges::all_of(
+             active, [](auto const& item) { return item.status == ava::diagnostics::ArtifactWriteStatus::Success && std::filesystem::exists(item.path); }) &&
+             refused.status == ava::diagnostics::ArtifactWriteStatus::StorageUnavailable,
+         "active traces reserve their maximum growth and cannot be pruned to admit another writer");
+  auto const first = active.front().path;
+  active.front().descriptor.reset();
+  auto admitted = ava::diagnostics::prepare_trace_artifact(paths, *anchors);
+  expect(admitted.status == ava::diagnostics::ArtifactWriteStatus::Success && std::filesystem::exists(first),
+         "closed empty trace no longer reserves future growth");
+  for (auto& trace : active)
+    trace.descriptor.reset();
+  admitted.descriptor.reset();
+  static_cast<void>(::chmod(first.c_str(), 0644));
+  auto const unsafe = first.parent_path() / "trace-v1-unsafe.jsonl";
+  write_test_file(root / "outside", "keep");
+  std::filesystem::create_symlink(root / "outside", unsafe);
+  refused = ava::diagnostics::prepare_trace_artifact(paths, *anchors);
+  struct stat shared_metadata{};
+  expect(refused.status == ava::diagnostics::ArtifactWriteStatus::Success && std::filesystem::is_symlink(unsafe) &&
+             std::filesystem::file_size(root / "outside") == 4 && ::stat(first.c_str(), &shared_metadata) == 0 && (shared_metadata.st_mode & 07777) == 0644,
+         "shared traces and unsafe siblings remain untouched without blocking new trace admission");
+  ava::diagnostics::SupportArtifact const artifact{.generated_at = 1, .doctor = sample_doctor_report(), .trace = {}, .last_failure = {}};
+  auto const shared_export = ava::diagnostics::publish_support_artifact(paths, *anchors, artifact);
+  expect(shared_export.status == ava::diagnostics::ArtifactWriteStatus::Success, "shared export fixture starts");
+  static_cast<void>(::chmod(shared_export.path.c_str(), 0644));
+  auto const unsafe_export = shared_export.path.parent_path() / "ava-support-v1-unsafe.json";
+  std::filesystem::create_symlink(root / "outside", unsafe_export);
+  auto const next_export = ava::diagnostics::publish_support_artifact(paths, *anchors, artifact);
+  expect(next_export.status == ava::diagnostics::ArtifactWriteStatus::Success && std::filesystem::is_symlink(unsafe_export) &&
+             ::stat(shared_export.path.c_str(), &shared_metadata) == 0 && (shared_metadata.st_mode & 07777) == 0644,
+         "shared exports and unsafe siblings remain untouched without blocking new support publication");
+  std::filesystem::remove_all(root);
+}
+
+void test_summary_refusal_counter_merges_without_event_loss()
+{
+  auto const root = unique_diagnostic_root("diagnostic_summary_refusal_merge");
+  auto const paths = diagnostic_paths(root);
+  auto const anchors = diagnostic_anchors(paths);
+  ava::diagnostics::TraceCounterSnapshot contribution{.captured_at = 1, .writer_health = {.complete = true, .delta_summaries_refused = 7}};
+  expect(ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, contribution) == ava::diagnostics::ArtifactWriteStatus::Success &&
+             ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, contribution) == ava::diagnostics::ArtifactWriteStatus::Success,
+         "summary refusal contributions persist");
+  auto stored = ava::diagnostics::read_trace_counter_snapshot(paths, *anchors);
+  expect(stored.record && stored.record->writer_health.delta_summaries_refused == 14 && stored.record->writer_health.events_dropped == 0,
+         "summary refusals merge independently without reporting lifecycle loss");
+  contribution.writer_health.delta_summaries_refused = std::numeric_limits<std::uint64_t>::max();
+  expect(ava::diagnostics::write_trace_counter_snapshot(paths, *anchors, contribution) == ava::diagnostics::ArtifactWriteStatus::Success,
+         "saturating summary refusal contribution persists");
+  stored = ava::diagnostics::read_trace_counter_snapshot(paths, *anchors);
+  expect(stored.record && stored.record->writer_health.delta_summaries_refused == std::numeric_limits<std::uint64_t>::max() &&
+             stored.record->writer_health.events_dropped == 0,
+         "summary refusal totals saturate without affecting event loss");
+  std::filesystem::remove_all(root);
+}
+
 }  // namespace
 
 void run_diagnostics_tests()
@@ -621,4 +865,9 @@ void run_diagnostics_tests()
   test_private_artifact_reader_rejects_unsafe_and_malformed_files();
   test_support_publication_is_unique_private_and_concurrent();
   test_private_artifact_storage_uses_logical_anchors_and_rejects_unsafe_roots();
+  test_malformed_counters_recover_and_quarantine_is_bounded();
+  test_last_failure_counts_consecutive_classifications();
+  test_artifact_retention_prunes_oldest_and_stale_temporaries();
+  test_retention_preserves_active_and_unsafe_artifacts();
+  test_summary_refusal_counter_merges_without_event_loss();
 }

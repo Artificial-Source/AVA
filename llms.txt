@@ -7,6 +7,7 @@
 
 - [Core](docs/core/README.md)
 - [Interfaces](docs/interfaces/README.md)
+- [Desktop](docs/desktop/README.md)
 - [Extensions](docs/extensions/README.md)
 - [Operations](docs/operations/README.md)
 

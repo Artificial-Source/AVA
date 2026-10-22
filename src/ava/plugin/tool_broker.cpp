@@ -732,17 +732,19 @@ ava::core::VoidResult visit_enabled_plugin_tools(ava::tools::ToolContext const& 
     return {};
 
   auto diagnostics = collect_plugin_diagnostics(discovery_options_for_context(context), enablement_file_for_context(context), context.workspace_dir);
-  for (auto const& status : diagnostics.plugins)
+  for (auto& status : diagnostics.plugins)
   {
     if (!status.enabled)
       continue;
     auto const& manifest = status.plugin.manifest;
-    for (auto const& contribution : manifest.contributes.tools)
+    for (std::size_t index = 0; index < manifest.contributes.tools.size(); ++index)
     {
-      auto model_tool_name = plugin_model_tool_name(manifest.id, contribution.name);
+      auto const& contribution = manifest.contributes.tools[index];
+      auto& model_tool = status.model_tools[index];
       auto binding = std::make_shared<PluginToolBinding const>(
-          PluginToolBinding{.manifest = manifest, .contribution = contribution, .model_tool_name = std::move(model_tool_name)});
+          PluginToolBinding{.manifest = manifest, .contribution = contribution, .model_tool_name = std::move(model_tool.model_tool_name)});
       auto descriptor = brokered_tool(std::move(binding));
+      descriptor.model_name_collision = model_tool.name_collision;
       if (auto visited = visitor(descriptor); !visited)
         return std::unexpected(std::move(visited.error()));
     }

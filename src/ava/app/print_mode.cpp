@@ -272,6 +272,16 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
   ModeSignalLatch signal_latch;
   bool const sanitize_stdout = ::isatty(STDOUT_FILENO) == 1;
   bool const sanitize_stderr = ::isatty(STDERR_FILENO) == 1;
+  {
+    runtime::RunOptions probe;
+    probe.parallel_read_search_tools = options.parallel_read_search_tools;
+    probe.parallel_read_search_max_workers = options.parallel_read_search_max_workers;
+    if (auto valid = validate_run_options(probe); !valid)
+    {
+      err << terminal_output_text(valid.error().format(), sanitize_stderr) << '\n';
+      return 2;
+    }
+  }
   std::optional<std::string> stdin_prompt;
   if (options.read_stdin)
   {
@@ -333,6 +343,8 @@ int run_print_mode(PrintModeOptions const& options, std::istream& in, std::ostre
   ava::provider::Provider const& provider =
       options.provider_override ? options.provider_override->get() : static_cast<ava::provider::Provider const&>(**default_provider);
   runtime::RunOptions runtime_options;
+  runtime_options.parallel_read_search_tools = options.parallel_read_search_tools;
+  runtime_options.parallel_read_search_max_workers = options.parallel_read_search_max_workers;
   runtime_options.offline = session_w->is_offline() || options.open_context.offline;
   if (!runtime_options.offline)
   {

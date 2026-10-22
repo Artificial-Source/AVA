@@ -219,6 +219,7 @@ set(AVA_TESTS_SOURCES
   "command_tests.cpp"
   "core_tests.cpp"
   "core_utf8_tests.cpp"
+  "core_fd_helpers_tests.cpp"
   "core_mode_json_permissions_tests.cpp"
   "curl_transport_process_tests.cpp"
   "clipboard_image_process_tests.cpp"
@@ -342,6 +343,7 @@ ava_apply_sanitizers(ava_tests)
 set(AVA_TEST_SUITES
   core_mode
   core_utf8
+  core_fd_helpers
   test_harness
   diagnostics
   acp
@@ -760,7 +762,6 @@ add_test(
           -DAVA_PYTHON=${Python3_EXECUTABLE}
           -DAVA_FAKE_PROVIDER_PY=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider.py
           -DAVA_FAKE_PROVIDER_SH=${CMAKE_CURRENT_SOURCE_DIR}/fake_provider_shell.sh
-          -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-headless-e2e-model-smoke
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_e2e_model_smoke.cmake)
 set_tests_properties(ava_cli.headless_e2e_model_smoke PROPERTIES TIMEOUT 60)
 
@@ -864,6 +865,15 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.fake_provider_owner PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
+    NAME ava_cli.headless_parallel_read_search_tools
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/cli_headless_parallel_read_search_tools_test.py
+            --ava $<TARGET_FILE:ava>
+            --fake-provider $<TARGET_FILE:ava_fake_provider_server>
+            --source ${CMAKE_SOURCE_DIR})
+  set_tests_properties(ava_cli.headless_parallel_read_search_tools PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
     NAME ava_tests.startup_overview_close_wait
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/startup_overview_close_wait_test.py)
@@ -880,6 +890,18 @@ if(Python3_Interpreter_FOUND)
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/model_selector_wait_test.py)
   set_tests_properties(ava_tests.model_selector_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
+    NAME ava_tests.command_output_viewport_wait
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/command_output_viewport_wait_test.py)
+  set_tests_properties(ava_tests.command_output_viewport_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
+    NAME ava_tests.context_report_wait
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tui_tmux_scenarios/context_report_wait_test.py)
+  set_tests_properties(ava_tests.context_report_wait PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
     NAME ava_tests.terminal_lifecycle_cursor
@@ -1090,6 +1112,22 @@ if(Python3_Interpreter_FOUND)
             -DAVA_PLUGIN_RUNNER_NEGATIVE_ROOT=${CMAKE_BINARY_DIR}/plugin-runner-scanner-negative
             -P ${CMAKE_CURRENT_SOURCE_DIR}/plugin_runner_static_contract_negative.cmake)
   set_tests_properties(ava_tests.plugin_runner_static_contract_negative PROPERTIES TIMEOUT 15)
+
+  add_test(
+    NAME ava_tests.mcp_stdio_static_contract
+    COMMAND ${CMAKE_COMMAND}
+            -DAVA_MCP_STDIO_DIR=${CMAKE_SOURCE_DIR}/src/ava/mcp
+            -DAVA_MCP_CMAKE=${CMAKE_SOURCE_DIR}/src/ava/mcp/CMakeLists.txt
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract.cmake)
+  set_tests_properties(ava_tests.mcp_stdio_static_contract PROPERTIES TIMEOUT 15)
+
+  add_test(
+    NAME ava_tests.mcp_stdio_static_contract_negative
+    COMMAND ${CMAKE_COMMAND}
+            -DAVA_MCP_STDIO_SCANNER=${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract.cmake
+            -DAVA_MCP_STDIO_NEGATIVE_ROOT=${CMAKE_BINARY_DIR}/mcp-stdio-scanner-negative
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/mcp_stdio_static_contract_negative.cmake)
+  set_tests_properties(ava_tests.mcp_stdio_static_contract_negative PROPERTIES TIMEOUT 15)
 
   add_test(
     NAME ava_cli.doctor_support

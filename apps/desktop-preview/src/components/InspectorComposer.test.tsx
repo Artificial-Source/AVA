@@ -1,0 +1,486 @@
+import { StrictMode } from 'react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { chooseMainModel, installDialogTestSupport } from '../screens/dialogTestSupport';
+
+import { createInitialState } from '../state/fixtures';
+import { AppShell } from './AppShell';
+import ChildConversation from './ChildConversation';
+
+beforeEach(installDialogTestSupport);
+
+function start() {
+  const user = userEvent.setup();
+  render(<StrictMode><AppShell /></StrictMode>);
+  return user;
+}
+
+function projects() {
+  return within(screen.getByRole('navigation', { name: 'All project chats' }));
+}
+
+function agents() {
+  return within(screen.getByRole('complementary', { name: 'Agents inspector' }));
+}
+
+function childButton(title: string) {
+  return agents().getByRole('button', { name: new RegExp(title) });
+}
+
+describe('attached inspector and read-only child view', () => {
+  it('defaults to Agents, derives working-first rows, and keeps exactly three functional rail modules', async () => {
+    const user = start();
+    const rail = screen.getByRole('navigation', { name: 'Inspectors' });
+    const toggle = within(rail).getByRole('button', { name: 'Agents' });
+    expect(within(rail).getAllByRole('button')).toEqual([
+      within(rail).getByRole('button', { name: 'Hide inspector' }),
+      toggle,
+      within(rail).getByRole('button', { name: 'Changes' }),
+      within(rail).getByRole('button', { name: 'Context' }),
+    ]);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', 'agents-inspector');
+    expect(toggle).toHaveAccessibleDescription('1 working child examples for Remember search filters. Not live activity.');
+    expect(agents().getAllByRole('listitem').map((item) => item.querySelector('button')?.dataset.childId)).toEqual(['search-return', 'search-outline', 'search-edge-cases']);
+    expect(childButton('Review back navigation')).toHaveAccessibleName(/^Working Review back navigation Aster/);
+    expect(childButton('Map return paths')).toHaveAccessibleName(/^Completed Map return paths Aster Mini/);
+    expect(projects().getByRole('button', { name: 'Remember search filters' }).querySelector('[data-status]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop mock work' })).not.toBeInTheDocument();
+    toggle.focus();
+    await user.keyboard(' ');
+    expect(screen.queryByRole('complementary', { name: 'Agents inspector' })).not.toBeInTheDocument();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).not.toHaveAttribute('aria-controls');
+    expect(toggle).toHaveAccessibleDescription(/1 working child examples/);
+    await user.keyboard('{Enter}');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('switches one panel at a time and returns focus to its rail button on Close or Escape', async () => {
+    const user = start();
+    const agentToggle = screen.getByRole('button', { name: 'Agents' });
+    const changesToggle = screen.getByRole('button', { name: 'Changes' });
+    await user.click(changesToggle);
+    expect(screen.queryByRole('complementary', { name: 'Agents inspector' })).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Mock changes' })).toBeVisible();
+    expect(changesToggle).toHaveAttribute('aria-controls', 'change-review');
+    expect(agentToggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(changesToggle);
+    expect(screen.queryByRole('complementary', { name: 'Mock changes' })).not.toBeInTheDocument();
+    await user.click(agentToggle);
+    await user.click(screen.getByRole('button', { name: 'Close agents' }));
+    expect(agentToggle).toHaveFocus();
+    await user.keyboard('{Enter}');
+    childButton('Review back navigation').focus();
+    await user.keyboard('{Escape}');
+    expect(agentToggle).toHaveFocus();
+    expect(agentToggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(changesToggle);
+    screen.getByRole('region', { name: 'Example change excerpts' }).focus();
+    await user.keyboard('{Escape}');
+    expect(changesToggle).toHaveFocus();
+    expect(changesToggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('shows a truthful empty roster and zero selected-parent count even with working examples elsewhere', async () => {
+    const user = start();
+    await user.click(projects().getByRole('button', { name: 'Completed Simplify route config' }));
+    expect(agents().getByRole('heading', { name: 'No child agents' })).toBeVisible();
+    expect(agents().queryByRole('list')).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: 'Agents' });
+    expect(toggle).toHaveAccessibleDescription(/0 working child examples for Simplify route config/);
+    expect(toggle.querySelector('span')).toBeNull();
+    await user.click(toggle);
+    expect(toggle).toHaveAccessibleDescription(/0 working child examples/);
+    await user.click(projects().getByRole('button', { name: 'Remember search filters' }));
+    expect(toggle).toHaveAccessibleDescription(/1 working child examples for Remember search filters/);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('inspects committed child examples without a composer or new top-level identity and restores the parent settings', async () => {
+    const user = start();
+    const draftText = 'Keep this parent draft\nAnd this second line.';
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: draftText } });
+    await chooseMainModel(user, 'orion');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Mode for this chat' }), 'plan');
+    await user.click(screen.getByRole('button', { name: 'Expand draft' }));
+    await user.click(screen.getByRole('button', { name: 'Add example context' }));
+    await user.click(screen.getByRole('button', { name: 'image result-layout.png' }));
+    await user.keyboard('{Escape}');
+    const recent = screen.getByRole('navigation', { name: 'Recent chats' });
+    const originalRecent = recent.textContent;
+    const row = childButton('Review back navigation');
+    row.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Review back navigation');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveFocus();
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(screen.queryByText('Child of Remember search filters · Wayfinder')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to parent' })).toHaveAccessibleDescription('Return to parent: Remember search filters. Restore the parent’s draft and settings.');
+    expect(await screen.findByRole('region', { name: 'Read-only child context' })).toHaveTextContent('Read-only child · Aster');
+    expect(screen.getAllByRole('button', { name: 'Back to parent' })).toHaveLength(1);
+    expect(screen.getByRole('article', { name: 'Committed child user example' })).toBeVisible();
+    expect(screen.getByRole('article', { name: 'Committed child assistant example' })).toHaveTextContent('suggested manual check, not a completed one');
+    expect(screen.getByRole('status')).toHaveTextContent('Read-only child example');
+    expect(screen.queryByRole('form', { name: 'Message composer' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Send|Stop mock work|Steer|Restart|Promote)$/i })).not.toBeInTheDocument();
+    expect(projects().getAllByRole('listitem')).toHaveLength(6);
+    expect(projects().getByRole('button', { name: 'Remember search filters' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByRole('navigation', { name: 'Pinned chats' })).not.toBeInTheDocument();
+    expect(recent.textContent).toBe(originalRecent);
+    await user.click(screen.getByRole('button', { name: 'Close agents' }));
+    expect(screen.getByRole('region', { name: /Child conversation:/ })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Changes' }));
+    expect(within(screen.getByRole('complementary', { name: 'Mock changes' })).getByRole('heading', { name: 'search-state.ts' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Back to parent' }));
+    expect(screen.getByRole('heading', { level: 1 })).toHaveFocus();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Remember search filters');
+    expect(screen.getByRole('textbox')).toHaveValue(draftText);
+    expect(screen.getByRole('button', { name: 'Model for this chat' })).toHaveTextContent('Orion');
+    expect(screen.getByRole('combobox', { name: 'Mode for this chat' })).toHaveValue('plan');
+    expect(screen.getByRole('button', { name: 'Collapse draft' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('list', { name: 'Attached example context' })).toHaveTextContent('result-layout.png');
+    expect(recent.textContent).toBe(originalRecent);
+  });
+
+  it.each(['open', 'closed'])('keeps one visible child identity and Back with the pane %s and focuses the committed return title', async (pane) => {
+    const user = start();
+    const title = screen.getByRole('heading', { level: 1 });
+    const row = childButton('Review back navigation');
+    row.focus();
+    await user.keyboard('{Enter}');
+    const canvas = screen.getByRole('region', { name: 'Review back navigation' });
+    expect(screen.getByRole('heading', { level: 1 })).toBe(title);
+    expect(canvas).toContainElement(title);
+    expect(title).toHaveAttribute('id', 'conversation-title');
+    expect(title).toHaveFocus();
+    expect(title.closest('[inert], [aria-hidden="true"], .srOnly')).toBeNull();
+    expect(canvas.firstElementChild).toHaveTextContent(/^Review back navigationBack to parent$/);
+    expect(canvas.firstElementChild?.querySelector('p')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Parent chat details' })).not.toBeInTheDocument();
+    // Re-inspecting the same reducer identity must still focus the visible title.
+    await user.click(childButton('Review back navigation'));
+    expect(title).toHaveFocus();
+    if (pane === 'closed') await user.click(screen.getByRole('button', { name: 'Hide inspector' }));
+    else await user.click(screen.getByRole('button', { name: 'Changes' }));
+    expect(screen.getAllByRole('heading', { level: 1 })).toEqual([title]);
+    expect(document.querySelectorAll('#conversation-title')).toHaveLength(1);
+    const back = within(canvas).getByRole('button', { name: 'Back to parent' });
+    expect(screen.getAllByRole('button', { name: 'Back to parent' })).toEqual([back]);
+    expect(back).toBeVisible();
+    expect(back).toHaveAttribute('title', 'Return to parent: Remember search filters. Restore the parent’s draft and settings.');
+    expect(back).toHaveAccessibleDescription(back.title);
+    expect(screen.queryByRole('form', { name: 'Message composer' })).not.toBeInTheDocument();
+    back.focus();
+    await user.keyboard('{Enter}');
+    const parentTitle = screen.getByRole('heading', { level: 1 });
+    expect(parentTitle).toBe(title);
+    expect(parentTitle).toHaveTextContent('Remember search filters');
+    expect(parentTitle).toHaveFocus();
+    expect(parentTitle.closest('[inert], [aria-hidden="true"], .srOnly')).toBeNull();
+    expect(canvas).toHaveAccessibleName('Remember search filters');
+    expect(document.querySelectorAll('#conversation-title')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Back to parent' })).not.toBeInTheDocument();
+    expect(canvas).toContainElement(parentTitle);
+    expect(canvas.firstElementChild).toHaveTextContent(/^Remember search filters$/);
+  });
+
+  it('keeps one stable canvas title across resize and pane modes without a placement subscription or deferred focus', async () => {
+    const matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    vi.stubGlobal('matchMedia', matchMedia);
+    const user = start();
+    const canvas = screen.getByRole('region', { name: 'Remember search filters' });
+    const title = screen.getByRole('heading', { level: 1 });
+    title.focus();
+    const focus = vi.spyOn(title, 'focus');
+    for (const width of [850, 1440, 2560, 3440, 850]) {
+      vi.stubGlobal('innerWidth', width);
+      fireEvent(window, new Event('resize'));
+      expect(screen.getByRole('heading', { level: 1 })).toBe(title);
+      expect(title).toHaveFocus();
+      expect(canvas).toContainElement(title);
+      expect(title.closest('[inert], [aria-hidden="true"], .srOnly')).toBeNull();
+      expect(document.querySelectorAll('#conversation-title')).toHaveLength(1);
+    }
+    const draft = screen.getByRole('textbox');
+    await user.type(draft, ' Still editing.');
+    expect(draft).toHaveFocus();
+    for (const name of ['Hide inspector', 'Show inspector', 'Changes', 'Context', 'Agents']) {
+      const button = screen.getByRole('button', { name });
+      await user.click(button);
+      expect(button).toHaveFocus();
+      expect(screen.getByRole('heading', { level: 1 })).toBe(title);
+      expect(canvas).toContainElement(title);
+      expect(document.querySelectorAll('h1')).toHaveLength(1);
+      expect(document.querySelectorAll('#conversation-title')).toHaveLength(1);
+    }
+    await user.click(draft);
+    for (const width of [1440, 850, 3440]) {
+      vi.stubGlobal('innerWidth', width);
+      fireEvent(window, new Event('resize'));
+      expect(draft).toHaveFocus();
+      expect(screen.getByRole('heading', { level: 1 })).toBe(title);
+    }
+    expect(focus).not.toHaveBeenCalled();
+    await user.click(childButton('Map return paths'));
+    expect(screen.getByRole('heading', { level: 1 })).toBe(title);
+    expect(title).toHaveTextContent('Map return paths');
+    expect(title).toHaveFocus();
+    fireEvent(window, new Event('resize'));
+    expect(title).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Back to parent' }));
+    expect(screen.getByRole('heading', { level: 1 })).toBe(title);
+    expect(canvas).toContainElement(title);
+    expect(title).toHaveTextContent('Remember search filters');
+    expect(title).toHaveFocus();
+    expect(focus).toHaveBeenCalledTimes(2);
+    await user.type(screen.getByRole('textbox'), ' After returning.');
+    expect(screen.getByRole('textbox')).toHaveFocus();
+    expect(focus).toHaveBeenCalledTimes(2);
+    expect(matchMedia).not.toHaveBeenCalledWith('(max-width: 1100px)');
+    focus.mockRestore();
+    // DOM identity/focus only; resize geometry and focus paint are browser-owned.
+  });
+
+  it('does not focus a title during ordinary Send, settings, navigation, or New', async () => {
+    const user = start();
+    const title = screen.getByRole('heading', { level: 1 });
+    const focus = vi.spyOn(title, 'focus');
+    const draft = screen.getByRole('textbox');
+    await user.type(draft, ' Keep normal editing focus.');
+    expect(draft).toHaveFocus();
+    await chooseMainModel(user, 'orion');
+    expect(screen.getByRole('button', { name: 'Model for this chat' })).toHaveFocus();
+    const mode = screen.getByRole('combobox', { name: 'Mode for this chat' });
+    await user.selectOptions(mode, 'plan');
+    expect(mode).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(focus).not.toHaveBeenCalled();
+    expect(title).not.toHaveFocus();
+    const navigate = projects().getByRole('button', { name: 'Attention Export date range' });
+    await user.click(navigate);
+    expect(navigate).toHaveFocus();
+    const newChat = screen.getByRole('button', { name: 'New chat' });
+    await user.click(newChat);
+    expect(newChat).toHaveFocus();
+    expect(screen.getByRole('heading', { level: 1 })).toBe(title);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('New chat 1');
+    expect(screen.getByRole('heading', { level: 1 })).not.toHaveFocus();
+    expect(focus).not.toHaveBeenCalled();
+    focus.mockRestore();
+  });
+
+  it('never retargets a working parent Stop to a child and leaves child liveness independent after returning', async () => {
+    const user = start();
+    await user.click(projects().getByRole('button', { name: 'Working Keyboard navigation' }));
+    await user.type(screen.getByRole('textbox'), 'A future parent message');
+    await user.keyboard('{Control>}{Enter}{/Control}');
+    expect(screen.queryByRole('article', { name: 'Your local preview message' })).not.toBeInTheDocument();
+    await user.click(childButton('Review focus boundaries'));
+    expect(screen.queryByRole('button', { name: 'Stop mock work' })).not.toBeInTheDocument();
+    await user.keyboard('{Control>}{Enter}{/Control}');
+    expect(projects().getByRole('button', { name: 'Working Keyboard navigation' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Back to parent' }));
+    expect(screen.getByRole('textbox')).toHaveValue('A future parent message');
+    await user.click(screen.getByRole('button', { name: 'Stop mock work' }));
+    expect(projects().getByRole('button', { name: 'Stopped Keyboard navigation' })).toBeVisible();
+    expect(childButton('Review focus boundaries')).toHaveAccessibleName(/^Working/);
+    expect(screen.getByRole('button', { name: 'Agents' })).toHaveAccessibleDescription(/1 working child examples/);
+  });
+
+  it('clears child inspection when the same parent, another sidebar chat, or New is selected', async () => {
+    const user = start();
+    for (const name of ['Remember search filters', 'Attention Export date range']) {
+      await user.click(childButton('Review back navigation'));
+      await user.click(projects().getByRole('button', { name }));
+      expect(screen.queryByRole('region', { name: /Child conversation:/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('textbox')).toBeVisible();
+      await user.click(projects().getByRole('button', { name: 'Remember search filters' }));
+    }
+    await user.click(childButton('Review back navigation'));
+    await user.click(screen.getByRole('button', { name: 'New chat' }));
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('New chat 1');
+    expect(screen.getByRole('textbox')).toHaveValue('');
+    expect(agents().getByRole('heading', { name: 'No child agents' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Back to parent' })).not.toBeInTheDocument();
+  });
+
+  it('distinguishes completed, failed, and unavailable children without tool streams, progress, or invented success', async () => {
+    const user = start();
+    await user.click(childButton('Map return paths'));
+    let transcript = await screen.findByRole('region', { name: /Child conversation:/ });
+    expect(within(transcript).getByText('Completed')).toBeVisible();
+    expect(transcript).toHaveTextContent('not a successful test or live result');
+    await user.click(childButton('Check empty queries'));
+    transcript = screen.getByRole('region', { name: /Child conversation:/ });
+    expect(within(transcript).getByText('Failed')).toBeVisible();
+    expect(transcript).toHaveTextContent('no check result is available');
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    await user.click(projects().getByRole('button', { name: 'Attention Export date range' }));
+    await user.click(childButton('Review summary wording'));
+    transcript = screen.getByRole('region', { name: /Child conversation:/ });
+    expect(within(transcript).getByText('Unavailable')).toBeVisible();
+    expect(transcript).toHaveTextContent('No committed messages were supplied');
+    expect(transcript).toHaveTextContent('No conversation to display.');
+    expect(within(transcript).queryByRole('article')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to parent' })).toBeVisible();
+  });
+
+  it('puts a distinct static glyph and status before the full accessible parent title, including shortcuts', async () => {
+    const user = start();
+    const fixtures = [
+      ['Working', 'Keyboard navigation'], ['Completed', 'Simplify route config'],
+      ['Attention', 'Export date range'], ['Stopped', 'Document the import flow'], ['Failed', 'Review retry behavior'],
+    ];
+    const glyphs = new Set<string>();
+    for (const [status, title] of fixtures) {
+      const row = projects().getByRole('button', { name: `${status} ${title}` });
+      const leading = row.firstElementChild?.firstElementChild;
+      expect(leading).toHaveTextContent(status);
+      expect(leading?.nextElementSibling).toHaveTextContent(title);
+      expect(row).toHaveAttribute('title', title);
+      glyphs.add(leading!.querySelector('path')!.getAttribute('d')!);
+    }
+    expect(glyphs.size).toBe(5);
+    await user.click(projects().getByRole('button', { name: 'Completed Simplify route config' }));
+    await user.click(projects().getByRole('button', { name: 'Pin Simplify route config' }));
+    const pin = within(screen.getByRole('navigation', { name: 'Pinned chats' })).getByRole('button', { name: 'Completed Simplify route config Wayfinder' });
+    expect(pin.firstElementChild?.firstElementChild).toHaveTextContent('Completed');
+    await user.click(projects().getByRole('button', { name: 'Remember search filters' }));
+    await user.click(pin);
+    expect(projects().getByRole('button', { name: 'Completed Simplify route config' })).toHaveAttribute('aria-current', 'page');
+    const transcript = screen.getByRole('region', { name: 'Conversation: Simplify route config' });
+    expect(within(transcript).getByText('Completed')).toBeVisible();
+    expect(transcript).not.toHaveTextContent('viewing it does not clear the label');
+  });
+
+  it('uses escaped text and the same safe Markdown boundary for committed child examples', () => {
+    const state = createInitialState();
+    render(<ChildConversation child={{ ...state.childAgents[0], messages: [
+      { id: 'child-user', role: 'user', text: '<script>example</script>' },
+      { id: 'child-assistant', role: 'assistant', markdown: '<img src="x" onerror="alert(1)">\n\n[Unsafe](javascript:alert%281%29)\n\n[Safe](https://example.com)' },
+    ] }} />);
+    const transcript = screen.getByRole('region', { name: /Child conversation:/ });
+    expect(transcript.querySelector('script, img')).toBeNull();
+    expect(screen.getByRole('article', { name: 'Committed child user example' })).toHaveTextContent('<script>example</script>');
+    expect(screen.getByText('Unsafe')).not.toHaveAttribute('href', expect.stringMatching(/^javascript:/));
+    expect(screen.getByRole('link', { name: 'Safe' })).toHaveAttribute('href', 'https://example.com');
+  });
+});
+
+describe('local composer context and presentation', () => {
+  it('opens an ordinary keyboard disclosure, attaches only invented references, and restores focus on Escape/removal', async () => {
+    const fileReader = vi.fn();
+    const filePicker = vi.fn();
+    vi.stubGlobal('FileReader', fileReader);
+    vi.stubGlobal('showOpenFilePicker', filePicker);
+    const user = start();
+    const add = screen.getByRole('button', { name: 'Add example context' });
+    add.focus();
+    await user.keyboard('{Enter}');
+    expect(add).toHaveAttribute('aria-expanded', 'true');
+    expect(add).toHaveAttribute('aria-controls', 'fixture-context');
+    const file = screen.getByRole('button', { name: 'file SearchPage.tsx' });
+    expect(file).toHaveFocus();
+    expect(screen.getByRole('region', { name: 'Example context' })).toHaveTextContent('Nothing is opened or uploaded');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    await user.keyboard(' ');
+    expect(file).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('No file was read or uploaded');
+    expect(screen.getByRole('list', { name: 'Attached example context' }).children).toHaveLength(1);
+    await user.keyboard('{Enter}');
+    expect(file).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByRole('list', { name: 'Attached example context' })).not.toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'image result-layout.png' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'context Navigation notes' })).toHaveFocus();
+    await user.keyboard(' ');
+    expect(screen.getByRole('list', { name: 'Attached example context' }).children).toHaveLength(3);
+    await user.keyboard('{Escape}');
+    expect(add).toHaveFocus();
+    expect(add).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('region', { name: 'Example context' })).not.toBeInTheDocument();
+    screen.getByRole('button', { name: 'Remove SearchPage.tsx context' }).focus();
+    await user.keyboard('{Enter}');
+    expect(add).toHaveFocus();
+    expect(screen.getByRole('list', { name: 'Attached example context' }).children).toHaveLength(2);
+    expect(screen.getByRole('textbox')).toHaveValue(createInitialState().chats[0].draft);
+    expect(fileReader).not.toHaveBeenCalled();
+    expect(filePicker).not.toHaveBeenCalled();
+  });
+
+  it('isolates context per parent, closes disclosure when leaving the composer, and keeps attachment identities on return', async () => {
+    const user = start();
+    await user.click(screen.getByRole('button', { name: 'Add example context' }));
+    await user.click(screen.getByRole('button', { name: 'file SearchPage.tsx' }));
+    await user.click(projects().getByRole('button', { name: 'Attention Export date range' }));
+    expect(screen.getByRole('button', { name: 'Add example context' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('list', { name: 'Attached example context' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Add example context' }));
+    await user.click(screen.getByRole('button', { name: 'context Navigation notes' }));
+    await user.click(projects().getByRole('button', { name: 'Remember search filters' }));
+    const chips = screen.getByRole('list', { name: 'Attached example context' });
+    expect(chips).toHaveTextContent('SearchPage.tsx');
+    expect(chips).not.toHaveTextContent('Navigation notes');
+    await user.click(screen.getByRole('button', { name: 'New chat' }));
+    expect(screen.queryByRole('list', { name: 'Attached example context' })).not.toBeInTheDocument();
+  });
+
+  it('expands inline with Enter/Space, retains the same textarea and text, and collapses with Escape without sending', async () => {
+    const user = start();
+    const draft = screen.getByRole('textbox');
+    const text = 'A longer draft.\nKeep these lines.\nAnd the caret-friendly input.';
+    fireEvent.change(draft, { target: { value: text } });
+    const expand = screen.getByRole('button', { name: 'Expand draft' });
+    expand.focus();
+    await user.keyboard('{Enter}');
+    expect(expand).toHaveAttribute('aria-expanded', 'true');
+    expect(expand).toHaveAccessibleName('Collapse draft');
+    expect(expand).toHaveFocus();
+    expect(screen.getByRole('textbox')).toBe(draft);
+    expect(draft).toHaveValue(text);
+    expect(screen.getByRole('form', { name: 'Message composer' })).toHaveAttribute('data-expanded', 'true');
+    await user.keyboard(' ');
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await user.keyboard(' ');
+    draft.focus();
+    await user.keyboard('{Escape}');
+    expect(expand).toHaveFocus();
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('textbox')).toBe(draft);
+    expect(draft).toHaveValue(text);
+    expect(screen.queryByRole('article', { name: 'Your local preview message' })).not.toBeInTheDocument();
+  });
+
+  it('opens the shared native model dialog from a labeled button beside unique first-party currentColor marks', async () => {
+    const user = start();
+    const model = screen.getByRole('button', { name: 'Model for this chat' });
+    const draft = screen.getByRole('textbox');
+    const marks = new Set<string>();
+    expect(model).toHaveAttribute('id', 'model-choice');
+    expect(model).toHaveAttribute('aria-haspopup', 'dialog');
+    for (const value of ['aster', 'aster-mini', 'orion'] as const) {
+      await chooseMainModel(user, value);
+      expect(model).toHaveFocus();
+      const mark = model.parentElement!.querySelector('[data-model-mark]')!;
+      expect(mark).toHaveAttribute('data-model-mark', value);
+      expect(mark).toHaveAttribute('stroke', 'currentColor');
+      expect(mark).toHaveAttribute('aria-hidden', 'true');
+      expect(mark).toBe(model.parentElement!.firstElementChild);
+      expect(mark.querySelector('image, foreignObject, use')).toBeNull();
+      marks.add(mark.innerHTML);
+      expect(screen.getByRole('textbox')).toBe(draft);
+    }
+    expect(marks.size).toBe(3);
+    expect(screen.queryByRole('combobox', { name: 'Model for this chat' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Mode for this chat' })).toHaveValue('build');
+    expect(document.querySelector('img')).toBeNull();
+  });
+});

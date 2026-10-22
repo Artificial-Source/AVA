@@ -8,6 +8,7 @@
 #include "ava/provider/provider.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <iosfwd>
 
 namespace ava::app {
@@ -17,6 +18,8 @@ struct RpcModeOptions
   runtime::OpenContext open_context;
   runtime::SessionLifecycleRequest lifecycle_request;
   HeadlessPermissionPolicyOptions permission_policy;
+  bool parallel_read_search_tools = false;
+  std::size_t parallel_read_search_max_workers = 4;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

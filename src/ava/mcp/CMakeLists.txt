@@ -15,9 +15,12 @@ target_include_directories(ava_mcp
 
 target_link_libraries(ava_mcp
   PUBLIC
+    AVA::process
     AVA::tools
   PRIVATE
+    AVA::command
     AVA::diagnostics
+    nlohmann_json::nlohmann_json
 )
 
 ava_apply_debugging(ava_mcp)

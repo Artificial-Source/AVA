@@ -210,8 +210,9 @@ class SessionRunController
   // any copied generation/owner route. Callers must publish a fresh controller.
   [[nodiscard]] ava::core::VoidResult retire_authority(SessionMaintenanceReservation const& reservation);
   [[nodiscard]] bool authority_retired() const noexcept;
-  // Wait only joins the currently active request (or returns its most recent
-  // terminal result). It never admits work or waits for a different request.
+  // Joins the active generation before considering bounded historical results.
+  // Registered waiters retain that generation's outcome even after eviction.
+  // It never admits work or waits for a different request.
   [[nodiscard]] ava::core::Result<RunOutcome> wait_outcome(std::string_view correlation_id);
   [[nodiscard]] ava::core::VoidResult wake(RunCommand command);
   // Consume only the requested kind; other correlated commands remain queued
@@ -252,6 +253,7 @@ class SessionRunController
   [[nodiscard]] ava::core::VoidResult reset_persistence_failure();
 
  private:
+  [[nodiscard]] ava::core::Result<RunOutcome> wait_outcome(std::string_view correlation_id, std::function<void()> const* before_wait);
   [[nodiscard]] static ava::core::VoidResult append_for_generation(std::shared_ptr<ActiveRunGuard::State> const& state, std::uint64_t generation,
                                                                    std::vector<ava::session::SessionEntry> entries, bool owner_route,
                                                                    SessionAppendRequestKind kind, std::vector<ava::session::SessionEntry> expected = {},
@@ -260,6 +262,7 @@ class SessionRunController
                                                                    ava::session::SessionCancelCallback cancel_requested = nullptr);
   std::shared_ptr<ActiveRunGuard::State> state_;
   friend class ActiveRunGuard;
+  friend struct SessionRunControllerTestAccess;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

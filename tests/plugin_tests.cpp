@@ -1180,6 +1180,103 @@ void test_plugin_runner_event_observation()
   }
 }
 
+void test_plugin_runner_compacts_multiline_json_records()
+{
+  auto const root = create_empty_root("plugin-runner-jsonl");
+  auto const workspace = root / "workspace";
+  auto const plugin_dir = root / "plugins" / "com.example.jsonl";
+  std::filesystem::create_directories(workspace);
+
+  write_text(plugin_dir / "plugin.sh",
+             "IFS= read -r line\n"
+             "printf '%s\\n' '{\"id\":\"ava_1\",\"type\":\"initialized\",\"api_version\":\"ava."
+             "plugin.v1\",\"plugin_version\":\"0.1.0\",\"contributions\":{}}'\n"
+             "IFS= read -r request\n"
+             "printf '%s\\n' \"$request\" >> requests.txt\n"
+             "printf '{\"id\":\"ava_tool_pretty_tool\",\"type\":\"tool.result\",\"ok\":true,\"content\":\"echoed\",\"metadata\":%s}\\n' \"$request\"\n"
+             "IFS= read -r request\n"
+             "printf '%s\\n' \"$request\" >> requests.txt\n"
+             "printf '{\"id\":\"ava_command_pretty_command\",\"type\":\"command.result\",\"ok\":true,\"content\":\"echoed\",\"metadata\":%s}\\n' \"$request\"\n"
+             "IFS= read -r request\n"
+             "printf '%s\\n' \"$request\" >> requests.txt\n"
+             "printf '{\"id\":\"ava_event_pretty_event\",\"type\":\"event.observed\",\"ok\":true,\"content\":\"echoed\",\"metadata\":%s}\\n' \"$request\"\n"
+             "while IFS= read -r line; do :; done\n");
+
+  auto process = ava::plugin::PluginProcess::start(runner_manifest(plugin_dir, "com.example.jsonl", "plugin.sh"),
+                                                   runner_options(workspace, std::chrono::milliseconds(500)));
+  expect(process.has_value(), process ? "JSONL round-trip plugin starts" : "JSONL round-trip plugin starts: " + process.error().format());
+  if (!process)
+    return;
+
+  std::string const payload =
+      "{\r\n"
+      "\t\"text\" : \"  keep \\\"quoted\\\" \\\\ and \\tline\\nbreak\\rend  \",\r\n"
+      "\t\"nested\" : { \"items\" : [ 1,\n true, { \"suffix\" : \"tail\\\\\", \"unicode\" : \"\\u0041\" } ] }\r\n"
+      "}\r\n";
+  std::string const compact_payload =
+      R"({"text":"  keep \"quoted\" \\ and \tline\nbreak\rend  ","nested":{"items":[1,true,{"suffix":"tail\\","unicode":"\u0041"}]}})";
+  auto const check_round_trip = [&](auto const& result, std::string_view type, std::string_view field) {
+    auto const operation = std::string(type);
+    expect(result && result->ok && result->content == "echoed",
+           result ? operation + " accepts one complete JSONL request" : operation + " accepts one complete JSONL request: " + result.error().format());
+    if (!result)
+      return;
+    auto const echoed_payload = ava::core::json::object_field(result->metadata_json, field);
+    expect(ava::core::json::string_field(result->metadata_json, "type") == type && result->metadata_json.find_first_of("\r\n") == std::string::npos &&
+               echoed_payload && *echoed_payload == compact_payload,
+           operation + " compacts only JSON whitespace outside strings");
+    expect(echoed_payload && ava::core::json::string_field(*echoed_payload, "text") == "  keep \"quoted\" \\ and \tline\nbreak\rend  ",
+           operation + " preserves spaces, escaped quotes, backslashes, tabs and line breaks inside strings");
+  };
+
+  check_round_trip((*process)->call_tool("todo_add", payload, "pretty_tool"), "tool.call", "arguments");
+  check_round_trip((*process)->call_command("todo", payload, "pretty_command"), "command.call", "arguments");
+  check_round_trip((*process)->observe_event("tool.result", payload, "pretty_event"), "event.observe", "payload");
+  auto const requests = read_text(plugin_dir / "requests.txt");
+  expect(std::count(requests.begin(), requests.end(), '\n') == 3 && requests.find('\r') == std::string::npos,
+         "fake plugin receives exactly one physical line for each tool, command and event record");
+  auto shutdown = (*process)->shutdown(std::chrono::milliseconds(500));
+  expect(shutdown.has_value(), "JSONL round-trip plugin shuts down");
+}
+
+void test_plugin_runner_compacts_multiline_proxy_metadata()
+{
+  auto const root = create_empty_root("plugin-runner-proxy-jsonl");
+  auto const workspace = root / "workspace";
+  auto const plugin_dir = root / "plugins" / "com.example.proxyjsonl";
+  auto const response_file = plugin_dir / "proxy-response.txt";
+  std::filesystem::create_directories(workspace);
+
+  write_text(plugin_dir / "plugin.sh", proxy_tool_script(proxy_request_json("px_pretty", "session.status", "{}"), response_file, "pretty_proxy"));
+  auto manifest = runner_manifest(plugin_dir, "com.example.proxyjsonl", "plugin.sh");
+  manifest.capabilities.push_back("proxy.session");
+  auto process = ava::plugin::PluginProcess::start(std::move(manifest), runner_options(workspace, std::chrono::milliseconds(500)));
+  expect(process.has_value(), process ? "proxy JSONL plugin starts" : "proxy JSONL plugin starts: " + process.error().format());
+  if (!process)
+    return;
+
+  auto result = (*process)->call_tool(
+      "todo_add", "{}", "pretty_proxy", {},
+      [](ava::plugin::PluginProxyRequest const&, ava::plugin::CancelCallback) -> ava::core::Result<ava::plugin::PluginProxyResponse> {
+        return ava::plugin::PluginProxyResponse{.ok = true,
+                                                .content = "proxy complete",
+                                                .metadata_json = "{\n  \"text\": \"  proxy \\\\ path\\nnext  \",\n  \"nested\": { \"ok\": true }\n}",
+                                                .error_category = {},
+                                                .error_message = {},
+                                                .error_details = {}};
+      });
+  expect(result && result->ok && result->content == "proxy observed",
+         result ? "proxy round trip completes" : "proxy round trip completes: " + result.error().format());
+  auto const response = read_text(response_file);
+  auto const metadata = ava::core::json::object_field(response, "metadata");
+  expect(ava::core::json::is_valid_object(response) && std::count(response.begin(), response.end(), '\n') == 1 && response.find('\r') == std::string::npos &&
+             metadata && *metadata == R"({"text":"  proxy \\ path\nnext  ","nested":{"ok":true}})" &&
+             ava::core::json::string_field(*metadata, "text") == "  proxy \\ path\nnext  ",
+         "proxy metadata uses the same single-line framing while preserving string bytes");
+  auto shutdown = (*process)->shutdown(std::chrono::milliseconds(500));
+  expect(shutdown.has_value(), "proxy JSONL plugin shuts down");
+}
+
 void test_enabled_plugin_dynamic_resources_list_and_read()
 {
   auto const root = create_empty_root("plugin-dynamic-resources");
@@ -2306,9 +2403,50 @@ void test_plugin_tool_registry_skips_name_collisions()
 
   auto const colliding_name = ava::plugin::plugin_model_tool_name("com.example.same", "todo_add");
   auto const schemas = ava::agent::ToolDispatcher::tool_schemas_json(context);
+  auto const diagnostics = ava::plugin::collect_plugin_diagnostics(
+      {.global_plugins_dir = context.plugin_global_plugins_dir, .project_plugins_dir = project_plugins}, state_file, workspace);
+  expect(diagnostics.failures.size() == 1, "plugin tool-name collision produces one user-visible diagnostic");
+  if (!diagnostics.failures.empty())
+  {
+    auto const& failure = diagnostics.failures.front();
+    expect(failure.kind == ava::plugin::PluginFailureKind::ModelToolNameCollision && failure.path == project_plugins / "com.example.same" / "plugin.json" &&
+               failure.message.find("later contribution disabled") != std::string::npos &&
+               failure.details.find("plugin=\"com.example.same\"") != std::string::npos &&
+               failure.details.find("contribution=\"todo_add\"") != std::string::npos &&
+               failure.details.find("model_tool=\"" + colliding_name + "\"") != std::string::npos &&
+               failure.details.find("existing_plugin=\"com-example-same\"") != std::string::npos &&
+               failure.details.find("existing_contribution=\"todo_add\"") != std::string::npos && failure.details.size() <= 4096,
+           "plugin collision diagnostics identify the disabled contribution and retained binding with bounded fields");
+  }
+  std::size_t marked_collisions = 0;
+  auto visited = ava::plugin::visit_enabled_plugin_tools(context, [&](ava::plugin::PluginBrokeredTool const& descriptor) -> ava::core::VoidResult {
+    if (descriptor.model_name_collision)
+    {
+      ++marked_collisions;
+      expect(descriptor.source_id == "com.example.same" && descriptor.plugin_name == "todo_add" && descriptor.model_tool_name == colliding_name,
+             "broker forwards the same later-contribution collision selected by plugin diagnostics");
+    }
+    return {};
+  });
+  expect(visited && marked_collisions == 1, "broker preserves the single collected plugin collision marker");
   auto const count = std::count_if(schemas.begin(), schemas.end(),
                                    [&](std::string const& schema) { return schema.find("\"name\":\"" + colliding_name + "\"") != std::string::npos; });
   expect(count == 1, "plugin registry exposes only one schema for colliding plugin tool names");
+
+  auto paths = ava::tests::app_test_paths(root);
+  paths.ava_state_dir = state_file.parent_path();
+  auto unlocked_session = plugin_command_test_session(paths, workspace);
+  auto failures = ava::app::run_plugins_command(unlocked_session, ava::app::CommandRequest{.command = "/plugins failures"});
+  auto const output = command_output_text(failures);
+  expect(failures && failures->handled && output.find("tool registry collision:") != std::string::npos &&
+             output.find("later contribution disabled") != std::string::npos && output.find("com.example.same") != std::string::npos &&
+             output.find("com-example-same") != std::string::npos && output.find(colliding_name) != std::string::npos,
+         "/plugins failures presents tool-name collisions without writing over the terminal");
+
+  auto disabled = ava::plugin::set_plugin_enabled(state_file, workspace, "com.example.same", false, ava::plugin::PluginScope::Project);
+  auto const after_disable = ava::plugin::collect_plugin_diagnostics(
+      {.global_plugins_dir = context.plugin_global_plugins_dir, .project_plugins_dir = project_plugins}, state_file, workspace);
+  expect(disabled && after_disable.failures.empty(), "disabling the later plugin clears its tool collision diagnostic");
 }
 
 }  // namespace
@@ -2328,6 +2466,8 @@ void run_plugin_tests()
   test_plugin_runner_tool_calls();
   test_plugin_runner_command_calls();
   test_plugin_runner_event_observation();
+  test_plugin_runner_compacts_multiline_json_records();
+  test_plugin_runner_compacts_multiline_proxy_metadata();
   test_enabled_plugin_dynamic_resources_list_and_read();
   test_disabled_plugin_dynamic_resources_do_not_execute();
   test_dynamic_resources_require_explicit_manifest_capability();

@@ -1,0 +1,26 @@
+/* Static, visit-local tokens. The default inherits AVA's existing palette and type. */
+.scope { --appearance-opaque: #202020; }
+.scope[data-palette='charcoal'] { --canvas: #1b1b1b; --surface-panel: #212121; --surface-raised: #2c2c2c; --glass-fill: rgba(35, 35, 35, .94); --appearance-opaque: #272727; }
+.scope[data-palette='midnight'] { --canvas: #0d0d0d; --surface-panel: #141414; --surface-raised: #1e1e1e; --glass-fill: rgba(21, 21, 21, .94); --appearance-opaque: #191919; }
+.scope[data-ui-font='system'] { font-family: system-ui, sans-serif; }
+.scope[data-prose-size='small'] { --prose-size: 14px; }
+.scope[data-prose-size='large'] { --prose-size: 17px; }
+.scope[data-prose-spacing='compact'] { --prose-spacing: 1.5; }
+.scope[data-prose-spacing='relaxed'] { --prose-spacing: 1.9; }
+.scope[data-reading-width='narrow'] { --reading-width: 620px; }
+.scope[data-reading-width='balanced'] { --reading-width: 700px; }
+.scope[data-material='opaque'], .scope[data-contrast='higher'] { --glass-fill: var(--appearance-opaque); --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
+.scope[data-contrast='higher'] { --muted: #d5d5d5; --quiet: #c7c7c7; --body: #eeeeee; --separator: #ffffff59; --edge: #ffffff8c; --edge-bright: #ffffff8c; }
+.scope[data-motion='reduced'] { --material-drift-display: none; }
+.scope[data-motion='reduced'], .scope[data-motion='reduced'] *, .scope[data-motion='reduced'] *::before, .scope[data-motion='reduced'] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+/* Local palette choices must never override an accessibility or blur fallback. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .scope[data-material] { --glass-fill: var(--appearance-opaque); --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .scope[data-material] { --glass-fill: var(--appearance-opaque); --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; }
+}
+@media (prefers-contrast: more) {
+  .scope[data-material] { --glass-fill: var(--appearance-opaque); --glass-sheen: linear-gradient(transparent, transparent); --glass-filter: none; --material-drift-display: none; --muted: #d5d5d5; --quiet: #c7c7c7; --body: #eeeeee; --separator: #ffffff59; --edge: #ffffff8c; --edge-bright: #ffffff8c; }
+}
+@media (prefers-reduced-motion: reduce) { .scope[data-material] { --material-drift-display: none; } }

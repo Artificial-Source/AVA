@@ -5,7 +5,7 @@ commands, contact model providers, load local resources, and launch extension
 processes when you allow those features. AVA's safety model is designed to make
 those actions explicit, bounded, auditable, and fail-closed where practical.
 
-**AVA has narrow Linux Landlock+seccomp containment for verified sealed local plans, not a general AVA sandbox.** It applies to Standard path-bearing or mutable commands, Sensitive commands after approval, and some Critical/Raw commands when a verified local plan and mutable-code policy require it. It applies filesystem rules, no-new-privileges, and a network-deny seccomp filter when the approved command plan does not allow networking. It does not sandbox whole AVA, plugins, MCP, LSP, containers, or VMs. Descendants that call `setsid` still inherit Landlock and seccomp, but escape AVA's PGID cleanup and its resource/lifetime control. Run AVA inside a separate container, VM, micro-VM, or policy sandbox when you need isolation from untrusted repositories, generated code, package scripts, or tooling.
+**AVA has narrow Linux Landlock+seccomp containment for verified sealed local plans, not a general AVA sandbox.** It applies to Standard path-bearing or mutable commands, Sensitive commands after approval, and some Critical/Raw commands when a verified local plan and mutable-code policy require it. It applies filesystem rules, no-new-privileges, and a seccomp filter in both network modes; network approval permits IP and route-netlink sockets, not AF_UNIX service sockets. It does not sandbox whole AVA, plugins, MCP, LSP, containers, or VMs. Descendants that call `setsid` still inherit Landlock and seccomp, but escape AVA's PGID cleanup and its resource/lifetime control. Run AVA inside a separate container, VM, micro-VM, or policy sandbox when you need isolation from untrusted repositories, generated code, package scripts, or tooling.
 
 ## Mental Model
 
@@ -25,7 +25,7 @@ those actions explicit, bounded, auditable, and fail-closed where practical.
 
 AVA classifies side effects as operations and resolves each request to
 `allow`, `ask`, or `deny` before the tool proceeds. Interactive sessions show a
-permission prompt for `ask`; headless modes fail closed unless an explicit safe
+permission prompt for `ask`; headless modes fail closed unless an explicit
 allow flag, session grant, persistent rule, or RPC `permission_reply` resolves
 the request. Decisions are recorded in the session audit trail when a session is
 active.
@@ -35,17 +35,20 @@ Common operations include:
 | Area | Operations | Default shape |
 | --- | --- | --- |
 | Files | `read`, `search`, `edit` | Workspace reads/searches are usually low risk; edits prompt or deny based on mode/path. |
-| Shell | `bash` | Parsed and classified before execution; unknown commands ask, high-risk commands deny. |
+| Shell | `bash` | Sealed and classified before execution; unknown commands ask, and destructive/privileged or raw-shell commands require Critical one-shot approval. |
 | Network | `network.fetch`, `network.search` | Explicit approval required. |
 | LSP | `lsp.query`, `lsp.server.launch` | Queries are permissioned; server launch asks because it starts a process. |
 | Resources | `skill`, `task` | Skill loading requires approval. Task/subagent launch is prompt-free and audited unless an exact persisted task deny matches; only sensitive nested or child actions prompt, and those remain independently permissioned. |
 | Plugins | `plugin.execute`, `plugin.tool.call`, `plugin.command.run`, `plugin.event.observe` | Launches and contributed operations require approval. |
 | MCP | `mcp.server.launch`, `mcp.server.connect`, `mcp.tool.call`, `mcp.resource.read` | Server process/session/tool/resource actions require approval. |
 
-Persistent permission rules are exact-match allow or deny rules. They are
-consulted only after AVA's built-in policy has produced an `ask` decision, so a
-remembered allow cannot upgrade a built-in hard deny. Matching persistent deny
-rules win over matching allow rules, and malformed rule storage fails closed.
+Persistent permission rules are exact-match allow or deny rules. Deny-only
+preflight runs even when built-in policy would auto-allow an operation. Full
+allow/deny resolution handles eligible `ask` decisions; a remembered allow
+cannot upgrade a built-in hard deny. Matching persistent deny rules win over
+matching allow rules, and malformed rule storage fails closed in either phase.
+See the permission gate (`src/ava/tools/tool_permission.cpp`) and the
+persistent resolvers (`src/ava/permissions/permission_rules.cpp`).
 Normal file tools cannot modify enforceable permission-rule files; manage rules
 with `/permissions` or the RPC permission-rule commands.
 
@@ -85,7 +88,7 @@ still goes through the permission model above.
 
 See [CONFIG.md](../core/configuration.md) for the full resource and trust path list.
 
-## Secrets, Protected Paths, And Destructive Denies
+## Secrets, Protected Paths, And Destructive Commands
 
 AVA treats paths, model output, terminal input, JSON, shell text, and local
 config as untrusted. Current hardening includes:
@@ -97,20 +100,36 @@ config as untrusted. Current hardening includes:
 - Search results are filtered through the read-file decision per matched file,
   so matches in denied secret paths are skipped instead of injected into model
   context.
-- File reads reject symlinks and non-regular files and enforce size/output
-  bounds.
-- Outside-workspace targets prompt as high risk rather than silently granting
-  access.
+- File reads reject non-regular files and enforce size/output bounds. Workspace
+  reads are descriptor-anchored: contained relative symlinks can be followed,
+  but escaping or absolute symlink targets are refused; the older-kernel
+  fallback rejects symlink components.
+- Non-secret outside-workspace targets default to high-risk `ask`, not a hard
+  deny. `--allow read-only` currently auto-approves otherwise-Ask read/search
+  operations even outside the workspace. Matching `--allow-tool read_file`,
+  `glob`, `grep`, or `list_directory` flags likewise have no workspace-only
+  target condition. Hard secret-path denies and persistent denies still apply.
+  See `src/ava/app/headless_policy.cpp`.
 - Plan mode denies source-code edits except planning markdown.
 - Normal write/edit/apply-patch tools reject enforceable permission-rule files;
   use the permission management commands instead.
-- The shell classifier denies known destructive patterns such as recursive
-  forced deletion, filesystem formatting helpers, fork-bomb patterns, broad
-  ownership/permission changes, and dangerous device redirection.
+- The sealed command policy classifies destructive/privileged commands such as
+  `rm`, `dd`, `mkfs*`, privileged helpers, and destructive Git forms as Critical:
+  they require explicit one-shot approval, not an unconditional backend deny.
+  Raw-shell syntax, including fork bombs or dangerous redirection, also requires
+  Critical one-shot approval. See the sealed classifier (`src/ava/command/policy.cpp`)
+  and permission decisions (`src/ava/permissions/permission.cpp`).
 
 These checks reduce accidental or model-initiated damage. They do not make a
 host account safe to expose to untrusted code. A command, plugin, LSP server, or
 MCP server that you approve can still run with the AVA process's OS privileges.
+
+File-tool reads run in AVA itself, outside contained-child Landlock/seccomp
+enforcement. `--allow read-only` is read/search approval, **not workspace
+confinement**; its outside-workspace policy remains pending, and the current
+behaviour above must not be mistaken for denial. Hide unneeded tools with
+`--tools`/`--exclude-tools` and use an external sandbox if workspace-only access
+is required.
 
 ## Bash Tool Safety And Sealed Command Plans
 
@@ -145,15 +164,52 @@ Policy details:
 - A persistent Deny is checked before Standard auto-allow. Reusable session or
   workspace Allows exist only for secret-screened, typed recipe identities;
   Critical/raw/unverified commands cannot acquire reusable Allow authority.
+- If an executable or shebang interpreter's canonical target is outside the
+  roots the containment plan grants, the plan is `Unavailable`. AVA falls back
+  to explicit Critical, one-shot approval for uncontained execution instead of
+  auto-running. nvm, pipx, and Nix toolchain symlinks can encounter this boundary;
+  the plan does not silently grant their arbitrary target directories.
 
 Linux development containment uses Landlock filesystem rules, no-new-privileges,
-and a seccomp network-deny filter when networking is not part of the approved
-plan. This materially restricts contained build/test commands, but it is not a
-complete VM boundary: descendants that deliberately create a new session still
-inherit Landlock/seccomp but escape verified-PGID cleanup and AVA's
-resource/lifetime control. Use an external container/VM sandbox for hostile code
-or stronger descendant isolation. See [Command containment](containment.md)
-for the exact contract and platform fallback.
+and a seccomp filter in **both** network modes. With networking denied,
+`socket()` and `connect()` return `EPERM`. With networking allowed, `socket()`
+permits only `AF_INET`, `AF_INET6`, and `AF_NETLINK` with `NETLINK_ROUTE`;
+`AF_UNIX` and other domains remain denied, so local session D-Bus, `docker.sock`,
+ssh-agent, and gpg-agent sockets are unreachable by design. Both modes deny
+`io_uring_setup()`, but allow private AF_UNIX stream/seqpacket `socketpair()` and
+`sendto`/`sendmsg`/`sendmmsg` for IPC such as Python asyncio and Node child-process
+pipes; datagram pairs are refused. Inherited-descriptor closure before exec,
+not send-syscall blocking, is the defence against inherited sockets.
+
+On Landlock ABI >= 6, contained commands also cannot signal processes or connect
+to abstract UNIX sockets outside their Landlock domain. Earlier supported ABIs
+retain the filesystem and seccomp policies without this additional scoping.
+
+Executable/interpreter parents normally receive directory read/execute rules.
+Parents equal to or containing trusted home (including trailing-slash and
+device/inode aliases), or overlapping AVA authority roots, instead grant only
+exact-file read/execute access. Startup PATH discovery drops `/` and entries
+equal to or containing trusted home, including symlink aliases.
+
+Any failure of the `SECCOMP_GET_ACTION_AVAIL` support probe makes containment
+Unavailable and requires Critical, one-shot Ask; there is no `PR_GET_SECCOMP`
+fallback. Child installation must still succeed before user code starts.
+
+Remaining containment limitations include:
+
+- Landlock does not filter individual secret files beneath an allowed workspace
+  or toolchain root; application file-tool denies do not mediate child reads.
+- Below Landlock ABI 6, contained code can signal same-UID processes outside its
+  group, including AVA, subject to ordinary OS checks.
+- The writable workspace includes an in-workspace `.git`; contained code can
+  plant hooks/configuration that affect later Git invocations.
+- Descendants that deliberately create a new session still inherit
+  Landlock/seccomp but escape verified-PGID cleanup and AVA's resource/lifetime
+  control.
+
+Use an external container/VM sandbox for hostile code or stronger isolation.
+See [Command containment](containment.md) for the exact contract, implementation
+links, and platform fallback.
 
 ## Plugin, MCP, And LSP Process Boundaries
 

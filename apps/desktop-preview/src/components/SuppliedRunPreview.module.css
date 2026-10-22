@@ -1,0 +1,6 @@
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; width: min(calc(100% - 2 * var(--conversation-padding)), var(--reading-width)); min-height: 30px; margin: 0 auto 4px; color: var(--muted); font-size: 11px; }
+.controls button, .controls select { min-height: 28px; padding: 3px 0; background: var(--canvas); color: var(--muted); font: inherit; }
+.controls button:hover, .controls select:hover { color: var(--text); }
+.controls button:disabled, .controls select:disabled { color: var(--quiet); }
+.controls select { max-width: 150px; }
+.controls p { margin: 0; overflow-wrap: anywhere; }

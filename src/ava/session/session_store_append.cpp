@@ -3,6 +3,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_store_internal.h"
 #include "ava/session/validation.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/path.h"
 
 #include <algorithm>
@@ -503,6 +504,20 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
       error.with_context("parent_close_cause", std::strerror(parent_close_error));
     return std::unexpected(
         with_append_commit_state(std::move(error), written == 0 ? AppendCommitState::NotStarted : AppendCommitState::PartialOrUnknown, path));
+  }
+
+  // A complete write is not a durable commit until its data reaches storage.
+  // Batch appends share this barrier before publishing each record's epoch.
+  if (int const sync_error = ava::core::fdatasync_with_restart(append_fd); sync_error != 0)
+  {
+    auto error = path_io_error("failed to sync the complete session entry through the append descriptor", path, sync_error);
+    error.with_context("bytes_written", std::to_string(written)).with_context("payload_bytes", std::to_string(payload.size()));
+    auto const [append_close_error, parent_close_error] = close_both();
+    if (append_close_error != 0)
+      error.with_context("append_close_cause", std::strerror(append_close_error));
+    if (parent_close_error != 0)
+      error.with_context("parent_close_cause", std::strerror(parent_close_error));
+    return std::unexpected(with_append_commit_state(std::move(error), AppendCommitState::PartialOrUnknown, path));
   }
 
   if (after_append_write_for_test_)

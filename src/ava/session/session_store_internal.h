@@ -2,6 +2,7 @@
 
 #include "ava/observability/run_observer.h"
 #include "ava/session/session_store.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/strict_json.h"
 
 #include <atomic>
@@ -76,27 +77,6 @@ enum class AppendCommitState
 [[nodiscard]] std::string_view append_commit_state_text(AppendCommitState state);
 [[nodiscard]] bool has_append_commit_state(ava::core::Error const& error);
 [[nodiscard]] ava::core::Error with_append_commit_state(ava::core::Error error, AppendCommitState state, std::filesystem::path const& path);
-
-class ScopedFd
-{
- public:
-  explicit ScopedFd(int fd = -1) noexcept;
-  ScopedFd(ScopedFd const&) = delete;
-  ScopedFd& operator=(ScopedFd const&) = delete;
-  ScopedFd(ScopedFd&& other) noexcept;
-  ScopedFd& operator=(ScopedFd&& other) noexcept;
-  ~ScopedFd();
-
-  [[nodiscard]] int get() const noexcept;
-  [[nodiscard]] int release() noexcept;
-  [[nodiscard]] int close_checked() noexcept;
-  void reset(int fd = -1) noexcept;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-
- private:
-  int fd_ = -1;
-};
 
 class SessionTraceScope
 {

@@ -6,7 +6,6 @@
 #include "ava/agent/tool_result.h"
 #include "ava/tools/lsp_tools.h"
 #include "ava/tools/mutation_queue.h"
-#include "ava/tools/secure_workspace.h"
 #include "ava/permissions/permission.h"
 
 #include <memory>
@@ -44,12 +43,7 @@ ava::core::Result<ToolDispatcher> ToolDispatcher::create_strict(ava::tools::Tool
                                                                 ToolVisibilityOptions visibility)
 {
   if (context.require_descriptor_secure_workspace && !context.secure_workspace)
-  {
-    auto workspace = ava::tools::SecureWorkspace::open(context.workspace_dir);
-    if (!workspace)
-      return std::unexpected(std::move(workspace.error()));
-    context.secure_workspace = std::move(*workspace);
-  }
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "strict dispatcher requires an open secure workspace"));
   auto registry = compose_tool_registry(context, visibility);
   if (!registry)
     return std::unexpected(std::move(registry.error()));

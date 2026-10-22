@@ -19,7 +19,7 @@ The same roots may contain `mode: primary` definitions selected at process start
 
 A selected definition's body is appended as explicit system instructions, preserving AVA's base, safety, context, and ambient-extension-free prompt composition. `tools: read-only` intersects the current CLI visibility with AVA's read/search built-ins and does not grant permission. An inherit primary keeps `task`, `job`, and `todowrite` unless CLI visibility removed them.
 
-Selection is invocation-local and available to the TUI, print mode, and CLI RPC; ACP rejects extra startup flags. The resolved definition remains fixed across model switches, prompt/trust reloads, and ordinary turns and is not persisted as a conversation turn. A navigated replacement may resolve the carried name again. Start or replace a session after config/trust changes when selected identity or policy must change; AVA has no live primary-agent picker.
+Selection is invocation-local and available to the TUI, print mode, and CLI RPC; ACP rejects extra startup flags. The resolved definition remains fixed across ordinary turns, model switches, and `/reload prompts`, and is not persisted as a conversation turn. Trust transactions, including trust reloads, re-resolve the requested name against the newly permitted catalog: they can refresh the definition, select a same-name global definition, or retire unavailable project authority. Tool visibility only narrows in the active session; removing or replacing a read-only primary does not restore hidden tools. Session navigation/replacement also resolves the carried name again. AVA has no live primary-agent picker.
 
 ## Foreground and background execution
 
@@ -55,6 +55,8 @@ The TUI child workspace is inspection-only. It projects bounded committed child 
 While a task belongs to the current AVA process, its task card shows a separate `launch:` row, the `/jobs` selector shows a compact launch suffix, and the child workspace shows a `Launch:` line. This is AVA's configured launch request (the proven display model name when available plus the selected AVA thinking level), not provider-confirmed serving identity. Launch display metadata is presentation-only and process-local: it is excluded from task/job results, public `/jobs` text and JSON, RPC, events, sessions, exports, search, filtering, details queries, and clipboard text. Replayed or historical task cards therefore omit the row after restart.
 
 `status`/`show` can inspect running or terminal state. `wait` waits only for its finite timeout and may return a still-running snapshot; it does not cancel the job. `result` is available only after terminal completion. `cancel` is cooperative: it records a cancellation request and signals the worker, so the snapshot can briefly remain running before reaching `canceled`. Completed, failed, canceled, and interrupted work is terminal; repeat controls return the current terminal state or an invalid-transition/not-found error as appropriate.
+
+Model-facing `job wait` checks parent-turn cancellation in approximately 50 ms slices. Canceling that wait stops only the parent's wait; the background job keeps running unless explicitly canceled. A provider-native child cancellation is reported as `canceled`, not completed; a provider-error terminal outcome becomes `failed` with a descriptive provider-category error.
 
 ## Promote foreground work
 

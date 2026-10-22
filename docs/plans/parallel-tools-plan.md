@@ -1,19 +1,20 @@
 # Parallel Ordinary Tool Execution Plan
 
-Status: internal/backend opt-in landed, default off. The staged rollout has now landed a scheduler seam, a bounded parallel scheduler engine, and `AgentLoop` integration behind `AgentLoopOptions::parallel_read_search_tools` with `parallel_read_search_max_workers`. The active eligible set is deliberately narrow: builtin `read_file`, `list_directory`, `glob`, and `grep` only, and only after preflight proves the call cannot prompt. There is still no CLI/TUI/RPC public flag, no provider-prompt or user-facing claim that ordinary tools run in parallel, no default behavior change, and no full-binary smoke for this path unless a future public/headless flag is added.
+Status: public headless opt-in landed, default still off. The staged rollout has a scheduler seam, a bounded parallel scheduler engine, `AgentLoop` integration behind `AgentLoopOptions::parallel_read_search_tools` with `parallel_read_search_max_workers`, and a narrow CLI/RPC launch bridge: `--parallel-read-search-tools` plus optional `--parallel-read-search-max-workers N` (N is 1..4) on `--print`/`--rpc` only. The active eligible set remains builtin `read_file`, `list_directory`, `glob`, and `grep` after preflight proves the call cannot prompt. Default sequential behavior is unchanged. There is still no TUI/interactive/ACP/config inheritance, no provider-prompt claim that ordinary tools run in parallel, and no default-on or broader tool eligibility.
 
 ## Problem
 
-AVA can receive more than one provider tool call in a single assistant turn. The default agent loop still dispatches ordinary tool calls sequentially in provider order, which is the safest user-facing behavior for permission prompts, session replay, and mutation visibility. An internal backend option can now run a conservative read/search subset concurrently to prove the implementation path without exposing it as product behavior yet.
+AVA can receive more than one provider tool call in a single assistant turn. The default agent loop still dispatches ordinary tool calls sequentially in provider order, which is the safest user-facing behavior for permission prompts, session replay, and mutation visibility. A conservative read/search subset can run concurrently behind the existing internal option and a default-off `--print`/`--rpc` launch flag.
 
 The relevant current surface is:
 
 - `src/ava/agent/agent_loop.cpp`: parses the assistant turn, preflights provider-ordered tool calls, and uses the parallel scheduler only when `AgentLoopOptions::parallel_read_search_tools` is true.
 - `src/ava/agent/agent_loop.h`: owns the default-off internal options `parallel_read_search_tools` and `parallel_read_search_max_workers`.
+- `src/ava/app/command_line.{h,cpp}`, `print_mode.{h,cpp}`, `rpc_mode.{h,cpp}`, `runtime/RunOptions.h`, and `runtime_prompt.cpp`: public headless opt-in flags and the ordinary-run bridge into `AgentLoopOptions`.
 - `src/ava/agent/tool_scheduler.{h,cpp}`: builds provider-ordered schedule slots, splits read/search epochs from barriers/deferred calls, runs eligible epochs with bounded `std::jthread` workers, propagates `std::stop_token` cancellation, and returns provider-ordered outcomes.
 - `src/ava/agent/tool_dispatcher.{h,cpp}`: dispatches one `ProviderToolCall` through built-in, plugin, and MCP registry paths; the AgentLoop integration uses copied worker contexts and buffered callbacks for preflight-proven read/search calls.
 - `src/ava/tools/file_tools.cpp` and search helpers: implement the currently eligible builtin read/search tools with bounded output and permission checks.
-- `src/ava/tools/mutation_queue.*`: still serializes mutation tools; mutation tools remain barriers and are not parallelized.
+- `src/ava/tools/mutation_queue.*`: serializes mutation tools sharing the same queue; mutation tools remain barriers and are not parallelized.
 - `src/ava/agent/message_builder.cpp` and `src/ava/session/validation.cpp`: replay still expects provider-order tool call/result pairing, so the internal opt-in commits completed outcomes in that order.
 - `src/ava/agent/background_job_registry.*`: owns the already-shipped `task background=true` subagent path, which remains separate from ordinary tool parallelism.
 
@@ -29,13 +30,13 @@ The landed eligibility is intentionally conservative:
 - Preserve provider-order permission prompts, permission audit records, session replay, runtime events, and final tool results.
 - Keep mutation safety at least as strong as today's per-path queue and all-validation-before-write patch behavior.
 - Make cancellation bounded and deterministic even when multiple tool workers are running.
-- Prove behavior with deterministic tests before exposing it by default or through a public flag.
+- Prove behavior with deterministic tests before exposing it by default or broadening eligibility.
 
 ## Non-goals
 
 - Do not use `task background=true` as the implementation substrate for ordinary tool parallelism.
 - Do not make mutation, shell/process, network, plugin, MCP, question, task/subagent, skill, LSP, unknown, or unreviewed tools parallel-eligible in the current internal opt-in.
-- Do not claim user-facing/default parallel tools until a public CLI/RPC/TUI/headless surface, full-binary smoke, and release docs are added.
+- Do not claim default-on or TUI/ACP parallel tools. The public surface is a headless `--print`/`--rpc` opt-in only.
 - Do not change session schema or switch to durable batch replay ordering in this internal activation.
 
 ## Landed internal model
@@ -44,7 +45,7 @@ The scheduler treats provider order as the semantic order and worker completion 
 
 Current activation eligibility is narrower than the long-term target:
 
-- Active now behind internal opt-in: builtin `read_file`, `list_directory`, `glob`, and `grep` with preflight-proven non-interactive permission decisions.
+- Active now behind internal opt-in and the public `--print`/`--rpc` flags: builtin `read_file`, `list_directory`, `glob`, and `grep` with preflight-proven non-interactive permission decisions.
 - Future candidates only after separate review: `webfetch`/`websearch`, LSP queries, `skill`, plugin tools, MCP tools, and other brokered external integrations.
 - Barriers by default: `write_file`, `edit_file`, `apply_patch`, `bash`, `question`, `task`, unknown tools, and any tool whose metadata does not explicitly opt in.
 
@@ -65,13 +66,13 @@ This preserves the user's mental model: the first prompt shown corresponds to th
 
 ## Mutation queue
 
-The existing mutation queue remains required and shared by the runtime/session, not created per worker.
+The mutation queue coordinates only callers sharing the same `MutationQueue` instance. `ToolDispatcher` creates a fresh queue when its context does not supply one (`src/ava/agent/tool_dispatcher.cpp`); current parent/child agent setup does not inject a common workspace queue (`src/ava/agent/agent_turn_executor.cpp` and `src/ava/agent/agent_turn_subagents.cpp`). Runtime/session-wide cross-dispatcher serialization remains an open ownership gap, not a shipped guarantee. The read/search scheduler does not create per-worker mutation queues or make mutation tools parallel-eligible.
 
 Rules for mutation-capable tools:
 
 - Mutation tools are barriers for the current implementation.
-- Same-path mutations continue through `MutationQueue::lock_path`.
-- Multi-path mutations continue through `MutationQueue::lock_paths`, with paths sorted/deduplicated to avoid deadlock.
+- Same-path mutations sharing a queue continue through `MutationQueue::lock_path`.
+- Multi-path mutations sharing a queue continue through `MutationQueue::lock_paths`, with paths sorted/deduplicated to avoid deadlock.
 - If future non-overlapping mutations are allowed in the same epoch, each call must declare its complete affected path set before execution. Unknown or data-dependent path sets fall back to barrier execution.
 - Reads/searches after any mutation barrier start only after the barrier commits or fails, preserving current sequential visibility.
 
@@ -107,7 +108,7 @@ Cancellation is turn-scoped and cooperative:
 - AgentLoop commits the contiguous recorded prefix in provider order, appends the normal turn cancellation boundary when cancellation wins, and stops before later barriers/epochs or provider continuation.
 - Calls whose durable `ToolCall` entry was never committed do not get orphan results.
 
-This behavior is internal only and covered at scheduler and AgentLoop levels; a future public flag should add a full-binary smoke that can exercise cancellation through the exposed surface.
+Cancellation remains covered at scheduler and AgentLoop levels. The public headless flag adds a full-binary fake-provider smoke for launch, provider-order results, mutation-barrier visibility, and denial; resume/cancellation settlement stays on the existing deterministic core harness.
 
 ## Deterministic tests and evidence
 
@@ -117,7 +118,7 @@ Current evidence for the internal opt-in:
 - `ava_tests.agent_loop`: default-off integration coverage, provider-order read/search progress/audit/session/replay, zero-worker cap clamping, Ask fallback through the sequential resolver path, active-epoch cancellation stopping unstarted slots, and cancellation before a later barrier.
 - Focused sanitizer suites from the M1/M2 implementation journal covered scheduler, AgentLoop, session, and tools paths, including real read/search parallel execution.
 
-No full `ava` binary smoke currently exercises this path because there is no public CLI/RPC/TUI/headless option to turn it on. If a future public/headless flag is added, add a full-binary fake-provider smoke before documenting user-facing parallel-tool behavior.
+A credential-free full-binary fake-provider smoke covers the public `--print`/`--rpc` opt-in, provider-order tool IDs, the four-tool eligible batch, an intervening mutation barrier, and the denial path. It does not claim throughput or broader eligibility.
 
 ## Why `task` background jobs are separate
 
@@ -136,6 +137,6 @@ Ordinary parallel tools need a different scheduler because they must preserve on
 1. Landed: replay/order tests and the scheduler abstraction that document the current sequential contract.
 2. Landed: bounded `std::jthread`/`std::stop_token` parallel scheduler engine with conservative barrier/deferred semantics.
 3. Landed: internal AgentLoop opt-in for preflight-proven builtin read/search epochs, buffered audit/progress, provider-order session/timeline commit, and cooperative cancellation behavior.
-4. Remaining before any user-facing claim: decide whether AVA needs a public/headless flag, wire it through the chosen CLI/RPC/TUI surface, document exact semantics, and add a full-binary fake-provider smoke for the exposed option.
-5. Remaining future work: network tools, LSP, skill, task/subagent, plugin, MCP, and broader external tools stay deferred until separate thread-safety, permission, cancellation, and replay reviews land.
-6. Remaining research: durable batch session ordering and any move toward default-on parallel execution require session-versioning/replay/export design and separate approval.
+4. Landed for headless opt-in only: `--parallel-read-search-tools` and `--parallel-read-search-max-workers N` on `--print`/`--rpc`, typed `RuntimeInvocation` / mode options / `RunOptions` / ordinary-run `AgentLoopOptions` propagation, invalid `RunOptions` rejection without clamping, and a full-binary fake-provider smoke. Interactive TUI, ACP, connect, doctor, compaction, strict adapters, and subagent delivery do not automatically inherit this public flag.
+5. Remaining future work: network tools, LSP, skill, task/subagent, plugin, MCP, and broader external tools stay deferred until separate thread-safety, permission, cancellation, and replay reviews land. Selective tool-catalog work is a separate design-gated track.
+6. Remaining research: durable batch session ordering, TUI/ACP exposure, and any move toward default-on parallel execution require session-versioning/replay/export design and separate approval. Long-session indexing remains a separate track.

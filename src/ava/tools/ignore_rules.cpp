@@ -1,16 +1,18 @@
 #include "sys.h"
+#include "ava/tools/file_tools_internal.h"
 #include "ava/tools/ignore_rules.h"
 #include "ava/tools/secure_workspace.h"
+#include "ava/core/fd_io.h"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
-#include <fstream>
+#include <cerrno>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <system_error>
 #include <utility>
-#include <unistd.h>
+#include <fcntl.h>
 
 namespace ava::tools {
 
@@ -133,6 +135,52 @@ bool starts_with_path_prefix(std::string_view value, std::string_view prefix)
   return value == prefix || (value.size() > prefix.size() && value.starts_with(prefix) && value[prefix.size()] == '/');
 }
 
+constexpr std::size_t kMaxIgnoreFileBytes = 1024U * 1024U;
+
+// Reads an opened .gitignore descriptor, bounded by kMaxIgnoreFileBytes even if the file grows while it is read.
+ava::core::Result<std::string> read_ignore_descriptor(int fd, std::uintmax_t size, std::filesystem::path const& ignore_file)
+{
+  auto const too_large = [&ignore_file] {
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, ".gitignore exceeds read limit");
+    error.with_context("path", ignore_file.string());
+    error.with_context("max_bytes", std::to_string(kMaxIgnoreFileBytes));
+    return error;
+  };
+  if (size > kMaxIgnoreFileBytes)
+    return std::unexpected(too_large());
+  auto content = ava::core::read_descriptor_bounded(fd, kMaxIgnoreFileBytes);
+  if (!content)
+  {
+    if (content.error() == EFBIG)
+      return std::unexpected(too_large());
+    auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed while reading .gitignore");
+    error.with_context("path", ignore_file.string());
+    error.with_context("cause", std::generic_category().message(content.error()));
+    return std::unexpected(std::move(error));
+  }
+  return std::move(*content);
+}
+
+// Missing, unreadable, symlinked, or non-regular ignore files contribute no rules.
+// The shared opener validates and reads the same owned descriptor without blocking on FIFOs.
+ava::core::Result<std::optional<std::string>> load_regular_ignore_file(std::filesystem::path const& ignore_file)
+{
+  auto opened = ava::core::open_regular_nofollow(AT_FDCWD, ignore_file.c_str());
+  if (!opened)
+  {
+    auto const& failure = opened.error();
+    if (failure.failure == ava::core::OpenRegularFailure::Open || failure.failure == ava::core::OpenRegularFailure::NotRegular)
+      return std::nullopt;
+    auto error = ava::core::open_regular_error(failure, "opened .gitignore");
+    error.with_context("path", ignore_file.string());
+    return std::unexpected(std::move(error));
+  }
+  auto content = read_ignore_descriptor(opened->fd.get(), static_cast<std::uintmax_t>(opened->status.st_size), ignore_file);
+  if (!content)
+    return std::unexpected(std::move(content.error()));
+  return std::optional<std::string>(std::move(*content));
+}
+
 }  // namespace
 
 bool is_git_dir(std::filesystem::path const& path)
@@ -243,6 +291,7 @@ ava::core::Result<void> IgnoreMatcher::load_rules()
     });
     if (!walked)
       return std::unexpected(std::move(walked.error()));
+    // Entries this walk had to skip are equally unreadable to the search walk, which reports them in its own result.
     return {};
   }
 
@@ -264,6 +313,13 @@ ava::core::Result<void> IgnoreMatcher::load_rules()
       return std::unexpected(std::move(error));
     }
     auto const& entry = *it;
+    if (std::error_code type_error;
+        entry.symlink_status(type_error).type() == std::filesystem::file_type::directory && !file_tools_internal::directory_is_listable(entry.path()))
+    {
+      // recursive_directory_iterator ends the whole walk when it cannot enter a subdirectory (unreadable, or its parent is not
+      // searchable). Such a directory cannot contribute .gitignore rules and the search walk reports it as skipped, so step over it.
+      it.disable_recursion_pending();
+    }
     if (entry.is_directory(iter_error))
     {
       if (is_git_dir(entry.path()) || is_generated_dir(entry.path()))
@@ -280,52 +336,37 @@ ava::core::Result<void> IgnoreMatcher::load_rules()
     if (!loaded)
       return std::unexpected(loaded.error());
   }
+  if (iter_error)
+  {
+    // The iterator resets itself to end when an increment fails. Report that instead of returning the rules gathered so far as if the
+    // walk had completed.
+    auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed while traversing the workspace for .gitignore rules");
+    error.with_context("workspace", workspace_dir_.string());
+    error.with_context("cause", iter_error.message());
+    return std::unexpected(std::move(error));
+  }
   return {};
 }
 
 ava::core::Result<void> IgnoreMatcher::load_file(std::filesystem::path const& ignore_file)
 {
-  std::ifstream file;
-  std::istringstream secure_file;
-  std::istream* input = nullptr;
+  std::istringstream input;
   if (secure_workspace_)
   {
     auto opened = secure_workspace_->open_regular_file(ignore_file);
     if (!opened)
     {
-      if (opened.error().category() == ava::core::ErrorCategory::NotFound || opened.error().category() == ava::core::ErrorCategory::PermissionDenied)
+      // A missing, unreadable, link-rejected, or non-regular (for example FIFO) .gitignore contributes no rules, as in the non-secure branch.
+      auto const category = opened.error().category();
+      if (category == ava::core::ErrorCategory::NotFound || category == ava::core::ErrorCategory::PermissionDenied ||
+          category == ava::core::ErrorCategory::InvalidArgument)
         return {};
       return std::unexpected(std::move(opened.error()));
     }
-    constexpr std::size_t kMaxIgnoreFileBytes = 1024U * 1024U;
-    if (opened->size() > kMaxIgnoreFileBytes)
-    {
-      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, ".gitignore exceeds secure read limit");
-      error.with_context("path", ignore_file.string());
-      error.with_context("max_bytes", std::to_string(kMaxIgnoreFileBytes));
-      return std::unexpected(std::move(error));
-    }
-    std::string content;
-    content.reserve(static_cast<std::size_t>(opened->size()));
-    std::array<char, 4096> buffer{};
-    while (true)
-    {
-      auto const count = ::read(opened->fd(), buffer.data(), buffer.size());
-      if (count < 0)
-      {
-        if (errno == EINTR)
-          continue;
-        auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed while securely reading .gitignore");
-        error.with_context("path", ignore_file.string());
-        error.with_context("cause", std::generic_category().message(errno));
-        return std::unexpected(std::move(error));
-      }
-      if (count == 0)
-        break;
-      content.append(buffer.data(), static_cast<std::size_t>(count));
-    }
-    secure_file.str(std::move(content));
-    input = &secure_file;
+    auto content = read_ignore_descriptor(opened->fd(), opened->size(), ignore_file);
+    if (!content)
+      return std::unexpected(std::move(content.error()));
+    input.str(std::move(*content));
   }
   else
   {
@@ -333,15 +374,18 @@ ava::core::Result<void> IgnoreMatcher::load_file(std::filesystem::path const& ig
     auto const status = std::filesystem::symlink_status(ignore_file, status_error);
     if (status_error || std::filesystem::is_symlink(status))
       return {};
-    file.open(ignore_file, std::ios::binary);
+    auto loaded = load_regular_ignore_file(ignore_file);
+    if (!loaded)
+      return std::unexpected(std::move(loaded.error()));
+    auto file = std::move(*loaded);
     if (!file)
       return {};
-    input = &file;
+    input.str(std::move(*file));
   }
 
   auto const base_relative = relative_to_workspace(ignore_file.parent_path());
   std::string line;
-  while (std::getline(*input, line))
+  while (std::getline(input, line))
   {
     if (!line.empty() && line.back() == '\r')
       line.pop_back();
@@ -392,7 +436,7 @@ ava::core::Result<void> IgnoreMatcher::load_file(std::filesystem::path const& ig
     rules_.push_back(std::move(rule));
   }
 
-  if (!input->eof() && input->fail())
+  if (!input.eof() && input.fail())
   {
     auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed while reading .gitignore");
     error.with_context("path", ignore_file.string());

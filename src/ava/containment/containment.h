@@ -70,9 +70,9 @@ struct DevelopmentContainmentPlan
   std::string unavailable_reason;
   std::uint32_t landlock_abi_version = 0;
   bool network_allowed = false;
-  // True when the plan calls for a network-denial seccomp filter (planned,
-  // not yet installed). The filter is actually installed only in the child;
-  // the parent verifies success before reporting containment_applied.
+  // True when the plan calls for a mode-aware seccomp filter (planned, not
+  // yet installed). Both network modes restrict socket domains and io_uring;
+  // the parent verifies child installation before reporting containment_applied.
   bool network_filter_planned = false;
   ContainmentFilesystemScope filesystem_scope;
 
@@ -100,12 +100,16 @@ struct DevelopmentContainmentPlan
 // workspace metadata, synthetic environment roots, sealed PATH/toolchain
 // entries, executable/interpreter chain, and capability network flag.
 // Probes required kernel features without mutating parent state.
+// Canonical executable/interpreter targets outside the planned roots make the
+// plan unavailable; containment never adds target roots implicitly.
 [[nodiscard]] DevelopmentContainmentPlan prepare_development_containment(ava::command::CommandPreparation const& preparation, bool network_enabled);
 
 // Apply the containment plan in the child process after stdio/cwd setup and
-// before exec. Installs Landlock filesystem rules and, when network is denied,
-// a seccomp filter after no_new_privs. Returns an error if installation fails;
-// the caller must clean up the verified group and not exec.
+// before exec. Installs Landlock and a seccomp filter in both network modes
+// after no_new_privs. Only IP/NETLINK_ROUTE sockets are permitted when networking
+// is allowed; private UNIX stream/seqpacket pairs work in either mode.
+// Returns an error if installation fails; the caller must clean up the verified
+// group and not exec.
 //
 // This function is called only in the child after fork.
 [[nodiscard]] ava::core::VoidResult apply_containment_in_child(DevelopmentContainmentPlan const& plan);

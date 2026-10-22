@@ -1,6 +1,9 @@
 #include "sys.h"
 #include "ava/session/session_store_internal.h"
+#include "ava/core/UniqueFd.h"
+#include "ava/core/fd_io.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -11,6 +14,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -21,6 +25,41 @@ namespace {
 
 using detail::path_io_error;
 using detail::same_file_identity;
+
+bool ancestor_sync_is_best_effort(int error_number)
+{
+  return error_number == EINVAL || error_number == ENOTSUP || error_number == EROFS || error_number == EACCES;
+}
+
+ava::core::VoidResult sync_session_ancestor_directories(std::vector<std::filesystem::path> const& ancestor_sync_paths)
+{
+  // Sync newly created ancestors and the existing directory that received
+  // their outermost entry. Unsupported/inaccessible ancestor barriers are best
+  // effort; the inode and its immediate parent retain mandatory barriers.
+  for (auto const& ancestor : ancestor_sync_paths)
+  {
+    ava::core::UniqueFd ancestor_fd(::open(ancestor.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
+    if (ancestor_fd.get() < 0)
+    {
+      int const open_error = errno;
+      if (ancestor_sync_is_best_effort(open_error))
+        continue;
+      return std::unexpected(path_io_error("failed to open session lease ancestor directory for sync", ancestor, open_error));
+    }
+    int const sync_error = ava::core::fsync_with_restart(ancestor_fd.get());
+    int const close_error = ancestor_fd.close_checked();
+    if (sync_error != 0 && !ancestor_sync_is_best_effort(sync_error))
+    {
+      auto error = path_io_error("failed to sync session lease ancestor directory", ancestor, sync_error);
+      if (close_error != 0)
+        error.with_context("ancestor_close_cause", std::strerror(close_error));
+      return std::unexpected(std::move(error));
+    }
+    if (close_error != 0)
+      return std::unexpected(path_io_error("failed to close session lease ancestor directory after sync", ancestor, close_error));
+  }
+  return {};
+}
 
 }  // namespace
 
@@ -67,13 +106,43 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
     error.with_context("path", diagnostic_path.string());
     return std::unexpected(std::move(error));
   }
-  std::error_code mkdir_error;
-  std::filesystem::create_directories(parent_path, mkdir_error);
-  if (mkdir_error)
+  std::vector<std::filesystem::path> directories_to_create;
+  for (auto directory = parent_path.is_absolute() ? parent_path : std::filesystem::path(".") / parent_path; !directory.empty();)
   {
-    auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed to create session lease directory");
-    error.with_context("path", parent_path.string()).with_context("cause", mkdir_error.message());
-    return std::unexpected(std::move(error));
+    std::error_code status_error;
+    if (std::filesystem::is_directory(directory, status_error))
+      break;
+    if (status_error && status_error != std::errc::no_such_file_or_directory)
+      return std::unexpected(path_io_error("failed to inspect session lease directory before creation", directory, status_error.value()));
+    directories_to_create.push_back(directory);
+    auto next = directory.parent_path();
+    if (next == directory)
+      break;
+    directory = std::move(next);
+  }
+  std::vector<std::filesystem::path> ancestor_sync_paths;
+  for (auto directory = directories_to_create.rbegin(); directory != directories_to_create.rend(); ++directory)
+  {
+    std::error_code mkdir_error;
+    bool const created = std::filesystem::create_directory(*directory, mkdir_error);
+    if (mkdir_error)
+    {
+      auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed to create session lease directory");
+      error.with_context("path", directory->string()).with_context("cause", mkdir_error.message());
+      return std::unexpected(std::move(error));
+    }
+    if (created)
+      ancestor_sync_paths.push_back(*directory);
+  }
+  if (!ancestor_sync_paths.empty())
+  {
+    // The immediate parent has its own mandatory barrier. Other newly created
+    // directories and the directory receiving their outermost entry sync inside out.
+    auto receiving_directory = ancestor_sync_paths.front().parent_path();
+    if (ancestor_sync_paths.back() == directories_to_create.front())
+      ancestor_sync_paths.pop_back();
+    std::ranges::reverse(ancestor_sync_paths);
+    ancestor_sync_paths.push_back(std::move(receiving_directory));
   }
   std::error_code permissions_error;
   std::filesystem::permissions(parent_path, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, permissions_error);
@@ -84,8 +153,8 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
     return std::unexpected(std::move(error));
   }
 
-  int parent_fd = ::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (parent_fd < 0)
+  ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  if (!parent_fd)
     return std::unexpected(path_io_error("failed to open new session lease directory", parent_path, errno));
 
   static std::atomic<std::uint64_t> temporary_sequence = 0;
@@ -95,14 +164,13 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
   {
     temporary_name = ".ava-session-lease-" + std::to_string(static_cast<long long>(::getpid())) + "-" +
                      std::to_string(temporary_sequence.fetch_add(1, std::memory_order_relaxed) + 1) + ".tmp";
-    fd = ::openat(parent_fd, temporary_name.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+    fd = ::openat(parent_fd.get(), temporary_name.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd >= 0 || errno != EEXIST)
       break;
   }
   if (fd < 0)
   {
     int const error_number = errno;
-    ::close(parent_fd);
     auto const category = error_number == ELOOP ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::Io;
     auto error = ava::core::Error(
         category, error_number == ELOOP ? "temporary session lease path must not be a symlink" : "failed to create private new session lease inode");
@@ -110,7 +178,7 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
     return std::unexpected(std::move(error));
   }
 
-  SessionLease lease(fd, diagnostic_path, true);
+  ava::core::UniqueFd lease_fd(fd);
   bool temporary_link_exists = true;
   bool final_link_exists = false;
   struct stat status{};
@@ -118,13 +186,14 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
   auto cleanup_owned_name = [&](std::string const& name, std::string_view context_key, ava::core::Error& error) {
     struct stat named_status{};
     struct stat current_status{};
-    if ((!status_valid && fstat(fd, &current_status) != 0) || (fstatat(parent_fd, name.c_str(), &named_status, AT_SYMLINK_NOFOLLOW) != 0 && errno != ENOENT))
+    if ((!status_valid && fstat(fd, &current_status) != 0) ||
+        (fstatat(parent_fd.get(), name.c_str(), &named_status, AT_SYMLINK_NOFOLLOW) != 0 && errno != ENOENT))
     {
       error.with_context(std::string(context_key), std::strerror(errno));
       return;
     }
     auto const& expected_status = status_valid ? status : current_status;
-    if (same_file_identity(expected_status, named_status) && ::unlinkat(parent_fd, name.c_str(), 0) != 0)
+    if (same_file_identity(expected_status, named_status) && ::unlinkat(parent_fd.get(), name.c_str(), 0) != 0)
       error.with_context(std::string(context_key), std::strerror(errno));
   };
   auto fail_created_inode = [&](ava::core::Error error) -> ava::core::Result<SessionLease> {
@@ -132,7 +201,15 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
       cleanup_owned_name(final_name, "final_cleanup_cause", error);
     if (temporary_link_exists)
       cleanup_owned_name(temporary_name, "temporary_cleanup_cause", error);
-    ::close(parent_fd);
+    if (final_link_exists)
+    {
+      if (int const sync_error = ava::core::fsync_with_restart(parent_fd.get()); sync_error != 0)
+        error.with_context("cleanup_directory_sync_cause", std::strerror(sync_error));
+    }
+    if (int const close_error = lease_fd.close_checked(); close_error != 0)
+      error.with_context("lease_close_cause", std::strerror(close_error));
+    if (int const close_error = parent_fd.close_checked(); close_error != 0)
+      error.with_context("parent_close_cause", std::strerror(close_error));
     return std::unexpected(std::move(error));
   };
 
@@ -152,7 +229,11 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
   if (flock(fd, LOCK_EX | LOCK_NB) != 0)
     return fail_created_inode(path_io_error("failed to acquire private new session lease", diagnostic_path, errno));
 
-  if (::linkat(parent_fd, temporary_name.c_str(), parent_fd, final_name.c_str(), 0) != 0)
+  // Publish only an inode whose initial contents have reached storage.
+  if (int const sync_error = ava::core::fdatasync_with_restart(fd); sync_error != 0)
+    return fail_created_inode(path_io_error("failed to sync private new session lease inode before publication", diagnostic_path, sync_error));
+
+  if (::linkat(parent_fd.get(), temporary_name.c_str(), parent_fd.get(), final_name.c_str(), 0) != 0)
   {
     int const error_number = errno;
     auto const category = error_number == ELOOP ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::Io;
@@ -171,7 +252,7 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
     error.with_context("path", diagnostic_path.string()).with_context("link_count", std::to_string(status.st_nlink));
     return fail_created_inode(std::move(error));
   }
-  if (::unlinkat(parent_fd, temporary_name.c_str(), 0) != 0)
+  if (::unlinkat(parent_fd.get(), temporary_name.c_str(), 0) != 0)
     return fail_created_inode(path_io_error("failed to remove private new session lease name after publication", diagnostic_path, errno));
   temporary_link_exists = false;
 
@@ -186,7 +267,7 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
     return fail_created_inode(std::move(error));
   }
   struct stat final_status{};
-  if (fstatat(parent_fd, final_name.c_str(), &final_status, AT_SYMLINK_NOFOLLOW) != 0)
+  if (fstatat(parent_fd.get(), final_name.c_str(), &final_status, AT_SYMLINK_NOFOLLOW) != 0)
     return fail_created_inode(path_io_error("failed to verify committed new session lease name", diagnostic_path, errno));
   if (!same_file_identity(status, final_status) || final_status.st_nlink != 1)
   {
@@ -194,8 +275,20 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
     error.with_context("path", diagnostic_path.string()).with_context("link_count", std::to_string(final_status.st_nlink));
     return fail_created_inode(std::move(error));
   }
-  ::close(parent_fd);
-  return lease;
+  // The final name and removal of the temporary name must both be durable.
+  if (int const sync_error = ava::core::fsync_with_restart(parent_fd.get()); sync_error != 0)
+    return fail_created_inode(path_io_error("failed to sync published new session lease directory", parent_path, sync_error));
+  if (auto synced = sync_session_ancestor_directories(ancestor_sync_paths); !synced)
+    return fail_created_inode(std::move(synced.error()));
+  if (int const close_error = parent_fd.close_checked(); close_error != 0)
+  {
+    auto error = path_io_error("new session lease was durably published but its directory descriptor close failed", parent_path, close_error);
+    error.with_context("creation_state", "durably_published");
+    if (int const lease_close_error = lease_fd.close_checked(); lease_close_error != 0)
+      error.with_context("lease_close_cause", std::strerror(lease_close_error));
+    return std::unexpected(std::move(error));
+  }
+  return SessionLease(lease_fd.release(), diagnostic_path, true);
 }
 
 ava::core::Result<SessionLease> SessionLease::acquire(std::filesystem::path const& session_path)

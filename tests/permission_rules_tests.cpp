@@ -11,6 +11,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -1626,11 +1627,81 @@ void test_registered_permission_rule_paths_protect_agent_loop_context()
          "registered enforceable permission rule paths protect agent-loop-style tool contexts without MCP/plugin inference");
 }
 
+void test_permission_rule_capacity_refusal_preserves_store()
+{
+  constexpr std::size_t max_file_bytes = 1024 * 1024;
+  for (auto const scope : {ava::permissions::PermissionRuleScope::Global, ava::permissions::PermissionRuleScope::Workspace})
+  {
+    auto const root =
+        create_empty_root(scope == ava::permissions::PermissionRuleScope::Global ? "permission-rules-global-capacity" : "permission-rules-workspace-capacity");
+    auto const store = test_store(root);
+    auto const target = root / "outside.txt";
+    auto draft = persistent_deny_draft(target);
+    draft.scope = scope;
+    draft.reason = std::string(1024, 'x');
+    auto seed = ava::permissions::add_persistent_permission_rule(store, draft);
+    expect(seed.has_value(), "permission capacity fixture creates a valid persistent Deny");
+    if (!seed)
+      continue;
+
+    std::string body = "{\"schema_version\":2,\"rules\":[";
+    std::size_t rule_count = 0;
+    while (true)
+    {
+      auto rule = *seed;
+      rule.rule_id = "permrule_capacity_" + std::to_string(rule_count);
+      auto const serialized = ava::permissions::permission_rule_json(rule);
+      auto const separator_bytes = rule_count == 0 ? 0U : 1U;
+      if (body.size() + separator_bytes + serialized.size() + 3 > max_file_bytes)
+        break;
+      if (rule_count != 0)
+        body += ',';
+      body += serialized;
+      ++rule_count;
+    }
+    body += "]}\n";
+    auto const path = ava::permissions::enforceable_permission_rules_file(store, scope);
+    write_file_with_mode(path, body, S_IRUSR | S_IWUSR);
+    auto before = ava::permissions::load_persistent_permission_rules(store);
+    expect(before && before->size() == rule_count && max_file_bytes - body.size() < 2048,
+           "near-capacity permission fixture remains valid and below the reader limit");
+    if (!before || before->empty())
+      continue;
+
+    struct stat before_status{};
+    expect(::stat(path.c_str(), &before_status) == 0, "permission capacity fixture records the original file identity");
+    // Escaping doubles this valid reason's serialized size, exceeding the
+    // remaining room even when the last full fixture rule did not quite fit.
+    draft.reason = std::string(1024, '\\');
+    auto added = ava::permissions::add_persistent_permission_rule(store, draft);
+    expect(!added && added.error().message().find("capacity") != std::string::npos && added.error().format().find("1048576") != std::string::npos &&
+               added.error().message().find("remove") != std::string::npos,
+           "permission rule addition reports actionable capacity failure before publishing an oversized candidate");
+
+    struct stat after_status{};
+    std::ifstream file(path, std::ios::binary);
+    std::string const after_body((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    expect(::stat(path.c_str(), &after_status) == 0 && before_status.st_dev == after_status.st_dev && before_status.st_ino == after_status.st_ino &&
+               after_body == body,
+           "capacity refusal leaves the existing permission file and bytes unchanged");
+    auto loaded = ava::permissions::load_persistent_permission_rules(store);
+    auto matched = ava::permissions::match_persistent_permission_rule(store, read_prompt(store, target));
+    expect(loaded && loaded->size() == rule_count && matched && *matched && (*matched)->action == ava::permissions::PermissionAction::Deny,
+           "capacity refusal preserves loading and enforcement of the old permission store");
+
+    auto removed = ava::permissions::remove_persistent_permission_rule(store, before->front().rule_id);
+    auto after_remove = ava::permissions::load_persistent_permission_rules(store);
+    expect(removed && removed->rule_id == before->front().rule_id && after_remove && after_remove->size() == rule_count - 1,
+           "rules remain removable after a capacity-refused addition");
+  }
+}
+
 }  // namespace
 
 void run_permission_rules_tests()
 {
   test_permission_rule_storage_add_list_remove();
+  test_permission_rule_capacity_refusal_preserves_store();
   test_old_critical_acknowledgements_never_recover_authority();
   test_legacy_command_allows_are_removed_one_at_a_time();
   test_permission_rule_precedence_denies_win();

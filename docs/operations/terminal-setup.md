@@ -71,7 +71,7 @@ AVA works inside tmux and screen, but multiplexers intentionally hide or transfo
 
 AVA requests the Kitty keyboard protocol on startup and falls back to xterm `modifyOtherKeys` when Kitty-style negotiation is not available. This improves detection for keys that legacy terminals often collapse, such as `Ctrl+Space`, `Ctrl+/`, `Ctrl+digit`, `Shift+Ctrl+P`, and modified arrow/delete combinations.
 
-Direct environment-identified Alacritty uses a best-effort asynchronous strict DA2 version check: versions through 0.14.0 (packed through 2401) request conservative Kitty flags 5, while 2402 and later request flags 7. AVA skips DA2 probing through tmux/screen and other mux paths, places a finite bound on the asynchronous reply, and never blocks startup for it.
+Keyboard negotiation is synchronous and bounded: AVA pushes Kitty disambiguation-only flags 1, queries the active flags, and uses a primary device-attributes response as a fence. The Kitty phase has a 50 ms deadline; if no nonzero Kitty flags reply is observed, AVA requests xterm `modifyOtherKeys` mode 2 and runs a separate fenced phase with its own 50 ms deadline. Startup can wait for these phases. OSC 11 background-color probing is a separate mechanism.
 
 Expected behavior:
 
@@ -91,9 +91,9 @@ If a key inserts stray text or does nothing:
 
 Persist cursor shape with `/cursor <default|block|underline|bar> [blink|steady]`. AVA emits DECSCUSR only while a non-default shape/blink policy is forced, resets it before suspend or external-editor handoff, reapplies it after return, and restores the terminal default on exit.
 
-Ctrl+Z (suspend) and Ctrl+G (external editor) temporarily return the TTY to shell mode. After `def_prog_mode`/`endwin`, AVA balances and disables the protocols it owns—Kitty keyboard stack entry, negotiated `modifyOtherKeys`, bracketed paste, and mouse—so the shell or `$VISUAL`/`$EDITOR` does not inherit a leaked Kitty stack or sticky paste/mouse modes. After `reset_prog_mode`, AVA refreshes geometry from `TIOCGWINSZ` (including resizes that happened while SIGTSTP-stopped), then re-arms paste, mouse, and the already-negotiated keyboard mode exactly once. Resume never re-probes OSC 11 and never grows the Kitty keyboard stack.
+Ctrl+Z (suspend) and Ctrl+G (external editor) temporarily return the TTY to shell mode. After `endwin`, AVA balances and disables the protocols it owns—Kitty keyboard stack entry, requested `modifyOtherKeys`, bracketed paste, and mouse—so the shell or `$VISUAL`/`$EDITOR` does not inherit a leaked Kitty stack or sticky paste/mouse modes. On return, AVA refreshes geometry (including resizes that happened while SIGTSTP-stopped), repaints the retained ncurses screen, re-enables paste and mouse, and reruns the bounded keyboard negotiation before reapplying cursor settings. The previous Kitty stack entry is popped before a new one is pushed. Resume does not re-probe OSC 11.
 
-On final TUI exit (normal quit, SIGTERM teardown, or partial enter failure), AVA again balances owned protocols, discards pending curses then kernel input nonblockingly (`flushinp` then `tcflush(TCIFLUSH)`), restores termios, shows the cursor, and leaves the alternate screen. Input flush does not sleep, drain output, or throw.
+On final TUI exit, the initialized terminal context stops its owned keyboard, bracketed-paste, and mouse modes, restores cursor defaults and visibility, restores mutable palette entries, and calls `endwin` for the interactive terminal. This cleanup does not explicitly flush queued curses or kernel input.
 
 ## Inline Images
 

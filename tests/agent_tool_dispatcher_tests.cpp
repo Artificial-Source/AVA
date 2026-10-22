@@ -1614,6 +1614,88 @@ void test_task_mode_and_job_tool_controls()
   }
 }
 
+void test_job_wait_parent_cancellation_keeps_background_running()
+{
+  auto const workspace = create_empty_root("dispatcher-job-wait-parent-cancel");
+  auto coordinator_result = ava::agent::SubagentCoordinator::create();
+  expect(coordinator_result.has_value(), "parent-cancel wait fixture creates coordinator");
+  if (!coordinator_result)
+    return;
+  auto coordinator = *coordinator_result;
+  struct WorkerState
+  {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool started = false;
+    bool release = false;
+  };
+  auto state = std::make_shared<WorkerState>();
+  auto started = coordinator->start_background("wait-owner", {.child_session_id = "independent-child"}, [state](auto const& context) {
+    std::stop_callback wake(context.stop_token, [&] { state->changed.notify_all(); });
+    std::unique_lock lock(state->mutex);
+    state->started = true;
+    state->changed.notify_all();
+    state->changed.wait(lock, [&] { return state->release || context.stop_token.stop_requested(); });
+    return ava::agent::BackgroundJobCompletion{
+        .state = context.stop_token.stop_requested() ? ava::agent::BackgroundJobState::Canceled : ava::agent::BackgroundJobState::Completed,
+        .final_text = "independent child finished",
+        .stop_reason = context.stop_token.stop_requested() ? "canceled" : "completed"};
+  });
+  expect(started.has_value(), "parent-cancel wait fixture starts independent background job");
+  if (!started)
+    return;
+  {
+    std::unique_lock lock(state->mutex);
+    expect(state->changed.wait_for(lock, std::chrono::seconds(1), [&] { return state->started; }), "independent background worker starts");
+  }
+  auto const job_id = started->job.identity.job_id;
+  ava::agent::ToolDispatcher deadline_dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "wait-owner"},
+                                                 ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  auto timed_out = deadline_dispatcher.dispatch(ava::agent::ProviderToolCall{
+      .id = "sliced_deadline_wait", .name = "job", .arguments_json = "{\"action\":\"wait\",\"job_id\":\"" + job_id + "\",\"timeout_ms\":125}"});
+  expect(timed_out && timed_out->success && timed_out->result_text.find("\"timed_out\":true") != std::string::npos,
+         "job wait reports the overall deadline expiring while its background worker remains blocked");
+  std::atomic_bool cancel_requested = false;
+  std::promise<void> wait_slice_finished;
+  std::promise<void> cancellation_ready;
+  auto cancellation_signal = cancellation_ready.get_future();
+  int cancel_checks = 0;
+  ava::agent::ToolDispatcher dispatcher(ava::tools::ToolContext{.workspace_dir = workspace,
+                                                                .cancel_requested =
+                                                                    [&] {
+                                                                      // Dispatcher preflight and the first job-wait check precede the
+                                                                      // first coordinator wait. Signal only after that slice returns.
+                                                                      if (++cancel_checks == 3)
+                                                                      {
+                                                                        wait_slice_finished.set_value();
+                                                                        cancellation_signal.wait();
+                                                                      }
+                                                                      return cancel_requested.load();
+                                                                    },
+                                                                .session_id = "wait-owner"},
+                                        ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  auto waiting = std::async(std::launch::async, [&] {
+    return dispatcher.dispatch(ava::agent::ProviderToolCall{
+        .id = "parent_long_wait", .name = "job", .arguments_json = "{\"action\":\"wait\",\"job_id\":\"" + job_id + "\",\"timeout_ms\":30000}"});
+  });
+  wait_slice_finished.get_future().wait();
+  cancel_requested = true;
+  cancellation_ready.set_value();
+  auto canceled = waiting.get();
+  auto still_running = coordinator->snapshot("wait-owner", job_id);
+  {
+    std::lock_guard lock(state->mutex);
+    state->release = true;
+    state->changed.notify_all();
+  }
+  auto completed = coordinator->wait("wait-owner", job_id, std::chrono::seconds(1));
+  expect(canceled && !canceled->success && canceled->payload.status == ava::agent::ToolResultStatus::Canceled,
+         "parent cancellation ends an in-flight job wait with the typed canceled result before its child is released");
+  expect(still_running && still_running->job.execution == ava::agent::SubagentExecutionState::Running && !still_running->job.cancel_requested && completed &&
+             completed->job.execution == ava::agent::SubagentExecutionState::Completed,
+         "canceling the parent wait leaves its independent background job running and able to complete");
+}
+
 void test_empty_worker_services_disable_interactive_tools()
 {
   auto const root = create_empty_root("dispatcher-empty-worker-services");
@@ -1958,6 +2040,127 @@ void test_permission_denial_guidance_provider_only_channel()
          "invalid guidance leaves unguided provider content bytes unchanged");
 }
 
+void test_apply_patch_rejects_symlink_targets()
+{
+  auto const root = create_empty_root("dispatcher-patch-symlink-target");
+  auto const workspace = ava::core::normalized_absolute_path(root / "workspace");
+  std::filesystem::create_directories(workspace);
+  auto const link_target = workspace / "AGENTS.md";
+  auto const link = workspace / "CLAUDE.md";
+  {
+    std::ofstream target(link_target, std::ios::binary | std::ios::trunc);
+    target << "agents old\n";
+  }
+  std::error_code link_error;
+  std::filesystem::create_symlink("AGENTS.md", link, link_error);
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(!link_error && secure.has_value(), "patch symlink fixture creates an in-workspace link and anchors the workspace");
+  if (link_error || !secure)
+    return;
+
+  auto const read_text = [](std::filesystem::path const& path) {
+    std::ifstream file(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  };
+  for (bool const secure_mode : {true, false})
+  {
+    ava::agent::ToolDispatcher const dispatcher(ava::tools::ToolContext{
+        .workspace_dir = workspace,
+        .mode = ava::agent::Mode::Build,
+        .secure_workspace = secure_mode ? *secure : nullptr,
+    });
+    auto patched = dispatcher.dispatch(ava::agent::ProviderToolCall{
+        .id = "call_patch_symlink_target",
+        .name = "apply_patch",
+        .arguments_json = R"({"edits":[{"path":"CLAUDE.md","old_text":"old","new_text":"new"}]})",
+    });
+    std::error_code status_error;
+    expect(patched && !patched->success && patched->result_text.find("does not patch through or replace symlinks") != std::string::npos &&
+               std::filesystem::is_symlink(std::filesystem::symlink_status(link, status_error)) && read_text(link_target) == "agents old\n",
+           std::string(secure_mode ? "descriptor-secure" : "non-secure") +
+               " apply_patch rejects a symlink target before reading it and leaves both the link and its target unchanged");
+  }
+}
+
+void test_strict_dispatcher_requires_secure_workspace()
+{
+  auto const workspace = create_empty_root("strict-dispatcher-missing-anchor");
+  std::ofstream(workspace / "note.txt") << "original";
+  ava::tools::ToolContext const context{.workspace_dir = workspace, .require_descriptor_secure_workspace = true};
+  auto dispatcher = ava::agent::ToolDispatcher::create_strict(context);
+  expect(!dispatcher && dispatcher.error().category() == ava::core::ErrorCategory::InvalidArgument &&
+             dispatcher.error().message() == "strict dispatcher requires an open secure workspace",
+         "strict dispatcher rejects missing descriptor authority at construction");
+  auto read = ava::tools::read_file(context, workspace / "note.txt");
+  auto write = ava::tools::write_file(context, workspace / "new.txt", "bad", ava::tools::WriteOptions{.permission_already_checked = true});
+  auto list = ava::tools::list_directory(context, workspace);
+  expect(!read && !write && !list && !std::filesystem::exists(workspace / "new.txt"),
+         "direct strict file contexts never fall through to pathname I/O when authority is missing");
+}
+
+void test_mixed_patch_reports_all_committed_paths()
+{
+  auto const root = create_empty_root("mixed-patch-commit-report");
+  auto const workspace = root / "workspace";
+  auto const outside = root / "outside";
+  std::filesystem::create_directories(workspace);
+  std::filesystem::create_directories(outside);
+  auto const inside = workspace / "inside.txt";
+  auto const first = outside / "first.txt";
+  auto const second = outside / "second.txt";
+  for (auto const& path : {inside, first, second})
+    std::ofstream(path) << "old";
+  auto secure = ava::tools::SecureWorkspace::open(workspace);
+  expect(secure.has_value(), "mixed patch fixture opens its secure workspace");
+  if (!secure)
+    return;
+  bool sabotaged = false;
+  ava::tools::ToolContext context{.workspace_dir = workspace,
+                                  .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+                                    return ava::permissions::PermissionResolution::Allow;
+                                  },
+                                  .cancel_requested =
+                                      [&] {
+                                        if (sabotaged)
+                                          return false;
+                                        std::size_t complete_stages = 0;
+                                        for (auto const& entry : std::filesystem::directory_iterator(outside))
+                                        {
+                                          auto const name = entry.path().filename().string();
+                                          if ((name.starts_with("first.txt.ava-patch-") || name.starts_with("second.txt.ava-patch-")) && entry.file_size() == 3)
+                                            ++complete_stages;
+                                        }
+                                        if (complete_stages == 2)
+                                        {
+                                          std::filesystem::remove(second);
+                                          std::filesystem::create_directory(second);
+                                          sabotaged = true;
+                                        }
+                                        return false;
+                                      },
+                                  .secure_workspace = *secure};
+  ava::agent::ToolDispatcher const dispatcher(context);
+  std::string edits = "{\"edits\":[";
+  for (auto const& path : {inside, first, second})
+  {
+    if (edits.back() != '[')
+      edits += ',';
+    edits += "{\"path\":\"" + ava::core::json::escape(path.generic_string()) + "\",\"old_text\":\"old\",\"new_text\":\"new\"}";
+  }
+  edits += "]}";
+  auto result = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "mixed_commit", .name = "apply_patch", .arguments_json = edits});
+  auto const read_text = [](std::filesystem::path const& path) {
+    std::ifstream file(path);
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+  };
+  expect(sabotaged && result && !result->success && read_text(inside) == "new" && read_text(first) == "new" && std::filesystem::is_directory(second),
+         "mixed patch failure fixture commits the secure target and one pathname target before the failing rename");
+  auto const committed = inside.generic_string() + ", " + first.generic_string();
+  expect(result && result->result_text.find("already_committed_paths") != std::string::npos &&
+             result->result_text.find(ava::core::json::escape(committed)) != std::string::npos,
+         "mixed patch error reports both secure and already-renamed pathname targets together");
+}
+
 }  // namespace
 
 void run_agent_tool_dispatcher_tests()
@@ -1973,7 +2176,11 @@ void run_agent_tool_dispatcher_tests()
   test_task_persistent_deny_preflight_blocks_runner();
   test_subagent_launch_display_normalization_and_validated_task_callback();
   test_task_mode_and_job_tool_controls();
+  test_job_wait_parent_cancellation_keeps_background_running();
   test_empty_worker_services_disable_interactive_tools();
   test_tool_dispatcher_plan_mode_denies_mutation();
   test_permission_denial_guidance_provider_only_channel();
+  test_apply_patch_rejects_symlink_targets();
+  test_strict_dispatcher_requires_secure_workspace();
+  test_mixed_patch_reports_all_committed_paths();
 }

@@ -2,6 +2,7 @@
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
 #include "tests/support/runtime_event_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/http/transport.h"
@@ -21,6 +22,7 @@
 #include "ava/agent/tool_types.h"
 #include "ava/tools/file_tools.h"
 #include "ava/plugin/enablement.h"
+#include "ava/plugin/install.h"
 #include "ava/permissions/permission.h"
 #include "ava/provider/openai_provider.h"
 #include "ava/context/context_loader.h"
@@ -28,16 +30,24 @@
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #ifndef AVA_FAKE_MCP_SERVER_PATH
 #define AVA_FAKE_MCP_SERVER_PATH ""
 #endif
@@ -458,8 +468,220 @@ void test_app_runtime_enabled_plugin_resource_failures_are_context_visible()
          "failed plugin static resources never consume outside content through intermediate or final symlinks and do not execute plugin entrypoints");
 }
 
+void test_plugin_install_copies_nested_directories()
+{
+  auto const root = create_empty_root("plugin-install-nested-directories");
+  auto const source = root / "source";
+  auto const global_root = root / "plugins";
+  auto const marker = root / "entrypoint-executed";
+  write_app_test_file(source / "plugin.json", app_plugin_install_manifest_json("com.example.nestedinstall", "Nested install", marker));
+  write_app_test_file(source / "one" / "two" / "payload.txt", "nested payload\n");
+  std::filesystem::create_directories(source / "one" / "empty");
+  auto inspected = ava::plugin::inspect_plugin_install_source(source);
+  expect(inspected.has_value(), "nested install fixture has a valid source");
+  if (!inspected)
+    return;
+  auto installed = ava::plugin::install_global_plugin(std::move(*inspected), global_root);
+  expect(installed.has_value(), installed ? "nested directories install" : installed.error().format());
+  if (!installed)
+    return;
+  std::ifstream payload(installed->destination_directory / "one" / "two" / "payload.txt", std::ios::binary);
+  std::string content{std::istreambuf_iterator<char>(payload), std::istreambuf_iterator<char>()};
+  expect(content == "nested payload\n" && std::filesystem::is_directory(installed->destination_directory / "one" / "empty") &&
+             installed->manifest.path == installed->destination_directory / "plugin.json" && !std::filesystem::exists(marker),
+         "nested and empty directories are copied with final manifest paths without executing the plugin");
+}
+
+void test_plugin_install_rejects_fifo_without_blocking()
+{
+  auto const root = create_empty_root("plugin-install-fifo");
+  auto const source = root / "source";
+  auto const global_root = root / "plugins";
+  write_app_test_file(source / "plugin.json", app_plugin_install_manifest_json("com.example.fifoinstall", "FIFO install", root / "executed"));
+  std::filesystem::create_directories(source / "nested");
+  int const created = ::mkfifo((source / "nested" / "pipe").c_str(), 0600);
+  expect(created == 0, "FIFO install fixture creates an unread FIFO");
+  if (created != 0)
+    return;
+  auto inspected = ava::plugin::inspect_plugin_install_source(source);
+  expect(inspected.has_value(), "FIFO fixture manifest can be inspected");
+  if (!inspected)
+    return;
+  auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    auto installed = ava::plugin::install_global_plugin(std::move(*inspected), global_root);
+    return !installed && installed.error().format().find("only directories and regular files") != std::string::npos ? 0 : 1;
+  });
+  ava::tests::expect_child_success(status, "a FIFO is rejected without opening it in blocking mode");
+  expect(std::filesystem::is_empty(global_root), "a rejected FIFO publishes no plugin and leaves no staging directory");
+}
+
+void test_plugin_install_rejects_directory_symlink_without_outside_writes()
+{
+  auto const root = create_empty_root("plugin-install-directory-symlink");
+  auto const source = root / "source";
+  auto const global_root = root / "plugins";
+  auto const existing = global_root / "com.example.existing";
+  auto const existing_manifest = app_plugin_install_manifest_json("com.example.existing", "Existing plugin", root / "executed");
+  write_app_test_file(existing / "plugin.json", existing_manifest);
+  write_app_test_file(existing / "keep.txt", "existing plugin must remain unchanged\n");
+  write_app_test_file(source / "plugin.json", app_plugin_install_manifest_json("com.example.linkinstall", "Link install", root / "executed"));
+  write_app_test_file(source / "nested" / "injected.txt", "must never reach the existing plugin\n");
+  std::error_code link_error;
+  std::filesystem::create_directory_symlink(existing, source / "nested" / "outside", link_error);
+  expect(!link_error, "directory symlink fixture points into an existing installed plugin");
+  if (link_error)
+    return;
+  auto inspected = ava::plugin::inspect_plugin_install_source(source);
+  expect(inspected.has_value(), "directory symlink fixture manifest can be inspected");
+  if (!inspected)
+    return;
+  auto installed = ava::plugin::install_global_plugin(std::move(*inspected), global_root);
+  std::ifstream kept_file(existing / "keep.txt", std::ios::binary);
+  std::string kept{std::istreambuf_iterator<char>(kept_file), std::istreambuf_iterator<char>()};
+  std::ifstream manifest_file(existing / "plugin.json", std::ios::binary);
+  std::string manifest{std::istreambuf_iterator<char>(manifest_file), std::istreambuf_iterator<char>()};
+  expect(!installed && installed.error().format().find("must not contain symlinks") != std::string::npos && kept == "existing plugin must remain unchanged\n" &&
+             manifest == existing_manifest && std::distance(std::filesystem::directory_iterator(existing), std::filesystem::directory_iterator{}) == 2 &&
+             std::distance(std::filesystem::directory_iterator(global_root), std::filesystem::directory_iterator{}) == 1,
+         "directory symlinks are rejected without changing another installed plugin or leaving staging residue");
+}
+
+void test_plugin_install_rejects_source_directory_substitution()
+{
+  auto const root = create_empty_root("plugin-install-source-substitution");
+  auto const source = root / "source";
+  auto const replacement = root / "replacement";
+  auto const global_root = root / "plugins";
+  auto const manifest = app_plugin_install_manifest_json("com.example.substitution", "Source substitution", root / "executed");
+  write_app_test_file(source / "plugin.json", manifest);
+  write_app_test_file(replacement / "plugin.json", manifest);
+  write_app_test_file(replacement / "injected.txt", "replacement source must not be installed\n");
+  auto inspected = ava::plugin::inspect_plugin_install_source(source);
+  expect(inspected.has_value(), "source substitution fixture inspects the original directory");
+  if (!inspected)
+    return;
+  std::filesystem::rename(source, root / "original");
+  std::error_code link_error;
+  std::filesystem::create_directory_symlink(replacement, source, link_error);
+  expect(!link_error, "source substitution fixture replaces the inspected root with a directory symlink");
+  if (link_error)
+    return;
+  auto installed = ava::plugin::install_global_plugin(std::move(*inspected), global_root);
+  expect(!installed && std::filesystem::is_empty(global_root), "installation does not follow a source-directory symlink substituted after inspection");
+}
+
+void test_plugin_install_directory_depth_limit()
+{
+  auto const root = create_empty_root("plugin-install-directory-depth-limit");
+  for (int const directory_depth : {32, 33})
+  {
+    auto const source = root / ("source-" + std::to_string(directory_depth));
+    auto const global_root = root / ("plugins-" + std::to_string(directory_depth));
+    write_app_test_file(source / "plugin.json", app_plugin_install_manifest_json("com.example.depthlimit", "Depth limit", root / "executed"));
+    auto leaf = source;
+    for (int level = 0; level < directory_depth; ++level)
+      leaf /= "nested";
+    write_app_test_file(leaf / "payload.txt", "depth-limit boundary payload\n");
+    auto inspected = ava::plugin::inspect_plugin_install_source(source);
+    expect(inspected.has_value(), "depth-limit fixture has a valid manifest");
+    if (!inspected)
+      continue;
+    auto installed = ava::plugin::install_global_plugin(std::move(*inspected), global_root);
+    if (directory_depth == 32)
+    {
+      expect(installed.has_value(), installed ? "32 directory levels install successfully" : installed.error().format());
+      if (installed)
+      {
+        auto installed_leaf = installed->destination_directory;
+        for (int level = 0; level < directory_depth; ++level)
+          installed_leaf /= "nested";
+        expect(std::filesystem::is_regular_file(installed_leaf / "payload.txt"), "the deepest permitted directory retains its payload");
+      }
+    }
+    else
+    {
+      auto const diagnostic = installed ? std::string{} : installed.error().format();
+      expect(!installed && diagnostic.find("maximum depth") != std::string::npos && diagnostic.find("max_depth: 32") != std::string::npos &&
+                 diagnostic.find(leaf.string()) != std::string::npos && std::filesystem::is_empty(global_root),
+             "a 33rd directory level is rejected with its path and limit, and bounded cleanup removes staging");
+    }
+  }
+}
+
+void test_plugin_install_manifest_size_boundary()
+{
+  auto const root = create_empty_root("plugin-install-manifest-size");
+  auto const source = root / "source";
+  auto contents = app_plugin_install_manifest_json("com.example.manifestlimit", "Manifest limit", root / "executed");
+  contents.resize(ava::plugin::kMaxManifestBytes, ' ');
+  write_app_test_file(source / "plugin.json", contents);
+  auto inspected = ava::plugin::inspect_plugin_install_source(source);
+  expect(inspected.has_value(), "install inspection accepts a manifest exactly at the byte limit");
+  if (!inspected)
+    return;
+  auto installed = ava::plugin::install_global_plugin(std::move(*inspected), root / "accepted");
+  expect(installed.has_value(), installed ? "copied manifest exactly at the byte limit loads" : installed.error().format());
+
+  auto stale = ava::plugin::inspect_plugin_install_source(source);
+  expect(stale.has_value(), "size-limit fixture retains a validated source before it grows");
+  if (!stale)
+    return;
+  contents.push_back(' ');
+  write_app_test_file(source / "plugin.json", contents);
+  auto oversized = ava::plugin::inspect_plugin_install_source(source);
+  expect(!oversized && oversized.error().message().find("maximum size") != std::string::npos, "install inspection rejects a manifest one byte above the limit");
+  auto rejected = ava::plugin::install_global_plugin(std::move(*stale), root / "rejected");
+  expect(!rejected && rejected.error().message().find("maximum size") != std::string::npos && std::filesystem::is_empty(root / "rejected"),
+         "a manifest that grows after inspection is rejected after copying and staging is removed");
+}
+
+void test_plugin_install_rejects_publication_and_zero_write_failures()
+{
+  for (auto const& [number, error_number] : {std::pair{SYS_renameat2, EINVAL}, std::pair{SYS_renameat2, ENOSYS}, std::pair{SYS_write, 0}})
+  {
+    auto const root = create_empty_root("plugin-install-syscall-failure-" + std::to_string(number) + "-" + std::to_string(error_number));
+    auto const source = root / "source";
+    auto const global_root = root / "plugins";
+    auto const marker = root / "executed";
+    write_app_test_file(source / "plugin.json", app_plugin_install_manifest_json("com.example.syscallfailure", "Syscall failure", marker));
+    write_app_test_file(source / "nested" / "payload.txt", "retained source payload\n");
+    auto inspected = ava::plugin::inspect_plugin_install_source(source);
+    expect(inspected.has_value(), "syscall failure fixture inspects a valid install source");
+    if (!inspected)
+      continue;
+    bool const publication_failure = number == SYS_renameat2;
+    auto const status = run_in_child_with_syscall_errno(number, std::nullopt, error_number, [&] {
+      auto installed = ava::plugin::install_global_plugin(std::move(*inspected), global_root);
+      auto const diagnostic = installed ? std::string{} : installed.error().format();
+      auto const expected = publication_failure ? "renameat2 RENAME_NOREPLACE is unavailable" : "failed to write plugin install file";
+      bool const actionable = !publication_failure || diagnostic.find("hint: use a kernel and filesystem") != std::string::npos;
+      return !installed && installed.error().category() == ava::core::ErrorCategory::Io && diagnostic.find(expected) != std::string::npos &&
+                     diagnostic.find(global_root.string()) != std::string::npos && actionable
+                 ? 0
+                 : 2;
+    });
+    expect(status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0,
+           publication_failure ? "unsupported no-replace publication fails closed with an actionable error for errno " + std::to_string(error_number)
+                               : "a zero-byte write fails instead of advancing the copy cursor");
+    expect(std::filesystem::is_empty(global_root) && std::filesystem::is_regular_file(source / "nested" / "payload.txt") && !std::filesystem::exists(marker),
+           "failed install removes staged files and directories without publishing, executing, or removing its source");
+  }
+}
+
+void run_plugin_install_regression_tests()
+{
+  test_plugin_install_manifest_size_boundary();
+  test_plugin_install_rejects_publication_and_zero_write_failures();
+  test_plugin_install_copies_nested_directories();
+  test_plugin_install_rejects_fifo_without_blocking();
+  test_plugin_install_rejects_directory_symlink_without_outside_writes();
+  test_plugin_install_rejects_source_directory_substitution();
+  test_plugin_install_directory_depth_limit();
+}
+
 void test_app_runtime_plugin_install_remove_commands()
 {
+  run_plugin_install_regression_tests();
   auto const root = create_empty_root("app-runtime-plugin-install-remove");
 
   auto const workspace = root / "workspace";

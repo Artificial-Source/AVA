@@ -83,6 +83,8 @@ struct TraceWriterHealth
   std::uint64_t events_dropped = 0;
   std::uint64_t writer_failures = 0;
   std::uint64_t bytes_written = 0;
+  // Intentional summary-budget refusals, separate from trace event loss.
+  std::uint64_t delta_summaries_refused = 0;
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 

@@ -61,6 +61,119 @@ std::vector<ava::agent::SubagentCoordinatorJobSnapshot> wait_for_published_runni
     std::this_thread::yield();
   }
 }
+
+// Deterministic child-scheduling witness. Trace callbacks and exact-file reads
+// record under one mutex/counter so ordering never depends on elapsed time.
+struct ChildSchedulingEvent
+{
+  enum class Kind
+  {
+    RunStart,
+    ToolStart,
+    FileRead
+  };
+
+  Kind kind = Kind::RunStart;
+  std::string session_id = {};
+  std::string parent_session_id = {};
+  std::string tool_name = {};
+  std::string file_name = {};
+  std::thread::id thread = {};
+  std::uint64_t order = 0;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+class ChildSchedulingWitness
+{
+ public:
+  void record_trace(ava::observability::TraceEvent const& event)
+  {
+    std::optional<ChildSchedulingEvent::Kind> kind;
+    if (event.type == ava::observability::TraceEventType::AgentRunStart)
+      kind = ChildSchedulingEvent::Kind::RunStart;
+    else if (event.type == ava::observability::TraceEventType::ToolDispatchStart)
+      kind = ChildSchedulingEvent::Kind::ToolStart;
+    if (!kind)
+      return;
+    std::string tool_name;
+    for (auto const& field : event.fields)
+      if (field.key == "tool_name")
+        tool_name = field.value;
+    std::lock_guard lock(mutex_);
+    events_.push_back(ChildSchedulingEvent{.kind = *kind,
+                                           .session_id = event.session_id,
+                                           .parent_session_id = event.parent_session_id,
+                                           .tool_name = std::move(tool_name),
+                                           .thread = std::this_thread::get_id(),
+                                           .order = next_order_++});
+  }
+
+  void record_file_read(std::filesystem::path const& absolute_path)
+  {
+    std::lock_guard lock(mutex_);
+    events_.push_back(ChildSchedulingEvent{.kind = ChildSchedulingEvent::Kind::FileRead,
+                                           .file_name = absolute_path.filename().string(),
+                                           .thread = std::this_thread::get_id(),
+                                           .order = next_order_++});
+  }
+
+  [[nodiscard]] std::vector<ChildSchedulingEvent> snapshot() const
+  {
+    std::lock_guard lock(mutex_);
+    return events_;
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  mutable std::mutex mutex_;
+  std::vector<ChildSchedulingEvent> events_;
+  std::uint64_t next_order_ = 0;
+};
+
+class ChildSchedulingObserver final : public ava::observability::RunObserver
+{
+ public:
+  explicit ChildSchedulingObserver(std::shared_ptr<ChildSchedulingWitness> witness) : witness_(std::move(witness)) { }
+
+  void on_event(ava::observability::TraceEvent const& event) override { witness_->record_trace(event); }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  std::shared_ptr<ChildSchedulingWitness> witness_;
+};
+
+class ChildSchedulingExactFileAccess final : public ava::tools::ExactFileAccess
+{
+ public:
+  explicit ChildSchedulingExactFileAccess(std::shared_ptr<ChildSchedulingWitness> witness) : witness_(std::move(witness)) { }
+
+  [[nodiscard]] bool supports_read_text_file() const noexcept override { return true; }
+  [[nodiscard]] bool supports_write_text_file() const noexcept override { return false; }
+
+  [[nodiscard]] ava::core::Result<std::string> read_text_file(std::filesystem::path const& absolute_path, ava::tools::ToolIoCancelCallback) const override
+  {
+    witness_->record_file_read(absolute_path);
+    std::ifstream file(absolute_path, std::ios::binary);
+    if (!file)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "child scheduling fixture file is missing"));
+    std::ostringstream content;
+    content << file.rdbuf();
+    return content.str();
+  }
+
+  [[nodiscard]] ava::core::VoidResult write_text_file(std::filesystem::path const&, std::string_view, ava::tools::ToolIoCancelCallback) const override
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "child scheduling fixture is read-only"));
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  std::shared_ptr<ChildSchedulingWitness> witness_;
+};
 } // namespace
 
 void test_agent_loop_private_task_launch_follows_public_running_and_stays_private()
@@ -965,6 +1078,172 @@ void test_agent_loop_task_subagent_propagates_authority_roots_to_foreground_and_
 
   run_case(false);
   run_case(true);
+}
+
+void test_agent_loop_task_subagent_does_not_inherit_parallel_read_search_scheduling()
+{
+  enum class ChildConstruction
+  {
+    ForegroundDirect,
+    ForegroundCoordinated,
+    Background
+  };
+
+  auto run_case = [](ChildConstruction construction) {
+    bool const background = construction == ChildConstruction::Background;
+    bool const coordinated = construction != ChildConstruction::ForegroundDirect;
+    auto const root = create_empty_root(background    ? "agent-task-child-scheduling-background"
+                                        : coordinated ? "agent-task-child-scheduling-coordinated"
+                                                      : "agent-task-child-scheduling-foreground");
+    auto const workspace = root / "workspace";
+    std::filesystem::create_directories(workspace);
+    {
+      std::ofstream one(workspace / "one.txt", std::ios::binary | std::ios::trunc);
+      one << "alpha";
+      std::ofstream two(workspace / "two.txt", std::ios::binary | std::ios::trunc);
+      two << "bravo";
+    }
+    ava::session::SessionStore store(ava::session::SessionStoreOptions{.root_dir = root / "sessions",
+                                                                       .workspace_dir = workspace,
+                                                                       .session_id = background    ? "parent-child-scheduling-background"
+                                                                                     : coordinated ? "parent-child-scheduling-coordinated"
+                                                                                                   : "parent-child-scheduling-foreground"});
+    ava::provider::OpenAIProvider const provider("https://api.example.test");
+
+    auto const parent_reads = sse_response(tool_call_sse("parent_read_one", "read_file", R"({"path":"one.txt"})") +
+                                           tool_call_sse("parent_read_two", "read_file", R"({"path":"two.txt"})") + "data: [DONE]\n\n");
+    auto const task_arguments = std::string(R"({"description":"sequential child","prompt":"read both files","subagent_type":"general","background":)") +
+                                (background ? "true}" : "false}");
+    auto const task_call = sse_response(tool_call_sse("call_task", "task", task_arguments) + "data: [DONE]\n\n");
+    auto const child_reads = sse_response(tool_call_sse("child_read_one", "read_file", R"({"path":"one.txt"})") +
+                                          tool_call_sse("child_read_two", "read_file", R"({"path":"two.txt"})") + "data: [DONE]\n\n");
+    auto const child_final = sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child read both\"}\n\ndata: [DONE]\n\n");
+    auto const parent_final = sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent continued\"}\n\ndata: [DONE]\n\n");
+
+    std::shared_ptr<ava::agent::SubagentCoordinator> coordinator;
+    std::function<ava::core::Result<std::unique_ptr<ava::provider::Provider>>()> provider_factory;
+    ava::http::TransportFactory transport_factory;
+    if (coordinated)
+    {
+      auto coordinator_result = ava::agent::SubagentCoordinator::create();
+      expect(coordinator_result.has_value(), "child scheduling fixture creates a subagent coordinator");
+      if (!coordinator_result)
+        return;
+      coordinator = *coordinator_result;
+      auto child_responses = std::make_shared<std::vector<ava::http::HttpResponse>>(std::initializer_list<ava::http::HttpResponse>{child_reads, child_final});
+      auto child_requests = std::make_shared<std::vector<ava::http::HttpRequest>>();
+      auto child_mutex = std::make_shared<std::mutex>();
+      provider_factory = []() -> ava::core::Result<std::unique_ptr<ava::provider::Provider>> {
+        std::unique_ptr<ava::provider::Provider> child = std::make_unique<ava::provider::OpenAIProvider>("https://api.example.test");
+        return child;
+      };
+      transport_factory = [child_responses, child_requests, child_mutex]() -> ava::core::Result<std::unique_ptr<ava::http::Transport>> {
+        std::unique_ptr<ava::http::Transport> child = std::make_unique<SharedFakeTransport>(child_responses, child_requests, child_mutex);
+        return child;
+      };
+    }
+    ava::tests::FakeTransport transport(coordinated ? std::vector<ava::http::HttpResponse>{parent_reads, task_call, parent_final}
+                                                    : std::vector<ava::http::HttpResponse>{parent_reads, task_call, child_reads, child_final, parent_final});
+
+    auto witness = std::make_shared<ChildSchedulingWitness>();
+    auto observation = std::make_shared<ava::observability::RunObservation>(std::make_shared<ChildSchedulingObserver>(witness));
+    auto exact_files = std::make_shared<ChildSchedulingExactFileAccess>(witness);
+
+    ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+        .workspace_dir = workspace,
+        .mode = ava::agent::Mode::Build,
+        .model = agent_loop_test::model_invocation_options(),
+        .access_token = "token",
+        .tool_execution = ava::agent::ToolExecutionOptions{.exact_file_access = exact_files},
+        .permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+          return ava::permissions::PermissionResolution::Allow;
+        },
+        .background_provider_factory = provider_factory,
+        .background_transport_factory = transport_factory,
+        .subagent_coordinator = coordinator,
+        .append_entry = append_route_for_test(store),
+        .append_batch = append_batch_route_for_test(store),
+        .session_read_authority = read_authority_for_test(store),
+        .parallel_read_search_tools = true,
+        .parallel_read_search_max_workers = 2,
+        .observation = observation});
+
+    auto result = loop.run_turn("read both then delegate", store, provider, transport);
+    expect(result && result->final_text == "parent continued", "child scheduling fixture completes the parent turn");
+
+    bool child_completed = !background;
+    if (background)
+    {
+      auto jobs = coordinator->list(store.session_id());
+      expect(jobs.size() == 1, "background child scheduling fixture publishes exactly one job");
+      if (jobs.size() == 1)
+      {
+        auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (;;)
+        {
+          auto waited = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::milliseconds(50));
+          if (waited && waited->job.execution != ava::agent::SubagentExecutionState::Starting &&
+              waited->job.execution != ava::agent::SubagentExecutionState::Running)
+          {
+            child_completed = waited->job.execution == ava::agent::SubagentExecutionState::Completed;
+            break;
+          }
+          if (std::chrono::steady_clock::now() >= deadline)
+            break;
+        }
+      }
+    }
+    expect(child_completed, "child scheduling fixture completes the child before scheduling inspection");
+
+    auto const events = witness->snapshot();
+    auto const parent_run = std::ranges::find_if(events, [&](ChildSchedulingEvent const& event) {
+      return event.kind == ChildSchedulingEvent::Kind::RunStart && event.session_id == store.session_id();
+    });
+    auto const child_run = std::ranges::find_if(events, [&](ChildSchedulingEvent const& event) {
+      return event.kind == ChildSchedulingEvent::Kind::RunStart && event.parent_session_id == store.session_id();
+    });
+    expect(parent_run != events.end() && child_run != events.end(), "child scheduling fixture observes parent and child run lifecycles");
+    if (parent_run == events.end() || child_run == events.end())
+      return;
+
+    std::vector<ChildSchedulingEvent> child_tool_starts;
+    std::vector<ChildSchedulingEvent> parent_reads_io;
+    std::vector<ChildSchedulingEvent> child_reads_io;
+    for (auto const& event : events)
+    {
+      if (event.kind == ChildSchedulingEvent::Kind::ToolStart && event.session_id == child_run->session_id && event.tool_name == "read_file")
+        child_tool_starts.push_back(event);
+      if (event.kind == ChildSchedulingEvent::Kind::FileRead)
+        (event.order < child_run->order ? parent_reads_io : child_reads_io).push_back(event);
+    }
+    expect(parent_reads_io.size() == 2 && child_reads_io.size() == 2 && child_tool_starts.size() == 2,
+           "child scheduling fixture routes both parent and child reads through the exact-file seam");
+
+    bool parent_parallel_io = parent_reads_io.size() == 2;
+    for (auto const& event : parent_reads_io)
+      parent_parallel_io = parent_parallel_io && event.thread != parent_run->thread;
+    expect(parent_parallel_io, "parent parallel read/search opt-in dispatches parent reads on scheduler workers");
+
+    bool child_sequential_io = child_reads_io.size() == 2 && child_tool_starts.size() == 2;
+    for (auto const& event : child_reads_io)
+      child_sequential_io = child_sequential_io && event.thread == child_run->thread;
+    for (auto const& event : child_tool_starts)
+      child_sequential_io = child_sequential_io && event.thread == child_run->thread;
+    expect(child_sequential_io, "parent parallel read/search opt-in leaves child read dispatch and exact-file IO on the child run thread");
+
+    if (child_tool_starts.size() == 2 && child_reads_io.size() == 2)
+    {
+      expect(child_reads_io[0].file_name == "one.txt" && child_reads_io[1].file_name == "two.txt",
+             "sequential child reads provider-ordered files instead of buffering a parallel epoch");
+      expect(child_tool_starts[0].order < child_reads_io[0].order && child_reads_io[0].order < child_tool_starts[1].order &&
+                 child_tool_starts[1].order < child_reads_io[1].order,
+             "each child ToolStart precedes its exact-file read and the next child ToolStart waits for the previous read");
+    }
+  };
+
+  run_case(ChildConstruction::ForegroundDirect);
+  run_case(ChildConstruction::ForegroundCoordinated);
+  run_case(ChildConstruction::Background);
 }
 
 void test_agent_loop_task_subagent_inherits_protected_permission_rule_store()

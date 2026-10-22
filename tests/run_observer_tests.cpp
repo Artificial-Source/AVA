@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/agent_loop_test_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/observability/run_observer.h"
@@ -9,22 +10,32 @@
 #include "ava/tools/bash_tool.h"
 #include "ava/session/session_store.h"
 #include "ava/provider/openai_provider.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/file.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
@@ -1624,14 +1635,193 @@ void test_concurrent_observation()
          "concurrent observation reserves the complete deterministic clock and sequence ranges");
 }
 
+void test_jsonl_writer_writes_complete_records()
+{
+  auto const root = create_empty_root("test_jsonl_writer_writes_complete_records");
+  auto const path = root / "trace.jsonl";
+  ava::observability::JsonlRunObserver writer({.path = path});
+  ava::observability::TraceEvent event;
+  event.run_id = "complete-records";
+  event.sequence = 1;
+  event.type = ava::observability::TraceEventType::AgentRunStart;
+  auto expected = ava::observability::canonical_json(event) + '\n';
+  bool threw = false;
+  try
+  {
+    writer.on_event(event);
+    event.sequence = 2;
+    event.type = ava::observability::TraceEventType::AgentRunTerminal;
+    event.outcome = ava::observability::TraceOutcome::Completed;
+    expected += ava::observability::canonical_json(event) + '\n';
+    writer.on_event(event);
+  }
+  catch (...)
+  {
+    threw = true;
+  }
+  writer.close();
+  auto const counters = writer.counters();
+  std::ifstream file(path, std::ios::binary);
+  std::string const actual((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  expect(!threw && actual == expected && counters.written == 2 && counters.failures == 0 && counters.dropped == 0 && counters.bytes_written == expected.size(),
+         "trace writes preserve complete JSONL records and byte accounting");
+}
+
+void test_jsonl_writer_rolls_back_and_stops_after_write_failure()
+{
+  auto const root = create_empty_root("test_jsonl_writer_rolls_back_and_stops_after_write_failure");
+  auto const path = root / "efbig.jsonl";
+  // Retry/EINTR mechanics are covered by the shared write_all tests. Here a
+  // real file-size limit exercises the observer's partial-record rollback,
+  // lifetime-lock release and permanent stop without weakening fd validation.
+  auto const status = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    struct rlimit original{};
+    struct sigaction ignore{};
+    ignore.sa_handler = SIG_IGN;
+    if (::getrlimit(RLIMIT_FSIZE, &original) != 0 || ::sigemptyset(&ignore.sa_mask) != 0 || ::sigaction(SIGXFSZ, &ignore, nullptr) != 0)
+      return 77;
+    ava::observability::JsonlRunObserver writer({.path = path});
+    ava::observability::TraceEvent event;
+    event.run_id = "write-failure";
+    event.sequence = 1;
+    event.type = ava::observability::TraceEventType::AgentRunStart;
+    auto const first_record = ava::observability::canonical_json(event) + '\n';
+    auto const boundary = static_cast<rlim_t>(first_record.size() + 7);
+    if (original.rlim_cur != RLIM_INFINITY && original.rlim_cur < boundary)
+      return 77;
+    writer.on_event(event);
+    struct rlimit const limited{.rlim_cur = boundary, .rlim_max = original.rlim_max};
+    if (::setrlimit(RLIMIT_FSIZE, &limited) != 0)
+      return 77;
+    event.sequence = 2;
+    event.type = ava::observability::TraceEventType::AgentRunTerminal;
+    event.outcome = ava::observability::TraceOutcome::Completed;
+    bool failed = false;
+    try
+    {
+      writer.on_event(event);
+    }
+    catch (std::system_error const& error)
+    {
+      failed = error.code().value() == EFBIG;
+    }
+    catch (...)
+    {
+    }
+    if (::setrlimit(RLIMIT_FSIZE, &original) != 0)
+      return 1;
+    // Reacquiring the lifetime lock proves failure released the owned descriptor.
+    ava::core::UniqueFd probe(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
+    bool const lock_released = probe && ::flock(probe.get(), LOCK_EX | LOCK_NB) == 0;
+    bool later_threw = false;
+    try
+    {
+      writer.on_event(event);
+    }
+    catch (...)
+    {
+      later_threw = true;
+    }
+    writer.close();
+    auto const counters = writer.counters();
+    std::ifstream file(path, std::ios::binary);
+    std::string const actual((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return failed && lock_released && !later_threw && actual == first_record && counters.written == 1 && counters.failures == 1 && counters.dropped == 1 &&
+                   counters.bytes_written == first_record.size() + 7
+               ? 0
+               : 1;
+  });
+  if (!status && (status.error() == EAGAIN || status.error() == ENOSYS || status.error() == EPERM))
+  {
+    ava::tests::request_skip("fork or RLIMIT_FSIZE is unavailable for the trace rollback regression");
+    return;
+  }
+  ava::tests::expect_child_success(
+      status, "a short trace write followed by EFBIG rolls back only its partial record, releases its lock, counts actual writes, and refuses later records",
+      "fork or RLIMIT_FSIZE is unavailable for the trace rollback regression");
+}
+
+void test_trace_scoring_separates_loss_from_observed_violations()
+{
+  using namespace ava::observability;
+  auto make_event = [](std::uint64_t sequence, TraceEventType type, TraceOutcome outcome = TraceOutcome::None) {
+    TraceEvent event;
+    event.sequence = sequence;
+    event.type = type;
+    event.run_id = "loss-coverage";
+    event.outcome = outcome;
+    return event;
+  };
+  auto const start = make_event(1, TraceEventType::AgentRunStart);
+  auto const text = make_event(2, TraceEventType::ProviderStreamEvent, TraceOutcome::TextDelta);
+  auto const terminal = make_event(3, TraceEventType::AgentRunTerminal, TraceOutcome::Completed);
+  TraceFixturePolicy policy{.fixture_id = "loss-coverage",
+                            .denominator = 100,
+                            .lifecycle_weight = 40,
+                            .required_boundary_weight = 60,
+                            .required_boundaries = {TraceRequiredBoundary::RunLifecycle, TraceRequiredBoundary::TextDelta}};
+  std::vector<TraceEvent> events{start, text};
+  auto missing_terminal = validate_and_score_trace(events, {.dropped_events = 1}, &policy);
+  expect(missing_terminal.valid && missing_terminal.errors.empty() && missing_terminal.incomplete_coverage && missing_terminal.coverage_gaps.size() == 2 &&
+             missing_terminal.score == 59,
+         "accounted terminal loss marks lifecycle and required-boundary coverage incomplete without inventing lifecycle errors");
+  auto callback_loss = validate_and_score_trace(events, {.callback_failures = 1}, &policy);
+  expect(callback_loss.valid && callback_loss.incomplete_coverage && callback_loss.coverage_gaps.size() == 2 && callback_loss.score == 59,
+         "a failed observer callback can also obscure a missing terminal boundary");
+  expect(!validate_and_score_trace(events, {}, &policy).valid, "an unaccounted missing terminal remains a lifecycle error");
+
+  events = {text, terminal};
+  auto missing_start = validate_and_score_trace(events, {.dropped_events = 1}, &policy);
+  expect(missing_start.valid && missing_start.errors.empty() && missing_start.incomplete_coverage && missing_start.coverage_gaps.size() == 2 &&
+             missing_start.score == 59,
+         "accounted loss of the start event is incomplete evidence rather than an observed ordering violation");
+  events = {start, terminal};
+  auto missing_text = validate_and_score_trace(events, {.dropped_events = 1}, &policy);
+  expect(missing_text.valid && missing_text.incomplete_coverage && missing_text.coverage_gaps.size() == 1 && missing_text.score == 39,
+         "loss-obscured required text coverage is still absent from the weighted score");
+  auto all_missing = validate_and_score_trace({}, {.dropped_events = 3}, &policy);
+  expect(all_missing.valid && all_missing.incomplete_coverage && all_missing.coverage_gaps.size() == 2 && all_missing.score == 0,
+         "a wholly lost trace has no observed violations and no satisfied required boundaries");
+
+  events = {start, text, terminal};
+  auto complete = validate_and_score_trace(events, {}, &policy);
+  expect(complete.valid && !complete.incomplete_coverage && complete.coverage_gaps.empty() && complete.score == 100,
+         "a lossless complete trace has complete coverage");
+  auto complete_with_loss = validate_and_score_trace(events, {.dropped_events = 1}, &policy);
+  expect(complete_with_loss.valid && complete_with_loss.incomplete_coverage && complete_with_loss.coverage_gaps.empty() && complete_with_loss.score == 99,
+         "loss marks evidence incomplete even when every required boundary was observed");
+
+  auto maximum = std::numeric_limits<std::uint64_t>::max();
+  auto saturated = validate_and_score_trace(events, {.callback_failures = maximum, .dropped_events = 1});
+  auto saturated_weighted = validate_and_score_trace(events, {.callback_failures = 1, .dropped_events = maximum}, &policy);
+  expect(saturated.valid && saturated.incomplete_coverage && saturated.score == 0 && saturated.accounted_failures == maximum &&
+             saturated.accounted_drops == 1 && saturated_weighted.valid && saturated_weighted.score == 0 && saturated_weighted.accounted_drops == maximum,
+         "loss totals saturate instead of wrapping to a perfect score in either scoring mode");
+
+  std::vector<std::vector<TraceEvent>> violations{{make_event(1, TraceEventType::ProviderStreamEvent), make_event(2, TraceEventType::AgentRunStart), terminal},
+                                                  {start, make_event(2, TraceEventType::AgentRunStart), terminal},
+                                                  {start, terminal, make_event(4, TraceEventType::ProviderStreamEvent)},
+                                                  {start, make_event(1, TraceEventType::ProviderStreamEvent), terminal},
+                                                  {start, make_event(2, TraceEventType::AgentRunTerminal, TraceOutcome::None)}};
+  for (auto const& observed : violations)
+  {
+    auto const scored = validate_and_score_trace(observed, {.dropped_events = 1});
+    expect(!scored.valid && !scored.errors.empty() && scored.incomplete_coverage,
+           "accounted loss never hides observed ordering, duplication, sequence, or terminal-outcome violations");
+  }
+}
+
 }  // namespace
 
 void run_run_observer_tests()
 {
   test_trace_canonical_redaction_and_determinism();
   test_observer_failures_bounds_and_disabled_artifacts();
+  test_jsonl_writer_writes_complete_records();
+  test_jsonl_writer_rolls_back_and_stops_after_write_failure();
   test_emit_isolates_all_construction_failures();
   test_trace_validator_and_scoring_manifest();
+  test_trace_scoring_separates_loss_from_observed_violations();
   test_queued_writer_bounds_and_unsafe_targets();
   test_dispatcher_trace_correlation_and_ordering();
   test_session_attachment_generation_alias_stress();

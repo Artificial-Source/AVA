@@ -570,6 +570,40 @@ std::string escape(std::string_view value)
   return result;
 }
 
+std::optional<std::string> compact(std::string_view value)
+{
+  std::string result;
+  result.reserve(value.size());
+  bool in_string = false;
+  bool escaped = false;
+  for (char const ch : value)
+  {
+    if (in_string)
+    {
+      if (ch == '\r' || ch == '\n')
+        return std::nullopt;
+      result.push_back(ch);
+      if (escaped)
+        escaped = false;
+      else if (ch == '\\')
+        escaped = true;
+      else if (ch == '"')
+        in_string = false;
+      continue;
+    }
+    if (ch == '"')
+    {
+      in_string = true;
+      result.push_back(ch);
+    }
+    else if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
+    {
+      result.push_back(ch);
+    }
+  }
+  return result;
+}
+
 std::optional<std::size_t> field_value_start(std::string_view object, std::string_view key)
 {
   std::string const needle = "\"" + escape(key) + "\"";

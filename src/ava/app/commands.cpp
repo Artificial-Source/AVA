@@ -24,6 +24,7 @@
 #include "ava/plugin/static_resources.h"
 #include "ava/permissions/permission.h"
 #include "ava/context/skill_loader.h"
+#include "ava/core/error.h"
 
 #include <algorithm>
 #include <string>
@@ -117,7 +118,7 @@ ava::core::Result<std::string> skill_prompt_message(runtime::session_ts& unlocke
   return ava::context::format_loaded_skill_for_tool(*match, sampled_files);
 }
 
-ava::core::Result<CommandResult> run_registry_command(runtime::session_ts& unlocked_session, CommandRequest request, CommandRegistryEntry const& entry)
+ava::core::Result<CommandResult> dispatch_registry_command(runtime::session_ts& unlocked_session, CommandRequest request, CommandRegistryEntry const& entry)
 {
   if (!entry.enabled)
     return handled_text(entry.command + " is disabled: " + entry.disabled_reason);
@@ -155,6 +156,11 @@ ava::core::Result<CommandResult> run_registry_command(runtime::session_ts& unloc
 }
 
 }  // namespace
+
+ava::core::Result<CommandResult> run_registry_command(runtime::session_ts& unlocked_session, CommandRequest request, CommandRegistryEntry const& entry)
+{
+  return dispatch_registry_command(unlocked_session, std::move(request), entry);
+}
 
 bool is_backend_command(std::string_view line) noexcept
 {
@@ -197,34 +203,17 @@ ava::core::Result<CommandResult> run_command(runtime::session_ts& unlocked_sessi
   if (!entry)
   {
     auto const token = command_token(request.command);
-    auto registry = load_command_registry(unlocked_session, CommandRegistryOptions{.include_builtins = false,
-                                                                                   .include_prompt_commands = true,
-                                                                                   .include_skills = true,
-                                                                                   .include_plugin_commands = true,
-                                                                                   .include_mcp_prompts = token.starts_with("/mcp:"),
-                                                                                   .permission_resolver = request.permission_resolver,
-                                                                                   .cancel_requested = request.cancel_requested});
-    if (auto const* registry_entry = find_command_registry_entry(registry, request.command))
-      return run_registry_command(unlocked_session, std::move(request), *registry_entry);
-    if (!token.starts_with("/skill:") && !token.starts_with("/mcp:") && !token.starts_with("/plugin:"))
+    auto resolved = resolve_command_registry_entry(unlocked_session, request.command, request.permission_resolver, request.cancel_requested);
+    if (!resolved)
     {
-      registry = load_command_registry(unlocked_session, CommandRegistryOptions{.include_builtins = false,
-                                                                                .include_prompt_commands = false,
-                                                                                .include_skills = false,
-                                                                                .include_plugin_commands = false,
-                                                                                .include_mcp_prompts = true,
-                                                                                .permission_resolver = request.permission_resolver,
-                                                                                .cancel_requested = request.cancel_requested});
-      if (auto const* registry_entry = find_command_registry_entry(registry, request.command))
-        return run_registry_command(unlocked_session, std::move(request), *registry_entry);
+      if (resolved.error().code() == ava::core::ErrorCode::Canceled)
+        return std::unexpected(std::move(resolved.error()));
+      return handled_text(resolved.error().message());
     }
-
+    if (*resolved)
+      return run_registry_command(unlocked_session, std::move(request), **resolved);
     if (token.starts_with("/skill:") || token.starts_with("/mcp:") || token.starts_with("/plugin:"))
-    {
-      if (!registry.diagnostics.empty())
-        return handled_text(registry.diagnostics.front().message);
       return handled_text("command not found: " + std::string(token));
-    }
     return result;
   }
   request.command = normalize_command_line(request.command, *entry);

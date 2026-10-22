@@ -4,10 +4,10 @@
 #include "ava/command/private_group.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/open_beneath.h"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cerrno>
 #include <cstring>
@@ -70,8 +70,6 @@ bool is_within(std::filesystem::path const& child, std::filesystem::path const& 
   if (!child.is_absolute() || !parent.is_absolute())
     return false;
   auto const relative = child.lexically_normal().lexically_relative(parent.lexically_normal());
-  if (relative.empty() || relative == ".")
-    return child.lexically_normal() == parent.lexically_normal();
   auto const begin = relative.begin();
   return begin != relative.end() && *begin != "..";
 }
@@ -517,22 +515,21 @@ ExecutableMetadata executable_from(PathMetadata const& metadata)
 
 ava::core::Result<std::filesystem::path> descriptor_executable_path(int fd, std::filesystem::path const& logical)
 {
-  auto const descriptor_path = "/proc/self/fd/" + std::to_string(fd);
-  std::array<char, 64 * 1024> target{};
-  auto const size = ::readlink(descriptor_path.c_str(), target.data(), target.size());
-  if (size <= 0 || static_cast<std::size_t>(size) == target.size())
+  auto physical = ava::core::descriptor_physical_path_checked(fd);
+  if (physical)
+    return physical->lexically_normal();
+  switch (physical.error().failure)
   {
-    auto error = command_error(ava::core::ErrorCategory::Io, "failed to derive narrow executable identity from its descriptor", "path", logical.string());
-    error.with_context("cause", std::strerror(errno));
-    return std::unexpected(std::move(error));
+    case ava::core::DescriptorPathFailure::Readlink:
+      break;
+    case ava::core::DescriptorPathFailure::Deleted:
+      return std::unexpected(command_error(ava::core::ErrorCategory::Io, "executable changed during descriptor identity capture", "path", logical.string()));
+    case ava::core::DescriptorPathFailure::NotAbsolute:
+      return std::unexpected(command_error(ava::core::ErrorCategory::Io, "executable descriptor identity is not absolute", "path", logical.string()));
   }
-  std::string value(target.data(), static_cast<std::size_t>(size));
-  if (value.ends_with(" (deleted)"))
-    return std::unexpected(command_error(ava::core::ErrorCategory::Io, "executable changed during descriptor identity capture", "path", logical.string()));
-  std::filesystem::path physical(value);
-  if (!physical.is_absolute())
-    return std::unexpected(command_error(ava::core::ErrorCategory::Io, "executable descriptor identity is not absolute", "path", logical.string()));
-  return physical.lexically_normal();
+  auto error = command_error(ava::core::ErrorCategory::Io, "failed to derive narrow executable identity from its descriptor", "path", logical.string());
+  error.with_context("cause", std::strerror(physical.error().error_number));
+  return std::unexpected(std::move(error));
 }
 
 ava::core::Result<ExecutableMetadata> executable_metadata(std::filesystem::path const& requested, ava::core::AnchorSet const& anchors)
@@ -606,8 +603,9 @@ void append_unique_path(std::vector<CommandPathEntry>& entries, CommandPathEntry
 }
 
 ava::core::Result<std::vector<CommandPathEntry>> discover_path(CommandBuildOptions const& options, std::filesystem::path const& workspace,
-                                                               std::filesystem::path const& trusted_home, ava::core::AnchorSet const& anchors)
+                                                               PathMetadata const& trusted_home_metadata, ava::core::AnchorSet const& anchors)
 {
+  auto const& trusted_home = trusted_home_metadata.canonical_path;
   std::optional<std::string> startup_path = options.startup_path;
   if (!startup_path)
   {
@@ -640,6 +638,12 @@ ava::core::Result<std::vector<CommandPathEntry>> discover_path(CommandBuildOptio
           return std::unexpected(std::move(safe.error()));
         continue;
       }
+      // Startup PATH is not authority to expose the real home (or all of /)
+      // as a read/execute toolchain root in the containment plan. Compare the
+      // sealed target identity too, so a symlink alias cannot expose the home.
+      if (safe->directory == "/" || is_within(trusted_home, safe->directory) ||
+          (safe->metadata.device == trusted_home_metadata.device && safe->metadata.inode == trusted_home_metadata.inode))
+        continue;
       append_unique_path(entries, std::move(*safe));
     }
   }
@@ -1017,7 +1021,7 @@ ava::core::Result<SealedCommandContext> discover_command_context(CommandIntent c
                                                         .xdg_state_home = std::move(*xdg_state_home),
                                                         .tmpdir = std::move(*tmpdir)};
 
-  auto entries = discover_path(options, workspace_metadata->canonical_path, trusted_home->canonical_path, *options.anchor_set);
+  auto entries = discover_path(options, workspace_metadata->canonical_path, *trusted_home, *options.anchor_set);
   if (!entries)
     return std::unexpected(std::move(entries.error()));
   for (auto const& entry : *entries)
@@ -1226,7 +1230,7 @@ bool is_sealed_user_tool_path(std::filesystem::path const& path, PathMetadata co
   if (path.empty() || !path.is_absolute() || path != path.lexically_normal() || trusted_home.requested_path.empty() ||
       !trusted_home.requested_path.is_absolute() || trusted_home.requested_path != trusted_home.requested_path.lexically_normal() ||
       trusted_home.requested_path != trusted_home.canonical_path || trusted_home.requested_path_is_symlink ||
-      !S_ISDIR(static_cast<mode_t>(trusted_home.mode)) || path == trusted_home.requested_path)
+      !S_ISDIR(static_cast<mode_t>(trusted_home.mode)) || is_within(trusted_home.requested_path, path))
   {
     return false;
   }

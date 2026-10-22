@@ -108,8 +108,8 @@ AgentLoopOptions inherited_child_options(AgentLoopOptions const& parent)
   child.child_compaction_blueprint = parent.child_compaction_blueprint;
   child.transport_factory = parent.transport_factory;
   child.session_read_limits = parent.session_read_limits;
-  child.parallel_read_search_tools = parent.parallel_read_search_tools;
-  child.parallel_read_search_max_workers = parent.parallel_read_search_max_workers;
+  // The parent's ordinary-run read/search scheduling opt-in is not a child
+  // execution capability; children keep the loop's sequential tool defaults.
   child.observation = parent.observation;
   child.subagent_launch.display = parent.subagent_launch.display;
   // Anchors, resource capabilities and observation deliberately share ownership
@@ -142,6 +142,23 @@ bool subagent_terminal(SubagentExecutionState state) noexcept
 {
   return state == SubagentExecutionState::Completed || state == SubagentExecutionState::Failed || state == SubagentExecutionState::Canceled ||
          state == SubagentExecutionState::Interrupted;
+}
+
+BackgroundJobState background_state_for(ava::core::RuntimeTerminalOutcome outcome) noexcept
+{
+  switch (outcome)
+  {
+    case ava::core::RuntimeTerminalOutcome::Cancelled:
+      return BackgroundJobState::Canceled;
+    case ava::core::RuntimeTerminalOutcome::Completed:
+    case ava::core::RuntimeTerminalOutcome::MaxTokens:
+    case ava::core::RuntimeTerminalOutcome::MaxTurnRequests:  // Includes the bounded tool-limit wrap-up.
+    case ava::core::RuntimeTerminalOutcome::Refusal:
+      return BackgroundJobState::Completed;
+    case ava::core::RuntimeTerminalOutcome::Error:
+      return BackgroundJobState::Failed;
+  }
+  std::unreachable();
 }
 
 BackgroundJobCompletion background_failure_completion(BackgroundJobContext const& context, ava::core::Error const& error)
@@ -404,12 +421,17 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
           append_subagent_error_best_effort(run_state->child_append, error);
         return background_failure_completion(context, error);
       }
-      auto completion = BackgroundJobCompletion{.state = BackgroundJobState::Completed,
+      auto completion = BackgroundJobCompletion{.state = background_state_for(child_result->outcome),
                                                 .final_text = child_result->final_text,
                                                 .stop_reason = std::string(ava::core::to_string(child_result->outcome)),
                                                 .provider_iterations = child_result->provider_iterations,
                                                 .tool_calls = child_result->tool_calls,
                                                 .tool_iterations = child_result->tool_iterations};
+      if (completion.state == BackgroundJobState::Failed)
+      {
+        completion.error = ava::core::Error(ava::core::ErrorCategory::Provider, "child turn ended with a provider error outcome");
+        completion.error->with_context("stop_reason", completion.stop_reason);
+      }
       {
         std::lock_guard lock(run_state->result_state->mutex);
         run_state->result_state->terminal_result = *child_result;
@@ -454,7 +476,7 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
     auto const parent_session_id = store_.options_session_id_copy();
     for (;;)
     {
-      auto waited = options_.subagent_coordinator->wait(parent_session_id, job_id, std::chrono::milliseconds(50), SubagentWaitMode::TerminalOrPromotion);
+      auto waited = options_.subagent_coordinator->wait(parent_session_id, job_id, kJobWaitCancellationSlice, SubagentWaitMode::TerminalOrPromotion);
       if (!waited)
         return std::unexpected(std::move(waited.error()));
       if (waited->job.was_promoted && !subagent_terminal(waited->job.execution))
@@ -530,6 +552,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
   auto child_result = child_loop.run_turn(request.prompt, child_store, provider_, transport_);
   if (!child_result)
     return std::unexpected(std::move(child_result.error()));
+  if (child_result->outcome == ava::core::RuntimeTerminalOutcome::Cancelled)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "foreground subagent was canceled", ava::core::ErrorCode::Canceled));
   return TaskSubagentResult{.task_id = child_store.options_session_id_copy(),
                             .job_id = "",
                             .session_path = child_store.session_path(),

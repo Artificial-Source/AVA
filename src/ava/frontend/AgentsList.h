@@ -26,4 +26,3 @@ class AgentsList : public Data
 };
 
 } // namespace ava::frontend
-

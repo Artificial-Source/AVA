@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/tools/secure_workspace.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/ids.h"
 #include "ava/core/open_beneath.h"
 
@@ -39,11 +40,13 @@ ava::core::Error workspace_error(ava::core::ErrorCategory category, std::string 
 
 bool path_is_within(std::filesystem::path const& root, std::filesystem::path const& candidate)
 {
-  auto root_it = root.begin();
   auto candidate_it = candidate.begin();
-  for (; root_it != root.end(); ++root_it, ++candidate_it)
-    if (candidate_it == candidate.end() || *candidate_it != *root_it)
+  for (auto const& component : root)
+  {
+    if (candidate_it == candidate.end() || *candidate_it != component)
       return false;
+    ++candidate_it;
+  }
   return true;
 }
 
@@ -53,18 +56,21 @@ bool contains_nul(std::filesystem::path const& path)
   return std::find(text.begin(), text.end(), '\0') != text.end();
 }
 
-ava::core::Result<SecureWorkspacePath> lexical_workspace_path(std::filesystem::path const& root, std::filesystem::path const& candidate)
+ava::core::Result<SecureWorkspacePath> lexical_workspace_path(std::filesystem::path const& root, std::filesystem::path const& physical_root,
+                                                              std::filesystem::path const& candidate)
 {
   if (candidate.empty() || contains_nul(candidate))
     return std::unexpected(workspace_error(ava::core::ErrorCategory::InvalidArgument, "secure workspace path is empty or contains NUL", root, candidate));
 
   auto absolute = (candidate.is_absolute() ? candidate : root / candidate).lexically_normal();
-  if (!absolute.is_absolute() || !path_is_within(root, absolute))
+  bool const in_logical_root = path_is_within(root, absolute);
+  if (!absolute.is_absolute() || (!in_logical_root && !path_is_within(physical_root, absolute)))
   {
     return std::unexpected(workspace_error(ava::core::ErrorCategory::PermissionDenied, "path is outside the descriptor-anchored workspace", root, absolute));
   }
+  auto const& matching_root = in_logical_root ? root : physical_root;
 
-  auto relative = absolute.lexically_relative(root);
+  auto relative = absolute.lexically_relative(matching_root);
   if (relative == ".")
     relative.clear();
   for (auto const& component : relative)
@@ -78,11 +84,13 @@ ava::core::Result<SecureWorkspacePath> lexical_workspace_path(std::filesystem::p
 
 ava::core::Error lookup_error(std::filesystem::path const& root, std::filesystem::path const& path, int error_number, std::string_view operation)
 {
-  auto const category = error_number == ELOOP || error_number == EXDEV
+  // EACCES/EPERM are access denials, not I/O faults: callers such as search skip unreadable entries by category.
+  auto const category = error_number == ELOOP || error_number == EXDEV || error_number == EACCES || error_number == EPERM
                             ? ava::core::ErrorCategory::PermissionDenied
                             : (error_number == ENOENT ? ava::core::ErrorCategory::NotFound : ava::core::ErrorCategory::Io);
-  auto const message = error_number == ELOOP || error_number == EXDEV ? "secure workspace lookup rejected a symlink, magic link, or root escape"
-                                                                      : std::string("secure workspace ") + std::string(operation) + " failed";
+  auto const message = error_number == ELOOP || error_number == EXDEV
+                           ? "path resolves outside the workspace through a symlink, magic link, or root escape; use the real path"
+                           : std::string("secure workspace ") + std::string(operation) + " failed";
   return workspace_error(category, message, root, path, error_number);
 }
 
@@ -97,58 +105,73 @@ SecureWorkspaceNodeType node_type(mode_t mode)
   return SecureWorkspaceNodeType::Other;
 }
 
-ava::core::Result<SecureWorkspaceHandle> open_typed(int root_fd, std::filesystem::path const& root, std::filesystem::path const& candidate, bool directory)
+ava::core::Result<SecureWorkspaceHandle> open_typed(int root_fd, std::filesystem::path const& root, std::filesystem::path const& physical_root,
+                                                    std::filesystem::path const& candidate, bool directory)
 {
-  auto identity = lexical_workspace_path(root, candidate);
+  auto identity = lexical_workspace_path(root, physical_root, candidate);
   if (!identity)
     return std::unexpected(std::move(identity.error()));
-  int const flags = directory ? O_RDONLY | O_DIRECTORY : O_RDONLY;
-  int fd = open_beneath(root_fd, identity->relative, flags);
-  if (fd < 0)
+  // Keep open_beneath's contained-symlink policy; validate the very descriptor it opened.
+  int const flags = directory ? O_RDONLY | O_DIRECTORY : O_RDONLY | O_NONBLOCK;
+  ava::core::UniqueFd descriptor(open_beneath(root_fd, identity->relative, flags));
+  if (!descriptor)
     return std::unexpected(lookup_error(root, identity->absolute, errno, directory ? "directory open" : "file open"));
 
+  if (!directory)
+  {
+    auto status = ava::core::prepare_regular_descriptor(descriptor.get());
+    if (!status)
+    {
+      auto error = ava::core::open_regular_error(status.error(), "secure workspace path");
+      error.with_context("workspace_root", root.string());
+      error.with_context("path", identity->absolute.string());
+      return std::unexpected(std::move(error));
+    }
+    return SecureWorkspaceHandle(descriptor.release(), static_cast<std::uintmax_t>(status->st_size), std::move(identity->absolute));
+  }
+
   struct stat status{};
-  if (::fstat(fd, &status) != 0)
-  {
-    int const error_number = errno;
-    ::close(fd);
-    return std::unexpected(lookup_error(root, identity->absolute, error_number, "fstat"));
-  }
-  bool const valid_type = directory ? S_ISDIR(status.st_mode) : S_ISREG(status.st_mode);
-  if (!valid_type)
-  {
-    ::close(fd);
-    return std::unexpected(workspace_error(ava::core::ErrorCategory::InvalidArgument,
-                                           directory ? "secure workspace path is not a directory" : "secure workspace path is not a regular file", root,
-                                           identity->absolute));
-  }
-  return SecureWorkspaceHandle(fd, static_cast<std::uintmax_t>(status.st_size), std::move(identity->absolute));
+  if (::fstat(descriptor.get(), &status) != 0)
+    return std::unexpected(lookup_error(root, identity->absolute, errno, "fstat"));
+  if (!S_ISDIR(status.st_mode))
+    return std::unexpected(workspace_error(ava::core::ErrorCategory::InvalidArgument, "secure workspace path is not a directory", root, identity->absolute));
+  return SecureWorkspaceHandle(descriptor.release(), static_cast<std::uintmax_t>(status.st_size), std::move(identity->absolute));
+}
+
+// Errors that mean a single directory entry could not be inspected or entered: it is unreadable, it vanished, or it was replaced by a
+// link or a non-directory between readdir and the descriptor-relative lookup. The walk skips and counts such an entry instead of failing.
+bool skippable_tree_entry_error(int error_number)
+{
+  return error_number == ENOENT || error_number == ENOTDIR || error_number == EACCES || error_number == EPERM || error_number == ELOOP || error_number == EXDEV;
 }
 
 ava::core::Result<bool> visit_directory(int directory_fd, std::filesystem::path const& root, std::filesystem::path const& relative_directory, std::size_t depth,
-                                        SecureWorkspaceWalkVisitor const& visitor)
+                                        SecureWorkspaceWalkVisitor const& visitor, SecureWorkspaceWalkSummary& summary)
 {
-  DIR* directory = ::fdopendir(directory_fd);
-  if (directory == nullptr)
-  {
-    int const error_number = errno;
-    ::close(directory_fd);
-    return std::unexpected(lookup_error(root, root / relative_directory, error_number, "directory traversal"));
-  }
+  // The stream owns the incoming descriptor on every exit, including visitor failures.
+  auto directory = ava::core::open_directory_stream(ava::core::UniqueFd(directory_fd));
+  if (!directory)
+    return std::unexpected(lookup_error(root, root / relative_directory, directory.error(), "directory traversal"));
 
-  errno = 0;
-  while (auto* entry = ::readdir(directory))
+  while (true)
   {
+    // readdir reports failure only through errno, and the previous entry's fstatat, open, or visitor may have left errno set.
+    errno = 0;
+    auto* entry = ::readdir(directory->get());
+    if (entry == nullptr)
+      break;
     std::string const name(entry->d_name);
     if (name == "." || name == "..")
       continue;
     struct stat status{};
-    if (::fstatat(::dirfd(directory), name.c_str(), &status, AT_SYMLINK_NOFOLLOW) != 0)
+    if (::fstatat(::dirfd(directory->get()), name.c_str(), &status, AT_SYMLINK_NOFOLLOW) != 0)
     {
-      if (errno == ENOENT)
-        continue;
       int const error_number = errno;
-      ::closedir(directory);
+      if (skippable_tree_entry_error(error_number))
+      {
+        ++summary.skipped_entries;
+        continue;
+      }
       return std::unexpected(lookup_error(root, root / relative_directory / name, error_number, "tree fstat"));
     }
 
@@ -161,42 +184,30 @@ ava::core::Result<bool> visit_directory(int directory_fd, std::filesystem::path 
                                        .depth = depth};
     auto action = visitor(item);
     if (!action)
-    {
-      ::closedir(directory);
       return std::unexpected(std::move(action.error()));
-    }
     if (*action == SecureWorkspaceWalkAction::Stop)
-    {
-      ::closedir(directory);
       return false;
-    }
     if (item.type == SecureWorkspaceNodeType::Directory && *action != SecureWorkspaceWalkAction::SkipDirectory)
     {
-      int child = open_beneath(::dirfd(directory), std::filesystem::path(name), O_RDONLY | O_DIRECTORY);
+      int child = open_beneath(::dirfd(directory->get()), std::filesystem::path(name), O_RDONLY | O_DIRECTORY);
       if (child < 0)
       {
-        if (errno == ENOENT || errno == ELOOP)
-          continue;
         int const error_number = errno;
-        ::closedir(directory);
+        if (skippable_tree_entry_error(error_number))
+        {
+          ++summary.skipped_entries;
+          continue;
+        }
         return std::unexpected(lookup_error(root, item.absolute_path, error_number, "tree directory open"));
       }
-      auto visited = visit_directory(child, root, relative, depth + 1, visitor);
+      auto visited = visit_directory(child, root, relative, depth + 1, visitor, summary);
       if (!visited)
-      {
-        ::closedir(directory);
         return std::unexpected(std::move(visited.error()));
-      }
       if (!*visited)
-      {
-        ::closedir(directory);
         return false;
-      }
     }
-    errno = 0;
   }
   int const read_error = errno;
-  ::closedir(directory);
   if (read_error != 0)
     return std::unexpected(lookup_error(root, root / relative_directory, read_error, "directory read"));
   return true;
@@ -365,11 +376,13 @@ bool SecureWorkspace::StagedWrite::target_changed() const noexcept
   return target_changed_;
 }
 
-SecureWorkspace::SecureWorkspace(int root_fd, std::filesystem::path root) : root_fd_(root_fd), root_(std::move(root))
+SecureWorkspace::SecureWorkspace(OpenTag, int root_fd, std::filesystem::path root, std::filesystem::path physical_root)
+    : root_fd_(root_fd), root_(std::move(root)), physical_root_(std::move(physical_root))
 {
 }
 
-SecureWorkspace::SecureWorkspace(SecureWorkspace&& other) noexcept : root_fd_(std::exchange(other.root_fd_, -1)), root_(std::move(other.root_))
+SecureWorkspace::SecureWorkspace(SecureWorkspace&& other) noexcept
+    : root_fd_(std::exchange(other.root_fd_, -1)), root_(std::move(other.root_)), physical_root_(std::move(other.physical_root_))
 {
 }
 
@@ -381,6 +394,7 @@ SecureWorkspace& SecureWorkspace::operator=(SecureWorkspace&& other) noexcept
     ::close(root_fd_);
   root_fd_ = std::exchange(other.root_fd_, -1);
   root_ = std::move(other.root_);
+  physical_root_ = std::move(other.physical_root_);
   return *this;
 }
 
@@ -396,6 +410,9 @@ ava::core::Result<std::shared_ptr<SecureWorkspace>> SecureWorkspace::open(std::f
   auto absolute = std::filesystem::absolute(root, absolute_error).lexically_normal();
   if (absolute_error || !absolute.is_absolute())
     return std::unexpected(workspace_error(ava::core::ErrorCategory::Io, "failed to resolve secure workspace root", root, root, absolute_error.value()));
+  // Normalize away the trailing empty component once, before component-wise containment comparisons.
+  if (!absolute.has_filename() && absolute != absolute.root_path())
+    absolute = absolute.parent_path();
   // The anchor descriptor is opened at startup, before any untrusted input is
   // processed, so symlinked components in the workspace root path are followed
   // rather than rejected. The root is opened directly with a plain openat
@@ -413,7 +430,15 @@ ava::core::Result<std::shared_ptr<SecureWorkspace>> SecureWorkspace::open(std::f
   if (anchored < 0)
     return std::unexpected(lookup_error(absolute, absolute, open_error, "root anchor open"));
 
-  return std::shared_ptr<SecureWorkspace>(new SecureWorkspace(anchored, std::move(absolute)));
+  ava::core::UniqueFd root_descriptor(anchored);
+  // Resolve the held root itself, not its possibly retargeted launch spelling.
+  auto physical = ava::core::descriptor_physical_path(root_descriptor.get());
+  if (!physical)
+    return std::unexpected(workspace_error(ava::core::ErrorCategory::Io, "failed to resolve physical secure workspace root", absolute, absolute));
+  // Tool contexts share this root authority for their lifetime.
+  auto workspace = std::make_shared<SecureWorkspace>(OpenTag{}, root_descriptor.get(), std::move(absolute), std::move(*physical));
+  static_cast<void>(root_descriptor.release());
+  return workspace;
 }
 
 std::filesystem::path const& SecureWorkspace::root() const noexcept
@@ -421,9 +446,15 @@ std::filesystem::path const& SecureWorkspace::root() const noexcept
   return root_;
 }
 
+bool SecureWorkspace::contains_lexical(std::filesystem::path const& candidate) const
+{
+  auto const absolute = (candidate.is_absolute() ? candidate : root_ / candidate).lexically_normal();
+  return path_is_within(root_, absolute) || path_is_within(physical_root_, absolute);
+}
+
 ava::core::Result<SecureWorkspacePath> SecureWorkspace::resolve(std::filesystem::path const& candidate, SecureWorkspaceResolveMode mode) const
 {
-  auto identity = lexical_workspace_path(root_, candidate);
+  auto identity = lexical_workspace_path(root_, physical_root_, candidate);
   if (!identity)
     return std::unexpected(std::move(identity.error()));
 
@@ -483,12 +514,12 @@ ava::core::Result<SecureWorkspacePath> SecureWorkspace::resolve(std::filesystem:
 
 ava::core::Result<SecureWorkspaceHandle> SecureWorkspace::open_regular_file(std::filesystem::path const& candidate) const
 {
-  return open_typed(root_fd_, root_, candidate, false);
+  return open_typed(root_fd_, root_, physical_root_, candidate, false);
 }
 
 ava::core::Result<SecureWorkspaceHandle> SecureWorkspace::open_directory(std::filesystem::path const& candidate) const
 {
-  return open_typed(root_fd_, root_, candidate, true);
+  return open_typed(root_fd_, root_, physical_root_, candidate, true);
 }
 
 ava::core::Result<std::vector<SecureWorkspaceDirectoryEntry>> SecureWorkspace::list_directory(std::filesystem::path const& candidate) const
@@ -499,69 +530,74 @@ ava::core::Result<std::vector<SecureWorkspaceDirectoryEntry>> SecureWorkspace::l
   int duplicate = ::dup(opened->fd());
   if (duplicate < 0)
     return std::unexpected(lookup_error(root_, opened->path(), errno, "directory duplication"));
-  DIR* directory = ::fdopendir(duplicate);
-  if (directory == nullptr)
-  {
-    int const error_number = errno;
-    ::close(duplicate);
-    return std::unexpected(lookup_error(root_, opened->path(), error_number, "directory listing"));
-  }
+  auto directory = ava::core::open_directory_stream(ava::core::UniqueFd(duplicate));
+  if (!directory)
+    return std::unexpected(lookup_error(root_, opened->path(), directory.error(), "directory listing"));
 
-  auto identity = lexical_workspace_path(root_, opened->path());
+  auto identity = lexical_workspace_path(root_, physical_root_, opened->path());
   if (!identity)
-  {
-    ::closedir(directory);
     return std::unexpected(std::move(identity.error()));
-  }
   std::vector<SecureWorkspaceDirectoryEntry> entries;
-  errno = 0;
-  while (auto* entry = ::readdir(directory))
+  while (true)
   {
+    // readdir reports failure only through errno, and a vanished entry's fstatat leaves ENOENT behind.
+    errno = 0;
+    auto* entry = ::readdir(directory->get());
+    if (entry == nullptr)
+      break;
     std::string const name(entry->d_name);
     if (name == "." || name == "..")
       continue;
     struct stat status{};
-    if (::fstatat(::dirfd(directory), name.c_str(), &status, AT_SYMLINK_NOFOLLOW) != 0)
+    if (::fstatat(::dirfd(directory->get()), name.c_str(), &status, AT_SYMLINK_NOFOLLOW) != 0)
     {
       if (errno == ENOENT)
         continue;
       int const error_number = errno;
-      ::closedir(directory);
       return std::unexpected(lookup_error(root_, opened->path() / name, error_number, "directory entry fstat"));
     }
     auto const relative = identity->relative / name;
+    if (S_ISLNK(status.st_mode))
+    {
+      ava::core::UniqueFd target(open_beneath(root_fd_, relative, O_PATH));
+      if (target)
+      {
+        struct stat target_status{};
+        if (::fstat(target.get(), &target_status) == 0)
+          status = target_status;
+      }
+    }
     entries.push_back(SecureWorkspaceDirectoryEntry{.name = name,
                                                     .absolute_path = root_ / relative,
                                                     .relative_path = relative,
                                                     .type = node_type(status.st_mode),
                                                     .size = S_ISREG(status.st_mode) ? static_cast<std::uintmax_t>(status.st_size) : 0,
                                                     .depth = 0});
-    errno = 0;
   }
   int const read_error = errno;
-  ::closedir(directory);
   if (read_error != 0)
     return std::unexpected(lookup_error(root_, opened->path(), read_error, "directory listing"));
   return entries;
 }
 
-ava::core::VoidResult SecureWorkspace::visit_tree(SecureWorkspaceWalkVisitor const& visitor) const
+ava::core::Result<SecureWorkspaceWalkSummary> SecureWorkspace::visit_tree(SecureWorkspaceWalkVisitor const& visitor) const
 {
   if (!visitor)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "secure workspace tree visitor is required"));
   int root_directory = open_beneath(root_fd_, {}, O_RDONLY | O_DIRECTORY);
   if (root_directory < 0)
     return std::unexpected(lookup_error(root_, root_, errno, "tree root open"));
-  auto visited = visit_directory(root_directory, root_, {}, 0, visitor);
+  SecureWorkspaceWalkSummary summary;
+  auto visited = visit_directory(root_directory, root_, {}, 0, visitor, summary);
   if (!visited)
     return std::unexpected(std::move(visited.error()));
-  return {};
+  return summary;
 }
 
 ava::core::Result<SecureWorkspace::StagedWrite> SecureWorkspace::stage_write(std::filesystem::path const& candidate, std::string_view content,
                                                                              std::function<bool()> const& cancel_requested) const
 {
-  auto identity = lexical_workspace_path(root_, candidate);
+  auto identity = lexical_workspace_path(root_, physical_root_, candidate);
   if (!identity)
     return std::unexpected(std::move(identity.error()));
   if (identity->relative.empty() || identity->relative.filename().empty())
@@ -677,7 +713,9 @@ ava::core::Result<SecureWorkspace::StagedWrite> SecureWorkspace::stage_write(std
     }
     offset += static_cast<std::size_t>(count);
   }
-  mode_t const permissions = target_exists ? existing.st_mode & 07777 : 0600;
+  // Only a replaced regular file donates its mode. A replaced symlink reports 0777 from lstat, which must never become the mode of the
+  // regular file written in its place.
+  mode_t const permissions = target_exists && S_ISREG(existing.st_mode) ? existing.st_mode & 07777 : 0600;
   if (::fchmod(temp, permissions) != 0 || ::fsync(temp) != 0)
   {
     int const error_number = errno;

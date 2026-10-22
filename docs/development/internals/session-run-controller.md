@@ -9,6 +9,7 @@
 - The controller state mutex protects admission, the validated phase table, stop source, snapshots, and bounded command/append queue reservation. It is never held across `SessionStore::append`, provider/tool work, stop callbacks, observer callbacks, or condition-variable notifications.
 - `RunObservation` marks the exact user-callback extent with stack-aware `in_run_observer_callback()` context. `append_mutex` has one FIFO driver at a time, and active-controller context is also stack-aware across nested A→B callbacks. An observer append may drive an idle controller but rejects instead of waiting behind a busy/re-entered controller. Shutdown from any observer callback marks closing and requests stop but only try-locks append serialization: an idle controller finalizes immediately, while an active append/recovery holder closes queued tickets and releases the immutable target after external callbacks return. Reset from any observer callback is rejected before locking; non-observer cross-thread shutdown/reset remain synchronous behind the driver.
 - `inspect_admission()` explicitly distinguishes `Admit`, same-correlation `JoinExistingOutcome`, and bounded different-request rejection. `wait_outcome()` joins only the same correlation. `wake` is bounded to 64 commands / 64 KiB per command. Overflow is rejected at the frontend adapter boundary; existing accepted steering is delivered and the run continues. Existing TUI and RPC correlation queues remain presentation adapters that queue follow-ups before `run_prompt`; they do not own backend lifecycle. `request_stop` fires the guard stop token immediately.
+- A waiter joining the active run retains that generation's own outcome independently of the 64-entry historical lookup cache, even if more than 64 newer runs finish before it resumes. If a request id is reused for an active run, joining that active generation takes precedence over a cached older outcome with the same id.
 
 ## State and terminal contract
 
@@ -16,13 +17,29 @@
 
 M2 does not implement M3 deadlines or a new cancellation stack. It adapts the existing cancellation callback to the controller stop token and preserves current transport/tool behavior.
 
-## Append-routing migration boundary
+## Current append routing
 
-During an active `run_prompt`, AgentLoop user/replay-user, assistant, reasoning, tool call/result, permission decision, error, and cancellation records pass `AgentLoopOptions::append_entry` to the RuntimeSession-owned bounded append route. The route serializes each legacy JSONL append without changing record bytes or ordering.
+During an active `run_prompt`, user/replay-user, tool-result, permission-decision,
+error, cancellation, and audit records use `AgentLoopOptions::append_entry`.
+Assistant text, reasoning, and function calls instead become ordered v4
+`assistant_output_item` records followed by one matching `assistant_turn_commit`.
+The writer passes that entire vector once through `AgentLoopOptions::append_batch`,
+injected from `ActiveRunGuard::append_batch_route()` alongside the ordinary route.
+Both routes are required before AgentLoop produces records, and both bind the
+immutable active-run generation.
 
-| Append class | M2 route |
+`SessionAppendTarget::append_batch` preflights one complete bounded transaction,
+including record/byte limits and assistant-output state, before the first write.
+The target and shared mutation serialization span preflight and all batch writes
+so cooperating mutations cannot interleave with the transaction. Visibility is
+atomic at the logical projection boundary: staged output is not visible without
+its matching commit. This is not a claim that the physical multi-record write is
+indivisible; partial/unknown persistence requires explicit recovery.
+
+| Append class | Current route |
 | --- | --- |
-| Parent user/assistant/reasoning/tool/permission/error/cancel | Generation-bound active route |
+| Parent user/replay-user/tool-result/permission/error/cancel | Generation-bound ordinary active route |
+| Assistant text/reasoning/function-call items plus terminal commit | Generation-bound active batch route; one complete v4 transaction |
 | Runtime compaction (auto/overflow) | Generation-bound conditional compaction route carrying the immutable expected snapshot |
 | Plugin/file-reference audits | Generation-bound ordinary active route |
 | Metadata/model/reasoning/mode commands | Stable RuntimeSession owner route |
@@ -56,7 +73,10 @@ also do not latch. Errors after `append_impl` is attempted preserve its stable
 all affected tickets, while partial/unknown target state requires explicit
 recovery.
 
-This is an additive M2 boundary: it does not rewrite JSONL history, change session/RPC/TUI/print bytes, add a second agent runtime, or claim M5 durable-writer semantics.
+Historical M2 rationale: the original routing migration serialized legacy appends
+without rewriting history, changing legacy record bytes, adding a second agent
+runtime, or claiming the planned M5 durable-writer semantics. The current v4
+assistant-output batch route above is a later format-aware extension.
 
 ## Runtime read authority
 

@@ -28,6 +28,7 @@ enum class ErrorCode
   Canceled,
   ProviderEventLimit,
   BodyOutputLimit,
+  FileSizeLimit,
 };
 
 struct ErrorContext

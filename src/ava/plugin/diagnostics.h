@@ -14,6 +14,7 @@ enum class PluginFailureKind
   Discovery,
   DuplicateId,
   Enablement,
+  ModelToolNameCollision,
 };
 
 struct PluginFailure
@@ -28,10 +29,20 @@ struct PluginFailure
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+struct PluginModelToolStatus
+{
+  std::string model_tool_name;
+  bool name_collision = false;
+
+  AVA_DEBUG_PRINT_MEMBERS_ON
+};
+
 struct PluginStatus
 {
   DiscoveredPlugin plugin;
   bool enabled = false;
+  // In manifest contribution order, populated only for enabled plugins.
+  std::vector<PluginModelToolStatus> model_tools = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
