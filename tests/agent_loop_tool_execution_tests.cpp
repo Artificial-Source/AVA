@@ -2,7 +2,9 @@
 #include "tests/agent_loop_test_declarations.h"
 #include "tests/support/agent_loop_test_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/session_store.h"
@@ -18,6 +20,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -30,6 +33,125 @@
 
 using agent_loop_test::sse_response;
 using agent_loop_test::tool_call_sse;
+
+namespace {
+class GatedReadAccess final : public ava::tools::ExactFileAccess
+{
+ public:
+  explicit GatedReadAccess(std::size_t count) : released_(count, false), delegate_(std::make_shared<agent_loop_test::ChildSchedulingWitness>()) { }
+  bool supports_read_text_file() const noexcept override { return true; }
+  bool supports_write_text_file() const noexcept override { return false; }
+  ava::core::Result<std::string> read_text_file(std::filesystem::path const& path, ava::tools::ToolIoCancelCallback cancel) const override
+  {
+    auto const index = static_cast<std::size_t>(std::stoul(path.stem().string()));
+    {
+      std::unique_lock lock(mutex_);
+      ++active_;
+      ++started_;
+      max_active_ = std::max(max_active_, active_);
+      changed_.notify_all();
+      changed_.wait(lock, [&] { return release_all_ || released_.at(index); });
+    }
+    auto result = delegate_.read_text_file(path, std::move(cancel));
+    {
+      std::lock_guard lock(mutex_);
+      --active_;
+      changed_.notify_all();
+    }
+    return result;
+  }
+  ava::core::VoidResult write_text_file(std::filesystem::path const&, std::string_view, ava::tools::ToolIoCancelCallback) const override
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "worker-cap fixture is read-only"));
+  }
+  bool wait_started(std::size_t count) const
+  {
+    std::unique_lock lock(mutex_);
+    return changed_.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return started_ >= count; });
+  }
+  void release(std::size_t index)
+  {
+    std::lock_guard lock(mutex_);
+    released_.at(index) = true;
+    changed_.notify_all();
+  }
+  void release_all()
+  {
+    std::lock_guard lock(mutex_);
+    release_all_ = true;
+    changed_.notify_all();
+  }
+  std::size_t max_active() const
+  {
+    std::lock_guard lock(mutex_);
+    return max_active_;
+  }
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+ private:
+  mutable std::mutex mutex_;
+  mutable std::condition_variable changed_;
+  std::vector<bool> released_;
+  bool release_all_ = false;
+  mutable std::size_t started_ = 0;
+  mutable std::size_t active_ = 0;
+  mutable std::size_t max_active_ = 0;
+  agent_loop_test::ChildSchedulingExactFileAccess delegate_;
+};
+
+struct ReadReleaseGuard
+{
+  std::shared_ptr<GatedReadAccess> access;
+  ~ReadReleaseGuard() { access->release_all(); }
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+}  // namespace
+
+void test_agent_loop_parallel_read_search_enforces_worker_caps()
+{
+  for (std::size_t configured : {0U, 2U})
+  {
+    auto const expected_cap = std::max<std::size_t>(1, configured);
+    auto const label = "AgentLoop worker cap " + std::to_string(configured);
+    agent_loop_test::AgentLoopFixture fixture("agent-worker-cap");
+    auto access = std::make_shared<GatedReadAccess>(5);
+    std::string calls;
+    for (std::size_t index = 0; index < 5; ++index)
+    {
+      auto const file = std::to_string(index) + ".txt";
+      ava::tests::write_test_file(fixture.workspace / file, "read-effect-" + std::to_string(index));
+      calls += tool_call_sse("cap_" + std::to_string(index), "read_file", "{\"path\":\"" + file + "\"}");
+    }
+    ava::tests::FakeTransport transport(
+        {sse_response(calls + "data: [DONE]\n\n"), sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\ndata: [DONE]\n\n")});
+    auto options = fixture.options();
+    options.parallel_read_search_tools = true;
+    options.parallel_read_search_max_workers = configured;
+    options.tool_execution.exact_file_access = access;
+    ava::agent::AgentLoop loop(std::move(options));
+    auto running = std::async(std::launch::async, [&] { return loop.run_turn("read all", fixture.store, fixture.provider, transport); });
+    ReadReleaseGuard release{access};  // Must release before the future can wait in its destructor.
+    bool const saturated = access->wait_started(expected_cap);
+    expect(saturated, label + ": fills the configured number of blocked read slots");
+    if (saturated)
+    {
+      ava::tests::expect_eq(access->max_active(), expected_cap, label + ": initial blocked batch respects the cap");
+      for (std::size_t index = 0; index < 5 - expected_cap; ++index)
+      {
+        access->release(index);
+        expect(access->wait_started(expected_cap + index + 1), label + ": starts a replacement only after a read is released");
+      }
+    }
+    access->release_all();
+    auto result = running.get();
+    ava::tests::expect_eq(access->max_active(), expected_cap, label + ": maximum observed active reads equals the effective cap");
+    if (!ava::tests::require(result && result->tool_timeline.size() == 5, label + ": all five reads complete"))
+      continue;
+    for (std::size_t index = 0; index < result->tool_timeline.size(); ++index)
+      ava::tests::expect_all(label + ": read " + std::to_string(index),
+                             {{"successful read", result->tool_timeline[index].status == ava::agent::ToolTimelineStatus::Success},
+                              {"provider-order result", result->tool_timeline[index].call_id == "cap_" + std::to_string(index)}});
+  }
+}
 
 void test_agent_loop_multiple_tools_and_denied_continuation()
 {
@@ -88,15 +210,13 @@ void test_agent_loop_multiple_tools_and_denied_continuation()
 
   auto entries = store.load();
   auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-  std::vector<std::string> committed_call_ids;
+  auto const committed_call_ids = entries ? agent_loop_test::committed_function_call_ids(*entries) : std::vector<std::string>{};
   std::vector<std::string> bound_result_ids;
   std::string final_text;
   for (auto const& turn : projection.turns)
   {
     for (auto const& item : turn.items)
     {
-      if (auto const* function = std::get_if<ava::session::AssistantOutputFunctionCall>(&item.item.payload))
-        committed_call_ids.push_back(function->call_id);
       if (auto const* text = std::get_if<ava::session::AssistantOutputText>(&item.item.payload))
         final_text = text->text;
     }
@@ -230,12 +350,8 @@ void test_agent_loop_parallel_read_search_preserves_provider_order_and_replay()
          "parallel read/search commits unique buffered permission audit entries in provider order");
 
   auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-  std::vector<std::string> committed_calls;
+  auto const committed_calls = entries ? agent_loop_test::committed_function_call_ids(*entries) : std::vector<std::string>{};
   std::vector<std::string> bound_results;
-  for (auto const& turn : projection.turns)
-    for (auto const& item : turn.items)
-      if (auto const* function = std::get_if<ava::session::AssistantOutputFunctionCall>(&item.item.payload))
-        committed_calls.push_back(function->call_id);
   if (entries)
     for (auto const& entry : *entries)
       if (entry.type == ava::session::EntryType::ToolResult && ava::core::json::field_value_start(entry.data_json, "assistant_output_entry_id"))
@@ -250,7 +366,7 @@ void test_agent_loop_parallel_read_search_preserves_provider_order_and_replay()
          "parallel read/search continuation replay keeps provider-order tool results");
 }
 
-void test_agent_loop_parallel_read_search_zero_max_workers_clamps_to_one()
+void test_agent_loop_parallel_read_search_zero_max_workers_completes_turn()
 {
   auto const root = create_empty_root("agent-parallel-zero-workers");
 
@@ -283,11 +399,11 @@ void test_agent_loop_parallel_read_search_zero_max_workers_clamps_to_one()
                                                           .parallel_read_search_max_workers = 0});
   auto result = loop.run_turn("read both with zero worker cap", store, provider, transport);
   expect(result && result->final_text == "done" && result->tool_calls == 2 && result->provider_iterations == 2,
-         "parallel read/search zero max_workers is clamped and does not fail the turn");
+         "parallel read/search accepts a zero worker setting and completes the turn");
   expect(tool_events.size() == 4 && tool_events[0].call_id == "call_1" && tool_events[1].call_id == "call_1" &&
              tool_events[1].status == ava::agent::ToolTimelineStatus::Success && tool_events[2].call_id == "call_2" && tool_events[3].call_id == "call_2" &&
              tool_events[3].status == ava::agent::ToolTimelineStatus::Success,
-         "zero-worker clamp keeps provider-order tool event commits");
+         "a zero worker setting preserves provider-order tool event commits");
 }
 
 void test_agent_loop_parallel_read_search_falls_back_for_ask_preflight()
@@ -312,8 +428,15 @@ void test_agent_loop_parallel_read_search_falls_back_for_ask_preflight()
        sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n"
                     "data: [DONE]\n\n")});
   auto const main_thread = std::this_thread::get_id();
-  std::thread::id resolver_thread;
-  int prompts = 0;
+  struct ResolverObservation
+  {
+    std::filesystem::path target = {};
+    std::thread::id thread = {};
+    bool history_loaded = false;
+    bool function_committed = false;
+  };
+  std::mutex resolver_mutex;
+  std::vector<ResolverObservation> resolver_observations;
   ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
       .workspace_dir = workspace,
       .anchor_set = command_anchors_for_test(workspace, store.session_path().parent_path() / "spill"),
@@ -321,20 +444,13 @@ void test_agent_loop_parallel_read_search_falls_back_for_ask_preflight()
       .model = agent_loop_test::model_invocation_options(),
       .access_token = "token",
       .permission_resolver = [&](ava::permissions::PermissionPrompt const& prompt) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
-        ++prompts;
-        resolver_thread = std::this_thread::get_id();
-        expect(prompt.target_path == outside_path, "parallel ask fallback resolver sees the outside read path");
         auto entries = store.load();
-        bool saw_committed_function_before_prompt = false;
-        if (entries)
-        {
-          auto const projection = ava::session::classify_assistant_output(*entries);
-          for (auto const& turn : projection.turns)
-            for (auto const& item : turn.items)
-              if (auto const* function = std::get_if<ava::session::AssistantOutputFunctionCall>(&item.item.payload))
-                saw_committed_function_before_prompt = saw_committed_function_before_prompt || function->call_id == "outside_read";
-        }
-        expect(entries && saw_committed_function_before_prompt, "Ask fallback commits the v4 function before invoking the resolver");
+        auto const ids = entries ? agent_loop_test::committed_function_call_ids(*entries) : std::vector<std::string>{};
+        std::lock_guard lock(resolver_mutex);
+        resolver_observations.push_back(ResolverObservation{.target = prompt.target_path,
+                                                            .thread = std::this_thread::get_id(),
+                                                            .history_loaded = entries.has_value(),
+                                                            .function_committed = std::ranges::find(ids, "outside_read") != ids.end()});
         return ava::permissions::PermissionResolution::Allow;
       },
       .append_entry = append_route_for_test(store),
@@ -343,17 +459,23 @@ void test_agent_loop_parallel_read_search_falls_back_for_ask_preflight()
       .parallel_read_search_tools = true,
       .parallel_read_search_max_workers = 2});
   auto result = loop.run_turn("read outside and inside", store, provider, transport);
-  expect(result && result->final_text == "done" && prompts == 1 && resolver_thread == main_thread,
-         "Ask read/search calls stay on the sequential barrier path when parallel opt-in is enabled");
+  std::vector<ResolverObservation> observations;
+  {
+    std::lock_guard lock(resolver_mutex);
+    observations = resolver_observations;
+  }
+  if (!ava::tests::require(observations.size() == 1, "Ask fallback invokes exactly one resolver"))
+    return;
+  ava::tests::expect_all("Ask fallback stays on the run thread after committing the exact function",
+                         {{"turn completes", result && result->final_text == "done"},
+                          {"run-thread resolver", observations.front().thread == main_thread},
+                          {"outside target", observations.front().target == outside_path},
+                          {"history loaded in resolver", observations.front().history_loaded},
+                          {"function committed before resolver", observations.front().function_committed}});
 
   auto entries = store.load();
-  auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-  std::vector<std::string> functions;
+  auto const functions = entries ? agent_loop_test::committed_function_call_ids(*entries) : std::vector<std::string>{};
   std::vector<std::string> bound_results;
-  for (auto const& turn : projection.turns)
-    for (auto const& item : turn.items)
-      if (auto const* function = std::get_if<ava::session::AssistantOutputFunctionCall>(&item.item.payload))
-        functions.push_back(function->call_id);
   if (entries)
     for (auto const& entry : *entries)
       if (entry.type == ava::session::EntryType::ToolResult && ava::core::json::field_value_start(entry.data_json, "assistant_output_entry_id"))
@@ -451,7 +573,7 @@ void test_agent_loop_parallel_read_search_active_cancellation_stops_unstarted_sl
   }
   expect(!cancel_timed_out, "active parallel cancellation test releases workers through condition variables without timing out");
   expect(worker_threads.size() == 2, "active parallel cancellation stops unstarted later read/search workers after the capped active batch");
-  expect(!result && result.error().message().find("canceled") != std::string::npos,
+  expect(!result && result.error().code() == ava::core::ErrorCode::Canceled,
          "active parallel read/search cancellation returns the agent-loop cancellation error");
   expect(resolver_calls.load() == 0, "active parallel cancellation does not call live permission resolvers from workers");
   expect(tool_events.size() == 4 && tool_events[0].call_id == "call_1" && tool_events[0].status == ava::agent::ToolTimelineStatus::Running &&
@@ -461,14 +583,9 @@ void test_agent_loop_parallel_read_search_active_cancellation_stops_unstarted_sl
          "active parallel cancellation commits launched canceled slots in provider order only");
 
   auto entries = store.load();
-  auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-  std::vector<std::string> committed_calls;
+  auto const committed_calls = entries ? agent_loop_test::committed_function_call_ids(*entries) : std::vector<std::string>{};
   std::vector<std::string> bound_results;
   bool saw_cancel_boundary = false;
-  for (auto const& turn : projection.turns)
-    for (auto const& item : turn.items)
-      if (auto const* function = std::get_if<ava::session::AssistantOutputFunctionCall>(&item.item.payload))
-        committed_calls.push_back(function->call_id);
   if (entries)
     for (auto const& entry : *entries)
     {
@@ -523,8 +640,7 @@ void test_agent_loop_parallel_read_search_cancellation_stops_later_barrier()
                                                           .parallel_read_search_tools = true,
                                                           .parallel_read_search_max_workers = 2});
   auto result = loop.run_turn("read both then cancel before bash", store, provider, transport);
-  expect(!result && result.error().message().find("canceled") != std::string::npos,
-         "parallel read/search reports cancellation after committing the completed epoch");
+  expect(!result && result.error().code() == ava::core::ErrorCode::Canceled, "parallel read/search reports cancellation after committing the completed epoch");
   expect(tool_events.size() == 4 && tool_events[0].call_id == "call_1" && tool_events[0].status == ava::agent::ToolTimelineStatus::Running &&
              tool_events[1].call_id == "call_1" && tool_events[1].status == ava::agent::ToolTimelineStatus::Success && tool_events[2].call_id == "call_2" &&
              tool_events[2].status == ava::agent::ToolTimelineStatus::Running && tool_events[3].call_id == "call_2" &&
@@ -532,13 +648,8 @@ void test_agent_loop_parallel_read_search_cancellation_stops_later_barrier()
          "parallel cancellation commits completed read/search outcomes in provider order and does not publish later barrier events");
 
   auto entries = store.load();
-  auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-  std::vector<std::string> committed_calls;
+  auto const committed_calls = entries ? agent_loop_test::committed_function_call_ids(*entries) : std::vector<std::string>{};
   std::vector<std::string> bound_results;
-  for (auto const& turn : projection.turns)
-    for (auto const& item : turn.items)
-      if (auto const* function = std::get_if<ava::session::AssistantOutputFunctionCall>(&item.item.payload))
-        committed_calls.push_back(function->call_id);
   if (entries)
     for (auto const& entry : *entries)
       if (entry.type == ava::session::EntryType::ToolResult && ava::core::json::field_value_start(entry.data_json, "assistant_output_entry_id"))
@@ -597,19 +708,14 @@ void test_agent_loop_cancellation_stops_later_sequential_tools()
   });
 
   auto result = loop.run_turn("read both but cancel after first", store, provider, transport);
-  expect(!result && result.error().message().find("canceled") != std::string::npos, "agent loop reports cancellation after the first sequential tool dispatch");
+  expect(!result && result.error().code() == ava::core::ErrorCode::Canceled, "agent loop reports typed cancellation after the first sequential tool dispatch");
   expect(tool_events.size() == 2 && tool_events[0].call_id == "call_1" && tool_events[0].status == ava::agent::ToolTimelineStatus::Running &&
              tool_events[1].call_id == "call_1" && tool_events[1].status == ava::agent::ToolTimelineStatus::Success,
          "agent loop does not publish events for later provider tool calls after cancellation");
 
   auto entries = store.load();
-  auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-  std::vector<std::string> committed_calls;
+  auto const committed_calls = entries ? agent_loop_test::committed_function_call_ids(*entries) : std::vector<std::string>{};
   std::vector<std::string> bound_results;
-  for (auto const& turn : projection.turns)
-    for (auto const& item : turn.items)
-      if (auto const* function = std::get_if<ava::session::AssistantOutputFunctionCall>(&item.item.payload))
-        committed_calls.push_back(function->call_id);
   if (entries)
     for (auto const& entry : *entries)
       if (entry.type == ava::session::EntryType::ToolResult && ava::core::json::field_value_start(entry.data_json, "assistant_output_entry_id"))
@@ -658,11 +764,8 @@ void test_agent_loop_tool_delta_dedupes_and_rejects_empty_tool_ids()
            "agent loop deduplicates tool deltas that arrive before tool start events");
 
     auto entries = store.load();
-    auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-    std::size_t functions = 0;
+    auto const functions = entries ? agent_loop_test::committed_function_call_ids(*entries).size() : 0;
     std::size_t bound_results = 0;
-    for (auto const& turn : projection.turns)
-      for (auto const& item : turn.items) functions += std::holds_alternative<ava::session::AssistantOutputFunctionCall>(item.item.payload);
     if (entries)
       for (auto const& entry : *entries)
         bound_results += entry.type == ava::session::EntryType::ToolResult && ava::core::json::field_value_start(entry.data_json, "assistant_output_entry_id");
@@ -754,11 +857,8 @@ void test_agent_loop_tool_delta_dedupes_and_rejects_empty_tool_ids()
     ava::agent::AgentLoop second_loop(std::move(options));
     auto second = second_loop.run_turn("second prompt", store, provider, transport);
     auto entries = store.load();
-    auto const projection = entries ? ava::session::classify_assistant_output(*entries) : ava::session::AssistantOutputProjection{};
-    std::size_t functions = 0;
+    auto const functions = entries ? agent_loop_test::committed_function_call_ids(*entries).size() : 0;
     std::size_t bound_results = 0;
-    for (auto const& turn : projection.turns)
-      for (auto const& item : turn.items) functions += std::holds_alternative<ava::session::AssistantOutputFunctionCall>(item.item.payload);
     if (entries)
       for (auto const& entry : *entries)
         bound_results += entry.type == ava::session::EntryType::ToolResult && ava::core::json::field_value_start(entry.data_json, "assistant_output_entry_id");

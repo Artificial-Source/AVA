@@ -130,7 +130,11 @@ void test_agent_loop_permission_resolver_threads_to_tools()
   expect(result && !result->tool_timeline.empty() && result->tool_timeline.front().permission_request_ids.size() == 1 &&
              result->tool_timeline.front().permission_request_ids[0] == resolver_permission_request_id,
          "agent loop exposes permission request ids on tool timeline entries");
+}
 
+void test_agent_loop_bash_permission_resolver_allows_command()
+{
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
   {
     auto const bash_root = create_empty_root("agent-bash-ask-allow");
 
@@ -170,7 +174,11 @@ void test_agent_loop_permission_resolver_threads_to_tools()
                bash_result->tool_timeline.front().status == ava::agent::ToolTimelineStatus::Success,
            "agent loop allows bash Ask decisions when resolver allows once");
   }
+}
 
+void test_agent_loop_bash_permission_resolver_denies_and_redacts_command()
+{
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
   {
     auto const bash_root = create_empty_root("agent-bash-ask-deny");
 
@@ -233,7 +241,11 @@ void test_agent_loop_permission_resolver_threads_to_tools()
                continuation_request.find("AGENT_DENIED_COMMAND_SECRET_SENTINEL") == std::string::npos,
            "agent loop redacts denied command arguments from durable audits, public stream events, serialized tool errors, and continuation payloads");
   }
+}
 
+void test_agent_loop_bash_permission_resolver_failure_becomes_tool_error()
+{
+  ava::provider::OpenAIProvider const provider("https://api.example.test");
   {
     auto const bash_root = create_empty_root("agent-bash-ask-fail");
 

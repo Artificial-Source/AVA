@@ -153,9 +153,13 @@ void test_agent_loop_uses_established_session_read_limits()
       .session_read_limits = ava::session::SessionReadLimits{.max_file_bytes = 8U * 1024U * 1024U, .max_line_bytes = 1024U * 1024U, .max_entries = 64},
   });
   auto bounded_result = bounded_loop.run_turn("bounded read must fail", store, provider, bounded_transport);
-  expect(legacy_result && legacy_transport.requests().size() == 1 && !bounded_result &&
-             bounded_result.error().message().find("bounded read limit") != std::string::npos && bounded_transport.requests().empty(),
-         "AgentLoop preserves legacy-unbounded history seeding while an explicit runtime read policy remains bounded");
+  ava::tests::expect_all("AgentLoop preserves legacy history reads and enforces the explicit file-byte policy",
+                         {{"legacy turn completes", legacy_result.has_value()},
+                          {"one legacy request", legacy_transport.requests().size() == 1},
+                          {"bounded session failure", !bounded_result && bounded_result.error().category() == ava::core::ErrorCategory::Session},
+                          {"file-byte limit context", !bounded_result && std::ranges::any_of(bounded_result.error().context(),
+                                                                                             [](auto const& field) { return field.key == "max_file_bytes"; })},
+                          {"no bounded provider request", bounded_transport.requests().empty()}});
 }
 
 void test_agent_loop_authority_policy_applies_between_provider_iterations()
@@ -198,8 +202,14 @@ void test_agent_loop_authority_policy_applies_between_provider_iterations()
       .session_read_authority = std::move(*authority),
   });
   auto result = loop.run_turn("read note", *store, provider, transport);
-  expect(!result && result.error().message().find("entry count") != std::string::npos && transport.requests().size() == 1,
-         "the policy bound to the read authority rejects grown history before the second provider iteration despite AgentLoop's default explicit limits");
+  auto const grown_history = store->load();
+  ava::tests::expect_all("bound read authority rejects grown history before the second provider iteration",
+                         {{"typed session failure", !result && result.error().category() == ava::core::ErrorCategory::Session},
+                          // Ephemeral bounded reads expose no numeric context or
+                          // distinguishing error code for their entry-count limit.
+                          {"entry-count policy rejected", !result && result.error().message().find("entry count") != std::string::npos},
+                          {"history grew beyond the bound", grown_history && grown_history->size() > limits.max_entries},
+                          {"only first provider request", transport.requests().size() == 1}});
 }
 
 void test_agent_loop_model_capability_gating()
@@ -247,9 +257,10 @@ void test_agent_loop_rejects_store_without_append_routes()
   ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
       .workspace_dir = workspace, .mode = ava::agent::Mode::Build, .model = agent_loop_test::model_invocation_options(), .access_token = "token"});
   auto result = loop.run_turn("hi", store, provider, transport);
-  expect(!result && result.error().message().find("authority routes") != std::string::npos && transport.requests().empty() &&
-             !std::filesystem::exists(store.session_path()),
-         "AgentLoop without both bound append routes fails before provider work or session mutation");
+  ava::tests::expect_all("missing append routes fail before provider work or session mutation",
+                         {{"invalid configuration", !result && result.error().category() == ava::core::ErrorCategory::InvalidArgument},
+                          {"no provider request", transport.requests().empty()},
+                          {"no session file", !std::filesystem::exists(store.session_path())}});
 }
 
 void test_agent_loop_rejects_ephemeral_store_missing_entry_or_batch_route()
@@ -283,9 +294,12 @@ void test_agent_loop_rejects_ephemeral_store_missing_entry_or_batch_route()
       .session_read_authority = *authority,
   });
   auto missing_entry_result = missing_entry.run_turn("hi", *store, provider, missing_entry_transport);
-  expect(!missing_entry_result && missing_entry_result.error().message().find("authority routes") != std::string::npos &&
-             missing_entry_transport.requests().empty() && store->load() && store->load()->empty(),
-         "ephemeral AgentLoop missing the entry route fails before provider work or session mutation");
+  auto const after_missing_entry = store->load();
+  ava::tests::expect_all(
+      "missing ephemeral entry route fails before effects",
+      {{"invalid configuration", !missing_entry_result && missing_entry_result.error().category() == ava::core::ErrorCategory::InvalidArgument},
+       {"no provider request", missing_entry_transport.requests().empty()},
+       {"empty history", after_missing_entry && after_missing_entry->empty()}});
 
   ava::tests::FakeTransport missing_batch_transport({});
   ava::agent::AgentLoop missing_batch(ava::agent::AgentLoopOptions{
@@ -297,9 +311,12 @@ void test_agent_loop_rejects_ephemeral_store_missing_entry_or_batch_route()
       .session_read_authority = *authority,
   });
   auto missing_batch_result = missing_batch.run_turn("hi", *store, provider, missing_batch_transport);
-  expect(!missing_batch_result && missing_batch_result.error().message().find("authority routes") != std::string::npos &&
-             missing_batch_transport.requests().empty() && store->load() && store->load()->empty(),
-         "ephemeral AgentLoop missing the batch route fails before provider work or session mutation");
+  auto const after_missing_batch = store->load();
+  ava::tests::expect_all(
+      "missing ephemeral batch route fails before effects",
+      {{"invalid configuration", !missing_batch_result && missing_batch_result.error().category() == ava::core::ErrorCategory::InvalidArgument},
+       {"no provider request", missing_batch_transport.requests().empty()},
+       {"empty history", after_missing_batch && after_missing_batch->empty()}});
 }
 
 void test_agent_loop_rejects_replaced_history_before_provider_use()

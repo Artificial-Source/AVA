@@ -1,7 +1,10 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/http/transport.h"
 #include "ava/app/command_palette.h"
 #include "ava/app/rpc/serialization.h"
@@ -20,7 +23,10 @@
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <exception>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -28,6 +34,7 @@
 #include <stop_token>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 #include <unistd.h>             // ::write
 
@@ -63,10 +70,11 @@ class TitleProviderTransport final : public ava::http::Transport
   std::shared_ptr<TitleTransportState> state_;
 };
 
+// Synchronization fake: only explicit release or stop may unblock a running call.
 struct GeneratorState
 {
   std::mutex mutex;
-  std::condition_variable changed;
+  std::condition_variable_any changed;
   std::size_t calls = 0;
   bool started = false;
   bool release = true;
@@ -75,16 +83,14 @@ struct GeneratorState
   std::string output = "Generated Session Title";
   std::string source;
 
-  ava::core::Result<std::string> generate(ava::app::SessionTitleGenerationRequest& request, std::stop_token stop_token,
-                                          std::chrono::steady_clock::time_point deadline)
+  ava::core::Result<std::string> generate(ava::app::SessionTitleGenerationRequest& request, std::stop_token stop_token, std::chrono::steady_clock::time_point)
   {
-    std::stop_callback wake(stop_token, [&] { changed.notify_all(); });
     std::unique_lock lock(mutex);
     ++calls;
     source = request.source_text;
     started = true;
     changed.notify_all();
-    changed.wait_until(lock, deadline, [&] { return release || stop_token.stop_requested(); });
+    changed.wait(lock, stop_token, [&] { return release; });
     stop_seen = stop_token.stop_requested();
     if (stop_seen)
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "fake title generation canceled"));
@@ -93,10 +99,10 @@ struct GeneratorState
     return output;
   }
 
-  bool wait_started()
+  bool wait_started(std::chrono::steady_clock::time_point deadline = ava::tests::now_plus_seconds(5))
   {
     std::unique_lock lock(mutex);
-    return changed.wait_for(lock, 3s, [&] { return started; });
+    return changed.wait_until(lock, deadline, [&] { return started; });
   }
 
   void allow_completion()
@@ -287,7 +293,8 @@ void test_metadata_manual_precedence_and_summary_projection()
       metadata && metadata->has_manual_name && metadata->name.empty() && metadata->generated_title == "Generated Later" && metadata->effective_title().empty(),
       "an empty historical manual name permanently suppresses generated titles regardless of later record order");
 
-  auto store = ava::session::SessionStore::create_ephemeral(std::filesystem::current_path());
+  auto const root = create_empty_root("session-title-effective-summary");
+  auto store = ava::session::SessionStore::create_ephemeral(root);
   expect(store.has_value(), "effective title summary test creates ephemeral store");
   if (!store)
     return;
@@ -398,9 +405,11 @@ void test_coordinator_dedupes_and_preserves_manual_rename_races()
   state->allow_completion();
   expect(coordinator->wait_until_idle(3s), "title race coordinator becomes idle");
   auto metadata = ava::session::load_session_metadata(session_w->store, session_w->lease());
-  expect(metadata && metadata->effective_title() == "Manual Rename" && metadata->generated_title == "First ordinary prompt Overview and" && state->calls == 1 &&
-             state->source == "First ordinary prompt",
-         "coordinator permanently deduplicates by session id, binds the first prompt, and never refines over a concurrent manual rename");
+  ava::tests::expect_all("coordinator deduplicates the first prompt without refining over a manual rename",
+                         {{"manual title wins", metadata && metadata->effective_title() == "Manual Rename"},
+                          {"fallback remains", metadata && metadata->generated_title == ava::app::fallback_session_title("First ordinary prompt")},
+                          {"single generation", state->calls == 1},
+                          {"first prompt bound", state->source == "First ordinary prompt"}});
   CRITICAL_AREA_END_W(session);
   coordinator->shutdown();
 }
@@ -813,8 +822,14 @@ void test_existing_manual_child_generated_and_sessionless_exclusions()
   expect(unlocked_sessionless_result.has_value(), "sessionless exclusion session opens");
   if (unlocked_sessionless_result)
   {
+    auto committed = seed_committed_ordinary_turn(*unlocked_sessionless_result, "Prompt without persistent session state");
+    if (!ava::tests::require(committed.has_value(), "sessionless exclusion has an otherwise eligible committed turn"))
+      return;
+    coordinator->schedule(*unlocked_sessionless_result, "Prompt without persistent session state", *committed, options);
     coordinator->schedule(*unlocked_sessionless_result, "Prompt without persistent session state", "missing_commit", options);
   }
+  if (!ava::tests::require(coordinator->wait_until_idle(3s), "sessionless exclusion check becomes idle"))
+    return;
 
   expect(state->calls == 0, "manual, child, generated, resumed-history, and sessionless sessions make no title-provider attempt");
   coordinator->shutdown();
@@ -829,6 +844,155 @@ void test_existing_manual_child_generated_and_sessionless_exclusions()
     expect(disabled_coordinator->wait_until_idle(100ms) && disabled_state->calls == 0, "strict title disable starts no worker or provider attempt");
   }
   disabled_coordinator->shutdown();
+}
+
+void test_generator_barrier_requires_release_or_stop()
+{
+  auto state = std::make_shared<GeneratorState>();
+  state->release = false;
+  std::optional<ava::core::Result<std::string>> result;
+  std::jthread worker([&](std::stop_token token) {
+    ava::app::SessionTitleGenerationRequest request{};
+    result = state->generate(request, token, std::chrono::steady_clock::time_point::min());
+  });
+  auto const started = state->wait_started();
+  worker.request_stop();
+  worker.join();
+  ava::tests::expect_all(
+      "the synchronization fake ignores request expiry and is always released by cancellation",
+      {{"readiness observed", started}, {"stop observed", state->stop_seen}, {"canceled rather than successful", result && !result->has_value()}});
+  GeneratorState not_started;
+  not_started.release = false;
+  auto const ready = not_started.wait_started(std::chrono::steady_clock::time_point::min());
+  std::stop_source cleanup;
+  if (!ready)
+    cleanup.request_stop();
+  ava::app::SessionTitleGenerationRequest request{};
+  auto early_canceled = not_started.generate(request, cleanup.get_token(), std::chrono::steady_clock::time_point::min());
+  ava::tests::expect_all("failed readiness cleanup also releases a generator canceled before entry",
+                         {{"readiness failed", !ready}, {"stop observed", not_started.stop_seen}, {"no successful late result", !early_canceled}});
+}
+
+void test_repeated_title_lifecycle_releases_process_resources()
+{
+  auto const root = create_empty_root("session-title-lifecycle-resources");
+  auto const child = ::fork();
+  if (!ava::tests::require(child >= 0, "resource-stability test forks its isolated runner"))
+    return;
+  if (child == 0)
+  {
+    auto const failures_before = ava::tests::failures();
+    try
+    {
+      auto count_entries = [](std::filesystem::path const& path) {
+        return static_cast<std::size_t>(std::distance(std::filesystem::directory_iterator(path), std::filesystem::directory_iterator{}));
+      };
+      auto cycle = [&](int index) {
+        auto state = std::make_shared<GeneratorState>();
+        state->release = false;
+        auto coordinator = make_coordinator(state);
+        if (!ava::tests::require(static_cast<bool>(coordinator), "resource cycle starts a coordinator"))
+          return false;
+        auto session = open_title_session(root / std::to_string(index), coordinator);
+        if (!ava::tests::require(session.has_value(), "resource cycle opens an isolated session"))
+          return false;
+        auto commit = seed_committed_ordinary_turn(*session, "Repeated title lifecycle cleanup");
+        if (!ava::tests::require(commit.has_value(), "resource cycle commits an ordinary turn"))
+          return false;
+        coordinator->schedule(*session, "Repeated title lifecycle cleanup", *commit, {});
+        auto const started = state->wait_started();
+        coordinator->shutdown();
+        ava::tests::expect_all("resource cycle cancels its started generator", {{"readiness observed", started}, {"stop observed", state->stop_seen}});
+        return started && state->stop_seen;
+      };
+      if (cycle(0))
+      {
+        auto const descriptors = count_entries("/proc/self/fd");
+        auto const threads = count_entries("/proc/self/task");
+        for (int index = 1; index <= 3; ++index)
+        {
+          if (!cycle(index))
+            break;
+          ava::tests::expect_eq(count_entries("/proc/self/fd"), descriptors, "title lifecycle returns all per-cycle descriptors");
+          ava::tests::expect_eq(count_entries("/proc/self/task"), threads, "title lifecycle joins all per-cycle workers");
+        }
+      }
+    }
+    catch (std::exception const& error)
+    {
+      expect(false, std::string("isolated title lifecycle runner: ") + error.what());
+    }
+    std::_Exit(ava::tests::failures() == failures_before ? 0 : 1);
+  }
+  ava::tests::ScopedChild runner(child);
+  auto const status = runner.wait_until(ava::tests::now_plus_seconds(30));
+  ava::tests::expect_all("isolated lifecycle resource checks exit successfully",
+                         {{"runner completed", status.has_value()},
+                          {"normal exit", status && WIFEXITED(*status)},
+                          {"all child assertions passed", status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0}});
+}
+
+// Unlike the synchronization fake, this generator reports expiry as failure, never success.
+struct DeadlineTitleGenerator
+{
+  std::mutex mutex;
+  std::condition_variable_any changed;
+  std::size_t calls = 0;
+  bool deadline_seen = false;
+
+  ava::core::Result<std::string> generate(std::stop_token token, std::chrono::steady_clock::time_point deadline)
+  {
+    std::unique_lock lock(mutex);
+    ++calls;
+    changed.wait_until(lock, token, deadline, [] { return false; });
+    deadline_seen = !token.stop_requested();
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "fake title request expired"));
+  }
+};
+
+void test_expired_generation_preserves_durable_fallback()
+{
+  auto const root = create_empty_root("session-title-deadline");
+  auto state = std::make_shared<DeadlineTitleGenerator>();
+  auto created = ava::app::SessionTitleCoordinator::create(
+      {.config = {},
+       .generator = [state](ava::app::SessionTitleGenerationRequest&, std::stop_token token,
+                            std::chrono::steady_clock::time_point deadline) { return state->generate(token, deadline); },
+       .transport_factory = nullptr,
+       .worker_count = 1,
+       .max_queued = 1,
+       .request_deadline = 40ms});
+  if (!ava::tests::require(created.has_value(), created ? "deadline title coordinator starts" : created.error().format()))
+    return;
+  auto coordinator = *created;
+  auto session = open_title_session(root, coordinator);
+  if (!ava::tests::require(session.has_value(), session ? "deadline title session opens" : session.error().format()))
+    return;
+  std::string const prompt = "Preserve the durable fallback after expiry";
+  auto commit = seed_committed_ordinary_turn(*session, prompt);
+  if (!ava::tests::require(commit.has_value(), commit ? "deadline title turn commits" : commit.error().format()))
+    return;
+  ava::app::runtime::RunOptions options;
+  options.access_token = "fake-title-deadline-token";
+  coordinator->schedule(*session, prompt, *commit, options);
+  if (!ava::tests::require(coordinator->wait_until_idle(10s), "expired title request becomes idle"))
+    return;
+  coordinator->shutdown();
+  auto locked = ava::app::runtime::session_ts::rat(*session);
+  auto metadata = ava::session::load_session_metadata(locked->store, locked->lease());
+  auto entries = locked->store.load_bounded(locked->lease(), ava::session::legacy_unbounded_session_read_limits());
+  auto const title_entries = entries ? std::ranges::count_if(*entries,
+                                                             [](auto const& item) {
+                                                               return item.type == ava::session::EntryType::SessionMetadata &&
+                                                                      ava::core::json::string_field(item.data_json, "generated_title").has_value();
+                                                             })
+                                     : 0;
+  ava::tests::expect_all("request expiry leaves exactly the synchronous title and no late refinement",
+                         {{"one generation request", state->calls == 1},
+                          {"deadline expiry observed", state->deadline_seen},
+                          {"durable fallback unchanged", metadata && metadata->generated_title == ava::app::fallback_session_title(prompt)},
+                          {"only fallback notification", coordinator->catalog_generation() == 1},
+                          {"only one durable title", entries && title_entries == 1}});
 }
 
 void test_shutdown_cancels_owned_generation()
@@ -859,10 +1023,12 @@ void test_shutdown_cancels_owned_generation()
   auto metadata_after_shutdown = ava::session::load_session_metadata(session_w->store, session_w->lease());
   {
     std::lock_guard lock(state->mutex);
-    expect(state->stop_seen && metadata_before_shutdown && metadata_after_shutdown &&
-               metadata_before_shutdown->effective_title() == "Cancel this title generation safely" &&
-               metadata_after_shutdown->effective_title() == "Cancel this title generation safely",
-           "title coordinator shutdown cancels provider refinement without removing the synchronous durable fallback");
+    ava::tests::expect_all(
+        "shutdown cancels refinement while retaining the durable fallback",
+        {{"provider stop observed", state->stop_seen},
+         {"fallback persisted before shutdown",
+          metadata_before_shutdown && metadata_before_shutdown->effective_title() == "Cancel this title generation safely"},
+         {"fallback retained after shutdown", metadata_after_shutdown && metadata_after_shutdown->effective_title() == "Cancel this title generation safely"}});
   }
 }
 
@@ -870,6 +1036,9 @@ void test_shutdown_cancels_owned_generation()
 
 void run_session_title_coordinator_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("session-title-tests-");
+  test_repeated_title_lifecycle_releases_process_resources();
+  test_generator_barrier_requires_release_or_stop();
   test_session_title_config_is_strict();
   test_title_config_uses_logical_runtime_anchors();
   test_title_text_boundaries();
@@ -884,4 +1053,5 @@ void run_session_title_coordinator_tests()
   test_runtime_trigger_is_after_completion_and_excludes_synthetic_turns();
   test_existing_manual_child_generated_and_sessionless_exclusions();
   test_shutdown_cancels_owned_generation();
+  test_expired_generation_preserves_durable_fallback();
 }

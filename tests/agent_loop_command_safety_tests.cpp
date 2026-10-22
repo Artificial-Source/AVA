@@ -1,8 +1,8 @@
 #include "sys.h"
 #include "tests/agent_loop_test_declarations.h"
 #include "tests/support/agent_loop_test_support.h"
-#include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/agent/agent_loop_session.h"
@@ -30,6 +30,16 @@
 
 using agent_loop_test::sse_response;
 using agent_loop_test::tool_call_sse;
+
+namespace {
+std::optional<std::string> native_tool_output(std::string_view request, std::string_view call_id)
+{
+  for (auto const& item : ava::core::json::objects_in_array_field(request, "input"))
+    if (ava::core::json::string_field(item, "type") == "function_call_output" && ava::core::json::string_field(item, "call_id") == call_id)
+      return ava::core::json::string_field(item, "output");
+  return std::nullopt;
+}
+}  // namespace
 using agent_loop_test::TraceCollector;
 
 void test_agent_loop_model_auto_allow_deny_preflight_blocks_auto_allow_without_process()
@@ -163,10 +173,7 @@ void test_agent_loop_truncates_tool_context()
 
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
-  {
-    std::ofstream large(workspace / "large.txt", std::ios::binary | std::ios::trunc);
-    large << std::string(12 * 1024, 'x');
-  }
+  ava::tests::write_test_file(workspace / "large.txt", std::string(12 * 1024, 'x'));
   ava::session::SessionStore store(ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "truncate"});
   ava::provider::OpenAIProvider const provider("https://api.example.test");
   ava::tests::FakeTransport transport({sse_response("data: {\"type\":\"response.function_call.added\",\"call_id\":\"call_large\",\"name\":\"read_file\"}\n\n"
@@ -176,10 +183,13 @@ void test_agent_loop_truncates_tool_context()
                                                     "data: [DONE]\n\n"),
                                        sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"
                                                     "data: [DONE]\n\n")});
+  auto model = agent_loop_test::model_invocation_options();
+  model.api_family = "openai_responses";
+  model.reasoning_format = "openai_responses";
   ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
-      .model = agent_loop_test::model_invocation_options(),
+      .model = std::move(model),
       .access_token = "token",
       .max_tool_result_context_bytes = 8 * 1024,
       .append_entry = append_route_for_test(store),
@@ -187,8 +197,53 @@ void test_agent_loop_truncates_tool_context()
       .session_read_authority = read_authority_for_test(store),
   });
   auto result = loop.run_turn("read large", store, provider, transport);
-  expect(result && transport.requests().size() == 2 && transport.requests()[1].body.find("tool result content truncated") != std::string::npos,
-         "agent loop truncates native tool results before OpenAI continuation");
+  if (!ava::tests::require(result.has_value(), "large tool read completes its turn") ||
+      !ava::tests::require(transport.requests().size() == 2, "large tool read sends exactly one continuation"))
+    return;
+  auto const output = native_tool_output(transport.requests()[1].body, "call_large");
+  if (!ava::tests::require(output.has_value(), "continuation contains the correlated native tool result"))
+    return;
+  ava::tests::expect_all("native tool-result truncation enforces the byte budget, not just a marker",
+                         {{"at most 8 KiB", output->size() <= 8 * 1024},
+                          {"marker is a suffix", output->ends_with("\n[AVA: tool result content truncated]")},
+                          {"oversized payload removed", output->find(std::string(8 * 1024 + 1, 'x')) == std::string::npos},
+                          {"bounded retained payload", ava::tests::count_occurrences(*output, std::string(1024, 'x')) <= 8}});
+}
+
+void test_agent_loop_tool_context_truncation_preserves_utf8_boundaries()
+{
+  constexpr std::string_view marker = "\n[AVA: tool result content truncated]";
+  // Adjacent budgets force the boundary to visit every byte of a three-byte
+  // codepoint. A byte resize or replacement-character repair cannot pass all.
+  for (std::size_t budget : {8190U, 8191U, 8192U})
+  {
+    agent_loop_test::AgentLoopFixture fixture("agent-tool-truncate-utf8");
+    std::string content;
+    for (std::size_t i = 0; i < 4096; ++i)
+      content += "\xE2\x82\xAC";
+    ava::tests::write_test_file(fixture.workspace / "unicode.txt", content + "OMITTED_TAIL");
+    auto options = fixture.options();
+    options.model.api_family = "openai_responses";
+    options.model.reasoning_format = "openai_responses";
+    options.max_tool_result_context_bytes = budget;
+    ava::agent::AgentLoop loop(std::move(options));
+    ava::tests::FakeTransport transport({sse_response(tool_call_sse("unicode_read", "read_file", R"({"path":"unicode.txt"})") + "data: [DONE]\n\n"),
+                                         sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\ndata: [DONE]\n\n")});
+    auto result = loop.run_turn("read unicode", fixture.store, fixture.provider, transport);
+    auto const label = "UTF-8 tool context budget " + std::to_string(budget);
+    if (!ava::tests::require(result.has_value(), label + ": turn completes") ||
+        !ava::tests::require(transport.requests().size() == 2, label + ": continuation exists"))
+      continue;
+    auto output = native_tool_output(transport.requests()[1].body, "unicode_read");
+    if (!ava::tests::require(output.has_value(), label + ": correlated tool output exists"))
+      continue;
+    ava::tests::expect_all(label, {{"within byte limit", output->size() <= budget},
+                                   {"marker suffix", output->ends_with(marker)},
+                                   {"valid UTF-8", ava::core::json::is_valid_utf8(*output)},
+                                   {"multibyte text retained", output->find("\xE2\x82\xAC") != std::string::npos},
+                                   {"no replacement repair", output->find("\xEF\xBF\xBD") == std::string::npos},
+                                   {"tail omitted", output->find("OMITTED_TAIL") == std::string::npos}});
+  }
 }
 
 void test_unresolved_committed_function_recovery_never_partially_appends_after_a_closed_window()
@@ -196,7 +251,8 @@ void test_unresolved_committed_function_recovery_never_partially_appends_after_a
   auto store = ava::session::SessionStore::create_ephemeral(create_empty_root("unresolved-committed-function-recovery"));
   auto target = store ? ava::session::SessionAppendTarget::create_ephemeral(*store)
                       : ava::core::Result<std::shared_ptr<ava::session::SessionAppendTarget>>(std::unexpected(store.error()));
-  if (!store || !target)
+  if (!ava::tests::require(store.has_value(), "closed-window recovery fixture creates store") ||
+      !ava::tests::require(target.has_value(), "closed-window recovery fixture creates append target"))
     return;
 
   auto function_turn = [](std::string call_id) {
@@ -229,11 +285,17 @@ void test_unresolved_committed_function_recovery_never_partially_appends_after_a
                         ? ava::agent::reconcile_unresolved_committed_function_calls(*authority, sink, ava::session::legacy_unbounded_session_read_limits())
                         : ava::core::VoidResult(std::unexpected(authority.error()));
   auto const after = store->load();
-  expect(first && boundary && current && authority && !reconciled && reconciled.error().message().find("active EOF tool-result window") != std::string::npos &&
-             synthetic_append_attempts == 0 && before && after && after->size() == before->size() &&
-             std::ranges::equal(
-                 *before, *after, {}, [](auto const& entry) { return entry.id; }, [](auto const& entry) { return entry.id; }),
-         "closed unresolved v4 calls reject the whole recovery batch before any synthetic result can mutate a later current call");
+  ava::tests::expect_all(
+      "closed unresolved calls reject the entire recovery batch before any synthetic mutation",
+      {{"fixture appends succeeded", first && boundary && current && authority},
+       {"typed session rejection", !reconciled && reconciled.error().category() == ava::core::ErrorCategory::Session},
+       {"closed call identified", !reconciled && std::ranges::any_of(reconciled.error().context(),
+                                                                     [](auto const& field) { return field.key == "call_id" && field.value == "closed_call"; })},
+       {"no synthetic append", synthetic_append_attempts == 0},
+       {"before history loaded", before.has_value()},
+       {"after history loaded", after.has_value()},
+       {"unchanged entry identities",
+        before && after && std::ranges::equal(*before, *after, {}, [](auto const& entry) { return entry.id; }, [](auto const& entry) { return entry.id; })}});
 }
 
 namespace {
@@ -253,10 +315,10 @@ void test_agent_loop_secure_workspace_refuses_in_workspace_symlink_escape()
   auto const outside = root / "outside";
   std::filesystem::create_directories(workspace);
   std::filesystem::create_directories(outside);
-  ava::tests::write_app_test_file(outside / "secret.txt", "LINKED-OUTSIDE-SECRET-7f3a\n");
-  ava::tests::write_app_test_file(outside / "listing-marker-7f3a.txt", "listed\n");
+  ava::tests::write_test_file(outside / "secret.txt", "LINKED-OUTSIDE-SECRET-7f3a\n");
+  ava::tests::write_test_file(outside / "listing-marker-7f3a.txt", "listed\n");
   auto const approved_path = outside / "approved.txt";
-  ava::tests::write_app_test_file(approved_path, "APPROVED-OUTSIDE-READ-7f3a\n");
+  ava::tests::write_test_file(approved_path, "APPROVED-OUTSIDE-READ-7f3a\n");
   // A committed in-workspace link to an outside directory, like docs/keys -> ~/.ssh.
   std::error_code link_error;
   std::filesystem::create_directory_symlink(outside, workspace / "link", link_error);
@@ -311,15 +373,15 @@ void test_agent_loop_secure_workspace_refuses_in_workspace_symlink_escape()
          "an approved explicit outside-workspace read still succeeds under the descriptor-anchored workspace");
 }
 
-void test_agent_loop_secure_workspace_read_survives_ancestor_swap_after_permission()
+void test_agent_loop_secure_workspace_refuses_ancestor_swap_after_permission()
 {
   auto const root = create_empty_root("agent-secure-workspace-ancestor-swap");
   auto const workspace = root / "workspace";
   auto const outside = root / "outside";
   std::filesystem::create_directories(workspace / "sub");
   std::filesystem::create_directories(outside);
-  ava::tests::write_app_test_file(workspace / "sub" / "note.txt", "INSIDE-NOTE-41c2\n");
-  ava::tests::write_app_test_file(outside / "note.txt", "SWAPPED-OUTSIDE-SECRET-41c2\n");
+  ava::tests::write_test_file(workspace / "sub" / "note.txt", "INSIDE-NOTE-41c2\n");
+  ava::tests::write_test_file(outside / "note.txt", "SWAPPED-OUTSIDE-SECRET-41c2\n");
 
   ava::session::SessionStore store(
       ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "secure-ancestor-swap"});

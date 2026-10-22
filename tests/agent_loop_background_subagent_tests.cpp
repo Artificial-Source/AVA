@@ -498,7 +498,7 @@ void test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint()
          "cancellation while child summarization is blocked terminates the worker without appending a compaction checkpoint");
 }
 
-void test_agent_loop_background_task_failure_records_parent_and_child_errors()
+void test_agent_loop_background_task_failure_is_isolated_to_child()
 {
   auto const root = create_empty_root("agent-task-background-failure");
 
@@ -574,11 +574,11 @@ void test_agent_loop_background_task_failure_records_parent_and_child_errors()
     saw_background_request = !background_requests->empty();
   }
   auto parent_entries = store.load();
-  bool const saw_parent_error = parent_entries && std::ranges::any_of(*parent_entries, [](ava::session::SessionEntry const& entry) {
-                                  return entry.type == ava::session::EntryType::Error &&
-                                         entry.data_json.find("fake transport has no response") != std::string::npos &&
-                                         entry.data_json.find("background_task_id") != std::string::npos;
-                                });
+  bool const parent_has_no_errors =
+      parent_entries && std::ranges::none_of(*parent_entries, [](auto const& entry) { return entry.type == ava::session::EntryType::Error; });
+  bool const parent_has_no_transport_diagnostic = parent_entries && std::ranges::none_of(*parent_entries, [](auto const& entry) {
+                                                    return entry.data_json.find("fake transport has no response") != std::string::npos;
+                                                  });
   bool saw_child_error = false;
   if (failed)
   {
@@ -593,7 +593,10 @@ void test_agent_loop_background_task_failure_records_parent_and_child_errors()
     }
   }
   expect(saw_background_request, "background failure test reaches the child provider transport");
-  expect(!saw_parent_error, "background task failures are not appended directly into the parent session");
+  ava::tests::expect_all("background failure stays out of the successful parent transcript",
+                         {{"parent loaded", parent_entries.has_value()},
+                          {"no parent Error record", parent_has_no_errors},
+                          {"no raw transport diagnostic in any parent record", parent_has_no_transport_diagnostic}});
   expect(saw_child_error, "background task failures are persisted in the child session with bounded sanitized content");
 }
 
@@ -954,6 +957,8 @@ void test_agent_loop_background_task_publishes_inspection_source()
         saw_prompt = true;
     }
     expect(saw_prompt, "live inspect projects the committed child user prompt prefix");
+    for (auto const& message : (*live)->messages)
+      expect(message.text.find(session_root.string()) == std::string::npos, "live inspection text omits the child session-storage path");
   }
 
   background_state->release_success();
@@ -969,5 +974,9 @@ void test_agent_loop_background_task_publishes_inspection_source()
       if (message.role == ava::agent::SubagentLiveMessageRole::Assistant && message.text.find("child hello") != std::string::npos)
         saw_assistant = true;
     expect(saw_assistant, "frozen frame includes committed assistant transcript text only");
+    // Message text is the frame's only string-bearing field; inspect every item,
+    // not only the fixed prompt/answer used to establish transcript availability.
+    for (auto const& message : (*frozen)->messages)
+      expect(message.text.find(session_root.string()) == std::string::npos, "frozen inspection text omits the child session-storage path");
   }
 }

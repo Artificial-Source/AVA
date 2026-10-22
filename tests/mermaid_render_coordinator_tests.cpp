@@ -1,4 +1,8 @@
 #include "sys.h"
+#include "tests/support/process_gate.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/app/mermaid_render_coordinator.h"
 #include "ava/app/tui/mermaid_tui_bridge.h"
@@ -9,18 +13,24 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
+#include <poll.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #ifndef AVA_FAKE_MERMAID_HELPER_PATH
@@ -47,13 +57,6 @@ ava::config::XdgPaths display_paths(std::filesystem::path const& root)
           .providers_file = config / "ava" / "providers.json",
           .prompts_dir = config / "ava" / "prompts",
           .sessions_dir = root / "state" / "ava" / "sessions"};
-}
-
-void write_file(std::filesystem::path const& path, std::string_view content)
-{
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(content.data(), static_cast<std::streamsize>(content.size()));
-  output.flush();
 }
 
 std::string read_file(std::filesystem::path const& path)
@@ -85,23 +88,126 @@ ava::app::MermaidRenderConfiguration helper_config(std::uint64_t epoch, std::vec
 }
 
 std::optional<ava::app::MermaidRenderCompletion> await_completion(ava::app::MermaidRenderCoordinator& coordinator, std::uint64_t identity,
-                                                                  std::chrono::milliseconds timeout = 4s)
+                                                                  std::vector<ava::app::MermaidRenderCompletion>& others)
 {
-  auto completions = coordinator.take_completions();
-  for (auto& completion : completions)
-  {
-    if (completion.identity == identity)
-      return std::move(completion);
-  }
-  if (!coordinator.wait_until_idle(timeout))
+  std::optional<ava::app::MermaidRenderCompletion> result;
+  auto collect = [&] {
+    for (auto& completion : coordinator.take_completions())
+    {
+      if (completion.identity == identity && !result)
+        result = std::move(completion);
+      else
+        others.push_back(std::move(completion));
+    }
+  };
+  collect();
+  auto const timeout = std::chrono::duration_cast<std::chrono::milliseconds>(ava::tests::now_plus_seconds(10) - std::chrono::steady_clock::now());
+  if (!ava::tests::require(coordinator.wait_until_idle(timeout), "Mermaid coordinator becomes idle before draining completions"))
     return std::nullopt;
-  completions = coordinator.take_completions();
-  for (auto& completion : completions)
+  collect();
+  return result;
+}
+
+std::optional<ava::app::MermaidRenderCompletion> await_completion(ava::app::MermaidRenderCoordinator& coordinator, std::uint64_t identity)
+{
+  std::vector<ava::app::MermaidRenderCompletion> others;
+  auto result = await_completion(coordinator, identity, others);
+  for (auto const& other : others)
+    expect(false, "unexpected Mermaid completion identity " + std::to_string(other.identity) + " while awaiting " + std::to_string(identity));
+  return result;
+}
+
+pid_t read_pid(std::filesystem::path const& path)
+{
+  std::ifstream input(path);
+  pid_t pid = -1;
+  input >> pid;
+  if (!ava::tests::require(static_cast<bool>(input) && pid > 1, "helper publishes a valid pid: " + path.string()))
+    return -1;
+  return pid;
+}
+
+// Readiness is acknowledged after exec and, for group-timeout, descendant initialization.
+// The coordinator retains process ownership; tests observe exit/reaping without adopting its child.
+class HelperReadiness
+{
+ public:
+  HelperReadiness()
+      : root_(ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-mermaid-")),
+        listener_(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0))
   {
-    if (completion.identity == identity)
-      return std::move(completion);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    auto const path = socket_path().string();
+    if (!listener_ || path.size() >= sizeof(address.sun_path))
+      throw std::runtime_error("create Mermaid readiness listener");
+    std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+    if (::bind(listener_.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || ::listen(listener_.get(), 1) != 0)
+      throw std::system_error(errno, std::generic_category(), "bind Mermaid readiness listener");
   }
-  return std::nullopt;
+
+  ava::app::MermaidRenderConfiguration configuration(std::uint64_t epoch, std::vector<std::string> mode) const
+  {
+    std::vector<std::string> args{"--control-socket", socket_path().string(), "--pid-file", (root_ / "helper.pid").string()};
+    args.insert(args.end(), std::make_move_iterator(mode.begin()), std::make_move_iterator(mode.end()));
+    return helper_config(epoch, std::move(args));
+  }
+
+  std::optional<pid_t> wait_ready(bool descendant = false)
+  {
+    auto const deadline = ava::tests::now_plus_seconds(10);
+    try
+    {
+      ava::core::UniqueFd peer;
+      while (!peer && std::chrono::steady_clock::now() < deadline)
+      {
+        pollfd descriptor{.fd = listener_.get(), .events = POLLIN, .revents = 0};
+        auto const remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        auto const polled = ::poll(&descriptor, 1, static_cast<int>(std::max(0ms, remaining).count()));
+        if (polled < 0 && errno == EINTR)
+          continue;
+        if (polled <= 0)
+          break;
+        peer.reset(::accept4(listener_.get(), nullptr, nullptr, SOCK_CLOEXEC));
+        if (!peer && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+          throw std::system_error(errno, std::generic_category(), "accept Mermaid readiness connection");
+      }
+      if (!ava::tests::require(static_cast<bool>(peer), "executed Mermaid helper connects its readiness socket"))
+        return std::nullopt;
+      ava::test::ProcessGateSet gates(peer.release());
+      auto remaining = [&] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::max(std::chrono::steady_clock::duration::zero(), deadline - std::chrono::steady_clock::now()));
+      };
+      gates.wait(0, remaining());
+      if (descendant)
+        gates.wait(1, remaining());
+      auto const pid = read_pid(root_ / "helper.pid");
+      if (!ava::tests::require(pid > 1 && ava::tests::process_is_live(pid), "initialized Mermaid helper is live before lifecycle action"))
+        return std::nullopt;
+      return pid;
+    }
+    catch (std::exception const& error)
+    {
+      expect(false, std::string("Mermaid helper readiness: ") + error.what());
+      return std::nullopt;
+    }
+  }
+
+ private:
+  std::filesystem::path socket_path() const { return root_ / "ready.sock"; }
+  ScopedTestDirectory root_;
+  ava::core::UniqueFd listener_;
+};
+
+void expect_helper_reaped(pid_t pid, std::string const& label)
+{
+  expect(ava::tests::wait_for_process_absent(pid, ava::tests::now_plus_seconds(5)), label + ": helper is no longer live");
+  int status = 0;
+  errno = 0;
+  auto const waited = ::waitpid(pid, &status, WNOHANG);
+  auto const wait_error = errno;
+  ava::tests::expect_all(label + ": coordinator reaps its executed helper", {{"no waitable child", waited == -1}, {"reaped child", wait_error == ECHILD}});
 }
 
 std::optional<ava::app::MermaidRenderCompletion> render(ava::app::MermaidRenderCoordinator& coordinator, std::uint64_t identity, std::uint64_t epoch,
@@ -122,7 +228,7 @@ void test_display_settings_mermaid_schema_and_preservation()
   auto missing = ava::app::load_tui_display_settings(paths);
   expect(missing && !missing->mermaid.enabled && missing->mermaid.argv.empty(), "missing display.json defaults Mermaid rendering to disabled");
 
-  write_file(display, R"({"theme":"light","mermaid":{"argv":["/not/installed/helper","--flag"],"future_nested":{"x":1}},"future_top":[1,2]})");
+  ava::tests::write_test_file(display, R"({"theme":"light","mermaid":{"argv":["/not/installed/helper","--flag"],"future_nested":{"x":1}},"future_top":[1,2]})");
   auto disabled = ava::app::load_tui_display_settings(paths);
   expect(disabled && !disabled->mermaid.enabled && !disabled->mermaid.enabled_configured && disabled->mermaid.argv_configured &&
              disabled->mermaid.argv.size() == 2 && disabled->mermaid.argv.front() == "/not/installed/helper",
@@ -135,7 +241,7 @@ void test_display_settings_mermaid_schema_and_preservation()
              preserved_text.find("future_nested") != std::string::npos && preserved_text.find("future_top") != std::string::npos,
          "display field updates preserve unknown top-level and Mermaid nested fields");
 
-  write_file(display, R"({"mermaid":{"enabled":true,"argv":["/not/installed/helper","literal"]}})");
+  ava::tests::write_test_file(display, R"({"mermaid":{"enabled":true,"argv":["/not/installed/helper","literal"]}})");
   auto enabled = ava::app::load_tui_display_settings(paths);
   auto good_watch = ava::app::load_tui_display_settings_watch_state(paths);
   auto render_configuration =
@@ -145,7 +251,7 @@ void test_display_settings_mermaid_schema_and_preservation()
          "enabled Mermaid settings expose a validated absolute argv through load, watch, and coordinator configuration seams");
 
   auto const last_good = enabled ? enabled->mermaid : ava::app::MermaidDisplaySettings{};
-  write_file(display, R"({"mermaid":{"enabled":true}})");
+  ava::tests::write_test_file(display, R"({"mermaid":{"enabled":true}})");
   auto invalid_reload = ava::app::load_tui_display_settings(paths);
   expect(!invalid_reload && last_good.enabled && last_good.argv.size() == 2,
          "an invalid display reload fails without mutating the caller-owned last known-good Mermaid settings");
@@ -164,15 +270,13 @@ void test_display_settings_mermaid_schema_and_preservation()
       std::string("{\"mermaid\":{\"enabled\":true,\"argv\":") + json_argv(too_large_total) + "}}",
       R"({"mermaid":{"enabled":true,"argv":["/helper",1]}})",
   };
-  bool all_rejected = true;
   for (auto const& invalid : invalid_documents)
   {
-    write_file(display, invalid);
-    all_rejected = all_rejected && !ava::app::load_tui_display_settings(paths);
+    ava::tests::write_test_file(display, invalid);
+    expect(!ava::app::load_tui_display_settings(paths), "Mermaid settings reject invalid document: " + invalid);
   }
-  expect(all_rejected, "Mermaid settings reject wrong types, empty/relative argv, count, per-argument, and aggregate byte overflows");
 
-  write_file(display, R"({"mermaid":{"enabled":false,"argv":[]}})");
+  ava::tests::write_test_file(display, R"({"mermaid":{"enabled":false,"argv":[]}})");
   auto explicitly_disabled = ava::app::load_tui_display_settings(paths);
   expect(explicitly_disabled && !explicitly_disabled->mermaid.enabled && explicitly_disabled->mermaid.argv.empty(),
          "explicitly disabled Mermaid settings may retain an empty argv");
@@ -215,8 +319,7 @@ void test_no_shell_environment_and_descriptor_launch()
   expect(cwd_configured && cwd && cwd->outcome == ava::app::MermaidRenderOutcome::Accepted && cwd->text == "/", "Mermaid helpers execute with fixed cwd /");
 
   auto const invalid_executable = root / "invalid-executable";
-  write_file(invalid_executable, "not an executable image\n");
-  static_cast<void>(::chmod(invalid_executable.c_str(), 0700));
+  ava::tests::write_test_file(invalid_executable, "not an executable image\n", 0700);
   auto invalid_config = ava::app::MermaidRenderConfiguration{.epoch = 4, .enabled = true, .argv = {invalid_executable.string()}};
   auto invalid_reconfigured = (*coordinator)->reconfigure(std::move(invalid_config));
   auto launch_failed = render(**coordinator, 4, 4);
@@ -266,18 +369,20 @@ void test_typed_process_and_output_failures()
       {{"long-line"}, ava::app::MermaidRenderOutcome::UnsafeOutput},
       {{"too-many-lines"}, ava::app::MermaidRenderOutcome::UnsafeOutput},
   };
-  bool all_typed = true;
   std::uint64_t identity = 10;
   std::uint64_t epoch = 2;
   for (auto const& failure : cases)
   {
     auto changed = (*coordinator)->reconfigure(helper_config(epoch, failure.argv));
     auto completion = render(**coordinator, identity, epoch);
-    all_typed = all_typed && changed && completion && completion->outcome == failure.outcome && completion->text.empty();
+    ava::tests::expect_all("typed payload-free Mermaid failure: " + failure.argv.front(),
+                           {{"configuration accepted", changed.has_value()},
+                            {"completion present", completion.has_value()},
+                            {"expected outcome", completion && completion->outcome == failure.outcome},
+                            {"no payload", completion && completion->text.empty()}});
     ++identity;
     ++epoch;
   }
-  expect(all_typed, "nonzero, signal, overflow, invalid UTF-8, controls, bidi, line, and line-count failures are typed and payload-free");
 
   auto missing = (*coordinator)->reconfigure({.epoch = epoch, .enabled = true, .argv = {"/definitely/missing/ava-mermaid-helper"}});
   auto missing_completion = render(**coordinator, identity, epoch);
@@ -289,84 +394,129 @@ void test_timeout_group_cleanup_cancel_reconfigure_and_shutdown()
 {
   auto const root = create_empty_root("mermaid-lifecycle");
   auto const child_pid_file = root / "child.pid";
-  auto coordinator = ava::app::MermaidRenderCoordinator::create(helper_config(1, {"group-timeout", child_pid_file.string()}));
-  if (!coordinator)
-  {
-    expect(false, coordinator.error().format());
+  HelperReadiness timeout_helper;
+  auto coordinator = ava::app::MermaidRenderCoordinator::create(timeout_helper.configuration(1, {"group-timeout", child_pid_file.string()}));
+  if (!ava::tests::require(coordinator.has_value(), coordinator ? "lifecycle coordinator starts" : coordinator.error().format()))
     return;
-  }
-  auto timed_out = render(**coordinator, 1, 1);
-  auto const child_pid_text = read_file(child_pid_file);
-  auto const child_pid = child_pid_text.empty() ? -1 : static_cast<pid_t>(std::stoll(child_pid_text));
-  errno = 0;
-  auto const child_missing = child_pid > 1 && ::kill(child_pid, 0) != 0 && errno == ESRCH;
-  expect(timed_out && timed_out->outcome == ava::app::MermaidRenderOutcome::Timeout && child_missing,
-         "one absolute timeout terminates the verified helper process group and its ordinary descendant");
+  auto queued = (*coordinator)->enqueue({.identity = 1, .config_epoch = 1, .source = "group timeout"});
+  if (!ava::tests::require(queued == ava::app::MermaidEnqueueResult::Queued, "group timeout request queues"))
+    return;
+  auto timeout_pid = timeout_helper.wait_ready(true);
+  if (!timeout_pid)
+    return;
+  auto const child_pid = read_pid(child_pid_file);
+  if (!ava::tests::require(child_pid > 1 && ava::tests::process_is_live(child_pid), "initialized ordinary descendant is live before timeout"))
+    return;
+  auto timed_out = await_completion(**coordinator, 1);
+  ava::tests::expect_all("absolute timeout terminates the initialized helper group",
+                         {{"typed timeout", timed_out && timed_out->outcome == ava::app::MermaidRenderOutcome::Timeout},
+                          {"descendant gone", ava::tests::wait_for_process_absent(child_pid, ava::tests::now_plus_seconds(5))}});
+  expect_helper_reaped(*timeout_pid, "group timeout");
 
-  auto cancel_configured = (*coordinator)->reconfigure(helper_config(2, {"timeout"}));
-  auto queued = (*coordinator)->enqueue({.identity = 2, .config_epoch = 2, .source = "cancel me"});
-  auto started = (*coordinator)->wait_for_in_flight(1s);
+  HelperReadiness cancel_helper;
+  auto cancel_configured = (*coordinator)->reconfigure(cancel_helper.configuration(2, {"timeout"}));
+  queued = (*coordinator)->enqueue({.identity = 2, .config_epoch = 2, .source = "cancel me"});
+  if (!ava::tests::require(cancel_configured && queued == ava::app::MermaidEnqueueResult::Queued, "active cancellation request queues"))
+    return;
+  auto cancel_pid = cancel_helper.wait_ready();
+  if (!cancel_pid)
+    return;
   auto canceled = (*coordinator)->cancel(2, 2);
-  auto canceled_completion = await_completion(**coordinator, 2, 1s);
-  expect(cancel_configured && queued == ava::app::MermaidEnqueueResult::Queued && started && canceled && canceled_completion &&
-             canceled_completion->outcome == ava::app::MermaidRenderOutcome::Canceled && (*coordinator)->wait_until_idle(1s),
-         "explicit cancellation promptly tears down active helper work and publishes a typed fallback");
+  auto canceled_completion = await_completion(**coordinator, 2);
+  ava::tests::expect_all("explicit cancellation tears down an executed helper and publishes a typed fallback",
+                         {{"cancellation accepted", canceled},
+                          {"typed cancellation", canceled_completion && canceled_completion->outcome == ava::app::MermaidRenderOutcome::Canceled}});
+  expect_helper_reaped(*cancel_pid, "explicit cancellation");
 
-  auto old_configured = (*coordinator)->reconfigure(helper_config(3, {"timeout"}));
-  static_cast<void>((*coordinator)->enqueue({.identity = 3, .config_epoch = 3, .source = "stale source"}));
-  auto old_started = (*coordinator)->wait_for_in_flight(1s);
+  HelperReadiness stale_helper;
+  auto old_configured = (*coordinator)->reconfigure(stale_helper.configuration(3, {"timeout"}));
+  queued = (*coordinator)->enqueue({.identity = 3, .config_epoch = 3, .source = "stale source"});
+  if (!ava::tests::require(old_configured && queued == ava::app::MermaidEnqueueResult::Queued, "old epoch request queues"))
+    return;
+  auto stale_pid = stale_helper.wait_ready();
+  if (!stale_pid)
+    return;
   auto new_configured = (*coordinator)->reconfigure(helper_config(4, {"echo"}));
-  auto current = render(**coordinator, 4, 4, "stale source");
+  queued = (*coordinator)->enqueue({.identity = 4, .config_epoch = 4, .source = "stale source"});
+  std::vector<ava::app::MermaidRenderCompletion> others;
+  auto current = await_completion(**coordinator, 4, others);
   auto remaining = (*coordinator)->take_completions();
-  auto const stale_published = std::ranges::any_of(remaining, [](auto const& completion) { return completion.identity == 3; });
-  expect(old_configured && old_started && new_configured && current && current->outcome == ava::app::MermaidRenderOutcome::Accepted &&
-             current->text == "stale source" && !stale_published,
-         "epoch changes discard stale work and cache state, terminate active work, and admit the new configuration");
+  others.insert(others.end(), std::make_move_iterator(remaining.begin()), std::make_move_iterator(remaining.end()));
+  ava::tests::expect_all("epoch changes suppress every observed stale completion and admit fresh work",
+                         {{"new configuration accepted", new_configured.has_value()},
+                          {"new request queued", queued == ava::app::MermaidEnqueueResult::Queued},
+                          {"fresh accepted output", current && current->outcome == ava::app::MermaidRenderOutcome::Accepted && current->text == "stale source"},
+                          {"not old cache", current && !current->from_cache},
+                          {"no stale completion", std::ranges::none_of(others, [](auto const& item) { return item.identity == 3; })}});
+  expect_helper_reaped(*stale_pid, "epoch replacement");
 
-  auto shutdown_configured = (*coordinator)->reconfigure(helper_config(5, {"timeout"}));
-  static_cast<void>((*coordinator)->enqueue({.identity = 5, .config_epoch = 5, .source = "shutdown"}));
-  auto shutdown_started = (*coordinator)->wait_for_in_flight(1s);
-  auto const shutdown_begin = std::chrono::steady_clock::now();
+  HelperReadiness shutdown_helper;
+  auto shutdown_configured = (*coordinator)->reconfigure(shutdown_helper.configuration(5, {"timeout"}));
+  queued = (*coordinator)->enqueue({.identity = 5, .config_epoch = 5, .source = "shutdown"});
+  if (!ava::tests::require(shutdown_configured && queued == ava::app::MermaidEnqueueResult::Queued, "shutdown request queues"))
+    return;
+  auto shutdown_pid = shutdown_helper.wait_ready();
+  if (!shutdown_pid)
+    return;
   (*coordinator)->shutdown();
-  auto const shutdown_elapsed = std::chrono::steady_clock::now() - shutdown_begin;
-  expect(shutdown_configured && shutdown_started && shutdown_elapsed < 1s && (*coordinator)->stats().shutting_down,
-         "shutdown cancels, joins, and reaps active helper work within a finite cleanup budget");
-
-  std::error_code ignored;
-  std::filesystem::remove_all(root, ignored);
+  expect((*coordinator)->stats().shutting_down, "shutdown closes coordinator admission");
+  expect_helper_reaped(*shutdown_pid, "shutdown");
 }
 
 void test_queue_deduplication_cache_and_bounds()
 {
-  auto coordinator = ava::app::MermaidRenderCoordinator::create(helper_config(1, {"timeout"}));
-  if (!coordinator)
-  {
-    expect(false, coordinator.error().format());
+  HelperReadiness active_helper;
+  auto coordinator = ava::app::MermaidRenderCoordinator::create(active_helper.configuration(1, {"timeout"}));
+  if (!ava::tests::require(coordinator.has_value(), coordinator ? "queue coordinator starts" : coordinator.error().format()))
     return;
-  }
-  static_cast<void>((*coordinator)->enqueue({.identity = 1, .config_epoch = 1, .source = "active"}));
-  auto started = (*coordinator)->wait_for_in_flight(1s);
+  auto const active_queued = (*coordinator)->enqueue({.identity = 1, .config_epoch = 1, .source = "active"});
+  if (!ava::tests::require(active_queued == ava::app::MermaidEnqueueResult::Queued, "deduplication active request queues"))
+    return;
+  auto started = active_helper.wait_ready();
+  if (!started)
+    return;
   auto attached_in_flight = (*coordinator)->enqueue({.identity = 2, .config_epoch = 1, .source = "active"});
   auto queued = (*coordinator)->enqueue({.identity = 3, .config_epoch = 1, .source = "queued"});
   auto attached_queued = (*coordinator)->enqueue({.identity = 4, .config_epoch = 1, .source = "queued"});
   auto dedupe_stats = (*coordinator)->stats();
-  expect(started && attached_in_flight == ava::app::MermaidEnqueueResult::AttachedToExisting && queued == ava::app::MermaidEnqueueResult::Queued &&
-             attached_queued == ava::app::MermaidEnqueueResult::AttachedToExisting && dedupe_stats.queued_requests == 1 && dedupe_stats.pending_identities == 4,
-         "identical in-flight and queued sources deduplicate helper work while retaining opaque request identities");
-  static_cast<void>((*coordinator)->reconfigure(helper_config(2, {"timeout"})));
-  static_cast<void>((*coordinator)->enqueue({.identity = 100, .config_epoch = 2, .source = "active-bound"}));
-  auto bound_started = (*coordinator)->wait_for_in_flight(1s);
-  bool accepted_to_bound = true;
+  ava::tests::expect_all("in-flight and queued sources deduplicate work while retaining request identities",
+                         {{"attached in flight", attached_in_flight == ava::app::MermaidEnqueueResult::AttachedToExisting},
+                          {"queued unique source", queued == ava::app::MermaidEnqueueResult::Queued},
+                          {"attached queued", attached_queued == ava::app::MermaidEnqueueResult::AttachedToExisting},
+                          {"one queued render", dedupe_stats.queued_requests == 1},
+                          {"four identities", dedupe_stats.pending_identities == 4}});
+  auto const canceled_queued = (*coordinator)->cancel(3, 1);
+  auto const canceled_attached = (*coordinator)->cancel(4, 1);
+  auto canceled_completions = (*coordinator)->take_completions();
+  ava::tests::expect_all("queued cancellation publishes each identity without launching queued work",
+                         {{"first queued cancellation", canceled_queued},
+                          {"attached queued cancellation", canceled_attached},
+                          {"queue removed", (*coordinator)->stats().queued_requests == 0},
+                          {"two cancellations", canceled_completions.size() == 2},
+                          {"identity 3 canceled", std::ranges::count_if(canceled_completions,
+                                                                        [](auto const& item) {
+                                                                          return item.identity == 3 && item.outcome == ava::app::MermaidRenderOutcome::Canceled;
+                                                                        }) == 1},
+                          {"identity 4 canceled", std::ranges::count_if(canceled_completions, [](auto const& item) {
+                                                    return item.identity == 4 && item.outcome == ava::app::MermaidRenderOutcome::Canceled;
+                                                  }) == 1}});
+  HelperReadiness bound_helper;
+  auto bounds_configured = (*coordinator)->reconfigure(bound_helper.configuration(2, {"timeout"}));
+  auto const bounds_queued = (*coordinator)->enqueue({.identity = 100, .config_epoch = 2, .source = "active-bound"});
+  if (!ava::tests::require(bounds_configured && bounds_queued == ava::app::MermaidEnqueueResult::Queued, "bounded queue active request queues"))
+    return;
+  auto bound_started = bound_helper.wait_ready();
+  if (!bound_started)
+    return;
   for (std::uint64_t identity = 101; identity < 132; ++identity)
   {
-    accepted_to_bound =
-        accepted_to_bound && (*coordinator)->enqueue({.identity = identity, .config_epoch = 2, .source = "queued-" + std::to_string(identity)}) ==
-                                 ava::app::MermaidEnqueueResult::Queued;
+    auto const admitted = (*coordinator)->enqueue({.identity = identity, .config_epoch = 2, .source = "queued-" + std::to_string(identity)});
+    ava::tests::expect_eq(admitted, ava::app::MermaidEnqueueResult::Queued, "bounded queue admits identity " + std::to_string(identity));
   }
   auto const full = (*coordinator)->enqueue({.identity = 132, .config_epoch = 2, .source = "one-too-many"});
-  expect(bound_started && accepted_to_bound && full == ava::app::MermaidEnqueueResult::QueueFull &&
-             (*coordinator)->stats().pending_identities == ava::app::kMaxMermaidQueuedRequests,
-         "the one-worker queue admits at most 32 undrained unique request identities");
+  ava::tests::expect_all("queue admits exactly its undrained identity bound",
+                         {{"next request rejected", full == ava::app::MermaidEnqueueResult::QueueFull},
+                          {"exact pending identity count", (*coordinator)->stats().pending_identities == ava::app::kMaxMermaidQueuedRequests}});
 
   auto const root = create_empty_root("mermaid-cache");
   auto const count_file = root / "count";
@@ -378,37 +528,72 @@ void test_queue_deduplication_cache_and_bounds()
   auto first_negative = render(**coordinator, 202, 4, "bad source");
   auto second_negative = render(**coordinator, 203, 4, "bad source");
   auto const total_count = read_file(count_file).size();
-  expect(cache_configured && first && second && first->outcome == ava::app::MermaidRenderOutcome::Accepted && second->from_cache && positive_count == 1 &&
-             negative_configured && first_negative && second_negative && first_negative->outcome == ava::app::MermaidRenderOutcome::NonzeroExit &&
-             second_negative->outcome == ava::app::MermaidRenderOutcome::NonzeroExit && second_negative->from_cache && total_count == 2,
-         "accepted and negative active-epoch cache entries suppress repeated helper launches");
+  ava::tests::expect_all(
+      "positive and negative cache entries suppress repeated helper launches",
+      {{"positive configuration", cache_configured.has_value()},
+       {"positive output", first && first->outcome == ava::app::MermaidRenderOutcome::Accepted},
+       {"positive cache hit", second && second->from_cache},
+       {"one positive launch", positive_count == 1},
+       {"negative configuration", negative_configured.has_value()},
+       {"negative output", first_negative && first_negative->outcome == ava::app::MermaidRenderOutcome::NonzeroExit},
+       {"negative cache hit", second_negative && second_negative->from_cache && second_negative->outcome == ava::app::MermaidRenderOutcome::NonzeroExit},
+       {"one negative launch", total_count == 2}});
+  auto reset = (*coordinator)->reconfigure(helper_config(5, {"--count", count_file.string(), "exit", "7"}));
+  auto const reset_stats = (*coordinator)->stats();
+  auto after_reset = render(**coordinator, 204, 5, "bad source");
+  ava::tests::expect_all(
+      "an epoch change clears both positive and negative cache accounting",
+      {{"new epoch accepted", reset.has_value()},
+       {"cache empty before rendering", reset_stats.cache_entries == 0 && reset_stats.accepted_cache_bytes == 0},
+       {"negative outcome rendered afresh", after_reset && !after_reset->from_cache && after_reset->outcome == ava::app::MermaidRenderOutcome::NonzeroExit},
+       {"helper relaunched", read_file(count_file).size() == 3}});
 
   auto entry_cache = ava::app::MermaidRenderCoordinator::create(helper_config(1, {"echo"}));
-  bool entry_runs = entry_cache.has_value();
+  if (!ava::tests::require(entry_cache.has_value(), "entry-bounded cache coordinator starts"))
+    return;
   if (entry_cache)
   {
     for (std::uint64_t identity = 1; identity <= 129; ++identity)
     {
       auto completion = render(**entry_cache, identity, 1, "cache-source-" + std::to_string(identity));
-      entry_runs = entry_runs && completion && completion->outcome == ava::app::MermaidRenderOutcome::Accepted;
+      if (!ava::tests::require(completion && completion->outcome == ava::app::MermaidRenderOutcome::Accepted,
+                               "entry cache accepts source " + std::to_string(identity)))
+        return;
+      if (identity == 128)
+        ava::tests::expect_eq((*entry_cache)->stats().cache_entries, std::size_t{128}, "entry cache retains its exact capacity before eviction");
     }
   }
   auto const entry_stats = entry_cache ? (*entry_cache)->stats() : ava::app::MermaidRenderCoordinatorStats{};
-  expect(entry_runs && entry_stats.cache_entries == ava::app::kMaxMermaidCacheEntries, "accepted-output cache evicts to its 128-entry bound");
+  ava::tests::expect_eq(entry_stats.cache_entries, ava::app::kMaxMermaidCacheEntries, "entry cache retains exactly 128 entries after overflow");
+  auto retained_entry = render(**entry_cache, 130, 1, "cache-source-2");
+  auto evicted_entry = render(**entry_cache, 131, 1, "cache-source-1");
+  ava::tests::expect_all(
+      "entry capacity evicts the oldest source without clearing retained entries",
+      {{"second source retained", retained_entry && retained_entry->from_cache}, {"first source evicted", evicted_entry && !evicted_entry->from_cache}});
 
   auto byte_cache = ava::app::MermaidRenderCoordinator::create(helper_config(1, {"output-size", std::to_string(ava::app::kMaxMermaidOutputBytes)}));
-  bool byte_runs = byte_cache.has_value();
+  if (!ava::tests::require(byte_cache.has_value(), "byte-bounded cache coordinator starts"))
+    return;
   if (byte_cache)
   {
     for (std::uint64_t identity = 1; identity <= 17; ++identity)
     {
       auto completion = render(**byte_cache, identity, 1, "large-cache-source-" + std::to_string(identity));
-      byte_runs = byte_runs && completion && completion->outcome == ava::app::MermaidRenderOutcome::Accepted;
+      if (!ava::tests::require(completion && completion->outcome == ava::app::MermaidRenderOutcome::Accepted,
+                               "byte cache accepts source " + std::to_string(identity)))
+        return;
+      if (identity == 16)
+        ava::tests::expect_eq((*byte_cache)->stats().cache_entries, std::size_t{16}, "byte cache retains every entry below its aggregate bound");
     }
   }
   auto const byte_stats = byte_cache ? (*byte_cache)->stats() : ava::app::MermaidRenderCoordinatorStats{};
-  expect(byte_runs && byte_stats.accepted_cache_bytes <= ava::app::kMaxMermaidAcceptedCacheBytes && byte_stats.cache_entries <= 16,
-         "accepted-output cache evicts before exceeding its 4 MiB aggregate text bound");
+  ava::tests::expect_all("byte capacity evicts only the oldest accepted output",
+                         {{"sixteen retained outputs", byte_stats.cache_entries == 16},
+                          {"exact retained bytes", byte_stats.accepted_cache_bytes == 16 * (ava::app::kMaxMermaidOutputBytes - 1)}});
+  auto retained_bytes = render(**byte_cache, 18, 1, "large-cache-source-2");
+  auto evicted_bytes = render(**byte_cache, 19, 1, "large-cache-source-1");
+  ava::tests::expect_all("byte eviction preserves newer cached output", {{"second source retained", retained_bytes && retained_bytes->from_cache},
+                                                                         {"first source evicted", evicted_bytes && !evicted_bytes->from_cache}});
 
   std::error_code ignored;
   std::filesystem::remove_all(root, ignored);
@@ -436,7 +621,7 @@ void test_tui_bridge_epoch_reload_and_callback_lifetime()
   auto configured_again = bridge->presentation_configuration();
   auto queued = callbacks.enqueue({.identity = 2, .config_epoch = configured.epoch, .source = "graph TD; A-->B\n"});
   std::optional<ava::tui::TuiMermaidRenderCompletion> completion;
-  auto const deadline = std::chrono::steady_clock::now() + 4s;
+  auto const deadline = ava::tests::now_plus_seconds(10);
   while (!completion && std::chrono::steady_clock::now() < deadline)
   {
     for (auto& candidate : callbacks.drain())
@@ -445,7 +630,7 @@ void test_tui_bridge_epoch_reload_and_callback_lifetime()
         completion = std::move(candidate);
     }
     if (!completion)
-      std::this_thread::sleep_for(1ms);
+      std::this_thread::yield();
   }
   expect(initial.epoch != 0 && !initial.enabled && disabled_result == ava::tui::TuiMermaidEnqueueResult::Rejected && applied && configured.enabled &&
              configured.epoch > initial.epoch && unchanged && configured_again.epoch == configured.epoch &&
@@ -497,6 +682,7 @@ void test_configuration_and_immediate_request_bounds()
 
 void run_mermaid_render_coordinator_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("mermaid-tests-");
   test_display_settings_mermaid_schema_and_preservation();
   test_no_shell_environment_and_descriptor_launch();
   test_typed_process_and_output_failures();

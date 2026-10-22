@@ -711,12 +711,35 @@ void test_interactive_run_queue_bounds_and_truncates_event_payloads()
 
   expect(queued.has_value(), "interactive run queue accepts messages within the aggregate byte limit");
   expect(!rejected.has_value(), "interactive run queue rejects oversized messages");
-  expect(events.size() == 1 && events.back().name == "steer_queued" && events.back().payload_json.find("\"message_truncated\":true") != std::string::npos &&
-             events.back().payload_json.find("\"message_bytes\":") != std::string::npos,
-         "interactive run queue truncates event payloads without truncating queued content");
+  if (ava::tests::require(events.size() == 1, "one accepted steering message emits exactly one queued event"))
+  {
+    auto const& payload = events.front().payload_json;
+    ava::tests::expect_all("steering event payload is bounded independently of queued content",
+                           {{"queued event", events.front().name == "steer_queued"},
+                            {"truncation flag", payload.find("\"message_truncated\":true") != std::string::npos},
+                            {"exact 512-byte prefix", payload.find("\"message\":\"" + std::string(512, 'x') + "\"") != std::string::npos},
+                            {"no excess payload byte", payload.find(std::string(513, 'x')) == std::string::npos},
+                            {"original byte count", ava::core::json::integer_field(payload, "message_bytes") == 528}});
+  }
   auto taken = queue.take_steering_messages();
-  expect(taken.has_value() && taken->size() == 1 && taken->front().size() == long_message.size(),
-         "interactive run queue preserves full content for backend consumption");
+  if (ava::tests::require(taken && taken->size() == 1, "backend consumes the one queued steering message"))
+    ava::tests::expect_eq(taken->front(), long_message, "backend receives the exact untruncated steering content");
+  events.clear();
+  std::string const multibyte_message = std::string(511, 'x') + "é";
+  auto multibyte_queued = queue.queue_steering(multibyte_message);
+  if (ava::tests::require(multibyte_queued && events.size() == 1, "multibyte steering message emits one event"))
+  {
+    auto const& payload = events.front().payload_json;
+    auto const message = ava::core::json::string_field(payload, "message");
+    ava::tests::expect_all("event truncation excludes a split UTF-8 character",
+                           {{"complete ASCII prefix", message == std::string(511, 'x')},
+                            {"valid UTF-8", message && ava::core::json::is_valid_utf8(*message)},
+                            {"truncation flag", payload.find("\"message_truncated\":true") != std::string::npos},
+                            {"original byte count", ava::core::json::integer_field(payload, "message_bytes") == 513}});
+  }
+  auto multibyte_taken = queue.take_steering_messages();
+  if (ava::tests::require(multibyte_taken && multibyte_taken->size() == 1, "backend consumes the multibyte steering message"))
+    ava::tests::expect_eq(multibyte_taken->front(), multibyte_message, "backend retains the whole UTF-8 character");
 }
 
 }  // namespace

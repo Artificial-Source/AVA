@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/http/transport.h"
@@ -85,7 +86,7 @@ struct DeliveryAdmissionBarrier
   bool wait_reached()
   {
     std::unique_lock lock(mutex);
-    return changed.wait_for(lock, std::chrono::seconds(3), [&] { return reached; });
+    return changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return reached; });
   }
 
   void release()
@@ -119,7 +120,7 @@ struct DeliveryFactoryState
   bool wait_completed(std::size_t count = 1)
   {
     std::unique_lock lock(mutex);
-    return changed.wait_for(lock, std::chrono::seconds(3), [&] { return completed_transports >= count; });
+    return changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return completed_transports >= count; });
   }
 };
 
@@ -288,9 +289,7 @@ DeliveryFixture make_fixture(std::string_view name, std::shared_ptr<DeliveryFact
                              std::size_t max_retained_parents = 64)
 {
   DeliveryFixture fixture;
-  fixture.root = temp_root() / std::string(name);
-  std::error_code error;
-  std::filesystem::remove_all(fixture.root, error);
+  fixture.root = create_empty_root(name);
   auto workspace = fixture.root / "workspace";
   std::filesystem::create_directories(workspace);
   fixture.paths = ava::tests::app_test_paths(fixture.root);
@@ -452,12 +451,20 @@ void test_idle_delivery_and_terminal_before_registration()
   {
     std::lock_guard lock(state->mutex);
     factories_after_ack = state->factories;
-    expect(state->retained_credential_at_factory.empty() && state->permission_resolver_present && !state->question_resolver_present &&
-               state->exact_file_access_cleared && state->command_executor_cleared && state->exact_builtin_tools_empty && state->ambient_extensions_isolated &&
-               state->session_mcp_disabled && state->provider_request_has_no_tools && state->delivery_run_request_id.starts_with("automatic_delivery_") &&
-               (!snapshot || snapshot->job.delivery_attempt_history.empty() ||
-                state->delivery_run_request_id != snapshot->job.delivery_attempt_history.back().attempt_id),
-           "delivery clears stale credentials and integration routes, advertises no tools, and uses a distinct automatic-run identity");
+    ava::tests::expect_all("delivery clears stale credentials and integration routes and uses a distinct automatic-run identity",
+                           {{"credentials cleared", state->retained_credential_at_factory.empty()},
+                            {"permission resolver", state->permission_resolver_present},
+                            {"question resolver cleared", !state->question_resolver_present},
+                            {"exact file access cleared", state->exact_file_access_cleared},
+                            {"command executor cleared", state->command_executor_cleared},
+                            {"no exact builtins", state->exact_builtin_tools_empty},
+                            {"extensions isolated", state->ambient_extensions_isolated},
+                            {"session MCP disabled", state->session_mcp_disabled},
+                            {"request has no tools", state->provider_request_has_no_tools},
+                            {"automatic run identity", state->delivery_run_request_id.starts_with("automatic_delivery_")},
+                            {"attempt history exists", snapshot && !snapshot->job.delivery_attempt_history.empty()},
+                            {"distinct attempt identity", snapshot && !snapshot->job.delivery_attempt_history.empty() &&
+                                                              state->delivery_run_request_id != snapshot->job.delivery_attempt_history.back().attempt_id}});
   }
   expect(fixture.manager->refresh_parent(unlocked_fixture_session, options).has_value(), "acknowledged parent may refresh without replaying delivery");
   fixture.manager->shutdown();
@@ -774,7 +781,7 @@ void test_capsule_generation_release_and_active_retention()
   bool job_started = false;
   {
     std::unique_lock lock(blocking->mutex);
-    job_started = blocking->changed.wait_for(lock, std::chrono::seconds(2), [&] { return blocking->started; });
+    job_started = blocking->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return blocking->started; });
   }
   if (third)
     fixture.manager->release_parent_if_unused(fixture_session_id, *third);
@@ -958,14 +965,12 @@ void test_bounded_delivery_retries()
 void test_retry_after_synthetic_user_append_uses_same_marker()
 {
   auto state = std::make_shared<DeliveryFactoryState>();
-  auto const root = temp_root() / "subagent-delivery-after-user-append";
-  std::error_code error;
-  std::filesystem::remove_all(root, error);
+  auto const root = create_empty_root("subagent-delivery-after-user-append");
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   auto paths = ava::tests::app_test_paths(root);
   auto coordinator_result = ava::agent::SubagentCoordinator::create();
-  if (!coordinator_result)
+  if (!ava::tests::require(coordinator_result.has_value(), "after-user-append retry fixture creates coordinator"))
     return;
   auto coordinator = *coordinator_result;
   ava::app::RuntimeProviderRunBundleFactory factory = [state](ava::app::runtime::session_ts const&, ava::app::runtime::RunOptions options,
@@ -985,7 +990,7 @@ void test_retry_after_synthetic_user_append_uses_same_marker()
         .provider = std::move(provider), .transport = std::move(transport), .auth_transport = nullptr, .options = std::move(options)};
   };
   auto manager_result = ava::app::SubagentDeliveryManager::create({.coordinator = coordinator, .provider_bundle_factory = std::move(factory)});
-  if (!manager_result)
+  if (!ava::tests::require(manager_result.has_value(), "after-user-append retry fixture creates delivery manager"))
     return;
   auto manager = *manager_result;
   ava::app::runtime::OpenContext open;
@@ -995,6 +1000,7 @@ void test_retry_after_synthetic_user_append_uses_same_marker()
   open.subagent_coordinator = coordinator;
   open.subagent_delivery_manager = manager;
   auto unlocked_session_result = ava::app::runtime::Session::open(open);
+  expect(unlocked_session_result.has_value(), "after-user-append retry fixture opens parent runtime");
   if (!unlocked_session_result)
     return;
   ava::app::runtime::session_ts& unlocked_session = *unlocked_session_result;
@@ -1016,7 +1022,7 @@ void test_retry_after_synthetic_user_append_uses_same_marker()
                                                    .tool_calls = 0,
                                                    .tool_iterations = 0};
       });
-  if (!started)
+  if (!ava::tests::require(started.has_value(), "after-user-append retry fixture starts background job"))
     return;
   expect(state->wait_completed(2), "delivery retries after a failed run that committed only its synthetic user marker");
   auto snapshot = coordinator->snapshot(session_id, started->job.identity.job_id);
@@ -1214,7 +1220,7 @@ void test_workspace_revocation_rejects_running_job_and_in_flight_delivery_before
     bool worker_started = false;
     {
       std::unique_lock lock(blocking->mutex);
-      worker_started = blocking->changed.wait_for(lock, std::chrono::seconds(3), [&] { return blocking->started; });
+      worker_started = blocking->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return blocking->started; });
     }
     auto denied = ava::app::run_command(session, ava::app::CommandRequest{.command = "/trust deny"});
     auto const persisted = ava::app::load_project_trust_state(fixture.paths, fixture.session_r()->workspace_dir());
@@ -1322,6 +1328,7 @@ void test_same_process_reconciliation_acks_existing_commit_without_rerun()
 
 void run_subagent_delivery_manager_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("delivery-manager-env-");
   test_ordinary_prompt_releases_unused_parents();
   test_idle_delivery_and_terminal_before_registration();
   test_active_turn_ordering_and_inactive_parent_navigation();

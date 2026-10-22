@@ -115,7 +115,10 @@ void test_legacy_provider_text_runs_preserve_v4_order()
   auto store = ava::session::SessionStore::create_ephemeral(create_empty_root("legacy-text-run-v4-order"));
   auto target = store ? ava::session::SessionAppendTarget::create_ephemeral(*store)
                       : ava::core::Result<std::shared_ptr<ava::session::SessionAppendTarget>>(std::unexpected(store.error()));
-  if (!store || !target || !anthropic_streaming || !gemini_non_stream || !anthropic_reasoning || !mixed_native)
+  if (!ava::tests::require(store.has_value(), "legacy text-run persistence creates an ephemeral store") ||
+      !ava::tests::require(target.has_value(), "legacy text-run persistence creates an append target") ||
+      !ava::tests::require(anthropic_streaming && gemini_non_stream && anthropic_reasoning && mixed_native,
+                           "all provider text-run inputs parse before persistence"))
     return;
   auto append_batch = [append_target = *target](std::vector<ava::session::SessionEntry> entries) { return append_target->append_batch(std::move(entries)); };
   auto append_entry = [append_target = *target](ava::session::SessionEntry entry) { return append_target->append(std::move(entry)); };
@@ -421,18 +424,25 @@ void test_v4_no_tools_fallback_survives_native_content_serializers()
          "data");
 }
 
-void test_request_time_history_projection_preserves_only_exact_native_replay()
-{
-  using ava::session::AssistantOutputFunctionCall;
-  using ava::session::AssistantOutputItem;
-  using ava::session::AssistantOutputItemKind;
-  using ava::session::AssistantOutputReasoning;
-  using ava::session::AssistantOutputText;
-  using ava::session::AssistantOutputTextPhase;
-  using ava::session::AssistantTurnCommit;
-  using ava::session::EntryType;
-  using ava::session::SessionEntry;
+namespace {
+using ava::session::AssistantOutputFunctionCall;
+using ava::session::AssistantOutputItem;
+using ava::session::AssistantOutputItemKind;
+using ava::session::AssistantOutputReasoning;
+using ava::session::AssistantOutputText;
+using ava::session::AssistantOutputTextPhase;
+using ava::session::AssistantTurnCommit;
+using ava::session::EntryType;
+using ava::session::SessionEntry;
 
+struct RequestHistoryFixture
+{
+  std::vector<SessionEntry> entries;
+  ava::agent::HistoryReplayTarget target;
+};
+
+RequestHistoryFixture request_history_fixture()
+{
   auto item_entry = [](std::string id, AssistantOutputItem item) {
     auto data = ava::session::serialize_assistant_output_item_data_json(item);
     return SessionEntry{
@@ -501,6 +511,13 @@ void test_request_time_history_projection_preserves_only_exact_native_replay()
                                                 .reasoning_format = "openai_responses",
                                                 .supports_tools = true,
                                                 .supports_images = true};
+  return {std::move(entries), std::move(target)};
+}
+}  // namespace
+
+void test_request_time_history_projection_preserves_only_exact_native_replay()
+{
+  auto [entries, target] = request_history_fixture();
   auto exact = ava::agent::build_provider_messages_from_entries(entries, ava::agent::MessageBuildOptions{.target = target});
   bool exact_native = exact && exact->size() == 2 && (*exact)[0].content_parts.size() == 3 && (*exact)[1].content_parts.size() == 1;
   if (exact_native)
@@ -532,7 +549,16 @@ void test_request_time_history_projection_preserves_only_exact_native_replay()
   auto malformed_provider_id =
       ava::agent::build_provider_messages_from_entries(malformed_provider_id_entries, ava::agent::MessageBuildOptions{.target = target});
   expect(!malformed_provider_id, "a malformed provider item identity is a hard v4 classification error rather than silent native replay");
+  auto unresolved_entries = entries;
+  unresolved_entries.pop_back();
+  auto unresolved = ava::agent::build_provider_messages_from_entries(unresolved_entries, ava::agent::MessageBuildOptions{.target = target});
+  expect(!unresolved && unresolved.error().message().find("tool result") != std::string::npos,
+         "an unresolved committed v4 function still fails at request time instead of inventing a portable completion");
+}
 
+void test_request_time_history_projection_portable_targets_drop_native_identity()
+{
+  auto [entries, target] = request_history_fixture();
   auto missing_target = ava::agent::build_provider_messages_from_entries(entries);
   std::string missing_target_fields;
   if (missing_target)
@@ -629,6 +655,11 @@ void test_request_time_history_projection_preserves_only_exact_native_replay()
              exact_after_portable->front().content_parts[1].tool_call_id == "call_source_canary" &&
              exact_after_portable->back().content_parts.front().tool_call_id == "call_source_canary",
          "A-to-B-to-A request projection is copy-only: returning to the exact target can safely reconstruct native replay from unchanged session records");
+}
+
+void test_request_time_history_projection_pairs_collision_free_portable_tools()
+{
+  auto [entries, target] = request_history_fixture();
   target.model_id = "gpt-5.6-sol";
 
   std::vector<SessionEntry> const synthetic_collision_entries = {
@@ -665,15 +696,21 @@ void test_request_time_history_projection_preserves_only_exact_native_replay()
              text_tool_projection.find("Tool call") != std::string::npos && text_tool_projection.find("Tool result") != std::string::npos &&
              text_tool_projection.find("VISIBLE_TOOL_RESULT") != std::string::npos && text_tool_projection.find("call_source_canary") == std::string::npos,
          "a no-tools target receives a labelled textual call/result pair without source or synthetic call IDs");
+}
 
-  auto unknown_commit = commit_entry(AssistantTurnCommit{.assistant_turn_id = "turn_projection",
-                                                         .item_count = 3,
-                                                         .provider = "openai",
-                                                         .model = "gpt-5.5",
-                                                         .finish_reason = "tool_calls",
-                                                         .usage_json = std::nullopt});
+void test_request_time_history_projection_rejects_unproven_source_identity()
+{
+  auto [entries, target] = request_history_fixture();
   auto unknown_entries = entries;
-  unknown_entries[3] = std::move(unknown_commit);
+  auto unknown_commit = ava::session::serialize_assistant_turn_commit_data_json(AssistantTurnCommit{.assistant_turn_id = "turn_projection",
+                                                                                                    .item_count = 3,
+                                                                                                    .provider = "openai",
+                                                                                                    .model = "gpt-5.5",
+                                                                                                    .finish_reason = "tool_calls",
+                                                                                                    .usage_json = std::nullopt});
+  if (!ava::tests::require(unknown_commit.has_value(), "unknown-provenance fixture serializes a valid commit"))
+    return;
+  unknown_entries[3].data_json = *unknown_commit;
   target.model_id = "gpt-5.5";
   target.supports_tools = true;
   auto unknown = ava::agent::build_provider_messages_from_entries(unknown_entries, ava::agent::MessageBuildOptions{.target = target});
@@ -720,7 +757,11 @@ void test_request_time_history_projection_preserves_only_exact_native_replay()
                                            part.tool_call_id == "call_source_canary";
                                   }),
          "a v4 result recorded across a contradictory model snapshot is projected portably rather than retaining native call identities");
+}
 
+void test_request_time_history_projection_compaction_requires_replay_provenance()
+{
+  auto [entries, target] = request_history_fixture();
   auto legacy_compaction_entries = entries;
   legacy_compaction_entries.push_back(SessionEntry{.id = "older_portable_compaction_projection",
                                                    .parent_id = "",
@@ -769,12 +810,6 @@ void test_request_time_history_projection_preserves_only_exact_native_replay()
   expect(marked_compaction && marked_compaction->size() == 1 && marked_compaction->front().content.find("PORTABLE_COMPACTION_SUMMARY") != std::string::npos &&
              marked_compaction->front().content.find("portable carry") != std::string::npos,
          "a portable-v1 compaction remains replayable even when the request target is omitted and therefore forced portable");
-
-  auto unresolved_entries = entries;
-  unresolved_entries.pop_back();
-  auto unresolved = ava::agent::build_provider_messages_from_entries(unresolved_entries, ava::agent::MessageBuildOptions{.target = target});
-  expect(!unresolved && unresolved.error().message().find("tool result") != std::string::npos,
-         "an unresolved committed v4 function still fails at request time instead of inventing a portable completion");
 }
 
 void test_request_time_history_projection_reserves_images_for_active_turn()

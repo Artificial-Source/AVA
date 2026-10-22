@@ -1,37 +1,65 @@
 #include "sys.h"
 #include "tests/agent_loop_test_declarations.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/core/result.h"
 
+#include <algorithm>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+namespace {
+ava::core::Result<ava::agent::BackgroundJobSnapshot> wait_for_terminal(ava::agent::BackgroundJobRegistry& registry, std::string const& id)
+{
+  auto const deadline = ava::tests::now_plus_seconds(5);
+  return registry.wait(id, std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()));
+}
+}  // namespace
 
 void test_background_job_registry_worker_exception_marks_failed()
 {
-  ava::agent::BackgroundJobRegistry registry;
+  ava::agent::BackgroundJobRegistry registry(ava::agent::BackgroundJobRegistryOptions{.max_running_jobs = 1, .max_retained_finished_jobs = 4});
   auto started = registry.start(ava::agent::BackgroundJobStartOptions{.title = "throws"},
                                 [](ava::agent::BackgroundJobContext const&) -> ava::agent::BackgroundJobCompletion { throw std::runtime_error("boom"); });
   expect(started.has_value(), "background registry starts worker that throws");
   if (started)
   {
-    auto failed = registry.wait(started->job_id, std::chrono::milliseconds(1000));
-    expect(failed && failed->state == ava::agent::BackgroundJobState::Failed && failed->error && failed->error->find("boom") != std::string::npos,
-           "background registry records thrown worker exceptions as failed jobs");
+    auto failed = wait_for_terminal(registry, started->job_id);
+    if (!ava::tests::require(failed.has_value(), "throwing worker reaches a terminal snapshot"))
+      return;
+    ava::tests::expect_all("background registry records and retains thrown worker failures",
+                           {{"failed state", failed->state == ava::agent::BackgroundJobState::Failed},
+                            {"exception detail", failed->error && failed->error->find("boom") != std::string::npos}});
+    // Starting more work may reap finished workers internally; no explicit
+    // join is required before capacity can be reused after an exception.
+    auto replacement = registry.start(ava::agent::BackgroundJobStartOptions{.title = "after exception"}, [](ava::agent::BackgroundJobContext const&) {
+      return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "replacement", .stop_reason = ""};
+    });
+    if (!ava::tests::require(replacement.has_value(), "worker exception permits reuse of the only running slot without an explicit join"))
+      return;
+    auto completed = wait_for_terminal(registry, replacement->job_id);
+    if (!ava::tests::require(completed.has_value(), "replacement worker reaches a terminal snapshot"))
+      return;
+    ava::tests::expect_eq(completed->final_text, std::string("replacement"), "replacement worker executes after the exception");
     auto const joined = registry.join_finished();
     auto retained = registry.wait(started->job_id, std::chrono::milliseconds(0));
-    expect(joined == 1 && retained && retained->state == ava::agent::BackgroundJobState::Failed,
-           "background registry retains terminal job snapshots after joining worker threads");
+    // start() already joined the failed worker; only the replacement remains.
+    ava::tests::expect_all("joining the replacement keeps the failed job queryable",
+                           {{"replacement worker joined", joined == 1},
+                            {"no worker joined twice", registry.join_finished() == 0},
+                            {"failed snapshot retained", retained && retained->state == ava::agent::BackgroundJobState::Failed}});
   }
 }
 
@@ -57,17 +85,19 @@ void test_background_job_registry_enforces_running_limit()
   expect(first.has_value(), "background registry starts first job under running limit");
   {
     std::unique_lock lock(state->mutex);
-    expect(state->changed.wait_for(lock, std::chrono::milliseconds(1000), [&] { return state->started; }),
+    expect(state->changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return state->started; }),
            "running-limit test worker starts before second job attempt");
   }
   auto second = registry.start(ava::agent::BackgroundJobStartOptions{.title = "second"}, [](ava::agent::BackgroundJobContext const&) {
     return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "unexpected", .stop_reason = "completed"};
   });
-  expect(!second && second.error().message().find("limit") != std::string::npos, "background registry rejects jobs above the running limit");
+  expect(!second && second.error().category() == ava::core::ErrorCategory::Tool &&
+             std::ranges::any_of(second.error().context(), [](auto const& field) { return field.key == "max_running_jobs" && field.value == "1"; }),
+         "background registry rejects jobs above the configured running limit with typed capacity context");
   if (first)
   {
     static_cast<void>(registry.cancel(first->job_id));
-    auto canceled = registry.wait(first->job_id, std::chrono::milliseconds(1000));
+    auto canceled = wait_for_terminal(registry, first->job_id);
     expect(canceled && canceled->state == ava::agent::BackgroundJobState::Canceled, "background registry frees running capacity after cancellation");
   }
   registry.join_finished();
@@ -77,7 +107,7 @@ void test_background_job_registry_enforces_running_limit()
   expect(third.has_value(), "background registry accepts a new job after running job completes");
   if (third)
   {
-    auto completed = registry.wait(third->job_id, std::chrono::milliseconds(1000));
+    auto completed = wait_for_terminal(registry, third->job_id);
     expect(completed && completed->final_text == "third done", "background registry completes job after running limit frees capacity");
   }
   registry.join_finished();
@@ -92,7 +122,7 @@ void test_background_job_registry_coerces_non_terminal_completion_to_failed()
   expect(started.has_value(), "background registry starts worker with invalid completion state");
   if (started)
   {
-    auto failed = registry.wait(started->job_id, std::chrono::milliseconds(1000));
+    auto failed = wait_for_terminal(registry, started->job_id);
     expect(failed && failed->state == ava::agent::BackgroundJobState::Failed && failed->error && failed->error->find("non-terminal") != std::string::npos,
            "background registry coerces non-terminal worker completions to failed snapshots");
     registry.join_finished();
@@ -116,7 +146,7 @@ void test_background_job_registry_bounds_snapshot_text()
          "background registry truncates oversized job descriptions without splitting UTF-8 codepoints");
   if (started)
   {
-    auto completed = registry.wait(started->job_id, std::chrono::milliseconds(1000));
+    auto completed = wait_for_terminal(registry, started->job_id);
     expect(completed && completed->final_text == "abcdef" && completed->final_text_truncated,
            "background registry truncates oversized final text without splitting UTF-8 codepoints");
     registry.join_finished();
@@ -157,21 +187,21 @@ void test_background_job_registry_normalizes_terminal_completion_fields()
   expect(completed_with_error && failed_without_error && canceled_with_error, "background registry starts terminal normalization workers");
   if (completed_with_error)
   {
-    auto completed = registry.wait(completed_with_error->job_id, std::chrono::milliseconds(1000));
+    auto completed = wait_for_terminal(registry, completed_with_error->job_id);
     expect(completed && completed->state == ava::agent::BackgroundJobState::Completed && completed->final_text == "done" &&
                completed->stop_reason == "completed" && !completed->error,
            "background registry clears completed-job errors and defaults stop reasons");
   }
   if (failed_without_error)
   {
-    auto failed = registry.wait(failed_without_error->job_id, std::chrono::milliseconds(1000));
+    auto failed = wait_for_terminal(registry, failed_without_error->job_id);
     expect(failed && failed->state == ava::agent::BackgroundJobState::Failed && failed->final_text.empty() && failed->stop_reason == "failed" &&
                failed->error && failed->error->find("without an error") != std::string::npos,
            "background registry synthesizes failed-job errors and clears final text");
   }
   if (canceled_with_error)
   {
-    auto canceled = registry.wait(canceled_with_error->job_id, std::chrono::milliseconds(1000));
+    auto canceled = wait_for_terminal(registry, canceled_with_error->job_id);
     expect(canceled && canceled->state == ava::agent::BackgroundJobState::Canceled && canceled->final_text.empty() && canceled->stop_reason == "canceled" &&
                !canceled->error,
            "background registry clears canceled-job errors and final text");
@@ -179,7 +209,7 @@ void test_background_job_registry_normalizes_terminal_completion_fields()
   registry.join_finished();
 }
 
-void test_background_job_registry_join_finished_is_concurrency_safe()
+void test_background_job_registry_join_finished_is_idempotent_across_threads()
 {
   ava::agent::BackgroundJobRegistry registry;
   auto started = registry.start(ava::agent::BackgroundJobStartOptions{.title = "concurrent join"}, [](ava::agent::BackgroundJobContext const&) {
@@ -188,12 +218,14 @@ void test_background_job_registry_join_finished_is_concurrency_safe()
   expect(started.has_value(), "background registry starts concurrent join worker");
   if (!started)
     return;
-  auto completed = registry.wait(started->job_id, std::chrono::milliseconds(1000));
+  auto completed = wait_for_terminal(registry, started->job_id);
   expect(completed && completed->state == ava::agent::BackgroundJobState::Completed, "background registry has a terminal job before concurrent join");
 
   std::atomic_bool threw = false;
   std::atomic_size_t joined_total = 0;
+  std::barrier start_together(2);
   auto joiner = [&] {
+    start_together.arrive_and_wait();
     try
     {
       joined_total.fetch_add(registry.join_finished(), std::memory_order_relaxed);
@@ -207,25 +239,38 @@ void test_background_job_registry_join_finished_is_concurrency_safe()
   std::thread second(joiner);
   first.join();
   second.join();
-  expect(!threw && joined_total.load(std::memory_order_relaxed) == 1, "background registry concurrent join_finished calls join exactly once");
+  ava::tests::expect_all("join_finished is idempotent across simultaneously released callers",
+                         {{"no exception", !threw.load()}, {"exactly one join", joined_total.load(std::memory_order_relaxed) == 1}});
 }
 
 void test_background_job_registry_prunes_retained_finished_jobs()
 {
   ava::agent::BackgroundJobRegistry registry(ava::agent::BackgroundJobRegistryOptions{.max_running_jobs = 4, .max_retained_finished_jobs = 1});
-  auto first = registry.start(ava::agent::BackgroundJobStartOptions{.title = "first retained"}, [](ava::agent::BackgroundJobContext const&) {
-    return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "first", .stop_reason = ""};
-  });
-  auto second = registry.start(ava::agent::BackgroundJobStartOptions{.title = "second retained"}, [](ava::agent::BackgroundJobContext const&) {
-    return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "second", .stop_reason = ""};
-  });
-  expect(first && second, "background registry starts retained-pruning workers");
-  if (first)
-    expect(registry.wait(first->job_id, std::chrono::milliseconds(1000)).has_value(), "first retained-pruning job completes");
-  if (second)
-    expect(registry.wait(second->job_id, std::chrono::milliseconds(1000)).has_value(), "second retained-pruning job completes");
+  auto first = registry.start(
+      ava::agent::BackgroundJobStartOptions{.job_id = "job_retention_a", .title = "first retained"}, [](ava::agent::BackgroundJobContext const&) {
+        return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "first", .stop_reason = ""};
+      });
+  if (!ava::tests::require(first.has_value(), "retention fixture starts the older worker"))
+    return;
+  auto older = wait_for_terminal(registry, first->job_id);
+  if (!ava::tests::require(older && older->state == ava::agent::BackgroundJobState::Completed, "older retained job finishes before newer job starts"))
+    return;
+  // Completion timestamps have second precision; explicit ordered IDs make
+  // the documented tie-break deterministic when both finish in the same second.
+  auto second = registry.start(
+      ava::agent::BackgroundJobStartOptions{.job_id = "job_retention_z", .title = "second retained"}, [](ava::agent::BackgroundJobContext const&) {
+        return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Completed, .final_text = "second", .stop_reason = ""};
+      });
+  if (!ava::tests::require(second.has_value(), "retention fixture starts the newer worker"))
+    return;
+  auto newer = wait_for_terminal(registry, second->job_id);
+  if (!ava::tests::require(newer && newer->state == ava::agent::BackgroundJobState::Completed, "newer retained job finishes"))
+    return;
   registry.join_finished();
-  expect(registry.snapshot().size() <= 1, "background registry prunes joined terminal snapshots beyond retention limit");
+  auto const retained = registry.snapshot();
+  if (!ava::tests::require(retained.size() == 1, "retention keeps exactly one finished snapshot, rather than deleting every job"))
+    return;
+  ava::tests::expect_eq(retained.front().job_id, second->job_id, "retention keeps the newest completed job");
 }
 
 void test_background_job_registry_destructor_stops_running_jobs()
@@ -257,7 +302,7 @@ void test_background_job_registry_destructor_stops_running_jobs()
     });
     expect(started.has_value(), "background registry starts destructor stop worker");
     std::unique_lock lock(state->mutex);
-    expect(state->changed.wait_for(lock, std::chrono::milliseconds(1000), [&] { return state->started; }),
+    expect(state->changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return state->started; }),
            "background registry destructor test worker starts before scope exit");
   }
 

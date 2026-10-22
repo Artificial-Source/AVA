@@ -28,10 +28,7 @@
 
 namespace {
 
-ava::http::HttpResponse sse_response(std::string const& body)
-{
-  return ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = body};
-}
+using agent_loop_test::sse_response;
 
 class CallbackTransport final : public ava::http::Transport
 {
@@ -263,9 +260,20 @@ void test_agent_loop_cancellation_boundaries()
                                                                                       entry.data_json.find("after_provider_call") != std::string::npos));
       }
     }
-    expect(!result && result.error().message() == "agent loop canceled" && transport.requests().size() == 1 && entries && saw_cancel && !saw_tool_entry &&
-               !saw_v4_output,
-           "cancellation before the assistant batch writes no v4 staging or commit records");
+    auto const cancel_entries = entries ? std::ranges::count_if(*entries, [](auto const& entry) { return entry.type == ava::session::EntryType::Cancel; }) : 0;
+    bool const exact_boundary =
+        entries && std::ranges::any_of(*entries, [](auto const& entry) {
+          return entry.type == ava::session::EntryType::Cancel && ava::core::json::string_field(entry.data_json, "boundary") == "during_provider_request";
+        });
+    ava::tests::expect_all("post-send cancellation is attributed to the provider request and writes no assistant/tool batch",
+                           {{"typed cancellation", !result && result.error().code() == ava::core::ErrorCode::Canceled},
+                            {"one request", transport.requests().size() == 1},
+                            {"history loaded", entries.has_value()},
+                            {"one cancellation record", cancel_entries == 1},
+                            {"exact boundary", exact_boundary},
+                            {"no tool entries", !saw_tool_entry},
+                            {"no v4 entries", !saw_v4_output},
+                            {"cancellation recorded", saw_cancel}});
   }
 
   {
@@ -281,10 +289,12 @@ void test_agent_loop_cancellation_boundaries()
         {sse_response("data: {\"type\":\"response.function_call.added\",\"call_id\":\"call_bash\",\"name\":\"bash\"}\n\n"
                       "data: "
                       "{\"type\":\"response.function_call_arguments.delta\",\"call_id\":\"call_bash\",\"delta\":\"{\\\"command\\\":"
-                      "\\\"sleep 2\\\",\\\"timeout_ms\\\":5000}\"}\n\n"
+                      "\\\"printf ready > bash-ready; read -r < bash-gate\\\",\\\"timeout_ms\\\":30000}\"}\n\n"
                       "data: [DONE]\n\n")});
     bool bash_started = false;
-    int bash_cancel_checks = 0;
+    auto const ready_path = workspace / "bash-ready";
+    if (!ava::tests::require(::mkfifo((workspace / "bash-gate").c_str(), 0600) == 0, "bash cancellation fixture creates its blocking input gate"))
+      return;
     ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
         .workspace_dir = workspace,
         .anchor_set = command_anchors_for_test(workspace, store.session_path().parent_path() / "spill"),
@@ -302,18 +312,18 @@ void test_agent_loop_cancellation_boundaries()
           return ava::permissions::PermissionResolution::Allow;
         },
         .cancel_requested =
-            [&bash_started, &bash_cancel_checks] {
+            [&bash_started, &ready_path] {
               if (!bash_started)
                 return false;
-              ++bash_cancel_checks;
-              return bash_cancel_checks >= 3;
+              return std::filesystem::exists(ready_path);
             },
         .append_entry = append_route_for_test(store),
         .append_batch = append_batch_route_for_test(store),
         .session_read_authority = read_authority_for_test(store),
     });
-    auto result = loop.run_turn("sleep then cancel", store, provider, transport);
+    auto result = loop.run_turn("cancel after bash signals readiness", store, provider, transport);
     auto entries = store.load();
+    expect(std::filesystem::exists(ready_path), "bash cancellation observes an executing shell, not only the Running tool event");
     bool const saw_canceled_tool_result = entries && std::ranges::any_of(*entries, [](ava::session::SessionEntry const& entry) {
                                             return entry.type == ava::session::EntryType::ToolResult &&
                                                    entry.data_json.find("\"status\":\"canceled\"") != std::string::npos &&
@@ -371,9 +381,13 @@ void test_agent_loop_cancellation_boundaries()
                                   entry.data_json.find("execution_outcome_unknown") != std::string::npos;
     }
     auto validation = entries ? ava::session::validate_session_replay(*entries) : ava::session::SessionReplayValidation{};
-    expect(!result && result.error().message() == "agent loop canceled" && entries && functions == 1 && bound_canceled_results == 1 && tool_events == 0 &&
-               validation.ok(),
-           "cancellation after a v4 commit but before first dispatch closes its exact binding without executing the tool");
+    ava::tests::expect_all("cancellation after commit closes its binding without dispatch",
+                           {{"typed cancellation", !result && result.error().code() == ava::core::ErrorCode::Canceled},
+                            {"history loaded", entries.has_value()},
+                            {"one function", functions == 1},
+                            {"one bound canceled result", bound_canceled_results == 1},
+                            {"no tool events", tool_events == 0},
+                            {"valid replay", validation.ok()}});
   }
 }
 
@@ -464,8 +478,7 @@ void test_agent_loop_error_paths_and_bounds()
         .session_read_authority = read_authority_for_test(store),
     });
     auto result = loop.run_turn("hi", store, provider, transport);
-    expect(!result && result.error().message().find("event limit") != std::string::npos && result.error().code() == ava::core::ErrorCode::ProviderEventLimit,
-           "agent loop enforces provider event bounds");
+    expect(!result && result.error().code() == ava::core::ErrorCode::ProviderEventLimit, "agent loop enforces typed provider event bounds");
   }
 
   {

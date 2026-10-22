@@ -1,7 +1,11 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/event/events.h"
 #include "ava/app/acp/session_update.h"
 #include "ava/app/commands.h"
@@ -154,6 +158,24 @@ void test_tool_dispatcher_plugin_tool_inclusion_control()
          "ordinary dispatcher can exclude plugin tools while preserving builtins and empty immutable session MCP");
 }
 
+using PermissionBits = std::filesystem::perms (*)(std::filesystem::path const&);
+void test_dispatcher_visibility(std::filesystem::path const& workspace);
+void test_dispatcher_read_search_and_validation(std::filesystem::path const& root, std::filesystem::path const& workspace,
+                                                ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_skill(std::filesystem::path const& root, std::filesystem::path const& workspace);
+void test_dispatcher_cancellation(std::filesystem::path const& root, std::filesystem::path const& workspace);
+void test_dispatcher_permission_audit(std::filesystem::path const& root, std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_patch_result(ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_exact_file_patch(std::filesystem::path const& workspace);
+void test_dispatcher_diff_and_permissions(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher, PermissionBits permission_bits);
+void test_dispatcher_same_file_patch(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_external_permissions(std::filesystem::path const& root, std::filesystem::path const& workspace,
+                                          ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_transactional_staging(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_patch_cancellation_and_bounds(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_question(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher);
+void test_dispatcher_schemas_and_registry();
+
 void test_tool_dispatcher()
 {
   auto const root = create_empty_root("dispatcher");
@@ -165,18 +187,28 @@ void test_tool_dispatcher()
     std::error_code status_error;
     return std::filesystem::status(permission_path, status_error).permissions() & mask;
   };
-  {
-    std::ofstream file(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-    file << "hello dispatcher";
-  }
-  {
-    std::ofstream file(workspace / "lines.txt", std::ios::binary | std::ios::trunc);
-    file << "one\n"
-            "Two\n"
-            "three\n";
-  }
+  ava::tests::write_test_file(workspace / "note.txt", "hello dispatcher");
+  ava::tests::write_test_file(workspace / "lines.txt", "one\nTwo\nthree\n");
 
   ava::agent::ToolDispatcher const dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build});
+  test_dispatcher_visibility(workspace);
+  test_dispatcher_read_search_and_validation(root, workspace, dispatcher);
+  test_dispatcher_skill(root, workspace);
+  test_dispatcher_cancellation(root, workspace);
+  test_dispatcher_permission_audit(root, workspace, dispatcher);
+  test_dispatcher_patch_result(dispatcher);
+  test_dispatcher_exact_file_patch(workspace);
+  test_dispatcher_diff_and_permissions(workspace, dispatcher, permission_bits);
+  test_dispatcher_same_file_patch(workspace, dispatcher);
+  test_dispatcher_external_permissions(root, workspace, dispatcher);
+  test_dispatcher_transactional_staging(workspace, dispatcher);
+  test_dispatcher_patch_cancellation_and_bounds(workspace, dispatcher);
+  test_dispatcher_question(workspace, dispatcher);
+  test_dispatcher_schemas_and_registry();
+}
+
+void test_dispatcher_visibility(std::filesystem::path const& workspace)
+{
   {
     ava::tools::ToolContext allowlisted_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build};
     ava::agent::ToolVisibilityOptions const allowlisted_visibility{.included_tools = {"read_file", "grep"}};
@@ -223,6 +255,11 @@ void test_tool_dispatcher()
     auto const schemas = ava::agent::ToolDispatcher::tool_schemas_json(no_builtin_context, no_builtin_visibility);
     expect(schemas.empty(), "tool visibility no-builtin-tools hides built-in provider schemas when no external tools exist");
   }
+}
+
+void test_dispatcher_read_search_and_validation(std::filesystem::path const& root, std::filesystem::path const& workspace,
+                                                ava::agent::ToolDispatcher const& dispatcher)
+{
   auto read =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_read", .name = "read_file", .arguments_json = "{\"path\":\"note.txt\",\"max_bytes\":5}"});
   expect(read && read->success && read->result_text.find("hello") != std::string::npos, "tool dispatcher maps read_file provider call to file tool");
@@ -300,14 +337,8 @@ void test_tool_dispatcher()
   expect(nul_include && !nul_include->success && nul_include->result_text.find("control byte") != std::string::npos,
          "tool dispatcher rejects NUL bytes decoded into grep include globs");
 
-  {
-    std::ofstream ignore_file(workspace / ".gitignore", std::ios::binary | std::ios::trunc);
-    ignore_file << "ignored.txt\n";
-  }
-  {
-    std::ofstream ignored_file(workspace / "ignored.txt", std::ios::binary | std::ios::trunc);
-    ignored_file << "hello ignored dispatcher";
-  }
+  ava::tests::write_test_file(workspace / ".gitignore", "ignored.txt\n");
+  ava::tests::write_test_file(workspace / "ignored.txt", "hello ignored dispatcher");
   auto ignored_glob =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_ignored_glob", .name = "glob", .arguments_json = "{\"pattern\":\"ignored.txt\"}"});
   expect(ignored_glob && ignored_glob->success && ignored_glob->result_text.find("\"paths\":[]") != std::string::npos &&
@@ -345,13 +376,13 @@ void test_tool_dispatcher()
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_bad_webfetch", .name = "webfetch", .arguments_json = "{\"url\":\"file:///etc/passwd\"}"});
   expect(bad_webfetch && !bad_webfetch->success && bad_webfetch->result_text.find("http") != std::string::npos,
          "tool dispatcher rejects unsupported webfetch URL schemes before network access");
+}
 
+void test_dispatcher_skill(std::filesystem::path const& root, std::filesystem::path const& workspace)
+{
   auto const skill_root = root / "project-skills";
   std::filesystem::create_directories(skill_root / "debugging");
-  {
-    std::ofstream file(skill_root / "debugging" / "SKILL.md", std::ios::binary | std::ios::trunc);
-    file << "---\nname: debugging\ndescription: Debug failures\n---\nUse systematic debugging.\n";
-  }
+  ava::tests::write_test_file(skill_root / "debugging" / "SKILL.md", "---\nname: debugging\ndescription: Debug failures\n---\nUse systematic debugging.\n");
   int skill_permission_prompts = 0;
   ava::agent::ToolDispatcher const skill_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
@@ -374,7 +405,10 @@ void test_tool_dispatcher()
   expect(loaded_skill && loaded_skill->success && loaded_skill->result_text.find("Use systematic debugging") != std::string::npos &&
              loaded_skill->result_text.find("Base directory for this skill") != std::string::npos && skill_permission_prompts == 1,
          "tool dispatcher exposes local SKILL.md content through the skill tool");
+}
 
+void test_dispatcher_cancellation(std::filesystem::path const& root, std::filesystem::path const& workspace)
+{
   ava::agent::ToolDispatcher const canceled_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
@@ -399,10 +433,7 @@ void test_tool_dispatcher()
          "tool dispatcher reports semantic cancellation for file tools without filesystem mutation");
 
   auto const canceled_outside_path = root / "dispatcher-canceled-outside.txt";
-  {
-    std::ofstream file(canceled_outside_path, std::ios::binary | std::ios::trunc);
-    file << "outside canceled";
-  }
+  ava::tests::write_test_file(canceled_outside_path, "outside canceled");
   int canceled_permission_prompts = 0;
   ava::agent::ToolDispatcher const canceled_permission_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
@@ -420,12 +451,12 @@ void test_tool_dispatcher()
   expect(canceled_outside_read && !canceled_outside_read->success && canceled_outside_read->payload.status == ava::agent::ToolResultStatus::Canceled &&
              canceled_permission_prompts == 0,
          "tool dispatcher cancellation prevents permission prompts for file tools");
+}
 
+void test_dispatcher_permission_audit(std::filesystem::path const& root, std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher)
+{
   auto const linked_permission_path = root / "dispatcher-linked-permission.txt";
-  {
-    std::ofstream file(linked_permission_path, std::ios::binary | std::ios::trunc);
-    file << "linked permission";
-  }
+  ava::tests::write_test_file(linked_permission_path, "linked permission");
   std::vector<ava::tools::PermissionAuditEvent> linked_permission_audits;
   std::string linked_prompt_request_id;
   ava::agent::ToolDispatcher const linked_permission_dispatcher(ava::tools::ToolContext{
@@ -454,14 +485,8 @@ void test_tool_dispatcher()
 
   auto const first_per_dispatch_permission_path = root / "dispatcher-per-dispatch-one.txt";
   auto const second_per_dispatch_permission_path = root / "dispatcher-per-dispatch-two.txt";
-  {
-    std::ofstream file(first_per_dispatch_permission_path, std::ios::binary | std::ios::trunc);
-    file << "first per-dispatch permission";
-  }
-  {
-    std::ofstream file(second_per_dispatch_permission_path, std::ios::binary | std::ios::trunc);
-    file << "second per-dispatch permission";
-  }
+  ava::tests::write_test_file(first_per_dispatch_permission_path, "first per-dispatch permission");
+  ava::tests::write_test_file(second_per_dispatch_permission_path, "second per-dispatch permission");
   std::vector<std::string> per_dispatch_permission_request_ids;
   ava::agent::ToolDispatcher const per_dispatch_permission_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
@@ -497,7 +522,10 @@ void test_tool_dispatcher()
              malformed_args->payload.error_category == "invalid_argument" && malformed_args->payload.error_message.find("required") != std::string::npos &&
              malformed_structured.find("\"error\"") != std::string::npos,
          "tool dispatcher semantic payload carries error category and message");
+}
 
+void test_dispatcher_patch_result(ava::agent::ToolDispatcher const& dispatcher)
+{
   auto patch = dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "call_patch", .name = "apply_patch", .arguments_json = "{\"edits\":[{\"path\":\"note.txt\",\"old_text\":\"dispatcher\",\"new_text\":\"patch\"}]}"});
   auto const patch_diff = patch ? ava::core::json::string_field(patch->result_text, "diff") : std::optional<std::string>{};
@@ -516,7 +544,10 @@ void test_tool_dispatcher()
   auto patched_read =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_patched_read", .name = "read_file", .arguments_json = "{\"path\":\"note.txt\"}"});
   expect(patched_read && patched_read->result_text.find("hello patch") != std::string::npos, "apply_patch updates file content through file tools");
+}
 
+void test_dispatcher_exact_file_patch(std::filesystem::path const& workspace)
+{
   auto remote_workspace = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(workspace));
   auto remote_files = std::make_shared<DispatcherExactFileAccess>();
   auto const remote_patch_path = ava::core::normalized_absolute_path(workspace) / "remote-patch.txt";
@@ -594,11 +625,11 @@ void test_tool_dispatcher()
              partial_capability_patch->result_text.find("capabilities are partial") != std::string::npos && partial_patch_permissions == 0 &&
              partial_patch_progress == 0 && partial_remote_files->reads == 0 && partial_remote_files->writes == 0,
          "partial exact-file capabilities reject apply_patch before permissions, progress, or I/O");
+}
 
-  {
-    std::ofstream file(workspace / "edit-diff.txt", std::ios::binary | std::ios::trunc);
-    file << "red green blue\n";
-  }
+void test_dispatcher_diff_and_permissions(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher, PermissionBits permission_bits)
+{
+  ava::tests::write_test_file(workspace / "edit-diff.txt", "red green blue\n");
   auto edit_diff_result = dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "call_edit_diff", .name = "edit_file", .arguments_json = "{\"path\":\"edit-diff.txt\",\"old_text\":\"green\",\"new_text\":\"gold\"}"});
   auto const edit_diff = edit_diff_result ? ava::core::json::string_field(edit_diff_result->result_text, "diff") : std::optional<std::string>{};
@@ -608,10 +639,7 @@ void test_tool_dispatcher()
          "edit_file provider result includes a bounded unified diff preview");
 
   auto const private_patch_path = workspace / "private-patch.txt";
-  {
-    std::ofstream file(private_patch_path, std::ios::binary | std::ios::trunc);
-    file << "private old";
-  }
+  ava::tests::write_test_file(private_patch_path, "private old");
   std::error_code chmod_error;
   std::filesystem::permissions(private_patch_path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
                                std::filesystem::perm_options::replace, chmod_error);
@@ -626,10 +654,7 @@ void test_tool_dispatcher()
          "apply_patch preserves 0600 permissions when replacing an existing file");
 
   auto const audit_patch_path = workspace / "audit-patch.txt";
-  {
-    std::ofstream file(audit_patch_path, std::ios::binary | std::ios::trunc);
-    file << "audit old";
-  }
+  ava::tests::write_test_file(audit_patch_path, "audit old");
   std::vector<ava::tools::PermissionAuditEvent> patch_audits;
   ava::agent::ToolDispatcher const audit_patch_dispatcher(
       ava::tools::ToolContext{.workspace_dir = workspace,
@@ -646,11 +671,11 @@ void test_tool_dispatcher()
              patch_audits[0].tool_name == "apply_patch" && patch_audits[1].operation == ava::permissions::Operation::EditFile &&
              patch_audits[1].tool_name == "apply_patch",
          "apply_patch audits read permission before edit permission");
+}
 
-  {
-    std::ofstream file(workspace / "sequential.txt", std::ios::binary | std::ios::trunc);
-    file << "one two";
-  }
+void test_dispatcher_same_file_patch(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher)
+{
+  ava::tests::write_test_file(workspace / "sequential.txt", "one two");
   auto sequential_patch =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_sequential_patch",
                                                        .name = "apply_patch",
@@ -661,10 +686,7 @@ void test_tool_dispatcher()
   expect(sequential_patch && sequential_patch->success && sequential_read && sequential_read->content == "two three",
          "apply_patch validates same-file edits against original content before applying replacements");
 
-  {
-    std::ofstream file(workspace / "alias.txt", std::ios::binary | std::ios::trunc);
-    file << "alpha gamma";
-  }
+  ava::tests::write_test_file(workspace / "alias.txt", "alpha gamma");
   auto alias_patch =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_alias_patch",
                                                        .name = "apply_patch",
@@ -674,10 +696,7 @@ void test_tool_dispatcher()
   expect(alias_patch && alias_patch->success && alias_read && alias_read->content == "beta delta",
          "apply_patch canonicalizes aliased same-file paths before staging writes");
 
-  {
-    std::ofstream file(workspace / "multi-diff.txt", std::ios::binary | std::ios::trunc);
-    file << "A\nB\nC\nD\nE\n";
-  }
+  ava::tests::write_test_file(workspace / "multi-diff.txt", "A\nB\nC\nD\nE\n");
   auto multi_diff_patch =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_multi_diff_patch",
                                                        .name = "apply_patch",
@@ -690,12 +709,8 @@ void test_tool_dispatcher()
              multi_diff->find("+D") == std::string::npos && multi_diff->find("-E") != std::string::npos && multi_diff->find("+Y") != std::string::npos,
          "apply_patch diff keeps unchanged middle lines as context for separated edits");
 
-  {
-    std::ofstream a(workspace / "queued-a.txt", std::ios::binary | std::ios::trunc);
-    a << "a old";
-    std::ofstream b(workspace / "queued-b.txt", std::ios::binary | std::ios::trunc);
-    b << "b old";
-  }
+  ava::tests::write_test_file(workspace / "queued-a.txt", "a old");
+  ava::tests::write_test_file(workspace / "queued-b.txt", "b old");
   auto dispatcher_queue = std::make_shared<ava::tools::MutationQueue>();
   ava::agent::ToolDispatcher const queued_patch_dispatcher(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build, .mutation_queue = dispatcher_queue});
@@ -710,10 +725,7 @@ void test_tool_dispatcher()
              queued_patch->result_text.find("\"changed_files\"") != std::string::npos,
          "apply_patch can acquire multiple shared mutation-queue locks and commit both paths");
 
-  {
-    std::ofstream file(workspace / "overlap.txt", std::ios::binary | std::ios::trunc);
-    file << "abcde";
-  }
+  ava::tests::write_test_file(workspace / "overlap.txt", "abcde");
   auto overlap_patch =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_overlap_patch",
                                                        .name = "apply_patch",
@@ -728,12 +740,13 @@ void test_tool_dispatcher()
       .id = "call_empty_old_patch", .name = "apply_patch", .arguments_json = "{\"edits\":[{\"path\":\"note.txt\",\"old_text\":\"\",\"new_text\":\"bad\"}]}"});
   expect(empty_old_patch && !empty_old_patch->success && empty_old_patch->result_text.find("old_text must not be empty") != std::string::npos,
          "apply_patch rejects empty old_text before attempting a match");
+}
 
+void test_dispatcher_external_permissions(std::filesystem::path const& root, std::filesystem::path const& workspace,
+                                          ava::agent::ToolDispatcher const& dispatcher)
+{
   auto const outside_path = root / "outside.txt";
-  {
-    std::ofstream outside_file(outside_path, std::ios::binary | std::ios::trunc);
-    outside_file << "dispatcher outside";
-  }
+  ava::tests::write_test_file(outside_path, "dispatcher outside");
   int dispatcher_prompts = 0;
   ava::agent::ToolDispatcher const resolving_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
@@ -750,10 +763,7 @@ void test_tool_dispatcher()
          "tool dispatcher threads resolver into file tools");
 
   auto const outside_patch_path = root / "outside-patch.txt";
-  {
-    std::ofstream outside_patch_file(outside_patch_path, std::ios::binary | std::ios::trunc);
-    outside_patch_file << "outside old";
-  }
+  ava::tests::write_test_file(outside_patch_path, "outside old");
   std::vector<ava::permissions::PermissionPrompt> apply_patch_prompts;
   ava::agent::ToolDispatcher const patch_resolving_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
@@ -779,10 +789,7 @@ void test_tool_dispatcher()
          "apply_patch resolves external read permission before edit permission");
 
   auto const outside_no_resolver_path = root / "outside-patch-no-resolver.txt";
-  {
-    std::ofstream file(outside_no_resolver_path, std::ios::binary | std::ios::trunc);
-    file << "keep old";
-  }
+  ava::tests::write_test_file(outside_no_resolver_path, "keep old");
   auto outside_patch_no_resolver = dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "call_outside_patch_no_resolver",
       .name = "apply_patch",
@@ -795,10 +802,7 @@ void test_tool_dispatcher()
          "apply_patch fails closed without resolver and does not write external targets");
 
   auto const outside_denied_patch_path = root / "outside-patch-denied.txt";
-  {
-    std::ofstream file(outside_denied_patch_path, std::ios::binary | std::ios::trunc);
-    file << "keep old";
-  }
+  ava::tests::write_test_file(outside_denied_patch_path, "keep old");
   int denied_patch_prompts = 0;
   ava::agent::ToolDispatcher const patch_denying_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
@@ -821,10 +825,7 @@ void test_tool_dispatcher()
          "apply_patch resolver read denial prevents all external writes");
 
   auto const outside_edit_denied_patch_path = root / "outside-patch-edit-denied.txt";
-  {
-    std::ofstream file(outside_edit_denied_patch_path, std::ios::binary | std::ios::trunc);
-    file << "keep old";
-  }
+  ava::tests::write_test_file(outside_edit_denied_patch_path, "keep old");
   std::vector<ava::permissions::PermissionPrompt> edit_denied_patch_prompts;
   ava::agent::ToolDispatcher const patch_edit_denying_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
@@ -858,10 +859,7 @@ void test_tool_dispatcher()
   }
 
   auto const outside_failed_patch_path = root / "outside-patch-failed.txt";
-  {
-    std::ofstream file(outside_failed_patch_path, std::ios::binary | std::ios::trunc);
-    file << "keep old";
-  }
+  ava::tests::write_test_file(outside_failed_patch_path, "keep old");
   ava::agent::ToolDispatcher const patch_failing_dispatcher(ava::tools::ToolContext{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
@@ -878,15 +876,14 @@ void test_tool_dispatcher()
   expect(outside_patch_failed && !outside_patch_failed->success && outside_failed_patch_read && outside_failed_patch_read->content == "keep old" &&
              outside_patch_failed->result_text.find("resolver_failed") != std::string::npos,
          "apply_patch resolver failure prevents all external writes");
+}
 
+void test_dispatcher_transactional_staging(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher)
+{
   auto const partial_a = workspace / "partial-a.txt";
   auto const partial_b = workspace / "partial-b.txt";
-  {
-    std::ofstream a(partial_a, std::ios::binary | std::ios::trunc);
-    a << "alpha old";
-    std::ofstream b(partial_b, std::ios::binary | std::ios::trunc);
-    b << "beta stays";
-  }
+  ava::tests::write_test_file(partial_a, "alpha old");
+  ava::tests::write_test_file(partial_b, "beta stays");
   auto partial_patch =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_partial_patch",
                                                        .name = "apply_patch",
@@ -899,18 +896,15 @@ void test_tool_dispatcher()
          "apply_patch validates all edits before writing so failures do not partially write");
 
   auto const staged_a = workspace / "staged-a.txt";
-  {
-    std::ofstream a(staged_a, std::ios::binary | std::ios::trunc);
-    a << "stage alpha old";
-  }
+  ava::tests::write_test_file(staged_a, "stage alpha old");
   long const name_max = pathconf(workspace.c_str(), _PC_NAME_MAX);
+  expect(name_max > 64 && name_max < 10000, "patch staging fixture has a bounded usable NAME_MAX");
   if (name_max > 64 && name_max < 10000)
   {
     std::string const long_patch_name(static_cast<std::size_t>(name_max) - 4, 'l');
     auto const staged_long = workspace / (long_patch_name + ".txt");
-    auto long_setup =
-        ava::tools::write_file(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build}, staged_long, "stage beta old");
-    if (long_setup)
+    // Fixture creation must not consume the temporary-name headroom under test.
+    ava::tests::write_test_file(staged_long, "stage beta old");
     {
       auto staged_patch = dispatcher.dispatch(ava::agent::ProviderToolCall{
           .id = "call_staged_patch_failure",
@@ -934,18 +928,14 @@ void test_tool_dispatcher()
   }
 
   auto const secure_staged_a = workspace / "secure-staged-a.txt";
-  {
-    std::ofstream a(secure_staged_a, std::ios::binary | std::ios::trunc);
-    a << "secure alpha old";
-  }
+  ava::tests::write_test_file(secure_staged_a, "secure alpha old");
   if (name_max > 64 && name_max < 10000)
   {
     std::string const secure_long_patch_name(static_cast<std::size_t>(name_max) - 4, 's');
     auto const secure_staged_long = workspace / (secure_long_patch_name + ".txt");
-    auto secure_long_setup =
-        ava::tools::write_file(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build}, secure_staged_long, "secure beta old");
+    ava::tests::write_test_file(secure_staged_long, "secure beta old");
     auto secure_patch_workspace = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(workspace));
-    if (secure_long_setup && secure_patch_workspace)
+    if (ava::tests::require(secure_patch_workspace.has_value(), "secure staging fixture opens workspace authority"))
     {
       ava::agent::ToolDispatcher const secure_patch_dispatcher(ava::tools::ToolContext{
           .workspace_dir = ava::core::normalized_absolute_path(workspace),
@@ -973,12 +963,12 @@ void test_tool_dispatcher()
              "descriptor-secure apply_patch cleans earlier staged writes and preserves all originals when a later stage fails");
     }
   }
+}
 
+void test_dispatcher_patch_cancellation_and_bounds(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher)
+{
   auto const patch_cancel_path = workspace / "patch-cancel-stage.txt";
-  {
-    std::ofstream file(patch_cancel_path, std::ios::binary | std::ios::trunc);
-    file << "stage cancel old";
-  }
+  ava::tests::write_test_file(patch_cancel_path, "stage cancel old");
   auto const has_patch_temp = [&workspace] {
     std::error_code iter_error;
     for (std::filesystem::directory_iterator it(workspace, iter_error), end; !iter_error && it != end; it.increment(iter_error))
@@ -1018,10 +1008,7 @@ void test_tool_dispatcher()
          "apply_patch cleanup removes a completed staged file when cancellation arrives before commit");
 
   auto const secure_patch_cancel_path = workspace / "secure-patch-cancel-stage.txt";
-  {
-    std::ofstream file(secure_patch_cancel_path, std::ios::binary | std::ios::trunc);
-    file << "secure stage cancel old";
-  }
+  ava::tests::write_test_file(secure_patch_cancel_path, "secure stage cancel old");
   auto secure_cancel_workspace = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(workspace));
   expect(secure_cancel_workspace.has_value(), "descriptor-secure cancellation test anchors its workspace");
   if (secure_cancel_workspace)
@@ -1067,10 +1054,7 @@ void test_tool_dispatcher()
   }
 
   auto const too_large_patch_path = workspace / "too-large-patch.txt";
-  {
-    std::ofstream large_patch_file(too_large_patch_path, std::ios::binary | std::ios::trunc);
-    large_patch_file << "old" << std::string((10 * 1024 * 1024) + 1, 'x');
-  }
+  ava::tests::write_test_file(too_large_patch_path, "old" + std::string((10 * 1024 * 1024) + 1, 'x'));
   auto too_large_patch = dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_too_large_patch",
                                    .name = "apply_patch",
@@ -1080,7 +1064,10 @@ void test_tool_dispatcher()
   too_large_patch_read.read(too_large_prefix.data(), static_cast<std::streamsize>(too_large_prefix.size()));
   expect(too_large_patch && !too_large_patch->success && too_large_patch->result_text.find("too large") != std::string::npos && too_large_prefix == "old",
          "apply_patch rejects files that exceed its full-read bound before writing");
+}
 
+void test_dispatcher_question(std::filesystem::path const& workspace, ava::agent::ToolDispatcher const& dispatcher)
+{
   auto unavailable_question = dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_question_unavailable", .name = "question", .arguments_json = "{\"question\":\"Which approach?\"}"});
   expect(unavailable_question && !unavailable_question->success && unavailable_question->result_text.find("unavailable") != std::string::npos,
@@ -1210,7 +1197,10 @@ void test_tool_dispatcher()
   auto unknown = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_unknown", .name = "missing_tool", .arguments_json = "{}"});
   expect(unknown && !unknown->success && unknown->result_text.find("unknown tool") != std::string::npos,
          "tool dispatcher returns structured unknown tool errors");
+}
 
+void test_dispatcher_schemas_and_registry()
+{
   auto const default_schemas = ava::agent::ToolDispatcher::tool_schemas_json();
   ava::tools::ToolContext lsp_schema_context;
   lsp_schema_context.lsp_diagnostics_provider = std::make_shared<EmptyDiagnosticsProvider>();
@@ -1228,6 +1218,8 @@ void test_tool_dispatcher()
          "built-in tool registry can resolve read_file with source identity");
   expect(registry.find("missing_tool") == nullptr, "built-in tool registry reports missing tools explicitly");
   ava::agent::ToolRegistry scratch_registry;
+  if (!ava::tests::require(registered_read_tool != nullptr, "registry fixture resolves read_file"))
+    return;
   if (registered_read_tool != nullptr)
   {
     auto registered_read = scratch_registry.register_tool(*registered_read_tool);
@@ -1381,9 +1373,7 @@ void test_task_persistent_deny_preflight_blocks_runner()
 
 void test_task_mode_and_job_tool_controls()
 {
-  auto const root = temp_root() / "dispatcher-job-controls";
-  std::error_code remove_error;
-  std::filesystem::remove_all(root, remove_error);
+  auto const root = create_empty_root("dispatcher-job-controls");
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
 
@@ -1441,15 +1431,15 @@ void test_task_mode_and_job_tool_controls()
       R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":1001})",
       R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":18446744073709551616})",
       R"({"description":"limit","prompt":"run","subagent_type":"general","max_tool_iterations":2,"max_tool_iterations":3})"};
-  bool invalid_rejected = true;
   for (std::size_t index = 0; index < invalid_limits.size(); ++index)
   {
     auto invalid = task_dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "task_limit_invalid_" + std::to_string(index), .name = "task", .arguments_json = invalid_limits[index]});
-    invalid_rejected = invalid_rejected && invalid && !invalid->success;
+    ava::tests::expect_all("task max_tool_iterations rejects " + invalid_limits[index],
+                           {{"failed tool result", invalid && !invalid->success}, {"runner not invoked", task_runs == 4}});
   }
-  expect(inherited_definition_limit && explicit_override && invalid_rejected && task_runs == 4,
-         "task max_tool_iterations inherits the agent definition, accepts an invocation override, and strictly rejects invalid integers");
+  ava::tests::expect_all("task max_tool_iterations inherits the definition and accepts an invocation override",
+                         {{"inherited limit", inherited_definition_limit}, {"explicit override", explicit_override}, {"runner calls", task_runs == 4}});
 
   std::size_t unknown_runs = 0;
   std::size_t unknown_permissions = 0;
@@ -1529,7 +1519,7 @@ void test_task_mode_and_job_tool_controls()
     return;
   {
     std::unique_lock lock(state->mutex);
-    expect(state->changed.wait_for(lock, std::chrono::seconds(1), [&] { return state->started; }), "job dispatcher worker reaches running state");
+    expect(state->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return state->started; }), "job dispatcher worker reaches running state");
   }
   auto const job_id = started->job.identity.job_id;
   ava::agent::ToolDispatcher job_dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "owner"},
@@ -1577,11 +1567,12 @@ void test_task_mode_and_job_tool_controls()
   auto promoted_state = std::make_shared<WorkerState>();
   auto foreground = coordinator->start("owner", ava::agent::SubagentJobMode::Foreground, {.child_session_id = "child_job_promote"},
                                        [promoted_state](auto const& context) { return promoted_state->run(context); });
+  expect(foreground.has_value(), "job promotion fixture publishes its foreground job");
   if (foreground)
   {
     {
       std::unique_lock lock(promoted_state->mutex);
-      expect(promoted_state->changed.wait_for(lock, std::chrono::seconds(1), [&] { return promoted_state->started; }),
+      expect(promoted_state->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return promoted_state->started; }),
              "job promotion fixture reaches running state");
     }
     auto promoted = job_dispatcher.dispatch(ava::agent::ProviderToolCall{
@@ -1599,11 +1590,12 @@ void test_task_mode_and_job_tool_controls()
   auto canceled_state = std::make_shared<WorkerState>();
   auto cancel_started = coordinator->start_background("owner", {.child_session_id = "child_job_cancel"},
                                                       [canceled_state](auto const& context) { return canceled_state->run(context); });
+  expect(cancel_started.has_value(), "job cancellation fixture publishes its background job");
   if (cancel_started)
   {
     {
       std::unique_lock lock(canceled_state->mutex);
-      expect(canceled_state->changed.wait_for(lock, std::chrono::seconds(1), [&] { return canceled_state->started; }),
+      expect(canceled_state->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return canceled_state->started; }),
              "job cancellation fixture reaches running state");
     }
     auto canceled = job_dispatcher.dispatch(ava::agent::ProviderToolCall{
@@ -1614,9 +1606,8 @@ void test_task_mode_and_job_tool_controls()
   }
 }
 
-void test_job_wait_parent_cancellation_keeps_background_running()
+void exercise_job_wait_parent_cancellation_keeps_background_running(std::filesystem::path const& workspace, bool abandon_at_checkpoint = false)
 {
-  auto const workspace = create_empty_root("dispatcher-job-wait-parent-cancel");
   auto coordinator_result = ava::agent::SubagentCoordinator::create();
   expect(coordinator_result.has_value(), "parent-cancel wait fixture creates coordinator");
   if (!coordinator_result)
@@ -1628,6 +1619,10 @@ void test_job_wait_parent_cancellation_keeps_background_running()
     std::condition_variable changed;
     bool started = false;
     bool release = false;
+    bool cancellation_checkpoint = false;
+    bool release_cancellation = false;
+    bool checkpoint_timed_out = false;
+    bool dispatch_finished = false;
   };
   auto state = std::make_shared<WorkerState>();
   auto started = coordinator->start_background("wait-owner", {.child_session_id = "independent-child"}, [state](auto const& context) {
@@ -1646,7 +1641,7 @@ void test_job_wait_parent_cancellation_keeps_background_running()
     return;
   {
     std::unique_lock lock(state->mutex);
-    expect(state->changed.wait_for(lock, std::chrono::seconds(1), [&] { return state->started; }), "independent background worker starts");
+    expect(state->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return state->started; }), "independent background worker starts");
   }
   auto const job_id = started->job.identity.job_id;
   ava::agent::ToolDispatcher deadline_dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "wait-owner"},
@@ -1656,44 +1651,86 @@ void test_job_wait_parent_cancellation_keeps_background_running()
   expect(timed_out && timed_out->success && timed_out->result_text.find("\"timed_out\":true") != std::string::npos,
          "job wait reports the overall deadline expiring while its background worker remains blocked");
   std::atomic_bool cancel_requested = false;
-  std::promise<void> wait_slice_finished;
-  std::promise<void> cancellation_ready;
-  auto cancellation_signal = cancellation_ready.get_future();
-  int cancel_checks = 0;
-  ava::agent::ToolDispatcher dispatcher(ava::tools::ToolContext{.workspace_dir = workspace,
-                                                                .cancel_requested =
-                                                                    [&] {
-                                                                      // Dispatcher preflight and the first job-wait check precede the
-                                                                      // first coordinator wait. Signal only after that slice returns.
-                                                                      if (++cancel_checks == 3)
-                                                                      {
-                                                                        wait_slice_finished.set_value();
-                                                                        cancellation_signal.wait();
-                                                                      }
-                                                                      return cancel_requested.load();
-                                                                    },
-                                                                .session_id = "wait-owner"},
-                                        ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  auto const deadline = ava::tests::now_plus_seconds(5);
+  ava::agent::ToolDispatcher dispatcher(
+      ava::tools::ToolContext{.workspace_dir = workspace,
+                              .cancel_requested =
+                                  [&] {
+                                    std::unique_lock lock(state->mutex);
+                                    state->cancellation_checkpoint = true;
+                                    state->changed.notify_all();
+                                    if (!state->changed.wait_until(lock, deadline, [&] { return state->release_cancellation; }))
+                                      state->checkpoint_timed_out = true;
+                                    return cancel_requested.load();
+                                  },
+                              .session_id = "wait-owner"},
+      ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
   auto waiting = std::async(std::launch::async, [&] {
-    return dispatcher.dispatch(ava::agent::ProviderToolCall{
+    auto result = dispatcher.dispatch(ava::agent::ProviderToolCall{
         .id = "parent_long_wait", .name = "job", .arguments_json = "{\"action\":\"wait\",\"job_id\":\"" + job_id + "\",\"timeout_ms\":30000}"});
-  });
-  wait_slice_finished.get_future().wait();
-  cancel_requested = true;
-  cancellation_ready.set_value();
-  auto canceled = waiting.get();
-  auto still_running = coordinator->snapshot("wait-owner", job_id);
-  {
     std::lock_guard lock(state->mutex);
+    state->dispatch_finished = true;
+    state->changed.notify_all();
+    return result;
+  });
+  auto release = [&](WorkerState*) {
+    cancel_requested = true;
+    std::lock_guard lock(state->mutex);
+    state->release_cancellation = true;
     state->release = true;
     state->changed.notify_all();
+  };
+  // Declared after the future so every exit releases both gates before joining.
+  std::unique_ptr<WorkerState, decltype(release)> cleanup(state.get(), release);
+  {
+    std::unique_lock lock(state->mutex);
+    auto const signaled = state->changed.wait_until(lock, deadline, [&] { return state->cancellation_checkpoint || state->dispatch_finished; });
+    ava::tests::expect_all("job dispatch reaches a cancellation checkpoint rather than returning early",
+                           {{"checkpoint signaled", signaled},
+                            {"checkpoint entered", state->cancellation_checkpoint},
+                            {"checkpoint did not time out", !state->checkpoint_timed_out}});
+    if (abandon_at_checkpoint)
+      return;
+    cancel_requested = true;
+    state->release_cancellation = true;
+    state->changed.notify_all();
   }
-  auto completed = coordinator->wait("wait-owner", job_id, std::chrono::seconds(1));
-  expect(canceled && !canceled->success && canceled->payload.status == ava::agent::ToolResultStatus::Canceled,
-         "parent cancellation ends an in-flight job wait with the typed canceled result before its child is released");
-  expect(still_running && still_running->job.execution == ava::agent::SubagentExecutionState::Running && !still_running->job.cancel_requested && completed &&
-             completed->job.execution == ava::agent::SubagentExecutionState::Completed,
-         "canceling the parent wait leaves its independent background job running and able to complete");
+  auto const ready = waiting.wait_until(deadline) == std::future_status::ready;
+  expect(ready, "parent cancellation releases the job dispatch before its watchdog");
+  if (!ready)
+    cleanup.reset();
+  auto canceled = waiting.get();
+  auto still_running = coordinator->snapshot("wait-owner", job_id);
+  cleanup.reset();
+  auto completed = coordinator->wait("wait-owner", job_id, std::chrono::seconds(3));
+  ava::tests::expect_all("parent cancellation at a dispatch checkpoint returns typed cancellation",
+                         {{"failed tool result", canceled && !canceled->success},
+                          {"typed cancellation", canceled && canceled->payload.status == ava::agent::ToolResultStatus::Canceled}});
+  ava::tests::expect_all("canceling the parent dispatch leaves its independent background job able to complete",
+                         {{"child remained running", still_running && still_running->job.execution == ava::agent::SubagentExecutionState::Running},
+                          {"child not canceled", still_running && !still_running->job.cancel_requested},
+                          {"child completed", completed && completed->job.execution == ava::agent::SubagentExecutionState::Completed}});
+}
+
+void test_job_wait_parent_cancellation_keeps_background_running()
+{
+  auto const workspace = create_empty_root("dispatcher-job-wait-parent-cancel");
+  auto const child = ::fork();
+  if (!ava::tests::require(child >= 0, "job-wait cancellation watchdog forks"))
+    return;
+  if (child == 0)
+  {
+    auto const failures_before = ava::tests::failures();
+    exercise_job_wait_parent_cancellation_keeps_background_running(workspace);
+    exercise_job_wait_parent_cancellation_keeps_background_running(workspace, true);
+    ::_exit(ava::tests::failures() == failures_before ? 0 : 1);
+  }
+  ava::tests::ScopedChild child_owner(child);
+  auto const status = child_owner.wait_until(ava::tests::now_plus_seconds(15));
+  ava::tests::expect_all("job-wait cancellation and failure-path teardown finish under the outer watchdog",
+                         {{"child completed", status.has_value()},
+                          {"normal exit", status && WIFEXITED(*status)},
+                          {"child assertions passed", status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0}});
 }
 
 void test_empty_worker_services_disable_interactive_tools()
@@ -1885,10 +1922,7 @@ void test_permission_denial_guidance_provider_only_channel()
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   auto const outside = root / "outside-note.txt";
-  {
-    std::ofstream out(outside, std::ios::binary | std::ios::trunc);
-    out << "outside";
-  }
+  ava::tests::write_test_file(outside, "outside");
 
   constexpr char const* kGuidance = "stay on the sealed workspace path";
   std::vector<ava::tools::PermissionAuditEvent> audits;
@@ -1908,6 +1942,8 @@ void test_permission_denial_guidance_provider_only_channel()
   auto const path_args = std::string("{\"path\":\"") + ava::core::json::escape(outside.string()) + "\"}";
   auto denied = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_guided_read", .name = "read_file", .arguments_json = path_args});
   expect(denied && !denied->success, "guided provider-tool denial returns a failed ToolDispatchResult");
+  if (!ava::tests::require(denied.has_value(), "guided denial returns a tool result"))
+    return;
 
   expect(denied->provider_user_guidance == kGuidance, "ToolDispatchResult dedicated provider field carries validated guidance");
   expect(denied->result_text.find(kGuidance) == std::string::npos && denied->result_text.find("user_guidance") == std::string::npos &&
@@ -1935,6 +1971,8 @@ void test_permission_denial_guidance_provider_only_channel()
   expect(static_cast<bool>(ava::agent::append_tool_result(append_sink, *denied)), "guided denial persists as a session tool_result");
   expect(persisted && ava::core::json::string_field(persisted->data_json, "provider_user_guidance") == std::string(kGuidance),
          "session ToolResult dedicated provider_user_guidance field contains validated guidance");
+  if (!ava::tests::require(persisted.has_value(), "guided denial persists a tool-result entry"))
+    return;
   auto const stored_result = ava::core::json::string_field(persisted->data_json, "result").value_or("");
   auto const stored_structured = ava::core::json::object_field(persisted->data_json, "structured_result").value_or("");
   expect(stored_result.find(kGuidance) == std::string::npos && stored_structured.find(kGuidance) == std::string::npos,
@@ -2047,10 +2085,7 @@ void test_apply_patch_rejects_symlink_targets()
   std::filesystem::create_directories(workspace);
   auto const link_target = workspace / "AGENTS.md";
   auto const link = workspace / "CLAUDE.md";
-  {
-    std::ofstream target(link_target, std::ios::binary | std::ios::trunc);
-    target << "agents old\n";
-  }
+  ava::tests::write_test_file(link_target, "agents old\n");
   std::error_code link_error;
   std::filesystem::create_symlink("AGENTS.md", link, link_error);
   auto secure = ava::tools::SecureWorkspace::open(workspace);
@@ -2085,7 +2120,7 @@ void test_apply_patch_rejects_symlink_targets()
 void test_strict_dispatcher_requires_secure_workspace()
 {
   auto const workspace = create_empty_root("strict-dispatcher-missing-anchor");
-  std::ofstream(workspace / "note.txt") << "original";
+  ava::tests::write_test_file(workspace / "note.txt", "original");
   ava::tools::ToolContext const context{.workspace_dir = workspace, .require_descriptor_secure_workspace = true};
   auto dispatcher = ava::agent::ToolDispatcher::create_strict(context);
   expect(!dispatcher && dispatcher.error().category() == ava::core::ErrorCategory::InvalidArgument &&
@@ -2109,7 +2144,7 @@ void test_mixed_patch_reports_all_committed_paths()
   auto const first = outside / "first.txt";
   auto const second = outside / "second.txt";
   for (auto const& path : {inside, first, second})
-    std::ofstream(path) << "old";
+    ava::tests::write_test_file(path, "old");
   auto secure = ava::tools::SecureWorkspace::open(workspace);
   expect(secure.has_value(), "mixed patch fixture opens its secure workspace");
   if (!secure)
@@ -2165,12 +2200,14 @@ void test_mixed_patch_reports_all_committed_paths()
 
 void run_agent_tool_dispatcher_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("tool-dispatcher-env-");
   ava::agent::ProviderToolCall const call{.id = "typed", .name = "read_file", .arguments_json = "{}"};
   auto negative = ava::agent::tool_dispatch::tool_error_result(call, ava::core::Error(ava::core::ErrorCategory::Tool, "not canceled"));
   auto typed =
       ava::agent::tool_dispatch::tool_error_result(call, ava::core::Error(ava::core::ErrorCategory::Tool, "operation stopped", ava::core::ErrorCode::Canceled));
-  expect(negative.payload.status != ava::agent::ToolResultStatus::Canceled && typed.payload.status == ava::agent::ToolResultStatus::Canceled,
-         "tool cancellation uses typed identity and never a substring of arbitrary error wording");
+  ava::tests::expect_all("tool cancellation uses typed identity rather than arbitrary error wording",
+                         {{"untyped error not canceled", negative.payload.status != ava::agent::ToolResultStatus::Canceled},
+                          {"typed error canceled", typed.payload.status == ava::agent::ToolResultStatus::Canceled}});
   test_tool_dispatcher_plugin_tool_inclusion_control();
   test_tool_dispatcher();
   test_task_persistent_deny_preflight_blocks_runner();

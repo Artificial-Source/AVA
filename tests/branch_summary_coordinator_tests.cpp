@@ -1,7 +1,9 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/http/transport.h"
 #include "ava/app/branch_summary_coordinator.h"
 #include "ava/app/runtime/OpenContext.h"
@@ -224,7 +226,7 @@ std::unique_ptr<BranchFixture> make_fixture(std::string_view name, bool append_s
 struct BlockingGenerator
 {
   std::mutex mutex;
-  std::condition_variable changed;
+  std::condition_variable_any changed;
   std::size_t calls = 0;
   bool started = false;
   bool release = false;
@@ -235,13 +237,13 @@ struct BlockingGenerator
   ava::core::Result<std::string> generate(ava::app::BranchSummaryGenerationPrompt const& value, std::stop_token stop_token,
                                           std::chrono::steady_clock::time_point deadline)
   {
-    std::stop_callback wake(stop_token, [&] { changed.notify_all(); });
     std::unique_lock lock(mutex);
     ++calls;
     prompt = value;
     started = true;
     changed.notify_all();
-    changed.wait_until(lock, deadline, [&] { return release || stop_token.stop_requested(); });
+    if (!changed.wait_until(lock, stop_token, deadline, [&] { return release; }) && !stop_token.stop_requested())
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "fake generator deadline expired"));
     stop_seen = stop_token.stop_requested();
     if (stop_seen)
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "fake generator canceled"));
@@ -251,7 +253,7 @@ struct BlockingGenerator
   bool wait_started()
   {
     std::unique_lock lock(mutex);
-    return changed.wait_for(lock, 3s, [&] { return started; });
+    return changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return started; });
   }
 
   void allow()
@@ -269,12 +271,55 @@ ava::app::BranchSummaryGenerator generator_for(std::shared_ptr<BlockingGenerator
   };
 }
 
+bool coordinator_ready(ava::core::Result<std::shared_ptr<ava::app::BranchSummaryCoordinator>> const& coordinator, std::string_view label)
+{
+  return ava::tests::require(coordinator.has_value(),
+                             coordinator ? std::string(label) + ": coordinator starts" : std::string(label) + ": " + coordinator.error().format());
+}
+
+ava::core::Result<std::uint64_t> prepare_checked(std::shared_ptr<ava::app::BranchSummaryCoordinator> const& coordinator,
+                                                 ava::app::BranchSummaryOperationRequest request, std::string_view label)
+{
+  auto generation = coordinator->prepare(std::move(request));
+  (void)ava::tests::require(generation.has_value(),
+                            generation ? std::string(label) + ": preparation starts" : std::string(label) + ": " + generation.error().format());
+  return generation;
+}
+
+bool await_confirmation(std::shared_ptr<ava::app::BranchSummaryCoordinator> const& coordinator, std::uint64_t generation, std::string_view label)
+{
+  auto const reached =
+      coordinator->wait_for_phase(generation, ava::app::BranchSummaryPhase::AwaitingConfirmation,
+                                  std::chrono::duration_cast<std::chrono::milliseconds>(ava::tests::now_plus_seconds(5) - std::chrono::steady_clock::now()));
+  auto const snapshot = coordinator->snapshot();
+  return ava::tests::require(
+      reached, std::string(label) + ": awaiting confirmation (phase=" + std::string(ava::app::to_string(snapshot.phase)) + ", reason=" + snapshot.reason + ")");
+}
+
+std::optional<std::uint64_t> prepare_awaiting(std::shared_ptr<ava::app::BranchSummaryCoordinator> const& coordinator,
+                                              ava::app::BranchSummaryOperationRequest request, std::string_view label)
+{
+  auto generation = prepare_checked(coordinator, std::move(request), label);
+  if (!generation || !await_confirmation(coordinator, *generation, label))
+    return std::nullopt;
+  return *generation;
+}
+
+bool confirm_generation(std::shared_ptr<ava::app::BranchSummaryCoordinator> const& coordinator, std::uint64_t generation, std::string_view label)
+{
+  auto confirmed = coordinator->confirm(generation);
+  return ava::tests::require(confirmed && *confirmed,
+                             confirmed ? std::string(label) + ": confirmation accepted" : std::string(label) + ": " + confirmed.error().format());
+}
+
 ava::app::BranchSummarySnapshot await_terminal(std::shared_ptr<ava::app::BranchSummaryCoordinator> const& coordinator, std::uint64_t generation,
                                                std::chrono::milliseconds timeout = 4s)
 {
-  expect(coordinator->wait_until_idle(timeout), "branch summary operation becomes terminal");
+  auto const idle = coordinator->wait_until_idle(
+      std::chrono::duration_cast<std::chrono::milliseconds>(ava::tests::now_plus_seconds(timeout) - std::chrono::steady_clock::now()));
   auto snapshot = coordinator->snapshot();
-  expect(snapshot.generation == generation && snapshot.terminal(), "branch summary terminal snapshot retains its operation generation");
+  ava::tests::expect_all("branch summary terminal state (phase=" + std::string(ava::app::to_string(snapshot.phase)) + ", reason=" + snapshot.reason + ")",
+                         {{"worker idle", idle}, {"requested generation", snapshot.generation == generation}, {"terminal phase", snapshot.terminal()}});
   return snapshot;
 }
 
@@ -304,13 +349,9 @@ ava::app::BranchSummarySnapshot confirmed_terminal(BranchFixture const& fixture,
     expect(false, coordinator.error().format());
     return {};
   }
-  auto generation = (*coordinator)->prepare(fixture.request(std::move(generator)));
-  if (!generation || !(*coordinator)->wait_for_phase(generation.value_or(0), ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) ||
-      !(*coordinator)->confirm(generation.value_or(0)).value_or(false))
-  {
-    expect(false, generation ? "confirmed branch summary operation did not reach confirmation" : generation.error().format());
+  auto generation = prepare_awaiting(*coordinator, fixture.request(std::move(generator)), "confirmed branch summary");
+  if (!generation || !confirm_generation(*coordinator, *generation, "confirmed branch summary"))
     return (*coordinator)->snapshot();
-  }
   return await_terminal(*coordinator, *generation);
 }
 
@@ -323,7 +364,7 @@ void test_recoverable_snapshot_fingerprint_is_exact_sha256()
   auto store = ava::session::SessionStore::create(workspace, sessions);
   auto lease = store ? ava::session::SessionLease::create_and_acquire(store->session_path())
                      : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
-  if (!store || !lease)
+  if (!ava::tests::require(store && lease, "fingerprint fixture creates and leases its store"))
     return;
   auto snapshot = store->load_recoverable_snapshot_bounded(*lease, kReadLimits);
   constexpr std::array<std::uint8_t, 32> empty_sha256{0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
@@ -480,14 +521,9 @@ void test_explicit_confirmation_success_and_existing()
   if (!coordinator_result)
     return;
   auto coordinator = *coordinator_result;
-  auto generation = coordinator->prepare(fixture->request(generator_for(state)));
-  expect(generation.has_value(), generation ? "branch summary preparation starts" : generation.error().format());
+  auto generation = prepare_awaiting(coordinator, fixture->request(generator_for(state)), "explicit confirmation");
   if (!generation)
     return;
-  auto const reached_confirmation = coordinator->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s);
-  auto const prepared_snapshot = coordinator->snapshot();
-  expect(reached_confirmation, "eligible branch summary waits for explicit confirmation (phase=" + std::string(ava::app::to_string(prepared_snapshot.phase)) +
-                                   ", reason=" + prepared_snapshot.reason + ")");
   auto source_contender = ava::session::SessionLease::acquire(fixture->source_store.session_path());
   auto awaiting = coordinator->snapshot();
   expect(source_contender && state->calls == 0 && awaiting.source_label == "Abandoned parent work" &&
@@ -539,9 +575,7 @@ void test_cancel_before_confirmation_is_nonmutating_and_conflicts_reject()
     return;
   }
   auto coordinator = *coordinator_result;
-  auto generation = coordinator->prepare(fixture->request(generator_for(state)));
-  expect(generation && coordinator->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s),
-         "pre-confirm cancellation fixture reaches awaiting confirmation");
+  auto generation = prepare_awaiting(coordinator, fixture->request(generator_for(state)), "pre-confirm cancellation");
   if (!generation)
     return;
   auto conflict = coordinator->prepare(fixture->request(generator_for(state)));
@@ -562,8 +596,10 @@ void test_typed_preparation_ineligibilities()
     if (fixture)
     {
       auto coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto generation = coordinator ? (*coordinator)->prepare(fixture->request()) : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-      if (coordinator && generation)
+      if (!coordinator_ready(coordinator, "empty suffix"))
+        return;
+      auto generation = prepare_checked(*coordinator, fixture->request(), "empty suffix");
+      if (generation)
         expect((*coordinator)->wait_until_idle(3s) && (*coordinator)->snapshot().eligibility_code == ava::app::BranchSummaryEligibilityCode::EmptySuffix,
                "empty direct-source suffix is a fixed typed ineligibility");
     }
@@ -574,8 +610,10 @@ void test_typed_preparation_ineligibilities()
     {
       auto busy_lease = ava::session::SessionLease::acquire(fixture->source_store.session_path());
       auto coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto generation = coordinator ? (*coordinator)->prepare(fixture->request()) : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-      if (coordinator && generation)
+      if (!coordinator_ready(coordinator, "busy source"))
+        return;
+      auto generation = prepare_checked(*coordinator, fixture->request(), "busy source");
+      if (generation)
         expect((*coordinator)->wait_until_idle(3s) && (*coordinator)->snapshot().eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceLeaseBusy,
                "an independently owned source lease is a fixed typed ineligibility");
     }
@@ -586,8 +624,10 @@ void test_typed_preparation_ineligibilities()
     {
       auto guard = fixture->current_controller->admit({.request_id = "active-normal-run"});
       auto coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto generation = coordinator ? (*coordinator)->prepare(fixture->request()) : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-      if (coordinator && generation)
+      if (!coordinator_ready(coordinator, "active run"))
+        return;
+      auto generation = prepare_checked(*coordinator, fixture->request(), "active run");
+      if (generation)
         expect((*coordinator)->wait_until_idle(3s) && (*coordinator)->snapshot().eligibility_code == ava::app::BranchSummaryEligibilityCode::ActiveRun,
                "an active normal run rejects preparation with a fixed typed reason");
     }
@@ -600,8 +640,10 @@ void test_typed_preparation_ineligibilities()
       request.source_session_id = "unrelated-session";
       request.source_session_path = fixture->sessions_dir / "unrelated-session.jsonl";
       auto coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto generation = coordinator ? (*coordinator)->prepare(std::move(request)) : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-      if (coordinator && generation)
+      if (!coordinator_ready(coordinator, "unrelated source"))
+        return;
+      auto generation = prepare_checked(*coordinator, std::move(request), "unrelated source");
+      if (generation)
         expect((*coordinator)->wait_until_idle(3s) && (*coordinator)->snapshot().eligibility_code == ava::app::BranchSummaryEligibilityCode::NotDirectSource,
                "unrelated, sibling, and descendant selections fail the exact direct-source relation check");
     }
@@ -614,8 +656,10 @@ void test_typed_preparation_ineligibilities()
       out << "{broken}\n";
       out.close();
       auto coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto generation = coordinator ? (*coordinator)->prepare(fixture->request()) : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-      if (coordinator && generation)
+      if (!coordinator_ready(coordinator, "corrupt source"))
+        return;
+      auto generation = prepare_checked(*coordinator, fixture->request(), "corrupt source");
+      if (generation)
         expect((*coordinator)->wait_until_idle(3s) && (*coordinator)->snapshot().eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceCorrupt,
                "corrupt source history is a read-only fixed typed ineligibility");
     }
@@ -628,15 +672,17 @@ void test_typed_preparation_ineligibilities()
       auto target = ephemeral ? ava::session::SessionAppendTarget::create_ephemeral(*ephemeral, kReadLimits)
                               : ava::core::Result<std::shared_ptr<ava::session::SessionAppendTarget>>(std::unexpected(ephemeral.error()));
       auto authority = target ? (*target)->read_authority() : ava::core::Result<ava::session::SessionReadAuthority>(std::unexpected(target.error()));
-      if (ephemeral && target && authority)
+      if (ava::tests::require(ephemeral && target && authority, "ephemeral fixture creates store, target, and authority"))
       {
         auto request = fixture->request();
         request.current_session_id = ephemeral->session_id();
         request.current_read_authority = *authority;
         request.current_controller = std::make_shared<ava::app::SessionRunController>(*target);
         auto coordinator = ava::app::BranchSummaryCoordinator::create();
-        auto generation = coordinator ? (*coordinator)->prepare(std::move(request)) : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-        if (coordinator && generation)
+        if (!coordinator_ready(coordinator, "ephemeral current"))
+          return;
+        auto generation = prepare_checked(*coordinator, std::move(request), "ephemeral current");
+        if (generation)
           expect((*coordinator)->wait_until_idle(3s) &&
                      (*coordinator)->snapshot().eligibility_code == ava::app::BranchSummaryEligibilityCode::CurrentSessionEphemeral,
                  "ephemeral current sessions fail with a fixed typed ineligibility");
@@ -703,7 +749,7 @@ void test_remaining_typed_preparation_ineligibilities()
   auto invalid_current = ava::session::SessionStore::create(fixture->workspace, fixture->sessions_dir);
   auto invalid_lease = invalid_current ? ava::session::SessionLease::create_and_acquire(invalid_current->session_path())
                                        : ava::core::Result<ava::session::SessionLease>(std::unexpected(invalid_current.error()));
-  if (invalid_current && invalid_lease)
+  if (ava::tests::require(invalid_current && invalid_lease, "invalid fork fixture creates and leases current session"))
   {
     auto const start_id = ava::core::make_id("entry");
     auto started = invalid_current->append(*invalid_lease, session_start(start_id));
@@ -716,7 +762,7 @@ void test_remaining_typed_preparation_ineligibilities()
     auto metadata_appended = metadata ? invalid_current->append(*invalid_lease, *metadata) : ava::core::VoidResult(std::unexpected(metadata.error()));
     auto authority = metadata_appended ? ava::session::SessionReadAuthority::create_persistent(*invalid_current, *invalid_lease, kReadLimits)
                                        : ava::core::Result<ava::session::SessionReadAuthority>(std::unexpected(metadata_appended.error()));
-    if (started && metadata_appended && authority)
+    if (ava::tests::require(started && metadata_appended && authority, "invalid fork fixture appends metadata and obtains read authority"))
     {
       auto request = fixture->request();
       request.current_session_id = invalid_current->session_id();
@@ -734,20 +780,23 @@ void test_generation_cancel_deadline_and_typed_failures()
     auto fixture = make_fixture("cancel-generating");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "cancel generating"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      expect(generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) &&
-                 (*coordinator)->confirm(*generation).value_or(false) && state->wait_started(),
-             "generation cancellation fixture reaches the provider boundary");
-      if (generation)
+      auto const before = ava::tests::read_session_test_binary_file(fixture->source_store.session_path());
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "cancel generating");
+      if (generation && confirm_generation(*coordinator, *generation, "cancel generating") &&
+          ava::tests::require(state->wait_started(), "cancel generating reaches the provider boundary"))
       {
         auto source_contender = ava::session::SessionLease::acquire(fixture->source_store.session_path());
         expect(!source_contender, "the exact source lease remains retained throughout provider generation");
         auto canceled = (*coordinator)->cancel(*generation);
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(canceled && *canceled && terminal.phase == ava::app::BranchSummaryPhase::Canceled && state->stop_seen && !terminal.refresh_required,
-               "generation cancellation propagates a stop token and appends no metadata");
+        ava::tests::expect_all("generation cancellation propagates a stop token without mutating the source",
+                               {{"cancellation accepted", canceled && *canceled},
+                                {"canceled phase", terminal.phase == ava::app::BranchSummaryPhase::Canceled},
+                                {"generator stopped", state->stop_seen},
+                                {"no refresh", !terminal.refresh_required},
+                                {"source unchanged", ava::tests::read_session_test_binary_file(fixture->source_store.session_path()) == before}});
       }
     }
   }
@@ -755,75 +804,80 @@ void test_generation_cancel_deadline_and_typed_failures()
     auto fixture = make_fixture("deadline");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create({.operation_deadline = 40ms});
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "deadline"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto const before = ava::tests::read_session_test_binary_file(fixture->source_store.session_path());
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "deadline");
+      if (generation)
       {
         expect((*coordinator)->confirm(*generation).value_or(false), "deadline fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Failed && terminal.failure_code == ava::app::BranchSummaryFailureCode::Deadline &&
-                   !terminal.refresh_required,
-               "one absolute deadline spans generation and fails with a fixed typed result");
+        ava::tests::expect_all("a confirmed operation expires with a typed nonmutating deadline result",
+                               {{"failed phase", terminal.phase == ava::app::BranchSummaryPhase::Failed},
+                                {"deadline code", terminal.failure_code == ava::app::BranchSummaryFailureCode::Deadline},
+                                {"no refresh", !terminal.refresh_required},
+                                {"source unchanged", ava::tests::read_session_test_binary_file(fixture->source_store.session_path()) == before}});
       }
     }
   }
   {
     auto fixture = make_fixture("provider-failure");
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "provider failure"))
     {
       auto provider_failure = [](ava::app::BranchSummaryGenerationPrompt const&, std::stop_token,
                                  std::chrono::steady_clock::time_point) -> ava::core::Result<std::string> {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "raw provider payload must not escape"));
       };
-      auto generation = (*coordinator)->prepare(fixture->request(provider_failure));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(provider_failure), "provider failure");
+      if (generation)
       {
         expect((*coordinator)->confirm(*generation).value_or(false), "provider failure fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.failure_code == ava::app::BranchSummaryFailureCode::ProviderFailed && terminal.reason.find("raw provider") == std::string::npos,
-               "provider failures are converted to a fixed payload-free code and reason");
+        ava::tests::expect_all("provider failure becomes a payload-free typed result",
+                               {{"provider failure code", terminal.failure_code == ava::app::BranchSummaryFailureCode::ProviderFailed},
+                                {"raw payload absent", terminal.reason.find("raw provider") == std::string::npos}});
       }
     }
   }
   {
     auto fixture = make_fixture("auth-failure");
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "authentication failure"))
     {
       auto auth_failure = [](ava::app::BranchSummaryGenerationPrompt const&, std::stop_token,
                              std::chrono::steady_clock::time_point) -> ava::core::Result<std::string> {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "private token rejected"));
       };
-      auto generation = (*coordinator)->prepare(fixture->request(auth_failure));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(auth_failure), "authentication failure");
+      if (generation)
       {
         expect((*coordinator)->confirm(*generation).value_or(false), "authentication failure fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.failure_code == ava::app::BranchSummaryFailureCode::AuthenticationUnavailable &&
-                   terminal.reason.find("private token") == std::string::npos,
-               "authentication failures are converted to a fixed credential-free result");
+        ava::tests::expect_all("authentication failure becomes a credential-free typed result",
+                               {{"authentication code", terminal.failure_code == ava::app::BranchSummaryFailureCode::AuthenticationUnavailable},
+                                {"private token absent", terminal.reason.find("private token") == std::string::npos}});
       }
     }
   }
   {
     auto fixture = make_fixture("model-failure");
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "model failure"))
     {
       auto state = std::make_shared<BlockingGenerator>();
       state->release = true;
       auto request = fixture->request(generator_for(state));
       request.selected_model.model_id = "missing-model";
       request.selected_model.api_family = "invalid-family";
-      auto generation = (*coordinator)->prepare(std::move(request));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, std::move(request), "model failure");
+      if (generation)
       {
         expect((*coordinator)->confirm(*generation).value_or(false), "model failure fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.failure_code == ava::app::BranchSummaryFailureCode::ModelUnavailable && state->calls == 0,
-               "invalid selected model fails before invoking even an injected generator");
+        ava::tests::expect_all("invalid selected model fails before invoking an injected generator",
+                               {{"model failure code", terminal.failure_code == ava::app::BranchSummaryFailureCode::ModelUnavailable},
+                                {"generator not called", state->calls == 0}});
       }
     }
   }
@@ -988,12 +1042,12 @@ void test_confirmed_recovery_precedes_generation()
         reservation_at_recovery->store(controller->snapshot().maintenance_reserved);
       };
       auto coordinator = ava::app::BranchSummaryCoordinator::create(std::move(options));
-      auto generation = coordinator ? (*coordinator)->prepare(fixture->request(generator_for(state)))
-                                    : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-      if (coordinator && generation)
+      if (!coordinator_ready(coordinator, "torn tail recovery"))
+        return;
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "torn tail recovery");
+      if (generation)
       {
-        expect((*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) &&
-                   ava::tests::read_session_test_binary_file(fixture->source_store.session_path()) == before && state->calls == 0,
+        expect(ava::tests::read_session_test_binary_file(fixture->source_store.session_path()) == before && state->calls == 0,
                "read-only preparation tolerates but never repairs one recoverable invalid final suffix");
         expect((*coordinator)->confirm(*generation).value_or(false), "torn-tail recovery fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
@@ -1030,9 +1084,10 @@ void test_confirmed_recovery_precedes_generation()
       auto state = std::make_shared<BlockingGenerator>();
       state->release = true;
       auto coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto generation = coordinator ? (*coordinator)->prepare(fixture->request(generator_for(state)))
-                                    : ava::core::Result<std::uint64_t>(std::unexpected(coordinator.error()));
-      if (coordinator && generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      if (!coordinator_ready(coordinator, "staged output recovery"))
+        return;
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "staged output recovery");
+      if (generation)
       {
         expect((*coordinator)->confirm(*generation).value_or(false), "staged assistant recovery fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
@@ -1063,7 +1118,7 @@ struct PhaseBlocker
   bool wait_reached()
   {
     std::unique_lock lock(mutex);
-    return changed.wait_for(lock, 3s, [&] { return reached; });
+    return changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return reached; });
   }
 
   void allow()
@@ -1080,87 +1135,104 @@ struct PhaseBlocker
   bool release = false;
 };
 
+struct ReleasePhaseOnExit
+{
+  std::shared_ptr<PhaseBlocker> blocker;
+  ~ReleasePhaseOnExit() { blocker->allow(); }
+};
+
 void test_active_run_checks_at_confirmation_and_preappend()
 {
   {
     auto fixture = make_fixture("active-at-confirm");
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "active at confirmation"))
     {
       auto state = std::make_shared<BlockingGenerator>();
       state->release = true;
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "active at confirmation");
+      if (generation)
       {
         auto guard = fixture->current_controller->admit({.request_id = "confirm-conflict"});
-        expect(guard && (*coordinator)->confirm(*generation).value_or(false), "confirmation conflict fixture admits a normal run and confirms");
+        if (!ava::tests::require(guard.has_value(), "confirmation conflict admits a normal run") ||
+            !confirm_generation(*coordinator, *generation, "active at confirmation"))
+          return;
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Ineligible && terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::ActiveRun &&
-                   state->calls == 0,
-               "confirmation rechecks active normal-run ownership before recovery or provider work");
+        ava::tests::expect_all("confirmation rechecks active normal-run ownership before provider work",
+                               {{"ineligible phase", terminal.phase == ava::app::BranchSummaryPhase::Ineligible},
+                                {"active-run code", terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::ActiveRun},
+                                {"generator not called", state->calls == 0}});
       }
     }
   }
   {
     auto fixture = make_fixture("maintenance-at-confirm");
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "maintenance at confirmation"))
     {
       auto state = std::make_shared<BlockingGenerator>();
       state->release = true;
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "maintenance at confirmation");
+      if (generation)
       {
         auto reservation = fixture->current_controller->reserve_maintenance();
-        expect(reservation && (*coordinator)->confirm(*generation).value_or(false),
-               "confirmation conflict fixture reserves independent maintenance and confirms");
+        if (!ava::tests::require(reservation.has_value(), "confirmation conflict reserves independent maintenance") ||
+            !confirm_generation(*coordinator, *generation, "maintenance at confirmation"))
+          return;
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Ineligible &&
-                   terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::CurrentSessionUnavailable && state->calls == 0,
-               "a maintenance conflict rejects confirmation without being classified as an active normal run");
+        ava::tests::expect_all("maintenance conflict rejects confirmation without active-run attribution",
+                               {{"ineligible phase", terminal.phase == ava::app::BranchSummaryPhase::Ineligible},
+                                {"current unavailable code", terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::CurrentSessionUnavailable},
+                                {"generator not called", state->calls == 0}});
       }
     }
   }
   {
     auto fixture = make_fixture("active-at-preappend");
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "active at preappend"))
     {
       auto state = std::make_shared<BlockingGenerator>();
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) &&
-          (*coordinator)->confirm(*generation).value_or(false) && state->wait_started())
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "active at preappend");
+      if (generation && confirm_generation(*coordinator, *generation, "active at preappend") &&
+          ava::tests::require(state->wait_started(), "preappend generator starts"))
       {
         auto guard = fixture->current_controller->admit({.request_id = "preappend-conflict"});
         auto const reserved = fixture->current_controller->snapshot().maintenance_reserved;
         state->allow();
         auto terminal = await_terminal(*coordinator, *generation);
         (*coordinator)->shutdown();
-        expect(!guard && reserved && terminal.phase == ava::app::BranchSummaryPhase::Succeeded && !fixture->current_controller->snapshot().maintenance_reserved,
-               "exclusive maintenance rejects a normal run throughout provider generation and releases only after terminal publication");
+        ava::tests::expect_all("exclusive maintenance rejects normal work until generation terminates",
+                               {{"normal run rejected", !guard},
+                                {"reserved during generation", reserved},
+                                {"summary succeeded", terminal.phase == ava::app::BranchSummaryPhase::Succeeded},
+                                {"reservation released", !fixture->current_controller->snapshot().maintenance_reserved}});
       }
     }
   }
   {
     auto fixture = make_fixture("active-at-append-linearization");
     auto blocker = std::make_shared<PhaseBlocker>(ava::app::BranchSummaryPhase::Appending);
-    auto coordinator =
-        ava::app::BranchSummaryCoordinator::create({.operation_deadline = 2s, .on_snapshot = [blocker](auto const& snapshot) { blocker->observe(snapshot); }});
-    if (fixture && coordinator)
+    auto coordinator = ava::app::BranchSummaryCoordinator::create({.operation_deadline = 30s,
+                                                                   .on_snapshot = [blocker](auto const& snapshot) { blocker->observe(snapshot); },
+                                                                   .configure_source_store_for_test = nullptr});
+    ReleasePhaseOnExit release_phase{blocker};
+    if (fixture && coordinator_ready(coordinator, "append linearization"))
     {
       auto generator = [](ava::app::BranchSummaryGenerationPrompt const&, std::stop_token,
                           std::chrono::steady_clock::time_point) -> ava::core::Result<std::string> { return "append linearization summary"; };
-      auto generation = (*coordinator)->prepare(fixture->request(generator));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) &&
-          (*coordinator)->confirm(*generation).value_or(false) && blocker->wait_reached())
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator), "append linearization");
+      if (generation && confirm_generation(*coordinator, *generation, "append linearization") &&
+          ava::tests::require(blocker->wait_reached(), "append linearization reaches its phase barrier"))
       {
         auto guard = fixture->current_controller->admit({.request_id = "append-linearization-conflict"});
         blocker->allow();
         auto terminal = await_terminal(*coordinator, *generation);
         auto entries = fixture->source_store.load_bounded(kReadLimits);
-        expect(
-            !guard && terminal.phase == ava::app::BranchSummaryPhase::Succeeded && entries && count_type(*entries, ava::session::EntryType::BranchSummary) == 1,
-            "exclusive maintenance closes final normal-run admission while the independent parent target appends");
+        ava::tests::expect_all("exclusive maintenance closes final normal-run admission while appending",
+                               {{"normal run rejected", !guard},
+                                {"summary succeeded", terminal.phase == ava::app::BranchSummaryPhase::Succeeded},
+                                {"one durable summary", entries && count_type(*entries, ava::session::EntryType::BranchSummary) == 1}});
       }
     }
   }
@@ -1175,10 +1247,10 @@ void test_confirmation_binds_exact_source_fingerprint()
     ava::app::BranchSummaryCoordinatorOptions options;
     options.configure_source_store_for_test = [setup_calls](ava::session::SessionStore&) { setup_calls->fetch_add(1); };
     auto coordinator = ava::app::BranchSummaryCoordinator::create(std::move(options));
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "mutated while awaiting"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "mutated while awaiting");
+      if (generation)
       {
         {
           auto contender = ava::session::SessionLease::acquire(fixture->source_store.session_path());
@@ -1192,8 +1264,11 @@ void test_confirmation_binds_exact_source_fingerprint()
         expect((*coordinator)->confirm(*generation).value_or(false), "mutated-source fixture confirms after the contender releases its lease");
         auto terminal = await_terminal(*coordinator, *generation);
         auto const after = ava::tests::read_session_test_binary_file(fixture->source_store.session_path());
-        expect(terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource && state->calls == 0 && setup_calls->load() == 0 && after == mutated,
-               "changed exact bytes fail StaleSource before recovery setup, provider work, or append");
+        ava::tests::expect_all("changed exact bytes fail before recovery setup, provider work, or append",
+                               {{"stale-source code", terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource},
+                                {"generator not called", state->calls == 0},
+                                {"recovery not configured", setup_calls->load() == 0},
+                                {"source unchanged", after == mutated}});
       }
     }
   }
@@ -1202,10 +1277,10 @@ void test_confirmation_binds_exact_source_fingerprint()
     auto state = std::make_shared<BlockingGenerator>();
     state->release = true;
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "same bytes replaced"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "same bytes replaced");
+      if (generation)
       {
         auto const bytes = ava::tests::read_session_test_binary_file(fixture->source_store.session_path());
         {
@@ -1217,8 +1292,9 @@ void test_confirmation_binds_exact_source_fingerprint()
         }
         expect((*coordinator)->confirm(*generation).value_or(false), "same-byte replacement fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Succeeded && state->calls == 1,
-               "exact-path inode replacement with identical bounded bytes and coverage is accepted");
+        ava::tests::expect_all(
+            "identical bounded bytes and coverage survive exact-path inode replacement",
+            {{"summary succeeded", terminal.phase == ava::app::BranchSummaryPhase::Succeeded}, {"generator called once", state->calls == 1}});
       }
     }
   }
@@ -1226,10 +1302,10 @@ void test_confirmation_binds_exact_source_fingerprint()
     auto fixture = make_fixture("changed-bytes-replaced-while-awaiting");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "changed bytes replaced"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "changed bytes replaced");
+      if (generation)
       {
         auto bytes = ava::tests::read_session_test_binary_file(fixture->source_store.session_path());
         auto const timestamp = bytes.find("2026-05-01T00:00:00Z");
@@ -1241,8 +1317,9 @@ void test_confirmation_binds_exact_source_fingerprint()
         ava::tests::write_session_test_binary_file(fixture->source_store.session_path(), bytes);
         expect((*coordinator)->confirm(*generation).value_or(false), "changed replacement fixture confirms");
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource && state->calls == 0,
-               "same-coverage inode replacement with one changed content byte fails before generation");
+        ava::tests::expect_all(
+            "one changed replacement byte fails before generation",
+            {{"stale-source code", terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource}, {"generator not called", state->calls == 0}});
       }
     }
   }
@@ -1254,7 +1331,7 @@ void test_coordinator_enforces_hard_read_policy()
     auto fixture = make_fixture("legacy-unbounded-request");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "hard entry policy"))
     {
       std::vector<ava::session::SessionEntry> additions;
       additions.reserve(ava::app::kBranchSummaryHardReadLimits.max_entries);
@@ -1271,15 +1348,16 @@ void test_coordinator_enforces_hard_read_policy()
         return;
       auto request = fixture->request(generator_for(state));
       request.read_limits = ava::session::legacy_unbounded_session_read_limits();
-      auto generation = (*coordinator)->prepare(std::move(request));
+      auto generation = prepare_checked(*coordinator, std::move(request), "hard entry policy");
       if (generation)
       {
         // Parsing the full entry-count boundary is intentionally expensive under TSan;
         // keep the ordinary helper deadline strict while allowing this instrumentation case.
         auto terminal = await_terminal(*coordinator, *generation, 20s);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Ineligible &&
-                   terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceCorrupt && state->calls == 0,
-               "a legacy-unbounded direct request is clamped to the immutable entry-count hard limit");
+        ava::tests::expect_all("legacy-unbounded request is clamped to the immutable entry-count hard limit",
+                               {{"ineligible phase", terminal.phase == ava::app::BranchSummaryPhase::Ineligible},
+                                {"source corrupt code", terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceCorrupt},
+                                {"generator not called", state->calls == 0}});
       }
     }
   }
@@ -1287,7 +1365,7 @@ void test_coordinator_enforces_hard_read_policy()
     auto fixture = make_fixture("legacy-unbounded-file-request");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "hard file policy"))
     {
       std::vector<ava::session::SessionEntry> additions;
       additions.reserve(9000);
@@ -1305,13 +1383,14 @@ void test_coordinator_enforces_hard_read_policy()
         return;
       auto request = fixture->request(generator_for(state));
       request.read_limits = ava::session::legacy_unbounded_session_read_limits();
-      auto generation = (*coordinator)->prepare(std::move(request));
+      auto generation = prepare_checked(*coordinator, std::move(request), "hard file policy");
       if (generation)
       {
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Ineligible &&
-                   terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceCorrupt && state->calls == 0,
-               "a legacy-unbounded direct request is clamped to the immutable 8 MiB file cap");
+        ava::tests::expect_all("legacy-unbounded request is clamped to the immutable 8 MiB file cap",
+                               {{"ineligible phase", terminal.phase == ava::app::BranchSummaryPhase::Ineligible},
+                                {"source corrupt code", terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceCorrupt},
+                                {"generator not called", state->calls == 0}});
       }
     }
   }
@@ -1319,7 +1398,7 @@ void test_coordinator_enforces_hard_read_policy()
     auto fixture = make_fixture("legacy-unbounded-line-request");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "hard line policy"))
     {
       auto oversized_line = ava::session::serialize_session_entry_line(
           entry("legacy-hard-line", fixture->branch_tip_entry_id, ava::session::EntryType::Error, R"({"message":"line limit"})"));
@@ -1338,24 +1417,25 @@ void test_coordinator_enforces_hard_read_policy()
         return;
       auto request = fixture->request(generator_for(state));
       request.read_limits = ava::session::legacy_unbounded_session_read_limits();
-      auto generation = (*coordinator)->prepare(std::move(request));
+      auto generation = prepare_checked(*coordinator, std::move(request), "hard line policy");
       if (generation)
       {
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Ineligible &&
-                   terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceCorrupt && state->calls == 0,
-               "a legacy-unbounded direct request is clamped to the immutable 1 MiB line cap");
+        ava::tests::expect_all("legacy-unbounded request is clamped to the immutable 1 MiB line cap",
+                               {{"ineligible phase", terminal.phase == ava::app::BranchSummaryPhase::Ineligible},
+                                {"source corrupt code", terminal.eligibility_code == ava::app::BranchSummaryEligibilityCode::SourceCorrupt},
+                                {"generator not called", state->calls == 0}});
       }
     }
   }
   {
     auto fixture = make_fixture("caller-read-restriction");
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "caller read restriction"))
     {
       auto request = fixture->request();
       request.read_limits.max_entries = 2;
-      auto generation = (*coordinator)->prepare(std::move(request));
+      auto generation = prepare_checked(*coordinator, std::move(request), "caller read restriction");
       if (generation)
       {
         auto terminal = await_terminal(*coordinator, *generation);
@@ -1377,11 +1457,10 @@ void test_stale_source_relation_identity_and_final_existing()
     auto fixture = make_fixture("stale-tip");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "stale tip"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) &&
-          (*coordinator)->confirm(*generation).value_or(false) && state->wait_started())
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "stale tip");
+      if (generation && confirm_generation(*coordinator, *generation, "stale tip") && ava::tests::require(state->wait_started(), "stale tip generation starts"))
       {
         auto const changed_id = ava::core::make_id("entry");
         expect(raw_append(fixture->source_store.session_path(),
@@ -1389,8 +1468,9 @@ void test_stale_source_relation_identity_and_final_existing()
                "stale-tip fixture bypass-appends an unrelated valid marker");
         state->allow();
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource && !terminal.refresh_required,
-               "an unrelated source marker changes the complete recovery baseline and fails stale");
+        ava::tests::expect_all(
+            "an unrelated source marker changes the recovery baseline and fails stale",
+            {{"stale-source code", terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource}, {"no refresh", !terminal.refresh_required}});
       }
     }
   }
@@ -1398,10 +1478,10 @@ void test_stale_source_relation_identity_and_final_existing()
     auto fixture = make_fixture("stale-relation");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "stale relation"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "stale relation");
+      if (generation)
       {
         auto current_entries = fixture->current_authority.load();
         auto metadata = current_entries ? ava::session::make_session_metadata_entry({.parent_session_id = "changed-source",
@@ -1415,8 +1495,9 @@ void test_stale_source_relation_identity_and_final_existing()
         expect(appended.has_value(), appended ? "stale relation metadata appends before confirmation" : appended.error().format());
         expect((*coordinator)->confirm(*generation).value_or(false), "changed relation fixture confirms after mutation");
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource && state->calls == 0,
-               "a current parent/source/fork mutation while awaiting consent fails before provider work");
+        ava::tests::expect_all(
+            "a current relation mutation while awaiting consent fails before provider work",
+            {{"stale-source code", terminal.failure_code == ava::app::BranchSummaryFailureCode::StaleSource}, {"generator not called", state->calls == 0}});
       }
     }
   }
@@ -1424,11 +1505,11 @@ void test_stale_source_relation_identity_and_final_existing()
     auto fixture = make_fixture("stale-inode");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "stale inode"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) &&
-          (*coordinator)->confirm(*generation).value_or(false) && state->wait_started())
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "stale inode");
+      if (generation && confirm_generation(*coordinator, *generation, "stale inode") &&
+          ava::tests::require(state->wait_started(), "stale inode generation starts"))
       {
         auto const bytes = ava::tests::read_session_test_binary_file(fixture->source_store.session_path());
         auto const moved = fixture->source_store.session_path().string() + ".old";
@@ -1444,11 +1525,11 @@ void test_stale_source_relation_identity_and_final_existing()
     auto fixture = make_fixture("final-existing");
     auto state = std::make_shared<BlockingGenerator>();
     auto coordinator = ava::app::BranchSummaryCoordinator::create();
-    if (fixture && coordinator)
+    if (fixture && coordinator_ready(coordinator, "final existing"))
     {
-      auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-      if (generation && (*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) &&
-          (*coordinator)->confirm(*generation).value_or(false) && state->wait_started())
+      auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "final existing");
+      if (generation && confirm_generation(*coordinator, *generation, "final existing") &&
+          ava::tests::require(state->wait_started(), "final existing generation starts"))
       {
         auto const marker_id = ava::core::make_id("entry");
         std::string data = "{\"schema_version\":1,\"summary\":\"won elsewhere\",\"source_session_id\":\"" +
@@ -1461,8 +1542,8 @@ void test_stale_source_relation_identity_and_final_existing()
                "final-existing fixture bypass-appends the exact competing summary");
         state->allow();
         auto terminal = await_terminal(*coordinator, *generation);
-        expect(terminal.phase == ava::app::BranchSummaryPhase::Existing && terminal.refresh_required,
-               "an exact matching summary observed on the final leased read wins over generic baseline staleness");
+        ava::tests::expect_all("an exact competing summary wins over generic baseline staleness",
+                               {{"existing phase", terminal.phase == ava::app::BranchSummaryPhase::Existing}, {"refresh required", terminal.refresh_required}});
       }
     }
   }
@@ -1473,11 +1554,11 @@ void test_matching_summary_is_existing_only_for_exact_final_coverage()
   auto fixture = make_fixture("nonfinal-matching-summary");
   auto state = std::make_shared<BlockingGenerator>();
   auto coordinator = ava::app::BranchSummaryCoordinator::create();
-  if (!fixture || !coordinator)
+  if (!fixture || !coordinator_ready(coordinator, "nonfinal existing"))
     return;
-  auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-  if (!generation || !(*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) ||
-      !(*coordinator)->confirm(*generation).value_or(false) || !state->wait_started())
+  auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "nonfinal existing");
+  if (!generation || !confirm_generation(*coordinator, *generation, "nonfinal existing") ||
+      !ava::tests::require(state->wait_started(), "nonfinal existing generation starts"))
     return;
   auto const marker_id = ava::core::make_id("entry");
   std::string data = "{\"schema_version\":1,\"summary\":\"nonfinal competing summary\",\"source_session_id\":\"" +
@@ -1537,12 +1618,12 @@ void test_append_commit_states_are_terminal_and_never_retried()
       }
     };
     auto coordinator = ava::app::BranchSummaryCoordinator::create(std::move(options));
-    if (!coordinator)
+    if (!coordinator_ready(coordinator, "append fault"))
       continue;
     auto state = std::make_shared<BlockingGenerator>();
     state->release = true;
-    auto generation = (*coordinator)->prepare(fixture->request(generator_for(state)));
-    if (!generation || !(*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+    auto generation = prepare_awaiting(*coordinator, fixture->request(generator_for(state)), "append fault");
+    if (!generation)
       continue;
     expect((*coordinator)->confirm(*generation).value_or(false), "append fault fixture confirms");
     auto terminal = await_terminal(*coordinator, *generation);
@@ -1603,10 +1684,10 @@ void test_production_provider_request_is_metadata_only()
   request.provider_options.access_token = "direct-fake-token";
   request.provider_options.transport_factory = [state] { return std::make_unique<ProviderTransport>(state); };
   auto coordinator = ava::app::BranchSummaryCoordinator::create();
-  if (!coordinator)
+  if (!coordinator_ready(coordinator, "direct provider"))
     return;
-  auto generation = (*coordinator)->prepare(std::move(request));
-  if (!generation || !(*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+  auto generation = prepare_awaiting(*coordinator, std::move(request), "direct provider");
+  if (!generation)
     return;
   expect((*coordinator)->confirm(*generation).value_or(false), "direct provider branch summary confirms");
   auto terminal = await_terminal(*coordinator, *generation);
@@ -1636,7 +1717,7 @@ void test_production_provider_request_is_metadata_only()
     auto oauth_paths = ava::tests::app_test_paths(oauth_fixture->root / "xdg");
     auto oauth_anchors = ava::core::AnchorSet::open({oauth_fixture->workspace, oauth_paths.ava_config_dir, oauth_paths.ava_state_dir});
     auto oauth_state = std::make_shared<ProviderTransportState>();
-    if (oauth_anchors)
+    if (ava::tests::require(oauth_anchors.has_value(), "OAuth provider opens fixture anchors"))
     {
       auto oauth_request = oauth_fixture->request();
       oauth_request.paths = oauth_paths;
@@ -1648,10 +1729,10 @@ void test_production_provider_request_is_metadata_only()
       oauth_request.provider_options.account_id = "oauth-account";
       oauth_request.provider_options.transport_factory = [oauth_state] { return std::make_unique<ProviderTransport>(oauth_state); };
       auto oauth_coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto oauth_generation = oauth_coordinator ? (*oauth_coordinator)->prepare(std::move(oauth_request))
-                                                : ava::core::Result<std::uint64_t>(std::unexpected(oauth_coordinator.error()));
-      if (oauth_coordinator && oauth_generation &&
-          (*oauth_coordinator)->wait_for_phase(*oauth_generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      if (!coordinator_ready(oauth_coordinator, "OAuth provider"))
+        return;
+      auto oauth_generation = prepare_awaiting(*oauth_coordinator, std::move(oauth_request), "OAuth provider");
+      if (oauth_generation)
       {
         expect((*oauth_coordinator)->confirm(*oauth_generation).value_or(false), "OAuth provider fixture confirms");
         auto oauth_terminal = await_terminal(*oauth_coordinator, *oauth_generation);
@@ -1679,7 +1760,7 @@ void test_production_provider_request_is_metadata_only()
       continue;
     auto exception_paths = ava::tests::app_test_paths(exception_fixture->root / "xdg");
     auto exception_anchors = ava::core::AnchorSet::open({exception_fixture->workspace, exception_paths.ava_config_dir, exception_paths.ava_state_dir});
-    if (!exception_anchors)
+    if (!ava::tests::require(exception_anchors.has_value(), "provider exception opens fixture anchors"))
       continue;
     auto exception_request = exception_fixture->request();
     exception_request.paths = exception_paths;
@@ -1692,10 +1773,10 @@ void test_production_provider_request_is_metadata_only()
     else
       exception_request.provider_options.transport_factory = [] { return std::make_unique<ThrowingProviderTransport>(); };
     auto exception_coordinator = ava::app::BranchSummaryCoordinator::create();
-    auto exception_generation = exception_coordinator ? (*exception_coordinator)->prepare(std::move(exception_request))
-                                                      : ava::core::Result<std::uint64_t>(std::unexpected(exception_coordinator.error()));
-    if (!exception_coordinator || !exception_generation ||
-        !(*exception_coordinator)->wait_for_phase(*exception_generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+    if (!coordinator_ready(exception_coordinator, "provider exception"))
+      continue;
+    auto exception_generation = prepare_awaiting(*exception_coordinator, std::move(exception_request), "provider exception");
+    if (!exception_generation)
       continue;
     expect((*exception_coordinator)->confirm(*exception_generation).value_or(false), "provider exception fixture confirms");
     auto exception_terminal = await_terminal(*exception_coordinator, *exception_generation);
@@ -1711,7 +1792,7 @@ void test_production_provider_request_is_metadata_only()
     auto oversized_anchors = ava::core::AnchorSet::open({oversized_fixture->workspace, oversized_paths.ava_config_dir, oversized_paths.ava_state_dir});
     auto oversized_state = std::make_shared<ProviderTransportState>();
     oversized_state->response_body.assign(ava::app::kMaxBranchSummaryRawResponseBytes + 1, 'x');
-    if (oversized_anchors)
+    if (ava::tests::require(oversized_anchors.has_value(), "oversized provider opens fixture anchors"))
     {
       auto oversized_request = oversized_fixture->request();
       oversized_request.paths = oversized_paths;
@@ -1719,10 +1800,10 @@ void test_production_provider_request_is_metadata_only()
       oversized_request.provider_options.access_token = "direct-fake-token";
       oversized_request.provider_options.transport_factory = [oversized_state] { return std::make_unique<ProviderTransport>(oversized_state); };
       auto oversized_coordinator = ava::app::BranchSummaryCoordinator::create();
-      auto oversized_generation = oversized_coordinator ? (*oversized_coordinator)->prepare(std::move(oversized_request))
-                                                        : ava::core::Result<std::uint64_t>(std::unexpected(oversized_coordinator.error()));
-      if (oversized_coordinator && oversized_generation &&
-          (*oversized_coordinator)->wait_for_phase(*oversized_generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s))
+      if (!coordinator_ready(oversized_coordinator, "oversized provider"))
+        return;
+      auto oversized_generation = prepare_awaiting(*oversized_coordinator, std::move(oversized_request), "oversized provider");
+      if (oversized_generation)
       {
         expect((*oversized_coordinator)->confirm(*oversized_generation).value_or(false), "raw provider cap fixture confirms");
         auto oversized_terminal = await_terminal(*oversized_coordinator, *oversized_generation);
@@ -1741,15 +1822,16 @@ void test_cancellation_linearizes_before_revalidation_and_append()
     if (!fixture)
       continue;
     auto blocker = std::make_shared<PhaseBlocker>(phase);
-    auto coordinator =
-        ava::app::BranchSummaryCoordinator::create({.operation_deadline = 2s, .on_snapshot = [blocker](auto const& snapshot) { blocker->observe(snapshot); }});
-    if (!coordinator)
+    auto coordinator = ava::app::BranchSummaryCoordinator::create({.operation_deadline = 30s,
+                                                                   .on_snapshot = [blocker](auto const& snapshot) { blocker->observe(snapshot); },
+                                                                   .configure_source_store_for_test = nullptr});
+    ReleasePhaseOnExit release_phase{blocker};
+    if (!coordinator_ready(coordinator, "cancellation linearization"))
       continue;
     auto generator = [](ava::app::BranchSummaryGenerationPrompt const&, std::stop_token,
                         std::chrono::steady_clock::time_point) -> ava::core::Result<std::string> { return "cancel linearization summary"; };
-    auto generation = (*coordinator)->prepare(fixture->request(generator));
-    if (!generation || !(*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s) ||
-        !(*coordinator)->confirm(*generation).value_or(false))
+    auto generation = prepare_awaiting(*coordinator, fixture->request(generator), "cancellation linearization");
+    if (!generation || !confirm_generation(*coordinator, *generation, "cancellation linearization"))
       continue;
     expect(blocker->wait_reached(), "cancellation reaches " + std::string(ava::app::to_string(phase)));
     auto const before = ava::tests::read_session_test_binary_file(fixture->source_store.session_path());
@@ -1771,9 +1853,11 @@ void test_shutdown_is_safe_in_every_nonterminal_phase()
     if (!fixture)
       continue;
     auto blocker = std::make_shared<PhaseBlocker>(phase);
-    auto coordinator =
-        ava::app::BranchSummaryCoordinator::create({.operation_deadline = 2s, .on_snapshot = [blocker](auto const& snapshot) { blocker->observe(snapshot); }});
-    if (!coordinator)
+    auto coordinator = ava::app::BranchSummaryCoordinator::create({.operation_deadline = 30s,
+                                                                   .on_snapshot = [blocker](auto const& snapshot) { blocker->observe(snapshot); },
+                                                                   .configure_source_store_for_test = nullptr});
+    ReleasePhaseOnExit release_phase{blocker};
+    if (!coordinator_ready(coordinator, "shutdown phase"))
       continue;
     auto generator = [](ava::app::BranchSummaryGenerationPrompt const&, std::stop_token,
                         std::chrono::steady_clock::time_point) -> ava::core::Result<std::string> { return "shutdown phase summary"; };
@@ -1789,8 +1873,8 @@ void test_shutdown_is_safe_in_every_nonterminal_phase()
       generation = *prepared;
       if (phase != ava::app::BranchSummaryPhase::AwaitingConfirmation)
       {
-        expect((*coordinator)->wait_for_phase(*generation, ava::app::BranchSummaryPhase::AwaitingConfirmation, 3s), "shutdown phase reaches confirmation gate");
-        expect((*coordinator)->confirm(*generation).value_or(false), "shutdown phase confirms");
+        if (!await_confirmation(*coordinator, *generation, "shutdown phase") || !confirm_generation(*coordinator, *generation, "shutdown phase"))
+          continue;
       }
     }
     expect(blocker->wait_reached(), "shutdown test reaches " + std::string(ava::app::to_string(phase)));
@@ -1888,6 +1972,7 @@ void test_ordinary_provider_context_ignores_branch_summaries()
 
 void run_branch_summary_coordinator_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("branch-summary-tests-");
   test_recoverable_snapshot_fingerprint_is_exact_sha256();
   test_projection_is_pure_and_strict();
   test_projection_boundaries_and_summary_sanitizer();

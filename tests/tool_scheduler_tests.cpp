@@ -1,4 +1,7 @@
+#include "tests/support/session_test_support.h"
+#include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/agent/tool_scheduler.h"
 #include "ava/core/error.h"
@@ -12,7 +15,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <filesystem>
-#include <fstream>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -41,7 +43,7 @@ ava::agent::ToolDispatchResult successful_result(ava::agent::ToolScheduleSlot co
 void expect_classification(ava::agent::ToolScheduleClassification const& actual, ToolScheduleEligibility eligibility, std::string_view reason,
                            std::string_view message)
 {
-  expect(actual.eligibility == eligibility && actual.reason == reason, std::string(message));
+  ava::tests::expect_all(std::string(message), {{"eligibility", actual.eligibility == eligibility}, {"reason", actual.reason == reason}});
 }
 
 void expect_builtin_classification(std::string_view name, ToolScheduleEligibility eligibility, std::string_view reason)
@@ -126,7 +128,7 @@ bool has_error_context(ava::core::Error const& error, std::string_view key, std:
 template <typename Predicate>
 void wait_for_test(std::condition_variable& changed, std::unique_lock<std::mutex>& lock, Predicate predicate, std::string const& message)
 {
-  bool const ready = changed.wait_for(lock, std::chrono::seconds(5), predicate);
+  bool const ready = changed.wait_until(lock, ava::tests::now_plus_seconds(5), predicate);
   expect(ready, message);
 }
 
@@ -260,6 +262,7 @@ void test_run_parallel_tool_schedule_splits_epochs_at_barriers()
     bool barrier_started = false;
     bool barrier_finished = false;
     bool read_after_barrier_started = false;
+    bool read_observed_finished_barrier = false;
   } state;
 
   std::optional<ava::core::Result<std::vector<ava::agent::ToolScheduleOutcome>>> scheduled;
@@ -291,7 +294,7 @@ void test_run_parallel_tool_schedule_splits_epochs_at_barriers()
 
           std::lock_guard lock(state.mutex);
           state.read_after_barrier_started = true;
-          expect(state.barrier_finished, "read after a barrier starts only after the barrier finished");
+          state.read_observed_finished_barrier = state.barrier_finished;
           state.changed.notify_all();
           return successful_result(slot);
         },
@@ -306,6 +309,7 @@ void test_run_parallel_tool_schedule_splits_epochs_at_barriers()
     state.changed.notify_all();
   }
   runner.join();
+  expect(state.read_observed_finished_barrier, "read after a barrier starts only after the barrier finished");
 
   expect(scheduled.has_value(), "parallel epoch splitting test stores a scheduler result");
   expect(scheduled && scheduled->has_value(), scheduled && !*scheduled ? scheduled->error().format() : "parallel scheduler succeeds across split epochs");
@@ -481,7 +485,7 @@ void test_run_parallel_tool_schedule_replaces_immediately_completed_capped_worke
   bool finished = false;
   {
     std::unique_lock lock(completion.mutex);
-    finished = completion.changed.wait_for(lock, std::chrono::seconds(10), [&] { return completion.finished; });
+    finished = completion.changed.wait_until(lock, ava::tests::now_plus_seconds(10), [&] { return completion.finished; });
   }
   if (!finished)
     static_cast<void>(cancellation.request_stop());
@@ -558,7 +562,7 @@ void test_run_parallel_tool_schedule_refills_capacity_after_retiring_a_completed
   bool finished = false;
   {
     std::unique_lock lock(state.mutex);
-    finished = state.changed.wait_for(lock, std::chrono::seconds(5), [&] { return state.finished; });
+    finished = state.changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return state.finished; });
   }
   if (!finished)
     static_cast<void>(cancellation.request_stop());
@@ -621,7 +625,7 @@ void test_run_parallel_tool_schedule_signals_stop_to_later_workers_on_error()
     wait_for_test(state.changed, lock, [&] { return state.started == 3; }, "stop-signaling test starts all workers");
     state.fail_first = true;
     state.changed.notify_all();
-    later_workers_stopped = state.changed.wait_for(lock, std::chrono::seconds(5), [&] { return state.stopped_workers.size() == 2; });
+    later_workers_stopped = state.changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return state.stopped_workers.size() == 2; });
   }
   if (!later_workers_stopped)
     static_cast<void>(cancellation.request_stop());
@@ -945,7 +949,7 @@ void test_run_parallel_tool_schedule_keeps_non_eligible_slots_sequential()
     {
       wait_for_test(
           state.changed, lock, [&] { return state.start_order.size() == index + 1; }, "non-eligible parallel scheduler test starts the next sequential slot");
-      expect(state.active == 1 && state.start_order.back() == index,
+      expect(state.active == 1 && !state.start_order.empty() && state.start_order.back() == index,
              "non-ready read candidates, barriers, and deferred slots run one-at-a-time in provider order");
       state.released[index] = true;
       state.changed.notify_all();
@@ -964,14 +968,8 @@ void test_run_parallel_tool_schedule_dispatches_real_read_search_tools()
 
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace / "src");
-  {
-    std::ofstream file(workspace / "note.txt", std::ios::binary | std::ios::trunc);
-    file << "alpha scheduler\nsecond line\n";
-  }
-  {
-    std::ofstream file(workspace / "src" / "code.cpp", std::ios::binary | std::ios::trunc);
-    file << "int scheduler_symbol = 1;\n";
-  }
+  ava::tests::write_test_file(workspace / "note.txt", "alpha scheduler\nsecond line\n");
+  ava::tests::write_test_file(workspace / "src" / "code.cpp", "int scheduler_symbol = 1;\n");
 
   std::vector calls{
       call("call_read", "read_file"),
@@ -1001,6 +999,8 @@ void test_run_parallel_tool_schedule_dispatches_real_read_search_tools()
   expect(outcomes && outcomes->size() == 4 && (*outcomes)[0].slot.call.name == "read_file" && (*outcomes)[1].slot.call.name == "list_directory" &&
              (*outcomes)[2].slot.call.name == "glob" && (*outcomes)[3].slot.call.name == "grep",
          "real read/search parallel dispatch keeps provider-order outcomes");
+  if (!ava::tests::require(outcomes && outcomes->size() == 4, "real read/search dispatch returns all four outcomes"))
+    return;
   expect(outcomes && (*outcomes)[0].result.success && (*outcomes)[0].result.result_text.find("alpha scheduler") != std::string::npos,
          "parallel scheduler can dispatch real read_file");
   expect(outcomes && (*outcomes)[1].result.success && (*outcomes)[1].result.result_text.find("note.txt") != std::string::npos,
@@ -1015,6 +1015,7 @@ void test_run_parallel_tool_schedule_dispatches_real_read_search_tools()
 
 void run_tool_scheduler_tests()
 {
+  ava::tests::HermeticTestEnvironment environment("tool-scheduler-env-");
   test_classify_builtin_tools_for_scheduling();
   test_classify_brokered_external_metadata_for_scheduling();
   test_build_sequential_tool_schedule_preserves_provider_order();

@@ -2,7 +2,9 @@
 #include "tests/agent_loop_test_declarations.h"
 #include "tests/support/agent_loop_test_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/http/transport.h"
 #include "ava/app/command_jobs.h"
 #include "ava/agent/agent_loop.h"
@@ -39,142 +41,110 @@
 #include <sys/stat.h>
 
 using agent_loop_test::BlockingBackgroundTransport;
+using agent_loop_test::ChildSchedulingEvent;
+using agent_loop_test::ChildSchedulingExactFileAccess;
+using agent_loop_test::ChildSchedulingObserver;
+using agent_loop_test::ChildSchedulingWitness;
 using agent_loop_test::SharedFakeTransport;
 using agent_loop_test::sse_response;
 using agent_loop_test::tool_call_sse;
 using agent_loop_test::TraceCollector;
+using agent_loop_test::wait_for_published_running_job;
 
 namespace {
-std::vector<ava::agent::SubagentCoordinatorJobSnapshot> wait_for_published_running_job(ava::agent::SubagentCoordinator const& coordinator,
-                                                                                       std::string const& parent_session_id, std::size_t expected_total_count)
-{
-  auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-  while (true)
-  {
-    auto jobs = coordinator.list(parent_session_id);
-    // Transport request readiness does not guarantee coordinator publication.
-    if (jobs.size() == expected_total_count &&
-        std::ranges::any_of(jobs, [](auto const& snapshot) { return snapshot.job.execution == ava::agent::SubagentExecutionState::Running; }))
-      return jobs;
-    if (std::chrono::steady_clock::now() >= deadline)
-      return jobs;
-    std::this_thread::yield();
-  }
-}
-
-// Deterministic child-scheduling witness. Trace callbacks and exact-file reads
-// record under one mutex/counter so ordering never depends on elapsed time.
-struct ChildSchedulingEvent
-{
-  enum class Kind
-  {
-    RunStart,
-    ToolStart,
-    FileRead
-  };
-
-  Kind kind = Kind::RunStart;
-  std::string session_id = {};
-  std::string parent_session_id = {};
-  std::string tool_name = {};
-  std::string file_name = {};
-  std::thread::id thread = {};
-  std::uint64_t order = 0;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
-
-class ChildSchedulingWitness
+class ScopedBackgroundRelease
 {
  public:
-  void record_trace(ava::observability::TraceEvent const& event)
-  {
-    std::optional<ChildSchedulingEvent::Kind> kind;
-    if (event.type == ava::observability::TraceEventType::AgentRunStart)
-      kind = ChildSchedulingEvent::Kind::RunStart;
-    else if (event.type == ava::observability::TraceEventType::ToolDispatchStart)
-      kind = ChildSchedulingEvent::Kind::ToolStart;
-    if (!kind)
-      return;
-    std::string tool_name;
-    for (auto const& field : event.fields)
-      if (field.key == "tool_name")
-        tool_name = field.value;
-    std::lock_guard lock(mutex_);
-    events_.push_back(ChildSchedulingEvent{.kind = *kind,
-                                           .session_id = event.session_id,
-                                           .parent_session_id = event.parent_session_id,
-                                           .tool_name = std::move(tool_name),
-                                           .thread = std::this_thread::get_id(),
-                                           .order = next_order_++});
-  }
-
-  void record_file_read(std::filesystem::path const& absolute_path)
-  {
-    std::lock_guard lock(mutex_);
-    events_.push_back(ChildSchedulingEvent{.kind = ChildSchedulingEvent::Kind::FileRead,
-                                           .file_name = absolute_path.filename().string(),
-                                           .thread = std::this_thread::get_id(),
-                                           .order = next_order_++});
-  }
-
-  [[nodiscard]] std::vector<ChildSchedulingEvent> snapshot() const
-  {
-    std::lock_guard lock(mutex_);
-    return events_;
-  }
-
+  explicit ScopedBackgroundRelease(std::shared_ptr<BlockingBackgroundTransport::State> state) : state_(std::move(state)) { }
+  ~ScopedBackgroundRelease() { state_->release_success(); }
+  ScopedBackgroundRelease(ScopedBackgroundRelease const&) = delete;
+  ScopedBackgroundRelease& operator=(ScopedBackgroundRelease const&) = delete;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
  private:
-  mutable std::mutex mutex_;
-  std::vector<ChildSchedulingEvent> events_;
-  std::uint64_t next_order_ = 0;
-};
-
-class ChildSchedulingObserver final : public ava::observability::RunObserver
-{
- public:
-  explicit ChildSchedulingObserver(std::shared_ptr<ChildSchedulingWitness> witness) : witness_(std::move(witness)) { }
-
-  void on_event(ava::observability::TraceEvent const& event) override { witness_->record_trace(event); }
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  std::shared_ptr<ChildSchedulingWitness> witness_;
-};
-
-class ChildSchedulingExactFileAccess final : public ava::tools::ExactFileAccess
-{
- public:
-  explicit ChildSchedulingExactFileAccess(std::shared_ptr<ChildSchedulingWitness> witness) : witness_(std::move(witness)) { }
-
-  [[nodiscard]] bool supports_read_text_file() const noexcept override { return true; }
-  [[nodiscard]] bool supports_write_text_file() const noexcept override { return false; }
-
-  [[nodiscard]] ava::core::Result<std::string> read_text_file(std::filesystem::path const& absolute_path, ava::tools::ToolIoCancelCallback) const override
-  {
-    witness_->record_file_read(absolute_path);
-    std::ifstream file(absolute_path, std::ios::binary);
-    if (!file)
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "child scheduling fixture file is missing"));
-    std::ostringstream content;
-    content << file.rdbuf();
-    return content.str();
-  }
-
-  [[nodiscard]] ava::core::VoidResult write_text_file(std::filesystem::path const&, std::string_view, ava::tools::ToolIoCancelCallback) const override
-  {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "child scheduling fixture is read-only"));
-  }
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  std::shared_ptr<ChildSchedulingWitness> witness_;
+  std::shared_ptr<BlockingBackgroundTransport::State> state_;
 };
 } // namespace
+
+void test_blocked_child_fixture_releases_after_early_setup_exit()
+{
+  auto state = std::make_shared<BlockingBackgroundTransport::State>();
+  BlockingBackgroundTransport transport(state, sse_response("fixture released"));
+  auto worker = std::async(std::launch::async, [&] { return transport.send(ava::http::HttpRequest{}); });
+  ScopedBackgroundRelease failure_cleanup(state);
+  auto abort_setup = [&] {
+    ScopedBackgroundRelease release_on_exit(state);
+    expect(state->wait_for_request(std::chrono::milliseconds(5000)), "cleanup regression fixture reaches its blocking request");
+    return;  // The same early exit used when a foreground fixture cannot proceed.
+  };
+  abort_setup();
+  bool const released = worker.wait_until(ava::tests::now_plus_seconds(5)) == std::future_status::ready;
+  if (!released)
+    state->release_success();
+  auto result = worker.get();
+  ava::tests::expect_all("early setup exit releases a blocked child before future destruction",
+                         {{"worker became ready", released}, {"transport returned its response", result && result->body == "fixture released"}});
+}
+
+void test_agent_loop_child_rejects_unadvertised_task_and_job_calls()
+{
+  agent_loop_test::AgentLoopFixture fixture("agent-real-child-rejects-controls");
+  auto created = ava::agent::SubagentCoordinator::create();
+  if (!ava::tests::require(created.has_value(), "real-child rejection fixture creates coordinator"))
+    return;
+  auto coordinator = *created;
+  auto responses = std::make_shared<std::vector<ava::http::HttpResponse>>(std::initializer_list<ava::http::HttpResponse>{
+      sse_response(tool_call_sse("nested_task", "task", R"({"description":"nested","prompt":"must not run","subagent_type":"general"})") + "data: [DONE]\n\n"),
+      sse_response(tool_call_sse("nested_job", "job", R"({"action":"list"})") + "data: [DONE]\n\n"),
+      sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child rejected controls\"}\n\ndata: [DONE]\n\n")});
+  auto requests = std::make_shared<std::vector<ava::http::HttpRequest>>();
+  auto mutex = std::make_shared<std::mutex>();
+  auto options = fixture.options();
+  options.subagent_coordinator = coordinator;
+  options.background_provider_factory = []() -> ava::core::Result<std::unique_ptr<ava::provider::Provider>> {
+    return std::make_unique<ava::provider::OpenAIProvider>("https://api.example.test");
+  };
+  options.background_transport_factory = [=]() -> ava::core::Result<std::unique_ptr<ava::http::Transport>> {
+    return std::make_unique<SharedFakeTransport>(responses, requests, mutex);
+  };
+  ava::agent::AgentLoop loop(std::move(options));
+  ava::tests::FakeTransport parent(
+      {sse_response(tool_call_sse("parent_task", "task", R"({"description":"child","prompt":"Reject recursive controls.","subagent_type":"general"})") +
+                    "data: [DONE]\n\n"),
+       sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent done\"}\n\ndata: [DONE]\n\n")});
+  auto result = loop.run_turn("delegate", fixture.store, fixture.provider, parent);
+  if (!ava::tests::require(result && result->final_text == "parent done", "parent completes after the real child handles rejected calls"))
+    return;
+  auto const jobs = coordinator->list(fixture.store.session_id());
+  if (!ava::tests::require(jobs.size() == 1, "real child produces exactly one parent-owned job"))
+    return;
+  auto const& child_id = jobs.front().job.identity.child_session_id;
+  auto sessions = ava::session::SessionStore::list_sessions(fixture.workspace, fixture.root / "sessions");
+  ava::tests::expect_all("real child construction forbids recursive task/job side effects",
+                         {{"only parent and child sessions", sessions && sessions->size() == 2},
+                          {"no child-owned jobs", coordinator->list(child_id).empty()},
+                          {"child completed", jobs.front().job.execution == ava::agent::SubagentExecutionState::Completed}});
+  auto child = ava::session::SessionStore::open(fixture.workspace, child_id, fixture.root / "sessions");
+  if (!ava::tests::require(child.has_value(), "real child transcript opens"))
+    return;
+  auto entries = child->load();
+  if (!ava::tests::require(entries.has_value(), "real child transcript loads"))
+    return;
+  std::size_t rejected = 0;
+  for (auto const& entry : *entries)
+    if (entry.type == ava::session::EntryType::ToolResult)
+    {
+      auto const id = ava::core::json::string_field(entry.data_json, "call_id").value_or("");
+      if (id == "nested_task" || id == "nested_job")
+      {
+        ++rejected;
+        auto const structured = ava::core::json::object_field(entry.data_json, "structured_result").value_or("{}");
+        ava::tests::expect_eq(ava::core::json::string_field(structured, "status").value_or(""), std::string("error"), "real child rejects " + id);
+      }
+    }
+  ava::tests::expect_eq(rejected, std::size_t(2), "both malicious child calls have durable failed results");
+  expect(agent_loop_test::bound_tool_result_call_ids(*entries) == std::vector<std::string>({"nested_task", "nested_job"}),
+         "real child rejected results are bound to exactly the two committed malicious calls");
+}
 
 void test_agent_loop_private_task_launch_follows_public_running_and_stays_private()
 {
@@ -616,7 +586,7 @@ void test_agent_loop_foreground_task_child_uses_parent_permission_resolver()
          "foreground child Ask operations use the inherited parent resolver while task launch itself remains auto-allowed");
 }
 
-void test_agent_loop_child_rejects_unadvertised_task_and_job_calls()
+void test_tool_visibility_exclusion_rejects_task_and_job_calls()
 {
   auto const root = temp_root() / "agent-child-rejects-job-controls";
   std::error_code remove_error;
@@ -651,10 +621,15 @@ void test_agent_loop_child_rejects_unadvertised_task_and_job_calls()
   bool const schemas_hidden = requests.size() == 3 && requests.front().body.find("\"name\":\"task\"") == std::string::npos &&
                               requests.front().body.find("\"name\":\"job\"") == std::string::npos;
   expect(result && result->final_text == "child controls rejected" && result->tool_calls == 2 && requests.size() == 3,
-         "child malicious task/job calls return bounded tool errors and the child continues");
-  expect(requests.size() == 3 && requests[1].body.find("unknown tool") != std::string::npos, "child malicious task call cannot start a recursive subagent");
-  expect(requests.size() == 3 && requests[2].body.find("unknown tool") != std::string::npos, "child malicious job call cannot reach a coordinator");
-  expect(schemas_hidden, "child provider schema hides both task and job controls");
+         "explicit visibility exclusions reject both configured task/job calls and allow continuation");
+  if (!ava::tests::require(result && result->tool_timeline.size() == 2, "excluded task/job calls each produce a tool result"))
+    return;
+  for (auto const& tool : result->tool_timeline)
+    ava::tests::expect_all("excluded tool " + tool.name,
+                           {{"failed dispatch", tool.status == ava::agent::ToolTimelineStatus::Error}, {"typed tool category", tool.error_category == "tool"}});
+  expect(schemas_hidden, "explicit visibility exclusions hide both task and job schemas");
+  auto const sessions = ava::session::SessionStore::list_sessions(workspace, root / "sessions");
+  expect(sessions && sessions->size() == 1, "explicit task exclusion creates no additional session");
 }
 
 void test_agent_loop_coordinated_foreground_uses_fresh_worker_and_preserves_result_accounting()
@@ -760,6 +735,7 @@ void test_agent_loop_coordinated_foreground_uses_fresh_worker_and_preserves_resu
                     "data: [DONE]\n\n")});
   auto resumed_parent =
       std::async(std::launch::async, [&] { return loop.run_turn("resume coordinated child", store, parent_provider, resume_parent_transport); });
+  ScopedBackgroundRelease release_resumed_child(resume_state);
   expect(resume_state->wait_for_request(std::chrono::milliseconds(1000)), "completed child session starts a later foreground worker with the same task_id");
   auto resumed_jobs = wait_for_published_running_job(*coordinator, store.session_id(), 2);
   auto resumed_job =
@@ -777,7 +753,7 @@ void test_agent_loop_coordinated_foreground_uses_fresh_worker_and_preserves_resu
   }
   auto const resumed_job_id = resumed_job->job.identity.job_id;
   auto promoted_resume = coordinator->promote(store.session_id(), resumed_job_id);
-  bool const resumed_parent_woke = resumed_parent.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  bool const resumed_parent_woke = resumed_parent.wait_until(ava::tests::now_plus_seconds(5)) == std::future_status::ready;
   if (!resumed_parent_woke)
     resume_state->release_success();
   auto resumed_result = resumed_parent.get();
@@ -846,6 +822,7 @@ void test_agent_loop_foreground_promotion_wakes_parent_without_restarting_child(
   });
 
   auto parent = std::async(std::launch::async, [&] { return loop.run_turn("delegate then promote", store, parent_provider, parent_transport); });
+  ScopedBackgroundRelease release_child(child_state);
   expect(child_state->wait_for_request(std::chrono::milliseconds(1000)), "foreground promotion child reaches its fresh transport");
   auto jobs = wait_for_published_running_job(*coordinator, store.session_id(), 1);
   expect(jobs.size() == 1, "foreground promotion publishes one stable job before waiting");
@@ -861,7 +838,7 @@ void test_agent_loop_foreground_promotion_wakes_parent_without_restarting_child(
   expect(active_command && !active_command->output.empty() && promoted && promoted->job.was_promoted &&
              promoted->job.execution == ava::agent::SubagentExecutionState::Running,
          "out-of-band active-run /jobs promote durably changes mode while preserving the running worker");
-  bool const parent_woke = parent.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  bool const parent_woke = parent.wait_until(ava::tests::now_plus_seconds(5)) == std::future_status::ready;
   if (!parent_woke)
     child_state->release_success();
   auto parent_result = parent.get();
@@ -934,6 +911,7 @@ void test_agent_loop_promoted_failure_persists_sanitized_child_error()
   });
 
   auto parent = std::async(std::launch::async, [&] { return loop.run_turn("delegate promoted failure", store, parent_provider, parent_transport); });
+  ScopedBackgroundRelease release_child(child_state);
   expect(child_state->wait_for_request(std::chrono::milliseconds(1000)), "promoted failure child reaches transport");
   auto jobs = wait_for_published_running_job(*coordinator, store.session_id(), 1);
   if (jobs.empty())
@@ -945,8 +923,13 @@ void test_agent_loop_promoted_failure_persists_sanitized_child_error()
   }
   auto promoted = coordinator->promote(store.session_id(), jobs.front().job.identity.job_id);
   expect(promoted && promoted->job.was_promoted, "promoted failure switches the running foreground job to background delivery");
+  bool const parent_woke = parent.wait_until(ava::tests::now_plus_seconds(5)) == std::future_status::ready;
+  if (!parent_woke)
+    child_state->release_success();
   auto parent_result = parent.get();
-  expect(parent_result && parent_result->final_text == "parent saw promotion", "promoted failure releases the parent before child terminal failure");
+  ava::tests::expect_all("promotion releases the parent before the child is allowed to fail",
+                         {{"parent became ready before release", parent_woke},
+                          {"parent completed continuation", parent_result && parent_result->final_text == "parent saw promotion"}});
   child_state->release_success();
   auto failed = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::seconds(1));
   auto child_store = ava::session::SessionStore::open(workspace, jobs.front().job.identity.child_session_id, session_root);
@@ -1172,7 +1155,7 @@ void test_agent_loop_task_subagent_does_not_inherit_parallel_read_search_schedul
       expect(jobs.size() == 1, "background child scheduling fixture publishes exactly one job");
       if (jobs.size() == 1)
       {
-        auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        auto const deadline = ava::tests::now_plus_seconds(5);
         for (;;)
         {
           auto waited = coordinator->wait(store.session_id(), jobs.front().job.identity.job_id, std::chrono::milliseconds(50));
@@ -1363,88 +1346,31 @@ void test_agent_config_loads_project_definitions()
   auto const agent_dir = workspace / ".ava" / "agents";
   std::filesystem::create_directories(global_agent_dir);
   std::filesystem::create_directories(agent_dir);
-  {
-    std::ofstream file(global_agent_dir / "coder.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "name: coder\n"
-            "description: Global primary coder.\n"
-            "mode: primary\n"
-            "---\n"
-            "GLOBAL PRIMARY INSTRUCTIONS";
-  }
-  {
-    // Create the lexically later file first so this fixture proves discovery sorts paths rather than relying on filesystem iteration order.
-    std::ofstream file(global_agent_dir / "ordered-z.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "name: ordered\n"
-            "description: Lexically later primary.\n"
-            "mode: primary\n"
-            "---\n"
-            "LEXICALLY LATER PRIMARY";
-  }
-  {
-    std::ofstream file(global_agent_dir / "ordered-a.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "name: ordered\n"
-            "description: Lexically earlier primary.\n"
-            "mode: primary\n"
-            "---\n"
-            "LEXICALLY EARLIER PRIMARY";
-  }
-  {
-    std::ofstream file(global_agent_dir / "broken-primary.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "description: Broken primary.\n"
-            "mode: primary\n"
-            "tools: unrestricted\n"
-            "---\n"
-            "BROKEN PRIMARY";
-  }
-  {
-    std::ofstream file(agent_dir / "reviewer.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "name: reviewer\n"
-            "description: Review implementation details.\n"
-            "tools: read-only\n"
-            "max_tool_iterations: 14\n"
-            "---\n"
-            "Inspect files and return concise review findings.";
-  }
-  {
-    std::ofstream file(agent_dir / "general.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "description: Attempt to override builtin.\n"
-            "---\n"
-            "Should be ignored.";
-  }
-  {
-    std::ofstream file(agent_dir / "coder.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "name: coder\n"
-            "description: Project coder for both catalogs.\n"
-            "mode: all\n"
-            "tools: read-only\n"
-            "---\n"
-            "PROJECT PRIMARY INSTRUCTIONS";
-  }
+  ava::tests::write_test_file(global_agent_dir / "coder.md",
+                              "---\nname: coder\ndescription: Global primary coder.\nmode: primary\n---\nGLOBAL PRIMARY INSTRUCTIONS");
+  // Create the later path first; discovery must choose lexical order, not creation order.
+  ava::tests::write_test_file(global_agent_dir / "ordered-z.md",
+                              "---\nname: ordered\ndescription: Lexically later primary.\nmode: primary\n---\nLEXICALLY LATER PRIMARY");
+  ava::tests::write_test_file(global_agent_dir / "ordered-a.md",
+                              "---\nname: ordered\ndescription: Lexically earlier primary.\nmode: primary\n---\nLEXICALLY EARLIER PRIMARY");
+  ava::tests::write_test_file(global_agent_dir / "broken-primary.md",
+                              "---\ndescription: Broken primary.\nmode: primary\ntools: unrestricted\n---\nBROKEN PRIMARY");
+  ava::tests::write_test_file(agent_dir / "reviewer.md",
+                              "---\nname: reviewer\ndescription: Review implementation details.\ntools: read-only\nmax_tool_iterations: 14\n---\n"
+                              "Inspect files and return concise review findings.");
+  ava::tests::write_test_file(agent_dir / "general.md", "---\ndescription: Attempt to override builtin.\n---\nShould be ignored.");
+  ava::tests::write_test_file(
+      agent_dir / "coder.md",
+      "---\nname: coder\ndescription: Project coder for both catalogs.\nmode: all\ntools: read-only\n---\nPROJECT PRIMARY INSTRUCTIONS");
   std::array<std::string_view, 5> const invalid_limits{"true", "1.5", "0", "-1", "18446744073709551616"};
   for (std::size_t index = 0; index < invalid_limits.size(); ++index)
-  {
-    std::ofstream file(agent_dir / ("invalid-limit-" + std::to_string(index) + ".md"), std::ios::binary | std::ios::trunc);
-    file << "---\nname: invalid-limit-" << index << "\ndescription: Invalid limit.\nmax_tool_iterations: " << invalid_limits[index] << "\n---\nINVALID";
-  }
-  {
-    std::ofstream file(agent_dir / "invalid-limit-duplicate.md", std::ios::binary | std::ios::trunc);
-    file << "---\nname: invalid-limit-duplicate\ndescription: Invalid duplicate limit.\nmax_tool_iterations: 2\nmax_tool_iterations: 3\n---\nINVALID";
-  }
-  {
-    std::ofstream file(agent_dir / "primary-only.md", std::ios::binary | std::ios::trunc);
-    file << "---\n"
-            "description: Primary only.\n"
-            "mode: primary\n"
-            "---\n"
-            "PRIMARY ONLY";
-  }
+    ava::tests::write_test_file(agent_dir / ("invalid-limit-" + std::to_string(index) + ".md"),
+                                "---\nname: invalid-limit-" + std::to_string(index) +
+                                    "\ndescription: Invalid limit.\nmax_tool_iterations: " + std::string(invalid_limits[index]) + "\n---\nINVALID");
+  ava::tests::write_test_file(
+      agent_dir / "invalid-limit-duplicate.md",
+      "---\nname: invalid-limit-duplicate\ndescription: Invalid duplicate limit.\nmax_tool_iterations: 2\nmax_tool_iterations: 3\n---\nINVALID");
+  ava::tests::write_test_file(agent_dir / "primary-only.md", "---\ndescription: Primary only.\nmode: primary\n---\nPRIMARY ONLY");
 
   auto loaded = ava::agent::load_agents(ava::agent::AgentLoadOptions{
       .workspace_root = workspace, .global_agent_dirs = {global_agent_dir}, .project_agent_dirs = {agent_dir}, .include_project_agents = true});
@@ -1471,11 +1397,10 @@ void test_agent_config_loads_project_definitions()
                diagnostic.str().find("PROJECT PRIMARY") == std::string::npos && diagnostic.str().find(agent_dir.string()) == std::string::npos,
            "primary-definition diagnostics expose typed provenance without names, prompt content, or source paths");
   }
-  bool invalid_limits_rejected = true;
   for (std::size_t index = 0; index < invalid_limits.size(); ++index)
-    invalid_limits_rejected = invalid_limits_rejected && ava::agent::find_subagent(loaded.subagents, "invalid-limit-" + std::to_string(index)) == nullptr;
-  invalid_limits_rejected = invalid_limits_rejected && ava::agent::find_subagent(loaded.subagents, "invalid-limit-duplicate") == nullptr;
-  expect(invalid_limits_rejected, "agent definitions strictly reject boolean, fractional, zero, negative, overflowing, and duplicate tool limits");
+    expect(ava::agent::find_subagent(loaded.subagents, "invalid-limit-" + std::to_string(index)) == nullptr,
+           "agent definition rejects max_tool_iterations=" + std::string(invalid_limits[index]));
+  expect(ava::agent::find_subagent(loaded.subagents, "invalid-limit-duplicate") == nullptr, "agent definition rejects duplicate max_tool_iterations");
   expect(ava::agent::find_subagent(loaded.subagents, "coder") != nullptr, "mode-all definitions are task-subagent visible");
   expect(ava::agent::find_subagent(loaded.subagents, "primary-only") == nullptr, "primary-mode definitions are not task-subagent visible");
   expect(!ava::agent::resolve_primary_agent(loaded, "reviewer"), "subagent-mode definitions are not primary selectable");
@@ -1495,7 +1420,10 @@ void test_agent_config_loads_project_definitions()
              global_coder->provenance == ava::agent::AgentDefinitionProvenance::Global,
          "global primary definitions load without project trust with explicit global provenance");
   expect(!ava::agent::resolve_primary_agent(untrusted, "primary-only"), "project-only primary definitions fail closed without trust");
+}
 
+void test_read_only_visibility_preset_never_widens_tool_access()
+{
   auto narrowed_default = ava::agent::narrow_tool_visibility_to_read_only({});
   expect(narrowed_default.mode == ava::agent::ToolVisibilityMode::Default &&
              narrowed_default.included_tools == std::vector<std::string>({"read_file", "list_directory", "glob", "grep"}),

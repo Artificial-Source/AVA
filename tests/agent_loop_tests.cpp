@@ -7,6 +7,10 @@ void run_agent_loop_tests()
   test_legacy_reasoning_replay_requires_exact_entry_source();
   test_v4_no_tools_fallback_survives_native_content_serializers();
   test_request_time_history_projection_preserves_only_exact_native_replay();
+  test_request_time_history_projection_portable_targets_drop_native_identity();
+  test_request_time_history_projection_pairs_collision_free_portable_tools();
+  test_request_time_history_projection_rejects_unproven_source_identity();
+  test_request_time_history_projection_compaction_requires_replay_provenance();
   test_request_time_history_projection_reserves_images_for_active_turn();
   test_agent_loop_assistant_turn_lifecycle_validation();
   test_agent_loop_text_only_turn();
@@ -26,6 +30,8 @@ void run_agent_loop_tests()
   test_agent_loop_task_spawned_child_compaction_isolated_and_resumable();
   test_agent_loop_foreground_task_child_uses_parent_permission_resolver();
   test_agent_loop_child_rejects_unadvertised_task_and_job_calls();
+  test_tool_visibility_exclusion_rejects_task_and_job_calls();
+  test_blocked_child_fixture_releases_after_early_setup_exit();
   test_agent_loop_coordinated_foreground_uses_fresh_worker_and_preserves_result_accounting();
   test_agent_loop_foreground_promotion_wakes_parent_without_restarting_child();
   test_agent_loop_promoted_failure_persists_sanitized_child_error();
@@ -34,12 +40,13 @@ void run_agent_loop_tests()
   test_agent_loop_task_subagent_inherits_protected_permission_rule_store();
   test_agent_loop_task_subagent_recovers_torn_child_before_resume();
   test_agent_config_loads_project_definitions();
+  test_read_only_visibility_preset_never_widens_tool_access();
   test_agent_loop_custom_subagent_definition_controls_prompt_and_tools();
   test_agent_loop_background_task_starts_child_session();
   test_agent_loop_background_resume_preserves_history_and_owner_authority();
   test_agent_loop_dispatcher_steering_reaches_blocked_child_fifo_once();
   test_agent_loop_cancel_during_child_compaction_writes_no_checkpoint();
-  test_agent_loop_background_task_failure_records_parent_and_child_errors();
+  test_agent_loop_background_task_failure_is_isolated_to_child();
   test_agent_loop_background_task_cancel_requests_child_cancellation();
   test_agent_loop_provider_native_canceled_tasks();
   test_agent_loop_background_task_requires_coordinator();
@@ -50,10 +57,13 @@ void run_agent_loop_tests()
   test_background_job_registry_coerces_non_terminal_completion_to_failed();
   test_background_job_registry_bounds_snapshot_text();
   test_background_job_registry_normalizes_terminal_completion_fields();
-  test_background_job_registry_join_finished_is_concurrency_safe();
+  test_background_job_registry_join_finished_is_idempotent_across_threads();
   test_background_job_registry_prunes_retained_finished_jobs();
   test_background_job_registry_destructor_stops_running_jobs();
   test_agent_loop_permission_resolver_threads_to_tools();
+  test_agent_loop_bash_permission_resolver_allows_command();
+  test_agent_loop_bash_permission_resolver_denies_and_redacts_command();
+  test_agent_loop_bash_permission_resolver_failure_becomes_tool_error();
   test_agent_loop_question_resolver_threads_to_tools();
   test_agent_loop_non_stream_response();
   test_agent_loop_non_stream_error_prevents_tool_dispatch();
@@ -68,7 +78,8 @@ void run_agent_loop_tests()
   test_agent_loop_context_overflow_retry_skips_duplicate_auto_compaction();
   test_agent_loop_multiple_tools_and_denied_continuation();
   test_agent_loop_parallel_read_search_preserves_provider_order_and_replay();
-  test_agent_loop_parallel_read_search_zero_max_workers_clamps_to_one();
+  test_agent_loop_parallel_read_search_zero_max_workers_completes_turn();
+  test_agent_loop_parallel_read_search_enforces_worker_caps();
   test_agent_loop_parallel_read_search_falls_back_for_ask_preflight();
   test_agent_loop_parallel_read_search_active_cancellation_stops_unstarted_slots();
   test_agent_loop_parallel_read_search_cancellation_stops_later_barrier();
@@ -78,6 +89,7 @@ void run_agent_loop_tests()
   test_agent_loop_model_auto_allow_deny_preflight_blocks_auto_allow_without_process();
   test_agent_loop_model_command_rejects_authority_workspace_before_permission_or_process();
   test_agent_loop_truncates_tool_context();
+  test_agent_loop_tool_context_truncation_preserves_utf8_boundaries();
   test_agent_loop_secure_workspace_refuses_in_workspace_symlink_escape();
-  test_agent_loop_secure_workspace_read_survives_ancestor_swap_after_permission();
+  test_agent_loop_secure_workspace_refuses_ancestor_swap_after_permission();
 }
