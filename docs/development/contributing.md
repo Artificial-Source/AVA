@@ -186,9 +186,13 @@ offline package, install, and provenance checks:
 
 ```sh
 scripts/run-tests.sh --build-dir build \
-  -R '^ava_release\.(provenance|install_component|package_linux)$' \
+  -R '^ava_release\.(provenance|install_component|package_timeout_cleanup)$' \
   --output-on-failure
+scripts/run-tests.sh --build-dir build-release \
+  -R '^ava_release\.package_linux$' --output-on-failure
 ```
+
+On Linux, `ava_release.package_linux` is registered even in developer builds, but skips with exit 77 when libcwd is enabled (including canonical `dev`/`EnableDebug` builds). Use the Release tree for real packaging coverage. `ava_release.package_timeout_cleanup` independently checks CTest timeout cleanup. In libcwd builds, `ava_release.install_component` still checks every installed file and skips only the installed-binary version probe.
 
 Always finish with:
 

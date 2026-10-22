@@ -32,6 +32,7 @@ Use `--suite baseline --runs 5` for machine-specific baseline evidence. Use `--s
 
 - Python uses `time.monotonic_ns`; the C++ helper uses `std::chrono::steady_clock`.
 - Processes launched directly by the backend harness receive a fresh environment rather than a filtered copy of the host environment. Its complete allowlist is a fixed `PATH` (`/usr/local/bin:/usr/bin:/bin`), `LANG`/`LC_ALL=C.UTF-8`, isolated `HOME`/XDG/`TMPDIR`, `TERM=dumb`, `NO_COLOR=1`, disabled Git prompting, AVA offline/debug-suppression controls, and `AVA_SESSION_TITLES=off`. Host `PYTHONPATH`, loader variables, askpass/Kerberos/Docker/database/provider/base-URL/credential variables, proxies, and arbitrary variables do not survive. The memory helper derives its nested AVA environment from that already-allowlisted map and applies only its fixed PTY terminal settings.
+- `run_process` owns subprocess cleanup on success, timeout, and cancellation, reaping descendants through a dedicated Linux subreaper (including children that call `setsid`); other POSIX hosts use a private process group. Linux timings exclude the owner's Python startup and cleanup grace.
 - SHA-256 (computed with Python's standard library), byte size, path, mtime, and executable mode identify AVA, the benchmark helper, a supplied fake provider, the memory helper, the sample plugin manifest and entrypoint, and the benchmark script. AVA also gets a bounded `--version` probe; plugin manifest identity records its ID/version/API and entrypoint declaration.
 - Source identity records repository path, exact commit, committed tree, and dirty state separately from artifact byte identity. Build metadata records the nearest CMake cache/source root, build type, compiler ID/version, sanitizer/TSan/debug/libcwd settings when present, and relevant C++ flags.
 - Build provenance and freshness remain best effort. Cache paths and mtimes can show a mismatch, but the harness does not claim that an executable embeds the recorded Git commit or prove that the executable was produced from that source state. Build the requested targets immediately before collecting evidence.
@@ -52,11 +53,15 @@ The JSON is the authoritative harness output; Markdown is only a readable render
 
 The registered `ava_benchmark.smoke` CTest uses broad reliability ceilings only: completion within a practical timeout, required helper seams measured, no plugin child left waitable, no child from manifest discovery, and no catastrophic RSS delta. It does **not** gate pull requests on microbenchmark deltas. Detailed baseline and stress suites are intentionally opt-in and unregistered.
 
+Both `ava_benchmark.smoke` (`TIMEOUT 75`) and `ava_benchmark.process_smoke` (`TIMEOUT 120`) use `RUN_SERIAL`, `PROCESSORS 4`, and `RESOURCE_LOCK ava_process_load`.
+
+Comparator fixtures in `ava_tests.benchmark_driver` and `ava_benchmark.process_harness_self_test` are synthetic-only. Live-Git cases run separately as `ava_benchmark.live_git_self_test` (`RUN_SERIAL`, `TIMEOUT 180`). `ava_benchmark.historical_artifact` is optional (`TIMEOUT 15`) and returns skip code 77 when the retained historical M0 artifact is absent.
+
 On non-Linux hosts, helper timing measurements can still run, but procfs idle process-tree RSS is explicitly unsupported. The macOS repeated-call result is a labeled peak-high-water fallback rather than current RSS; a platform with neither supported behavior reports `unsupported`, which intentionally does not satisfy the required smoke seam.
 
 ## M1 process-supervision extension
 
-M1 extends the M0 harness; it does not reinterpret M0 artifacts. `smoke`, `baseline`, and `stress` still emit `ava.backend-benchmark.v2`, and the historical M0 JSON remains validated by the harness self-test. The additional suites are:
+M1 extends the M0 harness; it does not reinterpret M0 artifacts. `smoke`, `baseline`, and `stress` still emit `ava.backend-benchmark.v2`, and `ava_benchmark.historical_artifact` validates the historical M0 JSON when present. The additional suites are:
 
 - `process-smoke`: the default registered catastrophic-correctness CTest, with one helper invocation per run;
 - `process-baseline`: opt-in raw distributions suitable for a same-host family migration pair.

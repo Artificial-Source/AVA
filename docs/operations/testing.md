@@ -20,13 +20,30 @@ The build and test runners default to the `build` tree, detect the available log
 
 Do not use `cmake --build build --target test --parallel N` to request parallel test execution: it only parallelizes the build tool around one CTest command and does not propagate `N` to CTest. Use `scripts/run-tests.sh --build-dir build --jobs N` for the locked runner, or `ctest --test-dir build --parallel N` when directly diagnosing CTest behavior without the script's build-tree safety lock.
 
-Every registered CTest carries a finite outer timeout: tests that set no explicit `TIMEOUT` receive a 120-second default at configure time, and explicit narrower or longer limits are preserved unchanged. These are only CTest kill-timers; in-test deadlines stay as-authored. For debugger sessions, setting `AVA_DEBUG_NO_TIMEOUT` in the *configure* environment (for example `AVA_DEBUG_NO_TIMEOUT=1` on the configure command) raises every per-test CTest timeout to one hour, or to `AVA_DEBUG_NO_TIMEOUT_SECONDS` when that is a positive integer; rerun configure without it to restore normal timeouts.
+Every registered CTest carries a finite outer timeout: backend tests that set no explicit `TIMEOUT` receive a 60-second default at configure time; terminal/TUI tests retain a 120-second default, and explicit limits are preserved. For debugger sessions, setting `AVA_DEBUG_NO_TIMEOUT` in the *configure* environment raises every CTest timeout to one hour, or to `AVA_DEBUG_NO_TIMEOUT_SECONDS` when that is a positive integer; rerun configure without it to restore normal timeouts. In-test helpers such as `now_plus_seconds` honor these controls separately at runtime.
+
+Process-heavy backend suites reserve `PROCESSORS 4` and share `RESOURCE_LOCK ava_process_load`, preventing lifecycle workloads from competing while pure backend tests remain parallel. The benchmark smokes `ava_benchmark.smoke` and `ava_benchmark.process_smoke` additionally use `RUN_SERIAL`.
 
 The test suite is built as `build/tests/ava_tests` and registered as focused `ava_tests.<suite>` CTests from sources under `tests/`. The LSP and MCP tests also build and use fake servers from `tests/support/`.
+
+Every `ava_tests.*` CTest registers `SKIP_RETURN_CODE 77`. The C++ runner returns 77 only when every case skipped and no assertions ran; a successful suite with assertions and skipped cases instead prints `passed with N skipped case(s)` and passes. `request_skip(case, reason)` prints each case and reason immediately.
+
+Linux CI requires `ava_tests.containment`, `ava_tests.tools`, `ava_tests.session`, `ava_tests.process_monitor`, `ava_tests.process_adoption_posix`, `ava_tests.process_capability_posix`, `ava_tests.process_deadline`, `ava_tests.process_launch_protocol_posix`, `ava_tests.process_readiness`, `ava_tests.process_supervisor_posix`, and `ava_release.provenance` to execute and pass. `.github/workflows/ci.yml` supplies these `--require` gates to `scripts/summarize-test-results.py`: required-suite skips and any tests unable to run fail the summary.
 
 The 2026-08-23 tested source-build matrix is Ubuntu 24.04.4 x64 with GCC 13.3: BetaTest/Unix Makefiles and Release/Ninja both passed full CTest. Clang 18 was environment-blocked, not qualified; MSVC, Windows, macOS, and AArch64 have no accepted native candidate evidence. Multi-config is not release-qualified. The audited x64 artifact requires BMI2, `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.13`, `libncursesw.so.6`, `libtinfo.so.6`, and `curl`, but exact retained bytes still need minimum-host smoke. This matrix does not qualify a dirty working tree or any future artifact; see the [release ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md).
 
 Plugin/MCP contract changes should also follow [`docs/plugin-compatibility-policy.md`](../plugin-compatibility-policy.md). Keep checked-in golden fixtures small and deterministic under `tests/golden/ava-080/`, and prefer existing `ava_tests` plugin/MCP suites for contract assertions.
+
+## Writing Tests
+
+- Use `tests/support/test_harness.h`: `require` records failed setup before an early return, `expect_eq` reports actual/expected values and source location, and `expect_all` names every failed member of a compound assertion.
+- Use `HermeticTestEnvironment` from `tests/support/test_env.h` for private HOME/XDG roots and cleared provider/proxy variables. `ScopedEnvVar(name, std::nullopt)` temporarily unsets a variable and restores its exact prior state. Construct environment fixtures before workers start, join workers before teardown, and declare scoped overrides after the hermetic fixture.
+- Use `tests/support/process_test_support.h`: bounded `read_until` for readiness markers, `wait_child_until` for owned direct children, and `ScopedChild` immediately after a raw fork for exception/early-return cleanup. Do not use these child waiters alongside Supervisor ownership. `process_is_live` and `wait_for_process_absent` exclude zombies but do not reap children.
+- Build absolute steady-clock deadlines with `now_plus_seconds` from `tests/support/test_timeout.h`; share a deadline across related readiness/cleanup steps.
+- Use `tests/support/syscall_errno_injection.h` for bounded child-only errno injection. Check `expect_child_success`'s `ChildTestOutcome` for a case-local skip rather than treating the suite-wide `skip_requested()` flag as that case's outcome.
+- CMake CLI drivers share `tests/cli_test_common.cmake`: correlate typed RPC assertions with request IDs using `ava_rpc_expect_in_line`, and call `ava_rpc_forbid` with only explicitly expected failure IDs. Python drivers use `tests/cli_test_support.py` for `isolated_environment`, `owned_popen`, and `run_owned`, including descendant cleanup.
+
+Synchronize on readiness, gates, or observable state, never sleeps. Avoid tight wall-clock pass conditions; use only wide-margin bounds that distinguish the bug. Never silently return when fixture setup fails: record a failure with `require`, or explicitly `request_skip(case, reason)` for an unavailable prerequisite.
 
 ## Temporary Fixture Ownership
 
@@ -77,9 +94,12 @@ For cancellation or active-run assertions, use a gate-delayed scenario, wait for
 Focused release provenance/package tests are offline and deterministic:
 
 ```sh
-scripts/run-tests.sh -R '^ava_release\.(provenance|install_component|package_linux)$'
+scripts/run-tests.sh --build-dir build -R '^ava_release\.(provenance|install_component|package_timeout_cleanup)$'
+scripts/run-tests.sh --build-dir build-release -R '^ava_release\.package_linux$'
 scripts/package-linux.sh --require-release-qualified --output-dir /absolute/path/outside/AVA
 ```
+
+`ava_release.package_linux` is registered on Linux in developer builds too, but exits 77 in libcwd-enabled builds (including the canonical `dev`/`EnableDebug` configuration); actual package coverage still needs the Release tree. `ava_release.package_timeout_cleanup` exercises CTest's SIGTERM/grace timeout path and verifies owned-process/workspace cleanup. `ava_release.install_component` still checks the complete installed-file allowlist in libcwd builds, skipping only the installed-binary version probe; non-libcwd builds compare installed and build-tree versions.
 
 The strict package command creates a fresh private Release build tree with Gitache/libcwd disabled, the pinned in-tree nlohmann JSON source selected, and CMake FetchContent fully disconnected. It rejects supplied binaries, dirty/mismatched source dependencies, missing or unsupported host/binary architecture evidence, disagreement between the canonical packaging-host architecture and detected ELF architecture, unexpected ELF dynamic dependencies, and license-policy failures. The flag `--require-release-qualified` and resulting `release_qualified:true` prove only these implemented static source/gitlink/license/version/native-architecture/dynamic-dependency/package gates. They do **not** prove full CTest, native CI, sanitizer/TSan, terminal gates, retained exact bytes, or publication. Complete candidate qualification requires the [release-readiness ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md) and [publication runbook](https://github.com/Artificial-Source/AVA/blob/develop/docs/operations/publication.md). Cross-compiled output is not evidence. Temporary, work, and publication directories are classified against the checkout by descriptor ancestry and device/inode identity, so invoking the script through a symlink cannot make a physically in-checkout directory appear external; logical source paths remain unchanged. Publication rechecks the already-opened output descriptor's ancestry before mutation and at namespace revalidation points. Static symlink, directory-identity, ownership, mode, and no-replace guarantees remain mandatory. A malicious process running concurrently under the same effective UID is outside this packaging threat model because it can directly alter the checkout and release inputs; this exclusion does not weaken those static guarantees. Ordinary `--binary` package workflows remain available but their packaged `PROVENANCE.json` is explicitly unqualified; no signing, SBOM, or attestation is implied.
 
@@ -163,7 +183,7 @@ Do not call a build-type-omitting direct sanitizer configure equivalent. A cache
 
 The explicit sanitizer cap avoids multiplying ASan/UBSan memory demand on smaller CI and developer hosts; raise it locally after measuring available memory.
 
-The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer for supported non-MSVC builds.
+The sanitizer preset enables AddressSanitizer and UndefinedBehaviorSanitizer for supported non-MSVC builds. `ava_tests.sanitizer_undefined_behavior` passes only when UBSan reports the planted `runtime error: signed integer overflow`; an arbitrary failing exit is not sufficient.
 
 ## CI Compiler Cache
 
