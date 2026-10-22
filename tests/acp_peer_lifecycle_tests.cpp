@@ -62,6 +62,7 @@ void test_acp_peer_lifecycle_notifications_and_duplicate_ids()
   JsonRpcPeer peer(
       std::make_unique<MemoryTransport>(state), [&service](Request const& request, std::stop_token token) { return service.handle_request(request, token); },
       [&service](Notification const& notification, std::stop_token token) { service.handle_notification(notification, token); });
+  ReaderBarrier reader(peer, [&service](Notification const& notification) { service.handle_control_notification(notification); });
   ava::core::VoidResult run_result;
   ava::core::JoinThread thread = ava::core::JoinThread::create("thread", [&] { run_result = peer.run(); });
   wait_reader(state);
@@ -73,7 +74,9 @@ void test_acp_peer_lifecycle_notifications_and_duplicate_ids()
   expect(init && init->find("\"result\"") != std::string::npos && init->find("\"protocolVersion\":1") != std::string::npos,
          "ACP peer successfully negotiates the M4 v1 baseline");
   feed(state, R"({"jsonrpc":"2.0","method":"unknown","params":{}})");
-  expect(!take_output(state, 80ms), "ACP notification failures produce no response");
+  expect(reader.synchronize(state), "reader classifies an unknown notification");
+  expect(synchronize_writer(peer, state), "writer drains all records preceding the notification probe");
+  expect(!take_output(state, 0ms), "ACP notification failures produce no response");
   feed(state, R"({"jsonrpc":"2.0","id":3,"method":"unknown","params":{}})");
   expect(output_has_code(take_output(state), -32601), "ACP peer routes unknown requests after initialization");
   feed(state, R"({"jsonrpc":"1.0","id":9,"result":{}})");
@@ -81,8 +84,10 @@ void test_acp_peer_lifecycle_notifications_and_duplicate_ids()
   feed(state, R"({"jsonrpc":"2.0","id":10})");
   feed(state, R"({"jsonrpc":"2.0","id":null})");
   feed(state, R"({"jsonrpc":"2.0","id":11,"result":{},"error":{"code":1,"message":"bad"}})");
-  expect(!take_output(state, 80ms) && peer.stats().unknown_or_late_responses == 5,
-         "all malformed response-intent envelopes are diagnosed and ignored without response loops");
+  expect(reader.synchronize(state), "reader classifies every malformed response-intent envelope");
+  expect(synchronize_writer(peer, state), "writer acknowledges response-intent classification");
+  ava::tests::expect_all("malformed responses are ignored without response loops",
+                         {{"no response", !take_output(state, 0ms)}, {"five classified responses", peer.stats().unknown_or_late_responses == 5}});
 
   std::string deep_value(kMaxNestingDepth + 1, '[');
   deep_value += '0';
@@ -92,16 +97,28 @@ void test_acp_peer_lifecycle_notifications_and_duplicate_ids()
   feed_limit_error(state, EnvelopeIntent::Response);
   feed_limit_error(state, EnvelopeIntent::Response);
   feed_limit_error(state, EnvelopeIntent::Notification);
-  expect(!take_output(state, 80ms) && peer.stats().unknown_or_late_responses == 9,
-         "over-depth and oversized response hints, plus oversized notifications, remain response-free");
+  expect(reader.synchronize(state), "reader classifies depth and size intent errors");
+  expect(synchronize_writer(peer, state), "writer acknowledges depth and size classification");
+  ava::tests::expect_all("over-depth and oversized response hints and notifications remain response-free",
+                         {{"no response", !take_output(state, 0ms)}, {"nine classified responses", peer.stats().unknown_or_late_responses == 9}});
   feed_limit_error(state, EnvelopeIntent::Request);
   expect(output_has_code(take_output(state), -32700), "an oversized request hint still produces the bounded parse error");
 
   feed(state, R"({"jsonrpc":"2.0","id":12,"method":"unknown","params":{}})");
   expect(output_has_code(take_output(state), -32601), "ACP peer continues handling valid input after depth and size intent errors");
+  auto const canceled_before = peer.stats().canceled_inbound_requests;
+  feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"never-admitted"}})");
+  expect(reader.synchronize(state), "reader processes cancellation of an unknown id");
+  feed(state, R"({"jsonrpc":"2.0","id":"never-admitted","method":"unknown","params":{}})");
+  auto after_unknown_cancel = take_output(state);
+  ava::tests::expect_all("unknown-id cancellation is a response-free no-op and leaves later requests usable",
+                         {{"next response identity", after_unknown_cancel && after_unknown_cancel->find(R"("id":"never-admitted")") != std::string::npos},
+                          {"next request handled", output_has_code(after_unknown_cancel, -32601)},
+                          {"no request canceled", peer.stats().canceled_inbound_requests == canceled_before}});
 
   close_input(state);
   thread.join();
+  expect(!take_output(state, 0ms), "notification and response-intent handling leaves no stray terminal records after EOF");
   expect(run_result.has_value(), "ACP peer exits cleanly on EOF");
 }
 
@@ -110,6 +127,7 @@ void test_acp_peer_bidirectional_out_of_order_deadline_and_late_response()
   using namespace ava::app::acp;
   auto state = std::make_shared<MemoryTransportState>();
   JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [](Request const&, std::stop_token) -> RequestResult { return std::string("{}"); });
+  ReaderBarrier reader(peer);
   ava::core::VoidResult run_result;
   ava::core::JoinThread thread = ava::core::JoinThread::create("thread", [&] { run_result = peer.run(); });
   wait_reader(state);
@@ -127,8 +145,8 @@ void test_acp_peer_bidirectional_out_of_order_deadline_and_late_response()
     feed(state, *first_response);
     auto second_done = second->completion.get();
     auto first_done = first->completion.get();
-    expect(second_done && second_done->find("2") != std::string::npos && first_done && first_done->find("1") != std::string::npos,
-           "ACP peer correlates out-of-order responses by typed id");
+    ava::tests::expect_all("ACP peer correlates out-of-order responses by typed id", {{"second payload", second_done && *second_done == R"({"order":2})"},
+                                                                                      {"first payload", first_done && *first_done == R"({"order":1})"}});
   }
 
   auto canceled = peer.send_request("client/cancel", std::string("{}"), 2s);
@@ -145,48 +163,73 @@ void test_acp_peer_bidirectional_out_of_order_deadline_and_late_response()
     expect(!cancellation && cancellation.error().code == -32800, "prompt cancellation releases one outbound client request without closing the connection");
     auto late_canceled = encode_success(canceled->id, R"({"outcome":{"outcome":"selected","optionId":"allow_always"}})");
     feed(state, *late_canceled);
-    std::this_thread::sleep_for(20ms);
+    expect(reader.synchronize(state), "reader classifies the response after cancellation");
     expect(peer.stats().unknown_or_late_responses == 1, "a response arriving after prompt cancellation is ignored and cannot apply a permission grant");
   }
 
-  auto timeout = peer.send_request("client/slow", std::string("{}"), 30ms);
-  expect(timeout.has_value(), "ACP peer admits a finite-deadline call");
-  static_cast<void>(take_output(state));
+  {
+    std::lock_guard lock(state->mutex);
+    state->block_writes = true;
+  }
+  expect(peer.send_notification("test/hold-deadline-writer", std::string("{}")).has_value(), "deadline fixture queues a leading writer gate");
+  wait_writer(state);
+  auto timeout = peer.send_request("client/queued-deadline", std::string("{}"), 100ms);
+  expect(timeout.has_value(), "ACP peer admits a finite-deadline call behind the held writer");
   if (timeout)
   {
+    if (!ava::tests::require(timeout->completion.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready,
+                             "queued deadline releases its future while the writer is held"))
+    {
+      peer.shutdown();
+      thread.join();
+      return;
+    }
     auto timed_out = timeout->completion.get();
-    expect(!timed_out && timed_out.error().code == -32603 && timed_out.error().message.find("outcome is unknown") != std::string::npos,
-           "a deadline after writer delivery reports an ambiguous response outcome rather than local rollback");
+    expect(!timed_out && timed_out.error().code == -32800, "a deadline before writer claim cancels locally rather than reporting ambiguous delivery");
     auto late = encode_success(timeout->id, "{}");
     feed(state, *late);
-    std::this_thread::sleep_for(20ms);
+    expect(reader.synchronize(state), "reader classifies the response after queued deadline expiry");
     expect(peer.stats().unknown_or_late_responses == 2, "ACP peer safely ignores and counts a late response");
   }
   feed(state, R"({"jsonrpc":"2.0","id":null,"result":{"unknown":true}})");
   feed(state, R"({"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"unknown"}})");
-  std::this_thread::sleep_for(20ms);
+  expect(reader.synchronize(state), "reader classifies null success and error responses");
   expect(peer.stats().unknown_or_late_responses == 4, "null success and error responses preserve identity and follow bounded unknown-response handling");
-
-  bool races_completed = true;
-  for (int index = 0; index < 20; ++index)
   {
-    auto call = peer.send_request("client/race", std::string("{}"), 3ms);
+    std::lock_guard lock(state->mutex);
+    state->block_writes = false;
+    state->cv.notify_all();
+  }
+  expect(synchronize_writer(peer, state), "writer skips the expired queued request before resuming responses");
+  auto held_record = take_output(state);
+  expect(held_record && held_record->find("test/hold-deadline-writer") != std::string::npos, "only the leading writer gate was delivered");
+
+  bool responses_completed = true;
+  for (int index = 0; index < 2; ++index)
+  {
+    auto call = peer.send_request("client/response", std::string("{}"), 5s);
     if (!call)
     {
-      races_completed = false;
+      responses_completed = false;
       break;
     }
     static_cast<void>(take_output(state));
     auto response_record = encode_success(call->id, "{}");
     ava::core::JoinThread responder = ava::core::JoinThread::create("responder", [state, response_record, index] {
-      std::this_thread::sleep_for(index % 2 == 0 ? 1ms : 3ms);
+      static_cast<void>(index);
       feed(state, *response_record);
     });
+    if (!ava::tests::require(call->completion.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready,
+                             "correlated response completes its pending call"))
+    {
+      peer.shutdown();
+      thread.join();
+      return;
+    }
     auto completion = call->completion.get();
-    races_completed = races_completed && (completion.has_value() ||
-                                          (completion.error().code == -32603 && completion.error().message.find("outcome is unknown") != std::string::npos));
+    responses_completed = responses_completed && completion.has_value() && *completion == "{}";
   }
-  expect(races_completed, "ACP response-versus-deadline races have exactly one pending-call completion owner");
+  expect(responses_completed, "delivered outbound calls complete with their exact correlated response");
 
   close_input(state);
   thread.join();
@@ -198,8 +241,11 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   using namespace ava::app::acp;
   auto state = std::make_shared<MemoryTransportState>();
   std::atomic_int started = 0;
-  JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [&started](Request const&, std::stop_token token) -> RequestResult {
-    started.fetch_add(1, std::memory_order_release);
+  std::promise<void> first_started;
+  auto started_signal = first_started.get_future();
+  JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [&started, &first_started](Request const&, std::stop_token token) -> RequestResult {
+    if (started.fetch_add(1, std::memory_order_release) == 0)
+      first_started.set_value();
     while (!token.stop_requested())
       std::this_thread::sleep_for(1ms);
     return std::unexpected(JsonRpcError{.code = -32800, .message = "cancelled", .data_json = std::nullopt, .id = std::nullopt, .suppress_response = false});
@@ -209,6 +255,13 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   wait_reader(state);
 
   feed(state, R"({"jsonrpc":"2.0","id":null,"method":"slow","params":{}})");
+  if (!ava::tests::require(started_signal.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready,
+                           "slow request handler starts before duplicate/cancel checks"))
+  {
+    peer.shutdown();
+    thread.join();
+    return;
+  }
   while (started.load(std::memory_order_acquire) == 0)
     std::this_thread::sleep_for(1ms);
   feed(state, R"({"jsonrpc":"2.0","id":null,"method":"slow","params":{}})");
@@ -243,6 +296,7 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   }
   auto saturated = peer.send_request("client/overflow", std::string("{}"), 5s);
   expect(pending.size() == kMaxPendingCalls && !saturated, "ACP peer enforces the pending outbound call limit");
+  expect(synchronize_writer(peer, state), "writer acknowledges all pending calls as delivered before EOF");
 
   close_input(state);
   thread.join();
@@ -250,16 +304,17 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   for (auto& call : pending)
   {
     auto result = call.completion.get();
-    all_released = all_released && !result &&
-                   (result.error().code == -32800 || (result.error().code == -32603 && result.error().message.find("outcome is unknown") != std::string::npos));
+    all_released = all_released && !result && result.error().code == -32603;
   }
-  expect(all_released && run_result.has_value(), "ACP EOF releases every pending outbound call with delivery-aware terminal errors");
+  ava::tests::expect_all("ACP EOF releases every writer-acknowledged pending call with ambiguous-delivery errors",
+                         {{"all delivered calls released", all_released}, {"clean peer exit", run_result.has_value()}});
 }
 
 void test_acp_peer_lifecycle_request_commit_linearization()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-peer-lifecycle-commit");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-peer-lifecycle-commit-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
@@ -268,10 +323,12 @@ void test_acp_peer_lifecycle_request_commit_linearization()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = ava::tests::app_test_paths(root);
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   auto state = std::make_shared<MemoryTransportState>();
   JsonRpcPeer peer(std::make_unique<MemoryTransport>(state),
                    [&service](Request const& request, std::stop_token token) { return service.handle_request(request, token); });
+  ReaderBarrier reader(peer);
   std::mutex barrier_mutex;
   std::condition_variable barrier_cv;
   bool committed = false;
@@ -299,10 +356,11 @@ void test_acp_peer_lifecycle_request_commit_linearization()
                   "\",\"mcpServers\":[]}}");
   {
     std::unique_lock lock(barrier_mutex);
-    static_cast<void>(barrier_cv.wait_for(lock, 2s, [&] { return committed; }));
+    expect(barrier_cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return committed; }),
+           "session/new reaches terminal commit before late cancellation");
   }
   feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"new-late"}})");
-  std::this_thread::sleep_for(10ms);
+  expect(reader.synchronize(state), "reader processes cancellation while session/new remains held after commit");
   {
     std::lock_guard lock(barrier_mutex);
     release = true;
@@ -319,8 +377,6 @@ void test_acp_peer_lifecycle_request_commit_linearization()
   service.unbind_request_terminal_committer();
   service.shutdown();
   expect(run_result.has_value(), "lifecycle request commit linearization test shuts down cleanly");
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_peer_outbound_queue_saturation()
@@ -346,6 +402,7 @@ void test_acp_peer_outbound_queue_saturation()
   expect(queued == kMaxOutboundRecords, "ACP peer deterministically fills the bounded outbound FIFO behind a blocked writer");
 
   auto const old_deadline = ava::tests::now_plus_seconds(5);
+  static_cast<void>(old_deadline);
   std::size_t failed_requests = 0;
   for (std::size_t index = 0; index < kMaxPendingCalls; ++index)
   {
@@ -373,8 +430,10 @@ void test_acp_peer_outbound_queue_saturation()
   }
   bool const recovered_ready = recovered && recovered->completion.wait_for(2s) == std::future_status::ready;
   auto recovered_result = recovered_ready ? std::optional<CallResult>(recovered->completion.get()) : std::nullopt;
-  expect(drained && recovered_record && recovered_result && recovered_result->has_value() && std::chrono::steady_clock::now() < old_deadline,
-         "failed enqueue rollback leaves no dangling pending entries or futures and a later request completes before stale deadlines");
+  ava::tests::expect_all("failed enqueue rollback leaves capacity available for a later request",
+                         {{"queue drained", drained},
+                          {"recovered request delivered", recovered_record.has_value()},
+                          {"recovered request succeeded", recovered_result && recovered_result->has_value()}});
 
   close_input(state);
   thread.join();
@@ -431,17 +490,9 @@ void test_acp_peer_fail_stop_poison_arbitrates_all_pending_calls()
 
   auto run_case = [](bool deadline_triggered) {
     auto state = std::make_shared<MemoryTransportState>();
-    std::mutex reader_barrier_mutex;
-    std::condition_variable reader_barrier_cv;
-    bool reader_barrier_reached = false;
+    // The reader probe must bypass workers while the collateral writer is held.
     JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [](Request const&, std::stop_token) -> RequestResult { return std::string("{}"); });
-    peer.set_control_notification_handler([&](Notification const&) {
-      {
-        std::lock_guard lock(reader_barrier_mutex);
-        reader_barrier_reached = true;
-      }
-      reader_barrier_cv.notify_all();
-    });
+    ReaderBarrier reader(peer);
     ava::core::VoidResult run_result;
     ava::core::JoinThread thread = ava::core::JoinThread::create("thread", [&] { run_result = peer.run(); });
     wait_reader(state);
@@ -465,12 +516,7 @@ void test_acp_peer_fail_stop_poison_arbitrates_all_pending_calls()
       if (staged_response)
         feed(state, std::move(*staged_response));
     }
-    feed(state, R"({"jsonrpc":"2.0","method":"session/cancel","params":{}})");
-    bool response_processed = false;
-    {
-      std::unique_lock lock(reader_barrier_mutex);
-      response_processed = reader_barrier_cv.wait_for(lock, 2s, [&] { return reader_barrier_reached; });
-    }
+    bool const response_processed = reader.synchronize(state);
     bool const response_staged = collateral && collateral->completion.wait_for(0ms) != std::future_status::ready;
 
     bool trigger_started = deadline_triggered;
@@ -516,6 +562,7 @@ void test_acp_peer_writer_acknowledged_lifecycle()
                      return std::string(R"({"ok":true})");
                    });
   handler_peer = &peer;
+  ReaderBarrier reader(peer);
   ava::core::VoidResult run_result;
   ava::core::JoinThread thread = ava::core::JoinThread::create("thread", [&] { run_result = peer.run(); });
   wait_reader(state);
@@ -528,11 +575,18 @@ void test_acp_peer_writer_acknowledged_lifecycle()
   {
     auto premature = encode_success(timed->id, R"({"outcome":{"outcome":"selected","optionId":"allow_always"}})");
     feed(state, *premature);
-    std::this_thread::sleep_for(20ms);
-    bool const premature_fulfilled = timed->completion.wait_for(0ms) == std::future_status::ready;
+    expect(reader.synchronize(state), "reader classifies a premature response while the outbound request is queued");
+    if (!ava::tests::require(timed->completion.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready,
+                             "queued request expires without writer release"))
+    {
+      peer.shutdown();
+      thread.join();
+      return;
+    }
     auto result = timed->completion.get();
-    expect(!premature_fulfilled && !result && result.error().code == -32800,
-           "a response for a queued outbound id is ignored and cannot grant permission before request delivery");
+    ava::tests::expect_all("a response for a queued outbound id cannot grant permission before delivery",
+                           {{"premature response counted", peer.stats().unknown_or_late_responses == 1},
+                            {"queued request expires locally", !result && result.error().code == -32800}});
   }
 
   feed(state, R"({"jsonrpc":"2.0","id":"held","method":"work","params":{}})");
@@ -540,6 +594,13 @@ void test_acp_peer_writer_acknowledged_lifecycle()
   bool const handler_commit_succeeded = handler_commit_ready && handler_committed.get();
   feed(state, R"({"jsonrpc":"2.0","id":"held","method":"work","params":{}})");
   feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"held"}})");
+  if (!ava::tests::require(reader.synchronize(state) && peer.stats().duplicate_inbound_ids != 0,
+                           "reader processes the duplicate and late cancellation before writer release"))
+  {
+    peer.shutdown();
+    thread.join();
+    return;
+  }
   while (peer.stats().duplicate_inbound_ids == 0)
     std::this_thread::sleep_for(1ms);
 
@@ -557,7 +618,8 @@ void test_acp_peer_writer_acknowledged_lifecycle()
              terminal_responses.find("Duplicate in-flight request id") != std::string::npos && handler_commit_succeeded && side_effects.load() == 1 &&
              peer.stats().canceled_inbound_requests == 0,
          "late cancellation loses to the atomically committed handler result while retaining the inbound id and preventing duplicate side effects");
-  expect(!take_output(state, 80ms), "each admitted inbound envelope produces exactly one terminal response under a stalled writer");
+  expect(synchronize_writer(peer, state), "writer acknowledges all held terminal records");
+  expect(!take_output(state, 0ms), "each admitted inbound envelope produces exactly one terminal response under a stalled writer");
   std::string const delivered = blocker.value_or("") + terminal_responses;
   expect(!timed || delivered.find(id_debug_string(timed->id)) == std::string::npos,
          "a timed-out outbound call is skipped rather than sent after the writer resumes");
@@ -575,12 +637,16 @@ void test_acp_peer_writer_acknowledged_lifecycle()
   wait_writer(eof_state);
   auto eof_call = eof_peer.send_request("client/eof-before-claim", std::string("{}"), 5s);
   close_input(eof_state);
-  expect(eof_call.has_value() && !eof_call->completion.get(), "EOF releases an outbound call queued behind a claimed write");
+  bool const eof_ready = eof_call && eof_call->completion.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready;
+  auto eof_result = eof_ready ? std::optional<CallResult>(eof_call->completion.get()) : std::nullopt;
+  eof_peer.shutdown();
+  expect(eof_result && !*eof_result && eof_result->error().code == -32800, "EOF releases an outbound call queued behind a claimed write");
   eof_thread.join();
   {
     std::lock_guard lock(eof_state->mutex);
     eof_state->block_writes = false;
     eof_state->cv.notify_all();
   }
-  expect(eof_state->canceled && !take_output(eof_state, 80ms), "EOF aborts the claimed transport write and skips queued outbound records");
+  ava::tests::expect_all("EOF aborts the claimed transport write and skips queued outbound records",
+                         {{"transport canceled", eof_state->canceled}, {"no output", !take_output(eof_state, 0ms)}});
 }

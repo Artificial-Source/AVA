@@ -3,6 +3,8 @@
 #include "tests/support/acp_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/process_test_support.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/app/acp/service.h"
@@ -27,6 +29,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -43,6 +46,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -73,7 +77,8 @@ void test_acp_service_gating_reinitialize_and_negotiation()
 void test_acp_service_mutating_request_terminal_commits()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-service-commit");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-service-commit-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
@@ -84,7 +89,8 @@ void test_acp_service_mutating_request_terminal_commits()
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
   std::set<std::int64_t> canceled_ids{1, 2, 4, 6};
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_request_terminal_committer([&canceled_ids](JsonRpcId const& id) {
     auto const* value = std::get_if<std::int64_t>(&id);
     return value == nullptr || !canceled_ids.contains(*value);
@@ -140,14 +146,13 @@ void test_acp_service_mutating_request_terminal_commits()
   }
 
   service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_session_request_schema_defaults_and_invalid_item_skipping()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-schema-defaults");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-schema-defaults-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
@@ -157,8 +162,10 @@ void test_acp_session_request_schema_defaults_and_invalid_item_skipping()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
-  AgentService service(options);
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP schema fixture initializes"))
+    return;
 
   auto create = [&](std::int64_t id, std::string fields) {
     return service.handle_request(
@@ -193,33 +200,29 @@ void test_acp_session_request_schema_defaults_and_invalid_item_skipping()
     static_cast<void>(
         service.handle_request(Request{.id = std::int64_t(20), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + id + "\"}"}, {}));
   service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_retained_resume_validates_cwd_and_limits()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-retained-contract");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-retained-contract-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   auto const nested = workspace / "nested";
   std::filesystem::create_directories(nested);
   configure_acp_test_model(root);
   auto coordinator = ava::agent::SubagentCoordinator::create();
-  expect(coordinator.has_value(), "ACP retained fixture creates coordinator");
-  if (!coordinator)
+  if (!ava::tests::require(coordinator.has_value(), "ACP retained fixture creates coordinator"))
     return;
   auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .max_retained_parents = 1});
-  expect(manager.has_value(), "ACP retained fixture creates one-parent manager");
-  if (!manager)
+  if (!ava::tests::require(manager.has_value(), "ACP retained fixture creates one-parent manager"))
     return;
   runtime::OpenContext context;
   context.paths = ava::tests::app_test_paths(root);
   context.subagent_delivery_manager = *manager;
   context.subagent_coordinator = *coordinator;
   auto original = runtime::Session::open_at(context, workspace, nested);
-  expect(original.has_value(), "ACP retained fixture opens original nested session");
-  if (!original)
+  if (!ava::tests::require(original.has_value(), "ACP retained fixture opens original nested session"))
     return;
   auto const id = runtime::session_ts::rat(*original)->store.session_id();
   auto controller = runtime::session_ts::rat(*original)->run_controller();
@@ -241,8 +244,7 @@ void test_acp_retained_resume_validates_cwd_and_limits()
   std::string body;
   auto factory = recording_bundle_factory(&body);
   auto bundle = factory(*original, {}, "retained setup");
-  expect(bundle.has_value(), "ACP retained setup creates fake provider bundle");
-  if (!bundle)
+  if (!ava::tests::require(bundle.has_value(), "ACP retained setup creates fake provider bundle"))
   {
     (*manager)->shutdown();
     return;
@@ -269,7 +271,8 @@ void test_acp_retained_resume_validates_cwd_and_limits()
     }
     return factory(session, std::move(run_options), label);
   };
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
   expect(service.handle_request(initialize_request(), {}).has_value(), "ACP retained service initializes");
   auto resume = [&](std::filesystem::path const& cwd) {
@@ -323,24 +326,22 @@ void test_acp_retained_resume_validates_cwd_and_limits()
   expect(still_available && runtime::session_ts::rat(*still_available)->run_controller() == controller,
          "failed ACP bounded validation preserves the exact original lease and controller for an unrestricted invocation");
   service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
+  (*manager)->shutdown();
 }
 
 void test_acp_prompt_close_cycles_release_parents()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-parent-cycles");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-parent-cycles-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
   auto coordinator = ava::agent::SubagentCoordinator::create();
-  expect(coordinator.has_value(), "ACP parent cycles create a coordinator");
-  if (!coordinator)
+  if (!ava::tests::require(coordinator.has_value(), "ACP parent cycles create a coordinator"))
     return;
   auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .max_retained_parents = 1});
-  expect(manager.has_value(), "ACP parent cycles create a bounded manager");
-  if (!manager)
+  if (!ava::tests::require(manager.has_value(), "ACP parent cycles create a bounded manager"))
     return;
   std::string body;
   AgentServiceOptions options;
@@ -349,7 +350,8 @@ void test_acp_prompt_close_cycles_release_parents()
   options.paths = ava::tests::app_test_paths(root);
   options.open_context.subagent_delivery_manager = *manager;
   options.provider_bundle_factory = recording_bundle_factory(&body);
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
   expect(service.handle_request(initialize_request(), {}).has_value(), "ACP parent cycles initialize");
   for (int cycle = 0; cycle != 4; ++cycle)
@@ -401,14 +403,13 @@ void test_acp_prompt_close_cycles_release_parents()
     expect(!found && !retained, "ACP close alone releases the exact unused retained capsule");
   }
   service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_session_capacity_is_reserved_before_persistence()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-session-capacity");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-session-capacity-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
@@ -418,8 +419,10 @@ void test_acp_session_capacity_is_reserved_before_persistence()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
-  AgentService service(options);
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP capacity fixture initializes"))
+    return;
 
   std::vector<std::string> session_ids;
   for (std::size_t index = 0; index < kMaxConnectionSessions; ++index)
@@ -443,14 +446,13 @@ void test_acp_session_capacity_is_reserved_before_persistence()
     static_cast<void>(
         service.handle_request(Request{.id = std::int64_t(200), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + id + "\"}"}, {}));
   service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_startup_model_is_pinned_across_config_mutation()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-model-pin");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-model-pin-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
@@ -468,19 +470,19 @@ void test_acp_startup_model_is_pinned_across_config_mutation()
     observed_models.push_back(ava::app::runtime::session_ts::crat(unlocked_session)->model_selection_r()->model);
     return base_factory(unlocked_session, std::move(run_options), label);
   };
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
   auto initialized = service.handle_request(initialize_request(), {});
   expect(initialized && initialized->find(R"("image":false)") != std::string::npos, "ACP initialize advertises capability from the startup model snapshot");
 
-  ava::tests::write_app_test_file(
+  ava::tests::write_test_file(
       paths.models_file,
       R"({"default_provider":"moonshot","default_model":"mutated-image","models":[{"provider":"moonshot","id":"mutated-image","name":"Mutated","family":"fake","supports_tools":false,"supports_streaming":false,"input_modalities":["text","image"],"output_modalities":["text"]}]})");
   auto created = service.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto session_id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
-  expect(session_id.has_value(), "ACP creates a session after model config mutation");
-  if (!session_id)
+  if (!ava::tests::require(session_id.has_value(), "ACP creates a session after model config mutation"))
     return;
   auto prompted =
       service.handle_request(Request{.id = std::int64_t(3),
@@ -507,11 +509,12 @@ void test_acp_startup_model_is_pinned_across_config_mutation()
              std::ranges::find(observed_models.back().input_modalities, "image") == observed_models.back().input_modalities.end(),
          "ACP session/resume keeps the same immutable startup model and capabilities");
 
-  auto const invalid_root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-model-unresolved");
+  auto invalid_root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-model-unresolved-");
+  auto const invalid_root = invalid_root_owner.path();
   std::filesystem::create_directories(invalid_root / "workspace");
   auto invalid_paths = ava::tests::app_test_paths(invalid_root);
   std::filesystem::create_directories(invalid_paths.ava_config_dir);
-  ava::tests::write_app_test_file(invalid_paths.models_file, R"({"default_provider":"missing","default_model":"missing"})");
+  ava::tests::write_test_file(invalid_paths.models_file, R"({"default_provider":"missing","default_model":"missing"})");
   AgentServiceOptions invalid_options;
   invalid_options.agent_version = "1";
   invalid_options.launch_root = ava::core::normalized_absolute_path(invalid_root / "workspace");
@@ -522,7 +525,7 @@ void test_acp_startup_model_is_pinned_across_config_mutation()
              unresolved.error().message.find("restart ava --acp") != std::string::npos && !invalid_service.initialized(),
          "ACP initialize fails actionably when the startup provider/model cannot resolve");
 
-  ava::tests::write_app_test_file(
+  ava::tests::write_test_file(
       invalid_paths.models_file,
       R"({"default_provider":"synthetic","default_model":"declared","models":[{"provider":"synthetic","id":"declared","name":"Declared","family":"fake","supports_tools":false,"supports_streaming":false,"input_modalities":["text"],"output_modalities":["text"]}]})");
   AgentService unknown_provider_service(invalid_options);
@@ -538,21 +541,18 @@ void test_acp_startup_model_is_pinned_across_config_mutation()
   auto synthetic_initialized = synthetic_provider_service.handle_request(initialize_request(), {});
   expect(synthetic_initialized && synthetic_provider_service.initialized(),
          "ACP custom provider bundle factories may supply synthetic declared providers for tests and embeddings");
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
-  std::filesystem::remove_all(invalid_root, cleanup);
 }
 
 void test_acp_resume_projects_history_for_pinned_startup_model()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-resume-model-history");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-resume-model-history-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   auto const paths = ava::tests::app_test_paths(root);
   std::filesystem::create_directories(paths.ava_config_dir);
-  ava::tests::write_app_test_file(
+  ava::tests::write_test_file(
       paths.models_file,
       R"({"default_provider":"moonshot","default_model":"image-model","models":[{"provider":"moonshot","id":"image-model","name":"Image","family":"fake","supports_tools":false,"supports_streaming":false,"input_modalities":["text","image"],"output_modalities":["text"]}]})");
 
@@ -562,9 +562,11 @@ void test_acp_resume_projects_history_for_pinned_startup_model()
   image_options.launch_root = ava::core::normalized_absolute_path(workspace);
   image_options.paths = paths;
   image_options.provider_bundle_factory = recording_bundle_factory(&image_body);
-  AgentService image_service(image_options);
+  ScopedAgentService image_fixture(std::move(root_owner), image_options);
+  auto& image_service = image_fixture.service;
   image_service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-  static_cast<void>(image_service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(image_fixture.initialize().has_value(), "ACP image-history fixture initializes"))
+    return;
   auto created = image_service.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto session_id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
@@ -583,7 +585,7 @@ void test_acp_resume_projects_history_for_pinned_startup_model()
   image_service.shutdown();
   expect(session_id && prompted, "ACP image-capable fixture persists compatible image history before restart");
 
-  ava::tests::write_app_test_file(
+  ava::tests::write_test_file(
       paths.models_file,
       R"({"default_provider":"moonshot","default_model":"text-model","models":[{"provider":"moonshot","id":"text-model","name":"Text","family":"fake","supports_tools":false,"supports_streaming":false,"input_modalities":["text"],"output_modalities":["text"]}]})");
   std::string text_body;
@@ -591,7 +593,8 @@ void test_acp_resume_projects_history_for_pinned_startup_model()
   text_options.provider_bundle_factory = recording_bundle_factory(&text_body);
   AgentService text_service(std::move(text_options));
   text_service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-  static_cast<void>(text_service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(text_service.handle_request(initialize_request(), {}).has_value(), "ACP text-only restart fixture initializes"))
+    return;
   RequestResult resumed;
   if (session_id)
     resumed = text_service.handle_request(
@@ -614,21 +617,19 @@ void test_acp_resume_projects_history_for_pinned_startup_model()
              text_body.find("attachments/") == std::string::npos,
          "ACP resumed request uses a non-identifying historical image placeholder");
   text_service.shutdown();
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_session_lifecycle_real_prompt_and_provider_ownership()
 {
   using namespace ava::app::acp;
-  auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-m3-test");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-m3-test-");
+  auto const root = root_owner.path();
   auto workspace = root / "workspace";
   auto nested = workspace / "nested";
   std::filesystem::create_directories(nested);
   auto paths = ava::tests::app_test_paths(root);
   std::filesystem::create_directories(paths.ava_config_dir);
-  ava::tests::write_app_test_file(
+  ava::tests::write_test_file(
       paths.models_file,
       R"({"default_provider":"moonshot","default_model":"acp-test","models":[{"provider":"moonshot","id":"acp-test","name":"ACP Test","family":"fake","supports_tools":false,"supports_streaming":false,"input_modalities":["text"],"output_modalities":["text"]}]})");
 
@@ -659,7 +660,8 @@ void test_acp_session_lifecycle_real_prompt_and_provider_ownership()
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
   options.provider_bundle_factory = std::move(factory);
-  AgentService service(std::move(options));
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   std::vector<std::string> updates;
   service.bind_update_sender([&](std::string_view session_id, std::string_view update) -> ava::core::VoidResult {
     updates.push_back(std::string(session_id) + ":" + std::string(update));
@@ -706,14 +708,13 @@ void test_acp_session_lifecycle_real_prompt_and_provider_ownership()
          "ACP emits one final text update per non-streaming prompt without duplication");
 
   service.shutdown();
-  std::error_code cleanup_error;
-  std::filesystem::remove_all(root, cleanup_error);
 }
 
 void test_acp_exact_identity_persisted_cwd_and_restart()
 {
   using namespace ava::app::acp;
-  auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-identity");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-identity-");
+  auto const root = root_owner.path();
   auto workspace = root / "workspace";
   auto nested = workspace / "nested";
   std::filesystem::create_directories(nested);
@@ -724,13 +725,13 @@ void test_acp_exact_identity_persisted_cwd_and_restart()
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
-  AgentService first(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& first = fixture.service;
   expect(first.handle_request(initialize_request(), {}).has_value(), "ACP cwd test initializes first host");
   auto created = first.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + nested.string() + "\",\"mcpServers\":[]}"}, {});
   auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
-  expect(id.has_value(), "ACP cwd test creates a nested-cwd session");
-  if (!id)
+  if (!ava::tests::require(id.has_value(), "ACP cwd test creates a nested-cwd session"))
     return;
   auto listed = first.handle_request(Request{.id = std::int64_t(3), .method = "session/list", .params_json = std::string("{}")}, {});
   expect(listed && listed->find(nested.string()) != std::string::npos, "session/list reports persisted original cwd rather than launch root");
@@ -767,10 +768,7 @@ void test_acp_exact_identity_persisted_cwd_and_restart()
 
   auto const oversized_path = store->session_path();
   std::string const oversized_bytes(kAcpSessionReadLimits.max_file_bytes + 1, 'x');
-  {
-    std::ofstream file(oversized_path, std::ios::binary | std::ios::trunc);
-    file.write(oversized_bytes.data(), static_cast<std::streamsize>(oversized_bytes.size()));
-  }
+  ava::tests::write_test_file(oversized_path, oversized_bytes);
   AgentService bounded(options);
   static_cast<void>(bounded.handle_request(initialize_request(), {}));
   auto oversized_resume = bounded.handle_request(
@@ -790,38 +788,57 @@ void test_acp_exact_identity_persisted_cwd_and_restart()
   }
   expect(!oversized_resume && oversized_after == oversized_bytes && !quarantine_exists,
          "ACP session/resume passes bounded recovery limits and rejects an oversized file unchanged without quarantine");
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_cross_process_lease_and_bounded_streaming()
 {
-  auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-lease");
+  if (auto const* path = std::getenv("AVA_ACP_LEASE_CHILD_PATH"))
+  {
+    auto contested = ava::session::SessionLease::acquire(path);
+    expect(!contested && contested.error().category() == ava::core::ErrorCategory::Session,
+           "session lease reports ownership contention in an independently executed AVA test process");
+    return;
+  }
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-lease-");
+  auto const root = root_owner.path();
   auto workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   auto store = ava::session::SessionStore::create(workspace, root / "sessions");
-  expect(store.has_value(), "lease test creates store");
-  if (!store)
+  if (!ava::tests::require(store.has_value(), "lease test creates store"))
     return;
-  static_cast<void>(append_session_entry_for_test(*store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
-                                                                                     .parent_id = "",
-                                                                                     .type = ava::session::EntryType::SessionStart,
-                                                                                     .timestamp = ava::session::now_timestamp(),
-                                                                                     .data_json = "{}"}));
+  if (!ava::tests::require(append_session_entry_for_test(*store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
+                                                                                            .parent_id = "",
+                                                                                            .type = ava::session::EntryType::SessionStart,
+                                                                                            .timestamp = ava::session::now_timestamp(),
+                                                                                            .data_json = "{}"})
+                               .has_value(),
+                           "lease fixture persists its session-start record"))
+    return;
   auto lease = ava::session::SessionLease::acquire(store->session_path());
+  if (!ava::tests::require(lease.has_value(), "lease fixture acquires its first exclusive owner"))
+    return;
   auto same_process = ava::session::SessionLease::acquire(store->session_path());
-  expect(lease && !same_process && same_process.error().message().find("already owned") != std::string::npos,
-         "session lease excludes a second owner in the same process with an actionable error");
-  pid_t child = fork();
-  if (child == 0)
-  {
-    auto contested = ava::session::SessionLease::acquire(store->session_path());
-    _exit(!contested && contested.error().message().find("already owned") != std::string::npos ? 0 : 1);
-  }
-  int status = 0;
-  static_cast<void>(waitpid(child, &status, 0));
-  expect(WIFEXITED(status) && WEXITSTATUS(status) == 0, "session lease excludes a second AVA process for the host lifetime");
+  expect(!same_process && same_process.error().category() == ava::core::ErrorCategory::Session,
+         "session lease classifies a second owner in the same process as ownership contention");
+  std::vector<std::string> child_environment;
+  for (auto entry = ::environ; *entry != nullptr; ++entry)
+    if (!std::string_view(*entry).starts_with("AVA_ACP_LEASE_CHILD_PATH="))
+      child_environment.emplace_back(*entry);
+  child_environment.push_back("AVA_ACP_LEASE_CHILD_PATH=" + store->session_path().string());
+  std::vector<char*> environment;
+  for (auto& entry : child_environment)
+    environment.push_back(entry.data());
+  environment.push_back(nullptr);
+  char executable[] = "/proc/self/exe";
+  char suite[] = "acp";
+  char* arguments[] = {executable, suite, nullptr};
+  pid_t child = -1;
+  int const spawned = posix_spawn(&child, executable, nullptr, nullptr, arguments, environment.data());
+  if (!ava::tests::require(spawned == 0, "lease fixture executes an independent test process: spawn errno=" + std::to_string(spawned)))
+    return;
+  ava::tests::ScopedChild child_owner(child);
+  auto const status = child_owner.wait_until(ava::tests::now_plus_seconds(5));
+  expect(status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0, "session lease excludes a second AVA process for the host lifetime");
 
   if (lease)
   {
@@ -836,14 +853,13 @@ void test_acp_cross_process_lease_and_bounded_streaming()
          "bounded streaming session open rejects an oversized transcript without unbounded allocation");
   auto recovered = store->load_bounded(ava::session::SessionReadLimits{.max_file_bytes = 4096, .max_line_bytes = 2048, .max_entries = 8});
   expect(recovered && recovered->size() == 2, "bounded session reader recovers on a later request with valid budgets");
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
-void test_acp_list_pagination_cancel_race_stop_reasons_and_file_safety()
+void test_acp_session_list_pagination_and_snapshot_bounds()
 {
   using namespace ava::app::acp;
-  auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-pagination");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-pagination-");
+  auto const root = root_owner.path();
   auto workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
@@ -851,14 +867,18 @@ void test_acp_list_pagination_cancel_race_stop_reasons_and_file_safety()
   for (int index = 0; index < 55; ++index)
   {
     auto store = ava::session::SessionStore::create(workspace, paths.sessions_dir);
-    if (!store)
-      continue;
-    static_cast<void>(append_session_entry_for_test(
-        *store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
-                                           .parent_id = "",
-                                           .type = ava::session::EntryType::SessionStart,
-                                           .timestamp = "2026-07-12T12:" + std::to_string(index / 10) + std::to_string(index % 10) + ":00Z",
-                                           .data_json = "{\"original_cwd\":\"" + ava::core::json::escape(workspace.string()) + "\"}"}));
+    if (!ava::tests::require(store.has_value(), "pagination fixture creates session " + std::to_string(index)))
+      return;
+    if (!ava::tests::require(
+            append_session_entry_for_test(
+                *store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
+                                                   .parent_id = "",
+                                                   .type = ava::session::EntryType::SessionStart,
+                                                   .timestamp = "2026-07-12T12:" + std::to_string(index / 10) + std::to_string(index % 10) + ":00Z",
+                                                   .data_json = "{\"original_cwd\":\"" + ava::core::json::escape(workspace.string()) + "\"}"})
+                .has_value(),
+            "pagination fixture persists session metadata " + std::to_string(index)))
+      return;
   }
   std::string request_body;
   AgentServiceOptions options;
@@ -866,66 +886,151 @@ void test_acp_list_pagination_cancel_race_stop_reasons_and_file_safety()
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
   options.provider_bundle_factory = recording_bundle_factory(&request_body);
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP pagination fixture initializes"))
+    return;
   auto first_page = service.handle_request(Request{.id = std::int64_t(2), .method = "session/list", .params_json = std::string("{}")}, {});
   auto const first_items = first_page ? ava::core::json::objects_in_array_field(*first_page, "sessions") : std::vector<std::string>{};
   auto cursor = first_page ? ava::core::json::string_field(*first_page, "nextCursor").value_or("") : "";
   expect(first_page && first_items.size() == kSessionListPageSize && !cursor.empty() && first_page->size() < kMaxRecordBytes,
          "session/list returns a bounded first page and pinned-schema nextCursor");
+  auto const nested = workspace / "nested";
+  std::filesystem::create_directory(nested);
+  auto nested_store = ava::session::SessionStore::create(workspace, paths.sessions_dir);
+  if (!ava::tests::require(nested_store.has_value(), "cwd-filter fixture creates a distinct nested-cwd session"))
+    return;
+  if (!ava::tests::require(
+          append_session_entry_for_test(*nested_store,
+                                        ava::session::SessionEntry{.id = "nested-start",
+                                                                   .parent_id = "",
+                                                                   .type = ava::session::EntryType::SessionStart,
+                                                                   .timestamp = ava::session::now_timestamp(),
+                                                                   .data_json = "{\"original_cwd\":\"" + ava::core::json::escape(nested.string()) + "\"}"})
+              .has_value(),
+          "cwd-filter fixture persists the distinct cwd"))
+    return;
+  auto wrong_cwd =
+      service.handle_request(Request{.id = std::int64_t(20),
+                                     .method = "session/list",
+                                     .params_json = "{\"cursor\":\"" + cursor + "\",\"cwd\":\"" + ava::core::json::escape(nested.string()) + "\"}"},
+                             {});
+  expect(!wrong_cwd && wrong_cwd.error().code == -32602, "session/list rejects cursor/cwd mismatch without consuming the snapshot");
   auto second_page =
       service.handle_request(Request{.id = std::int64_t(3), .method = "session/list", .params_json = std::string("{\"cursor\":\"") + cursor + "\"}"}, {});
   auto const second_items = second_page ? ava::core::json::objects_in_array_field(*second_page, "sessions") : std::vector<std::string>{};
   expect(second_page && second_items.size() == 5 && !ava::core::json::string_field(*second_page, "nextCursor"),
          "session/list cursor yields a stable bounded remainder page");
+  auto reused = service.handle_request(Request{.id = std::int64_t(21), .method = "session/list", .params_json = "{\"cursor\":\"" + cursor + "\"}"}, {});
+  expect(!reused && reused.error().code == -32602, "session/list invalidates a cursor after its final page is consumed");
+  auto filtered = service.handle_request(
+      Request{.id = std::int64_t(22), .method = "session/list", .params_json = "{\"cwd\":\"" + ava::core::json::escape(nested.string()) + "\"}"}, {});
+  auto const filtered_items = filtered ? ava::core::json::objects_in_array_field(*filtered, "sessions") : std::vector<std::string>{};
+  ava::tests::expect_all("session/list positively filters by the persisted original cwd",
+                         {{"one matching session", filtered_items.size() == 1},
+                          {"exact matching identity",
+                           filtered_items.size() == 1 && ava::core::json::string_field(filtered_items.front(), "sessionId") == nested_store->session_id()},
+                          {"reported cwd", filtered_items.size() == 1 && ava::core::json::string_field(filtered_items.front(), "cwd") == nested.string()},
+                          {"no continuation", filtered && !ava::core::json::string_field(*filtered, "nextCursor")}});
   auto invalid_cursor =
       service.handle_request(Request{.id = std::int64_t(4), .method = "session/list", .params_json = std::string(R"({"cursor":"v2:forged"})")}, {});
   expect(!invalid_cursor && invalid_cursor.error().code == -32602, "session/list rejects forged or unsupported cursor state");
 
-  for (int index = 0; index < 2000; ++index)
-  {
-    auto store = ava::session::SessionStore::create(workspace, paths.sessions_dir);
-    if (!store)
-      continue;
-    static_cast<void>(append_session_entry_for_test(
-        *store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
-                                           .parent_id = "",
-                                           .type = ava::session::EntryType::SessionStart,
-                                           .timestamp = ava::session::now_timestamp(),
-                                           .data_json = "{\"original_cwd\":\"" + ava::core::json::escape(workspace.string()) + "\"}"}));
-    static_cast<void>(append_session_metadata_for_test(
-        *store, ava::session::SessionMetadataUpdate{.name = std::optional<std::string>(std::string(256, 't')), .actor = "test"}));
-  }
   std::vector<std::string> retained_cursors;
-  for (int index = 0; index < 12; ++index)
+  for (std::size_t index = 0; index <= kMaxSessionListSnapshots; ++index)
   {
-    auto listed = service.handle_request(Request{.id = std::int64_t(100 + index), .method = "session/list", .params_json = std::string("{}")}, {});
+    auto listed = service.handle_request(Request{.id = std::int64_t(100), .method = "session/list", .params_json = std::string("{}")}, {});
     auto token = listed ? ava::core::json::string_field(*listed, "nextCursor") : std::nullopt;
-    if (token)
-      retained_cursors.push_back(*token);
+    if (!ava::tests::require(token.has_value(), "count-eviction fixture creates cursor " + std::to_string(index)))
+      return;
+    retained_cursors.push_back(*token);
   }
-  auto evicted =
-      retained_cursors.empty()
-          ? RequestResult(std::unexpected(JsonRpcError{}))
-          : service.handle_request(
-                Request{.id = std::int64_t(200), .method = "session/list", .params_json = std::string("{\"cursor\":\"") + retained_cursors.front() + "\"}"},
-                {});
-  auto newest =
-      retained_cursors.empty()
-          ? RequestResult(std::unexpected(JsonRpcError{}))
-          : service.handle_request(
-                Request{.id = std::int64_t(201), .method = "session/list", .params_json = std::string("{\"cursor\":\"") + retained_cursors.back() + "\"}"}, {});
-  expect(retained_cursors.size() == 12 && !evicted && evicted.error().code == -32602 && newest,
-         "session/list enforces aggregate snapshot bytes with deterministic oldest-first eviction and invalidates evicted cursors: cursors=" +
-             std::to_string(retained_cursors.size()) + " evicted=" + (evicted ? std::string("success") : std::to_string(evicted.error().code)) +
-             " newest=" + (newest ? std::string("success") : std::to_string(newest.error().code)));
+  auto read_cursor = [](AgentService& host, std::string const& token) {
+    return host.handle_request(Request{.id = std::int64_t(200), .method = "session/list", .params_json = "{\"cursor\":\"" + token + "\"}"}, {});
+  };
+  auto evicted = read_cursor(service, retained_cursors.front());
+  auto oldest_retained = read_cursor(service, retained_cursors[1]);
+  auto newest = read_cursor(service, retained_cursors.back());
+  ava::tests::expect_all("session/list count capacity evicts the oldest snapshot only", {{"oldest evicted", !evicted && evicted.error().code == -32602},
+                                                                                         {"next-oldest retained", oldest_retained.has_value()},
+                                                                                         {"newest retained", newest.has_value()}});
 
+  auto at_budget = [&](std::size_t bytes) {
+    auto budget_options = options;
+    budget_options.max_session_list_snapshot_bytes = bytes;
+    AgentService budget_service(budget_options);
+    auto initialized = budget_service.handle_request(initialize_request(), {});
+    if (!ava::tests::require(initialized.has_value(), "snapshot-budget fixture initializes"))
+      return initialized;
+    return budget_service.handle_request(Request{.id = std::int64_t(2), .method = "session/list", .params_json = std::string("{}")}, {});
+  };
+  auto zero_budget = at_budget(0);
+  if (!ava::tests::require(!zero_budget && zero_budget.error().code == -32603, "zero snapshot byte budget rejects a nonempty continuation"))
+    return;
+  // Calibrate a small two-snapshot budget without assuming allocator-specific
+  // string capacities; the eviction assertions below are the behavioral checks.
+  std::size_t rejected_bytes = 0;
+  std::size_t accepted_bytes = kMaxSessionListSnapshotBytes;
+  if (!ava::tests::require(at_budget(accepted_bytes).has_value(), "production snapshot budget accepts the small fixture"))
+    return;
+  while (accepted_bytes - rejected_bytes > 1)
+  {
+    auto const probe = rejected_bytes + (accepted_bytes - rejected_bytes) / 2;
+    if (at_budget(probe))
+      accepted_bytes = probe;
+    else
+      rejected_bytes = probe;
+  }
+  auto byte_options = options;
+  byte_options.max_session_list_snapshot_bytes = 2 * accepted_bytes;
+  AgentService byte_service(byte_options);
+  if (!ava::tests::require(byte_service.handle_request(initialize_request(), {}).has_value(), "aggregate-byte fixture initializes"))
+    return;
+  std::vector<std::string> byte_cursors;
+  for (int index = 0; index < 3; ++index)
+  {
+    auto listed = byte_service.handle_request(Request{.id = std::int64_t(2), .method = "session/list", .params_json = std::string("{}")}, {});
+    auto token = listed ? ava::core::json::string_field(*listed, "nextCursor") : std::nullopt;
+    if (!ava::tests::require(token.has_value(), "aggregate-byte fixture creates cursor " + std::to_string(index)))
+      return;
+    byte_cursors.push_back(*token);
+  }
+  auto byte_evicted = read_cursor(byte_service, byte_cursors[0]);
+  auto byte_retained = read_cursor(byte_service, byte_cursors[1]);
+  auto byte_newest = read_cursor(byte_service, byte_cursors[2]);
+  ava::tests::expect_all("a third snapshot exceeds the two-snapshot byte budget before count capacity",
+                         {{"oldest evicted", !byte_evicted && byte_evicted.error().code == -32602},
+                          {"second snapshot retained at exact aggregate budget", byte_retained.has_value()},
+                          {"newest retained", byte_newest.has_value()}});
+
+  service.shutdown();
+}
+
+void test_acp_idle_cancel_and_literal_file_safety()
+{
+  using namespace ava::app::acp;
+  std::string request_body;
+  AgentServiceOptions options;
+  options.agent_version = "1";
+  options.provider_bundle_factory = recording_bundle_factory(&request_body);
+  ScopedAgentService fixture("acp-literal-file-safety-", options);
+  auto& service = fixture.service;
+  auto const& workspace = fixture.workspace;
+  std::size_t update_count = 0;
+  service.bind_update_sender([&update_count](std::string_view, std::string_view) -> ava::core::VoidResult {
+    ++update_count;
+    return {};
+  });
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP literal-file fixture initializes"))
+    return;
   auto secret = workspace / "secret.txt";
-  ava::tests::write_app_test_file(secret, "MUST_NOT_ENTER_PROVIDER_CONTEXT");
+  ava::tests::write_test_file(secret, "MUST_NOT_ENTER_PROVIDER_CONTEXT");
   auto created = service.handle_request(
       Request{.id = std::int64_t(5), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
+  if (!ava::tests::require(id.has_value(), "ACP literal-file fixture creates a session"))
+    return;
   if (id)
   {
     service.handle_notification(Notification{.method = "session/cancel", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
@@ -944,8 +1049,17 @@ void test_acp_list_pagination_cancel_race_stop_reasons_and_file_safety()
                                {});
     auto detail = std::string("ACP prompt preserves @file as literal text and performs no implicit local file read: ") +
                   (prompt ? *prompt : prompt.error().message) + " body=" + request_body.substr(0, 512);
-    expect(request_body.find("@secret.txt") != std::string::npos && request_body.find("MUST_NOT_ENTER_PROVIDER_CONTEXT") == std::string::npos, detail);
+    ava::tests::expect_all(detail, {{"prompt completes", prompt && *prompt == R"({"stopReason":"end_turn"})"},
+                                    {"literal file reference", request_body.find("@secret.txt") != std::string::npos},
+                                    {"file contents excluded", request_body.find("MUST_NOT_ENTER_PROVIDER_CONTEXT") == std::string::npos},
+                                    {"both prompt updates delivered", update_count == 2}});
   }
+  service.shutdown();
+}
+
+void test_acp_runtime_stop_reason_catalog()
+{
+  using namespace ava::app::acp;
   bool outcomes_exhaustive = true;
   for (auto const& entry : ava::core::kRuntimeTerminalOutcomeCatalog)
   {
@@ -974,9 +1088,6 @@ void test_acp_list_pagination_cancel_race_stop_reasons_and_file_safety()
     outcomes_exhaustive = outcomes_exhaustive && (entry.outcome == ava::core::RuntimeTerminalOutcome::Error ? !mapped : mapped && *mapped == expected);
   }
   expect(outcomes_exhaustive, "ACP exhaustively maps the closed protocol-neutral runtime outcome catalog");
-  service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_session_cwd_allows_symlinked_workspace_path()

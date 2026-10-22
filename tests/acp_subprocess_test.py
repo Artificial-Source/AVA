@@ -11,6 +11,11 @@ import signal
 import subprocess
 import tempfile
 import time
+import sys
+import threading
+import traceback
+from cli_test_support import cleanup_owned_processes as cleanup_child_processes
+from cli_test_support import launch_owned
 
 from fake_provider import FakeProvider, launch_fake_provider
 from timeout_support import test_timeout
@@ -19,6 +24,29 @@ from timeout_support import test_timeout
 OWNED_PROCESSES = set()
 OWNED_PROVIDERS: list[FakeProvider] = []
 OWNED_DIRECTORIES: list[Path] = []
+STDOUT_BUFFERS = {}
+MAX_RECORD_BYTES = 1024 * 1024
+MAX_TRANSACTION_BYTES = 4 * 1024 * 1024
+
+
+def process_failure_context(process):
+    """Collect bounded, currently available stderr without waiting for child EOF."""
+    captured = bytearray()
+    descriptor = process.stderr.fileno()
+    was_blocking = os.get_blocking(descriptor)
+    try:
+        os.set_blocking(descriptor, False)
+        while len(captured) < 64 * 1024:
+            try:
+                chunk = os.read(descriptor, min(4096, 64 * 1024 - len(captured)))
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            captured.extend(chunk)
+    finally:
+        os.set_blocking(descriptor, was_blocking)
+    return f"process.poll()={process.poll()!r}; stderr={captured.decode(errors='replace')!r}"
 
 
 def environment(root):
@@ -67,53 +95,39 @@ def environment(root):
 
 
 def owned_popen(*arguments, **options):
-    options["start_new_session"] = True
-    process = subprocess.Popen(*arguments, **options)
+    process = launch_owned(*arguments, **options)
     OWNED_PROCESSES.add(process)
     return process
 
 
-def cleanup_owned_processes():
-    for process in reversed(tuple(OWNED_PROCESSES)):
-        if process.poll() is not None:
-            continue
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            continue
-    deadline = time.monotonic() + 2
-    for process in reversed(tuple(OWNED_PROCESSES)):
-        if process.poll() is not None:
-            continue
-        try:
-            process.wait(timeout=max(0.01, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    for process in tuple(OWNED_PROCESSES):
-        if process.poll() is None:
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                pass
-        for stream in (process.stdin, process.stdout, process.stderr):
-            if stream is not None and not stream.closed:
-                stream.close()
+def cleanup_owned_processes(*, directories=True):
+    errors = []
+    try:
+        cleanup_child_processes(tuple(OWNED_PROCESSES))
+    except Exception as error:
+        errors.append(error)
     OWNED_PROCESSES.clear()
+    STDOUT_BUFFERS.clear()
     for provider in reversed(OWNED_PROVIDERS):
-        provider.stop()
-    OWNED_PROVIDERS.clear()
-    for directory in reversed(OWNED_DIRECTORIES):
-        if directory.is_symlink() or directory.is_file():
-            directory.unlink(missing_ok=True)
-            continue
         try:
-            shutil.rmtree(directory)
-        except FileNotFoundError:
-            pass
-    OWNED_DIRECTORIES.clear()
+            provider.stop()
+        except Exception as error:
+            errors.append(error)
+    OWNED_PROVIDERS.clear()
+    if directories:
+        for directory in reversed(OWNED_DIRECTORIES):
+            try:
+                if directory.is_symlink() or directory.is_file():
+                    directory.unlink(missing_ok=True)
+                else:
+                    shutil.rmtree(directory)
+            except FileNotFoundError:
+                pass
+            except Exception as error:
+                errors.append(error)
+        OWNED_DIRECTORIES.clear()
+    if errors:
+        raise RuntimeError("ACP fixture cleanup failed: " + "; ".join(map(str, errors)))
 
 
 def signal_cleanup(signum, _frame):
@@ -178,59 +192,118 @@ def send(process, payload, ending=b"\n"):
     process.stdin.flush()
 
 
-def read_line(process, timeout=10.0, operation="ACP response"):
+def read_line(process, timeout=10.0, operation="ACP response", *, deadline=None):
+    buffer = STDOUT_BUFFERS.setdefault(process, bytearray())
+    if b"\n" in buffer:
+        line, _, remainder = buffer.partition(b"\n")
+        STDOUT_BUFFERS[process] = bytearray(remainder)
+        return json.loads(line)
+    deadline = deadline if deadline is not None else time.monotonic() + test_timeout(timeout)
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     ready = selector.select(test_timeout(timeout))
-    selector.close()
-    if not ready:
-        raise AssertionError(
-            f"timed out waiting for {operation}; process.poll()={process.poll()!r}")
-    line = process.stdout.readline()
-    assert line, f"ACP stdout closed during {operation}; process.poll()={process.poll()!r}"
-    return json.loads(line)
+    try:
+        while True:
+            if not ready:
+                raise AssertionError(f"timed out waiting for complete {operation}; partial={bytes(buffer[:256])!r}; {process_failure_context(process)}")
+            chunk = os.read(process.stdout.fileno(), 64 * 1024)
+            if not chunk:
+                raise AssertionError(f"ACP stdout closed during {operation}; partial={bytes(buffer[:256])!r}; {process_failure_context(process)}")
+            buffer.extend(chunk)
+            if b"\n" in buffer:
+                line, _, remainder = buffer.partition(b"\n")
+                assert len(line) <= MAX_RECORD_BYTES, f"oversized {operation} record"
+                STDOUT_BUFFERS[process] = bytearray(remainder)
+                return json.loads(line)
+            assert len(buffer) <= MAX_RECORD_BYTES, f"unterminated oversized {operation} record"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(f"timed out waiting for complete {operation}; partial={bytes(buffer[:256])!r}; {process_failure_context(process)}")
+            ready = selector.select(remaining)
+    finally:
+        selector.close()
+
+
+def records_until_ids(process, request_ids, timeout=15.0, operation="ACP request completion", *, deadline=None):
+    pending = set(request_ids)
+    captured_bytes = 0
+    deadline = deadline if deadline is not None else time.monotonic() + test_timeout(timeout)
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(f"timed out waiting for {operation}; pending={pending!r}; {process_failure_context(process)}")
+        record = read_line(process, remaining, operation, deadline=deadline)
+        captured_bytes += len(json.dumps(record, ensure_ascii=False).encode("utf-8"))
+        assert captured_bytes <= MAX_TRANSACTION_BYTES, f"oversized fixture transaction during {operation}"
+        yield record
+        if record.get("id", object()) in pending:
+            pending.remove(record["id"])
 
 
 def read_until_id(process, request_id, timeout=15.0, operation="ACP request completion"):
-    records = []
     deadline = time.monotonic() + test_timeout(timeout)
-    while time.monotonic() < deadline:
-        record = read_line(
-            process, max(0.05, deadline - time.monotonic()), operation)
-        records.append(record)
-        if record.get("id", object()) == request_id:
-            return records
-    raise AssertionError(
-        f"timed out waiting for {operation}; process.poll()={process.poll()!r}")
+    return list(records_until_ids(process, {request_id}, timeout, operation, deadline=deadline))
 
 
-def expect_no_stdout(process, timeout=0.12):
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
-    ready = selector.select(timeout)
-    selector.close()
-    assert not ready, "unexpected ACP stdout record"
+def expect_silent_input(process, *, initialized=False):
+    """The next complete response must belong to our ordered positive probe."""
+    request_id = "silence-probe"
+    send(process, json.dumps({
+        "jsonrpc": "2.0", "id": request_id, "method": "test/silence-probe", "params": {},
+    }).encode())
+    response = read_line(process, operation="silence probe")
+    assert response.get("id") == request_id, response
+    assert response["error"]["code"] == (-32601 if initialized else -32600), response
 
 
 def stop_cleanly(process):
     process.stdin.close()
     assert process.wait(timeout=test_timeout(10)) == 0
-    assert process.stdout.read() == b""
-    assert process.stderr.read() == b""
+    assert not STDOUT_BUFFERS.pop(process, b""), "unexpected buffered ACP stdout after terminal response"
+    assert process.stdout.read(1) == b""
+    assert process.stderr.read(1) == b""
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--ava", required=True)
-    parser.add_argument("--fake-provider", required=True)
-    parser.add_argument("--fake-mcp", required=True)
-    parser.add_argument("--root", required=True)
-    args = parser.parse_args()
-    # Command plans validate workspace ancestry. Use a private mkdtemp root
-    # (honors TMPDIR) rather than the build tree, whose checkout ancestor can
-    # deliberately be shared. The directory is removed during process cleanup.
-    root = Path(tempfile.mkdtemp(prefix="ava-acp-subprocess-"))
-    OWNED_DIRECTORIES.append(root)
+def test_unterminated_record_cleanup(root):
+    process = owned_popen(
+        [sys.executable, "-c", "import os; os.write(1, b'{'); os.read(0, 1)"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=environment(root), bufsize=0,
+    )
+    selector = selectors.DefaultSelector()
+    try:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        assert selector.select(test_timeout(2)), "unterminated-record fixture publishes its partial record"
+    finally:
+        selector.close()
+    failures = []
+
+    def read_fragment():
+        try:
+            read_line(process, timeout=0.05, operation="unterminated fixture record")
+        except Exception as error:
+            failures.append(error)
+
+    reader = threading.Thread(target=read_fragment)
+    reader.start()
+    try:
+        reader.join(test_timeout(2))
+        completed_while_child_held = not reader.is_alive()
+    finally:
+        # Independent rescue releases the child even if complete-line reads
+        # regress to blocking. Join and reap before reporting the assertion.
+        if process.poll() is None:
+            send(process, b"x", ending=b"")
+        process.wait(timeout=test_timeout(2))
+        reader.join(test_timeout(2))
+    assert not reader.is_alive(), "unterminated-record fixture reader did not stop after child EOF"
+    assert completed_while_child_held, "record deadline did not fire while the child withheld LF and EOF"
+    assert len(failures) == 1 and isinstance(failures[0], AssertionError), failures
+    assert process.poll() == 0, "unterminated-record fixture child was not reaped"
+    STDOUT_BUFFERS.pop(process, None)
+
+
+def test_protocol_recovery(args, root):
 
     conflict = subprocess.run([args.ava, "--acp", "--rpc"], input=b"", capture_output=True, env=environment(root), timeout=test_timeout(10))
     assert conflict.returncode != 0 and conflict.stdout == b"" and b"standalone" in conflict.stderr
@@ -238,13 +311,15 @@ def main():
     parent_secret_name = "AVA_ACP_SUBPROCESS_PARENT_SECRET"
     previous_parent_secret = os.environ.get(parent_secret_name)
     os.environ[parent_secret_name] = "must-not-reach-child"
-    process = start(args.ava, root / "recovery")
-    child_environment = Path(f"/proc/{process.pid}/environ").read_bytes().split(b"\0")
-    assert not any(item.startswith(parent_secret_name.encode() + b"=") for item in child_environment)
-    if previous_parent_secret is None:
-        os.environ.pop(parent_secret_name, None)
-    else:
-        os.environ[parent_secret_name] = previous_parent_secret
+    try:
+        process = start(args.ava, root / "recovery")
+        child_environment = Path(f"/proc/{process.pid}/environ").read_bytes().split(b"\0")
+        assert not any(item.startswith(parent_secret_name.encode() + b"=") for item in child_environment)
+    finally:
+        if previous_parent_secret is None:
+            os.environ.pop(parent_secret_name, None)
+        else:
+            os.environ[parent_secret_name] = previous_parent_secret
     send(process, b"{")
     parse_error = read_line(process)
     assert parse_error["error"]["code"] == -32700 and parse_error["id"] is None
@@ -271,7 +346,7 @@ def main():
     send(process, json.dumps({"jsonrpc": "2.0", "id": "load-deferred", "method": "session/load", "params": {}}).encode())
     assert read_line(process)["error"]["code"] == -32601
     send(process, json.dumps({"jsonrpc": "2.0", "method": "unknown", "params": {}}).encode())
-    expect_no_stdout(process)
+    expect_silent_input(process, initialized=True)
     send(process, json.dumps({"jsonrpc": "2.0", "id": 4, "method": "unknown", "params": {}}).encode())
     missing = read_line(process)
     assert missing["id"] == 4 and missing["error"]["code"] == -32601
@@ -307,7 +382,7 @@ def main():
     )
     for record in malformed_response_intent:
         send(loops, record)
-    expect_no_stdout(loops)
+    expect_silent_input(loops)
 
     deep_result = b"[" * 80 + b"0" + b"]" * 80
     for record in (
@@ -315,7 +390,7 @@ def main():
         b'{"jsonrpc":"2.0","result":' + deep_result + b',"id":null}',
     ):
         send(loops, record)
-    expect_no_stdout(loops)
+    expect_silent_input(loops)
 
     oversized_value = b"x" * (1024 * 1024 + 64)
     for record in (
@@ -325,14 +400,14 @@ def main():
         b'{"jsonrpc":"2.0","result":"' + oversized_value + b'","id":null}',
     ):
         send(loops, record)
-    expect_no_stdout(loops)
+    expect_silent_input(loops)
 
     oversized_notification = (
         b'{"jsonrpc":"2.0","params":{"blob":"' + oversized_value
         + b'"},"method":"unknown"}'
     )
     send(loops, oversized_notification)
-    expect_no_stdout(loops)
+    expect_silent_input(loops)
 
     oversized_request = (
         b'{"jsonrpc":"2.0","params":{"blob":"' + oversized_value
@@ -352,6 +427,8 @@ def main():
     assert 1 <= len(diagnostics) <= response_intent_records
     assert all(b"response" in line and b"result" not in line and b"error" not in line for line in diagnostics)
 
+
+def test_session_lifecycle(args, root):
     lifecycle_root = root / "lifecycle-env"
     workspace = root / "workspace"
     nested = workspace / "nested"
@@ -382,12 +459,9 @@ def main():
     traversal = new_session("traversal", workspace / ".." / "outside")
     assert traversal["error"]["code"] == -32602 and "traversal" in traversal["error"]["message"]
     link = workspace / "linked"
-    try:
-        link.symlink_to(nested, target_is_directory=True)
-        linked = new_session("symlink", link)
-        assert linked["error"]["code"] == -32602 and "symlink" in linked["error"]["message"]
-    except OSError:
-        pass
+    link.symlink_to(nested, target_is_directory=True)
+    linked = new_session("symlink", link)
+    assert linked["error"]["code"] == -32602
     send(lifecycle, json.dumps({
         "jsonrpc": "2.0", "id": "mcp-http", "method": "session/new",
         "params": {"cwd": str(workspace), "mcpServers": [{"type": "http", "name": "remote", "url": "https://example.invalid", "headers": []}]},
@@ -443,13 +517,10 @@ def main():
     prompt("pa", session_a, "independent a")
     prompt("pb", session_b, "independent b")
     independent = []
-    completed = set()
-    while completed != {"pa", "pb"}:
-        record = read_line(lifecycle, 10, "parallel session prompt completion")
+    for record in records_until_ids(lifecycle, {"pa", "pb"}, 10, "parallel session prompt completion"):
         independent.append(record)
         if record.get("id") in {"pa", "pb"}:
             assert record["result"]["stopReason"] == "end_turn"
-            completed.add(record["id"])
     assert all(record.get("error") is None for record in independent)
 
     send(lifecycle, json.dumps({"jsonrpc": "2.0", "id": "close-a", "method": "session/close", "params": {"sessionId": session_a}}).encode())
@@ -460,7 +531,7 @@ def main():
     }).encode())
     load_rejected = read_line(lifecycle)
     assert load_rejected["id"] == "load-a" and load_rejected["error"]["code"] == -32601
-    expect_no_stdout(lifecycle)
+    expect_silent_input(lifecycle, initialized=True)
 
     send(lifecycle, json.dumps({"jsonrpc": "2.0", "id": "list", "method": "session/list", "params": {}}).encode())
     listed = read_line(lifecycle)["result"]["sessions"]
@@ -475,6 +546,8 @@ def main():
     stop_cleanly(lifecycle)
     provider.finish(timeout=test_timeout(10))
 
+
+def test_permission_routing(args, root, workspace):
     # A real bidirectional client must be able to answer a permission request
     # while session/prompt is still in flight. Tool updates remain ordered
     # around the request and the terminal response is last.
@@ -503,8 +576,7 @@ def main():
     }).encode())
     permission_records = []
     permission_request = None
-    while True:
-        record = read_line(permission_process, 10, "permission session lifecycle response")
+    for record in records_until_ids(permission_process, {"permission-prompt"}, 10, "permission session lifecycle response"):
         permission_records.append(record)
         if record.get("method") == "session/request_permission":
             permission_request = record
@@ -540,6 +612,8 @@ def main():
     permission_provider.finish(timeout=test_timeout(10))
     assert "ACP_PERMISSION_CONTENT" in permission_provider.request_log.read_text(errors="replace")
 
+
+def test_client_filesystem_routing(args, root, workspace):
     # M5 client filesystem routing is exercised through the real stdio peer,
     # including permission-before-read and the exact outbound DTO.
     client_fs_root = root / "client-fs-env"
@@ -567,8 +641,7 @@ def main():
         "params": {"sessionId": client_fs_session, "prompt": [{"type": "text", "text": "read through client fs"}]},
     }).encode())
     client_fs_methods = []
-    while True:
-        record = read_line(client_fs, 10, "client filesystem session lifecycle response")
+    for record in records_until_ids(client_fs, {"fsp"}, 10, "client filesystem session lifecycle response"):
         method = record.get("method")
         if method == "session/request_permission":
             client_fs_methods.append(method)
@@ -596,6 +669,8 @@ def main():
     client_fs_requests = client_fs_provider.request_log.read_text(errors="replace")
     assert "REMOTE_CLIENT_FS_CONTENT" in client_fs_requests and "LOCAL_CONTENT_MUST_NOT_WIN" not in client_fs_requests
 
+
+def test_client_terminal_routing(args, root, workspace):
     # A negotiated terminal follows the complete remote lifecycle and never
     # starts a local process in the real ava --acp process.
     terminal_root = root / "terminal-env"
@@ -621,8 +696,7 @@ def main():
         "params": {"sessionId": terminal_session, "prompt": [{"type": "text", "text": "run through client terminal"}]},
     }).encode())
     terminal_methods = []
-    while True:
-        record = read_line(terminal_process, 10, "terminal session lifecycle response")
+    for record in records_until_ids(terminal_process, {"tp"}, 10, "terminal session lifecycle response"):
         method = record.get("method")
         if method == "session/request_permission":
             terminal_methods.append(method)
@@ -656,6 +730,8 @@ def main():
     assert "SUBPROCESS_TERMINAL_OUTPUT" in terminal_provider.request_log.read_text(errors="replace")
     assert not (workspace / "terminal-e2e-marker").exists()
 
+
+def test_image_prompt_content(args, root, workspace):
     image_root = root / "image-env"
     configure_fake_model(image_root, input_modalities=["text", "image"])
     image_provider = start_fake_provider(args.fake_provider, root / "image-provider", scenario="text")
@@ -685,6 +761,8 @@ def main():
     image_requests = image_provider.request_log.read_text(errors="replace")
     assert "iVBORw0KGgo=" in image_requests and "image/png" in image_requests
 
+
+def test_idle_and_active_cancellation(args, root, workspace):
     cancel_root = root / "cancel-env"
     configure_fake_model(cancel_root)
     cancel_provider = start_fake_provider(args.fake_provider, root / "cancel-provider", scenario="text")
@@ -743,6 +821,8 @@ def main():
     # write may fail after the gate release; only prove the process is gone.
     active_provider.stop()
 
+
+def test_auth_model_and_broken_output(args, root, workspace):
     auth_root = root / "auth-env"
     configure_fake_model(auth_root)
     auth = start(args.ava, auth_root, cwd=workspace, extra_env={"MOONSHOT_BASE_URL": "http://127.0.0.1:1"})
@@ -781,6 +861,45 @@ def main():
     diagnostic = broken.stderr.read()
     assert diagnostic and b"protocolVersion" not in diagnostic and b"initialize" not in diagnostic
 
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ava", required=True)
+    parser.add_argument("--fake-provider", required=True)
+    parser.add_argument("--fake-mcp", required=True)
+    parser.add_argument("--root", required=True)
+    args = parser.parse_args()
+    root = Path(tempfile.mkdtemp(prefix="ava-acp-subprocess-"))
+    OWNED_DIRECTORIES.append(root)
+    cases = [
+        ("unterminated-reader", lambda case_root, workspace: test_unterminated_record_cleanup(case_root)),
+        ("protocol-recovery", lambda case_root, workspace: test_protocol_recovery(args, case_root)),
+        ("session-lifecycle", lambda case_root, workspace: test_session_lifecycle(args, case_root)),
+        ("permission-routing", lambda case_root, workspace: test_permission_routing(args, case_root, workspace)),
+        ("client-filesystem", lambda case_root, workspace: test_client_filesystem_routing(args, case_root, workspace)),
+        ("client-terminal", lambda case_root, workspace: test_client_terminal_routing(args, case_root, workspace)),
+        ("image-content", lambda case_root, workspace: test_image_prompt_content(args, case_root, workspace)),
+        ("cancellation", lambda case_root, workspace: test_idle_and_active_cancellation(args, case_root, workspace)),
+        ("startup-and-broken-output", lambda case_root, workspace: test_auth_model_and_broken_output(args, case_root, workspace)),
+    ]
+    failures = []
+    for name, case in cases:
+        case_root = root / name
+        case_root.mkdir(mode=0o700)
+        workspace = case_root / "workspace"
+        workspace.mkdir(mode=0o700)
+        try:
+            case(case_root, workspace)
+        except Exception as error:
+            failures.append(f"{name}: {error}")
+            traceback.print_exc()
+        finally:
+            try:
+                cleanup_owned_processes(directories=False)
+            except Exception as error:
+                failures.append(f"{name} cleanup: {error}")
+                traceback.print_exc()
+    assert not failures, "\n".join(failures)
     print("real ava --acp subprocess checks passed")
     return 0
 

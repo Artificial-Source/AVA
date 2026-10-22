@@ -24,6 +24,8 @@ struct AgentServiceOptions
   RuntimeProviderRunBundleFactory provider_bundle_factory;
   std::chrono::milliseconds permission_timeout = kDefaultCallTimeout;
   std::chrono::milliseconds close_grace = kSessionCloseGrace;
+  // Aggregate retained session/list cursor memory; defaults preserve the wire policy.
+  std::size_t max_session_list_snapshot_bytes = kMaxSessionListSnapshotBytes;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

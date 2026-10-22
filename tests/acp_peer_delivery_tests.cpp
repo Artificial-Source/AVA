@@ -2,6 +2,7 @@
 #include "tests/acp_test_declarations.h"
 #include "tests/support/acp_test_support.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/process_test_support.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/command/command.h"
@@ -83,15 +84,24 @@ void test_acp_peer_claimed_outbound_abort_and_delivery_races()
   wait_writer(timeout_state);
   bool const timed_ready = timed && timed->completion.wait_for(2s) == std::future_status::ready;
   auto timed_result = timed_ready ? std::optional<CallResult>(timed->completion.get()) : std::nullopt;
+  bool timeout_aborted = false;
+  {
+    std::lock_guard lock(timeout_state->mutex);
+    timeout_aborted = timeout_state->canceled && timeout_state->cancel_calls > 0;
+  }
+  timeout_peer.shutdown();
   timeout_thread.join();
   {
     std::lock_guard lock(timeout_state->mutex);
     timeout_state->block_writes = false;
     timeout_state->cv.notify_all();
   }
-  expect(timed_result && !*timed_result && timed_result->error().code == -32800 && timeout_run.has_value() && timeout_state->canceled &&
-             timeout_state->cancel_calls > 0 && timeout_state->write_attempts == 1 && !take_output(timeout_state, 80ms),
-         "a claimed request timeout aborts the transport before bounded completion and never resumes the record");
+  ava::tests::expect_all("a claimed request timeout aborts the transport and never resumes the record",
+                         {{"local cancellation", timed_result && !*timed_result && timed_result->error().code == -32800},
+                          {"transport aborted before rescue", timeout_aborted},
+                          {"clean peer exit", timeout_run.has_value()},
+                          {"one write attempt", timeout_state->write_attempts == 1},
+                          {"no record delivered", !take_output(timeout_state, 0ms)}});
 
   auto eof_state = std::make_shared<MemoryTransportState>();
   eof_state->block_writes = true;
@@ -104,10 +114,14 @@ void test_acp_peer_claimed_outbound_abort_and_delivery_races()
   close_input(eof_state);
   bool const eof_ready = eof_call && eof_call->completion.wait_for(2s) == std::future_status::ready;
   auto eof_result = eof_ready ? std::optional<CallResult>(eof_call->completion.get()) : std::nullopt;
+  eof_peer.shutdown();
   eof_thread.join();
-  expect(eof_result && !*eof_result && eof_result->error().code == -32800 && eof_run.has_value() && eof_state->canceled && eof_state->cancel_calls > 0 &&
-             eof_state->write_attempts == 1 && !take_output(eof_state, 80ms),
-         "EOF aborts a request that is itself the claimed stalled record and completes peer and future without draining it");
+  ava::tests::expect_all("EOF aborts the claimed stalled record and completes peer and future without draining it",
+                         {{"local cancellation", eof_result && !*eof_result && eof_result->error().code == -32800},
+                          {"clean peer exit", eof_run.has_value()},
+                          {"transport canceled", eof_state->canceled && eof_state->cancel_calls > 0},
+                          {"one write attempt", eof_state->write_attempts == 1},
+                          {"no record delivered", !take_output(eof_state, 0ms)}});
 
   auto cancel_state = std::make_shared<MemoryTransportState>();
   cancel_state->block_writes = true;
@@ -121,14 +135,24 @@ void test_acp_peer_claimed_outbound_abort_and_delivery_races()
     cancel_peer.cancel_pending_call(canceled->id, "prompt canceled during claimed permission write");
   bool const cancel_ready = canceled && canceled->completion.wait_for(2s) == std::future_status::ready;
   auto cancel_result = cancel_ready ? std::optional<CallResult>(canceled->completion.get()) : std::nullopt;
+  bool cancel_aborted = false;
+  {
+    std::lock_guard lock(cancel_state->mutex);
+    cancel_aborted = cancel_state->canceled && cancel_state->cancel_calls > 0;
+  }
+  cancel_peer.shutdown();
   cancel_thread.join();
-  expect(cancel_result && !*cancel_result && cancel_result->error().code == -32800 && cancel_run.has_value() && cancel_state->canceled &&
-             cancel_state->cancel_calls > 0 && cancel_state->write_attempts == 1 && !take_output(cancel_state, 80ms),
-         "cancel_pending_call aborts a claimed request before bounded completion and does not resume it");
+  ava::tests::expect_all("cancel_pending_call aborts a claimed request before completion and does not resume it",
+                         {{"local cancellation", cancel_result && !*cancel_result && cancel_result->error().code == -32800},
+                          {"transport aborted before rescue", cancel_aborted},
+                          {"clean peer exit", cancel_run.has_value()},
+                          {"one write attempt", cancel_state->write_attempts == 1},
+                          {"no record delivered", !take_output(cancel_state, 0ms)}});
 
   auto staged_state = std::make_shared<MemoryTransportState>();
   staged_state->block_writes = true;
   JsonRpcPeer staged_peer(std::make_unique<MemoryTransport>(staged_state), [](Request const&, std::stop_token) -> RequestResult { return std::string("{}"); });
+  ReaderBarrier staged_reader(staged_peer);
   ava::core::JoinThread staged_thread = ava::core::JoinThread::create("staged_thread", [&] { static_cast<void>(staged_peer.run()); });
   wait_reader(staged_state);
   auto staged = staged_peer.send_request("session/request_permission", std::string("{}"), 2s);
@@ -141,7 +165,7 @@ void test_acp_peer_claimed_outbound_abort_and_delivery_races()
     auto guessed = encode_success(staged->id, R"({"outcome":{"outcome":"selected","optionId":"allow_always"}})");
     feed(staged_state, *guessed);
   }
-  std::this_thread::sleep_for(20ms);
+  expect(staged_reader.synchronize(staged_state), "reader classifies the claimed request's guessed response before writer release");
   bool const fulfilled_before_visible = staged && staged->completion.wait_for(0ms) == std::future_status::ready;
   bool output_before_release = false;
   {
@@ -155,8 +179,12 @@ void test_acp_peer_claimed_outbound_abort_and_delivery_races()
   auto staged_result = staged_ready ? std::optional<CallResult>(staged->completion.get()) : std::nullopt;
   close_input(staged_state);
   staged_thread.join();
-  expect(randomized_id && !fulfilled_before_visible && !output_before_release && staged_record && staged_result && staged_result->has_value(),
-         "a guessed response while the permission request is writer-claimed is staged until delivery acknowledgement and randomized ids are non-predictable");
+  ava::tests::expect_all("a response while writer-claimed is staged until delivery acknowledgment",
+                         {{"connection-scoped outbound id", randomized_id},
+                          {"not fulfilled before visibility", !fulfilled_before_visible},
+                          {"no output before writer release", !output_before_release},
+                          {"request delivered", staged_record.has_value()},
+                          {"staged response completed after delivery", staged_result && staged_result->has_value()}});
 
   auto delivered_state = std::make_shared<MemoryTransportState>();
   delivered_state->block_writes = true;
@@ -201,12 +229,20 @@ void test_acp_peer_claimed_outbound_abort_and_delivery_races()
   wait_writer(ambiguous_state);
   bool const ambiguous_ready = ambiguous && ambiguous->completion.wait_for(2s) == std::future_status::ready;
   auto ambiguous_result = ambiguous_ready ? std::optional<CallResult>(ambiguous->completion.get()) : std::nullopt;
+  bool ambiguous_aborted = false;
+  {
+    std::lock_guard lock(ambiguous_state->mutex);
+    ambiguous_aborted = ambiguous_state->canceled;
+  }
+  ambiguous_peer.shutdown();
   ambiguous_thread.join();
   auto physically_delivered = take_output(ambiguous_state);
-  expect(ambiguous_result && !*ambiguous_result && ambiguous_result->error().code == -32603 &&
-             ambiguous_result->error().message.find("outcome is unknown") != std::string::npos && ambiguous_run.has_value() && ambiguous_state->canceled &&
-             physically_delivered && !take_output(ambiguous_state, 80ms),
-         "a full physical delivery reported after cancellation yields one ambiguous-delivery winner and no resumed duplicate record");
+  ava::tests::expect_all("a full physical delivery reported after cancellation yields one ambiguous winner without duplicate output",
+                         {{"ambiguous error", ambiguous_result && !*ambiguous_result && ambiguous_result->error().code == -32603},
+                          {"clean peer exit", ambiguous_run.has_value()},
+                          {"transport aborted before rescue", ambiguous_aborted},
+                          {"physical delivery", physically_delivered.has_value()},
+                          {"no duplicate", !take_output(ambiguous_state, 0ms)}});
 }
 
 void test_acp_prompt_admission_rollback_and_control_cancel_saturation()
@@ -214,7 +250,8 @@ void test_acp_prompt_admission_rollback_and_control_cancel_saturation()
   using namespace ava::app::acp;
 
   auto run_case = [](bool cancel_with_json_rpc) {
-    auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-admission-order");
+    auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-admission-order-");
+    auto const root = root_owner.path();
     auto workspace = root / "workspace";
     std::filesystem::create_directories(workspace);
     configure_acp_test_model(root);
@@ -224,13 +261,14 @@ void test_acp_prompt_admission_rollback_and_control_cancel_saturation()
     options.launch_root = ava::core::normalized_absolute_path(workspace);
     options.paths = ava::tests::app_test_paths(root);
     options.provider_bundle_factory = recording_bundle_factory(&body);
-    AgentService service(options);
-    static_cast<void>(service.handle_request(initialize_request(), {}));
+    ScopedAgentService fixture(std::move(root_owner), options);
+    auto& service = fixture.service;
+    if (!ava::tests::require(fixture.initialize().has_value(), "ACP admission-order fixture initializes"))
+      return;
     auto created = service.handle_request(
         Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
     auto session_id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
-    expect(session_id.has_value(), "ACP admission-order test creates a session");
-    if (!session_id)
+    if (!ava::tests::require(session_id.has_value(), "ACP admission-order test creates a session"))
       return;
 
     auto state = std::make_shared<MemoryTransportState>();
@@ -248,7 +286,7 @@ void test_acp_prompt_admission_rollback_and_control_cancel_saturation()
           gate_cv.wait(lock, [&release] { return release; });
         });
     peer.set_request_pre_admission_hook([&service](Request const& request) { return service.pre_admit_request(request); });
-    peer.set_control_notification_handler([&service, &control_cancels](Notification const& notification) {
+    ReaderBarrier reader(peer, [&service, &control_cancels](Notification const& notification) {
       control_cancels.fetch_add(1, std::memory_order_relaxed);
       service.handle_control_notification(notification);
     });
@@ -260,28 +298,31 @@ void test_acp_prompt_admission_rollback_and_control_cancel_saturation()
     ava::core::VoidResult run_result;
     ava::core::JoinThread peer_thread = ava::core::JoinThread::create("peer_thread", [&] { run_result = peer.run(); });
     wait_reader(state);
-    for (std::size_t index = 0; index < kWorkerCount; ++index) feed(state, R"({"jsonrpc":"2.0","method":"test/block","params":{}})");
+    for (std::size_t index = 0; index < kWorkerCount; ++index)
+      feed(state, R"({"jsonrpc":"2.0","method":"test/block","params":{}})");
     {
       std::unique_lock lock(gate_mutex);
-      static_cast<void>(gate_cv.wait_for(lock, 2s, [&] { return blockers_entered == kWorkerCount; }));
+      expect(gate_cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return blockers_entered == kWorkerCount; }),
+             "admission-order fixture occupies every worker before queuing the prompt");
     }
 
     auto prompt_record = std::string("{\"jsonrpc\":\"2.0\",\"id\":\"queued\",\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"") + *session_id +
                          "\",\"prompt\":[{\"type\":\"text\",\"text\":\"queued\"}]}}";
     feed(state, prompt_record);
-    std::this_thread::sleep_for(20ms);
+    expect(reader.synchronize(state), "reader pre-admits the queued prompt before cancellation");
     if (cancel_with_json_rpc)
     {
       feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"queued"}})");
-      while (peer.stats().canceled_inbound_requests == 0) std::this_thread::sleep_for(1ms);
     }
     else
     {
-      for (std::size_t index = 1; index < kMaxWorkerQueue; ++index) feed(state, R"({"jsonrpc":"2.0","method":"test/queued","params":{}})");
-      for (int index = 0; index < 8; ++index) feed(state, R"({"jsonrpc":"2.0","method":"test/dropped","params":{}})");
+      for (std::size_t index = 1; index < kMaxWorkerQueue; ++index)
+        feed(state, R"({"jsonrpc":"2.0","method":"test/queued","params":{}})");
+      for (int index = 0; index < 8; ++index)
+        feed(state, R"({"jsonrpc":"2.0","method":"test/dropped","params":{}})");
       feed(state, std::string("{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\",\"params\":{\"sessionId\":\"") + *session_id + "\"}}");
-      while (control_cancels.load(std::memory_order_acquire) == 0) std::this_thread::sleep_for(1ms);
     }
+    expect(reader.synchronize(state), "reader processes cancellation while all generic workers remain blocked");
     {
       std::lock_guard lock(gate_mutex);
       release = true;
@@ -318,8 +359,6 @@ void test_acp_prompt_admission_rollback_and_control_cancel_saturation()
     service.unbind_update_sender();
     service.shutdown();
     expect(run_result.has_value(), "admission and control cancellation test shuts down cleanly");
-    std::error_code cleanup;
-    std::filesystem::remove_all(root, cleanup);
   };
 
   run_case(true);
@@ -439,30 +478,21 @@ void test_acp_peer_started_non_cooperative_shutdown_escalates()
   }
 
   int status = 0;
-  bool exited = false;
   auto const deadline = ava::tests::now_plus_seconds(5);
-  while (std::chrono::steady_clock::now() < deadline)
-  {
-    auto const waited = waitpid(child, &status, WNOHANG);
-    if (waited == child)
-    {
-      exited = true;
-      break;
-    }
-    std::this_thread::sleep_for(10ms);
-  }
-  if (!exited)
-  {
-    static_cast<void>(kill(child, SIGKILL));
-    static_cast<void>(waitpid(child, &status, 0));
-  }
+  ava::tests::ScopedChild child_owner(child);
+  auto const child_status = child_owner.wait_until(deadline);
+  bool const exited = child_status.has_value();
+  if (child_status)
+    status = *child_status;
 
-  char entry_signal = '\0';
-  auto const signal_bytes = read(entry_pipe[0], &entry_signal, 1);
+  std::string entry_signal;
+  bool const handler_entered = ava::tests::read_until(entry_pipe[0], entry_signal, "1", ava::tests::now_plus_seconds(1), 1);
   static_cast<void>(close(entry_pipe[0]));
-  expect(signal_bytes == 1 && entry_signal == '1', "the non-cooperative request handler starts before causing transport EOF");
-  expect(exited && WIFEXITED(status) && WEXITSTATUS(status) == kShutdownEscalationExitCode,
-         "a started non-cooperative request causes bounded normal shutdown escalation exit 70");
+  expect(handler_entered, "the non-cooperative request handler starts before causing transport EOF");
+  ava::tests::expect_all("a started non-cooperative request causes normal shutdown escalation exit 70",
+                         {{"child exited before watchdog", exited},
+                          {"normal exit", WIFEXITED(status)},
+                          {"escalation exit code", WIFEXITED(status) && WEXITSTATUS(status) == kShutdownEscalationExitCode}});
 }
 
 void test_acp_redacted_command_audit_omits_recipe_arguments()
@@ -502,40 +532,55 @@ void test_acp_peer_write_failure_wakes_reader_and_shutdown_race()
   ava::core::JoinThread thread = ava::core::JoinThread::create("thread", [&] { run_result = peer.run(); });
   wait_reader(state);
   feed(state, R"({"jsonrpc":"2.0","id":1,"method":"x","params":{}})");
+  bool reader_woken = false;
+  {
+    std::unique_lock lock(state->mutex);
+    reader_woken = state->cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return state->read_canceled; });
+  }
+  peer.shutdown();
   thread.join();
-  expect(!run_result, "ACP write failure wakes the reader and terminates the connection");
+  ava::tests::expect_all("ACP write failure wakes the reader with transport cancellation and propagates the failure",
+                         {{"reader observes cancellation before rescue", reader_woken}, {"write failure propagated", !run_result}});
 
   auto blocked_state = std::make_shared<MemoryTransportState>();
-  std::atomic_bool entered = false;
+  std::promise<void> entered;
+  auto handler_entered = entered.get_future();
   JsonRpcPeer blocked(std::make_unique<MemoryTransport>(blocked_state), [&entered](Request const&, std::stop_token token) -> RequestResult {
-    entered.store(true, std::memory_order_release);
-    while (!token.stop_requested()) std::this_thread::sleep_for(1ms);
+    entered.set_value();
+    std::mutex mutex;
+    std::condition_variable_any changed;
+    std::unique_lock lock(mutex);
+    changed.wait(lock, token, [] { return false; });
     return std::string("{}");
   });
   ava::core::VoidResult blocked_result;
   ava::core::JoinThread blocked_thread = ava::core::JoinThread::create("blocked_thread", [&] { blocked_result = blocked.run(); });
   wait_reader(blocked_state);
   feed(blocked_state, R"({"jsonrpc":"2.0","id":1,"method":"blocked","params":{}})");
-  while (!entered.load(std::memory_order_acquire)) std::this_thread::sleep_for(1ms);
+  expect(handler_entered.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready, "cooperative request enters before shutdown");
   blocked.shutdown();
   blocked.shutdown();
   blocked_thread.join();
   expect(blocked_result.has_value(), "ACP idempotent shutdown cancels and joins a cooperatively blocked request handler");
 
   auto notification_state = std::make_shared<MemoryTransportState>();
-  std::atomic_bool notification_entered = false;
+  std::promise<void> notification_entered;
+  auto notification_started = notification_entered.get_future();
   std::atomic_bool notification_stopped = false;
   JsonRpcPeer notifications(
       std::make_unique<MemoryTransport>(notification_state), [](Request const&, std::stop_token) -> RequestResult { return std::string("{}"); },
       [&notification_entered, &notification_stopped](Notification const&, std::stop_token token) {
-        notification_entered.store(true, std::memory_order_release);
-        while (!token.stop_requested()) std::this_thread::sleep_for(1ms);
+        notification_entered.set_value();
+        std::mutex mutex;
+        std::condition_variable_any changed;
+        std::unique_lock lock(mutex);
+        changed.wait(lock, token, [] { return false; });
         notification_stopped.store(true, std::memory_order_release);
       });
   ava::core::JoinThread notification_thread = ava::core::JoinThread::create("notification_thread", [&] { static_cast<void>(notifications.run()); });
   wait_reader(notification_state);
   feed(notification_state, R"({"jsonrpc":"2.0","method":"blocked-notification","params":{}})");
-  while (!notification_entered.load(std::memory_order_acquire)) std::this_thread::sleep_for(1ms);
+  expect(notification_started.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready, "notification handler enters before shutdown");
   notifications.shutdown();
   notification_thread.join();
   expect(notification_stopped.load(std::memory_order_acquire), "ACP notification handlers receive connection shutdown cancellation");

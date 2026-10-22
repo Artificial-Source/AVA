@@ -141,6 +141,11 @@ def main():
     assert manifest_outcomes == source_outcomes, (manifest_outcomes, source_outcomes)
     assert {name for name, disposition in source_outcomes.items() if disposition == "protocol_error"} == {"error"}
 
+    test_cmake = (source / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    registered = set(re.findall(r"add_test\(\s*NAME\s+([A-Za-z0-9_.-]+)", test_cmake))
+    suites = re.search(r"set\(AVA_TEST_SUITES\s+(.*?)\)", test_cmake, re.DOTALL)
+    assert suites, "CTest suite list is missing"
+    registered.update(f"ava_tests.{suite}" for suite in suites.group(1).split())
     status_values = set(manifest["statusValues"])
     for section in (
         "methods", "capabilities", "contentDiscriminators", "toolCallContentDiscriminators", "toolKinds",
@@ -150,6 +155,9 @@ def main():
         for entry in manifest[section]:
             assert entry["status"] in status_values, (section, entry)
             assert entry.get("handler") and entry.get("test"), (section, entry)
+            for reference in entry["test"].split("/"):
+                resolved = reference if "." in reference else f"ava_tests.{reference}"
+                assert resolved in registered, (section, entry["name"], reference, "unregistered test reference")
 
     cmake = (source / "CMakeLists.txt").read_text()
     dependency = manifest["jsonDependency"]

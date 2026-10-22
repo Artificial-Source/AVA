@@ -3,7 +3,9 @@
 #include "tests/support/acp_test_support.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/test_timeout.h"
 #include "ava/command/command.h"
 #include "ava/http/transport.h"
 #include "ava/process/scope.h"
@@ -62,7 +64,8 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
   using namespace ava::app::acp;
 
   auto run_phase_case = [](ava::app::RunPhase phase, bool expect_cancel) {
-    auto root = std::filesystem::temp_directory_path() / ava::core::make_id(expect_cancel ? "acp-cancel-before" : "acp-cancel-late");
+    auto root_owner = ScopedTestDirectory::create_unique(temp_root(), expect_cancel ? "acp-cancel-before-" : "acp-cancel-late-");
+    auto const root = root_owner.path();
     auto workspace = root / "workspace";
     std::filesystem::create_directories(workspace);
     configure_acp_test_model(root);
@@ -77,7 +80,8 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
     options.paths = paths;
     options.run_options.on_phase = [barrier](ava::app::RunPhase observed) { return barrier->observe(observed); };
     options.provider_bundle_factory = sequence_bundle_factory(transport_state, {acp_text_response("terminal success")});
-    AgentService service(options);
+    ScopedAgentService fixture(std::move(root_owner), options);
+    auto& service = fixture.service;
     std::mutex updates_mutex;
     std::vector<std::string> updates;
     service.bind_update_sender([&](std::string_view, std::string_view update) -> ava::core::VoidResult {
@@ -85,12 +89,12 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
       updates.emplace_back(update);
       return {};
     });
-    static_cast<void>(service.handle_request(initialize_request(), {}));
+    if (!ava::tests::require(fixture.initialize().has_value(), "ACP terminal arbitration fixture initializes"))
+      return;
     auto created = service.handle_request(
         Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
     auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
-    expect(id.has_value(), "ACP terminal arbitration fixture creates a session");
-    if (!id)
+    if (!ava::tests::require(id.has_value(), "ACP terminal arbitration fixture creates a session"))
       return;
 
     RequestResult prompt_result;
@@ -104,6 +108,16 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
     bool const reached = barrier->wait_until_reached();
     expect(reached,
            expect_cancel ? "ACP prompt reaches deterministic pre-Completing barrier" : "ACP prompt reaches deterministic committed Completing barrier");
+    if (reached && expect_cancel)
+    {
+      auto competing = service.pre_admit_request(
+          Request{.id = std::int64_t(30),
+                  .method = "session/prompt",
+                  .params_json = "{\"sessionId\":\"" + *id + "\",\"prompt\":[{\"type\":\"text\",\"text\":\"must not be admitted\"}]}"});
+      expect(!competing && competing.error().code == -32600, "ACP pre-admission rejects a second prompt on the active session");
+      if (competing && *competing)
+        (*competing)();
+    }
     if (reached)
       service.handle_notification(Notification{.method = "session/cancel", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
     barrier->release();
@@ -139,15 +153,14 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
       expect(prompt_result && *prompt_result == R"({"stopReason":"end_turn"})" && request_count == 1 && update_count == 1 && assistant_entries == 1,
              "cancel after Completing is a no-op and preserves emitted and durable terminal success");
     }
-    std::error_code cleanup;
-    std::filesystem::remove_all(root, cleanup);
   };
 
   run_phase_case(ava::app::RunPhase::AwaitingProvider, true);
   run_phase_case(ava::app::RunPhase::Completing, false);
 
   auto run_setup_case = [](bool fail_setup, bool cancel_setup, ava::core::ErrorCategory failure_category = ava::core::ErrorCategory::Provider) {
-    auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-provider-setup-cancel");
+    auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-provider-setup-cancel-");
+    auto const root = root_owner.path();
     auto workspace = root / "workspace";
     std::filesystem::create_directories(workspace);
     configure_acp_test_model(root);
@@ -189,14 +202,15 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
       return ava::app::RuntimeProviderRunBundle{
           .provider = std::move(*provider), .transport = std::move(transport), .auth_transport = std::move(auth), .options = std::move(run_options)};
     };
-    AgentService service(options);
+    ScopedAgentService fixture(std::move(root_owner), options);
+    auto& service = fixture.service;
     service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-    static_cast<void>(service.handle_request(initialize_request(), {}));
+    if (!ava::tests::require(fixture.initialize().has_value(), "ACP provider-setup fixture initializes"))
+      return;
     auto created = service.handle_request(
         Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
     auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
-    expect(id.has_value(), "ACP provider-setup arbitration fixture creates a session");
-    if (!id)
+    if (!ava::tests::require(id.has_value(), "ACP provider-setup fixture creates a session"))
       return;
 
     RequestResult prompt_result;
@@ -209,7 +223,8 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
     });
     {
       std::unique_lock lock(gate->mutex);
-      static_cast<void>(gate->cv.wait_for(lock, 2s, [&] { return gate->entered; }));
+      expect(gate->cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return gate->entered; }),
+             "ACP provider setup reaches its gate before cancellation");
     }
     if (cancel_setup)
       service.handle_notification(Notification{.method = "session/cancel", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
@@ -221,16 +236,18 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
     prompt_thread.join();
     service.shutdown();
 
+    std::size_t provider_requests = 0;
+    {
+      std::lock_guard lock(transport_state->mutex);
+      provider_requests = transport_state->request_bodies.size();
+    }
     if (cancel_setup)
-      expect(prompt_result && *prompt_result == R"({"stopReason":"cancelled"})", fail_setup
-                                                                                     ? "cancel accepted during failing provider setup wins the setup error"
-                                                                                     : "cancel accepted during provider setup stops the admitted prompt");
+      ava::tests::expect_all(
+          fail_setup ? "cancel during failing provider setup wins the setup error" : "cancel during provider setup stops the admitted prompt",
+          {{"canceled terminal", prompt_result && *prompt_result == R"({"stopReason":"cancelled"})"}, {"provider never contacted", provider_requests == 0}});
     else
-      expect(!prompt_result && prompt_result.error().code == -32603 &&
-                 prompt_result.error().message.find("provider setup failed deterministically") != std::string::npos,
+      expect(!prompt_result && prompt_result.error().code == -32603,
              "non-authentication provider and permission setup errors remain ACP internal errors when cancellation did not win");
-    std::error_code cleanup;
-    std::filesystem::remove_all(root, cleanup);
   };
 
   run_setup_case(false, true);
@@ -242,7 +259,8 @@ void test_acp_cancel_terminal_arbitration_and_provider_setup_paths()
 void test_acp_critical_commands_remain_one_shot()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-critical-persistent-command");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-critical-persistent-command-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   expect(::chmod(root.c_str(), S_IRWXU) == 0 && ::chmod(workspace.c_str(), S_IRWXU) == 0,
@@ -278,7 +296,8 @@ void test_acp_critical_commands_remain_one_shot()
   options.launch_root = workspace;
   options.paths = paths;
   options.provider_bundle_factory = sequence_bundle_factory(state, {bash_response, acp_text_response("critical persistent allow completed")});
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
   std::atomic_int permission_requests = 0;
   service.bind_client_request_sender(
@@ -288,7 +307,8 @@ void test_acp_critical_commands_remain_one_shot()
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "unexpected ACP client permission request"));
       },
       [](JsonRpcId const&, std::string) { return true; });
-  static_cast<void>(service.handle_request(initialize_request_with_capabilities(R"({"terminal":true})"), {}));
+  if (!ava::tests::require(fixture.initialize(1, R"({"terminal":true})").has_value(), "ACP critical-command fixture initializes"))
+    return;
   auto created = service.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto const session_id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
@@ -336,15 +356,13 @@ void test_acp_critical_commands_remain_one_shot()
                                                                  .command_metadata = unavailable_metadata});
   expect(unavailable && *unavailable == ava::permissions::PermissionResolution::Deny && fallback_calls == 1 && unavailable->resolution_source == "client",
          "Critical command metadata with Unavailable containment falls through to ACP client denial without persistent authority");
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_session_mcp_requires_persistent_operator_authorization()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-mcp-operator-auth");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-mcp-operator-auth-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_tool_test_model(root);
@@ -357,7 +375,8 @@ void test_acp_session_mcp_requires_persistent_operator_authorization()
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
   options.provider_bundle_factory = sequence_bundle_factory(provider_state, {acp_text_response("must not run")});
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
   std::atomic_int permission_requests = 0;
   service.bind_client_request_sender(
@@ -369,7 +388,8 @@ void test_acp_session_mcp_requires_persistent_operator_authorization()
         return PendingCall{.id = "untrusted-mcp-allow", .completion = promise.get_future()};
       },
       [](JsonRpcId const&, std::string) { return true; });
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP operator-authorization fixture initializes"))
+    return;
 
   auto const server_json =
       std::string("{\"name\":\"touch\",\"command\":\"/usr/bin/touch\",\"args\":[\"") + ava::core::json::escape(marker.string()) + "\"],\"env\":[]}";
@@ -397,15 +417,13 @@ void test_acp_session_mcp_requires_persistent_operator_authorization()
   expect(id && !prompted && prompted.error().message.find("persistent operator authorization is required") != std::string::npos &&
              permission_requests.load() == 0 && provider_requests == 0 && !std::filesystem::exists(marker),
          detail);
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_strict_session_mcp_registry_and_error_propagation()
 {
   using namespace ava::app::acp;
-  auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-strict-mcp");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-strict-mcp-");
+  auto const root = root_owner.path();
   auto workspace = root / "workspace";
   auto nested = workspace / "nested";
   std::filesystem::create_directories(nested);
@@ -426,14 +444,15 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
   auto application_scope = ava::process::ProcessScopeV1::application(std::make_shared<ava::process::Supervisor>());
-  expect(application_scope.has_value(), "ACP MCP fixture admits test-owned application process authority");
-  if (!application_scope)
+  if (!ava::tests::require(application_scope.has_value(), "ACP MCP fixture admits test-owned application process authority"))
     return;
   options.open_context.application_process_scope = *application_scope;
   options.provider_bundle_factory = sequence_bundle_factory(transport_state, std::move(responses));
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP MCP registry fixture initializes"))
+    return;
   auto const server_json = std::string("{\"name\":\"demo\",\"command\":\"") + ava::core::json::escape(AVA_FAKE_MCP_SERVER_PATH) +
                            "\",\"args\":[\"cwd-marker\",\"" + ava::core::json::escape(cwd_marker.string()) + "\"],\"env\":[]}";
   ava::permissions::PermissionRuleStore const rule_store{.global_rules_file = paths.ava_config_dir / "permission-rules.json",
@@ -517,7 +536,8 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   bash_options.provider_bundle_factory = sequence_bundle_factory(bash_state, std::move(bash_responses));
   AgentService bash_service(std::move(bash_options));
   bash_service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-  static_cast<void>(bash_service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(bash_service.handle_request(initialize_request(), {}).has_value(), "ACP unadvertised-bash fixture initializes"))
+    return;
   auto bash_created = bash_service.handle_request(
       Request{.id = std::int64_t(20), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + nested.string() + "\",\"mcpServers\":[]}"}, {});
   auto bash_id = bash_created ? ava::core::json::string_field(*bash_created, "sessionId") : std::nullopt;
@@ -554,7 +574,8 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
     error_options.provider_bundle_factory = sequence_bundle_factory(error_state, {acp_text_response()});
     AgentService error_service(error_options);
     error_service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-    static_cast<void>(error_service.handle_request(initialize_request(), {}));
+    if (!ava::tests::require(error_service.handle_request(initialize_request(), {}).has_value(), "ACP MCP error fixture initializes"))
+      return;
     auto error_created =
         error_service.handle_request(Request{.id = std::int64_t(10),
                                              .method = "session/new",
@@ -604,15 +625,13 @@ void test_acp_strict_session_mcp_registry_and_error_propagation()
   run_error_case("[{\"name\":\"missing\",\"command\":\"" + ava::core::json::escape(missing_command) + "\",\"args\":[],\"env\":[]}]",
                  "process executable is unavailable or not executable",
                  {{ava::permissions::Operation::McpServerLaunch, missing_launch_identity}, {ava::permissions::Operation::McpServerConnect, "missing"}});
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_negotiated_client_filesystem_and_terminal_routing()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-client-tools");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-client-tools-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   expect(::chmod(root.c_str(), S_IRWXU) == 0 && ::chmod(workspace.c_str(), S_IRWXU) == 0,
@@ -620,10 +639,7 @@ void test_acp_negotiated_client_filesystem_and_terminal_routing()
   configure_acp_tool_test_model(root);
   auto const paths = ava::tests::app_test_paths(root);
   auto const note = workspace / "note.txt";
-  {
-    std::ofstream file(note, std::ios::binary | std::ios::trunc);
-    file << "local bytes";
-  }
+  ava::tests::write_test_file(note, "local bytes");
 
   auto ready = [](std::string id, CallResult result) {
     std::promise<CallResult> promise;
@@ -637,10 +653,7 @@ void test_acp_negotiated_client_filesystem_and_terminal_routing()
           R"({"choices":[{"message":{"tool_calls":[{"id":"call_read","function":{"name":"read_file","arguments":"{\"path\":\"note.txt\"}"}}]},"finish_reason":"tool_calls"}]})")};
 
   auto run_read_case = [&](std::string capabilities, bool expect_remote_read, bool coherent_pair, bool fail_remote = false) {
-    {
-      std::ofstream file(note, std::ios::binary | std::ios::trunc);
-      file << "local bytes";
-    }
+    ava::tests::write_test_file(note, "local bytes");
     auto provider_state = std::make_shared<CapturingSequenceState>();
     AgentServiceOptions options;
     options.agent_version = "1";
@@ -709,10 +722,7 @@ void test_acp_negotiated_client_filesystem_and_terminal_routing()
       .body = std::string(
           R"({"choices":[{"message":{"tool_calls":[{"id":"call_write","function":{"name":"write_file","arguments":"{\"path\":\"note.txt\",\"content\":\"updated bytes\"}"}}]},"finish_reason":"tool_calls"}]})")};
   auto run_write_case = [&](std::string capabilities, bool expect_remote_write, bool fail_remote = false) {
-    {
-      std::ofstream file(note, std::ios::binary | std::ios::trunc);
-      file << "local bytes";
-    }
+    ava::tests::write_test_file(note, "local bytes");
     auto provider_state = std::make_shared<CapturingSequenceState>();
     AgentServiceOptions options;
     options.agent_version = "1";
@@ -740,7 +750,9 @@ void test_acp_negotiated_client_filesystem_and_terminal_routing()
           return ready("write", CallResult(std::string(R"({"_meta":[]})")));
         },
         [](JsonRpcId const&, std::string) { return true; });
-    static_cast<void>(service.handle_request(initialize_request_with_capabilities(std::move(capabilities)), {}));
+    if (!ava::tests::require(service.handle_request(initialize_request_with_capabilities(std::move(capabilities)), {}).has_value(),
+                             "ACP client-write fixture initializes"))
+      return;
     auto created = service.handle_request(
         Request{.id = std::int64_t(12), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
     auto session_id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
@@ -797,7 +809,9 @@ void test_acp_negotiated_client_filesystem_and_terminal_routing()
         return ready("terminal-release", CallResult(std::string("{}")));
       },
       [](JsonRpcId const&, std::string) { return true; });
-  static_cast<void>(terminal_service.handle_request(initialize_request_with_capabilities(R"({"terminal":true})"), {}));
+  if (!ava::tests::require(terminal_service.handle_request(initialize_request_with_capabilities(R"({"terminal":true})"), {}).has_value(),
+                           "ACP terminal-routing fixture initializes"))
+    return;
   auto terminal_created = terminal_service.handle_request(
       Request{.id = std::int64_t(10), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto terminal_session = terminal_created ? ava::core::json::string_field(*terminal_created, "sessionId") : std::nullopt;
@@ -820,15 +834,13 @@ void test_acp_negotiated_client_filesystem_and_terminal_routing()
              !std::filesystem::exists(marker),
          "terminal negotiation exposes bash and routes exact create-wait-output-release without local process fallback");
   terminal_service.shutdown();
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_builtin_permission_gateway_one_shot_mutations_and_updates()
 {
   using namespace ava::app::acp;
-  auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-permission-tools");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-permission-tools-");
+  auto const root = root_owner.path();
   auto workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_tool_test_model(root);
@@ -846,7 +858,8 @@ void test_acp_builtin_permission_gateway_one_shot_mutations_and_updates()
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = paths;
   options.provider_bundle_factory = sequence_bundle_factory(state, {std::move(tool_response), acp_text_response("permission complete")});
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   std::mutex sequence_mutex;
   std::vector<std::string> sequence;
   std::vector<std::string> permission_params;
@@ -869,7 +882,8 @@ void test_acp_builtin_permission_gateway_one_shot_mutations_and_updates()
         return PendingCall{.id = std::string("permission-") + std::to_string(++request_sequence), .completion = promise.get_future()};
       },
       [](JsonRpcId const&, std::string) { return true; });
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP one-shot mutation fixture initializes"))
+    return;
   auto created = service.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
@@ -897,15 +911,28 @@ void test_acp_builtin_permission_gateway_one_shot_mutations_and_updates()
   });
   auto const tool_result = std::ranges::find_if(observed, [](std::string const& item) { return item.find(R"("status":"completed")") != std::string::npos; });
   auto const agent_text = std::ranges::find_if(observed, [](std::string const& item) { return item.find("agent_message_chunk") != std::string::npos; });
-  expect(id && prompted && *prompted == R"({"stopReason":"end_turn"})" && request_sequence.load() == 2 && requests.size() == 2 &&
-             requests.front().find(R"("toolCallId":"call_write_1")") != std::string::npos &&
-             requests.back().find(R"("toolCallId":"call_write_2")") != std::string::npos &&
-             requests.front().find(R"("status":"pending")") != std::string::npos && requests.front().find("approved content") != std::string::npos &&
-             requests.front().find(R"("optionId":"allow_always")") == std::string::npos && first_tool != observed.end() && permission != observed.end() &&
-             execution_start != observed.end() && first_tool->find(R"("status":"pending")") != std::string::npos &&
-             std::filesystem::exists(workspace / "approved.txt") && read_acp_test_file(workspace / "approved.txt") == "approved content" &&
-             first_tool < permission && permission < execution_start && execution_start < tool_result && tool_result < agent_text,
-         "ACP built-in writes show each bounded mutation and order pending, one-shot permission, in-progress, and completion exactly");
+  ava::tests::expect_all("ACP built-in writes ask for one-shot approval of each bounded mutation",
+                         {{"session created", id.has_value()},
+                          {"prompt completes", prompted && *prompted == R"({"stopReason":"end_turn"})"},
+                          {"two approval calls", request_sequence.load() == 2},
+                          {"two approval DTOs", requests.size() == 2},
+                          {"first call id", requests.size() == 2 && requests.front().find(R"("toolCallId":"call_write_1")") != std::string::npos},
+                          {"second call id", requests.size() == 2 && requests.back().find(R"("toolCallId":"call_write_2")") != std::string::npos},
+                          {"pending approval status", requests.size() == 2 && requests.front().find(R"("status":"pending")") != std::string::npos},
+                          {"proposed content", requests.size() == 2 && requests.front().find("approved content") != std::string::npos},
+                          {"no persistent option", requests.size() == 2 && requests.front().find(R"("optionId":"allow_always")") == std::string::npos},
+                          {"file created", std::filesystem::exists(workspace / "approved.txt")},
+                          {"exact file content", read_acp_test_file(workspace / "approved.txt") == "approved content"}});
+  ava::tests::expect_all("ACP built-in update stream orders pending, permission, execution, completion, then final text",
+                         {{"pending tool", first_tool != observed.end() && first_tool->find(R"("status":"pending")") != std::string::npos},
+                          {"permission present", permission != observed.end()},
+                          {"execution present", execution_start != observed.end()},
+                          {"completion present", tool_result != observed.end()},
+                          {"final text present", agent_text != observed.end()},
+                          {"pending before permission", first_tool < permission},
+                          {"permission before execution", permission < execution_start},
+                          {"execution before completion", execution_start < tool_result},
+                          {"completion before text", tool_result < agent_text}});
 
   if (id)
   {
@@ -918,14 +945,13 @@ void test_acp_builtin_permission_gateway_one_shot_mutations_and_updates()
           audited = true;
     expect(audited, "ACP one-shot file permission decisions persist the generic client source and permission/tool identity in the normal session audit stream");
   }
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_session_grant_cannot_follow_retargeted_parent_symlink()
 {
   using namespace ava::app::acp;
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-grant-retarget");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-grant-retarget-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   auto const outside = root / "outside";
   std::filesystem::create_directories(workspace / "grant-parent");
@@ -955,7 +981,8 @@ void test_acp_session_grant_cannot_follow_retargeted_parent_symlink()
     auto factory = sequence_bundle_factory(provider_state, std::move(responses));
     return factory(unlocked_session, std::move(run_options), label);
   };
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
   std::atomic_int permission_requests = 0;
   service.bind_client_request_sender(
@@ -966,7 +993,8 @@ void test_acp_session_grant_cannot_follow_retargeted_parent_symlink()
         return PendingCall{.id = std::string("grant-permission-") + std::to_string(permission_requests.load()), .completion = promise.get_future()};
       },
       [](JsonRpcId const&, std::string) { return true; });
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP retargeted-path fixture initializes"))
+    return;
   auto created = service.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto session_id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
@@ -991,8 +1019,6 @@ void test_acp_session_grant_cannot_follow_retargeted_parent_symlink()
              read_acp_test_file(workspace / "grant-parent-original" / "target.txt") == "inside approved",
          "ACP one-shot mutation approvals cannot authorize a later path retargeted through a symlink");
   service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_permission_once_always_reject_cancel_invalid_and_hard_policy_matrix()
@@ -1000,7 +1026,8 @@ void test_acp_permission_once_always_reject_cancel_invalid_and_hard_policy_matri
   using namespace ava::app::acp;
 
   auto run_case = [](std::string_view option_id, bool cancelled, bool hard_deny, int expected_requests, bool expect_file, bool expect_cancelled) {
-    auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-permission-matrix");
+    auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-permission-matrix-");
+    auto const root = root_owner.path();
     auto workspace = root / "workspace";
     std::filesystem::create_directories(workspace);
     configure_acp_tool_test_model(root);
@@ -1016,7 +1043,8 @@ void test_acp_permission_once_always_reject_cancel_invalid_and_hard_policy_matri
     options.paths = paths;
     options.provider_bundle_factory = sequence_bundle_factory(
         provider_state, {ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = tool_body}, acp_text_response("matrix complete")});
-    AgentService service(options);
+    ScopedAgentService fixture(std::move(root_owner), options);
+    auto& service = fixture.service;
     std::atomic_bool execution_started = false;
     service.bind_update_sender([&](std::string_view, std::string_view update) -> ava::core::VoidResult {
       if (update.find(R"("status":"in_progress")") != std::string_view::npos)
@@ -1035,7 +1063,8 @@ void test_acp_permission_once_always_reject_cancel_invalid_and_hard_policy_matri
           return PendingCall{.id = std::string("matrix-permission-") + std::to_string(requests.load()), .completion = promise.get_future()};
         },
         [](JsonRpcId const&, std::string) { return true; });
-    static_cast<void>(service.handle_request(initialize_request(), {}));
+    if (!ava::tests::require(fixture.initialize().has_value(), "ACP permission-matrix fixture initializes"))
+      return;
     auto created = service.handle_request(
         Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
     auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
@@ -1049,11 +1078,15 @@ void test_acp_permission_once_always_reject_cancel_invalid_and_hard_policy_matri
     service.shutdown();
     bool const canceled_result = result && *result == R"({"stopReason":"cancelled"})";
     bool const completed_result = result && *result == R"({"stopReason":"end_turn"})";
-    expect(id && requests.load() == expected_requests && std::filesystem::exists(workspace / target) == expect_file &&
-               execution_started.load(std::memory_order_acquire) == expect_file && (expect_cancelled ? canceled_result : completed_result),
-           "ACP permission matrix never reports execution started for denied, canceled, invalid, or hard-denied calls");
-    std::error_code cleanup;
-    std::filesystem::remove_all(root, cleanup);
+    auto const case_name = std::string("ACP permission matrix option=") + std::string(option_id) + " cancelled=" + std::to_string(cancelled) +
+                           " hard_deny=" + std::to_string(hard_deny);
+    ava::tests::expect_all(case_name, {{"session created", id.has_value()},
+                                       {"permission request count", requests.load() == expected_requests},
+                                       {"terminal outcome", expect_cancelled ? canceled_result : completed_result}});
+    ava::tests::expect_eq(execution_started.load(std::memory_order_acquire), expect_file, case_name + " execution-start update");
+    ava::tests::expect_eq(std::filesystem::exists(workspace / target), expect_file, case_name + " filesystem effect");
+    if (expect_file)
+      ava::tests::expect_eq(read_acp_test_file(workspace / target), std::string("matrix-secret"), case_name + " approved file content");
   };
 
   run_case("allow_once", false, false, 2, true, false);
@@ -1067,34 +1100,38 @@ void test_acp_permission_once_always_reject_cancel_invalid_and_hard_policy_matri
 void test_acp_close_timeout_is_internal_error_with_eventual_cleanup()
 {
   using namespace ava::app::acp;
-  auto root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-close-timeout");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-close-timeout-");
+  auto const root = root_owner.path();
   auto workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
   std::string body;
-  std::atomic_bool entered = false;
-  std::atomic_bool release = false;
+  auto barrier = std::make_shared<RunPhaseBarrier>();
+  barrier->target = ava::app::RunPhase::AwaitingProvider;
   auto coordinator = ava::agent::SubagentCoordinator::create();
-  expect(coordinator.has_value(), "ACP close timeout creates coordinator");
-  if (!coordinator)
+  if (!ava::tests::require(coordinator.has_value(), "ACP close timeout creates coordinator"))
     return;
   auto manager = ava::app::SubagentDeliveryManager::create({.coordinator = *coordinator, .max_retained_parents = 1});
-  expect(manager.has_value(), "ACP close timeout uses a one-parent manager");
-  if (!manager)
+  if (!ava::tests::require(manager.has_value(), "ACP close timeout uses a one-parent manager"))
     return;
   AgentServiceOptions options;
   options.agent_version = "1";
   options.launch_root = ava::core::normalized_absolute_path(workspace);
   options.paths = ava::tests::app_test_paths(root);
-  options.provider_bundle_factory = recording_bundle_factory(&body, &entered, &release);
+  options.provider_bundle_factory = recording_bundle_factory(&body);
+  options.run_options.on_phase = [barrier](ava::app::RunPhase phase) { return barrier->observe(phase); };
   options.open_context.subagent_delivery_manager = *manager;
   options.close_grace = 5ms;
-  AgentService service(options);
+  ScopedAgentService fixture(std::move(root_owner), options);
+  auto& service = fixture.service;
   service.bind_update_sender([](std::string_view, std::string_view) -> ava::core::VoidResult { return {}; });
-  static_cast<void>(service.handle_request(initialize_request(), {}));
+  if (!ava::tests::require(fixture.initialize().has_value(), "ACP close-timeout fixture initializes"))
+    return;
   auto created = service.handle_request(
       Request{.id = std::int64_t(2), .method = "session/new", .params_json = std::string("{\"cwd\":\"") + workspace.string() + "\",\"mcpServers\":[]}"}, {});
   auto id = created ? ava::core::json::string_field(*created, "sessionId") : std::nullopt;
+  if (!ava::tests::require(id.has_value(), "ACP close-timeout fixture creates a session"))
+    return;
   RequestResult prompt_result;
   ava::core::JoinThread prompt_thread;
   if (id)
@@ -1106,12 +1143,17 @@ void test_acp_close_timeout_is_internal_error_with_eventual_cleanup()
                                          .params_json = std::string("{\"sessionId\":\"") + *id + "\",\"prompt\":[{\"type\":\"text\",\"text\":\"block\"}]}"},
                                  {});
     });
-    while (!entered.load(std::memory_order_acquire))
-      std::this_thread::sleep_for(1ms);
+    if (!ava::tests::require(barrier->wait_until_reached(), "ACP close-timeout fixture holds an active prompt before provider execution"))
+    {
+      barrier->release();
+      prompt_thread.join();
+      service.shutdown();
+      return;
+    }
     auto closed =
         service.handle_request(Request{.id = std::int64_t(4), .method = "session/close", .params_json = std::string("{\"sessionId\":\"") + *id + "\"}"}, {});
     expect(!closed && closed.error().code == -32603, "session/close reports internal stop timeout as -32603, not resource-not-found");
-    release.store(true, std::memory_order_release);
+    barrier->release();
     prompt_thread.join();
     bool retained_found = true;
     auto retained = (*manager)->retained_session(*id, workspace, retained_found, {.exact_session_id = true});
@@ -1121,6 +1163,4 @@ void test_acp_close_timeout_is_internal_error_with_eventual_cleanup()
     expect(!absent && absent.error().code == -32002, "timed-out close removes registry ownership and eventually releases host resources");
   }
   service.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }

@@ -985,12 +985,12 @@ ava::core::Result<std::string> AcpSessionRegistry::list_json(std::optional<std::
         retained_bytes += cwd_key->capacity();
       for (auto const& record : records)
         retained_bytes += record.session_id.capacity() + record.cwd.capacity() + record.title.capacity() + record.updated_at.capacity();
-      if (retained_bytes > kMaxSessionListSnapshotBytes)
+      if (retained_bytes > options_.max_session_list_snapshot_bytes)
         return std::unexpected(session_error("session/list cursor snapshot exceeds retained byte budget"));
 
       std::lock_guard lock(mutex_);
       while (!list_snapshot_order_.empty() &&
-             (list_snapshots_.size() >= kMaxSessionListSnapshots || list_snapshot_bytes_ + retained_bytes > kMaxSessionListSnapshotBytes))
+             (list_snapshots_.size() >= kMaxSessionListSnapshots || retained_bytes > options_.max_session_list_snapshot_bytes - list_snapshot_bytes_))
       {
         auto const evicted_token = std::move(list_snapshot_order_.front());
         list_snapshot_order_.pop_front();

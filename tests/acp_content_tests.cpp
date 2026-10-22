@@ -11,6 +11,8 @@
 #include "ava/app/acp/transport.h"
 #include "ava/agent/mode.h"
 #include "ava/permissions/permission.h"
+#include "ava/provider/provider_utils.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -57,6 +59,37 @@ void test_acp_prompt_content_capabilities_and_strict_validation()
     expect(!rejected && rejected.error().code == -32602,
            "ACP prompt decoder rejects malformed base64/MIME/discriminators and unsupported rich content with -32602");
   }
+
+  auto blocks = [](std::size_t count, std::string const& block) {
+    std::string json = "[";
+    for (std::size_t index = 0; index < count; ++index)
+    {
+      if (index != 0)
+        json += ',';
+      json += block;
+    }
+    return json + ']';
+  };
+  auto image_block = [](std::size_t bytes) {
+    return std::string(R"({"type":"image","mimeType":"image/png","data":")") + ava::provider::base64_encode(std::string(bytes, 'x')) + R"("})";
+  };
+  auto boundary = [](std::string const& accepted, std::string const& rejected, std::string const& name) {
+    auto at_limit = decode_prompt_content(accepted);
+    auto over_limit = decode_prompt_content(rejected);
+    ava::tests::expect_all(
+        "ACP prompt " + name + " boundary",
+        {{"accepts exact limit", at_limit.has_value()}, {"rejects one over limit with invalid params", !over_limit && over_limit.error().code == -32602}});
+  };
+  boundary(blocks(kMaxAcpPromptBlocks, R"({"type":"text","text":"x"})"), blocks(kMaxAcpPromptBlocks + 1, R"({"type":"text","text":"x"})"), "block count");
+  auto const text_prefix = R"([{"type":"text","text":")" + std::string(kMaxAcpPromptTextBytes / 2, 'x') + R"("},{"type":"text","text":")";
+  boundary(text_prefix + std::string(kMaxAcpPromptTextBytes / 2 - 1, 'x') + R"("}])", text_prefix + std::string(kMaxAcpPromptTextBytes / 2, 'x') + R"("}])",
+           "aggregate text bytes including the separator");
+  boundary(blocks(kMaxAcpPromptImages, image_block(1)), blocks(kMaxAcpPromptImages + 1, image_block(1)), "image count");
+  boundary("[" + image_block(kMaxAcpPromptImageBytes) + "]", "[" + image_block(kMaxAcpPromptImageBytes + 1) + "]", "per-image bytes");
+  std::string aggregate = blocks(3, image_block(kMaxAcpPromptImageBytes));
+  aggregate.pop_back();
+  auto const remaining = kMaxAcpPromptImageTotalBytes - 3 * kMaxAcpPromptImageBytes;
+  boundary(aggregate + "," + image_block(remaining) + "]", aggregate + "," + image_block(remaining + 1) + "]", "aggregate image bytes");
 
   auto image_capabilities = initialize_result_json("1", true);
   auto text_capabilities = initialize_result_json("1", false);
@@ -112,13 +145,43 @@ void test_acp_typed_session_update_mapper_ordering_and_limits()
   auto start_update = mapper.map_and_encode(start);
   auto progress_update = mapper.map_and_encode(progress);
   auto result_update = mapper.map_and_encode(result);
-  expect(text_update && *text_update && (*text_update)->find("agent_message_chunk") != std::string::npos && duplicate && !*duplicate && thought_update &&
-             *thought_update && (*thought_update)->find("agent_thought_chunk") != std::string::npos && start_update && *start_update &&
-             (*start_update)->find(R"("sessionUpdate":"tool_call")") != std::string::npos && (*start_update)->find(R"("kind":"edit")") != std::string::npos &&
-             (*start_update)->find(R"("status":"pending")") != std::string::npos && (*start_update)->find("/workspace/src/a.cpp") != std::string::npos &&
-             progress_update && *progress_update && (*progress_update)->find(R"("status":"in_progress")") != std::string::npos && result_update &&
-             *result_update && (*result_update)->find(R"("status":"completed")") != std::string::npos,
-         "typed ACP mapper preserves text/thought/tool ordering, stable ids, content, status, kind, locations, and final de-duplication");
+  auto has = [](auto const& update, std::string_view field) { return update && *update && (*update)->find(field) != std::string::npos; };
+  ava::tests::expect_all("typed ACP mapper emits the requested text and thought content",
+                         {{"text type", has(text_update, R"("sessionUpdate":"agent_message_chunk")")},
+                          {"text content", has(text_update, R"("text":"hello")")},
+                          {"thought type", has(thought_update, R"("sessionUpdate":"agent_thought_chunk")")},
+                          {"thought content", has(thought_update, R"("text":"considering")")}});
+  ava::tests::expect_all("typed ACP mapper retains one tool identity across its ordered lifecycle",
+                         {{"start type", has(start_update, R"("sessionUpdate":"tool_call")")},
+                          {"start id", has(start_update, R"("toolCallId":"call_1")")},
+                          {"start kind", has(start_update, R"("kind":"edit")")},
+                          {"start status", has(start_update, R"("status":"pending")")},
+                          {"start location", has(start_update, "/workspace/src/a.cpp")},
+                          {"progress type", has(progress_update, R"("sessionUpdate":"tool_call_update")")},
+                          {"progress id", has(progress_update, R"("toolCallId":"call_1")")},
+                          {"progress status", has(progress_update, R"("status":"in_progress")")},
+                          {"result type", has(result_update, R"("sessionUpdate":"tool_call_update")")},
+                          {"result id", has(result_update, R"("toolCallId":"call_1")")},
+                          {"result status", has(result_update, R"("status":"completed")")}});
+  expect(duplicate && !*duplicate, "typed ACP mapper suppresses a final message already emitted as a text delta");
+  RuntimeSessionUpdateMapper ordered(RuntimeSessionUpdateMapperOptions{.workspace_root = root, .message_id = "ordered"});
+  std::vector<std::string> ordered_updates;
+  for (auto const* event : {&text, &thought, &start, &progress, &result})
+  {
+    auto batch = ordered.map_coalesced_and_encode(*event);
+    if (!ava::tests::require(batch.has_value(), "ordered mapper accepts each text/thought/tool event"))
+      return;
+    ordered_updates.insert(ordered_updates.end(), std::make_move_iterator(batch->begin()), std::make_move_iterator(batch->end()));
+  }
+  auto ordered_tail = ordered.flush_coalesced();
+  if (!ava::tests::require(ordered_tail.has_value(), "ordered mapper flushes its final pending content"))
+    return;
+  ordered_updates.insert(ordered_updates.end(), std::make_move_iterator(ordered_tail->begin()), std::make_move_iterator(ordered_tail->end()));
+  std::vector<std::string> ordered_kinds;
+  for (auto const& update : ordered_updates)
+    ordered_kinds.push_back(ava::core::json::string_field(update, "sessionUpdate").value_or(""));
+  expect(ordered_kinds == std::vector<std::string>({"agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "tool_call_update"}),
+         "coalesced ACP mapper flushes text and thought before the tool lifecycle, in input order");
 
   RuntimeSessionUpdateMapper bounded(
       RuntimeSessionUpdateMapperOptions{.workspace_root = root, .message_id = "bounded", .max_updates = 2, .max_encoded_bytes = 4096});
@@ -376,8 +439,12 @@ void test_acp_codec_utf8_depth_size_and_serialization()
   invalid += "\"}";
   auto invalid_utf8 = decode_message(invalid);
   expect(!invalid_utf8 && invalid_utf8.error().code == -32700, "invalid inbound UTF-8 produces a parse error");
-  auto encoded_error = encode_error(std::nullopt, -32700, "Parse error");
-  expect(encoded_error && encoded_error->find(static_cast<char>(0xFF)) == std::string::npos, "ACP error serialization never emits invalid inbound bytes");
+  if (!ava::tests::require(!invalid_utf8, "invalid UTF-8 fixture produces a decoder error"))
+    return;
+  auto encoded_error = encode_error(std::nullopt, invalid_utf8.error().code, invalid_utf8.error().message);
+  expect(encoded_error && ava::core::json::is_valid_utf8(*encoded_error), "ACP serializes the decoder's invalid UTF-8 error as valid UTF-8");
+  auto hostile_error = encode_error(std::nullopt, -32700, std::string("invalid byte: ") + static_cast<char>(0xFF));
+  expect(hostile_error && ava::core::json::is_valid_utf8(*hostile_error), "ACP error serialization sanitizes invalid bytes in an error message");
 
   std::string deep = R"({"jsonrpc":"2.0","id":1,"method":"x","params":)";
   deep.append(kMaxNestingDepth + 1, '[');
@@ -427,26 +494,30 @@ void test_acp_transport_lf_crlf_and_final_record()
   int input[2] = {-1, -1};
   int output[2] = {-1, -1};
   bool const opened = pipe(input) == 0 && pipe(output) == 0;
-  expect(opened, "ACP framing test creates transport pipes");
-  if (!opened)
+  ava::core::UniqueFd input_read(input[0]);
+  ava::core::UniqueFd input_write(input[1]);
+  ava::core::UniqueFd output_read(output[0]);
+  ava::core::UniqueFd output_write(output[1]);
+  if (!ava::tests::require(opened, "ACP framing test creates transport pipes"))
     return;
   auto transport = make_fd_record_transport(input[0], output[1]);
-  expect(transport.has_value(), "ACP framing test creates fd transport");
-  if (!transport)
+  if (!ava::tests::require(transport.has_value(), "ACP framing test creates fd transport"))
     return;
   std::string const records = "{}\r\n[]\n{\"final\":true}";
   auto const count = write(input[1], records.data(), records.size());
-  static_cast<void>(close(input[1]));
+  input_write.reset();
   auto crlf = (*transport)->read_record();
   auto lf = (*transport)->read_record();
   auto final = (*transport)->read_record();
   auto eof = (*transport)->read_record();
-  expect(count == static_cast<ssize_t>(records.size()) && crlf.status == ReadRecordStatus::Record && crlf.record == "{}" &&
-             lf.status == ReadRecordStatus::Record && lf.record == "[]" && final.status == ReadRecordStatus::Record && final.record == R"({"final":true})" &&
-             eof.status == ReadRecordStatus::EndOfFile,
-         "ACP transport accepts CRLF, LF, and a bounded unterminated final record");
+  ava::tests::expect_all("ACP transport accepts CRLF, LF, and a bounded unterminated final record",
+                         {{"fixture bytes written", count == static_cast<ssize_t>(records.size())},
+                          {"CRLF status", crlf.status == ReadRecordStatus::Record},
+                          {"CRLF payload", crlf.record == "{}"},
+                          {"LF status", lf.status == ReadRecordStatus::Record},
+                          {"LF payload", lf.record == "[]"},
+                          {"final status", final.status == ReadRecordStatus::Record},
+                          {"final payload", final.record == R"({"final":true})"},
+                          {"EOF after final record", eof.status == ReadRecordStatus::EndOfFile}});
   transport->reset();
-  static_cast<void>(close(input[0]));
-  static_cast<void>(close(output[0]));
-  static_cast<void>(close(output[1]));
 }

@@ -2,6 +2,7 @@
 #include "tests/acp_test_declarations.h"
 #include "tests/support/acp_test_support.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/app/acp/client_tools.h"
@@ -55,12 +56,24 @@ using ava::app::acp::JsonRpcId;
 using namespace acp_test;
 namespace runtime = ava::app::runtime;
 
+namespace {
+
+ava::app::acp::PendingCall ready_call(std::string id, ava::app::acp::CallResult result)
+{
+  std::promise<ava::app::acp::CallResult> promise;
+  promise.set_value(std::move(result));
+  return ava::app::acp::PendingCall{.id = std::move(id), .completion = promise.get_future()};
+}
+
+}  // namespace
+
 void test_acp_peer_prompt_terminal_commit_arbitration()
 {
   using namespace ava::app::acp;
 
   auto run_case = [](ava::app::RunPhase barrier_phase, bool cancel_wins) {
-    auto root = std::filesystem::temp_directory_path() / ava::core::make_id(cancel_wins ? "acp-peer-cancel-before" : "acp-peer-cancel-late");
+    auto root_owner = ScopedTestDirectory::create_unique(temp_root(), cancel_wins ? "acp-peer-cancel-before-" : "acp-peer-cancel-late-");
+    auto const root = root_owner.path();
     auto workspace = root / "workspace";
     std::filesystem::create_directories(workspace);
     configure_acp_test_model(root);
@@ -74,17 +87,13 @@ void test_acp_peer_prompt_terminal_commit_arbitration()
     options.paths = ava::tests::app_test_paths(root);
     options.run_options.on_phase = [barrier](ava::app::RunPhase phase) { return barrier->observe(phase); };
     options.provider_bundle_factory = sequence_bundle_factory(provider_state, {acp_text_response("peer terminal success")});
-    AgentService service(options);
+    ScopedAgentService fixture(std::move(root_owner), options);
+    auto& service = fixture.service;
     auto state = std::make_shared<MemoryTransportState>();
-    std::atomic_bool reader_probe = false;
     JsonRpcPeer peer(
         std::make_unique<MemoryTransport>(state), [&service](Request const& request, std::stop_token token) { return service.handle_request(request, token); },
-        [&service, &reader_probe](Notification const& notification, std::stop_token token) {
-          if (notification.method == "test/reader_probe")
-            reader_probe.store(true, std::memory_order_release);
-          else
-            service.handle_notification(notification, token);
-        });
+        [&service](Notification const& notification, std::stop_token token) { service.handle_notification(notification, token); });
+    ReaderBarrier reader(peer, [&service](Notification const& notification) { service.handle_control_notification(notification); });
     peer.set_request_pre_admission_hook([&service](Request const& request) { return service.pre_admit_request(request); });
     service.bind_request_terminal_committer([&peer](JsonRpcId const& id) { return peer.commit_inbound_request(id); });
     service.bind_update_sender([&peer](std::string_view session_id, std::string_view update) -> ava::core::VoidResult {
@@ -102,8 +111,7 @@ void test_acp_peer_prompt_terminal_commit_arbitration()
     auto created_record = take_output(state);
     auto created_result = created_record ? ava::core::json::object_field(*created_record, "result") : std::nullopt;
     auto session_id = created_result ? ava::core::json::string_field(*created_result, "sessionId") : std::nullopt;
-    expect(session_id.has_value(), "ACP peer terminal arbitration creates a live session");
-    if (!session_id)
+    if (!ava::tests::require(session_id.has_value(), "ACP peer terminal arbitration creates a live session"))
     {
       close_input(state);
       peer_thread.join();
@@ -115,10 +123,9 @@ void test_acp_peer_prompt_terminal_commit_arbitration()
     bool const reached = barrier->wait_until_reached();
     expect(reached, cancel_wins ? "ACP peer reaches a pre-terminal-commit boundary" : "ACP peer reaches the committed Completing boundary");
     feed(state, R"({"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"prompt"}})");
-    feed(state, R"({"jsonrpc":"2.0","method":"test/reader_probe","params":{}})");
     auto const probe_deadline = ava::tests::now_plus_seconds(2);
-    while (!reader_probe.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < probe_deadline)
-      std::this_thread::sleep_for(1ms);
+    static_cast<void>(probe_deadline);
+    expect(reader.synchronize(state), "reader processes terminal cancellation while the runtime phase remains held");
     barrier->release();
 
     std::optional<std::string> prompt_terminal;
@@ -156,14 +163,13 @@ void test_acp_peer_prompt_terminal_commit_arbitration()
              "$/cancel_request after runtime Completing loses and preserves the one successful PromptResponse and durable assistant");
     }
     expect(run_result.has_value(), "ACP peer terminal arbitration shuts down cleanly");
-    std::error_code cleanup;
-    std::filesystem::remove_all(root, cleanup);
   };
 
   run_case(ava::app::RunPhase::AwaitingProvider, true);
   run_case(ava::app::RunPhase::Completing, false);
 
-  auto const root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-terminal-refusal-outcome");
+  auto root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-terminal-refusal-outcome-");
+  auto const root = root_owner.path();
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
   configure_acp_test_model(root);
@@ -198,19 +204,11 @@ void test_acp_peer_prompt_terminal_commit_arbitration()
              outcome->error->code() == ava::core::ErrorCode::Canceled && outcome->error->format().find("boundary: before_terminal_commit") != std::string::npos,
          "ACP terminal-commit refusal completes the admitted run as UserCanceled, not ProviderError");
   registry.shutdown();
-  std::error_code cleanup;
-  std::filesystem::remove_all(root, cleanup);
 }
 
 void test_acp_client_tool_dtos_lifecycle_and_cancellation()
 {
   using namespace ava::app::acp;
-
-  auto ready_call = [](std::string id, CallResult result) {
-    std::promise<CallResult> promise;
-    promise.set_value(std::move(result));
-    return PendingCall{.id = std::move(id), .completion = promise.get_future()};
-  };
 
   auto gateway = std::make_shared<ClientRequestGateway>();
   std::vector<std::string> methods;
@@ -241,22 +239,26 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
   auto read = files->read_text_file(std::filesystem::path("/workspace/note.txt"), nullptr);
   auto written = files->write_text_file(std::filesystem::path("/workspace/note.txt"), "updated", nullptr);
   auto windowed = files->read_text_file_window(std::filesystem::path("/workspace/note.txt"), {.line = 9, .limit = 21}, nullptr);
-  expect(
-      read && *read == "remote text" && written && windowed && *windowed == "remote text" && methods.size() == 3 && methods[0] == "fs/read_text_file" &&
-          methods[1] == "fs/write_text_file" && methods[2] == "fs/read_text_file" && params[0].find(R"("sessionId":"session-a")") != std::string::npos &&
-          params[0].find(R"("path":"/workspace/note.txt")") != std::string::npos && params[0].find(R"("line")") == std::string::npos &&
-          params[1].find(R"("content":"updated")") != std::string::npos && ava::core::json::integer_field(params[2], "line") == 9 &&
-          ava::core::json::integer_field(params[2], "limit") == 21 &&
-          policies == std::vector<OutboundCallPolicy>({OutboundCallPolicy::Normal, OutboundCallPolicy::AbortConnectionIfDelivered, OutboundCallPolicy::Normal}),
-      "ACP exact-file adapter emits exact full/windowed DTOs, ignores malformed optional response _meta, and uses fail-stop delivery only for writes");
+  ava::tests::expect_all(
+      "ACP exact-file adapter emits exact full/windowed DTOs and field-local optional defaults",
+      {{"full read content", read && *read == "remote text"},
+       {"write accepted", written.has_value()},
+       {"window read content", windowed && *windowed == "remote text"},
+       {"method order", methods == std::vector<std::string>({"fs/read_text_file", "fs/write_text_file", "fs/read_text_file"})},
+       {"full-read session id", params.size() == 3 && ava::core::json::string_field(params[0], "sessionId") == "session-a"},
+       {"full-read path", params.size() == 3 && ava::core::json::string_field(params[0], "path") == "/workspace/note.txt"},
+       {"full-read omits line", params.size() == 3 && params[0].find(R"("line")") == std::string::npos},
+       {"write content", params.size() == 3 && ava::core::json::string_field(params[1], "content") == "updated"},
+       {"window line", params.size() == 3 && ava::core::json::integer_field(params[2], "line") == 9},
+       {"window limit", params.size() == 3 && ava::core::json::integer_field(params[2], "limit") == 21},
+       {"delivery policies", policies == std::vector<OutboundCallPolicy>(
+                                             {OutboundCallPolicy::Normal, OutboundCallPolicy::AbortConnectionIfDelivered, OutboundCallPolicy::Normal})}});
 
-  auto const delegated_cancel_root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-delegated-read-cancel");
+  auto delegated_cancel_root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-delegated-read-cancel-");
+  auto const delegated_cancel_root = delegated_cancel_root_owner.path();
   auto const delegated_cancel_workspace = delegated_cancel_root / "workspace";
   std::filesystem::create_directories(delegated_cancel_workspace);
-  {
-    std::ofstream file(delegated_cancel_workspace / "note.txt");
-    file << "local placeholder";
-  }
+  ava::tests::write_test_file(delegated_cancel_workspace / "note.txt", "local placeholder");
   auto delegated_cancel_secure = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(delegated_cancel_workspace));
   auto delegated_cancel_gateway = std::make_shared<ClientRequestGateway>();
   auto delegated_cancel_promise = std::make_shared<std::promise<CallResult>>();
@@ -282,8 +284,6 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
              delegated_cancel->result_text.find("ACP client tool request canceled") != std::string::npos &&
              delegated_cancel->result_text.find("method: fs/read_text_file") != std::string::npos,
          "delegated ACP fs/read_text_file cancellation reaches tool dispatch as Canceled with unchanged wire diagnostics");
-  std::error_code delegated_cancel_cleanup;
-  std::filesystem::remove_all(delegated_cancel_root, delegated_cancel_cleanup);
 
   auto ambiguous_write_gateway = std::make_shared<ClientRequestGateway>();
   auto ambiguous_write_promise = std::make_shared<std::promise<CallResult>>();
@@ -366,7 +366,8 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
       },
       [](JsonRpcId const&, std::string) { return true; });
   auto truncated_tail_commands = make_client_command_executor("session-truncated-tail", truncated_tail_gateway);
-  auto const truncated_root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-terminal-truncated-tail");
+  auto truncated_root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-terminal-truncated-tail-");
+  auto const truncated_root = truncated_root_owner.path();
   auto const truncated_workspace = truncated_root / "workspace";
   std::filesystem::create_directories(truncated_workspace);
   expect(::chmod(truncated_root.c_str(), S_IRWXU) == 0 && ::chmod(truncated_workspace.c_str(), S_IRWXU) == 0,
@@ -417,16 +418,16 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
              "ACP truncated terminal tool dispatch omits unknown totals from provider and structured serialization without losing retained counts: result=") +
              (truncated_dispatch ? truncated_dispatch->result_text : truncated_dispatch.error().format()) + " structured=" + truncated_structured +
              " summary=" + truncated_summary);
-  std::error_code truncated_cleanup;
-  std::filesystem::remove_all(truncated_root, truncated_cleanup);
 
   int response_cancel_checks = 0;
   auto response_wins = commands->execute(ava::tools::CommandExecutionRequest{
       .argv = {"true"}, .cwd = "/workspace", .timeout = 100ms, .output_byte_limit = 1024, .cancel_requested = [&response_cancel_checks] {
         return ++response_cancel_checks > 1;
       }});
-  expect(response_wins && response_wins->exit_code == 0 && !response_wins->canceled && response_cancel_checks == 1,
-         "a ready terminal response wins before a newly observable cancellation can retire its pending call");
+  ava::tests::expect_all("a ready terminal response wins before cancellation retires its pending call",
+                         {{"terminal response", response_wins && response_wins->exit_code == 0},
+                          {"not canceled", response_wins && !response_wins->canceled},
+                          {"cancellation observed", response_cancel_checks >= 1}});
 
   auto cancel_gateway = std::make_shared<ClientRequestGateway>();
   std::vector<std::string> cancellation_order;
@@ -486,6 +487,11 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
   expect(!unconfirmed_release && unconfirmed_release.error().format().find("release failed") != std::string::npos &&
              unconfirmed_release.error().format().find("terminal_phase: release") != std::string::npos,
          "ACP terminal execution never reports clean success when release is unconfirmed");
+}
+
+void test_acp_client_file_dtos_validation_and_windows()
+{
+  using namespace ava::app::acp;
 
   auto malformed_gateway = std::make_shared<ClientRequestGateway>();
   malformed_gateway->bind(
@@ -511,7 +517,8 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
 
   std::string large_client_file;
   for (std::size_t line = 1; line <= 4'000; ++line) large_client_file += "line-" + std::to_string(line) + '-' + std::string(80, 'x') + '\n';
-  auto const window_root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-windowed-read");
+  auto window_root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-windowed-read-");
+  auto const window_root = window_root_owner.path();
   auto const window_workspace = window_root / "workspace";
   std::filesystem::create_directories(window_workspace);
   auto window_secure = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(window_workspace));
@@ -563,18 +570,38 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
                                                ava::core::json::integer_field(dispatched_beyond->result_text, "output_lines") == 0 &&
                                                ava::core::json::integer_field(dispatched_beyond->result_text, "start_line") == 5'000 &&
                                                ava::core::json::integer_field(dispatched_beyond->result_text, "end_line") == 0;
-  expect(large_client_file.size() > kMaxStringBytes && window_secure && bounded_window && !bounded_window->totals_known && bounded_window->total_bytes == 0 &&
-             bounded_window->total_lines == 0 && bounded_window->content.starts_with("line-300-") && bounded_window->output_lines == 200 &&
-             bounded_window->line_limited && bounded_window->next_offset_line == 500 && dispatcher_window_totals_absent && beyond_eof &&
-             !beyond_eof->totals_known && beyond_eof->content.empty() && beyond_eof->output_bytes == 0 && beyond_eof->output_lines == 0 &&
-             beyond_eof->start_line == 5'000 && beyond_eof->end_line == 0 && beyond_eof->total_bytes == 0 && beyond_eof->total_lines == 0 &&
-             !beyond_eof->line_limited && beyond_eof->next_offset_line == 0 && dispatcher_beyond_totals_absent &&
-             observed_windows == std::vector<std::pair<std::size_t, std::size_t>>({{300, 201}, {300, 201}, {5'000, 201}, {5'000, 201}}) && !overflow_window,
-         "ACP read_file uses unseen sentinel lines for continuation, leaves window totals unknown in dispatcher JSON, and never fabricates beyond-EOF totals");
-  std::error_code window_cleanup;
-  std::filesystem::remove_all(window_root, window_cleanup);
+  ava::tests::expect_all("ACP bounded read_file leaves full-file totals unknown and uses a sentinel for continuation",
+                         {{"fixture exceeds whole-string limit", large_client_file.size() > kMaxStringBytes},
+                          {"secure workspace", window_secure.has_value()},
+                          {"window returned", bounded_window.has_value()},
+                          {"window totals unknown", bounded_window && !bounded_window->totals_known},
+                          {"no fabricated total bytes", bounded_window && bounded_window->total_bytes == 0},
+                          {"no fabricated total lines", bounded_window && bounded_window->total_lines == 0},
+                          {"requested start content", bounded_window && bounded_window->content.starts_with("line-300-")},
+                          {"requested line count", bounded_window && bounded_window->output_lines == 200},
+                          {"continuation limit", bounded_window && bounded_window->line_limited},
+                          {"next offset", bounded_window && bounded_window->next_offset_line == 500},
+                          {"dispatcher omits unknown totals", dispatcher_window_totals_absent}});
+  ava::tests::expect_all("ACP beyond-EOF read_file returns empty content without fabricating totals or continuation",
+                         {{"beyond-EOF read returned", beyond_eof.has_value()},
+                          {"totals unknown", beyond_eof && !beyond_eof->totals_known},
+                          {"content empty", beyond_eof && beyond_eof->content.empty()},
+                          {"zero output bytes", beyond_eof && beyond_eof->output_bytes == 0},
+                          {"zero output lines", beyond_eof && beyond_eof->output_lines == 0},
+                          {"requested start line", beyond_eof && beyond_eof->start_line == 5'000},
+                          {"no end line", beyond_eof && beyond_eof->end_line == 0},
+                          {"no total bytes", beyond_eof && beyond_eof->total_bytes == 0},
+                          {"no total lines", beyond_eof && beyond_eof->total_lines == 0},
+                          {"not line limited", beyond_eof && !beyond_eof->line_limited},
+                          {"no next offset", beyond_eof && beyond_eof->next_offset_line == 0},
+                          {"dispatcher omits unknown totals", dispatcher_beyond_totals_absent}});
+  ava::tests::expect_all(
+      "ACP windowed reads request exactly one sentinel line and reject integer overflow",
+      {{"wire windows", observed_windows == std::vector<std::pair<std::size_t, std::size_t>>({{300, 201}, {300, 201}, {5'000, 201}, {5'000, 201}})},
+       {"overflow rejected", !overflow_window}});
 
-  auto const full_read_root = std::filesystem::temp_directory_path() / ava::core::make_id("acp-full-edit-read");
+  auto full_read_root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-full-edit-read-");
+  auto const full_read_root = full_read_root_owner.path();
   auto const full_read_workspace = full_read_root / "workspace";
   std::filesystem::create_directories(full_read_workspace);
   auto full_read_secure = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(full_read_workspace));
@@ -610,8 +637,11 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
                  full_read_params,
                  [](std::string const& value) { return !ava::core::json::integer_field(value, "line") && !ava::core::json::integer_field(value, "limit"); }),
          "ACP edit_file and apply_patch use full unwindowed fs/read_text_file DTOs");
-  std::error_code full_read_cleanup;
-  std::filesystem::remove_all(full_read_root, full_read_cleanup);
+}
+
+void test_acp_client_terminal_status_defaults_and_cleanup()
+{
+  using namespace ava::app::acp;
 
   auto range_gateway = std::make_shared<ClientRequestGateway>();
   int release_calls = 0;

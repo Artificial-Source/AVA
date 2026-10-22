@@ -1,8 +1,17 @@
 #include "sys.h"
 #include "tests/acp_test_declarations.h"
+#include "tests/support/test_env.h"
+
+#include <cstdlib>
 
 void run_acp_tests()
 {
+  if (std::getenv("AVA_ACP_LEASE_CHILD_PATH") != nullptr)
+  {
+    test_acp_cross_process_lease_and_bounded_streaming();
+    return;
+  }
+  ava::tests::HermeticTestEnvironment environment("ava-acp-suite-");
   test_acp_prompt_content_capabilities_and_strict_validation();
   test_acp_typed_session_update_mapper_ordering_and_limits();
   test_acp_permission_dtos_show_bounded_actions();
@@ -21,7 +30,9 @@ void run_acp_tests()
   test_acp_session_lifecycle_real_prompt_and_provider_ownership();
   test_acp_exact_identity_persisted_cwd_and_restart();
   test_acp_cross_process_lease_and_bounded_streaming();
-  test_acp_list_pagination_cancel_race_stop_reasons_and_file_safety();
+  test_acp_session_list_pagination_and_snapshot_bounds();
+  test_acp_idle_cancel_and_literal_file_safety();
+  test_acp_runtime_stop_reason_catalog();
   test_acp_cancel_terminal_arbitration_and_provider_setup_paths();
   test_acp_critical_commands_remain_one_shot();
   test_acp_session_mcp_requires_persistent_operator_authorization();
@@ -34,6 +45,8 @@ void run_acp_tests()
   test_acp_close_timeout_is_internal_error_with_eventual_cleanup();
   test_acp_peer_prompt_terminal_commit_arbitration();
   test_acp_client_tool_dtos_lifecycle_and_cancellation();
+  test_acp_client_file_dtos_validation_and_windows();
+  test_acp_client_terminal_status_defaults_and_cleanup();
   test_acp_peer_lifecycle_notifications_and_duplicate_ids();
   test_acp_peer_shutdown_cancels_blocked_transport();
   test_acp_peer_bidirectional_out_of_order_deadline_and_late_response();

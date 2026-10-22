@@ -67,7 +67,8 @@ AcpSessionOptions session_options(AgentServiceOptions const& options, std::weak_
                            .updates = std::move(updates),
                            .client_requests = std::move(client_requests),
                            .permission_timeout = options.permission_timeout,
-                           .close_grace = options.close_grace};
+                           .close_grace = options.close_grace,
+                           .max_session_list_snapshot_bytes = options.max_session_list_snapshot_bytes};
 }
 
 std::expected<Json, JsonRpcError> params_object(Request const& request, bool empty_allowed = false)

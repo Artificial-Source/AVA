@@ -66,6 +66,7 @@ struct AcpSessionOptions
   std::weak_ptr<ClientRequestGateway> client_requests;
   std::chrono::milliseconds permission_timeout = kDefaultCallTimeout;
   std::chrono::milliseconds close_grace = kSessionCloseGrace;
+  std::size_t max_session_list_snapshot_bytes = kMaxSessionListSnapshotBytes;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

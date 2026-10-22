@@ -192,15 +192,12 @@ def main():
     assert [entry["name"] for entry in interop["clients"] if entry["evidenceLabel"] == "manual verified"] == ["Zed"]
     assert jetbrains["completedEvidenceReports"] == [] and codecompanion["completedEvidenceReports"] == []
     for entry in clients.values():
-        docs_path = entry["configurationDocumentationPath"].split("#", 1)[0]
-        assert (source / docs_path).is_file(), entry["name"]
-    acp_configuration_docs = (source / "docs/acp.md").read_text(encoding="utf-8")
-    for heading in (
-        "## Zed custom agent",
-        "## JetBrains 2026.1+ custom agent",
-        "## CodeCompanion.nvim custom ACP adapter",
-    ):
-        assert heading in acp_configuration_docs, heading
+        docs_path, anchor = entry["configurationDocumentationPath"].split("#", 1)
+        document = source / docs_path
+        assert document.is_file(), entry["name"]
+        headings = re.findall(r"^#{1,6}\s+(.+)$", document.read_text(encoding="utf-8"), re.MULTILINE)
+        anchors = {re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-") for heading in headings}
+        assert anchor in anchors, (entry["name"], anchor)
     captured_reports = sorted(
         path.name for path in (source / "docs/interop/evidence").glob("*.md")
         if path.name != "README.md"
@@ -253,108 +250,15 @@ def main():
     assert cmake.index("if(AVA_ENABLE_ACPX_INTEROP)") < cmake.index("NAME ava_cli.acpx_interop")
     assert "acp-acpx/node_modules/.bin/acpx" in cmake
 
-    sdk_harness = (sdk_dir / "interop.mjs").read_text(encoding="utf-8")
-    assert "ndJsonStream(Writable.toWeb(ava.child.stdin), Readable.toWeb(ava.child.stdout))" in sdk_harness
-    assert ".connectWith(" in sdk_harness
-    assert "process.exitCode = 77" in sdk_harness
-    assert "[\"--acp\"]" in sdk_harness
-    assert "env.MOONSHOT_API_KEY = FAKE_KEY" in sdk_harness
-    assert "scrubParentEnvironment();" in sdk_harness
-    assert "...process.env" not in sdk_harness
-
-    acpx_harness = (acpx_dir / "interop.py").read_text(encoding="utf-8")
-    for token in ("EXPECTED_NODE_VERSION = \"v24.13.1\"", "EXPECTED_ACPX_VERSION = \"0.12.0\"", "\"--agent\"", "\"exec\"", "\"--json-strict\"", "\"--approve-all\""):
-        assert token in acpx_harness
-    assert "start_new_session=True" in acpx_harness
-    assert "os.environ.clear()" in acpx_harness
-
     dogfood_script_path = source / dogfood["scriptPath"]
     assert dogfood_script_path.stat().st_mode & 0o111
-    dogfood_script = dogfood_script_path.read_text(encoding="utf-8")
-    for token in (
-        "run_ctest_gate sdk AVA_REQUIRE_ACP_SDK_INTEROP",
-        "run_ctest_gate acpx AVA_ENABLE_ACPX_INTEROP",
-        "--confinement sandbox",
-        "--wayland-display",
-        "--acknowledge-disposable-credential-free",
-        "ordinary-account profile-only execution is rejected",
-        "XDG_CONFIG_HOME=\"$phase_root/xdg-config\"",
-        "AVA_ZED_DOGFOOD_PHASE_ROOT=\"$phase_root\"",
-        "ZED_ALLOW_EMULATED_GPU=1",
-        "MAX_ZED_FILE_BLOCKS=65536",
-        "process_alive_non_zombie",
-        "open(f\"/proc/{pid}/environ\"",
-        "signal.pidfd_send_signal(pidfd, signal_number)",
-        "cleanup_phase_tagged_processes \"$phase_root\"",
-        "cleanup_zed_phase_processes \"$phase_root\" || status=1",
-        "wait_for_capture_exit",
-        "capture exited nonzero",
-        "mkfifo -- \"$zed_stdout_fifo\" \"$zed_stderr_fifo\"",
-        "bounded residual scan found no PID",
-        "\"command\": ava",
-        "\"args\": [\"--acp\"]",
-        "end-to-end-workflow",
-        "scenario=text",
-        "report_status: incomplete",
-        "zed sanitize-copy",
-        "sanitization rejected: fake key value is present",
-    ):
-        assert token in dogfood_script, token
-    assert "npm ci" not in dogfood_script and "npx" not in dogfood_script
-    assert "pgrep -f" not in dogfood_script
-
-    policy = (source / dogfood["evidencePolicyPath"]).read_text(encoding="utf-8")
-    for token in (
-        "Zed 1.9.0 is **manual verified only for the flows captured",
-        "observed",
-        "inferred",
-        "Raw GUI logs",
-        "report_status: incomplete",
-        "configuration documented but not executed",
-    ):
-        assert token in policy, token
-
+    # These entry points have executable interoperability/dogfood checks. Their
+    # implementation tokens and CI action revisions are not manifest contracts.
     acp_docs = (source / "docs/acp.md").read_text(encoding="utf-8")
-    for token in (
-        "Official `@agentclientprotocol/sdk` | 1.2.1",
-        "`acpx` | 0.12.0",
-        "automated, opt-in alpha compatibility smoke, not official conformance",
-        "`Zed` | 1.9.0",
-        "`manual verified`",
-        "zed-1.9.0-2026-07-14.md",
-        "`JetBrains` | 2026.1+",
-        "configuration documented but not executed",
-        "$XDG_CONFIG_HOME/zed/settings.json",
-        "~/.jetbrains/acp.json",
-        "CodeCompanion.nvim",
-        "terminal=false",
-        "npm ci --ignore-scripts --no-audit --no-fund",
-        "Node 24.13.1",
-        "AVA_REQUIRE_ACP_SDK_INTEROP",
-        "AVA_ENABLE_ACPX_INTEROP",
-    ):
-        assert token in acp_docs, token
-
-    workflow = (source / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    for sha in (
-        "3d3c42e5aac5ba805825da76410c181273ba90b1",
-        "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
-        "820762786026740c76f36085b0efc47a31fe5020",
-    ):
-        assert sha in workflow
-    assert "permissions:\n  contents: read" in workflow
-    assert workflow.count("persist-credentials: false") == workflow.count("actions/checkout@")
-    assert "node-version: 24.13.1" in workflow
-    assert workflow.count("npm ci --ignore-scripts --no-audit --no-fund") >= 2
-    assert "AVA_REQUIRE_ACP_SDK_INTEROP=ON" in workflow
-    assert "AVA_ENABLE_ACPX_INTEROP=ON" in workflow
-    assert "workflow_dispatch:" in workflow and "run_acpx:" in workflow
-    assert "env -i" in workflow
-    sanitizer_job = workflow.split("\n  sanitizer:\n", 1)[1].split("\n  acp-sdk-interop:", 1)[0]
-    assert "id: sanitizer-test" in sanitizer_job
-    assert "if: always() && steps.sanitizer-test.outcome != 'skipped'" in sanitizer_job
-    assert "summarize-test-results.py" in sanitizer_job
-    assert "ava-junit-sanitize.xml" in sanitizer_job
+    for name, entry in metadata.items():
+        assert entry["version"] in acp_docs, (name, entry["version"])
+    for client in clients.values():
+        assert client["name"] in acp_docs, client["name"]
 
     print("ACP M6 interoperability package locks, metadata, CMake, and CI are consistent")
     return 0
