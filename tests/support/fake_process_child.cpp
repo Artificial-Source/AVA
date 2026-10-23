@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <charconv>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
@@ -177,13 +178,13 @@ int bash_signal_tree(char const* disposition, char const* lifetime, char const* 
   ::close(acknowledged[1]);
   bool const installed = read_control_byte(acknowledged[0]);
   ::close(acknowledged[0]);
+  // Two process ids and separators fit comfortably; a negative or truncated
+  // length means the state line is wrong and the fixture must not look ready.
   std::array<char, 64> state{};
-  auto group = std::to_chars(state.data(), state.data() + state.size(), ::getpgrp());
-  *group.ptr++ = ' ';
-  auto descendant = std::to_chars(group.ptr, state.data() + state.size(), child);
-  *descendant.ptr++ = '\n';
-  int const state_fd = installed ? ::open(state_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600) : -1;
-  bool const recorded = state_fd >= 0 && write_all(state_fd, state.data(), static_cast<std::size_t>(descendant.ptr - state.data()));
+  int const state_length = std::snprintf(state.data(), state.size(), "%ld %ld\n", static_cast<long>(::getpgrp()), static_cast<long>(child));
+  bool const formatted = state_length > 0 && static_cast<std::size_t>(state_length) < state.size();
+  int const state_fd = installed && formatted ? ::open(state_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600) : -1;
+  bool const recorded = state_fd >= 0 && write_all(state_fd, state.data(), static_cast<std::size_t>(state_length));
   if (state_fd >= 0)
     ::close(state_fd);
   int const ready_fd = recorded ? ::open(ready_path, O_WRONLY | O_CLOEXEC) : -1;

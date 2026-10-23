@@ -24,6 +24,9 @@ ENVIRONMENT_ALLOWLIST = (
     "UBSAN_OPTIONS", "LSAN_OPTIONS", "TSAN_OPTIONS", "MSAN_OPTIONS",
     "ASAN_SYMBOLIZER_PATH", "LLVM_SYMBOLIZER_PATH", "TMPDIR", "TZ",
     "AVA_DEBUG_NO_TIMEOUT", "AVA_DEBUG_NO_TIMEOUT_SECONDS",
+    # CTest pins automatic session titles off so scripted providers see only
+    # the requests their scenarios expect.
+    "AVA_SESSION_TITLES",
 )
 
 

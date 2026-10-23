@@ -28,8 +28,9 @@ function(ava_cli_timeouts)
 endfunction()
 
 # ava_cli_isolated_env(OUT ROOT) returns --unset options followed by assignments
-# accepted by cmake -E env and GNU env. Keep only loader, sanitizer, locale and
-# explicit test-debug settings; credentials, endpoints and proxies never leak in.
+# accepted by cmake -E env and GNU env. Keep only loader, sanitizer, locale,
+# explicit test-debug settings and the CTest-wide session title policy;
+# credentials, endpoints and proxies never leak in.
 function(ava_cli_isolated_env OUT ROOT)
   get_filename_component(ROOT "${ROOT}" ABSOLUTE)
   file(MAKE_DIRECTORY "${ROOT}/home" "${ROOT}/config" "${ROOT}/state" "${ROOT}/data" "${ROOT}/cache" "${ROOT}/runtime")
@@ -47,21 +48,24 @@ function(ava_cli_isolated_env OUT ROOT)
       LSAN_OPTIONS TSAN_OPTIONS MSAN_OPTIONS ASAN_SYMBOLIZER_PATH LLVM_SYMBOLIZER_PATH
       TMPDIR TZ AVA_DEBUG_NO_TIMEOUT AVA_DEBUG_NO_TIMEOUT_SECONDS
       LIBCWD_NO_STARTUP_MSGS AVA_NO_DEBUG_OUTPUT AVA_TEST_NAME AVA_DEBUG_OUTPUT_DIR
-      LIBCWD_RCFILE_NAME LIBCWD_RCFILE_OVERRIDE_NAME)
+      LIBCWD_RCFILE_NAME LIBCWD_RCFILE_OVERRIDE_NAME AVA_SESSION_TITLES)
   execute_process(COMMAND "${CMAKE_COMMAND}" -E environment
                   OUTPUT_VARIABLE INHERITED ERROR_VARIABLE ENV_ERROR RESULT_VARIABLE ENV_RESULT)
   if(NOT ENV_RESULT EQUAL 0)
     message(FATAL_ERROR "Cannot isolate the CLI fixture environment: ${ENV_ERROR}")
   endif()
-  string(REPLACE "\n" ";" INHERITED "${INHERITED}")
+  # Extract only the variable names, anchored on the line break that precedes
+  # each one (the dump is prefixed with one so the first line matches too).
+  # Treating the dump as a CMake list would split values on semicolons and
+  # swallow everything after an unbalanced bracket (terminal color settings
+  # contain both), silently keeping later variables in the child environment.
+  string(REGEX MATCHALL "\n[^=\n]+=" NAMES "\n${INHERITED}")
   set(UNSETS "")
-  foreach(VARIABLE IN LISTS INHERITED)
-    if(VARIABLE MATCHES "^([^=]+)=")
-      set(NAME "${CMAKE_MATCH_1}")
-      list(FIND ALLOWLIST "${NAME}" ALLOWED_INDEX)
-      if(ALLOWED_INDEX EQUAL -1)
-        list(APPEND UNSETS "--unset=${NAME}")
-      endif()
+  foreach(MATCH IN LISTS NAMES)
+    string(REGEX REPLACE "^\n([^=\n]+)=$" "\\1" NAME "${MATCH}")
+    list(FIND ALLOWLIST "${NAME}" ALLOWED_INDEX)
+    if(ALLOWED_INDEX EQUAL -1)
+      list(APPEND UNSETS "--unset=${NAME}")
     endif()
   endforeach()
   list(APPEND UNSETS ${ASSIGNMENTS})
