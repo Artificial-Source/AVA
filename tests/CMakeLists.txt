@@ -37,7 +37,10 @@ ava_apply_warnings(ava_fake_lsp_server)
 ava_apply_sanitizers(ava_fake_lsp_server)
 
 add_executable(ava_lsp_real_clangd_smoke "lsp_real_clangd_smoke.cpp")
-target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE ava_test_support)
+# Link the backend archives directly, as ava_tests does: relying on the support
+# library's interface alone leaves libava_core.a before libava_observability.a
+# in libcwd builds and init_thread unresolved.
+target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE ${AVA_BACKEND_LIBRARIES} ava_test_support)
 ava_apply_warnings(ava_lsp_real_clangd_smoke)
 ava_apply_sanitizers(ava_lsp_real_clangd_smoke)
 
@@ -133,7 +136,7 @@ ava_apply_sanitizers(ava_backend_benchmark_helper)
 
 add_executable(ava_rpc_broken_pipe_subprocess_test "rpc_broken_pipe_subprocess_test.cpp")
 add_dependencies(ava_rpc_broken_pipe_subprocess_test ava)
-target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE ava_test_support)
+target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE ${AVA_BACKEND_LIBRARIES} ava_test_support)
 target_compile_definitions(ava_rpc_broken_pipe_subprocess_test PRIVATE AVA_EXE_PATH="$<TARGET_FILE:ava>")
 ava_apply_warnings(ava_rpc_broken_pipe_subprocess_test)
 ava_apply_sanitizers(ava_rpc_broken_pipe_subprocess_test)

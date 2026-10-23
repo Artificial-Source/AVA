@@ -134,32 +134,55 @@ ava::core::Result<std::shared_ptr<ava::session::SessionAppendTarget>> persistent
   return ava::session::SessionAppendTarget::create_persistent(store, lease, ava::session::SessionReadLimits{});
 }
 
+// A ThreadSanitizer runtime keeps its own background thread, so forking the
+// instrumented parent can leave the child waiting on a runtime lock that no
+// thread will release. Run the cases inline there; CTest's timeout remains the
+// watchdog for that configuration.
+#if defined(__SANITIZE_THREAD__)
+constexpr bool kForkControllerCases = false;
+#elif defined(__has_feature)
+constexpr bool kForkControllerCases = !__has_feature(thread_sanitizer);
+#else
+constexpr bool kForkControllerCases = true;
+#endif
+
+bool run_controller_case_body(void (*body)(), std::string const& name)
+{
+  auto const previous_failures = ava::tests::failures();
+  try
+  {
+    body();
+  }
+  catch (std::exception const& error)
+  {
+    expect(false, name + ": " + error.what());
+  }
+  catch (...)
+  {
+    expect(false, name + ": unexpected exception");
+  }
+  return ava::tests::failures() == previous_failures;
+}
+
 // Keep closed gates and blocking joins inside one process; the parent owns
 // termination and the complete temporary namespace even when a regression hangs.
 [[nodiscard]] bool run_controller_case(void (*body)(), std::string const& name)
 {
   auto directory = ScopedTestDirectory::create_unique(temp_root(), "controller-case-");
   ScopedEnvVar tmpdir("TMPDIR", directory.path().string());
+  if constexpr (!kForkControllerCases)
+  {
+    // The suite process owns every directory here; its exit cleanup removes them.
+    return run_controller_case_body(body, name);
+  }
   auto const child = ::fork();
   if (!ava::tests::require(child >= 0, name + ": fork watchdog case"))
     return false;
   if (child == 0)
   {
-    auto const previous_failures = ava::tests::failures();
-    try
-    {
-      body();
-    }
-    catch (std::exception const& error)
-    {
-      expect(false, name + ": " + error.what());
-    }
-    catch (...)
-    {
-      expect(false, name + ": unexpected exception");
-    }
+    bool const passed = run_controller_case_body(body, name);
     static_cast<void>(cleanup_owned_test_directories());
-    ::_exit(ava::tests::failures() == previous_failures ? 0 : 1);
+    ::_exit(passed ? 0 : 1);
   }
   ava::tests::ScopedChild owner(child);
   auto const status = owner.wait_until(ava::tests::now_plus_seconds(30));
