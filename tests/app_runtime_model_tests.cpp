@@ -4,6 +4,10 @@
 #include "tests/support/process_test_support.h"
 #include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
+#include "ava/frontend/FrontEnd.h"
+#include "ava/frontend/GitBranch.h"
+#include "ava/frontend/UnlockedData.h"
+#include "ava/http/transport.h"
 #include "ava/app/commands.h"
 #include "ava/app/reasoning_controls.h"
 #include "ava/app/rpc/input.h"
@@ -16,9 +20,6 @@
 #include "ava/app/runtime_reasoning.h"
 #include "ava/agent/message_builder.h"
 #include "ava/config/model_config.h"
-#include "ava/frontend/FrontEnd.h"
-#include "ava/frontend/UnlockedData.h"
-#include "ava/http/transport.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/attachments.h"
 #include "ava/session/record.h"
@@ -36,11 +37,13 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <latch>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <fcntl.h>
@@ -258,6 +261,58 @@ void test_unlocked_data_access_and_notifications()
   data_type replacement("forty-two");
   data = std::move(replacement);
   expect(notifications == 4 && observed_value == "forty-two", "move assignment preserves destination registration and publishes the transferred value");
+}
+
+void test_frontend_refresh_observes_write_before_notification()
+{
+  CallbackFrontEnd frontend;
+  ava::app::runtime::GitBranch_ts branch(&frontend, "initial");
+  ava::frontend::GitBranch projection(&frontend);
+  projection.initialize(&branch);
+  std::latch write_locked(1);
+  std::latch release_write(1);
+  std::latch reader_entering(1);
+  std::latch deliver_notification(1);
+  int notifications = 0;
+  frontend.on_data_changed = [&](ava::frontend::DataListIndex) {
+    deliver_notification.wait();
+    ++notifications;
+    projection.dirty();
+  };
+
+  // A writer gates the canonical read, then commits before its notification is
+  // delivered. The initial dirty refresh may copy that committed value first.
+  // Delayed notification must be consumed without a false display change; a
+  // subsequent write must still be visible at the next refresh.
+  std::jthread writer([&] {
+    branch.change([&](std::string& value) {
+      value = "during-refresh";
+      write_locked.count_down();
+      release_write.wait();
+    });
+  });
+  write_locked.wait();
+  std::string copied;
+  bool changed = false;
+  std::jthread reader([&] {
+    reader_entering.count_down();
+    auto const refreshed = projection.git_branch_refresh();
+    copied = refreshed.value;
+    changed = refreshed.changed;
+  });
+  reader_entering.wait();
+  release_write.count_down();
+  reader.join();
+  expect(changed && copied == "during-refresh", "a canonical write committed before notification is visible to the in-flight refresh");
+  deliver_notification.count_down();
+  writer.join();
+  auto const notified = projection.git_branch_refresh();
+  expect(notifications == 1 && !notified.changed && notified.value == "during-refresh",
+         "delayed notification is delivered once and consumes dirty state without changing an already-current display");
+  branch.change([](std::string& value) { value = "next-refresh"; });
+  auto const next = projection.git_branch_refresh();
+  expect(notifications == 2 && next.changed && next.value == "next-refresh", "a later canonical write is observed by the next refresh");
+  expect(!projection.git_branch_refresh().changed, "the next refresh consumes that display change once");
 }
 
 std::optional<std::string> app_error_context(ava::core::Error const& error, std::string_view key)

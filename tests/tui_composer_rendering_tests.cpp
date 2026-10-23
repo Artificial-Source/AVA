@@ -303,25 +303,36 @@ bool test_changed_session_snapshot_resets_presentation()
 
   auto const jobs_still_available = subagent_workspace.open_selector() && subagent_workspace.active() && job_list_calls == 1;
 
-  // Reconcile two backend replacements without an intervening presentation DTO or render.
-  // Display refresh consumption must not be required to reset the newest local state.
-  bool rapid_replacements_ok = true;
-  for (std::size_t index = 0; index < 2; ++index)
-  {
-    presentation.snapshot.input = "draft from previous session";
-    presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
-    auto const before = presentation.snapshot.transcript_generation;
-    auto const replaced = frontend.replace_session_identity();
-    static_cast<void>(frontend.session_id_metadata());
-    auto const committed = options.read_committed_session_id();
-    auto const transitioned =
-        ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list, committed);
-    rapid_replacements_ok = rapid_replacements_ok && replaced && transitioned && presentation.snapshot.session_id == committed &&
-                            presentation.snapshot.input.empty() && presentation.pending_image_attachments.empty() &&
-                            presentation.snapshot.transcript_generation == before + 1;
-  }
+  // Two actual replacements occur before either a display refresh or a
+  // serialized presentation boundary. Only the final identity is presented.
+  presentation.snapshot.input = "draft from previous session";
+  presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
+  auto const before_replacements = presentation.snapshot.transcript_generation;
+  auto const first_replaced = frontend.replace_session_identity();
+  auto const intermediate_identity = options.read_committed_session_id();
+  auto const second_replaced = frontend.replace_session_identity();
+  auto const final_identity = options.read_committed_session_id();
+  static_cast<void>(frontend.session_id_metadata());
+  auto const transitioned = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
+                                                                         active_select_list, final_identity);
+  bool const rapid_replacements_ok = first_replaced && second_replaced && intermediate_identity != final_identity && transitioned &&
+                                     presentation.snapshot.session_id == final_identity && presentation.snapshot.input.empty() &&
+                                     presentation.pending_image_attachments.empty() && presentation.snapshot.transcript_generation == before_replacements + 1;
+  expect(rapid_replacements_ok, "two replacements before one boundary reset presentation exactly once to the final identity");
 
-  return changed_state_ok && unchanged_state_ok && jobs_still_available && rapid_replacements_ok;
+  // The control seam compares committed identities, not unobservable backend
+  // generations. A -> B -> A between boundaries leaves an A-bound view intact.
+  presentation.snapshot.input = "same-identity draft";
+  auto const before_round_trip = presentation.snapshot.transcript_generation;
+  frontend.set_session_identity_metadata("intermediate-session");
+  frontend.set_session_identity_metadata(final_identity);
+  auto const round_trip_transition = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
+                                                                                  active_select_list, options.read_committed_session_id());
+  bool const identity_round_trip_ok = !round_trip_transition && presentation.snapshot.session_id == final_identity &&
+                                      presentation.snapshot.input == "same-identity draft" && presentation.snapshot.transcript_generation == before_round_trip;
+  expect(identity_round_trip_ok, "identity A-to-B-to-A before one boundary preserves the A-bound presentation without a reset");
+
+  return changed_state_ok && unchanged_state_ok && jobs_still_available && rapid_replacements_ok && identity_round_trip_ok;
 }
 
 bool test_active_run_session_transition_discards_prior_session_events()
@@ -1026,11 +1037,16 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
       count_completion(presentation.snapshot, "/theme", 0, "sunrise") == 0 && count_completion(presentation.snapshot, "/theme", 0, "midnight") == 1 &&
       count_completion(presentation.snapshot, "/theme", 0, "backend-theme-fact") == 1 &&
       count_completion(presentation.snapshot, "/hotkeys", 1, "mode_toggle", {"set"}) == 1 && key_display(presentation.snapshot, "/mode") == "Alt+Y";
+  auto const before_empty = presentation.snapshot.file_references_generation;
+  presentation.apply_catalog_delivery(options, ava::tui::TuiCatalogDelivery{.slash_catalog_generation = 4, .workspace_catalog_generation = 3});
+  bool const known_empty = presentation.snapshot.file_references.empty() && count_completion(presentation.snapshot, "/theme", 0, "backend-theme-fact") == 0 &&
+                           presentation.snapshot.file_references_generation == before_empty + 1;
+  expect(known_empty, "new catalog generations with empty vectors clear previous values rather than treating them as omitted unchanged payloads");
   expect(initial, "initial TUI slash composition includes retained backend facts, local choices, and effective binding hints once");
   expect(applied_once, "catalog boundary pulls apply each delivered generation exactly once and preserve unchanged completion sources");
   expect(backend_refresh, "backend slash replacements recompose retained local facts without duplicates");
   expect(local_refresh, "local display and keybinding reloads replace stale choices and hints without backend refresh");
-  return initial && applied_once && backend_refresh && local_refresh;
+  return initial && applied_once && backend_refresh && local_refresh && known_empty;
 }
 
 bool test_display_settings_reload_poll_outcome_and_preview_staging()
@@ -1296,6 +1312,8 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   int local_display_calls = 0;
   int keybinding_reload_calls = 0;
   int project_trust_reads = 0;
+  bool trust_action_committed = false;
+  int catalog_pulls = 0;
   ava::tui::ProjectTrustSnapshot current_project_trust{
       .decision = "trusted", .project_resources = "enabled", .workspace = "workspace", .matched_path = {}, .trust_file = {}};
   ava::tui::TuiRuntimeOptions options;
@@ -1306,7 +1324,13 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
                                  .argument_completions = {ava::tui::SlashCommandArgumentCompletion{
                                      .value = "init", .description = "initialize keybindings", .category = "General", .argument_index = 0}}}};
   options.slash_catalog_generation = 1;
-  options.read_catalog_delivery = [&options]() { return ava::tui::TuiCatalogDelivery{.slash_catalog_generation = options.slash_catalog_generation}; };
+  options.read_catalog_delivery = [&]() {
+    ++catalog_pulls;
+    if (trust_action_committed)
+      return ava::tui::TuiCatalogDelivery{.slash_commands = {{.command = "/trusted-project-command", .description = "trusted resource"}},
+                                          .slash_catalog_generation = 2};
+    return ava::tui::TuiCatalogDelivery{.slash_catalog_generation = 1};
+  };
   options.read_startup_overview = [] {
     return ava::tui::StartupOverviewSnapshot{.theme_name = "dark", .theme_badge = "built-in", .compact_line = "build · provider/model · /overview"};
   };
@@ -1314,9 +1338,12 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
     ++project_trust_reads;
     return current_project_trust;
   };
-  options.on_submit = [&backend_submissions, &submitted_request_mode_keys](std::string const& submitted, ava::tui::TuiSubmitContext context) {
+  options.on_submit = [&backend_submissions, &submitted_request_mode_keys, &trust_action_committed](std::string const& submitted,
+                                                                                                    ava::tui::TuiSubmitContext context) {
     backend_submissions.push_back(submitted);
     submitted_request_mode_keys.push_back(ava::tui::keys_display(context.key_bindings, ava::tui::TuiAction::ModeToggle));
+    if (submitted == "/trust")
+      trust_action_committed = true;
     ava::tui::TuiSubmitResult result;
     result.output = {"backend handled " + submitted};
     return result;
@@ -1425,7 +1452,15 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   bool const bare_ok = continued(bare) && backend_submissions.size() == 3 && display_reload_calls == 1 && keybinding_reload_calls == 2 &&
                        presentation.snapshot.status == "keybindings reloaded";
 
-  return settings_popup_ok && models_ok && malformed_ok && theme_ok && local_theme_ok && keybindings_ok && backend_help_uses_request_copy && bare_ok;
+  auto const pulls_before_trust = catalog_pulls;
+  auto const trust = submit_controller.submit(std::string("/trust"));
+  bool const trust_catalog_refreshed =
+      continued(trust) && trust_action_committed && catalog_pulls == pulls_before_trust + 1 &&
+      std::ranges::any_of(presentation.snapshot.slash_commands, [](auto const& item) { return item.command == "/trusted-project-command"; });
+  expect(trust_catalog_refreshed, "trust action completion pulls the newly published catalog into the palette at the serialized boundary");
+
+  return settings_popup_ok && models_ok && malformed_ok && theme_ok && local_theme_ok && keybindings_ok && backend_help_uses_request_copy && bare_ok &&
+         trust_catalog_refreshed;
 }
 
 // Exercise one rendering case on the runner-initialized application screen and report its original expectation.
@@ -2883,6 +2918,15 @@ void run_tui_composer_rendering_tests_part_4()
   directories_frontend.set_directories("/workspace/root", "/workspace/root/nested", {"/writable/changed-only"});
   auto const metadata_only_workspace = directories_frontend.workspace_root_metadata();
   auto const metadata_only_current = directories_frontend.current_directory_metadata();
+  directories_frontend.set_directories("/workspace/root", "/workspace/root/nested", {"/writable/changed-only"});
+  auto const identical_workspace = directories_frontend.workspace_root_metadata();
+  auto const identical_current = directories_frontend.current_directory_metadata();
+  auto const consumed_workspace = directories_frontend.workspace_root_metadata();
+  auto const consumed_current = directories_frontend.current_directory_metadata();
+  expect(identical_workspace == std::pair<std::string, bool>{"/workspace/root", false} &&
+             identical_current == std::pair<std::string, bool>{"/workspace/root/nested", false} && consumed_workspace == identical_workspace &&
+             consumed_current == identical_current,
+         "identical directory writes consume dirty state without changing either independently refreshed display");
   tui_test_support::TuiFrontEndFixture replacement_directories_frontend;
   auto const fixture_workspace = std::filesystem::path(replacement_directories_frontend.workspace_root_metadata().first);
   static_cast<void>(replacement_directories_frontend.current_directory_metadata());
@@ -2921,6 +2965,11 @@ void run_tui_composer_rendering_tests_part_4()
   auto const unchanged_branch = branch_frontend.git_branch_metadata();
   branch_frontend.set_git_branch("feature/initial");
   auto const changed_branch = branch_frontend.git_branch_metadata();
+  branch_frontend.set_git_branch("feature/initial");
+  auto const identical_branch = branch_frontend.git_branch_metadata();
+  auto const consumed_branch = branch_frontend.git_branch_metadata();
+  expect(identical_branch == std::pair<std::string, bool>{"feature/initial", false} && consumed_branch == identical_branch,
+         "identical git-branch writes consume dirty state without changing the display");
   auto const replaced = branch_frontend.replace_session_with_git_branch("feature/replacement");
   auto const replacement_branch = branch_frontend.git_branch_metadata();
   expect(initial_branch.first.empty() && initial_branch.second && unchanged_branch.first.empty() && !unchanged_branch.second &&

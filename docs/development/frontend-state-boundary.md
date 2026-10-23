@@ -1,10 +1,120 @@
 # Frontend State Boundary
 
-This is a descriptive maintainer reference for the interactive, history and service
-interfaces retained during the transition to `UnlockedData` and frontend
-projections. It records existing contracts and dependencies, not a new popup,
+Ordinary backend facts have one canonical owner and registered frontend
+projections. Appearance and interaction state belongs to the TUI thread.
+This reference describes both that boundary and the precise interactive,
+history and service interfaces retained alongside it. It is not a new popup,
 history or public C++ API. See the [codebase guide](codebase-guide.md#frontend)
-for the frontend module's ordinary display-state responsibilities.
+for the frontend module's responsibilities.
+
+## Ownership classes
+
+| Class | Owner and meaning | Boundary |
+| --- | --- | --- |
+| B | Backend-affecting facts that are or may become visible | The seven reviewed canonical wrappers below, observed through registered projections. A dirty flag invalidates a cache; it does not confer authority. Catalogs and todos remain pending-review transports, not additional wrappers. |
+| U | Pure appearance and interaction | TUI-thread-local theme, bindings, layout, focus, selection, previews and editable drafts. No `UnlockedData` or new mutex. Only the submitted string and explicitly captured request parameters cross the submit boundary. |
+| D | Deferred interaction, historical content or service | Existing permission/question/plugin exchanges, history pickers, streaming content, subagent/branch operations, on-demand popups and image/editor/Mermaid services. Their existing authority, ordering and synchronization remain necessary. |
+| I | Immutable initialization | `app_version`; no change tracking or canonical session copy. |
+| A | Action outcome or control | Success/error, correlated status text, quit and committed-session identity reads. An action result does not deliver the ordinary current state. |
+
+The no-configured-primary definition is named `none`; it is not inferred from
+model identity. Explicit agent selection resolves an actual configured definition.
+The composer label and the next normal request use the same selected-agent
+authority; inspector focus and model-picker previews cannot change that authority.
+Failed prompt reconstruction remains execution-blocking until recovery, distinct
+from a legitimate empty definition-specific prompt.
+
+## Canonical inventory
+
+Alias locations are repository paths; they are deliberately not packaged-doc
+links. The first six members belong to `Session_aggregate_base` in
+`src/ava/app/runtime/Session.h:65-72`; the seventh belongs to its `store`.
+Projection files are under `src/ava/frontend/`, with the named class in matching
+`.h`/`.cxx` files.
+
+| Alias declaration | Canonical member and writers | Projection and refresh accessors | Exact copy versus derivation |
+| --- | --- | --- | --- |
+| `src/ava/app/runtime/AgentSelection.h:30`: `AgentSelection_ts` | `agent_selection_`; `Session::open`, `apply_trust_prompt_state_and_refresh`, `replace_with` | `AgentSelection`: `agent_refresh`, `provenance_refresh`, `tool_preset_refresh` | Exact copies of `selected_primary_agent.name`, `.provenance`, `.tool_preset` only. No prompt body, definition path or fabricated model override. Enum labels are derived. |
+| `src/ava/app/runtime/Directories.h:20`: `Directories_ts` | `directories_`; `Session::open` (including `open_at` inputs) and `replace_with` | `Directories`: `workspace_root_refresh`, `current_directory_refresh` | Whole `Directories`, including additional writable directories. Display paths derive from `workspace_dir` and `current_dir` separately; writable-directory-only changes need not change either label. |
+| `src/ava/app/runtime/GitBranch.h:11`: `GitBranch_ts` | `git_branch_`; `Session::open`, `refresh_git_branch`, `replace_with` | `GitBranch`: `git_branch_refresh` | Exact observed string; empty means no branch observed. Backend observation retains the startup/action/completion cadence. Rendering does no Git or filesystem work. |
+| `src/ava/app/runtime/ModelSelection.h:31`: `ModelSelection_ts` | `model_selection_`; `Session::open`, model/reasoning mutation methods, scoped-model commands, `replace_with` | `ModelSelection`: `model_refresh`, `provider_refresh`, `reasoning_refresh`, `context_window_tokens_refresh` | Whole `ModelSelection::model` (`ModelInfo`) and optional `reasoning`, copied together. Model/reasoning labels are derived; provider and numeric window come from that copy. The optional scoped cycle remains backend authority and is not copied into a new scope projection. |
+| `src/ava/app/runtime/ResolvedPromptState.h:24`: `PromptModeAndContextSources_ts` | `resolved_prompt_state_.mode_and_context_sources`; `Session::open`, `apply_prompt_state`, model/trust prompt reconstruction, `replace_with` | `PromptModeAndContextSources`: `mode_refresh`, `context_source_count_refresh` | Exact mode plus derived `context_sources.size()` under one guard. No context vector, assembled prompt, or duplicate backend count. Zero is known empty. |
+| `src/ava/session/Stats.h:70`: `Stats_ts` | `session_stats_`; `refresh_session_statistics` in `SessionStatisticsPublication.cpp`, startup and `replace_with` | `SessionStats`: `token_count_refresh`, `contex_percentage_refresh` (current spelling) | Whole `Stats`, including cumulative provider usage and separate active-history/system-prompt estimates. Saturating active total, compact text and percentage are derived caches. Unknown estimates stay unknown. Exact total changes can change percentage without changing compact text; model-window changes also refresh percentage independently. |
+| `src/ava/session/session_store.h:97`: `SessionStoreOptions_ts` | `store.options_`; `SessionStore` constructors/copy/move assignment and session replacement | `SessionIdentity`: `session_id_refresh`, `session_path_refresh` | Whole options copy; session ID is exact, path is derived by `session_path_for_options`. Independently consumed ID/path display changes are not the committed-transition control signal. |
+
+`FrontEnd::register_frontend_data` registers the seven final addresses before
+typed `initialize_frontend_state` initializes projections. `TuiFrontEnd::data_changed`
+routes each registered index. A write guard notifies after unlocking, even for
+an identical write. Each projection clears dirty atomically before reading,
+retains pending changes independently for its exposed fields, and suppresses
+redisplay for equal displayed values. Refresh results must not escape the
+frontend's lifetime or be treated as backend write authority.
+
+Changed flags have the implemented single-consumer ownership, not independent
+subscriptions for every renderer. In particular `SessionStats` consumes the model
+window notification when the two projections are connected. Other model string
+refreshes do not consume it. Registered assignment preserves the destination
+address/index and mutex; detached construction remains unregistered.
+
+## Seam contract
+
+`src/ava/tui/runtime.h` defines the following complete `TuiRuntimeOptions`
+field set. Rows group fields only when their ownership and delivery contract match.
+Classes describe payload meaning, not merely the file containing a callback.
+
+| Fields | Class | Contract |
+| --- | --- | --- |
+| `app_version` | I | Immutable build label. |
+| `initial_status` | U/A | Startup diagnostics, not a canonical status register. |
+| `initial_transcript` | D | One-time onboarding/content input. |
+| `slash_commands`, `slash_catalog_generation`, `file_references`, `workspace_catalog_generation`, `initial_todos` | B, retained transport | Initial hydration of pending-review catalog/todo domains. |
+| `initial_display_settings`, `key_bindings` | U | Local effective settings and bindings. |
+| `mermaid_render` | D/U | Retained worker bridge plus local configuration parameters. |
+| `read_committed_session_id` | A | Narrow application-owned identity read outside the UI lock, only at serialized boundaries. |
+| `read_catalog_delivery`, `read_committed_todos` | B, retained transport | Pull and immediately apply at serialized non-quit action/completion boundaries, never during render. |
+| `read_startup_overview`, `read_project_trust` | D | Owning filtered popup DTOs, read once per popup open; not ordinary boundary refreshes. |
+| `create_active_run_queues`, `on_submit` | D/A | Existing bound queue and submit/content protocol, without ordinary state fields. |
+| `on_attach_image`, `on_paste_clipboard_image`, `on_external_editor`, `on_load_image_attachment` | D | Validated service results; optional absence, errors and replacement content remain distinct. |
+| `on_toggle_mode` | A | `VoidResult`; display comes from canonical prompt metadata, including the sidebar mode. |
+| `on_cycle_reasoning`, `on_cycle_model` | A | `Result<std::string>` feedback, not authoritative labels. |
+| `on_reload_key_bindings` | U | `Result<TuiKeyBindings>` for local application. |
+| `on_reload_display_settings`, `on_maybe_reload_display_settings`, `on_local_display_settings_action` | U | Local effective results; poll absence means unchanged, presence means applied even when displayed values match, error preserves last-good state. |
+| `model_selector_view`, `reasoning_selector_view`, `scoped_model_selector_view`, `session_selector_view` | D | Retained on-demand views; no eager model/scope subscription. |
+| `list_subagents`, `inspect_subagent`, `cancel_subagent`, `promote_subagent` | D | Owner-bound hidden IDs, historical inspector frames and narrow control outcomes. |
+| `on_open_fork_user_turn_selector`, `on_open_copy_user_turn_selector`, `on_read_user_turn_text` | D | Authorized history picker/exact-text access. |
+| `on_session_selector_sort_cycle`, `on_session_selector_named_filter_toggle`, `on_session_selector_path_display_toggle`, `on_session_selector_archived_filter_toggle`, `on_session_selector_label_timestamp_toggle` | U, retained popup path | Existing selector controls and view delivery, not new canonical domains. |
+| `on_session_selector_archive`, `on_session_selector_unarchive` | A/D | Validated persistence actions retaining popup results. |
+| `on_session_selector_branch_parent`, `on_session_selector_branch_child`, `on_session_selected`, `on_fork_user_turn_selected` | A | `Result<std::string>` feedback; reconcile committed identity separately before retained pulls. Preserve post-commit warnings and error-path synchronization. |
+| `on_branch_summary_prepare`, `branch_summary_snapshot`, `on_branch_summary_confirm`, `on_branch_summary_cancel`, `on_branch_summary_refresh_catalog` | D | Existing generation-bound confirmation/status/catalog protocol. |
+| `remember_permission_rule` | D | Permission-rule authority/result correlation. |
+| `on_settings_selected`, `on_model_selected`, `on_reasoning_selected` | A | `Result<std::string>` feedback; backend validates and publishes, frontend refreshes. Local settings actions use the separate local path. |
+| `on_scoped_model_toggled`, `on_scoped_model_enable_all`, `on_scoped_model_clear_all`, `on_scoped_model_toggle_provider`, `on_scoped_model_reorder`, `on_scoped_model_save` | D | Existing scoped-model popup/persistence contracts, including prior-view arguments. |
+| `on_before_tui_shutdown` | D | Existing cancel/join barrier while curses is alive. |
+
+`TuiSubmitResult` retains only `quit`, `ordinary_turn_committed`, `output`,
+`tool_timeline`, `ordinary_turn_request_ids`, `local_command_result`,
+`conversation_output` and `conversation_tool_timeline`. These are outcomes,
+attribution and content, not an ordinary-state bundle. The old bulk type,
+submit-state member, snapshot-returning actions and apply helpers are removed.
+
+`TuiCatalogDelivery` contains just the two vectors and paired optional
+generations. A repeated present generation retains current values, even when
+the vector is empty because unchanged data was omitted. A new or absent
+generation applies the vector, including a genuinely empty catalog. Pull and
+apply form one synchronous step, so constructing a delivery is not separately
+mistaken for application. There is no claim of multi-subscriber delivery.
+Local completion hints are recomposed on actual source changes.
+
+Todo hydration keeps its former cadence except on quit. Completion hydration
+now runs on the TUI thread; this still loads retained history and is not a
+canonical todo publication implementation. No catalog/todo wrapper is approved
+by this cutover. General history access remains a separate design.
+
+Presentation transitions compare the committed identity, independently of
+consumed display flags. Two replacements before one boundary produce one reset
+to the final identity. An A-to-B-to-A round trip before an A-bound presentation
+boundary produces no reset: the seam has no backend generation. Existing
+request/session correlation rejects stale active-run content separately.
 
 ## Retained interfaces
 
@@ -84,3 +194,155 @@ TUI invokes it outside the UI lock before applying the committed-session
 transition. Observed Git-branch text and a branch-summary confirmation operation
 are different contracts. Neither a display refresh nor a local preview grants
 permission to perform the latter.
+
+## Guard
+
+`tests/frontend_state_boundary_test.py` is the only source-text test for this
+boundary. CTest registers `ava_tests.frontend_state_boundary` (`--source`) and
+`ava_tests.frontend_state_boundary_self_test` (`--self-test`), each with a
+15-second timeout and bytecode generation disabled. It scans C++ `.h`, `.hpp`,
+`.cpp` and `.cxx` files, not historical documentation or its own policy literals.
+It strips comments before checking declarations/identifiers.
+
+| Rule | Exact scope and enforcement | One extension point |
+| --- | --- | --- |
+| Seam | Parse the bodies of `TuiRuntimeOptions` and `TuiSubmitResult` in `src/ava/tui/runtime.h`. Reject unrecognized declarations and non-function members outside the reviewed name sets. Callback return/parameter types cannot name a `*Snapshot` except `TuiBranchSummarySnapshot`, `StartupOverviewSnapshot`, `ProjectTrustSnapshot`; this also rejects composer/sidebar and renamed ordinary snapshot payloads. | `SEAM_FIELDS` for reviewed data fields; `RETAINED_CALLBACK_SNAPSHOTS` only for an explicitly approved retained protocol type. |
+| Removed ordinary paths | Reject `TuiRuntimeStateSnapshot`, `state_snapshot`, `apply_runtime_state_snapshot`, `TuiKeyBindingReloadResult`, `refresh_token_status` in `src/ava/tui`, `src/ava/app`, `src/ava/frontend`, `tests`. In `src/ava/tui` additionally reject `refresh_session_statistics`, `compute_session_stats`, `estimate_active_context_tokens`, `read_authority`, `observe_git_branch`, `refresh_git_branch`. | `BANNED_IDENTIFIERS` and `TUI_BACKEND_IDENTIFIERS`, with their existing explicit directory scopes in `check_tree`. |
+| Session seam | Only `src/ava/tui/TuiFrontEnd.h` and `src/ava/tui/TuiFrontEnd.cpp` may use `session_ts`, `SCOPED_CRITICAL_AREA` or `app::runtime::Session` within `src/ava/tui`. | `SESSION_SEAM_FILES`; expansion requires review of the actual access, not a directory exemption. |
+| Reviewed canonical domains and lock-free appearance | Exactly the seven path/alias/value triples above under `src/ava/app/runtime` and `src/ava/session`; additional, missing, duplicate, changed-value and non-alias instantiations fail. No `UnlockedData<`, `std::mutex` or `std::shared_mutex` in `src/ava/app/tui/display_reload.*`, `tui_display_settings.*`, `src/ava/tui/theme.*`, `keybindings.*`. | `CANONICAL_WRAPPERS` for an individually approved domain; `UI_ONLY_STEMS` for another local-only owner. |
+| No protocol wrappers | No `UnlockedData<` anywhere under `src/ava/tui` or `src/ava/app/tui`. | The two explicit prefixes in `check_tree`; do not exempt a deferred directory to add pending-request state. |
+
+The self-test mutates a valid miniature tree and requires a negative case for
+each rule, including every banned identifier and both UI directories. Positive
+fixtures retain local composer/sidebar snapshots, the three popup/operation
+snapshot types, `SubagentInspectorFrame`, the sanctioned Session seam, backend
+statistics computation, and the Mermaid service mutex. The latter is in
+`src/ava/app/tui/mermaid_tui_bridge.h`, outside the UI-only stems; permission,
+question, plugin and active-run synchronization is likewise not subject to a
+blanket mutex ban.
+
+This is a scoped syntactic guard, not a C++ type/alias resolver or a proof that
+arbitrary renamed payloads have correct ownership. Review new contracts by
+effect and keep behavioral tests below. The separate unchanged
+`tests/module_dependency_rules_test.py` enforces include direction with zero
+backend exceptions; the plugin and session-read authority inventories remain
+independent checks. Adding a domain requires its canonical-type approval,
+writer/consumer inventory, behavior test and this document before changing an
+allowlist.
+
+## Matrix reconciliation
+
+The following tables close audit 02 sections B/C/D and the reconciliation
+matrix sections 4/5/8. Historical proposed removals are not current requirements:
+the later decisions retain on-demand trust/overview/model/scope popups, the
+other enumerated interactions, and pending-review catalog/todo transports.
+“Migrated” means the old ordinary-state transfer is gone; “local” means U
+ownership; “retained” is an explicit unchanged boundary, not an unfinished
+canonical implementation.
+
+### Behavioral evidence key
+
+All paths below are repository paths. These names identify behavior assertions,
+not source-shape assertions and not an unconditional claim that any particular
+test invocation ran.
+
+| Key | Tests or terminal scenarios and the behavior they exercise |
+| --- | --- |
+| Projection | `tests/tui_runtime_state_tests.cpp`: `test_frontend_data_changed_routes_each_canonical` checks initial delivery, isolated canonical writes and once-only display consumption. `tests/app_runtime_model_tests.cpp`: `test_unlocked_data_access_and_notifications` checks unlocked notification and registered assignment; `test_frontend_refresh_observes_write_before_notification` gates a canonical writer and delayed notification, then checks the next write/refresh. |
+| Identity | `tests/tui_composer_rendering_tests.cpp`: `run_tui_composer_rendering_tests_part_4` checks initial/identical/replacement identity, prompt, directory and Git values, same-size context counts, distinct workspace/current paths in the sidebar drawer, and sanitized rendering. `tests/app_runtime_startup_tests.cpp`: `test_app_runtime_open_session_and_context_prompt`, `test_app_runtime_replacement_open_context`, `test_app_runtime_git_branch_observation_and_refresh` exercise backend path/context and observed-branch behavior. |
+| Agent | `tests/tui_composer_rendering_tests.cpp`: `test_selected_agent_projection_and_rendering` checks canonical labels, independent metadata flags, no-op writes, replacement and detached initialization. `tests/app_runtime_prompt_tests.cpp`: `test_default_primary_is_canonical_builtin_ava_without_duplicate_prompt`, `test_app_run_prompt_isolates_ambient_extensions`, `test_primary_agent_tool_iteration_limit_is_applied_to_runtime_loop`, `test_project_primary_revocation_removes_authority_without_broadening_tools` check the actual next request's selected instructions/tools, default `none` and trust-driven authority changes. |
+| Statistics | `tests/tui_selector_tests.cpp`: `run_tui_selector_tests` checks model/string/numeric flag ordering, compact versus exact totals and model-window-only percentage changes. `tests/app_runtime_startup_tests.cpp`: `test_app_token_status_tracks_compaction_projection` asserts one initial publication, one recomputation for batched mutations and no additional work on unchanged `/exit`; `test_app_statistics_invalidate_partial_append_recovery` and `test_app_statistics_reject_stale_work_across_session_replacement` check mutation/replacement safety. |
+| Transition | `tests/tui_composer_rendering_tests.cpp`: `test_changed_session_snapshot_resets_presentation` checks full reset, unchanged identity, two replacements before one boundary and A-to-B-to-A non-reset; `test_active_run_session_transition_discards_prior_session_events` checks old content/event/queue/finish discard and zero catalog/todo pulls on quit. `tests/events_tests.cpp`: `test_interactive_tui_stops_follow_ups_at_session_transition`. |
+| Catalog | `tests/tui_composer_rendering_tests.cpp`: `test_local_slash_completion_composition_tracks_current_ui_facts` checks paired delivery, repeated-generation no-op, new-generation empty replacement and local-hint recomposition. `test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload` checks a trust-action completion reaches the palette. `tests/app_runtime_catalog_tests.cpp`: `test_application_catalog_coordinator_publishes_coherent_generation`, `test_application_catalog_cache_reuses_workspace_and_session_indexes`, `test_application_catalog_current_session_incremental_refresh`. |
+| Local | `tests/tui_composer_rendering_tests.cpp`: `test_display_settings_reload_poll_outcome_and_preview_staging`, `test_display_settings_reload_rebuilds_open_startup_overview`, `test_local_overview_hint_refresh_is_idempotent_and_bounded`, `test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload`; `tests/app_runtime_command_ui_tests.cpp`: `app_command_dispatcher_ui_part`. Scenarios `nested_settings_preview`, `main_editor_input`, `theme_env`, `theme_persisted` exercise persistence, previews and effective keybinding dispatch. |
+| Popup | `tests/tui_selector_tests.cpp`: `run_tui_selector_tests` checks current/default/disabled model and reasoning semantics, branch/subagent views and controls. `tests/app_runtime_command_ui_tests.cpp`: `test_startup_overview_snapshot_bounds_order_redaction`, `test_startup_overview_bounded_lower_bound_counts`. Scenarios `main_models_selectors`, `main_session_mgmt`, `startup_overview`, `main_startup_trust_keybinds` exercise retained interactive flows. |
+| Content | `tests/tui_command_output_tests.cpp`: `test_catalog_driven_local_command_transcript_invariant`, `test_unauthorized_command_event_tool_merge`, `test_buffered_runtime_event_completion_settlement`; `tests/tui_runtime_state_tests.cpp`: `test_tui_todowrite_event_state_and_snapshot_hydration`, `test_tui_mixed_runtime_event_queue_preserves_order_and_context`. Scenarios `active_run`, `restore_followup`, `streaming_scroll`. |
+| History | `tests/app_runtime_session_command_tests.cpp`: `test_app_session_fork_from_entry_and_user_turns`, `test_app_session_branch_commands`, `test_app_session_new_resume_commands`, `test_app_session_metadata_commands`; scenario `main_session_mgmt`. These retain validated IDs, exact-text/history access and committed navigation, rather than asserting a new history subscription. |
+| Initialization | `tests/tui_runtime_state_tests.cpp`: `test_runtime_initialization_preserves_local_and_retained_inputs` checks version, diagnostics, onboarding and canonical mode refresh for composer/sidebar. `tests/app_runtime_prompt_tests.cpp`: `test_app_first_run_auth_onboarding`. |
+| Protocol | The per-interface regression anchors in **Retained interfaces**, including permission/question/plugin/subagent/branch/Mermaid and their terminal scenarios. Examples: `test_tui_plugin_ui_coordinator_ordering_limits_and_lifecycle` in `tests/plugin_ui_tests.cpp`, `test_explicit_confirmation_success_and_existing` and `test_shutdown_is_safe_in_every_nonterminal_phase` in `tests/branch_summary_coordinator_tests.cpp`, `test_tui_bridge_epoch_reload_and_callback_lifetime` in `tests/mermaid_render_coordinator_tests.cpp`. |
+
+The gated refresh test proves commit-before-notification ordering, a consumed
+no-op notification and a subsequent write observed on the next refresh. It
+does not instrument or claim a pause inside the concrete value-copy expression.
+The routing test observes public projection changes, not private dirty bits.
+
+### Ordinary inputs: audit 02 B and matrix 4
+
+| Historical fields | Final disposition | Evidence |
+| --- | --- | --- |
+| `mode`, `session_id`, `session_path`, `workspace` | Migrated B: prompt, identity and distinct directory projections; control identity remains A. | Identity, Transition, Initialization |
+| `git_branch` | Migrated B: backend-observed string, no render-time observation. | Identity, Projection |
+| `context_source_count` in options, old bundle and submit result | Migrated B: nested prompt metadata vector size, including known zero. | Identity, Projection |
+| `initial_status` and action `status` | Local U startup feedback and migrated A action strings; no shared status domain. | Initialization, Local, Transition; `main_models_selectors` |
+| `app_version` | Retained I. | Initialization |
+| `initial_transcript` | Retained D onboarding/content. | Initialization, Content |
+| `slash_commands`, `slash_catalog_generation` | Retained B pending-review delivery plus local U completion hints; no canonical catalog type introduced. | Catalog; `main_slash_completions` |
+| `file_references`, `workspace_catalog_generation` | Retained B pending-review delivery; generation distinguishes omitted unchanged from genuinely empty. | Catalog |
+| `custom_themes` | Local U discovery, validation, previews and labels. | Local |
+| `project_trust` | Retained D on-demand filtered popup data; backend trust authority stays unwrapped. Historical removal proposal superseded. | Popup, Local, Agent |
+| `initial_todos`, `todos` | Retained B history hydration and D live event delivery; no invented todo wrapper. | Content, Transition |
+| `show_images`, `image_width_cells`, `cursor` | Local U effective display state. | Local; `main_paste_scrollback_attach` |
+| `mermaid_config_epoch`, `mermaid_enabled`, bridge `config_epoch`/`enabled` | Local U preferences and retained D worker-correlation parameters. | Local, Protocol; `mermaid` |
+| `startup_overview` | Retained D filtered on-demand input with local U presentation/hints; no eager resource domain. | Popup, Local |
+| bridge `enqueue`, `cancel`, `drain` | Retained D service operations. | Protocol |
+| `key_bindings` | Local U owner/reload; retained immutable request copy for help compatibility. | Local |
+
+### Callbacks: audit 02 C and matrix 5
+
+This also records callbacks introduced by the cutover. Exact field names and
+result contracts are enumerated in **Seam contract** above.
+
+| Callback rows | Final disposition | Evidence |
+| --- | --- | --- |
+| Former statistics-refresh callback | Migrated B backend publication and frontend observation; callback removed. | Statistics |
+| `create_active_run_queues`; `on_submit` | Retained D/A controls and content; ordinary state/count members removed. | Content, Transition |
+| `on_attach_image`; `on_paste_clipboard_image`; `on_load_image_attachment`; `on_external_editor` | Retained D validated services; draft remains local U. | Protocol; `main_editor_input`, `main_paste_scrollback_attach` |
+| `on_toggle_mode`; `on_cycle_reasoning`; `on_cycle_model` | Migrated A success/error/feedback plus B projections. | Initialization, Statistics; `main_models_selectors` |
+| `on_reload_key_bindings`; `on_reload_display_settings`; `on_maybe_reload_display_settings`; `on_local_display_settings_action` | Local U, including explicit applied/unchanged/error semantics. | Local |
+| `model_selector_view`; `scoped_model_selector_view`; `reasoning_selector_view`; `session_selector_view` | Retained D interactive lists; committed facts still use B projections. | Popup, Catalog |
+| `list_subagents`; `inspect_subagent`; `cancel_subagent`; `promote_subagent` | Retained D ownership/status/control/content protocol, not active-agent authority. | Protocol, Popup; `subagent_workspace` |
+| `on_open_fork_user_turn_selector`; `on_open_copy_user_turn_selector`; `on_read_user_turn_text` | Retained D authorized historical retrieval. | History |
+| Session-selector sort, named-filter, path-display, archived-filter and label-timestamp callbacks | Local U controls in the retained popup path; no replacement canonical catalog approved. | Popup; `main_session_mgmt` |
+| `on_session_selector_archive`; `on_session_selector_unarchive` | Retained A/D persistence action and popup result. | History, Popup; `main_session_mgmt` |
+| `on_session_selector_branch_parent`; `on_session_selector_branch_child`; `on_session_selected` | Migrated A feedback and committed transition; D selection remains. | Transition, History |
+| `on_branch_summary_prepare`; `branch_summary_snapshot`; `on_branch_summary_confirm`; `on_branch_summary_cancel`; `on_branch_summary_refresh_catalog` | Retained D generation-bound exchange, including refresh request. | Protocol, Popup; `branch_summary` |
+| `remember_permission_rule` | Retained D permission authority/result. | Protocol; `main_permission_flow` |
+| `on_settings_selected` | Migrated A backend trust actions; appearance/binding actions use local U path. | Local, Catalog; `nested_settings_preview` |
+| `on_model_selected`; `on_reasoning_selected` | Migrated A feedback and B canonical model/reasoning. | Statistics, Popup; `main_models_selectors` |
+| `on_fork_user_turn_selected` | Migrated A feedback and committed identity; retained D picker and post-commit warning handling. | History, Transition; `main_session_mgmt` |
+| Scoped-model toggle, enable-all, clear-all, provider-toggle, reorder and save callbacks | Retained D popup/persistence, including prior-view arguments; no scope projection. | Popup; `main_models_selectors` |
+| `on_before_tui_shutdown` | Retained D lifecycle barrier. | Protocol and complete terminal shutdown wave |
+| `read_committed_session_id` | Retained A control independent of display flags. | Transition |
+| `read_catalog_delivery`; `read_committed_todos` | Retained pending-review B pulls, immediately applied except on quit. | Catalog, Transition |
+| `read_startup_overview`; `read_project_trust` | Retained D on-demand popup reads. | Local, Popup |
+
+### Nested results: audit 02 D and matrix 5
+
+| Historical member or nested interface | Final disposition | Evidence |
+| --- | --- | --- |
+| Submit `quit` | Retained A; no catalog/todo pull on quit. | Transition, Statistics |
+| Submit `ordinary_turn_committed`, `ordinary_turn_request_ids` | Retained D/A attribution; absent IDs do not authorize conversation events. | Content |
+| Submit `output`, `tool_timeline` | Retained D fallback/streamed content. | Content |
+| `local_command_result.output`, `.tool_timeline` | Retained D local-only content, not conversation authority. | Content |
+| `conversation_output`, `conversation_tool_timeline` | Retained D separately attributed fallback. | Content |
+| Submit context count and bulk-state member | Migrated B count; obsolete bundle removed, retained domains pulled separately. | Identity, Transition, Catalog, Guard |
+| Old keybinding reload wrapper and its broad state member | Local U binding reload, no backend publication. | Local, Guard |
+| `TuiActiveRunQueues`: `active_request_id`, queue/take/skip/mark/restore/nonblocking-command/finish operations; queued/restored message records | Retained D exact queue order and session/request binding. | Content; `test_interactive_run_queue_runs_follow_up_lifecycle`, `test_interactive_run_queue_restores_latest_pending_message` in `tests/events_tests.cpp` |
+| `TuiSubmitContext`: request identity, permission/question resolvers, event sink, cancellation, steering/follow-up operations, launch sink, plugin endpoint, attachments | Retained D request/exchange/content authority. | Content, Protocol |
+| `TuiSubmitContext::key_bindings` | Retained immutable U compatibility data captured before worker launch. | Local |
+| Mermaid bridge/request/completion identity, source/text, accepted and epoch | Retained D bounded service; local U preference owner. | Protocol |
+| `TuiBranchSummarySnapshot`: generation, phase, labels, optional eligibility/failure/append codes, `refresh_required` | Retained D operation state, explicitly not an ordinary-state replacement. | Protocol, Popup |
+
+### Acceptance areas: matrix 8
+
+| Area | Closure evidence and limits |
+| --- | --- |
+| Reference projection contract | Projection, Identity and Statistics cover initialization, no-op writes, independent pending fields, controlled notification ordering and stable registered assignment/replacement. No multi-subscriber semantics are asserted. |
+| Effective agent | Agent covers canonical default/selected/trust state, rendered label and the next provider request's instructions/tool behavior. No agent-switching product feature or model override is invented. |
+| Directories | Identity covers distinct root/current values, startup/replacement and sidebar-drawer rendering, with backend path authority unchanged. |
+| Local state | Local covers reload/persistence/preview behavior; Guard restricts lock/wrapper ownership in local-only files. Existing cross-thread services remain exceptions. |
+| Session transitions | Transition and History cover shared reset, same identity, coalesced replacements, stale completion/follow-up discard and retained navigation. Intermediate unobserved identities do not acquire a new generation. |
+| Catalogs | Catalog and Popup cover paired generation application, no-op/empty semantics, cache work avoidance, validated choices and local hints. Canonical catalog/todo types remain pending review; history errors still collapse to the existing empty todo result. |
+| Statistics | Statistics covers separate estimates, compact/exact changes, model-window dependency, compaction, stale work rejection and bounded `/exit` publication. Rendering has no statistics-computation callback. |
+| Deferred interfaces | Protocol and the retained-interface table preserve exact authority, content and cancellation, verified by focused suites and opt-in terminal scenarios. |
+| Boundary | Guard checks the scoped syntactic invariants and unchanged module/authority guards enforce their own contracts. Behavioral assertions, not a blanket `Snapshot` ban, establish equivalence. |

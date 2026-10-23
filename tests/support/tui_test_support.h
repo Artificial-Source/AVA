@@ -66,6 +66,8 @@ class TuiFrontEndFixture final
   void set_prompt_metadata(ava::agent::Mode mode, std::size_t context_source_count);
   // Notify the frontend without changing canonical identity values.
   void touch_session_identity();
+  // Change only the canonical store identity, without replacing unrelated registered values.
+  void set_session_identity_metadata(std::string session_id);
   // Replace all three bounded fields of the canonical selected-agent metadata.
   void set_selected_agent_metadata(std::string name, ava::agent::AgentDefinitionProvenance provenance, ava::agent::AgentToolPreset tool_preset);
   // Notify the frontend without changing canonical selected-agent metadata.

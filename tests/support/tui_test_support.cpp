@@ -185,6 +185,13 @@ void TuiFrontEndFixture::touch_session_identity()
   session_w->store.options().change([](ava::session::SessionStoreOptions&) { });
 }
 
+void TuiFrontEndFixture::set_session_identity_metadata(std::string session_id)
+{
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  session_w->store.options().change(
+      [session_id = std::move(session_id)](ava::session::SessionStoreOptions& options) mutable { options.session_id = std::move(session_id); });
+}
+
 void TuiFrontEndFixture::set_selected_agent_metadata(std::string name, ava::agent::AgentDefinitionProvenance provenance,
                                                      ava::agent::AgentToolPreset tool_preset)
 {

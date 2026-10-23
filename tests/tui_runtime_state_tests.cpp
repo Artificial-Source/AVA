@@ -4,6 +4,7 @@
 #include "ava/event/EventEnvelope.h"
 #include "ava/event/EventEnvelopeContext.h"
 #include "ava/event/RuntimeEvent.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/event_state.h"
 #include "ava/tui/runtime.h"
@@ -15,6 +16,7 @@
 #include "ava/core/result.h"
 
 #include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <cstddef>
 #include <expected>
@@ -2192,8 +2194,87 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
          "boundary refresh replaces todos from committed session history");
 }
 
+void test_frontend_data_changed_routes_each_canonical()
+{
+  tui_test_support::TuiFrontEndFixture fixture;
+  auto& frontend = *fixture.frontend();
+  auto consume = [&]() {
+    // One public display accessor per canonical domain; consume all independently
+    // pending fields as well so later writes cannot inherit initialization flags.
+    std::array<bool, 7> changed{
+        frontend.agent_selection().agent_refresh().changed,       frontend.directories().workspace_root_refresh().changed,
+        frontend.git_branch().git_branch_refresh().changed,       frontend.model_selection().model_refresh().changed,
+        frontend.prompt_metadata().mode_refresh().changed,        frontend.session_stats().token_count_refresh().changed,
+        frontend.session_identity().session_id_refresh().changed,
+    };
+    static_cast<void>(frontend.agent_selection().provenance_refresh());
+    static_cast<void>(frontend.agent_selection().tool_preset_refresh());
+    static_cast<void>(frontend.directories().current_directory_refresh());
+    static_cast<void>(frontend.model_selection().provider_refresh());
+    static_cast<void>(frontend.model_selection().reasoning_refresh());
+    static_cast<void>(frontend.model_selection().context_window_tokens_refresh());
+    static_cast<void>(frontend.prompt_metadata().context_source_count_refresh());
+    static_cast<void>(frontend.session_stats().contex_percentage_refresh());
+    static_cast<void>(frontend.session_identity().session_path_refresh());
+    return changed;
+  };
+  auto const initial = consume();
+  expect(std::ranges::all_of(initial, [](bool changed) { return changed; }), "registration initializes all seven canonical display projections");
+  expect(consume() == std::array<bool, 7>{}, "initial display changes are consumed independently");
+  for (std::size_t domain = 0; domain < 7; ++domain)
+  {
+    switch (domain)
+    {
+      case 0:
+        fixture.set_selected_agent_metadata("route-agent", ava::agent::AgentDefinitionProvenance::Project, ava::agent::AgentToolPreset::ReadOnly);
+        break;
+      case 1:
+        fixture.set_directories("/route/workspace", "/route/workspace/current");
+        break;
+      case 2:
+        fixture.set_git_branch("route-branch");
+        break;
+      case 3:
+        fixture.set_model({.display_name = "Route model"});
+        break;
+      case 4:
+        fixture.set_prompt_metadata(ava::agent::Mode::Plan, 3);
+        break;
+      case 5:
+        fixture.set_active_token_estimates(42'000, 100);
+        break;
+      case 6:
+        fixture.set_session_identity_metadata("route-session");
+        break;
+    }
+    std::array<bool, 7> expected{};
+    expected[domain] = true;
+    expect(consume() == expected, "canonical write changes only its corresponding display projection, domain " + std::to_string(domain));
+    expect(consume() == std::array<bool, 7>{}, "each canonical display notification is consumed once, domain " + std::to_string(domain));
+  }
+}
+
+void test_runtime_initialization_preserves_local_and_retained_inputs()
+{
+  tui_test_support::TuiFrontEndFixture frontend;
+  ava::tui::TuiRuntimeOptions options;
+  options.app_version = "boundary-test-version";
+  options.initial_status = "keybinding load warning";
+  options.initial_transcript = {{.label = "ava", .text = "onboarding instructions"}};
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  expect(presentation.sidebar.version == "boundary-test-version" && presentation.snapshot.status == "keybinding load warning" &&
+             presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().text == "onboarding instructions",
+         "immutable version, startup diagnostics and retained onboarding content survive initialization without backend-state transport");
+  frontend.set_prompt_metadata(ava::agent::Mode::Plan, 2);
+  presentation.refresh_prompt_metadata();
+  expect(presentation.snapshot.mode == "plan" && presentation.sidebar.mode == "plan",
+         "canonical mode refresh updates composer and sidebar together without a returned current-mode label");
+}
+
 void run_tui_runtime_event_state_tests()
 {
+  test_frontend_data_changed_routes_each_canonical();
+  test_runtime_initialization_preserves_local_and_retained_inputs();
   test_tui_event_state_reduces_runtime_events();
   test_tui_retry_activity_settles_and_restores_contextual_hint();
   test_tui_transcript_projection_and_cap_parity();

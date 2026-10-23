@@ -1006,6 +1006,20 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_tests.module_dependency_rules_self_test PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   add_test(
+    NAME ava_tests.frontend_state_boundary
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/frontend_state_boundary_test.py
+            --source ${CMAKE_SOURCE_DIR})
+  set_tests_properties(ava_tests.frontend_state_boundary PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
+    NAME ava_tests.frontend_state_boundary_self_test
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/frontend_state_boundary_test.py
+            --self-test)
+  set_tests_properties(ava_tests.frontend_state_boundary_self_test PROPERTIES TIMEOUT 15 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(
     NAME ava_tests.test_timeout_policy
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_timeout_policy_test.py
