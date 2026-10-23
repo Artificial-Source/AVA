@@ -267,7 +267,7 @@ PluginEventObserverOptions plugin_event_observer_options(runtime::session_ts& un
       },
       .cancel_requested = nullptr,
       .process_scope = session_r->session_process_scope(),
-      .session_id = session_r->store.options_r()->session_id,
+      .session_id = session_r->store.options_session_id_copy(),
       .provider_id = std::move(provider_id),
       .model_id = std::move(model_id),
       .current_dir = session_r->current_dir()};

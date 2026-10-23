@@ -71,9 +71,12 @@ ava::core::Result<runtime::PromptState> select_runtime_prompt_state(runtime::ses
   };
   auto inputs = [&] {
     SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session);
+    // Copy the model before taking the agent-selection guard; a model guard temporary inside the
+    // initializer would nest the two projection locks in the opposite order of the loop setup below.
+    auto model = session_r->model_selection_r()->model;
     auto selection_r = session_r->agent_selection_r();
     return PromptStateInputs{.paths = session_r->paths(),
-                             .model = session_r->model_selection_r()->model,
+                             .model = std::move(model),
                              .workspace_dir = session_r->workspace_dir(),
                              .current_dir = session_r->current_dir(),
                              .include_project_resources = project_resources_trusted(session_r->project_trust()),
@@ -487,12 +490,13 @@ ava::core::Result<ava::agent::AgentLoopResult> run_admitted_prompt(runtime::sess
   std::optional<ava::agent::AgentLoop> loop;
   {
     SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
     std::size_t selected_max_tool_iterations = ava::agent::AgentLoopOptions{}.max_tool_iterations;
     {
       auto agent_selection_r = session_r->agent_selection_r();
       selected_max_tool_iterations = agent_selection_r->selected_primary_agent.max_tool_iterations.value_or(selected_max_tool_iterations);
     }
+    // Hold only the model guard while the loop options are built.
+    runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
     loop.emplace(ava::agent::AgentLoopOptions{
         .workspace_dir = session_r->workspace_dir(),
         .current_dir = session_r->current_dir(),

@@ -401,7 +401,7 @@ void add_backend_argument_completions(std::vector<SlashCommandCatalogItem>& item
                       session_r->workspace_dir(),
                       project_resources_trusted(session_r->project_trust()),
                       session_r->subagent_coordinator(),
-                      session_r->store.options_r()->session_id,
+                      session_r->store.options_session_id_copy(),
                       session_r->anchor_set(),
                       session_r->context_sources()};
   }();

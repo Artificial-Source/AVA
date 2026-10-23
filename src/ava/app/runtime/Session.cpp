@@ -719,12 +719,24 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                                      .diagnostics = diagnostics(),
                                      .mcp_config = mcp_config(),
                                      .provider_catalog = provider_catalog()};
+  // Copy every guarded value in its own statement: a guard temporary inside the aggregate initializer
+  // would stay locked until the whole expression completes and fix a lock order between unrelated
+  // projection mutexes (the store copy below locks the options wrapper itself).
+  // Copy the selected definition into a fresh wrapper without inheriting frontend registration.
+  AgentSelection_ts agent_selection{*agent_selection_r()};
+  // Copy directory configuration without inheriting the source object's frontend registration.
+  Directories_ts directories_copy{*Directories_ts::crat(directories())};
+  // Copy the model selection without inheriting the source object's frontend registration.
+  ModelSelection_ts model_selection{*model_selection_r()};
+  // Copy statistics, including both context estimates, without inheriting frontend registration.
+  session::Stats_ts session_stats{*session_stats_r()};
+  // Copy the branch without inheriting the source object's frontend registration.
+  GitBranch_ts git_branch_copy{*GitBranch_ts::crat(git_branch())};
+  ava::session::SessionStore store_copy = store;
   return Session_aggregate_base{
       .invocation_inputs_ = std::move(detached_inputs),
-      // Copy the selected definition into a fresh wrapper without inheriting frontend registration.
-      .agent_selection_ = AgentSelection_ts{*agent_selection_r()},
-      // Copy directory configuration without inheriting the source object's frontend registration.
-      .directories_ = Directories_ts{*Directories_ts::crat(directories())},
+      .agent_selection_ = std::move(agent_selection),
+      .directories_ = std::move(directories_copy),
       .resolved_prompt_state_ =
           ResolvedPromptState{.readiness = prompt_readiness(),
                               .base_prompt = base_prompt(),
@@ -732,17 +744,14 @@ Session_aggregate_base Session::create_detached_state(ava::session::SessionLease
                               .system_prompt = system_prompt(),
                               .ambient_extension_free_system_prompt = ambient_extension_free_system_prompt(),
                               .mode_and_context_sources = PromptModeAndContextSources{.mode = mode(), .context_sources = context_sources()}},
-      // Copy the model selection without inheriting the source object's frontend registration.
-      .model_selection_ = ModelSelection_ts{*model_selection_r()},
-      // Copy statistics, including both context estimates, without inheriting frontend registration.
-      .session_stats_ = session::Stats_ts{*session_stats_r()},
+      .model_selection_ = std::move(model_selection),
+      .session_stats_ = std::move(session_stats),
       // Detached sessions coordinate publication independently from the source frontend destination.
       .session_statistics_publication_ = std::make_shared<SessionStatisticsPublicationState>(),
-      // Copy the branch without inheriting the source object's frontend registration.
-      .git_branch_ = GitBranch_ts{*GitBranch_ts::crat(git_branch())},
+      .git_branch_ = std::move(git_branch_copy),
       .trust_state_ = trust_state(),
       .resources_ = std::move(session_resources),
-      .store = store,
+      .store = std::move(store_copy),
       .created = created};
 }
 
