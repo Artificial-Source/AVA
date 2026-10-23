@@ -49,25 +49,35 @@ function(ava_cli_isolated_env OUT ROOT)
       TMPDIR TZ AVA_DEBUG_NO_TIMEOUT AVA_DEBUG_NO_TIMEOUT_SECONDS
       LIBCWD_NO_STARTUP_MSGS AVA_NO_DEBUG_OUTPUT AVA_TEST_NAME AVA_DEBUG_OUTPUT_DIR
       LIBCWD_RCFILE_NAME LIBCWD_RCFILE_OVERRIDE_NAME AVA_SESSION_TITLES)
-  execute_process(COMMAND "${CMAKE_COMMAND}" -E environment
-                  OUTPUT_VARIABLE INHERITED ERROR_VARIABLE ENV_ERROR RESULT_VARIABLE ENV_RESULT)
+  # Environment values may contain newlines (exported Bash functions do), so a
+  # textual `cmake -E environment` dump cannot delimit entries safely. Ask
+  # Python for JSON containing names only: values, including credentials, never
+  # enter CMake output or diagnostics.
+  find_program(AVA_CLI_ENV_PYTHON NAMES python3 REQUIRED)
+  execute_process(
+    COMMAND "${AVA_CLI_ENV_PYTHON}" -I -S -c
+            "import json, os; print(json.dumps(list(os.environ), ensure_ascii=True))"
+    OUTPUT_VARIABLE INHERITED_NAMES ERROR_VARIABLE ENV_ERROR RESULT_VARIABLE ENV_RESULT)
   if(NOT ENV_RESULT EQUAL 0)
     message(FATAL_ERROR "Cannot isolate the CLI fixture environment: ${ENV_ERROR}")
   endif()
-  # Extract only the variable names, anchored on the line break that precedes
-  # each one (the dump is prefixed with one so the first line matches too).
-  # Treating the dump as a CMake list would split values on semicolons and
-  # swallow everything after an unbalanced bracket (terminal color settings
-  # contain both), silently keeping later variables in the child environment.
-  string(REGEX MATCHALL "\n[^=\n]+=" NAMES "\n${INHERITED}")
+  string(JSON NAME_COUNT ERROR_VARIABLE JSON_ERROR LENGTH "${INHERITED_NAMES}")
+  if(NOT JSON_ERROR STREQUAL "NOTFOUND")
+    message(FATAL_ERROR "Cannot decode isolated CLI environment names: ${JSON_ERROR}")
+  endif()
   set(UNSETS "")
-  foreach(MATCH IN LISTS NAMES)
-    string(REGEX REPLACE "^\n([^=\n]+)=$" "\\1" NAME "${MATCH}")
-    list(FIND ALLOWLIST "${NAME}" ALLOWED_INDEX)
-    if(ALLOWED_INDEX EQUAL -1)
-      list(APPEND UNSETS "--unset=${NAME}")
-    endif()
-  endforeach()
+  if(NAME_COUNT GREATER 0)
+    math(EXPR LAST_NAME "${NAME_COUNT} - 1")
+    foreach(NAME_INDEX RANGE 0 ${LAST_NAME})
+      string(JSON NAME GET "${INHERITED_NAMES}" ${NAME_INDEX})
+      list(FIND ALLOWLIST "${NAME}" ALLOWED_INDEX)
+      if(ALLOWED_INDEX EQUAL -1)
+        # Preserve one argv element for names containing CMake list syntax.
+        string(REPLACE ";" "\\;" LIST_NAME "${NAME}")
+        list(APPEND UNSETS "--unset=${LIST_NAME}")
+      endif()
+    endforeach()
+  endif()
   list(APPEND UNSETS ${ASSIGNMENTS})
   set(${OUT} "${UNSETS}" PARENT_SCOPE)
 endfunction()

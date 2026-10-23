@@ -617,6 +617,16 @@ add_test(
           -DAVA_EXE=$<TARGET_FILE:ava>
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_package_manager_deferred.cmake)
 
+if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME ava_cli.isolated_env
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_isolated_env_test.py inject
+            ${CMAKE_COMMAND}
+            -DAVA_CLI_ENV_PYTHON=${Python3_EXECUTABLE}
+            -DAVA_CLI_TEST_ROOT=${CMAKE_BINARY_DIR}/cli-isolated-env
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli_isolated_env_test.cmake)
+endif()
+
 ava_add_cli_test(ava_cli.headless_mode_json_alias cli_headless_mode_json_alias.cmake FAKE_PROVIDER)
 ava_add_cli_test(ava_cli.headless_tool_visibility cli_headless_tool_visibility.cmake FAKE_PROVIDER)
 
