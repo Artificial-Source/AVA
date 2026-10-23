@@ -350,8 +350,10 @@ bool test_active_run_session_transition_discards_prior_session_events()
   };
   options.read_committed_todos = [&]() {
     ++todo_pulls;
-    return backend_session_replaced ? std::vector<ava::tui::TodoItem>{{.id = "new-todo", .content = "NEW TODO", .status = ava::tui::TodoStatus::Pending}}
-                                    : std::vector<ava::tui::TodoItem>{};
+    std::vector<ava::tui::TodoItem> todos;
+    if (backend_session_replaced)
+      todos.push_back({.id = "new-todo", .content = "NEW TODO", .status = ava::tui::TodoStatus::Pending});
+    return todos;
   };
   options.create_active_run_queues = [&finish_called](ava::event::EventEnvelopeSink sink) {
     auto queued = ava::event::EventEnvelope{};
