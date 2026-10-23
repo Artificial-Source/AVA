@@ -243,6 +243,10 @@ the runtime refreshes it. `session/` wraps its options and statistics in
 **Does not belong here:** terminal rendering, input handling, protocol framing,
 or any runtime mutation; frontends refresh and render, the runtime owns changes.
 
+**Retained exchanges:** the [frontend state boundary](frontend-state-boundary.md)
+records the interactive, history, and service contracts that remain separate
+from ordinary display-state projections.
+
 **Nearest tests:** `app_runtime_model_tests.cpp` and the TUI frontend coverage in
 `tui_*_tests.cpp`.
 
