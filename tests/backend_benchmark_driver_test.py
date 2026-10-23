@@ -227,6 +227,9 @@ class BenchmarkDriverTests(unittest.TestCase):
         self.assertTrue(all(harness.BenchmarkTestLoader.is_process_test(name) for name in harness.LIVE_GIT_TESTS))
         self.assertTrue(expected_general_method_names().isdisjoint(harness.LIVE_GIT_TESTS))
 
+    # Inspect effective CTest registration, not source spelling, to keep ordinary
+    # process and smoke suites parallel while preserving real fixture isolation.
+    # Standalone runs without a configured build skip this registration check.
     def test_ctest_entries_preserve_scheduling_contract(self) -> None:
         build = os.environ.get("AVA_TEST_BUILD_DIR")
         if build is None:
@@ -239,16 +242,75 @@ class BenchmarkDriverTests(unittest.TestCase):
             test["name"]: {prop["name"]: prop["value"] for prop in test["properties"]}
             for test in json.loads(completed.stdout)["tests"]
         }
+
+        # CTest omits PROCESSORS when the named test uses its default single slot.
+        def assert_default_processors(name: str) -> None:
+            self.assertEqual(tests[name].get("PROCESSORS", 1), 1, name)
+
+        for name, properties in tests.items():
+            self.assertNotIn("ava_process_load", properties.get("RESOURCE_LOCK", []), name)
+            self.assertNotIn("RUN_SERIAL", properties, name)
+
         for name in ("ava_benchmark.harness_self_test", "ava_benchmark.process_harness_self_test", "ava_tests.benchmark_driver"):
             properties = tests[name]
             self.assertGreater(properties["TIMEOUT"], 0, name)
             self.assertTrue({"benchmark", "offline", "self-test"} <= set(properties["LABELS"]), name)
+        for name in tests:
+            if name.startswith("ava_benchmark."):
+                assert_default_processors(name)
         live = tests["ava_benchmark.live_git_self_test"]
         self.assertGreaterEqual(live["TIMEOUT"], 120)
-        self.assertTrue(live["RUN_SERIAL"])
+        self.assertNotIn("RUN_SERIAL", live)
+        assert_default_processors("ava_benchmark.live_git_self_test")
         self.assertIn("ava_benchmark_git_fixture", live["RESOURCE_LOCK"])
         for name in ("ava_benchmark.smoke", "ava_benchmark.process_smoke"):
-            self.assertTrue(tests[name]["RUN_SERIAL"], name)
+            properties = tests[name]
+            self.assertNotIn("RUN_SERIAL", properties, name)
+            assert_default_processors(name)
+            self.assertEqual(properties["COST"], 20, name)
+            self.assertNotIn("RESOURCE_LOCK", properties, name)
+
+        independent_process_suites = (
+            "ava_tests.process_gate",
+            "ava_tests.process_supervisor",
+            "ava_tests.curl_transport_process",
+            "ava_tests.plugin_runner_process",
+            "ava_tests.clipboard_image_process",
+            "ava_tests.tools",
+            "ava_tests.plugin",
+            "ava_tests.mcp",
+            "ava_tests.lsp",
+            "ava_tests.app_rpc",
+            "ava_tests.acp",
+            "ava_cli.headless_rpc_bash_process_cleanup",
+        )
+        for name in independent_process_suites:
+            properties = tests[name]
+            assert_default_processors(name)
+            self.assertEqual(properties["COST"], 10, name)
+            self.assertNotIn("RESOURCE_LOCK", properties, name)
+            self.assertNotIn("RUN_SERIAL", properties, name)
+
+        parallel_runner = tests["ava_build.parallel_test_runner"]
+        assert_default_processors("ava_build.parallel_test_runner")
+        self.assertEqual(parallel_runner["COST"], 8)
+        self.assertNotIn("RESOURCE_LOCK", parallel_runner)
+
+        headless = tests["ava_cli.headless_parallel_read_search_tools"]
+        assert_default_processors("ava_cli.headless_parallel_read_search_tools")
+        self.assertEqual(headless["COST"], 5)
+
+        for name in ("ava_release.package_linux", "ava_release.package_timeout_cleanup"):
+            if name in tests:
+                properties = tests[name]
+                assert_default_processors(name)
+                self.assertNotIn("RESOURCE_LOCK", properties, name)
+                self.assertNotIn("RUN_SERIAL", properties, name)
+
+        for name in ("ava_tests.benchmark_driver", "ava_benchmark.process_harness_self_test"):
+            properties = tests[name]
+            assert_default_processors(name)
+            self.assertIn("ava_benchmark_git_fixture", properties["RESOURCE_LOCK"], name)
         for name, properties in tests.items():
             if name.startswith("ava_tests."):
                 self.assertEqual(properties["SKIP_RETURN_CODE"], 77, name)

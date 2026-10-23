@@ -803,6 +803,8 @@ if(AVA_ENABLE_ACPX_INTEROP AND NOT Python3_Interpreter_FOUND)
   message(FATAL_ERROR "AVA_ENABLE_ACPX_INTEROP requires Python 3 for the bounded launcher")
 endif()
 if(Python3_Interpreter_FOUND)
+  # Each invocation owns its inherited gate descriptors, so this test has no
+  # shared fixture and does not require RUN_SERIAL.
   add_test(
     NAME ava_tests.process_gate
     COMMAND ${Python3_EXECUTABLE}
@@ -925,12 +927,12 @@ if(Python3_Interpreter_FOUND)
     LABELS "benchmark;offline;self-test;python"
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;AVA_TEST_BUILD_DIR=${CMAKE_BINARY_DIR}")
   set_tests_properties(ava_tests.benchmark_driver ava_benchmark.process_harness_self_test PROPERTIES
-    RESOURCE_LOCK ava_benchmark_git_fixture PROCESSORS 4 COST 3)
+    RESOURCE_LOCK ava_benchmark_git_fixture COST 3)
 
   add_test(NAME ava_benchmark.live_git_self_test
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/backend_benchmark_driver_test.py --live-git-tests)
   set_tests_properties(ava_benchmark.live_git_self_test PROPERTIES
-    TIMEOUT 180 RUN_SERIAL TRUE PROCESSORS 4 RESOURCE_LOCK ava_benchmark_git_fixture COST 30
+    TIMEOUT 180 RESOURCE_LOCK ava_benchmark_git_fixture COST 30
     LABELS "benchmark;offline;self-test;git-heavy;python"
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
@@ -1323,7 +1325,7 @@ if(Python3_Interpreter_FOUND)
               --build-dir ${CMAKE_BINARY_DIR})
     # Let the harness unwind its owned processes and workspace before CTest escalates.
     set_tests_properties(ava_release.package_linux PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 240
-      TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10 PROCESSORS 4
+      TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10
       LABELS "release;package;process-heavy;offline;python" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
     add_test(NAME ava_release.package_timeout_cleanup
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/package_linux_tests.py
@@ -1331,7 +1333,7 @@ if(Python3_Interpreter_FOUND)
         --ava $<TARGET_FILE:ava> --fake-provider $<TARGET_FILE:ava_fake_provider_server>
         --repo ${CMAKE_SOURCE_DIR} --build-dir ${CMAKE_BINARY_DIR} --timeout-cleanup-self-test)
     set_tests_properties(ava_release.package_timeout_cleanup PROPERTIES
-      SKIP_RETURN_CODE 77 TIMEOUT 45 PROCESSORS 4 RESOURCE_LOCK ava_process_load
+      SKIP_RETURN_CODE 77 TIMEOUT 45
       TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10
       LABELS "release;package;process;self-test;offline;python" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
@@ -1510,8 +1512,9 @@ if(AVA_AVA_LAUNCHING_TESTS)
   set_property(TEST ${AVA_AVA_LAUNCHING_TESTS} APPEND PROPERTY ENVIRONMENT "LIBCWD_NO_STARTUP_MSGS=1;AVA_NO_DEBUG_OUTPUT=1")
 endif()
 
-# CTest schedules drivers, not the children they create. Charge and serialize
-# lifecycle workloads while leaving pure backend tests available for parallel work.
+# Keep scheduling priorities and workload labels descriptive without reserving
+# a fixed share of every host. Resource locks are reserved for genuinely shared
+# fixtures; ordinary smoke and lifecycle suites remain eligible for parallel work.
 foreach(_ava_test IN LISTS AVA_REGISTERED_TESTS)
   if(_ava_test MATCHES "^ava_tests\\.")
     set_property(TEST ${_ava_test} PROPERTY SKIP_RETURN_CODE 77)
@@ -1543,23 +1546,22 @@ foreach(_ava_test IN LISTS AVA_REGISTERED_TESTS)
     set_property(TEST ${_ava_test} APPEND PROPERTY LABELS python)
   endif()
   if(_ava_test STREQUAL "ava_build.parallel_test_runner")
-    set_tests_properties(${_ava_test} PROPERTIES SKIP_RETURN_CODE 77 PROCESSORS 4
-      RESOURCE_LOCK ava_process_load COST 8)
+    set_tests_properties(${_ava_test} PROPERTIES SKIP_RETURN_CODE 77 COST 8)
     set_property(TEST ${_ava_test} APPEND PROPERTY LABELS "process;self-test")
   endif()
   if(_ava_test MATCHES "^ava_cli\\.headless_")
-    set_tests_properties(${_ava_test} PROPERTIES PROCESSORS 2 COST 5)
+    set_tests_properties(${_ava_test} PROPERTIES COST 5)
   endif()
   if(_ava_test MATCHES "^ava_tests\\.(process_|curl_transport_process$|plugin_runner_process$|clipboard_image_process$|tools$|plugin$|mcp$|lsp$|app_rpc$|acp$)"
       OR _ava_test STREQUAL "ava_cli.headless_rpc_bash_process_cleanup")
-    set_tests_properties(${_ava_test} PROPERTIES PROCESSORS 4 RESOURCE_LOCK ava_process_load COST 10)
+    set_tests_properties(${_ava_test} PROPERTIES COST 10)
     set_property(TEST ${_ava_test} APPEND PROPERTY LABELS "process;process-heavy;load-sensitive")
   endif()
   if(_ava_test MATCHES "^ava_benchmark\\.")
-    set_tests_properties(${_ava_test} PROPERTIES SKIP_RETURN_CODE 77 PROCESSORS 4)
+    set_tests_properties(${_ava_test} PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   if(_ava_test MATCHES "^ava_benchmark\\.(process_smoke|smoke)$")
-    set_tests_properties(${_ava_test} PROPERTIES RUN_SERIAL TRUE RESOURCE_LOCK ava_process_load COST 20
+    set_tests_properties(${_ava_test} PROPERTIES COST 20
       TIMEOUT_SIGNAL_NAME SIGTERM TIMEOUT_SIGNAL_GRACE_PERIOD 10)
     set_property(TEST ${_ava_test} APPEND PROPERTY LABELS "process-heavy;load-sensitive")
   endif()

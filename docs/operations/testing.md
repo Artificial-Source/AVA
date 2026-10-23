@@ -22,7 +22,7 @@ Do not use `cmake --build build --target test --parallel N` to request parallel 
 
 Every registered CTest carries a finite outer timeout: backend tests that set no explicit `TIMEOUT` receive a 60-second default at configure time; terminal/TUI tests retain a 120-second default, and explicit limits are preserved. For debugger sessions, setting `AVA_DEBUG_NO_TIMEOUT` in the *configure* environment raises every CTest timeout to one hour, or to `AVA_DEBUG_NO_TIMEOUT_SECONDS` when that is a positive integer; rerun configure without it to restore normal timeouts. In-test helpers such as `now_plus_seconds` honor these controls separately at runtime.
 
-Process-heavy backend suites reserve `PROCESSORS 4` and share `RESOURCE_LOCK ava_process_load`, preventing lifecycle workloads from competing while pure backend tests remain parallel. The benchmark smokes `ava_benchmark.smoke` and `ava_benchmark.process_smoke` additionally use `RUN_SERIAL`.
+Process-heavy backend suites carry `COST` priorities and descriptive labels but use CTest's default processor allocation, allowing unrelated families to overlap. Ordinary benchmark smokes also run in parallel: they enforce broad reliability ceilings rather than compare microperformance. Launch detailed benchmark measurements in isolation explicitly. Locks such as `ava_benchmark_git_fixture` remain limited to tests that share an actual fixture.
 
 The test suite is built as `build/tests/ava_tests` and registered as focused `ava_tests.<suite>` CTests from sources under `tests/`. The LSP and MCP tests also build and use fake servers from `tests/support/`.
 

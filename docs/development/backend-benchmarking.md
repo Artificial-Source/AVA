@@ -53,9 +53,9 @@ The JSON is the authoritative harness output; Markdown is only a readable render
 
 The registered `ava_benchmark.smoke` CTest uses broad reliability ceilings only: completion within a practical timeout, required helper seams measured, no plugin child left waitable, no child from manifest discovery, and no catastrophic RSS delta. It does **not** gate pull requests on microbenchmark deltas. Detailed baseline and stress suites are intentionally opt-in and unregistered.
 
-Both `ava_benchmark.smoke` (`TIMEOUT 75`) and `ava_benchmark.process_smoke` (`TIMEOUT 120`) use `RUN_SERIAL`, `PROCESSORS 4`, and `RESOURCE_LOCK ava_process_load`.
+Both `ava_benchmark.smoke` (`TIMEOUT 75`) and `ava_benchmark.process_smoke` (`TIMEOUT 120`) use ordinary parallel CTest scheduling. They gate broad reliability ceilings, not microperformance comparisons, so detailed benchmark measurements should be launched in isolation explicitly. Fixture-specific locks remain limited to tests that share those fixtures.
 
-Comparator fixtures in `ava_tests.benchmark_driver` and `ava_benchmark.process_harness_self_test` are synthetic-only. Live-Git cases run separately as `ava_benchmark.live_git_self_test` (`RUN_SERIAL`, `TIMEOUT 180`). `ava_benchmark.historical_artifact` is optional (`TIMEOUT 15`) and returns skip code 77 when the retained historical M0 artifact is absent.
+Comparator fixtures in `ava_tests.benchmark_driver` and `ava_benchmark.process_harness_self_test` are synthetic-only. Live-Git cases run separately as `ava_benchmark.live_git_self_test` (`TIMEOUT 180`) and retain the shared Git-fixture lock. `ava_benchmark.historical_artifact` is optional (`TIMEOUT 15`) and returns skip code 77 when the retained historical M0 artifact is absent.
 
 On non-Linux hosts, helper timing measurements can still run, but procfs idle process-tree RSS is explicitly unsupported. The macOS repeated-call result is a labeled peak-high-water fallback rather than current RSS; a platform with neither supported behavior reports `unsupported`, which intentionally does not satisfy the required smoke seam.
 
