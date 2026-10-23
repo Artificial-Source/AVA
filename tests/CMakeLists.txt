@@ -37,10 +37,16 @@ ava_apply_warnings(ava_fake_lsp_server)
 ava_apply_sanitizers(ava_fake_lsp_server)
 
 add_executable(ava_lsp_real_clangd_smoke "lsp_real_clangd_smoke.cpp")
-# Link the backend archives directly, as ava_tests does: relying on the support
-# library's interface alone leaves libava_core.a before libava_observability.a
-# in libcwd builds and init_thread unresolved.
-target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE ${AVA_BACKEND_LIBRARIES} ava_test_support)
+# Link exactly as ava_tests does. The debug library's printer dependencies make
+# the frontend and backend archives one cycle, and CMake repeats that cycle.
+# With the frontend archives first, the observability objects are pulled in
+# the first pass and init_thread resolves from libava_core.a in the next;
+# through the support library's interface alone they are pulled after the
+# last pass and the libcwd-enabled Debug and sanitizer links fail.
+target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ${AICXX_OBJECTS_LIST})
+if (OptionEnableLibcwd)
+  target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
+endif()
 ava_apply_warnings(ava_lsp_real_clangd_smoke)
 ava_apply_sanitizers(ava_lsp_real_clangd_smoke)
 
@@ -136,7 +142,11 @@ ava_apply_sanitizers(ava_backend_benchmark_helper)
 
 add_executable(ava_rpc_broken_pipe_subprocess_test "rpc_broken_pipe_subprocess_test.cpp")
 add_dependencies(ava_rpc_broken_pipe_subprocess_test ava)
-target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE ${AVA_BACKEND_LIBRARIES} ava_test_support)
+# Same link specification as ava_tests; see ava_lsp_real_clangd_smoke above.
+target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ${AICXX_OBJECTS_LIST})
+if (OptionEnableLibcwd)
+  target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
+endif()
 target_compile_definitions(ava_rpc_broken_pipe_subprocess_test PRIVATE AVA_EXE_PATH="$<TARGET_FILE:ava>")
 ava_apply_warnings(ava_rpc_broken_pipe_subprocess_test)
 ava_apply_sanitizers(ava_rpc_broken_pipe_subprocess_test)

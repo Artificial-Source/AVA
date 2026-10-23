@@ -887,6 +887,18 @@ void test_repeated_title_lifecycle_releases_process_resources()
       auto count_entries = [](std::filesystem::path const& path) {
         return static_cast<std::size_t>(std::distance(std::filesystem::directory_iterator(path), std::filesystem::directory_iterator{}));
       };
+      // A joined thread can linger in /proc/self/task for a moment after join()
+      // returns; wait briefly for the count to settle instead of reading once.
+      auto settled_task_count = [&](std::size_t expected) {
+        auto const deadline = ava::tests::now_plus_seconds(5);
+        auto count = count_entries("/proc/self/task");
+        while (count != expected && std::chrono::steady_clock::now() < deadline)
+        {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          count = count_entries("/proc/self/task");
+        }
+        return count;
+      };
       auto cycle = [&](int index) {
         auto state = std::make_shared<GeneratorState>();
         state->release = false;
@@ -908,13 +920,13 @@ void test_repeated_title_lifecycle_releases_process_resources()
       if (cycle(0))
       {
         auto const descriptors = count_entries("/proc/self/fd");
-        auto const threads = count_entries("/proc/self/task");
+        auto const threads = settled_task_count(1);
         for (int index = 1; index <= 3; ++index)
         {
           if (!cycle(index))
             break;
           ava::tests::expect_eq(count_entries("/proc/self/fd"), descriptors, "title lifecycle returns all per-cycle descriptors");
-          ava::tests::expect_eq(count_entries("/proc/self/task"), threads, "title lifecycle joins all per-cycle workers");
+          ava::tests::expect_eq(settled_task_count(threads), threads, "title lifecycle joins all per-cycle workers");
         }
       }
     }
