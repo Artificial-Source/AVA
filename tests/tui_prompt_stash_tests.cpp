@@ -186,15 +186,12 @@ void test_prompt_stash_runtime_controller()
          "prompt stash selector restores and removes an arbitrary older entry by selected identity and reports success");
 
   ava::tui::reset_composer_draft(draft_state.draft);
-  ava::tui::TuiRuntimeStateSnapshot next_session;
-  next_session.status = "session switched";
   auto const backend_session_replaced = frontend.replace_session_identity();
-  auto const session_changed =
-      ava::tui::apply_runtime_state_snapshot_with_presentation_transition(options, presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                          active_list, options.read_committed_session_id(), std::move(next_session));
+  auto const session_changed = ava::tui::apply_committed_session_transition_and_refresh(options, presentation, draft_state, renderer, transcript_search,
+                                                                                        subagent_workspace, active_list, options.read_committed_session_id());
   expect(backend_session_replaced && session_changed && controller.stash().size() == 1 && controller.pop_latest() &&
              draft_state.draft.text == "newest selector draft" && backend_submit_calls == 0 && presentation.snapshot.status == "stashed prompt restored",
-         "prompt stash survives an authoritative session snapshot transition in one runtime process, restores LIFO, and never dispatches backend work");
+         "prompt stash survives a committed session transition in one runtime process, restores LIFO, and never dispatches backend work");
   ava::tui::reset_composer_draft(draft_state.draft, "draft to clear from stash");
   expect(controller.trigger() && controller.stash().size() == 1, "prompt stash runtime fixture stores an entry for clear");
   expect(controller.clear() && controller.stash().empty() && presentation.snapshot.status == "prompt stash cleared",

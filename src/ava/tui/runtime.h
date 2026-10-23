@@ -103,17 +103,13 @@ struct TuiActiveRunQueues
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-struct TuiRuntimeStateSnapshot
+// Pending-review catalog transport pulled and applied at serialized boundaries.
+struct TuiCatalogDelivery
 {
-  std::string status;
   std::vector<SlashCommandItem> slash_commands = {};
   std::optional<std::size_t> slash_catalog_generation = std::nullopt;
   std::vector<FileReferenceItem> file_references = {};
-  // When present, identical generations let runtime snapshots reuse the
-  // existing workspace references without invalidating completion rankings.
   std::optional<std::size_t> workspace_catalog_generation = std::nullopt;
-  // Presentation hydration for the latest committed todowrite snapshot.
-  std::vector<TodoItem> todos = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -166,10 +162,6 @@ struct TuiSubmitResult
   std::optional<TuiLocalCommandResult> local_command_result = std::nullopt;
   std::vector<std::string> conversation_output;
   std::vector<ToolTimelineItem> conversation_tool_timeline;
-  // Returned by submit workers so the TUI thread applies state changes before
-  // accepting another prompt. This is intentionally distinct from command
-  // output/status, which the TUI settles after rendering the completed turn.
-  std::optional<TuiRuntimeStateSnapshot> state_snapshot = std::nullopt;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -313,10 +305,14 @@ struct TuiRuntimeOptions
   // TUI calls it only at serialized action/completion boundaries and never
   // while holding its UI lock.
   std::function<std::string()> read_committed_session_id;
+  // Pending-review catalog and todo transports. Pull and apply only at
+  // serialized action/completion boundaries, never during rendering.
+  std::function<TuiCatalogDelivery()> read_catalog_delivery;
+  std::function<std::vector<TodoItem>()> read_committed_todos;
   // UI-thread popup initialization callbacks. Inputs: none. Outputs: owning,
   // already-filtered DTOs from current in-memory Session state. Side effects:
   // briefly acquire the backend Session read guard. Call once per popup open,
-  // never during ordinary snapshot application or rendering.
+  // never during ordinary boundary refreshes or rendering.
   std::function<StartupOverviewSnapshot()> read_startup_overview;
   std::function<ProjectTrustSnapshot()> read_project_trust;
   std::function<TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;
@@ -325,9 +321,9 @@ struct TuiRuntimeOptions
   std::function<ava::core::Result<std::optional<ava::session::ImageAttachmentRef>>()> on_paste_clipboard_image;
   std::function<ava::core::Result<std::optional<std::string>>(std::string_view)> on_external_editor;
   std::function<ava::core::Result<ava::session::LoadedImageAttachment>(ava::session::ImageAttachmentRef const&)> on_load_image_attachment;
-  std::function<ava::core::Result<std::string>()> on_toggle_mode;
+  std::function<ava::core::VoidResult()> on_toggle_mode;
   std::function<ava::core::Result<std::string>()> on_cycle_reasoning;
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(bool)> on_cycle_model;
+  std::function<ava::core::Result<std::string>(bool)> on_cycle_model;
   // Loads validated bindings for application by the TUI thread. The callback
   // must not refresh backend catalogs or return backend runtime snapshots.
   std::function<ava::core::Result<TuiKeyBindings>()> on_reload_key_bindings;
@@ -363,8 +359,8 @@ struct TuiRuntimeOptions
   std::function<SelectListView()> on_session_selector_label_timestamp_toggle;
   std::function<ava::core::Result<SelectListView>(std::string_view)> on_session_selector_archive;
   std::function<ava::core::Result<SelectListView>(std::string_view)> on_session_selector_unarchive;
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view)> on_session_selector_branch_parent;
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view)> on_session_selector_branch_child;
+  std::function<ava::core::Result<std::string>(std::string_view)> on_session_selector_branch_parent;
+  std::function<ava::core::Result<std::string>(std::string_view)> on_session_selector_branch_child;
   // Hidden selector values are the only session identities crossing this boundary.
   // All returned operation state is path-free and fixed-code only.
   std::function<ava::core::Result<TuiBranchSummarySnapshot>(std::string_view)> on_branch_summary_prepare;
@@ -374,12 +370,12 @@ struct TuiRuntimeOptions
   std::function<ava::core::Result<SelectListView>()> on_branch_summary_refresh_catalog;
   std::function<ava::core::Result<TuiRememberedPermissionRule>(ava::permissions::PermissionPrompt const&, ava::permissions::PermissionAction)>
       remember_permission_rule;
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view)> on_settings_selected;
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view)> on_model_selected;
+  std::function<ava::core::Result<std::string>(std::string_view)> on_settings_selected;
+  std::function<ava::core::Result<std::string>(std::string_view)> on_model_selected;
   // No value clears the explicit AVA level and restores model/provider default.
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::optional<std::string>)> on_reasoning_selected;
+  std::function<ava::core::Result<std::string>(std::optional<std::string>)> on_reasoning_selected;
   // Fork at the selected public user entry id through the normal branch path.
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view entry_id)> on_fork_user_turn_selected;
+  std::function<ava::core::Result<std::string>(std::string_view entry_id)> on_fork_user_turn_selected;
   // Re-read exact public user-turn text by stable entry id at action time.
   std::function<ava::core::Result<std::string>(std::string_view entry_id)> on_read_user_turn_text;
   std::function<ava::core::Result<SelectListView>(SelectListView const&, std::string_view)> on_scoped_model_toggled;
@@ -388,7 +384,7 @@ struct TuiRuntimeOptions
   std::function<ava::core::Result<SelectListView>(SelectListView const&, std::string_view)> on_scoped_model_toggle_provider;
   std::function<ava::core::Result<SelectListView>(SelectListView const&, std::string_view, bool)> on_scoped_model_reorder;
   std::function<ava::core::Result<std::string>()> on_scoped_model_save;
-  std::function<ava::core::Result<TuiRuntimeStateSnapshot>(std::string_view)> on_session_selected;
+  std::function<ava::core::Result<std::string>(std::string_view)> on_session_selected;
   // Runs after the composer loop exits while curses is still active. Application-scoped
   // workers that can notify this runtime must be canceled and joined here.
   std::function<void()> on_before_tui_shutdown;

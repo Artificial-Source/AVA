@@ -283,10 +283,6 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
     std::string selected_source_value;
   } branch_summary_ui;
   bool branch_summary_exit_ready = false;
-  auto apply_runtime_state_snapshot = [&](TuiRuntimeStateSnapshot state) {
-    // Shared path with active-run; popup-only facts remain local and untouched.
-    apply_runtime_state_snapshot_preserving_popups(options, presentation_state, std::move(state));
-  };
   SettingsNavigationState settings_nav;
   bool settings_session_open = false;
   struct ClearThemePreviewOnExit
@@ -982,12 +978,10 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
         }
         return values;
       };
-      auto apply_opened_session_snapshot = [&](TuiRuntimeStateSnapshot state, bool) {
-        auto status = state.status;
-        auto const committed_session_id = options.read_committed_session_id ? options.read_committed_session_id() : std::string{};
-        static_cast<void>(apply_runtime_state_snapshot_with_presentation_transition(options, presentation_state, draft_state, renderer, transcript_search,
-                                                                                    subagent_workspace, active_select_list, std::move(committed_session_id),
-                                                                                    std::move(state)));
+      auto settle_opened_session = [&](std::string status) {
+        auto committed_session_id = options.read_committed_session_id ? options.read_committed_session_id() : std::string{};
+        static_cast<void>(apply_committed_session_transition_and_refresh(options, presentation_state, draft_state, renderer, transcript_search,
+                                                                         subagent_workspace, active_select_list, std::move(committed_session_id)));
         if (!status.empty())
           settle_local_command_status(snapshot, std::move(status));
       };
@@ -1170,8 +1164,9 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           auto selected = options.on_settings_selected(confirm_token);
           if (selected)
           {
-            auto status = selected->status;
-            apply_runtime_state_snapshot(std::move(*selected));
+            presentation_state.refresh_after_backend_action(options);
+            auto status = std::move(*selected);
+            snapshot.status = status;
             begin_settings_preview_baseline();
             if (settings_nav.in_display())
             {
@@ -1471,7 +1466,7 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           {
             snapshot.select_list.reset();
             active_select_list = ActiveSelectList::None;
-            apply_opened_session_snapshot(std::move(*opened), true);
+            settle_opened_session(std::move(*opened));
           }
           else
           {
@@ -1625,7 +1620,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           auto selected = dispatch_tui_selector_authority(snapshot, "switching model…", render, [&]() { return options.on_model_selected(selected_value); });
           if (selected)
           {
-            apply_runtime_state_snapshot(std::move(*selected));
+            presentation_state.refresh_after_backend_action(options);
+            snapshot.status = std::move(*selected);
             if (!open_reasoning_selector(true))
             {
               terminal_write_failed = true;
@@ -1645,7 +1641,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
               dispatch_tui_selector_authority(snapshot, "setting thinking mode…", render, [&]() { return options.on_reasoning_selected(std::move(level)); });
           if (selected)
           {
-            apply_runtime_state_snapshot(std::move(*selected));
+            presentation_state.refresh_after_backend_action(options);
+            snapshot.status = std::move(*selected);
           }
           else
           {
@@ -1658,7 +1655,7 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           auto selected = dispatch_tui_selector_authority(snapshot, "opening session…", render, [&]() { return options.on_session_selected(selected_value); });
           if (selected)
           {
-            apply_opened_session_snapshot(std::move(*selected), false);
+            settle_opened_session(std::move(*selected));
           }
           else
           {
@@ -1687,9 +1684,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
             auto opened = options.on_fork_user_turn_selected(selected_value);
             if (opened)
             {
-              // Same transition boundary as session open; transition authority
-              // comes from the committed backend identity callback, not this DTO.
-              apply_opened_session_snapshot(std::move(*opened), true);
+              // Session open and fork share the committed identity boundary.
+              settle_opened_session(std::move(*opened));
             }
             else
             {
@@ -1732,8 +1728,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
           auto selected = options.on_settings_selected(selected_value);
           if (selected)
           {
-            // Success feedback stays on the transient status surface from the applied DTO.
-            apply_runtime_state_snapshot(std::move(*selected));
+            presentation_state.refresh_after_backend_action(options);
+            snapshot.status = std::move(*selected);
           }
           else
           {
@@ -2108,7 +2104,7 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
       }
       else
       {
-        snapshot.mode = *result;
+        presentation_state.refresh_prompt_metadata();
         snapshot.status = "mode switched to " + snapshot.mode;
       }
     }
@@ -2643,9 +2639,8 @@ int TuiFrontEnd::run_interactive_composer(TuiRuntimeOptions options)
   return terminal_signal_received ? 130 : (terminal_write_failed ? 1 : 0);
 }
 
-ava::core::Result<TuiRuntimeStateSnapshot> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, std::string pending_status,
-                                                                           std::function<bool()> const& render,
-                                                                           std::function<ava::core::Result<TuiRuntimeStateSnapshot>()> const& callback)
+ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, std::string pending_status, std::function<bool()> const& render,
+                                                               std::function<ava::core::Result<std::string>()> const& callback)
 {
   snapshot.select_list.reset();
   snapshot.status = std::move(pending_status);

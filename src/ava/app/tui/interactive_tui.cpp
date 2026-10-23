@@ -176,16 +176,9 @@ int run_tui(InteractiveState state)
     auto const captured_changes = capture_title_catalog_changes();
     return application_catalog.refresh_session_tree_and_consume_title_changes(unlocked_session, captured_changes);
   };
-  auto state_snapshot = [&unlocked_session, &application_catalog, &refresh_title_catalog](std::string status) {
+  auto settle_backend_action = [&unlocked_session, &refresh_title_catalog]() {
     static_cast<void>(ava::app::runtime::refresh_git_branch(unlocked_session));
     static_cast<void>(refresh_title_catalog());
-    auto delivery = application_catalog.delivery_snapshot();
-    return ava::tui::TuiRuntimeStateSnapshot{.status = std::move(status),
-                                             .slash_commands = project_slash_command_items(std::move(delivery.slash_commands)),
-                                             .slash_catalog_generation = delivery.slash_catalog_generation,
-                                             .file_references = project_file_reference_items(std::move(delivery.file_references)),
-                                             .workspace_catalog_generation = delivery.workspace_catalog_generation,
-                                             .todos = todos_for_session(unlocked_session)};
   };
   auto session_selector_sort = ava::app::SessionSelectorSort::Recent;
   bool session_selector_named_only = false;
@@ -204,8 +197,8 @@ int run_tui(InteractiveState state)
     static_cast<void>(refresh_title_catalog());
     return session_selector_view_from_catalog();
   };
-  auto open_session_selector_target = [&unlocked_session, &open_requested_session, &state_snapshot, &application_catalog](
-                                          std::string target_session_id, std::string status_prefix) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+  auto open_session_selector_target = [&unlocked_session, &open_requested_session, &settle_backend_action, &application_catalog](
+                                          std::string target_session_id, std::string status_prefix) -> ava::core::Result<std::string> {
     if (target_session_id.empty())
     {
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session branch target is missing session id"));
@@ -214,7 +207,8 @@ int run_tui(InteractiveState state)
     if (target_session_id == current_session_id)
     {
       application_catalog.retarget_session(current_session_id);
-      return state_snapshot(status_prefix + target_session_id + " (already open)");
+      settle_backend_action();
+      return status_prefix + target_session_id + " (already open)";
     }
     auto unlocked_opened_result = open_requested_session(target_session_id);
     if (!unlocked_opened_result)
@@ -223,11 +217,11 @@ int run_tui(InteractiveState state)
       return std::unexpected(std::move(replaced.error()));
     application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id);
     application_catalog.refresh_values(unlocked_session);
-    return state_snapshot(status_prefix + target_session_id);
+    settle_backend_action();
+    return status_prefix + target_session_id;
   };
   auto open_selector_branch = [&application_catalog, &open_session_selector_target, &session_selector_sort, &session_selector_show_archived,
-                               &refresh_title_catalog](std::string_view selected_session_id,
-                                                       bool parent) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+                               &refresh_title_catalog](std::string_view selected_session_id, bool parent) -> ava::core::Result<std::string> {
     if (auto refreshed = refresh_title_catalog(); !refreshed)
       return std::unexpected(std::move(refreshed.error()));
     if (selected_session_id.empty())
@@ -296,6 +290,15 @@ int run_tui(InteractiveState state)
             SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
             return session_r->store.options_r()->session_id;
           },
+      .read_catalog_delivery =
+          [&application_catalog]() {
+            auto delivery = application_catalog.delivery_snapshot();
+            return ava::tui::TuiCatalogDelivery{.slash_commands = project_slash_command_items(std::move(delivery.slash_commands)),
+                                                .slash_catalog_generation = delivery.slash_catalog_generation,
+                                                .file_references = project_file_reference_items(std::move(delivery.file_references)),
+                                                .workspace_catalog_generation = delivery.workspace_catalog_generation};
+          },
+      .read_committed_todos = [&unlocked_session]() { return todos_for_session(unlocked_session); },
       .read_startup_overview =
           [&unlocked_session]() {
             // The builder holds one Session read guard while performing only bounded,
@@ -348,7 +351,7 @@ int run_tui(InteractiveState state)
                 .finish = [queue](bool canceled) { return queue->finish(canceled); }};
           },
       .on_submit =
-          [&state, &unlocked_session, &refresh_session_tree_catalog, &refresh_title_catalog, &state_snapshot, &application_catalog](
+          [&state, &unlocked_session, &refresh_session_tree_catalog, &refresh_title_catalog, &settle_backend_action, &application_catalog](
               std::string const& submitted, ava::tui::TuiSubmitContext context) {
             auto const request_hotkeys = command_hotkeys_from_key_bindings(context.key_bindings);
             // Persistent rules resolve before the TUI fallback resolver in
@@ -442,6 +445,7 @@ int run_tui(InteractiveState state)
               local_command_result = ava::tui::TuiLocalCommandResult{.output = std::move(request_presentation.local_command.output),
                                                                      .tool_timeline = tui_tool_timeline(request_presentation.local_command.tool_timeline)};
             }
+            settle_backend_action();
             return ava::tui::TuiSubmitResult{.quit = line_result.quit,
                                              .ordinary_turn_committed = line_result.ordinary_turn_committed,
                                              .output = line_result.output,
@@ -449,8 +453,7 @@ int run_tui(InteractiveState state)
                                              .ordinary_turn_request_ids = std::move(request_presentation.ordinary_turn_request_ids),
                                              .local_command_result = std::move(local_command_result),
                                              .conversation_output = std::move(request_presentation.conversation.output),
-                                             .conversation_tool_timeline = tui_tool_timeline(request_presentation.conversation.tool_timeline),
-                                             .state_snapshot = state_snapshot({})};
+                                             .conversation_tool_timeline = tui_tool_timeline(request_presentation.conversation.tool_timeline)};
           },
       .on_attach_image = [&unlocked_session](std::string const& path) -> ava::core::Result<ava::session::ImageAttachmentRef> {
         auto source = std::filesystem::path(path);
@@ -482,14 +485,14 @@ int run_tui(InteractiveState state)
         SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
         return ava::session::load_image_attachment(session_r->store, attachment);
       },
-      .on_toggle_mode = [&unlocked_session]() -> ava::core::Result<std::string> {
+      .on_toggle_mode = [&unlocked_session]() -> ava::core::VoidResult {
         auto result = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/mode"});
         if (!result)
           return std::unexpected(std::move(result.error()));
-        return ava::agent::to_string(ava::app::runtime::session_ts::rat(unlocked_session)->mode());
+        return {};
       },
       .on_cycle_reasoning = [&unlocked_session]() -> ava::core::Result<std::string> { return ava::app::cycle_runtime_reasoning(unlocked_session); },
-      .on_cycle_model = [&unlocked_session, &state_snapshot](bool forward) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_cycle_model = [&unlocked_session, &settle_backend_action](bool forward) -> ava::core::Result<std::string> {
         auto model = forward ? ava::app::rpc::next_runtime_model(ava::app::runtime::session_ts::rat(unlocked_session))
                              : ava::app::rpc::previous_runtime_model(ava::app::runtime::session_ts::rat(unlocked_session));
         if (!model)
@@ -497,7 +500,8 @@ int run_tui(InteractiveState state)
         auto switched = ava::app::runtime::Session::switch_model_and_refresh(unlocked_session, std::move(*model));
         if (!switched)
           return std::unexpected(std::move(switched.error()));
-        return state_snapshot(*switched ? "model cycled" : "model already selected");
+        settle_backend_action();
+        return *switched ? "model cycled" : "model already selected";
       },
       .on_reload_key_bindings = [&unlocked_session]() -> ava::core::Result<ava::tui::TuiKeyBindings> {
         auto const paths = runtime::session_ts::crat(unlocked_session)->paths();
@@ -639,10 +643,10 @@ int run_tui(InteractiveState state)
         }
         return session_selector_snapshot();
       },
-      .on_session_selector_branch_parent = [open_selector_branch](std::string_view session_id) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_session_selector_branch_parent = [open_selector_branch](std::string_view session_id) -> ava::core::Result<std::string> {
         return open_selector_branch(session_id, true);
       },
-      .on_session_selector_branch_child = [open_selector_branch](std::string_view session_id) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_session_selector_branch_child = [open_selector_branch](std::string_view session_id) -> ava::core::Result<std::string> {
         return open_selector_branch(session_id, false);
       },
       .on_branch_summary_prepare = std::move(branch_summary_prepare),
@@ -654,15 +658,15 @@ int run_tui(InteractiveState state)
           [&unlocked_session](ava::permissions::PermissionPrompt const& prompt, ava::permissions::PermissionAction action) {
             return remember_permission_rule_for_prompt(unlocked_session, prompt, action);
           },
-      .on_settings_selected = [&unlocked_session, &state_snapshot,
-                               &application_catalog](std::string_view value) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_settings_selected = [&unlocked_session, &settle_backend_action, &application_catalog](std::string_view value) -> ava::core::Result<std::string> {
         if (value == "settings:keybindings.validate")
         {
           auto validated = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/keybindings validate"});
           if (!validated)
             return std::unexpected(std::move(validated.error()));
           auto status = validated->output.empty() ? std::string("keybindings validation complete") : validated->output.front();
-          return state_snapshot(std::move(status));
+          settle_backend_action();
+          return status;
         }
         constexpr std::string_view trust_prefix = "settings:trust.";
         if (value.starts_with(trust_prefix))
@@ -674,12 +678,14 @@ int run_tui(InteractiveState state)
             return std::unexpected(std::move(trusted.error()));
           application_catalog.refresh_values(unlocked_session);
           auto status = trusted->output.empty() ? std::string("trust action complete") : trusted->output.front();
-          return state_snapshot(std::move(status));
+          settle_backend_action();
+          return status;
         }
 
-        return state_snapshot("view closed");
+        settle_backend_action();
+        return "view closed";
       },
-      .on_model_selected = [&unlocked_session, &state_snapshot](std::string_view value) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_model_selected = [&unlocked_session, &settle_backend_action](std::string_view value) -> ava::core::Result<std::string> {
         auto const separator = value.find('/');
         if (separator == std::string_view::npos || separator == 0 || separator + 1 >= value.size())
         {
@@ -693,15 +699,17 @@ int run_tui(InteractiveState state)
         auto switched = ava::app::runtime::Session::switch_model_and_refresh(unlocked_session, std::move(*model));
         if (!switched)
           return std::unexpected(std::move(switched.error()));
-        return state_snapshot(*switched ? "model switched" : "model already selected");
+        settle_backend_action();
+        return *switched ? "model switched" : "model already selected";
       },
-      .on_reasoning_selected = [&unlocked_session, &state_snapshot](std::optional<std::string> level) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_reasoning_selected = [&unlocked_session, &settle_backend_action](std::optional<std::string> level) -> ava::core::Result<std::string> {
         if (!level)
         {
           auto changed = ava::app::runtime::Session::set_reasoning_and_refresh(unlocked_session, std::nullopt);
           if (!changed)
             return std::unexpected(std::move(changed.error()));
-          return state_snapshot(*changed ? "thinking mode set to Default" : "thinking mode already Default");
+          settle_backend_action();
+          return *changed ? "thinking mode set to Default" : "thinking mode already Default";
         }
         ava::config::ModelInfo const model = ava::app::runtime::session_ts::rat(unlocked_session)->model_selection_r()->model;
         auto selection = ava::app::reasoning_selection_for_level(model, *level);
@@ -711,10 +719,11 @@ int run_tui(InteractiveState state)
         if (!changed)
           return std::unexpected(std::move(changed.error()));
         auto const label = ava::app::reasoning_level_label(*level);
-        return state_snapshot(*changed ? "thinking mode set to " + label : "thinking mode already " + label);
+        settle_backend_action();
+        return *changed ? "thinking mode set to " + label : "thinking mode already " + label;
       },
-      .on_fork_user_turn_selected = [&unlocked_session, &state_snapshot, &application_catalog,
-                                     &refresh_session_tree_catalog](std::string_view entry_id) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_fork_user_turn_selected = [&unlocked_session, &settle_backend_action, &application_catalog,
+                                     &refresh_session_tree_catalog](std::string_view entry_id) -> ava::core::Result<std::string> {
         if (entry_id.empty())
         {
           return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "fork-from selection is missing entry id"));
@@ -739,8 +748,8 @@ int run_tui(InteractiveState state)
           after_session_id = session_r->store.options_r()->session_id;
           after_session_path = session_r->store.session_path().string();
         }
-        // F-001 defense: never return an "opened" snapshot when authority did not
-        // switch (for example sessionless handled success with no branch).
+        // Never report an opened session when authority did not switch, such
+        // as sessionless handled success without a branch.
         if (after_session_id == before_session_id && after_session_path == before_session_path)
         {
           auto message = forked->output.empty() ? std::string("fork-from did not switch sessions") : forked->output.front();
@@ -756,9 +765,8 @@ int run_tui(InteractiveState state)
         if (auto const newline = status.find('\n'); newline != std::string::npos)
           status.erase(newline);
 
-        // F-002: after a successful switch always return/apply the post-fork
-        // snapshot. Catalog refresh is soft and visible — never error after
-        // mutation and never keep old presentation over the new authority.
+        // After a successful switch, catalog refresh failures remain visible
+        // warnings so the TUI can apply the newly committed session authority.
         if (forked->session_tree_changed)
         {
           if (auto refreshed = refresh_session_tree_catalog(); !refreshed)
@@ -779,7 +787,8 @@ int run_tui(InteractiveState state)
           application_catalog.retarget_session(after_session_id);
           application_catalog.refresh_values(unlocked_session);
         }
-        return state_snapshot(std::move(status));
+        settle_backend_action();
+        return status;
       },
       .on_read_user_turn_text = [&unlocked_session](std::string_view entry_id) -> ava::core::Result<std::string> {
         return ava::app::read_session_user_turn_text(unlocked_session, entry_id);
@@ -795,8 +804,8 @@ int run_tui(InteractiveState state)
       .on_scoped_model_reorder = [&unlocked_session](ava::tui::SelectListView const& previous, std::string_view value, bool up)
           -> ava::core::Result<ava::tui::SelectListView> { return reorder_scoped_model(unlocked_session, previous, value, up); },
       .on_scoped_model_save = [&unlocked_session]() -> ava::core::Result<std::string> { return save_scoped_model_cycle(unlocked_session); },
-      .on_session_selected = [&unlocked_session, &open_requested_session, &state_snapshot,
-                              &application_catalog](std::string_view value) -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+      .on_session_selected = [&unlocked_session, &open_requested_session, &settle_backend_action,
+                              &application_catalog](std::string_view value) -> ava::core::Result<std::string> {
         if (value.empty())
         {
           return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session selection is missing session id"));
@@ -805,7 +814,8 @@ int run_tui(InteractiveState state)
         if (value == current_session_id)
         {
           application_catalog.retarget_session(current_session_id);
-          return state_snapshot("session already open");
+          settle_backend_action();
+          return "session already open";
         }
         auto unlocked_opened_result = open_requested_session(value);
         if (!unlocked_opened_result)
@@ -814,7 +824,8 @@ int run_tui(InteractiveState state)
           return std::unexpected(std::move(replaced.error()));
         application_catalog.retarget_session(ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id);
         application_catalog.refresh_values(unlocked_session);
-        return state_snapshot("session opened");
+        settle_backend_action();
+        return "session opened";
       },
       .on_before_tui_shutdown =
           [&display_settings, branch_summary_coordinator]() {

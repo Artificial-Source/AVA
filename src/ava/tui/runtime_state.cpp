@@ -160,12 +160,8 @@ void RuntimePresentationState::refresh_prompt_metadata()
   sidebar.mode = mode.value;
 }
 
-void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state)
+void RuntimePresentationState::apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery state)
 {
-  DoutEntering(dc::notice, "RuntimePresentationState::apply_runtime_state_snapshot(" << options << ", " << state << ")");
-
-  refresh_prompt_metadata();
-  snapshot.status = std::move(state.status);
   bool completion_sources_changed = false;
   if (!state.slash_catalog_generation || !applied_slash_catalog_generation_ || *state.slash_catalog_generation != *applied_slash_catalog_generation_)
   {
@@ -185,7 +181,15 @@ void RuntimePresentationState::apply_runtime_state_snapshot(TuiRuntimeOptions co
     refresh_local_palette_hints(snapshot, options.key_bindings);
     ++snapshot.file_references_generation;
   }
-  sidebar.todos = std::move(state.todos);
+}
+
+void RuntimePresentationState::refresh_after_backend_action(TuiRuntimeOptions const& options)
+{
+  refresh_prompt_metadata();
+  if (options.read_catalog_delivery)
+    apply_catalog_delivery(options, options.read_catalog_delivery());
+  if (options.read_committed_todos)
+    sidebar.todos = options.read_committed_todos();
 }
 
 void RuntimePresentationState::apply_local_key_bindings(TuiRuntimeOptions& options, TuiKeyBindings bindings)
@@ -251,14 +255,6 @@ void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, Activ
   snapshot.select_list = std::move(view);
 }
 
-void apply_runtime_state_snapshot_preserving_popups(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
-                                                    TuiRuntimeStateSnapshot state)
-{
-  // Ordinary backend snapshots do not carry popup-only facts. In particular,
-  // applying one must neither read nor close an already-open overview.
-  presentation_state.apply_runtime_state_snapshot(options, std::move(state));
-}
-
 bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                                         TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
                                         ActiveSelectList& active_select_list, std::string committed_session_id)
@@ -315,16 +311,14 @@ bool apply_committed_session_transition(RuntimePresentationState& presentation_s
   return session_changed;
 }
 
-bool apply_runtime_state_snapshot_with_presentation_transition(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
-                                                               RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                                                               TranscriptSearchController& transcript_search,
-                                                               RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
-                                                               std::string committed_session_id, TuiRuntimeStateSnapshot state)
+bool apply_committed_session_transition_and_refresh(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
+                                                    RuntimeDraftState& draft_state, RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
+                                                    RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
+                                                    std::string committed_session_id)
 {
   auto const session_changed = apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace,
                                                                   active_select_list, std::move(committed_session_id));
-
-  apply_runtime_state_snapshot_preserving_popups(options, presentation_state, std::move(state));
+  presentation_state.refresh_after_backend_action(options);
   return session_changed;
 }
 

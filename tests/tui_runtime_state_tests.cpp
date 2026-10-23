@@ -198,15 +198,6 @@ void apply_session_start(ava::tui::TuiEventState& state, ava::core::Mode mode, s
 void test_tui_event_state_reduces_runtime_events()
 {
   tui_test_support::TuiFrontEndFixture frontend;
-  ava::tui::TuiRuntimeOptions presentation_options;
-  //  presentation_options.model = "GPT-5.5";
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), presentation_options);
-  ava::tui::TuiRuntimeStateSnapshot runtime_state;
-  //  runtime_state.model = "GPT-5.6";
-  presentation.apply_runtime_state_snapshot(presentation_options, std::move(runtime_state));
-  expect(!presentation.snapshot.context_source_count && !presentation.sidebar.context_source_count,
-         "runtime snapshot application leaves source-count presentation to the frontend display projection");
-
   ava::tui::TuiEventState state;
   apply_session_start(state, ava::core::Mode::Build, "openai", "gpt-5.5");
 
@@ -1701,16 +1692,13 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
           events.push_back("render");
           return true;
         },
-        [&]() -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
+        [&]() -> ava::core::Result<std::string> {
           std::unique_lock lock(mutex);
           events.push_back("callback");
           callback_started = true;
           ready.notify_one();
           release.wait(lock, [&]() { return callback_released; });
-          ava::tui::TuiRuntimeStateSnapshot state;
-          //          state.model = "GPT-5.5";
-          state.status = "model already selected";
-          return state;
+          return "model already selected";
         });
     dispatch_succeeded = result.has_value();
   });
@@ -1730,9 +1718,7 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
   snapshot.select_list->title = "Select session";
   auto failed = ava::tui::dispatch_tui_selector_authority(
       snapshot, "opening session…", []() { return true; },
-      []() -> ava::core::Result<ava::tui::TuiRuntimeStateSnapshot> {
-        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "session unavailable"));
-      });
+      []() -> ava::core::Result<std::string> { return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "session unavailable")); });
   expect(!failed && !snapshot.select_list && snapshot.status.find("session unavailable") != std::string::npos && snapshot.input == original_input &&
              snapshot.input_cursor == original_cursor,
          "failed selector authority dispatch keeps modal cleared, reports authority failure, and retains draft and cursor");
@@ -2196,13 +2182,14 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
   options.initial_todos = {ava::tui::TodoItem{.id = "seed", .content = "Hydrated", .status = ava::tui::TodoStatus::Pending}};
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
   expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "runtime options hydrate sidebar todos at startup");
-  ava::tui::TuiRuntimeStateSnapshot switched;
-  //  switched.provider = "openai";
-  //  switched.model = "gpt-5.5";
-  switched.todos = {ava::tui::TodoItem{.id = "switched", .content = "After switch", .status = ava::tui::TodoStatus::InProgress}};
-  presentation.apply_runtime_state_snapshot(options, std::move(switched));
-  expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "switched",
-         "runtime state snapshot replaces todos on session switch");
+  int todo_pulls = 0;
+  options.read_committed_todos = [&]() {
+    ++todo_pulls;
+    return std::vector<ava::tui::TodoItem>{{.id = "switched", .content = "After switch", .status = ava::tui::TodoStatus::InProgress}};
+  };
+  presentation.refresh_after_backend_action(options);
+  expect(todo_pulls == 1 && presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "switched",
+         "boundary refresh replaces todos from committed session history");
 }
 
 void run_tui_runtime_event_state_tests()

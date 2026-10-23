@@ -514,7 +514,8 @@ void RuntimeActionController::cycle_model(bool forward)
     static_cast<void>(core::Application::instance().terminal_context().beep());
     return;
   }
-  presentation_state_.apply_runtime_state_snapshot(options_, std::move(*result));
+  presentation_state_.refresh_after_backend_action(options_);
+  snapshot.status = std::move(*result);
   renderer_.transcript_scroll_offset = 0;
 }
 

@@ -40,9 +40,9 @@ struct TuiActiveNonblockingCommandDispatchResult
 // Clears a selector and paints truthful pending authority state before invoking
 // a synchronous model/session callback. The callback remains authoritative;
 // this boundary never applies or claims its result.
-[[nodiscard]] ava::core::Result<TuiRuntimeStateSnapshot> dispatch_tui_selector_authority(
-    ComposerSnapshot& snapshot, std::string pending_status, std::function<bool()> const& render,
-    std::function<ava::core::Result<TuiRuntimeStateSnapshot>()> const& callback);
+[[nodiscard]] ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, std::string pending_status,
+                                                                             std::function<bool()> const& render,
+                                                                             std::function<ava::core::Result<std::string>()> const& callback);
 
 // Presentation-only state transitions used by the interactive reasoning-cycle path.
 void apply_reasoning_cycle_success(ComposerSnapshot& snapshot, std::string feedback);

@@ -433,9 +433,12 @@ the enforcing constant.
   `transcript`, `pending_tools`, `permission_audits`, `queued_messages`, `activity`,
   `modified_files`, `todos` — the completed transcript grows for the lifetime of the
   visible session.
-- `TuiRuntimeStateSnapshot` and conversation buffers
+- `TuiSubmitResult` conversation buffers
   ([src/ava/tui/runtime.h](../../src/ava/tui/runtime.h)): `output`, `tool_timeline`,
   `conversation_output`, `conversation_tool_timeline`, request-id lists.
+- `TuiCatalogDelivery` carries pending-review slash/file completion vectors and
+  generations through a serialized boundary pull. Committed todos are pulled
+  separately at the same boundaries; quit completion skips both pulls.
 - `ApplicationCatalogCoordinator` cache (above) and mermaid render completions.
 
 **Observability (opt-in)**

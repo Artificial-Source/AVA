@@ -533,12 +533,6 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     return true;
   };
   auto clear_draft_for_interrupt = [&]() { return action_controller_.clear_draft_for_interrupt(); };
-  auto apply_runtime_state_snapshot = [&](std::string committed_session_id, TuiRuntimeStateSnapshot runtime_state) {
-    // Same shared overview sync path as the idle runtime loop.
-    return apply_runtime_state_snapshot_with_presentation_transition(options_, presentation_state_, draft_state_, renderer_, transcript_search_,
-                                                                     subagent_workspace_, action_controller_.active_select_list(),
-                                                                     std::move(committed_session_id), std::move(runtime_state));
-  };
 
   auto const is_command_submission = submitted_value.starts_with('/') || shell_helper_submission(submitted_value);
   if (is_command_submission && runtime_commands::session_switching_command(submitted_value) && !pending_image_attachments.empty())
@@ -872,23 +866,15 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     state.command_events_released = !is_command_submission || !state.ordinary_turn_request_ids.empty();
     if (state.command_events_released)
       state.event_projection_pending = true;
-    // Read backend identity after the worker has committed, before acquiring the
-    // UI lock. Completion DTO identity is presentation data and is never
-    // transition authority.
-    auto const committed_session_id = options_.read_committed_session_id ? options_.read_committed_session_id() : std::string{};
-    if (result.state_snapshot)
-    {
-      // Submit workers own ShellState. Apply their authoritative snapshot
-      // on the TUI thread before another prompt can consult UI-local
-      // session grants or attachments.
-      std::lock_guard<std::recursive_mutex> lock(ui_mutex);
-      session_changed = apply_runtime_state_snapshot(committed_session_id, std::move(*result.state_snapshot));
-    }
-    else
+    // Read backend identity after the worker has committed, before acquiring
+    // the UI lock. Action results never carry session transition authority.
+    auto committed_session_id = options_.read_committed_session_id ? options_.read_committed_session_id() : std::string{};
     {
       std::lock_guard<std::recursive_mutex> lock(ui_mutex);
       session_changed = apply_committed_session_transition(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_,
-                                                           action_controller_.active_select_list(), committed_session_id);
+                                                           action_controller_.active_select_list(), std::move(committed_session_id));
+      if (!result.quit)
+        presentation_state_.refresh_after_backend_action(options_);
     }
     if (active_queues && active_queues->finish)
     {

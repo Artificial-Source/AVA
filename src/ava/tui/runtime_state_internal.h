@@ -19,7 +19,7 @@ namespace ava::tui {
 
 struct RuntimeDraftState;
 struct TuiRuntimeOptions;
-struct TuiRuntimeStateSnapshot;
+struct TuiCatalogDelivery;
 struct TuiLocalDisplaySettings;
 class RuntimeRenderer;
 class RuntimeSubagentWorkspaceController;
@@ -100,7 +100,9 @@ class RuntimePresentationState final
   RuntimePresentationState(TuiFrontEnd* frontend, TuiRuntimeOptions& options);
 
   void refresh_prompt_metadata();
-  void apply_runtime_state_snapshot(TuiRuntimeOptions const& options, TuiRuntimeStateSnapshot state);
+  void apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery state);
+  // Pulls retained data without reading or replacing popup-only facts.
+  void refresh_after_backend_action(TuiRuntimeOptions const& options);
   // Applies TUI-owned bindings and refreshes every local hint projection.
   // This never changes backend catalog generations or applies a backend snapshot.
   void apply_local_key_bindings(TuiRuntimeOptions& options, TuiKeyBindings bindings);
@@ -131,10 +133,6 @@ class RuntimePresentationState final
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list);
 void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list);
 
-// Applies an authoritative runtime snapshot without reading or replacing popup-only facts.
-void apply_runtime_state_snapshot_preserving_popups(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
-                                                    TuiRuntimeStateSnapshot state);
-
 // Applies the local effects of a committed backend session transition. The
 // committed_session_id parameter must be read through
 // TuiRuntimeOptions::read_committed_session_id before taking the TUI UI lock.
@@ -144,14 +142,11 @@ void apply_runtime_state_snapshot_preserving_popups(TuiRuntimeOptions const& opt
                                                       TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
                                                       ActiveSelectList& active_select_list, std::string committed_session_id);
 
-// Applies every authoritative runtime snapshot after synchronizing local state
-// to committed_session_id. The identity parameter is backend-read control data,
-// never an identity copied from the incoming presentation DTO.
-[[nodiscard]] bool apply_runtime_state_snapshot_with_presentation_transition(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
-                                                                             RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                                                                             TranscriptSearchController& transcript_search,
-                                                                             RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                                             ActiveSelectList& active_select_list, std::string committed_session_id,
-                                                                             TuiRuntimeStateSnapshot state);
+// Synchronizes session-scoped presentation before pulling retained backend data.
+[[nodiscard]] bool apply_committed_session_transition_and_refresh(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
+                                                                  RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+                                                                  TranscriptSearchController& transcript_search,
+                                                                  RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
+                                                                  std::string committed_session_id);
 
 }  // namespace ava::tui
