@@ -507,6 +507,9 @@ set_tests_properties(ava_tests.process_monitor PROPERTIES TIMEOUT 45 LABELS "pro
 set_tests_properties(ava_tests.process_readiness PROPERTIES TIMEOUT 45 LABELS "process;posix;readiness;offline")
 set_tests_properties(ava_tests.process_supervisor_posix PROPERTIES TIMEOUT 45 LABELS "process;posix;offline")
 set_tests_properties(ava_tests.tool_scheduler PROPERTIES TIMEOUT 30)
+# Durable appends synchronize the session file; on -O0 CI runners the whole
+# suite needs about 35 seconds and its per-case watchdog is 120 seconds.
+set_tests_properties(ava_tests.session_run_controller PROPERTIES TIMEOUT 180)
 
 add_test(NAME ava_tests.lsp_real_clangd_smoke COMMAND ava_lsp_real_clangd_smoke)
 set_tests_properties(ava_tests.lsp_real_clangd_smoke PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 20 LABELS "lsp;offline;optional")

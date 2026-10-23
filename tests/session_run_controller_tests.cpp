@@ -185,7 +185,9 @@ bool run_controller_case_body(void (*body)(), std::string const& name)
     ::_exit(passed ? 0 : 1);
   }
   ava::tests::ScopedChild owner(child);
-  auto const status = owner.wait_until(ava::tests::now_plus_seconds(30));
+  // Durable appends synchronize the session file, so one case can take tens of
+  // seconds on an unoptimized CI runner; the suite's CTest timeout is 180 s.
+  auto const status = owner.wait_until(ava::tests::now_plus_seconds(120));
   ava::tests::expect_child_success(status ? std::expected<int, int>(*status) : std::expected<int, int>(std::unexpected(errno)), name);
   // Do not accumulate hung cases until the outer suite watchdog intervenes.
   return status.has_value() && WIFEXITED(*status);
