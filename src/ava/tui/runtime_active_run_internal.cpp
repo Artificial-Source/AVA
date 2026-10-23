@@ -866,15 +866,17 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     state.command_events_released = !is_command_submission || !state.ordinary_turn_request_ids.empty();
     if (state.command_events_released)
       state.event_projection_pending = true;
-    // Read backend identity after the worker has committed, before acquiring
-    // the UI lock. Action results never carry session transition authority.
+    // Read backend identity and the retained catalog/todo transports after the
+    // worker has committed, before acquiring the UI lock. Action results never
+    // carry session transition authority. A quit completion pulls nothing.
     auto committed_session_id = options_.read_committed_session_id ? options_.read_committed_session_id() : std::string{};
+    auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(options_);
     {
       std::lock_guard<std::recursive_mutex> lock(ui_mutex);
       session_changed = apply_committed_session_transition(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_,
                                                            action_controller_.active_select_list(), std::move(committed_session_id));
       if (!result.quit)
-        presentation_state_.refresh_after_backend_action(options_);
+        presentation_state_.apply_boundary_data(options_, std::move(boundary_reads));
     }
     if (active_queues && active_queues->finish)
     {

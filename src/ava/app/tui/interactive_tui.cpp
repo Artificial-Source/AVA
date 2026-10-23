@@ -582,7 +582,7 @@ int run_tui(InteractiveState state)
             return ava::app::promote_subagent_for_workspace(coordinator, session_id, job_id);
           },
       .on_open_fork_user_turn_selector = [&unlocked_session](std::string_view initial_query) -> ava::core::Result<ava::tui::SelectListView> {
-        // F-001: refuse sessionless /fork-from before listing/selecting so a later
+        // Refuse sessionless /fork-from before listing/selecting so a later
         // handled no-op cannot open a picker that wipes the live transcript.
         if (auto allowed = ava::app::require_persistent_session_for_fork_from(unlocked_session); !allowed)
           return std::unexpected(std::move(allowed.error()));

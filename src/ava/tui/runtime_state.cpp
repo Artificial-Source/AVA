@@ -160,20 +160,20 @@ void RuntimePresentationState::refresh_prompt_metadata()
   sidebar.mode = mode.value;
 }
 
-void RuntimePresentationState::apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery state)
+void RuntimePresentationState::apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery delivery)
 {
   bool completion_sources_changed = false;
-  if (!state.slash_catalog_generation || !applied_slash_catalog_generation_ || *state.slash_catalog_generation != *applied_slash_catalog_generation_)
+  if (!delivery.slash_catalog_generation || !applied_slash_catalog_generation_ || *delivery.slash_catalog_generation != *applied_slash_catalog_generation_)
   {
-    snapshot.slash_commands = std::move(state.slash_commands);
-    applied_slash_catalog_generation_ = state.slash_catalog_generation;
+    snapshot.slash_commands = std::move(delivery.slash_commands);
+    applied_slash_catalog_generation_ = delivery.slash_catalog_generation;
     completion_sources_changed = true;
   }
-  if (!state.workspace_catalog_generation || !applied_workspace_catalog_generation_ ||
-      *state.workspace_catalog_generation != *applied_workspace_catalog_generation_)
+  if (!delivery.workspace_catalog_generation || !applied_workspace_catalog_generation_ ||
+      *delivery.workspace_catalog_generation != *applied_workspace_catalog_generation_)
   {
-    snapshot.file_references = std::move(state.file_references);
-    applied_workspace_catalog_generation_ = state.workspace_catalog_generation;
+    snapshot.file_references = std::move(delivery.file_references);
+    applied_workspace_catalog_generation_ = delivery.workspace_catalog_generation;
     completion_sources_changed = true;
   }
   if (completion_sources_changed)
@@ -183,13 +183,29 @@ void RuntimePresentationState::apply_catalog_delivery(TuiRuntimeOptions const& o
   }
 }
 
-void RuntimePresentationState::refresh_after_backend_action(TuiRuntimeOptions const& options)
+//static
+RuntimePresentationState::BoundaryReads RuntimePresentationState::read_boundary_data(TuiRuntimeOptions const& options)
+{
+  BoundaryReads reads;
+  if (options.read_catalog_delivery)
+    reads.catalog = options.read_catalog_delivery();
+  if (options.read_committed_todos)
+    reads.todos = options.read_committed_todos();
+  return reads;
+}
+
+void RuntimePresentationState::apply_boundary_data(TuiRuntimeOptions const& options, BoundaryReads reads)
 {
   refresh_prompt_metadata();
-  if (options.read_catalog_delivery)
-    apply_catalog_delivery(options, options.read_catalog_delivery());
-  if (options.read_committed_todos)
-    sidebar.todos = options.read_committed_todos();
+  if (reads.catalog)
+    apply_catalog_delivery(options, std::move(*reads.catalog));
+  if (reads.todos)
+    sidebar.todos = std::move(*reads.todos);
+}
+
+void RuntimePresentationState::refresh_after_backend_action(TuiRuntimeOptions const& options)
+{
+  apply_boundary_data(options, read_boundary_data(options));
 }
 
 void RuntimePresentationState::apply_local_key_bindings(TuiRuntimeOptions& options, TuiKeyBindings bindings)

@@ -71,7 +71,7 @@ Classes describe payload meaning, not merely the file containing a callback.
 | `initial_display_settings`, `key_bindings` | U | Local effective settings and bindings. |
 | `mermaid_render` | D/U | Retained worker bridge plus local configuration parameters. |
 | `read_committed_session_id` | A | Narrow application-owned identity read outside the UI lock, only at serialized boundaries. |
-| `read_catalog_delivery`, `read_committed_todos` | B, retained transport | Pull and immediately apply at serialized non-quit action/completion boundaries, never during render. |
+| `read_catalog_delivery`, `read_committed_todos` | B, retained transport | Pulled outside the UI lock like the identity read, then applied at serialized non-quit action/completion boundaries, never during render. |
 | `read_startup_overview`, `read_project_trust` | D | Owning filtered popup DTOs, read once per popup open; not ordinary boundary refreshes. |
 | `create_active_run_queues`, `on_submit` | D/A | Existing bound queue and submit/content protocol, without ordinary state fields. |
 | `on_attach_image`, `on_paste_clipboard_image`, `on_external_editor`, `on_load_image_attachment` | D | Validated service results; optional absence, errors and replacement content remain distinct. |

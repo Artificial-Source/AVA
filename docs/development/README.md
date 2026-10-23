@@ -5,7 +5,7 @@ These current maintainer references describe the source checkout and engineering
 - [Contributing guide](contributing.md): prerequisites, build workflow, checks, and review expectations.
 - [Architecture](architecture.md): system boundaries, data flow, and module ownership.
 - [Codebase guide](codebase-guide.md): implementation map and common change paths.
-- [Frontend state boundary](frontend-state-boundary.md): retained interactive, history, and service contracts during the ordinary-state migration.
+- [Frontend state boundary](frontend-state-boundary.md): ownership classes, the canonical `UnlockedData` inventory, the TUI runtime seam and its guard, and the retained interactive, history, and service contracts.
 - [Backend benchmarking](backend-benchmarking.md): reproducible offline benchmark suites, methodology, and interpretation.
 - [Documentation policy](documentation-policy.md): information authority, style, freshness, and validation.
 - [C++ safety rules](cpp-safety-rules.md): ownership, errors, concurrency, and systems-programming constraints.

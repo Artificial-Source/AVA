@@ -306,7 +306,8 @@ struct TuiRuntimeOptions
   // while holding its UI lock.
   std::function<std::string()> read_committed_session_id;
   // Pending-review catalog and todo transports. Pull and apply only at
-  // serialized action/completion boundaries, never during rendering.
+  // serialized action/completion boundaries, never during rendering, and
+  // like read_committed_session_id never while holding the UI lock.
   std::function<TuiCatalogDelivery()> read_catalog_delivery;
   std::function<std::vector<TodoItem>()> read_committed_todos;
   // UI-thread popup initialization callbacks. Inputs: none. Outputs: owning,

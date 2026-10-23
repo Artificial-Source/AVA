@@ -4,6 +4,7 @@
 #include "ava/event/events.h"
 #include "ava/agent/subagent_launch.h"
 #include "ava/tui/composer.h"
+#include "ava/tui/runtime.h"
 #include "ava/tui/session_grants.h"
 #include "ava/session/attachments.h"
 #include "ava/core/result.h"
@@ -18,9 +19,6 @@
 namespace ava::tui {
 
 struct RuntimeDraftState;
-struct TuiRuntimeOptions;
-struct TuiCatalogDelivery;
-struct TuiLocalDisplaySettings;
 class RuntimeRenderer;
 class RuntimeSubagentWorkspaceController;
 class TranscriptSearchController;
@@ -100,8 +98,20 @@ class RuntimePresentationState final
   RuntimePresentationState(TuiFrontEnd* frontend, TuiRuntimeOptions& options);
 
   void refresh_prompt_metadata();
-  void apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery state);
-  // Pulls retained data without reading or replacing popup-only facts.
+  void apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery delivery);
+  // The retained catalog/todo transports read at one serialized boundary.
+  struct BoundaryReads
+  {
+    std::optional<TuiCatalogDelivery> catalog;
+    std::optional<std::vector<TodoItem>> todos;
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+  // Reads the retained transports through the options callbacks. Like
+  // read_committed_session_id, call this without holding the UI lock.
+  static BoundaryReads read_boundary_data(TuiRuntimeOptions const& options);
+  // Applies previously read transports without reading or replacing popup-only facts.
+  void apply_boundary_data(TuiRuntimeOptions const& options, BoundaryReads reads);
+  // Reads and applies in one step for callers that hold no lock.
   void refresh_after_backend_action(TuiRuntimeOptions const& options);
   // Applies TUI-owned bindings and refreshes every local hint projection.
   // This never changes backend catalog generations or applies a backend snapshot.
