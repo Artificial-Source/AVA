@@ -23,6 +23,54 @@ struct TestPad : public terminal::Pad
   }
 };
 
+class SGRDecoder
+{
+ private:
+  std::array<char, 16> buf_;
+  int index_ = 0;
+
+ public:
+  enum Result {
+    decoding, discarded, WheelUp, WheelDown
+  };
+
+  Result feed(wint_t key)
+  {
+    if (index_ == 0)
+    {
+      if (key != 27)
+        return discarded;
+    }
+    else if (key == 77)
+    {
+      if (index_ >= 5)
+      {
+        index_ = 0;
+        if (buf_[4] == 52)
+          return WheelUp;
+        if (buf_[4] == 53)
+          return WheelDown;
+      }
+      index_ = 0;
+      return discarded;
+    }
+    // Store key.
+    buf_[index_++] = key;
+    // Overflow protection.
+    if (index_ == buf_.size())
+      return discard();
+    // Still incomplete.
+    return decoding;
+  }
+
+ private:
+  Result discard()
+  {
+    index_ = 0;
+    return discarded;
+  }
+};
+
 int main()
 {
   Application application("linux08-pad");
@@ -58,13 +106,12 @@ int main()
 
   int const max_first_row = static_cast<int>(pads[0].dimension().height() - pads.size() * view_size.height());
   int first_row = 0;
+  SGRDecoder decoder;
   for (;;)
   {
     for (int p = 0; p < pads.size(); ++p)
       pads[p].prefresh({static_cast<uint32_t>(first_row + p * pad_view_height), 0}, pad_view_pos[p], view_size);
 
-    bool saw_esc = false;
-    bool saw_bracket_open = false;
     int count = 0;
     for (;;)
     {
@@ -74,34 +121,17 @@ int main()
       // pads are deliberately not refreshed as a side effect of input operations.
       pads[0].basic_window().get_wch(key);
 
+      Dout(dc::notice, "key = " << key);
+
       if (key == 'q')
         return EXIT_SUCCESS;
 
-      bool saw_scroll_up, saw_scroll_down;
-      if (saw_esc && key == '[')
-        saw_bracket_open = true;
-      else
+      SGRDecoder::Result result = decoder.feed(key);
+      if (result == SGRDecoder::WheelUp || result == SGRDecoder::WheelDown)
       {
-        saw_scroll_up = false;
-        saw_scroll_down = false;
-        if (saw_bracket_open && (key == 'A' || key == 'B'))
-        {
-          saw_scroll_up = key == 'A';
-          saw_scroll_down = key == 'B';
-        }
-        saw_bracket_open = false;
+        first_row = std::clamp(first_row + (result == SGRDecoder::WheelDown ? 1 : -1), 0, max_first_row);
+        break;
       }
-
-      if (saw_scroll_up || saw_scroll_down)
-      {
-        if ((++count % 5) == 0)
-        {
-          first_row = std::clamp(first_row + (saw_scroll_down ? 1 : -1), 0, max_first_row);
-          break;
-        }
-      }
-
-      saw_esc = key == 27;
     }
   }
 }
