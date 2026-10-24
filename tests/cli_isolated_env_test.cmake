@@ -15,6 +15,9 @@ file(MAKE_DIRECTORY "${TEST_ROOT}/physical")
 file(CREATE_LINK "${TEST_ROOT}/physical" "${TEST_ROOT}/linked" SYMBOLIC)
 set(FIXTURE_ROOT "${TEST_ROOT}/linked")
 ava_cli_isolated_env(AVA_CLI_ENV "${FIXTURE_ROOT}")
+# Script mode leaves CMP0109 unset, so find_program() would accept a readable
+# but non-executable PATH entry named `env` (for example a shell-init file).
+cmake_policy(SET CMP0109 NEW)
 find_program(AVA_GNU_ENV NAMES env REQUIRED)
 
 set(CHECK_COMMAND
