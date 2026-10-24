@@ -109,6 +109,85 @@ class CandidateTests(unittest.TestCase):
         self.run_candidate("verify", "--manifest-sha256", "0" * 64, "--revision", self.revision, success=False)
         self.run_candidate("verify", "--manifest-sha256", manifest, "--revision", "0" * 40, success=False)
 
+    def draft_arguments(self):
+        (self.build / "ava").write_bytes(b"#!/bin/sh\nprintf 'ava 1.0.0\\n'\n")
+        self.run_candidate("seal")
+        manifest = self.package()
+        self.directory.chmod(0o700)
+        body = self.root / "release-body.md"
+        body.write_text(
+            "# AVA 1.0.0\nCommit: @AVA_COMMIT@\n"
+            "Archive: @AVA_ARCHIVE_SHA256@\nChecksum: @AVA_CHECKSUM_SHA256@\n"
+            "Manifest: @AVA_MANIFEST_SHA256@\n")
+        return ["draft", "--dry-run", "--revision", self.revision,
+                "--manifest-sha256", manifest, "--repository", "example/ava",
+                "--body", str(body), "--output", str(self.root / "draft-plan")]
+
+    def test_draft_dry_run_renders_notes_without_running_remote_commands(self):
+        arguments = self.draft_arguments()
+        manifest = arguments[5]
+        output = self.root / "draft-plan"
+        result = self.run_candidate(*arguments)
+        self.assertIn("no remote commands were run", result.stdout)
+        notes = (output / "release-body.md").read_text()
+        self.assertIn(self.revision, notes)
+        self.assertIn(manifest, notes)
+        self.assertNotIn("@AVA_", notes)
+        commands = (output / "draft-commands.sh").read_text()
+        self.assertIn("gh release create v1.0.0 --repo example/ava --draft", commands)
+        self.assertIn("--verify-tag", commands)
+        self.assertIn("git ls-remote", commands)
+        self.assertIn("gh api --paginate", commands)
+        self.assertNotIn("--clobber", commands)
+        self.assertNotIn("cmake", commands)
+        self.assertFalse(subprocess.run(
+            ["git", "-C", str(self.repo), "show-ref", "--verify", "--quiet",
+             "refs/tags/v1.0.0"]).returncode == 0)
+
+    def test_draft_requires_explicit_dry_run(self):
+        arguments = self.draft_arguments()
+        arguments.remove("--dry-run")
+        self.assertIn("requires --dry-run", self.run_candidate(*arguments, success=False).stderr)
+
+    def test_draft_rejects_changed_manifest(self):
+        arguments = self.draft_arguments()
+        (self.directory / "candidate.json").write_text("{}\n")
+        self.assertIn("manifest digest mismatch", self.run_candidate(*arguments, success=False).stderr)
+        self.assertFalse((self.root / "draft-plan").exists())
+
+    def test_draft_rejects_existing_plan_without_changing_it(self):
+        arguments = self.draft_arguments()
+        self.run_candidate(*arguments)
+        notes = self.root / "draft-plan/release-body.md"
+        before = notes.read_bytes()
+        self.run_candidate(*arguments, success=False)
+        self.assertEqual(notes.read_bytes(), before)
+
+    def test_draft_rejects_existing_local_tag(self):
+        arguments = self.draft_arguments()
+        subprocess.run(["git", "-C", str(self.repo), "tag", "v1.0.0"], check=True)
+        self.assertIn("local tag already exists", self.run_candidate(*arguments, success=False).stderr)
+
+    def test_draft_rejects_extra_or_symlink_inputs(self):
+        arguments = self.draft_arguments()
+        extra = self.directory / "unexpected"
+        extra.write_text("not an approved release asset")
+        self.assertIn("unexpected files", self.run_candidate(*arguments, success=False).stderr)
+        extra.unlink()
+        extra.symlink_to(self.root / "release-body.md")
+        self.assertIn("not symlinks", self.run_candidate(*arguments, success=False).stderr)
+
+    def test_draft_rejects_incomplete_notes(self):
+        arguments = self.draft_arguments()
+        (self.root / "release-body.md").write_text("# AVA 1.0.0\nNo identity\n")
+        self.assertIn("missing @AVA_COMMIT@", self.run_candidate(*arguments, success=False).stderr)
+
+    def test_draft_rejects_wrong_body_version(self):
+        arguments = self.draft_arguments()
+        body = self.root / "release-body.md"
+        body.write_text(body.read_text().replace("# AVA 1.0.0", "# AVA 9.0.0"))
+        self.assertIn("body version differs", self.run_candidate(*arguments, success=False).stderr)
+
     def test_supplied_binary_cannot_claim_reused_build(self):
         result = subprocess.run([str(ROOT / "scripts/package-linux.sh"), "--build-dir", str(self.build),
                                  "--binary", str(self.build / "ava")], capture_output=True, text=True)

@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Seal a tested build and verify retained candidate bytes; never build or publish."""
+"""Seal candidate bytes, verify transfers, and prepare owner-run draft commands."""
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
+import shlex
+import stat
 import subprocess
 import tarfile
+import tempfile
 
 
 def digest(path: pathlib.Path) -> str:
@@ -96,17 +100,124 @@ def verify_candidate(directory: pathlib.Path, expected_manifest: str, revision: 
     return actual
 
 
+def prepare_draft(args: argparse.Namespace) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repository):
+        raise ValueError("repository must be OWNER/REPO")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
+        raise ValueError("revision must be a full commit SHA")
+    directory = args.directory.absolute()
+    status = directory.lstat()
+    if (not stat.S_ISDIR(status.st_mode) or status.st_uid != os.geteuid()
+            or stat.S_IMODE(status.st_mode) != 0o700):
+        raise ValueError("candidate directory must be owned by you with mode 0700")
+    for entry in directory.iterdir():
+        if not stat.S_ISREG(entry.lstat().st_mode):
+            raise ValueError("candidate inputs must be regular files, not symlinks")
+    candidate = verify_candidate(directory, args.manifest_sha256, args.revision)
+    if {entry.name for entry in directory.iterdir()} != {*candidate["files"], "candidate.json"}:
+        raise ValueError("candidate directory contains unexpected files")
+    archive_name = next(name for name in candidate["files"] if name.endswith(".tar.gz"))
+    version = archive_name.removeprefix("ava-").removesuffix("-linux-x64.tar.gz")
+    tag = "v" + version
+    local_tag = subprocess.run(
+        ["git", "-C", str(args.repo), "show-ref", "--verify", "--quiet", "refs/tags/" + tag])
+    if local_tag.returncode != 1:
+        raise ValueError("local tag already exists or could not be checked")
+    if git(args.repo, "rev-parse", args.revision + "^{commit}") != args.revision:
+        raise ValueError("approved revision is not a local commit")
+    body = args.body.read_text()
+    if f"# AVA {version}\n" not in body:
+        raise ValueError("release body version differs from archive")
+    replacements = {
+        "@AVA_COMMIT@": args.revision,
+        "@AVA_ARCHIVE_SHA256@": candidate["files"][archive_name],
+        "@AVA_CHECKSUM_SHA256@": candidate["files"][archive_name + ".sha256"],
+        "@AVA_MANIFEST_SHA256@": args.manifest_sha256,
+    }
+    for placeholder, value in replacements.items():
+        if placeholder not in body:
+            raise ValueError(f"release body is missing {placeholder}")
+        body = body.replace(placeholder, value)
+    if re.search(r"@AVA_[A-Z_]+@", body):
+        raise ValueError("release body contains an unresolved placeholder")
+    # Read the executable only after manifest, archive and provenance verification.
+    with tempfile.TemporaryDirectory(prefix="ava-draft-smoke-") as temp:
+        root = pathlib.Path(temp)
+        binary = root / "ava"
+        with tarfile.open(directory / archive_name, "r:gz") as archive:
+            with archive.extractfile(archive_name.removesuffix(".tar.gz") + "/bin/ava") as stream:
+                binary.write_bytes(stream.read())
+        binary.chmod(0o700)
+        environment = {"PATH": "/usr/bin:/bin", "HOME": temp,
+                       "XDG_CONFIG_HOME": str(root / "config"), "XDG_STATE_HOME": str(root / "state"),
+                       "LANG": "C.UTF-8", "TERM": "xterm-256color"}
+        output = subprocess.check_output([str(binary), "--version"], env=environment,
+                                         text=True, timeout=30).strip()
+        if output != "ava " + version:
+            raise ValueError("extracted executable version differs from archive")
+    destination = args.output.absolute()
+    # mkdir and exclusive writes make a repeated dry-run fail without replacing
+    # a previously reviewed body or command file.
+    destination.mkdir(mode=0o700)
+    notes = destination / "release-body.md"
+    with notes.open("x") as stream:
+        stream.write(body)
+    notes_sha = digest(notes)
+    q = shlex.quote
+    repository = args.repository
+    remote = "https://github.com/" + repository + ".git"
+    script = pathlib.Path(__file__).resolve()
+    commands = [
+        "#!/usr/bin/env bash", "set -euo pipefail", "umask 077",
+        "# Owner only: run after the packet and GitHub evidence are approved.",
+        shlex.join(["python3", str(script), "verify", "--directory", str(directory),
+                    "--revision", args.revision, "--manifest-sha256", args.manifest_sha256]),
+        f"printf '%s\\n' {q(notes_sha + '  ' + str(notes))} | sha256sum --check --strict",
+        f"remote_tags=$(git ls-remote --tags {q(remote)} {q('refs/tags/' + tag)} {q('refs/tags/' + tag + '^{}')})",
+        'test -z "$remote_tags" || { echo "Remote tag already exists; stop" >&2; exit 1; }',
+        f"release_tags=$(gh api --paginate {q('repos/' + repository + '/releases')} --jq '.[].tag_name')",
+        f"if printf '%s\\n' \"$release_tags\" | grep -Fxq -- {q(tag)}; then",
+        '  echo "Release or draft already exists; stop" >&2; exit 1', "fi",
+        shlex.join(["git", "-C", str(args.repo.absolute()), "tag", "-a", tag,
+                    args.revision, "-m", f"AVA {version}"]),
+        shlex.join(["git", "-C", str(args.repo.absolute()), "push", remote, "refs/tags/" + tag]),
+        shlex.join(["gh", "release", "create", tag, "--repo", repository, "--draft",
+                    "--verify-tag", "--title", "AVA " + version, "--notes-file", str(notes),
+                    str(directory / archive_name), str(directory / (archive_name + ".sha256"))]),
+        "# Stop here. Verify the draft's downloaded assets and obtain final approval.",
+        "# Publication is a separate owner command in docs/operations/publication.md.",
+    ]
+    with (destination / "draft-commands.sh").open("x") as stream:
+        stream.write("\n".join(commands) + "\n")
+    result = {**candidate, "version": version, "repository": repository,
+              "manifest_sha256": args.manifest_sha256, "release_body_sha256": notes_sha,
+              "commands": str(destination / "draft-commands.sh")}
+    print("Dry-run passed; no remote commands were run. Owner commands:\n")
+    print("\n".join(commands))
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("seal", "verify-build", "record", "verify"))
+    parser.add_argument("command", choices=("seal", "verify-build", "record", "verify", "draft"))
     parser.add_argument("--repo", type=pathlib.Path, default=pathlib.Path(__file__).resolve().parent.parent)
     parser.add_argument("--build-dir", type=pathlib.Path)
     parser.add_argument("--directory", type=pathlib.Path)
     parser.add_argument("--manifest-sha256")
     parser.add_argument("--revision")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--repository")
+    parser.add_argument("--body", type=pathlib.Path)
+    parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
     try:
-        if args.command == "verify":
+        if args.command == "draft":
+            if not all((args.dry_run, args.directory, args.manifest_sha256, args.revision,
+                        args.repository, args.body, args.output)):
+                parser.error("draft requires --dry-run, --directory, --manifest-sha256, "
+                             "--revision, --repository, --body and a new --output directory")
+            result = prepare_draft(args)
+        elif args.command == "verify":
             if not args.directory or not args.manifest_sha256 or not args.revision:
                 parser.error("verify requires --directory, --manifest-sha256 and --revision")
             result = verify_candidate(args.directory, args.manifest_sha256, args.revision)
@@ -127,7 +238,7 @@ def main() -> int:
                 print("manifest_sha256=" + digest(args.directory / "candidate.json"))
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
-    except (ValueError, KeyError, OSError, subprocess.CalledProcessError, tarfile.TarError) as error:
+    except (ValueError, KeyError, OSError, subprocess.SubprocessError, tarfile.TarError) as error:
         parser.exit(1, f"candidate verification failed: {error}\n")
 
 

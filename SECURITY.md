@@ -2,7 +2,12 @@
 
 ## Supported versions
 
-Security fixes are evaluated against the current development baseline on the `develop` branch. AVA has no published release support schedule in this repository.
+Before the first official publication, AVA has no supported released version;
+security fixes are evaluated against the current `develop` baseline. After
+publication, only the latest published, non-withdrawn `1.0.x` patch is supported
+unless owners announce another line. See the
+[supported-version policy](docs/operations/publication.md#8-supported-versions).
+This is not a response-time or maintenance-duration promise.
 
 ## Reporting a vulnerability
 

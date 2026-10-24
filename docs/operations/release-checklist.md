@@ -2,7 +2,7 @@
 
 This checklist covers the local Linux host artifact and exact-byte candidate CI. Runtime version `1.0.0` is not a published release. Candidate CI retains archives and evidence, but does **not** commit, tag, push, publish a release, sign, notarize, generate an SBOM, or call a live provider.
 
-For the current decision and exact-byte blockers, see the [release-readiness ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md). For the required but not-yet-implemented official lifecycle, see [publication.md](https://github.com/Artificial-Source/AVA/blob/develop/docs/operations/publication.md). For deterministic, sanitizer, terminal, and opt-in live-provider evidence, see [testing.md](testing.md).
+For the current decision and exact-byte blockers, see the [release-readiness ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md). For owner approvals, retained-byte draft preparation, publication, and withdrawal, see [publication.md](https://github.com/Artificial-Source/AVA/blob/develop/docs/operations/publication.md). For deterministic, sanitizer, terminal, and opt-in live-provider evidence, see [testing.md](testing.md).
 
 ## Artifact contract
 

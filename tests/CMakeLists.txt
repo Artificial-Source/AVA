@@ -1327,6 +1327,10 @@ if(Python3_Interpreter_FOUND)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/release_candidate_tests.py)
     set_tests_properties(ava_release.candidate_contract PROPERTIES TIMEOUT 120
       ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    add_test(NAME ava_release.publication_dry_run
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/release_candidate_tests.py -k draft)
+    set_tests_properties(ava_release.publication_dry_run PROPERTIES TIMEOUT 30
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
     if(AVA_RELEASE_ARTIFACT)
       set_property(TEST ava_release.candidate_contract APPEND PROPERTY
         ENVIRONMENT "AVA_RELEASE_TEST_BINARY=$<TARGET_FILE:ava>")

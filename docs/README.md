@@ -39,7 +39,7 @@ Use the [extensions index](extensions/README.md) for local plugins, MCP servers,
 
 ## Operations
 
-The [operations index](operations/README.md) covers builds, tests, Docker, terminals, diagnostics, troubleshooting, local release artifacts, and the required but not-yet-implemented [official publication runbook](operations/publication.md). Start with the symptom-first [troubleshooting guide](operations/troubleshooting.md) when AVA or its build fails.
+The [operations index](operations/README.md) covers builds, tests, Docker, terminals, diagnostics, troubleshooting, local release artifacts, and the owner-run [official publication runbook](operations/publication.md). The runbook is prepared; approval and the exact-candidate GitHub run are still required. Start with the symptom-first [troubleshooting guide](operations/troubleshooting.md) when AVA or its build fails.
 
 ## Security
 

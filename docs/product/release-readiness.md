@@ -134,9 +134,9 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 
 ### AVA-REL-012 — Official publication lifecycle and reviewed 1.0 notes
 
-- **Tier/status/owner:** P1; open blocker; shared.
+- **Tier/status/owner:** P1; release notes and local draft tooling implemented; local packet rehearsal and owner/GitHub gates pending; shared.
 - **Subsystem:** release operations, changelog/release notes, publication, rollback, and withdrawal.
-- **Exact evidence:** no `v1.0.0` tag or official release exists; `CHANGELOG.md` has no reviewed 1.0 release section; current automation ends at local no-clobber package publication. The required but unimplemented design is [publication.md](../operations/publication.md).
+- **Exact evidence:** `CHANGELOG.md` has a user-facing `1.0.0 - UNRELEASED` section. The [canonical release body](../operations/release-body-1.0.0.md) has exact-commit/digest placeholders and the REL-013 support floor. [publication.md](../operations/publication.md) gives owner commands, approval records, no-clobber draft staging from retained assets, remote verification, patch correction, withdrawal, and supported-version policy. `scripts/release-candidate.py draft --dry-run` verifies local packet identity, renders notes, smokes the extracted version, and prints remote commands without running them; its eight black-box cases pass. No tag, release, or GitHub write was made.
 - **Impact:** an ad hoc first release can publish the wrong commit or bytes, overwrite assets, omit limitations, or leave no correction/withdrawal procedure.
 - **Measurable acceptance:** owners review the exact version/commit, 1.0 changelog and release body, supported floor, known limits, checksums, approval record, immutable correction policy, post-publication checks, rollback/withdrawal decision tree, and supported-version policy; a no-clobber draft dry-run uses the retained `AVA-REL-011` assets; final tag/commit equality and remote assets are verified. This audit itself creates no tag or release.
 - **Verification:** reviewed release packet, dry-run record, approvals, remote tag/commit/API checks, downloaded asset hashes, extracted smoke, clean-install smoke, and withdrawal/patch drill evidence.

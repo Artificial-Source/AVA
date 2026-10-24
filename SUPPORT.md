@@ -17,4 +17,10 @@ For reproducible defects or documentation problems, open a public issue using th
 
 Community support is best-effort. Do not include credentials, tokens, private session data, proprietary source, or exploit details in public reports. Route suspected vulnerabilities according to [`SECURITY.md`](SECURITY.md).
 
+Before first publication there is no supported released version. After
+publication, support covers only the latest published, non-withdrawn `1.0.x`
+patch unless owners announce another line. The
+[publication policy](docs/operations/publication.md#8-supported-versions)
+defines corrections, withdrawal, and any future end-of-support announcement.
+
 For contributions and development setup, see [`CONTRIBUTING.md`](CONTRIBUTING.md).

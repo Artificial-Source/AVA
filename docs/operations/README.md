@@ -9,5 +9,6 @@ These current operational guides cover source builds, validation, diagnosis, and
 - [Troubleshooting](troubleshooting.md): symptom-first recovery guidance.
 - [Diagnostics](diagnostics.md): passive doctor, private diagnostics, and sanitized support exports.
 - [Release checklist](release-checklist.md): exact Linux host-artifact contract and local static package/provenance gates.
-- [Official publication runbook](publication.md): required but not-yet-implemented draft/approval/publication, verification, rollback, and withdrawal design.
+- [Official publication runbook](publication.md): owner approvals, retained-byte draft preparation, publication checks, corrections, and withdrawal.
+- [1.0.0 release body](release-body-1.0.0.md): canonical notes template rendered with the approved commit and digests.
 - [Artifact README source template](release-artifact-readme.md): source-only template installed as the future artifact documentation spine.
