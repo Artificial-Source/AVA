@@ -7,6 +7,12 @@ A version here does not mean that a tag or public release exists.
 
 ## [Unreleased]
 
+### Changed
+
+- CI Release builds no longer restore the SDK job's compiler cache by
+  mistake, which had forced an almost full rebuild. Local ccache use is now
+  documented.
+
 ## [1.0.0] - UNRELEASED
 
 These notes are ready for owner review. AVA 1.0.0 has not been published.
