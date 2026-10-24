@@ -177,6 +177,29 @@ if(AVA_ENABLE_TSAN AND NOT MSVC)
   add_link_options(-fsanitize=thread)
 endif()
 
+# Official Linux x64 host artifacts use one explicit ISA, never the build CPU.
+# AVA does not consume ai-utils/deposit_extract.h (its scalar branch currently
+# has unguarded BMI2 helpers). Disable the optional probe, without changing pins.
+option(AVA_RELEASE_ARTIFACT "Enforce the Linux x64 release artifact configuration" OFF)
+if(AVA_RELEASE_ARTIFACT)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+     NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" OR
+     NOT CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_CONFIGURATION_TYPES)
+    message(FATAL_ERROR "AVA_RELEASE_ARTIFACT requires single-config native Linux x64 Release")
+  endif()
+  if(AVA_ENABLE_GITACHE OR OptionEnableLibcwd OR OptionEnableAvaSanitizers OR AVA_ENABLE_TSAN)
+    message(FATAL_ERROR "Release artifacts require gitache, libcwd and sanitizers OFF")
+  endif()
+  # Nehalem tuning also avoids GCC's BMI-compatible REP-BSF/TZCNT aliases,
+  # allowing instruction inspection to reject every BMI mnemonic outright.
+  add_compile_options(-march=x86-64-v2 -mtune=nehalem -mno-bmi2)
+  set(CW_BMI2_SUPPORT 0 CACHE INTERNAL "BMI2 is outside the artifact CPU floor" FORCE)
+  execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE AVA_RELEASE_SOURCE_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE
+    COMMAND_ERROR_IS_FATAL ANY)
+  file(WRITE "${CMAKE_BINARY_DIR}/release-source-revision" "${AVA_RELEASE_SOURCE_REVISION}\n")
+endif()
+
 # ai-utils probes x86 BMI2 by compiling and running GCC x86 builtins. Those
 # builtins do not exist on non-x86 targets, where a failed probe must mean
 # "unsupported" rather than aborting configuration.

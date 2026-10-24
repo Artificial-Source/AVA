@@ -90,7 +90,7 @@ Tests currently build into `tests/ava_tests`, registered as focused `ava_tests.<
 | AArch64 | Not qualified for the first publication | No native exact-candidate evidence in the frozen audit |
 | Multi-config generators | Not release-qualified | Configuration/output/package selection is not proven configuration-safe |
 
-Only Linux x64 is targeted for the first official publication, and dirty working trees are always unqualified. The audited x64 artifact requires BMI2, `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.13`, `libncursesw.so.6`, `libtinfo.so.6`, and `curl`; publication still requires minimum-host smoke of the exact retained bytes. See [build configuration](../operations/build-configuration.md) and the [release-readiness ledger](../product/release-readiness.md).
+Only Linux x64 is targeted for the first official publication, and dirty working trees are always unqualified. Candidate builds target **x86-64-v2 (no BMI2/AVX)** with Ubuntu 24.04/glibc 2.39 as the minimum host, libstdc++ exposing `GLIBCXX_3.4.32`/`CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), terminfo, and `curl` 8.5+. Inspection caps binary symbol requirements at `GLIBC_2.38`, `GLIBCXX_3.4.32`, and `CXXABI_1.3.13`; publication still requires minimum-host smoke of the exact retained bytes. See [build configuration](../operations/build-configuration.md) and the [release-readiness ledger](../product/release-readiness.md).
 
 ## Configuration
 

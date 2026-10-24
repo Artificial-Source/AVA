@@ -1,6 +1,6 @@
 # AVA Release Artifact Checklist
 
-This is the operator checklist for AVA's implemented local Linux host artifact. It is not a publish pipeline or complete release-candidate qualification. Runtime version `1.0.0` is not a published release. The workflow does **not** commit, tag, push, publish, upload CI artifacts, sign, notarize, generate an SBOM, or call a live provider.
+This checklist covers the local Linux host artifact and exact-byte candidate CI. Runtime version `1.0.0` is not a published release. Candidate CI retains archives and evidence, but does **not** commit, tag, push, publish a release, sign, notarize, generate an SBOM, or call a live provider.
 
 For the current decision and exact-byte blockers, see the [release-readiness ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md). For the required but not-yet-implemented official lifecycle, see [publication.md](https://github.com/Artificial-Source/AVA/blob/develop/docs/operations/publication.md). For deterministic, sanitizer, terminal, and opt-in live-provider evidence, see [testing.md](testing.md).
 
@@ -15,7 +15,7 @@ ava-X.Y.Z-linux-ARCH.tar.gz
 ava-X.Y.Z-linux-ARCH.tar.gz.sha256
 ```
 
-`ARCH` is normalized by the packaging script (for example, `x64` or `arm64`). The archive has one top-level `ava-X.Y.Z-linux-ARCH/` directory with this exact allowlist:
+The first-publication `ARCH` is **`x64` only**. The generic local packager also normalizes other native ELF architectures for development checks; those outputs are not official candidates. The archive has one top-level `ava-X.Y.Z-linux-ARCH/` directory with this exact allowlist:
 
 ```text
 bin/ava
@@ -69,7 +69,7 @@ cmake --install build-release \
 
 ## Portability boundary
 
-This is a dynamically linked **host artifact**, not a universal or manylinux-style bundle. The 2026-08-23 audited x64 artifact requires a CPU with BMI2, `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.13`, `libncursesw.so.6`, `libtinfo.so.6`, a usable terminfo database, and `curl` on `PATH`. The audit host was Ubuntu 24.04.4 x64; this floor came from exact binary inspection and still requires extracted-artifact smoke on the chosen minimum supported host.
+This is a dynamically linked **Linux x64 host artifact**, not a universal or manylinux-style bundle. Official candidates target **x86-64-v2 (Nehalem-class or newer)**, with BMI2/AVX disabled. The minimum host is Ubuntu 24.04 (glibc 2.39), libstdc++ exposing `GLIBCXX_3.4.32`/`CXXABI_1.3.13`, `libncursesw.so.6`/`libtinfo.so.6` (6.4+), terminfo, and `curl` 8.5+. `scripts/inspect-linux-artifact.py` caps required symbols at `GLIBC_2.38`, `GLIBCXX_3.4.32`, and `CXXABI_1.3.13`, checks decoded ISA/encodings and `/lib64/ld-linux-x86-64.so.2`, and lists dynamic dependencies. Ubuntu container extraction and QEMU Nehalem smoke qualify the userspace and CPU profile separately from the native terminal gates.
 
 The first-publication target is Linux x64 only. Every published architecture requires its own native exact-candidate CI build, full deterministic and required terminal/sanitizer evidence, clean source/package gates, retained exact archive/checksum bytes, and minimum-floor smoke. Cross-compilation and source branches are not qualification evidence. AArch64, MSVC, Windows, and macOS were not qualified; multi-config is not release-qualified. Dirty working trees are always unqualified.
 
@@ -82,7 +82,7 @@ Build-only dependencies are not packaged. Building from this checkout needs CMak
 - Confirm the intended top-level CMake version and exact `ava --version` output.
 - Confirm scope remains terminal `ava` plus the documented allowlist.
 - Confirm no credentials, local configuration, session files, quarantines, or provider output can enter the stage.
-- Confirm commit/tag/push/publish/CI-artifact/signing/CPack/cross-build/desktop work remains out of scope unless separately approved.
+- Confirm tag/push/official-publication/signing/CPack/cross-build/desktop work remains out of scope unless separately approved; candidate CI upload is required evidence.
 
 ### 2. Developer build and deterministic tests
 
@@ -175,7 +175,22 @@ The deterministic package/provenance harness covers dependency-disconnected sour
 scripts/run-tests.sh -R '^ava_release\.package_linux$'
 ```
 
-Build mode should also be exercised during local candidate preparation because the CTest harness deliberately uses the already-built test binary. Final publication still requires CI to test and retain the exact packaged bytes under `AVA-REL-011`; this local run cannot substitute.
+Official candidate preparation uses the tested build, never the fresh-build packaging mode. In a clean checkout:
+
+```sh
+CC=gcc-13 CXX=g++-13 cmake --preset release-candidate -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+scripts/build.sh --build-dir build-candidate --jobs 6
+python3 scripts/release-candidate.py seal --build-dir build-candidate
+scripts/run-tests.sh --build-dir build-candidate --jobs 6
+# Run the exact 23 tmux and four PTY gates in CI with zero skips.
+scripts/package-linux.sh --build-dir "$PWD/build-candidate" --require-release-qualified \
+  --output-dir /absolute/private/output
+python3 scripts/release-candidate.py record --build-dir build-candidate --directory /absolute/private/output
+python3 scripts/inspect-linux-artifact.py /absolute/private/output/ava-1.0.0-linux-x64.tar.gz
+scripts/smoke-linux-minimum-host.sh /absolute/private/output "$PWD/build-candidate/tests/ava_fake_provider_server"
+```
+
+The seal binds the configured commit and executable/helper digests before tests. Packaging checks it before and after staging; the manifest proves the archived executable is identical. The `release-candidate`/`verify-promotion` CI jobs add same-commit sanitizer/TSan dependencies, exact 23+4 zero-skip checks, 90-day archive/checksum/evidence retention, and independent re-download verification. Local checks cannot substitute for the retained GitHub run.
 
 Independent inspection remains useful:
 
@@ -205,4 +220,4 @@ Format changed C++ with the repository `clang-format`. Record exact commands, pa
 
 ## Work outside this local checklist
 
-Exact-byte CI retention and official publication are open first-release blockers, not implemented by this checklist; follow `AVA-REL-011` through `AVA-REL-013` in the [release ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md). Post-release P2/P3 work includes deterministic archives, SBOM/signing/attestation policy, CPack/distribution formats, cross-build matrices, runtime bundling, registries/package managers, and desktop artifacts.
+Exact-byte CI retention is implemented but still requires a successful retained run before the first release; official publication remains separate. Follow `AVA-REL-011` through `AVA-REL-013` in the [release ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md). Post-release P2/P3 work includes deterministic archives, SBOM/signing/attestation policy, CPack/distribution formats, cross-build matrices, runtime bundling, registries/package managers, and desktop artifacts.

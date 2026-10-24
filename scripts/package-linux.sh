@@ -13,15 +13,17 @@ fake_provider=""
 output_dir=""
 binary_supplied=false
 require_release_qualified=false
+release_build=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/package-linux.sh [--binary ABS] [--fake-provider ABS] [--output-dir ABS] [--require-release-qualified]
+Usage: scripts/package-linux.sh [--build-dir ABS | --binary ABS] [--fake-provider ABS] [--output-dir ABS] [--require-release-qualified]
 
-Without --binary, configure a fresh private Release build tree and build ava plus the fake-provider helper.
+Without --build-dir or --binary, configure a fresh private Release build and build ava plus the fake-provider.
+With --build-dir, reuse a sealed release-candidate build, with no configure or build command.
 With --binary, snapshot that executable once and stage it only when its exact version matches this checkout.
 A supplied --fake-provider is likewise snapshotted once before model smoke.
---require-release-qualified enforces the implemented static source/gitlink/license/version/native-architecture/dynamic-dependency/package gates for a clean native source-built x86_64/AArch64 artifact; it does not prove CTest, CI, retention, or publication.
+--require-release-qualified enforces static source/gitlink/license/version/native-architecture/dynamic-dependency/package gates; --build-dir additionally enforces the inspected Linux x64 floor and sealed build identity. CI evidence remains required.
 If --output-dir is omitted, a new private unpredictable directory is created.
 Python 3 is required for provenance, packaging-time link verification, and secure publication.
 EOF
@@ -38,7 +40,7 @@ require_absolute() {
 
 while (($# > 0)); do
   case "$1" in
-    --binary|--fake-provider|--output-dir)
+    --build-dir|--binary|--fake-provider|--output-dir)
       if (($# < 2)); then
         echo "error: $1 requires a value" >&2
         usage >&2
@@ -46,6 +48,7 @@ while (($# > 0)); do
       fi
       require_absolute "$1" "$2"
       case "$1" in
+        --build-dir) release_build=$2 ;;
         --binary) binary=$2; binary_supplied=true ;;
         --fake-provider) fake_provider=$2 ;;
         --output-dir) output_dir=$2 ;;
@@ -67,6 +70,16 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+if [[ -n $release_build ]]; then
+  if [[ $binary_supplied == true || -n $fake_provider ]]; then
+    echo "error: --build-dir cannot be combined with --binary or --fake-provider" >&2
+    exit 2
+  fi
+  python3 "$repo_root/scripts/release-candidate.py" verify-build --repo "$repo_root" --build-dir "$release_build"
+  binary="$release_build/ava"
+  fake_provider="$release_build/tests/ava_fake_provider_server"
+fi
 
 if [[ $require_release_qualified == true && $binary_supplied == true ]]; then
   echo "error: --require-release-qualified rejects supplied-binary mode" >&2
@@ -139,12 +152,16 @@ if [[ -z $binary ]]; then
   # A static package-qualification build must not inherit artifacts or configuration from a
   # developer tree. Keep the Release tree private with the package transaction.
   release_build="$work_root/release-build"
-  cmake --preset release -S "$repo_root" -B "$release_build" \
+  release_preset=release
+  if [[ $(uname -m) == x86_64 ]]; then
+    release_preset=release-candidate
+  fi
+  cmake --preset "$release_preset" -S "$repo_root" -B "$release_build" \
     -DAVA_ENABLE_GITACHE=OFF \
     -DEnableLibcwd=OFF \
     -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
     -DCMAKE_DISABLE_FIND_PACKAGE_nlohmann_json=ON
-  cmake --build "$release_build" --target ava ava_fake_provider_server
+  cmake --build "$release_build" --parallel 6 --target ava ava_fake_provider_server
   binary="$release_build/ava"
   if [[ -z $fake_provider ]]; then
     fake_provider="$release_build/tests/ava_fake_provider_server"
@@ -160,6 +177,9 @@ if [[ -n $fake_provider ]]; then
   python3 "$repo_root/scripts/publish-linux-artifacts.py" \
     --snapshot-executable "$fake_provider" "$input_root/fake-provider"
   fake_provider="$input_root/fake-provider"
+fi
+if [[ -f $release_build/release-build.json ]]; then
+  python3 "$repo_root/scripts/inspect-linux-artifact.py" "$binary"
 fi
 
 version_output=$("$binary" --version)
@@ -348,6 +368,10 @@ run_smoke() {
 [[ $(run_smoke "$extracted/bin/ava" --version) == "ava $version" ]]
 help_output=$(run_smoke "$extracted/bin/ava" --help)
 grep -q 'Usage' <<<"$help_output"
+if [[ -f $release_build/release-build.json ]]; then
+  doctor_output=$(run_smoke "$extracted/bin/ava" doctor)
+  [[ -n $doctor_output ]]
+fi
 packages_output=$(run_smoke "$extracted/bin/ava" packages list)
 grep -qi 'deferred' <<<"$packages_output"
 
@@ -360,6 +384,10 @@ if [[ -n $fake_provider && -x $fake_provider ]]; then
   echo "package model smoke: passed"
 else
   echo "package model smoke: skipped (no executable --fake-provider supplied)"
+fi
+
+if [[ -f $release_build/release-build.json ]]; then
+  python3 "$repo_root/scripts/release-candidate.py" verify-build --repo "$repo_root" --build-dir "$release_build"
 fi
 
 # Publish the checksum first and archive last; the archive is the pair's commit marker.

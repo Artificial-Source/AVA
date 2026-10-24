@@ -1323,6 +1323,17 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(ava_release.install_component PROPERTIES TIMEOUT 75 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME ava_release.candidate_contract
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/release_candidate_tests.py)
+    set_tests_properties(ava_release.candidate_contract PROPERTIES TIMEOUT 120
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    if(AVA_RELEASE_ARTIFACT)
+      set_property(TEST ava_release.candidate_contract APPEND PROPERTY
+        ENVIRONMENT "AVA_RELEASE_TEST_BINARY=$<TARGET_FILE:ava>")
+      add_test(NAME ava_release.artifact_inspection
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/inspect-linux-artifact.py $<TARGET_FILE:ava>)
+      set_tests_properties(ava_release.artifact_inspection PROPERTIES TIMEOUT 60)
+    endif()
     add_test(
       NAME ava_release.package_linux
       COMMAND ${Python3_EXECUTABLE}
@@ -1347,6 +1358,7 @@ if(Python3_Interpreter_FOUND)
       LABELS "release;package;process;self-test;offline;python" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
 
+  set(AVA_TUI_TEST_BASE "${CMAKE_BINARY_DIR}" CACHE PATH "Private terminal evidence base (keep AF_UNIX paths short)")
   set(AVA_TUI_TMUX_SMOKE_SCENARIOS
     suspend_resume
     keybind_conflict
@@ -1380,7 +1392,7 @@ if(Python3_Interpreter_FOUND)
               --ava $<TARGET_FILE:ava>
               --fake-provider $<TARGET_FILE:ava_fake_provider_server>
               --fake-mermaid-helper $<TARGET_FILE:ava_fake_mermaid_helper>
-              --root ${CMAKE_BINARY_DIR}/tui-tmux-smoke/${AVA_TUI_TMUX_SMOKE_SCENARIO})
+              --root ${AVA_TUI_TEST_BASE}/tui-tmux-smoke/${AVA_TUI_TMUX_SMOKE_SCENARIO})
     set_tests_properties(
       ava_tui.tmux_smoke_${AVA_TUI_TMUX_SMOKE_SCENARIO}
       PROPERTIES

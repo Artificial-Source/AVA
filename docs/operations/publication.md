@@ -34,6 +34,10 @@ The reviewed release packet must contain:
 
 The approver compares the release body against `CHANGELOG.md`, the exact candidate diff, the retained artifact's `PROVENANCE.json`, and the platform evidence. Review must remove private paths, credentials, raw captures, provider payloads, internal evidence roots, and claims based only on static competitor inspection.
 
+Use this support paragraph verbatim in the reviewed release body (then add the reviewed version, commit, changes, limitations and artifact digests):
+
+> Supported artifact: **Linux x64 only, x86-64-v2 (Nehalem-class or newer; no BMI2 or AVX requirement)**. Minimum qualified host: Ubuntu 24.04, glibc 2.39, libstdc++ providing `GLIBCXX_3.4.32` and `CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), a usable terminfo database, and `curl` 8.5+ on `PATH`. Binary symbol requirements do not exceed `GLIBC_2.38`, `GLIBCXX_3.4.32`, or `CXXABI_1.3.13`; loader `/lib64/ld-linux-x86-64.so.2` and host `libc.so.6`, `libm.so.6`, `libgcc_s.so.1`, `libstdc++.so.6`, `libncursesw.so.6`, `libtinfo.so.6` are required. No Windows, macOS, AArch64, or other distribution artifact is qualified. Python/CMake are not AVA runtime requirements. No automatic updates, signing, SBOM, or attestation is provided.
+
 ## 3. Tag policy
 
 - Official release tags use `vX.Y.Z` and point directly to the approved candidate commit.
@@ -56,6 +60,21 @@ ava-X.Y.Z-linux-ARCH.tar.gz.sha256
 The release CI record must establish that the executable inside this archive is the one that passed the complete candidate gate: full deterministic CTest, canonical sanitizer evidence, focused TSan, all 23 tmux and four PTY gates, install/provenance/package checks, checksum/extraction, version/help/doctor, and fake-provider smoke. Retention duration must cover approval, publication, post-publication verification, and the project's incident window.
 
 Before staging, download the retained pair into a new mode-0700 operator directory outside the checkout, verify the CI-recorded digests, verify the adjacent checksum, inspect the exact member allowlist, and extract into a new private directory. Never accept a locally rebuilt substitute.
+
+Implementation: `.github/workflows/ci.yml` runs `release-candidate` on manual dispatch (`release_candidate=true`) and `v*` tags, not routine pushes/PRs. This avoids duplicating the costly complete terminal/container/package wave on every edit; routine CI still runs deterministic tests and its small terminal selection. GCC 13 on Ubuntu 24.04 fixes the runtime floor independently of newer developer compilers. The job depends on successful `sanitizer` and `tsan` jobs from the same workflow commit, builds the final binary once, and packages its sealed build through `--build-dir`. Nothing in promotion invokes CMake/build.
+
+Retained artifacts are `linux-x64-candidate-RUN-ATTEMPT` and `linux-x64-evidence-RUN-ATTEMPT`, each with **90-day retention**. The candidate artifact contains the unchanged archive/checksum and `candidate.json` with archive/checksum/executable SHA-256 values, source revision and member inventory. The run summary independently records the manifest SHA-256 and same-run sanitizer/TSan conclusions. Evidence contains JUnit, binary inspection and container smoke logs. `verify-promotion` downloads that exact artifact and verifies the manifest digest supplied by the producing job plus all enclosed digests/commit/provenance, then runs extracted version/help. Its summary records the matching before/after values. It does not tag or publish.
+
+For a later operator promotion, copy the full revision and manifest SHA-256 from the approved run summary, not from the download itself. In a new private directory outside the checkout:
+
+```sh
+gh run download RUN --name linux-x64-candidate-RUN-ATTEMPT --dir /absolute/private/download
+python3 scripts/release-candidate.py verify --directory /absolute/private/download \
+  --revision FULL_APPROVED_COMMIT --manifest-sha256 APPROVED_MANIFEST_SHA256
+python3 scripts/inspect-linux-artifact.py /absolute/private/download/ava-1.0.0-linux-x64.tar.gz
+```
+
+Verify that `release-candidate`, `sanitizer`, `tsan`, and `verify-promotion` all succeeded for that same commit/run before draft staging. Expired artifacts require a new candidate qualification; never rebuild during promotion. This download/verify step is implemented, but the separate reviewed/no-clobber official draft lifecycle remains `AVA-REL-012`.
 
 ## 5. Draft, approve, and publish without clobber
 

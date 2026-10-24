@@ -74,11 +74,13 @@ scripts/package-linux.sh --output-dir /absolute/path/outside/AVA
 
 The script builds Release `ava` plus the fake-provider smoke helper, stages only CMake component `ava`, extracts the archive fresh, verifies its checksum and CLI behavior, and runs the deterministic model smoke. `--binary /absolute/path/to/ava` accepts an existing binary; add `--fake-provider /absolute/path/to/ava_fake_provider_server` to run the model smoke in that mode. Without a fake helper the script prints an explicit skip.
 
-This is a dynamically linked **host** artifact, not a portable Linux bundle. The 2026-08-23 audited x64 candidate requires BMI2, `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.13`, `libncursesw.so.6`, `libtinfo.so.6`, a usable terminfo database, and `curl` on `PATH`. The first-publication target is Linux x64 only; another architecture may publish only after native exact-candidate evidence.
+The first-publication target is **Linux x64 only**, built for **x86-64-v2 (Nehalem-class or newer; no BMI2/AVX requirement)**. The minimum qualified host is Ubuntu 24.04: glibc 2.39, libstdc++ providing `GLIBCXX_3.4.32` and `CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), a usable terminfo database, and `curl` 8.5+ on `PATH`. Inspection caps binary symbol requirements at `GLIBC_2.38`, `GLIBCXX_3.4.32`, and `CXXABI_1.3.13`. This is a dynamically linked host artifact, not a portable Linux bundle; other distributions and architectures require independent exact-candidate evidence.
 
 Tested on Ubuntu 24.04.4 x64: GCC 13 BetaTest with Unix Makefiles and GCC 13 Release with Ninja. Clang 18 was environment-blocked; MSVC, Windows, macOS, and AArch64 were not qualified. Multi-config builds are not release-qualified. A dirty tree is never a qualified artifact, and these source results do not qualify future release bytes.
 
 `--require-release-qualified` and `PROVENANCE.json` field `release_qualified:true` prove only the implemented static source/gitlink/license/native-architecture/dynamic-dependency/package gates. Complete candidate qualification requires the [release ledger](docs/product/release-readiness.md) and [publication runbook](docs/operations/publication.md).
+
+The opt-in/tagged `release-candidate` CI job uses GCC 13 on Ubuntu 24.04, builds once, seals executable digests, tests those bytes, and packages with `--build-dir` without rebuilding. It retains the archive, checksum and digest manifest for 90 days; `verify-promotion` re-downloads and verifies them without publishing. Routine pushes keep the smaller terminal gate.
 
 ## Run
 

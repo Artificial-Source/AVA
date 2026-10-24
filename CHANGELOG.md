@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Added opt-in/tagged Linux x64 candidate CI that seals and tests one Release build, requires all 23 tmux and four PTY gates without skips, retains exact archive/checksum digests for 90 days, and verifies re-downloaded bytes without rebuilding or publishing.
+- Added an x86-64-v2 release-artifact configuration with BMI2 disabled, fail-closed ISA/symbol/loader inspection, and Ubuntu 24.04 plus Nehalem CPU-profile archive smoke.
 - Community documentation and GitHub contribution templates.
 - Configurable primary agent definitions and invocation-local `--agent` selection; see [subagent configuration](docs/core/configuration.md#subagents).
 - Completed TUI parity documentation for Mermaid fence projection, transcript selection/navigation/copy affordances, cursor control and bounded Kitty/`modifyOtherKeys` negotiation, prompt stash, and the 23-scenario isolated tmux suite. These surfaces retain explicit accessibility, renderer, probing, and session-tree non-goals.
