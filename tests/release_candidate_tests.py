@@ -144,6 +144,25 @@ class CandidateTests(unittest.TestCase):
             ["git", "-C", str(self.repo), "show-ref", "--verify", "--quiet",
              "refs/tags/v1.0.0"]).returncode == 0)
 
+    def test_draft_preflight_rejects_existing_release_in_large_listing(self):
+        self.run_candidate(*self.draft_arguments())
+        tools = self.root / "tools"
+        tools.mkdir()
+        releases = self.root / "remote-releases.txt"
+        releases.write_text("v1.0.0\n" + "other-version\n" * 20000)
+        (tools / "gh").write_text(f'#!/bin/sh\ncat "{releases}"\n')
+        (tools / "git").write_text(
+            '#!/bin/sh\nif [ "$1" = ls-remote ]; then exit 0; fi\n'
+            'echo "unexpected remote write" >&2\nexit 99\n')
+        for executable in tools.iterdir():
+            executable.chmod(0o700)
+        result = subprocess.run(
+            ["bash", str(self.root / "draft-plan/draft-commands.sh")],
+            env={**os.environ, "PATH": str(tools) + ":/usr/bin:/bin"},
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Release or draft already exists", result.stderr)
+
     def test_draft_requires_explicit_dry_run(self):
         arguments = self.draft_arguments()
         arguments.remove("--dry-run")

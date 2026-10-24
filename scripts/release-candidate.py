@@ -176,7 +176,7 @@ def prepare_draft(args: argparse.Namespace) -> dict:
         f"remote_tags=$(git ls-remote --tags {q(remote)} {q('refs/tags/' + tag)} {q('refs/tags/' + tag + '^{}')})",
         'test -z "$remote_tags" || { echo "Remote tag already exists; stop" >&2; exit 1; }',
         f"release_tags=$(gh api --paginate {q('repos/' + repository + '/releases')} --jq '.[].tag_name')",
-        f"if printf '%s\\n' \"$release_tags\" | grep -Fxq -- {q(tag)}; then",
+        f'if grep -Fxq -- {q(tag)} <<<"$release_tags"; then',
         '  echo "Release or draft already exists; stop" >&2; exit 1', "fi",
         shlex.join(["git", "-C", str(args.repo.absolute()), "tag", "-a", tag,
                     args.revision, "-m", f"AVA {version}"]),
