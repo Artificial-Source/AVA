@@ -184,7 +184,7 @@ option(AVA_RELEASE_ARTIFACT "Enforce the Linux x64 release artifact configuratio
 if(AVA_RELEASE_ARTIFACT)
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
      NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" OR
-     NOT CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_CONFIGURATION_TYPES)
+     NOT CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_CONFIGURATION_TYPES OR CMAKE_CROSSCOMPILING)
     message(FATAL_ERROR "AVA_RELEASE_ARTIFACT requires single-config native Linux x64 Release")
   endif()
   if(AVA_ENABLE_GITACHE OR OptionEnableLibcwd OR OptionEnableAvaSanitizers OR AVA_ENABLE_TSAN)
@@ -211,6 +211,16 @@ unset(_ava_system_processor)
 
 # Declare aicxx submodules.
 include(AICxxSubmodules)
+
+if(AVA_RELEASE_ARTIFACT)
+  # cwds enables its RDTSCP microbenchmark whenever assembly compiles, not
+  # when the target ISA guarantees it. AVA never uses that optional API.
+  # Keep unused benchmark code out of the artifact without changing the pin.
+  get_target_property(_ava_cwds_sources cwds_ObjLib SOURCES)
+  list(FILTER _ava_cwds_sources EXCLUDE REGEX "(^|/)benchmark\\.(cxx|h)$")
+  set_property(TARGET cwds_ObjLib PROPERTY SOURCES "${_ava_cwds_sources}")
+  unset(_ava_cwds_sources)
+endif()
 
 # libcwd publishes libdw/libelf as interface dependencies rather than recording
 # them as NEEDED entries. Linux toolchains that default to --as-needed can then

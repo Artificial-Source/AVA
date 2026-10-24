@@ -73,7 +73,7 @@ This is a dynamically linked **Linux x64 host artifact**, not a universal or man
 
 The first-publication target is Linux x64 only. Every published architecture requires its own native exact-candidate CI build, full deterministic and required terminal/sanitizer evidence, clean source/package gates, retained exact archive/checksum bytes, and minimum-floor smoke. Cross-compilation and source branches are not qualification evidence. AArch64, MSVC, Windows, and macOS were not qualified; multi-config is not release-qualified. Dirty working trees are always unqualified.
 
-Build-only dependencies are not packaged. Building from this checkout needs CMake 3.27+, a C++23 compiler, Boost and ncurses development files, Git, and configured source dependencies. Canonical debug-enabled development/sanitizer configurations also require a writable `GITACHE_ROOT`, Python 3, and JSON-capable Universal Ctags. Packaging additionally needs Bash, Python 3, `tar`, `sha256sum`, and Linux `renameat2`. Python is not a runtime dependency.
+Build-only dependencies are not packaged. Building from this checkout needs CMake 3.27+, a C++23 compiler, Boost and ncurses development files, Git, and configured source dependencies. Canonical debug-enabled development/sanitizer configurations also require a writable `GITACHE_ROOT`, Python 3, and JSON-capable Universal Ctags. Packaging additionally needs Bash, Python 3, `tar`, `sha256sum`, and Linux `renameat2`; candidate inspection also needs binutils (`readelf`, `objdump`). The minimum-host smoke needs Docker or Podman and installs QEMU inside Ubuntu 24.04. These test/packaging tools are not AVA runtime dependencies.
 
 ## Release-candidate checks
 

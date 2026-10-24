@@ -7,7 +7,7 @@ import io
 import json
 import os
 import pathlib
-import shutil
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -130,8 +130,9 @@ class InspectionTests(unittest.TestCase):
         section = self.root / "extension.bin"
         section.write_bytes(data)
         binary = self.root / "ava-mutated"
-        subprocess.run(["objcopy", "--add-section", f".ava_isa_test={section}",
-                        "--set-section-flags", ".ava_isa_test=alloc,code,readonly",
+        # Mutate the first executable section so negative cases do not scan
+        # AVA's complete text eight times before reaching the injected opcode.
+        subprocess.run(["objcopy", "--update-section", f".init={section}",
                         str(self.binary), str(binary)], check=True, capture_output=True)
         result = subprocess.run(["python3", str(INSPECT), str(binary)], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
@@ -152,16 +153,21 @@ class InspectionTests(unittest.TestCase):
     def test_tzcnt_is_rejected_without_guessing_about_fallback(self):
         self.reject_instruction(bytes.fromhex("f3 48 0f bc c0 c3"), "outside reviewed")
 
+    def test_optional_rdtscp_benchmark_code_is_rejected(self):
+        self.reject_instruction(bytes.fromhex("0f 01 f9 c3"), "outside reviewed")
+
     def test_unknown_instruction_is_rejected(self):
         self.reject_instruction(bytes.fromhex("0f 3f c3"), "outside reviewed")
 
     def test_newer_symbol_floor_is_rejected(self):
         original = self.binary.read_bytes()
-        for old, new in ((b"GLIBC_2.38", b"GLIBC_9.99"),
-                         (b"GLIBCXX_3.4.32", b"GLIBCXX_9.9.99"),
-                         (b"CXXABI_1.3.13", b"CXXABI_9.9.99")):
-            with self.subTest(family=old):
-                self.assertIn(old, original)
+        for family in (b"GLIBC", b"GLIBCXX", b"CXXABI"):
+            with self.subTest(family=family):
+                # Change the major version without changing ELF string offsets.
+                match = re.search(family + rb"_([0-8])\.[0-9.]+", original)
+                self.assertIsNotNone(match)
+                old = match[0]
+                new = family + b"_9" + old[len(family) + 2:]
                 binary = self.root / "ava-newer-symbol"
                 binary.write_bytes(original.replace(old, new))
                 result = subprocess.run(["python3", str(INSPECT), str(binary)], capture_output=True, text=True)
