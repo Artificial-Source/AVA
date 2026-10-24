@@ -78,7 +78,7 @@ void run_app_runtime_tests()
   test_application_catalog_current_session_incremental_refresh();
   test_request_projection_validates_committed_v4_history();
   test_unlocked_data_access_and_notifications();
-  test_frontend_refresh_observes_write_before_notification();
+  test_frontend_refresh_observes_concurrent_write();
   test_runtime_model_switch_accepts_committed_openai_responses_reasoning();
   test_app_runtime_model_switch_persists_and_reopens();
   test_app_runtime_session_lease_reacquired_after_owner_death();

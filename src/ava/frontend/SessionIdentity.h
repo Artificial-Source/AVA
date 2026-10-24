@@ -1,6 +1,8 @@
 #pragma once
 
-#include "FrontEnd.h"
+#include "Data.h"
+#include "DisplayString.h"
+#include "RefreshResult.h"
 #include "ava/session/session_store.h"
 #include "utils/macros.h"
 
@@ -8,6 +10,8 @@
 #include <string>
 
 namespace ava::frontend {
+
+class FrontEnd;
 
 // Cache the registered session-store options and project their display identity on the frontend thread.
 class SessionIdentity

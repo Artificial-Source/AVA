@@ -156,7 +156,8 @@ void TuiFrontEndFixture::set_model(TuiTestModel model)
 void TuiFrontEndFixture::set_git_branch(std::string branch)
 {
   ava::app::runtime::session_ts::wat session_w(impl_->session);
-  session_w->git_branch().change([branch = std::move(branch)](std::string& canonical_branch) mutable { canonical_branch = std::move(branch); });
+  session_w->git_branch().change(
+      [branch = std::move(branch)](ava::app::runtime::GitBranch& canonical_branch) mutable { canonical_branch.name = std::move(branch); });
 }
 
 void TuiFrontEndFixture::set_directories(std::filesystem::path workspace_root, std::filesystem::path current_directory,
@@ -290,7 +291,8 @@ bool TuiFrontEndFixture::replace_session_with_git_branch(std::string branch)
     return false;
   {
     ava::app::runtime::session_ts::wat replacement_w(*replacement);
-    replacement_w->git_branch().change([branch = std::move(branch)](std::string& canonical_branch) mutable { canonical_branch = std::move(branch); });
+    replacement_w->git_branch().change(
+        [branch = std::move(branch)](ava::app::runtime::GitBranch& canonical_branch) mutable { canonical_branch.name = std::move(branch); });
   }
   return ava::app::runtime::Session::replace_with(impl_->session, *replacement).has_value();
 }

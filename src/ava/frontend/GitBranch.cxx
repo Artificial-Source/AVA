@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "FrontEnd.h"
 #include "GitBranch.h"
 
 namespace ava::frontend {
@@ -11,9 +12,9 @@ void GitBranch::refresh()
   ASSERT(dynamic_cast<app::runtime::GitBranch_ts const*>(data) != nullptr);
   auto const* unlocked_git_branch = static_cast<app::runtime::GitBranch_ts const*>(data);
   app::runtime::GitBranch_ts::crat git_branch_r(*unlocked_git_branch);
-  bool const changed = git_branch_snapshot_ != *git_branch_r;
+  bool const changed = git_branch_snapshot_ != git_branch_r->name;
   git_branch_.changed_ = git_branch_.changed_ || changed;
-  git_branch_snapshot_ = *git_branch_r;
+  git_branch_snapshot_ = git_branch_r->name;
 }
 
 // Remember the canonical branch's registration index, rather than retaining a movable Session pointer.

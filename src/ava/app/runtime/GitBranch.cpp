@@ -33,9 +33,9 @@ bool refresh_git_branch(session_ts& unlocked_session)
   session_ts::wat session_w(unlocked_session);
   if (session_w->store.options_r()->session_id != identity.first || session_w->workspace_dir() != identity.second)
     return false;
-  if (*GitBranch_ts::crat(session_w->git_branch()) == observed)
+  if (GitBranch_ts::crat(session_w->git_branch())->name == observed)
     return false;
-  session_w->git_branch().change([&observed](std::string& branch) { branch = std::move(observed); });
+  session_w->git_branch().change([&observed](GitBranch& branch) { branch.name = std::move(observed); });
   return true;
 }
 

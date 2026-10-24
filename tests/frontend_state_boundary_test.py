@@ -35,11 +35,10 @@ TUI_BACKEND_IDENTIFIERS = {
     "refresh_session_statistics", "compute_session_stats", "estimate_active_context_tokens",
     "read_authority", "observe_git_branch", "refresh_git_branch",
 }
-SESSION_SEAM_FILES = {"src/ava/tui/TuiFrontEnd.h", "src/ava/tui/TuiFrontEnd.cpp"}
 CANONICAL_WRAPPERS = {
     ("src/ava/app/runtime/AgentSelection.h", "AgentSelection_ts", "AgentSelection"),
     ("src/ava/app/runtime/Directories.h", "Directories_ts", "Directories"),
-    ("src/ava/app/runtime/GitBranch.h", "GitBranch_ts", "std::string"),
+    ("src/ava/app/runtime/GitBranch.h", "GitBranch_ts", "GitBranch"),
     ("src/ava/app/runtime/ModelSelection.h", "ModelSelection_ts", "ModelSelection"),
     ("src/ava/app/runtime/ResolvedPromptState.h", "PromptModeAndContextSources_ts", "PromptModeAndContextSources"),
     ("src/ava/session/Stats.h", "Stats_ts", "Stats"),
@@ -121,8 +120,8 @@ def check_tree(source: Path) -> None:
                 forbidden = identifiers & TUI_BACKEND_IDENTIFIERS
                 if forbidden:
                     raise AssertionError(f"tui backend: {relative}: forbidden {sorted(forbidden)}")
-                if relative not in SESSION_SEAM_FILES and SESSION_ACCESS.search(text):
-                    raise AssertionError(f"session seam: {relative}: backend access outside TuiFrontEnd")
+                if SESSION_ACCESS.search(text):
+                    raise AssertionError(f"session seam: {relative}: backend access belongs in frontend initialization, not TUI code")
             if relative.startswith(("src/ava/app/runtime/", "src/ava/session/")):
                 wrapper_count += len(WRAPPER.findall(text))
                 for alias, value in WRAPPER_ALIAS.findall(text):
@@ -152,7 +151,7 @@ def self_test() -> None:
         put(SEAM_PATH, baseline)
         for path, alias, value in CANONICAL_WRAPPERS:
             put(path, f"using {alias} = frontend::UnlockedData<{value}>;\n")
-        put("src/ava/tui/TuiFrontEnd.cpp", "app::runtime::session_ts::crat session_r; SCOPED_CRITICAL_AREA(); app::runtime::Session* session;")
+        put("src/ava/frontend/FrontEnd.cxx", "app::runtime::session_ts::crat session_r; SCOPED_CRITICAL_AREA(); app::runtime::Session* session;")
         put("src/ava/app/tui/mermaid_tui_bridge.h", "std::mutex mutex; SubagentInspectorFrame frame;")
         put("src/ava/tui/composer.h", "struct ComposerSnapshot {}; struct SidebarSnapshot {};")
         put("src/ava/app/backend.cpp", "refresh_session_statistics(); read_authority();")

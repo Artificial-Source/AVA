@@ -2,6 +2,7 @@
 #ifdef CWDEBUG
 #include "ava/debug/debug_ostream_operators.h"
 #endif
+#include "FrontEnd.h"
 #include "SessionStats.h"
 
 #include <iomanip>

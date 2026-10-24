@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "AgentSelection.h"
+#include "FrontEnd.h"
 #include "ava/app/runtime/AgentSelection.h"
 
 #include <utility>

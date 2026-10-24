@@ -1,6 +1,13 @@
 #pragma once
 
+#include "AgentSelection.h"
 #include "Data.h"
+#include "Directories.h"
+#include "GitBranch.h"
+#include "ModelSelection.h"
+#include "PromptModeAndContextSources.h"
+#include "SessionIdentity.h"
+#include "SessionStats.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/app/runtime/session_ts.h"
 
@@ -14,34 +21,6 @@ using SessionConstReadAccess = threadsafe::AccessConst<SessionUnlockedBase>;
 
 namespace ava::frontend {
 
-// A string as displayed on the UI.
-// This type is used to store (private) state in snapshot objects, in the form of a display string,
-// that are members of the final frontend class.
-struct DisplayString
-{
-  std::string display_;
-  bool changed_{true};
-
-  bool clear_changed()
-  {
-    bool changed = changed_;
-    changed_ = false;
-    return changed;
-  }
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
-// Return a refreshed projection value together with its independently consumed change notification.
-template <typename T>
-struct RefreshResult
-{
-  T value;
-  bool changed;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-};
-
 // class FrontEnd
 //
 // Base class of a frontend.
@@ -50,9 +29,18 @@ class FrontEnd
  protected:
   DataList data_list_;          // All registered frontend Data objects.
 
+  // Frontend projection objects.
+  AgentSelection agent_selection_;
+  ModelSelection model_selection_;
+  PromptModeAndContextSources prompt_metadata_;
+  SessionStats session_stats_;
+  Directories directories_;
+  GitBranch git_branch_;
+  SessionIdentity session_identity_;
+
  protected:
-  // Constructor.
-  FrontEnd() : data_list_(core::Application::instance().vec8alloc()) { }
+  // Construct the registry and projections, connecting statistics to this frontend's model projection.
+  FrontEnd();
 
   // The user entered text in the composer area and hit Enter. Called by the derived frontend.
   void on_submit(std::u8string const& input);
@@ -66,11 +54,17 @@ class FrontEnd
   // Register all Data (derived) objects.
   void register_frontend_data(app::runtime::session_ts& unlocked_session);
 
-  // Let the derived class initialize its displayable state. Called by FrontEnd::register_frontend_data.
-  virtual void initialize_frontend_state(app::runtime::SessionConstReadAccess const& session_r) = 0;
+  // Initialize the common projections from session_r after registering their canonical objects.
+  // Overrides that use the common projections must call this base implementation.
+  void initialize_frontend_state(app::runtime::SessionConstReadAccess const& session_r);
+  // Override this for UI *specific* frontend projections; default: the are none.
+  virtual void initialize_frontend_state_impl(app::runtime::SessionConstReadAccess const& UNUSED_ARG(session_r)) { }
 
-  // One of the registered Data objects was changed. Called by the backend.
-  virtual void data_changed(DataListIndex index) = 0;
+  // Mark the common projection for index dirty on the notifying backend thread, without accessing UI state.
+  // Overrides that use the common projections must forward notifications to this base implementation.
+  void data_changed(DataListIndex index);
+  // Override this for UI *specific* frontend projections; default: the are none.
+  virtual void data_changed_impl(DataListIndex UNUSED_ARG(index)) { }
 
   // Obtain Data pointer for index previously returned by register_data.
   Data const* get_data(DataListIndex index) const
@@ -80,7 +74,20 @@ class FrontEnd
     return data_list_[index];
   }
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // Accessors.
+
+  AgentSelection& agent_selection() { return agent_selection_; }
+  ModelSelection& model_selection() { return model_selection_; }
+  ModelSelection const& model_selection() const { return model_selection_; }
+  PromptModeAndContextSources& prompt_metadata() { return prompt_metadata_; }
+  SessionStats& session_stats() { return session_stats_; }
+  SessionStats const& session_stats() const { return session_stats_; }
+  Directories& directories() { return directories_; }
+  GitBranch& git_branch() { return git_branch_; }
+  SessionIdentity& session_identity() { return session_identity_; }
+
+  // Projection caches remain frontend-thread-owned and must not be traversed by generic debug printing.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 } // namespace ava::frontend

@@ -1,6 +1,8 @@
 #pragma once
 
-#include "FrontEnd.h"
+#include "Data.h"
+#include "DisplayString.h"
+#include "RefreshResult.h"
 #include "ava/app/runtime/ResolvedPromptState.h"
 
 #include <atomic>
@@ -8,6 +10,8 @@
 #include "debug.h"
 
 namespace ava::frontend {
+
+class FrontEnd;
 
 // Frontend projection of the observable mode and context-source count.
 class PromptModeAndContextSources

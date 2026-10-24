@@ -36,14 +36,14 @@ Projection files are under `src/ava/frontend/`, with the named class in matching
 | --- | --- | --- | --- |
 | `src/ava/app/runtime/AgentSelection.h:30`: `AgentSelection_ts` | `agent_selection_`; `Session::open`, `apply_trust_prompt_state_and_refresh`, `replace_with` | `AgentSelection`: `agent_refresh`, `provenance_refresh`, `tool_preset_refresh` | Exact copies of `selected_primary_agent.name`, `.provenance`, `.tool_preset` only. No prompt body, definition path or fabricated model override. Enum labels are derived. |
 | `src/ava/app/runtime/Directories.h:20`: `Directories_ts` | `directories_`; `Session::open` (including `open_at` inputs) and `replace_with` | `Directories`: `workspace_root_refresh`, `current_directory_refresh` | Whole `Directories`, including additional writable directories. Display paths derive from `workspace_dir` and `current_dir` separately; writable-directory-only changes need not change either label. |
-| `src/ava/app/runtime/GitBranch.h:11`: `GitBranch_ts` | `git_branch_`; `Session::open`, `refresh_git_branch`, `replace_with` | `GitBranch`: `git_branch_refresh` | Exact observed string; empty means no branch observed. Backend observation retains the startup/action/completion cadence. Rendering does no Git or filesystem work. |
+| `src/ava/app/runtime/GitBranch.h:18`: `GitBranch_ts` | `git_branch_`; `Session::open`, `refresh_git_branch`, `replace_with` | `GitBranch`: `git_branch_refresh` | Whole canonical `GitBranch`; `name` is the exact observed string and empty means no branch observed. Backend observation retains the startup/action/completion cadence. Rendering does no Git or filesystem work. |
 | `src/ava/app/runtime/ModelSelection.h:31`: `ModelSelection_ts` | `model_selection_`; `Session::open`, model/reasoning mutation methods, scoped-model commands, `replace_with` | `ModelSelection`: `model_refresh`, `provider_refresh`, `reasoning_refresh`, `context_window_tokens_refresh` | Whole `ModelSelection::model` (`ModelInfo`) and optional `reasoning`, copied together. Model/reasoning labels are derived; provider and numeric window come from that copy. The optional scoped cycle remains backend authority and is not copied into a new scope projection. |
 | `src/ava/app/runtime/ResolvedPromptState.h:24`: `PromptModeAndContextSources_ts` | `resolved_prompt_state_.mode_and_context_sources`; `Session::open`, `apply_prompt_state`, model/trust prompt reconstruction, `replace_with` | `PromptModeAndContextSources`: `mode_refresh`, `context_source_count_refresh` | Exact mode plus derived `context_sources.size()` under one guard. No context vector, assembled prompt, or duplicate backend count. Zero is known empty. |
 | `src/ava/session/Stats.h:70`: `Stats_ts` | `session_stats_`; `refresh_session_statistics` in `SessionStatisticsPublication.cpp`, startup and `replace_with` | `SessionStats`: `token_count_refresh`, `contex_percentage_refresh` (current spelling) | Whole `Stats`, including cumulative provider usage and separate active-history/system-prompt estimates. Saturating active total, compact text and percentage are derived caches. Unknown estimates stay unknown. Exact total changes can change percentage without changing compact text; model-window changes also refresh percentage independently. |
 | `src/ava/session/session_store.h:97`: `SessionStoreOptions_ts` | `store.options_`; `SessionStore` constructors/copy/move assignment and session replacement | `SessionIdentity`: `session_id_refresh`, `session_path_refresh` | Whole options copy; session ID is exact, path is derived by `session_path_for_options`. Independently consumed ID/path display changes are not the committed-transition control signal. |
 
 `FrontEnd::register_frontend_data` registers the seven final addresses before
-typed `initialize_frontend_state` initializes projections. `TuiFrontEnd::data_changed`
+typed `FrontEnd::initialize_frontend_state` initializes its frontend-neutral projections. `FrontEnd::data_changed`
 routes each registered index. A write guard notifies after unlocking, even for
 an identical write. Each projection clears dirty atomically before reading,
 retains pending changes independently for its exposed fields, and suppresses
@@ -177,15 +177,13 @@ supporting app-side adapters; backend permission decisions, Session stores,
 leases, plugin invocation authority, agent instructions and assembled prompts do
 not become TUI-owned or copied `UnlockedData` domains.
 
-The current
-`src/ava/frontend/FrontEnd.h` and typed
-`initialize_frontend_state` remain in use. Their sanctioned Session read seam is
-`src/ava/tui/TuiFrontEnd.h` /
-`src/ava/tui/TuiFrontEnd.cpp`, with existing transitive
-Session headers through `FrontEnd.h` and
-`src/ava/frontend/SessionStats.h`. This does not authorize
-new Session access in TUI rendering or require a replacement index-only binding
-API.
+The common projections, their construction, typed `initialize_frontend_state`
+and notification routing belong to `src/ava/frontend/FrontEnd.h` / `FrontEnd.cxx`.
+The implementation accesses Session during registration and initialization;
+projection headers forward-declare FrontEnd and include the small display/result
+headers instead of their owning class. `SessionStats.h` includes the canonical
+statistics header, not Session. TuiFrontEnd inherits this common behavior without
+its own Session access. No replacement index-only binding API is required.
 
 `TuiRuntimeOptions::read_committed_session_id` remains a narrow control read at
 serialized action/completion boundaries, independent of consumed display dirty
@@ -208,7 +206,7 @@ It strips comments before checking declarations/identifiers.
 | --- | --- | --- |
 | Seam | Parse the bodies of `TuiRuntimeOptions` and `TuiSubmitResult` in `src/ava/tui/runtime.h`. Reject unrecognized declarations and non-function members outside the reviewed name sets. Callback return/parameter types cannot name a `*Snapshot` except `TuiBranchSummarySnapshot`, `StartupOverviewSnapshot`, `ProjectTrustSnapshot`; this also rejects composer/sidebar and renamed ordinary snapshot payloads. | `SEAM_FIELDS` for reviewed data fields; `RETAINED_CALLBACK_SNAPSHOTS` only for an explicitly approved retained protocol type. |
 | Removed ordinary paths | Reject `TuiRuntimeStateSnapshot`, `state_snapshot`, `apply_runtime_state_snapshot`, `TuiKeyBindingReloadResult`, `refresh_token_status` in `src/ava/tui`, `src/ava/app`, `src/ava/frontend`, `tests`. In `src/ava/tui` additionally reject `refresh_session_statistics`, `compute_session_stats`, `estimate_active_context_tokens`, `read_authority`, `observe_git_branch`, `refresh_git_branch`. | `BANNED_IDENTIFIERS` and `TUI_BACKEND_IDENTIFIERS`, with their existing explicit directory scopes in `check_tree`. |
-| Session seam | Only `src/ava/tui/TuiFrontEnd.h` and `src/ava/tui/TuiFrontEnd.cpp` may use `session_ts`, `SCOPED_CRITICAL_AREA` or `app::runtime::Session` within `src/ava/tui`. | `SESSION_SEAM_FILES`; expansion requires review of the actual access, not a directory exemption. |
+| Session seam | No file within `src/ava/tui` may use `session_ts`, `SCOPED_CRITICAL_AREA` or `app::runtime::Session`. Common projection initialization lives in `src/ava/frontend/FrontEnd.cxx`. | Any new access requires review of its actual ownership, not a directory exemption. |
 | Reviewed canonical domains and lock-free appearance | Exactly the seven path/alias/value triples above under `src/ava/app/runtime` and `src/ava/session`; additional, missing, duplicate, changed-value and non-alias instantiations fail. No `UnlockedData<`, `std::mutex` or `std::shared_mutex` in `src/ava/app/tui/display_reload.*`, `tui_display_settings.*`, `src/ava/tui/theme.*`, `keybindings.*`. | `CANONICAL_WRAPPERS` for an individually approved domain; `UI_ONLY_STEMS` for another local-only owner. |
 | No protocol wrappers | No `UnlockedData<` anywhere under `src/ava/tui` or `src/ava/app/tui`. | The two explicit prefixes in `check_tree`; do not exempt a deferred directory to add pending-request state. |
 
@@ -248,7 +246,7 @@ test invocation ran.
 
 | Key | Tests or terminal scenarios and the behavior they exercise |
 | --- | --- |
-| Projection | `tests/tui_runtime_state_tests.cpp`: `test_frontend_data_changed_routes_each_canonical` checks initial delivery, isolated canonical writes and once-only display consumption. `tests/app_runtime_model_tests.cpp`: `test_unlocked_data_access_and_notifications` checks unlocked notification and registered assignment; `test_frontend_refresh_observes_write_before_notification` gates a canonical writer and delayed notification, then checks the next write/refresh. |
+| Projection | `tests/tui_runtime_state_tests.cpp`: `test_frontend_data_changed_routes_each_canonical` checks initial delivery, isolated canonical writes and once-only display consumption. `tests/app_runtime_model_tests.cpp`: `test_unlocked_data_access_and_notifications` checks unlocked extension notification and registered assignment; `test_frontend_refresh_observes_concurrent_write` gates a canonical writer, checks base routing without extension callbacks, explicitly replays late dirtiness, then checks the next write/refresh. |
 | Identity | `tests/tui_composer_rendering_tests.cpp`: `run_tui_composer_rendering_tests_part_4` checks initial/identical/replacement identity, prompt, directory and Git values, same-size context counts, distinct workspace/current paths in the sidebar drawer, and sanitized rendering. `tests/app_runtime_startup_tests.cpp`: `test_app_runtime_open_session_and_context_prompt`, `test_app_runtime_replacement_open_context`, `test_app_runtime_git_branch_observation_and_refresh` exercise backend path/context and observed-branch behavior. |
 | Agent | `tests/tui_composer_rendering_tests.cpp`: `test_selected_agent_projection_and_rendering` checks canonical labels, independent metadata flags, no-op writes, replacement and detached initialization. `tests/app_runtime_prompt_tests.cpp`: `test_default_primary_is_canonical_builtin_ava_without_duplicate_prompt`, `test_app_run_prompt_isolates_ambient_extensions`, `test_primary_agent_tool_iteration_limit_is_applied_to_runtime_loop`, `test_project_primary_revocation_removes_authority_without_broadening_tools` check the actual next request's selected instructions/tools, default `none` and trust-driven authority changes. |
 | Statistics | `tests/tui_selector_tests.cpp`: `run_tui_selector_tests` checks model/string/numeric flag ordering, compact versus exact totals and model-window-only percentage changes. `tests/app_runtime_startup_tests.cpp`: `test_app_token_status_tracks_compaction_projection` asserts one initial publication, one recomputation for batched mutations and no additional work on unchanged `/exit`; `test_app_statistics_invalidate_partial_append_recovery` and `test_app_statistics_reject_stale_work_across_session_replacement` check mutation/replacement safety. |

@@ -1,12 +1,16 @@
 #pragma once
 
-#include "FrontEnd.h"
+#include "Data.h"
+#include "DisplayString.h"
+#include "RefreshResult.h"
 #include "ava/app/runtime/Directories.h"
 
 #include <atomic>
 #include <string>
 
 namespace ava::frontend {
+
+class FrontEnd;
 
 class Directories
 {

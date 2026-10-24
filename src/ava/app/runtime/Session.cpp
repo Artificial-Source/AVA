@@ -625,7 +625,7 @@ ava::core::Result<session_ts> Session::construct(OpenContext const& context, run
       ModelSelection{.model = std::move(model), .reasoning = std::move(reasoning), .scoped_model_cycle = registry.scoped_model_cycle});
   session::Stats_ts session_stats;
   std::shared_ptr<SessionStatisticsPublicationState> session_statistics_publication;
-  GitBranch_ts git_branch(observe_git_branch(workspace_dir));
+  GitBranch_ts git_branch(GitBranch{.name = observe_git_branch(workspace_dir)});
   TrustState trust_state{.project_trust = std::move(project_trust)};
   std::shared_ptr<SessionRunController> run_controller;
   try

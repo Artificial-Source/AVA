@@ -1,14 +1,18 @@
 #pragma once
 
-#include "FrontEnd.h"
+#include "Data.h"
+#include "DisplayString.h"
 #include "ModelSelection.h"
+#include "RefreshResult.h"
 #include "ava/debug/print_members_on.h"
-#include "ava/app/runtime/Session.h"
+#include "ava/session/Stats.h"
 
 #include <atomic>
 #include "debug.h"
 
 namespace ava::frontend {
+
+class FrontEnd;
 
 // Frontend projection of canonical session statistics, including both active-context estimates.
 // Refresh and snapshot access are confined to the frontend thread; dirty() may be called by backend notification threads.

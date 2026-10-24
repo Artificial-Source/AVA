@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "FrontEnd.h"
 #include "PromptModeAndContextSources.h"
 
 namespace ava::frontend {

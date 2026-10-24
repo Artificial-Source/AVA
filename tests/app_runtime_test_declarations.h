@@ -69,7 +69,7 @@ void test_app_session_new_resume_commands();
 void test_app_session_metadata_commands();
 void test_request_projection_validates_committed_v4_history();
 void test_unlocked_data_access_and_notifications();
-void test_frontend_refresh_observes_write_before_notification();
+void test_frontend_refresh_observes_concurrent_write();
 void test_runtime_model_switch_accepts_committed_openai_responses_reasoning();
 void test_application_catalog_cache_reuses_workspace_and_session_indexes();
 void test_application_catalog_coordinator_publishes_coherent_generation();

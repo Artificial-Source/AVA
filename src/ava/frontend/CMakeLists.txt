@@ -14,6 +14,9 @@ add_library(ava_frontend
 target_link_libraries(ava_frontend
   PUBLIC
     AVA::core
+  PRIVATE
+    # Model projections format committed model and reasoning selections using config helpers.
+    AVA::config
 )
 
 ava_apply_debugging(ava_frontend)

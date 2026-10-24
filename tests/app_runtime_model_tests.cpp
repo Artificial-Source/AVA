@@ -194,14 +194,20 @@ void test_app_runtime_session_lease_reacquired_after_owner_death()
 
 namespace {
 
+// Exercise the common projection implementation without terminal-specific overrides or runtime services.
+class CommonFrontEnd final : public ava::frontend::FrontEnd
+{
+ public:
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
 class CallbackFrontEnd final : public ava::frontend::FrontEnd
 {
  public:
   std::function<void(ava::frontend::DataListIndex)> on_data_changed;
 
-  void initialize_frontend_state(app::runtime::SessionConstReadAccess const&) override { }
-
-  void data_changed(ava::frontend::DataListIndex index) override
+  // Observe only extension data; FrontEnd handles canonical projection notifications without invoking this hook.
+  void data_changed_impl(ava::frontend::DataListIndex index) override
   {
     if (on_data_changed)
       on_data_changed(index);
@@ -215,11 +221,17 @@ class CallbackFrontEnd final : public ava::frontend::FrontEnd
 void test_unlocked_data_access_and_notifications()
 {
   using data_type = ava::frontend::UnlockedData<std::string>;
+  static_assert(!std::same_as<data_type, ava::app::runtime::GitBranch_ts>);
   static_assert(std::derived_from<data_type::wat, data_type::rat>);
   static_assert(std::derived_from<data_type::wat, data_type::crat>);
   static_assert(std::move_constructible<data_type::wat>);
 
   CallbackFrontEnd frontend;
+  ava::app::runtime::GitBranch_ts branch(&frontend, ava::app::runtime::GitBranch{"canonical-initial"});
+  auto& branch_projection = frontend.git_branch();
+  branch_projection.initialize(&branch);
+  expect(branch_projection.git_branch_refresh().changed, "the canonical branch projection starts initialized and dirty");
+
   data_type data(&frontend, "seven");
   int notifications = 0;
   std::string observed_value;
@@ -247,6 +259,9 @@ void test_unlocked_data_access_and_notifications()
     expect(read_rat(data_w) == "seven" && read_crat(data_w) == "seven", "write access retains inherited rat and crat reference conversions");
   }
   expect(notifications == 1 && observed_value == "seven", "a write guard notifies after unlocking even when no value was modified");
+  auto const after_extension_write = branch_projection.git_branch_refresh();
+  expect(!after_extension_write.changed && after_extension_write.value == "canonical-initial",
+         "plain string extension data reaches its hook without dirtying the canonical Git branch projection");
 
   {
     data_type::wat first(data);
@@ -261,32 +276,45 @@ void test_unlocked_data_access_and_notifications()
   data_type replacement("forty-two");
   data = std::move(replacement);
   expect(notifications == 4 && observed_value == "forty-two", "move assignment preserves destination registration and publishes the transferred value");
+
+  branch.change([](ava::app::runtime::GitBranch& value) { value.name = "canonical-updated"; });
+  auto const after_canonical_write = branch_projection.git_branch_refresh();
+  expect(notifications == 4 && after_canonical_write.changed && after_canonical_write.value == "canonical-updated",
+         "canonical Git branch writes bypass the extension hook and refresh their projection");
 }
 
-void test_frontend_refresh_observes_write_before_notification()
+// Exercise common routing during a concurrent write and explicitly replay a late dirty notification.
+// The extension hook is not an interception point for canonical notifications.
+void test_frontend_refresh_observes_concurrent_write()
 {
+  {
+    CommonFrontEnd frontend;
+    ava::app::runtime::GitBranch_ts branch(&frontend, ava::app::runtime::GitBranch{"initial"});
+    frontend.git_branch().initialize(&branch);
+    auto const initial = frontend.git_branch().git_branch_refresh();
+    expect(initial.changed && initial.value == "initial", "a non-TUI frontend owns and initializes its common projection");
+    expect(!frontend.git_branch().git_branch_refresh().changed, "the common projection consumes its initial display change");
+    branch.change([](ava::app::runtime::GitBranch& value) { value.name = "base-notification"; });
+    auto const updated = frontend.git_branch().git_branch_refresh();
+    expect(updated.changed && updated.value == "base-notification", "base frontend notification routing refreshes a non-TUI projection");
+    expect(!frontend.git_branch().git_branch_refresh().changed, "base frontend notifications are consumed once");
+  }
+
   CallbackFrontEnd frontend;
-  ava::app::runtime::GitBranch_ts branch(&frontend, "initial");
-  ava::frontend::GitBranch projection(&frontend);
+  ava::app::runtime::GitBranch_ts branch(&frontend, ava::app::runtime::GitBranch{"initial"});
+  auto& projection = frontend.git_branch();
   projection.initialize(&branch);
   std::latch write_locked(1);
   std::latch release_write(1);
   std::latch reader_entering(1);
-  std::latch deliver_notification(1);
   int notifications = 0;
-  frontend.on_data_changed = [&](ava::frontend::DataListIndex) {
-    deliver_notification.wait();
-    ++notifications;
-    projection.dirty();
-  };
+  frontend.on_data_changed = [&](ava::frontend::DataListIndex) { ++notifications; };
 
-  // A writer gates the canonical read, then commits before its notification is
-  // delivered. The initial dirty refresh may copy that committed value first.
-  // Delayed notification must be consumed without a false display change; a
-  // subsequent write must still be visible at the next refresh.
+  // A writer gates the canonical read, then commits while the initial dirty refresh is pending.
+  // Both possible notification/refresh orderings must leave the projection current.
   std::jthread writer([&] {
-    branch.change([&](std::string& value) {
-      value = "during-refresh";
+    branch.change([&](ava::app::runtime::GitBranch& value) {
+      value.name = "during-refresh";
       write_locked.count_down();
       release_write.wait();
     });
@@ -303,15 +331,18 @@ void test_frontend_refresh_observes_write_before_notification()
   reader_entering.wait();
   release_write.count_down();
   reader.join();
-  expect(changed && copied == "during-refresh", "a canonical write committed before notification is visible to the in-flight refresh");
-  deliver_notification.count_down();
+  expect(changed && copied == "during-refresh", "a concurrent canonical write is visible to the in-flight refresh");
   writer.join();
+  expect(notifications == 0, "common canonical notifications do not reach the frontend-specific hook");
+  // Replay the effect of a notification arriving after refresh has already copied the committed value.
+  // No backend interception hook is needed to check the projection's late-dirty semantics.
+  projection.dirty();
   auto const notified = projection.git_branch_refresh();
-  expect(notifications == 1 && !notified.changed && notified.value == "during-refresh",
-         "delayed notification is delivered once and consumes dirty state without changing an already-current display");
-  branch.change([](std::string& value) { value = "next-refresh"; });
+  expect(!notified.changed && notified.value == "during-refresh", "a late dirty notification does not change an already-current display");
+  branch.change([](ava::app::runtime::GitBranch& value) { value.name = "next-refresh"; });
   auto const next = projection.git_branch_refresh();
-  expect(notifications == 2 && next.changed && next.value == "next-refresh", "a later canonical write is observed by the next refresh");
+  expect(notifications == 0 && next.changed && next.value == "next-refresh",
+         "a later canonical write is routed by the base frontend and observed by the next refresh");
   expect(!projection.git_branch_refresh().changed, "the next refresh consumes that display change once");
 }
 

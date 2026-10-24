@@ -45,7 +45,12 @@ add_executable(ava_lsp_real_clangd_smoke "lsp_real_clangd_smoke.cpp")
 # last pass and the libcwd-enabled Debug and sanitizer links fail.
 target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ${AICXX_OBJECTS_LIST})
 if (OptionEnableLibcwd)
-  target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
+  # Common frontend construction can pull projections and their debug printers
+  # late in the link. Rescan the complete existing printer cycle, not only terminal/debug.
+  set(AVA_TEST_DEBUG_LINK_LIBRARIES ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} AVA::app_common)
+  list(REMOVE_DUPLICATES AVA_TEST_DEBUG_LINK_LIBRARIES)
+  list(JOIN AVA_TEST_DEBUG_LINK_LIBRARIES "," AVA_TEST_DEBUG_LINK_GROUP)
+  target_link_libraries(ava_lsp_real_clangd_smoke PRIVATE "$<LINK_GROUP:RESCAN,${AVA_TEST_DEBUG_LINK_GROUP}>")
 endif()
 ava_apply_warnings(ava_lsp_real_clangd_smoke)
 ava_apply_sanitizers(ava_lsp_real_clangd_smoke)
@@ -121,6 +126,10 @@ add_executable(ava_backend_benchmark_helper
   "backend_benchmark_protocol.cpp"
 )
 target_link_libraries(ava_backend_benchmark_helper PRIVATE ${AVA_BACKEND_LIBRARIES} ${AICXX_OBJECTS_LIST})
+if (OptionEnableLibcwd)
+  # Match the complete printer-cycle rescan used by the other small test executables.
+  target_link_libraries(ava_backend_benchmark_helper PRIVATE "$<LINK_GROUP:RESCAN,${AVA_TEST_DEBUG_LINK_GROUP}>")
+endif()
 target_include_directories(ava_backend_benchmark_helper PRIVATE ${CMAKE_SOURCE_DIR})
 add_dependencies(ava_backend_benchmark_helper ava_fake_lsp_server ava_fake_mcp_server)
 if(TARGET AVA::process)
@@ -145,7 +154,7 @@ add_dependencies(ava_rpc_broken_pipe_subprocess_test ava)
 # Same link specification as ava_tests; see ava_lsp_real_clangd_smoke above.
 target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE ${AVA_FRONTEND_LIBRARIES} ${AVA_BACKEND_LIBRARIES} ava_test_support ${AICXX_OBJECTS_LIST})
 if (OptionEnableLibcwd)
-  target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE "$<LINK_GROUP:RESCAN,AVA::debug,AVA::terminal>")
+  target_link_libraries(ava_rpc_broken_pipe_subprocess_test PRIVATE "$<LINK_GROUP:RESCAN,${AVA_TEST_DEBUG_LINK_GROUP}>")
 endif()
 target_compile_definitions(ava_rpc_broken_pipe_subprocess_test PRIVATE AVA_EXE_PATH="$<TARGET_FILE:ava>")
 ava_apply_warnings(ava_rpc_broken_pipe_subprocess_test)

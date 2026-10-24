@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "FrontEnd.h"
 #include "SessionIdentity.h"
 
 namespace ava::frontend {

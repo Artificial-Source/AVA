@@ -1,7 +1,9 @@
 #pragma once
 
-#include "FrontEnd.h"
-#include "ava/frontend/UnlockedData.h"
+#include "Data.h"
+#include "DisplayString.h"
+#include "RefreshResult.h"
+#include "UnlockedData.h"
 #include "ava/agent/agent_definition_types.h"
 #include "utils/macros.h"
 
@@ -13,6 +15,8 @@ struct AgentSelection;
 }
 
 namespace ava::frontend {
+
+class FrontEnd;
 
 // Bounded frontend copy of the selected primary agent's display metadata.
 struct SelectedAgentMetadata

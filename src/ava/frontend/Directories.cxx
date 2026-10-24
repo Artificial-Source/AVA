@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "Directories.h"
+#include "FrontEnd.h"
 
 namespace ava::frontend {
 

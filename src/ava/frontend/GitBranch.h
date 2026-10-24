@@ -1,6 +1,8 @@
 #pragma once
 
-#include "FrontEnd.h"
+#include "Data.h"
+#include "DisplayString.h"
+#include "RefreshResult.h"
 #include "ava/app/runtime/GitBranch.h"
 
 #include <atomic>
@@ -9,13 +11,15 @@
 
 namespace ava::frontend {
 
+class FrontEnd;
+
 // Cache a frontend-thread snapshot of the backend's last observed Git branch.
 // Backend notifications only invalidate the snapshot; they do not read the filesystem.
 class GitBranch
 {
  private:
   FrontEnd const* frontend_;
-  // Copy of the entire canonical std::string value protected by ava::app::runtime::GitBranch_ts (no containing value-class member).
+  // Exact copy of canonical ava::app::runtime::GitBranch::name protected by GitBranch_ts.
   std::string git_branch_snapshot_;
   DisplayString git_branch_;
   std::atomic_bool dirty_;

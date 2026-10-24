@@ -1,6 +1,8 @@
 #pragma once
 
-#include "FrontEnd.h"
+#include "Data.h"
+#include "DisplayString.h"
+#include "RefreshResult.h"
 #include "ava/app/runtime/ModelSelection.h"     // app::runtime::ModelSelection_ts
 #include "utils/macros.h"
 
@@ -8,6 +10,8 @@
 #include "debug.h"
 
 namespace ava::frontend {
+
+class FrontEnd;
 
 class ModelSelection
 {

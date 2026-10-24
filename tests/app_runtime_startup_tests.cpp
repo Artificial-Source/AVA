@@ -912,14 +912,14 @@ void test_app_runtime_git_branch_observation_and_refresh()
   if (!session)
     return;
 
-  auto initial = *ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch());
+  auto initial = ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch())->name;
   auto const unchanged = ava::app::runtime::refresh_git_branch(*session);
   {
     std::ofstream head(workspace / ".git" / "HEAD");
     head << "ref: refs/heads/feature/changed\n";
   }
   auto const changed = ava::app::runtime::refresh_git_branch(*session);
-  auto refreshed = *ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch());
+  auto refreshed = ava::app::runtime::GitBranch_ts::crat(ava::app::runtime::session_ts::crat(*session)->git_branch())->name;
 
   {
     std::ofstream head(workspace / ".git" / "HEAD");
