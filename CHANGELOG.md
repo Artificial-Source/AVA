@@ -58,7 +58,9 @@ These notes are ready for owner review. AVA 1.0.0 has not been published.
   oversized reply fails with an error before any tool runs.
 - Session writes are synced before AVA reports success. Torn final records can
   recover on supported older kernels. Attachment reads reject symlinks and
-  FIFOs. Trace and support files have bounded retention and safer cleanup.
+  FIFOs. Attachment import, replay, and branch copies stay inside the
+  session folder even if a folder is swapped for a symlink while AVA works.
+  Trace and support files have bounded retention and safer cleanup.
 - Contained commands cannot reach host UNIX services. On Landlock ABI 6 or
   newer, they also cannot signal or use abstract sockets outside their domain.
   Unsafe executable paths need explicit approval rather than broader grants.

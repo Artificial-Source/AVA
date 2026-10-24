@@ -44,4 +44,8 @@ struct LoadedImageAttachment {
 [[nodiscard]] ava::core::Result<LoadedImageAttachment> load_image_attachment(SessionStore const& store,
                                                                              ImageAttachmentRef const& attachment);
 
+// Copies verified bytes through held no-follow source/destination descriptors.
+// Existing destination content is verified read-only rather than overwritten.
+[[nodiscard]] ava::core::VoidResult copy_image_attachment(SessionStore const& source, SessionStore const& destination, ImageAttachmentRef const& attachment);
+
 }  // namespace ava::session

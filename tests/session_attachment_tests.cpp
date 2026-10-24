@@ -67,25 +67,31 @@ std::optional<std::filesystem::path> created_session_rollback_quarantine(std::fi
   return std::nullopt;
 }
 
-// Interposition state machine (one child for each FIFO/symlink replacement):
-// 1. The child requests tracing, stops for setup, then reads.
-// 2. The parent steps syscall stops until openat/openat2 is about to open the
-//    attachment, ignoring syscall exits and opens of other paths. Stored reads
-//    may use a root-relative path; imported reads use the source's full path.
-// 3. While the child is stopped at that entry, park the original inode and
-//    install the replacement. Thus no preceding pathname check can avoid it.
-// 4. After swapping, continue without syscall stepping; the reader must reject
-//    the replacement with the expected category, not block opening a FIFO.
-// 5. Reap the child and restore the original fixture before checking the result.
-// Trace failures kill/reap the child; unsupported tracing/filesystem operations
-// skip the case. The parent's shared deadline bounds every trace stop and read.
+struct AttachmentReplacement
+{
+  std::filesystem::path canary{};
+  std::filesystem::path component{};
+  bool directory = false;
+  bool write = false;
+};
+
+// Stop at the actual open syscall, after any pathname validation. For canary
+// cases keep tracing reads as well: matching bytes and hashes must not mask an
+// outside read. Directory swaps may safely use an already-held original inode.
 template <typename ReadAttachment>
-void test_attachment_replacement_before_open(std::filesystem::path const& path, ReadAttachment&& read_attachment)
+void test_attachment_replacement_before_open(std::filesystem::path const& path, ReadAttachment&& read_attachment, AttachmentReplacement const& replacement = {})
 {
 #if defined(__linux__) && defined(PTRACE_GET_SYSCALL_INFO)
   for (bool const symlink : {false, true})
   {
-    auto const parked = std::filesystem::path(path.string() + ".before-open");
+    if (!replacement.canary.empty() && !symlink)
+      continue;
+    std::filesystem::path swapped_path;
+    std::filesystem::path parked;
+    auto const canary_bytes = replacement.canary.empty() ? std::string{} : ava::tests::read_session_test_binary_file(replacement.canary);
+    struct stat canary_status{};
+    if (!replacement.canary.empty() && !ava::tests::require(::stat(replacement.canary.c_str(), &canary_status) == 0, "outside canary is inspectable"))
+      return;
     auto const child = ::fork();
     expect(child >= 0, "attachment replacement regression forks a watchdog-protected reader");
     if (child < 0)
@@ -96,6 +102,10 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
         ::_exit(77);
       ::raise(SIGSTOP);
       auto result = read_attachment();
+      if (!replacement.canary.empty())
+        ::_exit(result || result.error().category() == ava::core::ErrorCategory::PermissionDenied || result.error().category() == ava::core::ErrorCategory::Io
+                    ? 0
+                    : 1);
       auto const expected_category = symlink ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::InvalidArgument;
       ::_exit(!result && result.error().category() == expected_category ? 0 : 1);
     }
@@ -165,10 +175,11 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
     bool original_parked = false;
     bool trace_ok = true;
     bool unsupported = false;
+    bool outside_read = false;
     int signal_to_deliver = 0;
     while (true)
     {
-      auto const request = swapped ? PTRACE_CONT : PTRACE_SYSCALL;
+      auto const request = swapped && replacement.canary.empty() ? PTRACE_CONT : PTRACE_SYSCALL;
       if (::ptrace(request, child, nullptr, reinterpret_cast<void*>(static_cast<std::intptr_t>(signal_to_deliver))) != 0 || !wait_child())
       {
         trace_ok = false;
@@ -198,12 +209,43 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
       }
       if (info.op != PTRACE_SYSCALL_INFO_ENTRY)
         continue;
+      if (swapped)
+      {
+        if (info.entry.nr == SYS_read)
+        {
+          struct stat accessed{};
+          auto const descriptor = "/proc/" + std::to_string(child) + "/fd/" + std::to_string(info.entry.args[0]);
+          if (::stat(descriptor.c_str(), &accessed) == 0 && accessed.st_dev == canary_status.st_dev && accessed.st_ino == canary_status.st_ino)
+            outside_read = true;
+        }
+        continue;
+      }
       bool is_open = info.entry.nr == SYS_openat;
 #ifdef SYS_openat2
       is_open = is_open || info.entry.nr == SYS_openat2;
 #endif
       if (!is_open)
         continue;
+      if (!replacement.canary.empty())
+      {
+        auto flags = info.entry.args[2];
+#ifdef SYS_openat2
+        if (info.entry.nr == SYS_openat2)
+        {
+          errno = 0;
+          auto const word = ::ptrace(PTRACE_PEEKDATA, child, reinterpret_cast<void*>(static_cast<std::uintptr_t>(info.entry.args[2])), nullptr);
+          if (word == -1 && errno != 0)
+          {
+            trace_ok = false;
+            kill_child();
+            break;
+          }
+          flags = static_cast<std::uint64_t>(word);
+        }
+#endif
+        if (((flags & O_CREAT) != 0) != replacement.write)
+          continue;
+      }
       std::string opened_path;
       for (std::size_t offset = 0; offset < 4096; offset += sizeof(long))
       {
@@ -223,11 +265,29 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
           break;
       }
       auto const opened = std::filesystem::path(opened_path);
-      if (opened != path && (opened.is_absolute() || opened.filename() != path.filename()))
+      if (opened != path && ((!replacement.write && opened.is_absolute()) || opened.filename() != path.filename()))
         continue;
 
-      original_parked = ::rename(path.c_str(), parked.c_str()) == 0;
-      swapped = original_parked && (symlink ? ::symlink(parked.c_str(), path.c_str()) == 0 : ::mkfifo(path.c_str(), 0600) == 0);
+      auto actual = replacement.canary.empty() ? path : opened;
+      if (!replacement.canary.empty() && !actual.is_absolute())
+      {
+        std::array<char, 4096> directory{};
+        auto const descriptor = "/proc/" + std::to_string(child) + "/fd/" + std::to_string(static_cast<int>(info.entry.args[0]));
+        auto const count = ::readlink(descriptor.c_str(), directory.data(), directory.size());
+        if (count <= 0 || static_cast<std::size_t>(count) == directory.size())
+        {
+          trace_ok = false;
+          kill_child();
+          break;
+        }
+        actual = std::filesystem::path(std::string(directory.data(), static_cast<std::size_t>(count))) / actual;
+      }
+      swapped_path = replacement.component.empty() ? (replacement.directory ? actual.parent_path() : actual) : replacement.component;
+      parked = std::filesystem::path(swapped_path.string() + ".before-open");
+      original_parked = ::rename(swapped_path.c_str(), parked.c_str()) == 0;
+      auto const target = replacement.canary.empty() ? parked : (replacement.directory ? replacement.canary.parent_path() : replacement.canary);
+      swapped = (original_parked || (replacement.write && errno == ENOENT)) &&
+                (symlink ? ::symlink(target.c_str(), swapped_path.c_str()) == 0 : ::mkfifo(swapped_path.c_str(), 0600) == 0);
       if (original_parked && !swapped && (errno == ENOSYS || errno == EOPNOTSUPP))
         unsupported = true;
       if (!swapped)
@@ -237,10 +297,17 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
         break;
       }
     }
+    if (swapped)
+      expect(::unlink(swapped_path.c_str()) == 0, "attachment replacement fixture removes its replacement");
     if (original_parked)
+      expect(::rename(parked.c_str(), swapped_path.c_str()) == 0, "attachment replacement fixture restores its original inode");
+    if (!replacement.canary.empty())
     {
-      static_cast<void>(::unlink(path.c_str()));
-      expect(::rename(parked.c_str(), path.c_str()) == 0, "attachment replacement fixture restores its original regular file");
+      struct stat after{};
+      expect(!outside_read, "attachment operation never reads the outside canary, even when its bytes match the expected hash");
+      expect(ava::tests::read_session_test_binary_file(replacement.canary) == canary_bytes && ::stat(replacement.canary.c_str(), &after) == 0 &&
+                 after.st_mode == canary_status.st_mode,
+             "attachment operation preserves outside canary bytes and permissions");
     }
     if (unsupported)
     {
@@ -254,6 +321,7 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
 #else
   static_cast<void>(path);
   static_cast<void>(read_attachment);
+  static_cast<void>(replacement);
   ava::tests::request_skip("attachment replacement race requires Linux syscall tracing");
 #endif
 }
@@ -659,6 +727,13 @@ void test_image_attachment_storage_boundary()
   }
 
   test_attachment_replacement_before_open(attachment_path, [&] { return ava::session::load_image_attachment(*store, attachment); });
+  for (auto const& component : {attachment_path, attachment_path.parent_path(), attachment_root, attachment_root.parent_path()})
+  {
+    auto const canary = outside_dir / attachment_path.filename();
+    ava::tests::write_test_file(canary, "hello", 0640);
+    test_attachment_replacement_before_open(attachment_path, [&] { return ava::session::load_image_attachment(*store, attachment); },
+                                            {.canary = canary, .component = component, .directory = component != attachment_path});
+  }
 }
 
 void test_image_attachment_import()
@@ -672,7 +747,7 @@ void test_image_attachment_import()
   if (!store)
     return;
 
-  auto const image_path = root / "input.png";
+  auto const image_path = root / "input" / "input.png";
   auto const bytes = ava::tests::session_test_tiny_png_bytes();
   ava::tests::write_session_test_binary_file(image_path, bytes);
 
@@ -773,6 +848,49 @@ void test_image_attachment_import()
   }
 
   test_attachment_replacement_before_open(image_path, [&] { return ava::session::import_image_attachment(*store, image_path); });
+
+  auto const imported_path = *ava::session::resolve_attachment_storage_path(*store, imported->storage_path);
+  auto const canary_dir = root / "outside-canaries";
+  auto const source_canary = canary_dir / image_path.filename();
+  auto const destination_canary = canary_dir / imported_path.filename();
+  ava::tests::write_test_file(source_canary, bytes, 0640);
+  ava::tests::write_test_file(destination_canary, bytes, 0640);
+  for (bool const directory : {false, true})
+  {
+    test_attachment_replacement_before_open(image_path, [&] { return ava::session::import_image_attachment(*store, image_path); },
+                                            {.canary = source_canary, .directory = directory});
+    test_attachment_replacement_before_open(imported_path, [&] { return ava::session::import_image_attachment_bytes(*store, bytes); },
+                                            {.canary = destination_canary, .directory = directory, .write = true});
+  }
+
+  auto const user = append_session_entry_for_test(
+      *store, ava::session::SessionEntry{.id = "attachment_user",
+                                         .parent_id = "",
+                                         .type = ava::session::EntryType::UserMessage,
+                                         .timestamp = "2026-10-24T00:00:00Z",
+                                         .data_json = "{\"text\":\"image\",\"attachments\":[{\"id\":\"" + imported->id +
+                                                      "\",\"type\":\"image\",\"mime_type\":\"image/png\",\"byte_size\":" + std::to_string(imported->byte_size) +
+                                                      ",\"sha256\":\"" + imported->sha256 + "\",\"storage_path\":\"" + imported->storage_path + "\"}]}"});
+  if (!ava::tests::require(user.has_value(), "branch replacement fixture persists attachment metadata"))
+    return;
+  for (auto const mode : {ava::session::SessionBranchMode::Fork, ava::session::SessionBranchMode::Clone})
+  {
+    for (bool const directory : {false, true})
+    {
+      auto branch = [&] {
+        return ava::session::create_session_branch(ava::session::SessionBranchOptions{.workspace_dir = workspace,
+                                                                                      .root_dir = root / "sessions",
+                                                                                      .source_session_id = store->options_session_id_copy(),
+                                                                                      .branch_from_entry_id = "",
+                                                                                      .name = std::nullopt,
+                                                                                      .labels = std::nullopt,
+                                                                                      .mode = mode,
+                                                                                      .actor = "test"});
+      };
+      test_attachment_replacement_before_open(imported_path, branch, {.canary = destination_canary, .directory = directory});
+      test_attachment_replacement_before_open(imported_path, branch, {.canary = destination_canary, .directory = directory, .write = true});
+    }
+  }
 }
 
 void test_created_session_rollback_is_identity_safe_and_preserves_attachments()
