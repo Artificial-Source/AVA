@@ -134,9 +134,43 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 
 ### AVA-REL-012 — Official publication lifecycle and reviewed 1.0 notes
 
-- **Tier/status/owner:** P1; release notes and local draft tooling implemented; local packet rehearsal and owner/GitHub gates pending; shared.
+- **Tier/status/owner:** P1; **prepared; awaiting owner approval and GitHub run**; shared.
 - **Subsystem:** release operations, changelog/release notes, publication, rollback, and withdrawal.
 - **Exact evidence:** `CHANGELOG.md` has a user-facing `1.0.0 - UNRELEASED` section. The [canonical release body](../operations/release-body-1.0.0.md) has exact-commit/digest placeholders and the REL-013 support floor. [publication.md](../operations/publication.md) gives owner commands, approval records, no-clobber draft staging from retained assets, remote verification, patch correction, withdrawal, and supported-version policy. `scripts/release-candidate.py draft --dry-run` verifies local packet identity, renders notes, smokes the extracted version, and prints remote commands without running them; its nine black-box cases pass, including refusal of an existing release in a large paginated listing. No tag, release, or GitHub write was made.
+- **Local rehearsal (2026-10-24):** packet source
+  `1c2fe2ee9a29e6639ce14b46edf819ff3ae9a89d`; GCC 13.3 Release configured with
+  `cmake --preset release-candidate -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF`.
+  `scripts/build.sh --build-dir build-candidate --jobs 6 --target ava ava_fake_provider_server`
+  passed. The sealed build then passed nine focused CTests: the four source
+  Markdown/structure gates, provenance, install component, candidate contract,
+  publication dry-run, and artifact inspection. The dry-run CTest includes nine
+  credential-free cases. Full deterministic, terminal, sanitizer/TSan, and
+  minimum-host waves were not repeated for this REL-012 rehearsal; the owner
+  must obtain those gates from the final retained GitHub run.
+- **Local packet result:** `package-linux.sh --build-dir ... --require-release-qualified`
+  passed without rebuilding, including static provenance, ISA/library inspection,
+  packaged links, checksum, extracted version/help/doctor and fake-provider smoke.
+  `release-candidate.py record`, then `draft --dry-run` with the recorded commit
+  and manifest digest, passed. It rendered the canonical body, checked extracted
+  `ava 1.0.0`, and printed owner commands without any remote call. Generated
+  `plan/draft-commands.sh` also passed `bash -n`. Evidence is `focused-final.xml`,
+  `candidate/candidate.json`, and the rendered `plan/` under the private local
+  rehearsal root. These are local preparation bytes, not official CI artifacts.
+- **Local packet SHA-256 values:**
+  - Executable: `bebb04a48ad2a090bb936f205b705348f76dedb34d927b664682c2db56235b0c`.
+  - Archive: `3a71cd98ed8c156980b4a9681ebad4445515a4c85aea0659109ec332e9bafb6c`.
+  - Adjacent checksum file: `0efdd67600de119fa5b6969205e322f2ba6cdfceeaf958afd0667a3ab9741f11`.
+  - `candidate.json`: `a9337a0d68b32151896d80609a979cc6d0cd28bedb28965e0a81d72c0a6064e3`.
+  - Rendered body: `c313f6c9eaa54b0628f17d7edfb1550487b24a7817f8ab70216abb944c593dd2`.
+  - Owner command file: `862d68827d58b90d1e3c635df063532720333ecb17068002ef73d144762235e8`.
+- **Remaining owner gates:** select the final integrated commit and complete its
+  retained release-candidate GitHub run; review the changelog, body, floor, limits,
+  and exact digests; record operator and independent owner approval plus the
+  correction/withdrawal drill; create the no-clobber draft from the downloaded
+  retained assets; verify its tag, body, asset digests, and clean install; give
+  separate final approval; publish and repeat public download/smoke checks.
+  This evidence-only ledger update does not change the rehearsal packet's
+  source identity or authorize promotion of local bytes.
 - **Impact:** an ad hoc first release can publish the wrong commit or bytes, overwrite assets, omit limitations, or leave no correction/withdrawal procedure.
 - **Measurable acceptance:** owners review the exact version/commit, 1.0 changelog and release body, supported floor, known limits, checksums, approval record, immutable correction policy, post-publication checks, rollback/withdrawal decision tree, and supported-version policy; a no-clobber draft dry-run uses the retained `AVA-REL-011` assets; final tag/commit equality and remote assets are verified. This audit itself creates no tag or release.
 - **Verification:** reviewed release packet, dry-run record, approvals, remote tag/commit/API checks, downloaded asset hashes, extracted smoke, clean-install smoke, and withdrawal/patch drill evidence.
