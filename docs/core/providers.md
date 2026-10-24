@@ -23,6 +23,21 @@ Related user docs: [`docs/core/custom-providers.md`](custom-providers.md),
 [`docs/operations/testing.md#provider-live-smoke-matrix`](../operations/testing.md#provider-live-smoke-matrix),
 and [`docs/core/usage.md#current-limits`](usage.md#current-limits).
 
+All four runtime API families enforce the same parser limits for buffered and
+streamed output: 256 KiB per buffered response/SSE input buffer or data record,
+4,096 data records, at most 4,095 ordinary normalized events (one additional slot
+is reserved for an error), and 1,024 entries per protocol array with a shared
+1,024-entry allowance across nested content/tool arrays in a record. Visible
+text, reasoning text, and tool arguments share a cumulative 256 KiB fragment
+allowance per response; retained event identity/replay metadata has a separate
+256 KiB allowance. Transport chunk boundaries do not reset these counters.
+Exceeding a limit fails the response with a fixed provider diagnostic; later
+records cannot complete or execute a partial tool call. Reduce requested output
+or split the task rather than retrying the same oversized response. These parser
+limits are independent of the transport's larger response-body cap and Gemini's
+smaller optional replay-metadata limit described below.
+
+
 ## Runtime Providers Implemented
 
 These provider ids have a built-in runtime factory and can back model selection.

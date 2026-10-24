@@ -1,5 +1,6 @@
 #include "tests/support/agent_loop_test_support.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/provider_parser_budget_tests.h"
 #include "tests/support/session_test_support.h"
 #include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
@@ -177,6 +178,21 @@ void test_gemini_provider_contract()
 
 void test_gemini_response_parsing()
 {
+  ava::provider::GeminiProvider const budget_provider;
+  ava::tests::test_provider_parser_budgets(
+      budget_provider, [](std::string const& text) { return R"({"candidates":[{"content":{"parts":[{"text":")" + text + R"("}]}}]})"; },
+      [](std::string const& text) { return R"(data: {"candidates":[{"content":{"parts":[{"text":")" + text + R"("}]}}]})"; },
+      {R"({"candidates":)" + ava::tests::provider_budget_array("{}") + "}",
+       R"({"candidates":[{"content":{"parts":)" + ava::tests::provider_budget_array(R"({"text":"x"})") + "}}]}",
+       R"({"candidates":[{"content":{"parts":)" + ava::tests::provider_budget_array(R"({"text":"x"})", 513) + R"(}},{"content":{"parts":)" +
+           ava::tests::provider_budget_array(R"({"text":"x"})", 513) + "}}]}"},
+      R"(data: {"candidates":[]})");
+  ava::tests::test_provider_tool_fragment_budget(
+      budget_provider, "",
+      [](std::string const& text) {
+        return R"(data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":")" + text + R"("}}}]}}]})";
+      },
+      "data: [DONE]\n\n");
   ava::provider::GeminiProvider const provider("https://gemini.example.test");
   auto const response = provider.parse_response(
       ava::http::HttpResponse{

@@ -23,8 +23,10 @@ constexpr std::string_view kAnthropicOAuthBeta = "oauth-2025-04-20";
 
 std::string_view trim_ascii(std::string_view value)
 {
-  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) value.remove_prefix(1);
-  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) value.remove_suffix(1);
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0)
+    value.remove_prefix(1);
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0)
+    value.remove_suffix(1);
   return value;
 }
 
@@ -111,7 +113,8 @@ void merge_usage(TokenUsage& target, TokenUsage const& source)
 
 void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long, AnthropicStreamParser::ToolBlock>& tools,
                            std::map<long long, AnthropicStreamParser::ReasoningBlock>& reasoning_blocks, std::optional<TokenUsage>& usage,
-                           std::optional<ProviderFinishReason>& finish_reason, bool& saw_data, bool& message_stop_seen, bool& error_seen, std::string_view data)
+                           std::optional<ProviderFinishReason>& finish_reason, bool& saw_data, bool& message_stop_seen, bool& error_seen, std::string_view data,
+                           ProviderSseBuffer& framing)
 {
   auto append_terminal_error = [&](std::string_view message) {
     error_seen = true;
@@ -130,6 +133,12 @@ void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long,
   {
     if (auto const message = ava::core::json::object_field(data, "message"))
     {
+      auto const content = ava::core::json::strict_objects_in_array_field(*message, "content", kMaxProviderParserArrayItems);
+      if (ava::core::json::field_value_start(*message, "content") && !content)
+      {
+        append_terminal_error("Anthropic response parser limit exceeded");
+        return;
+      }
       if (auto const parsed = parse_anthropic_usage(*message))
       {
         if (!usage)
@@ -162,6 +171,11 @@ void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long,
         append_terminal_error("Anthropic thinking signature exceeded byte limit");
         return;
       }
+      if (!framing.retain_fragment(signature))
+      {
+        append_terminal_error("Anthropic response parser limit exceeded");
+        return;
+      }
       reasoning_blocks[*index] = AnthropicStreamParser::ReasoningBlock{.signature = signature, .redacted_data = "", .redacted = false};
       events.push_back(StreamEvent{.type = StreamEventType::ReasoningStart,
                                    .text = "",
@@ -177,6 +191,11 @@ void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long,
       if (redacted_data.size() > kMaxReasoningOpaqueBytes)
       {
         append_terminal_error("Anthropic redacted thinking payload exceeded byte limit");
+        return;
+      }
+      if (!framing.retain_fragment(redacted_data))
+      {
+        append_terminal_error("Anthropic response parser limit exceeded");
         return;
       }
       reasoning_blocks[*index] = AnthropicStreamParser::ReasoningBlock{.signature = "", .redacted_data = redacted_data, .redacted = true};
@@ -244,6 +263,11 @@ void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long,
         {
           reasoning_blocks.erase(reasoning);
           append_terminal_error("Anthropic thinking signature exceeded byte limit");
+          return;
+        }
+        if (!framing.retain_fragment(signature_delta))
+        {
+          append_terminal_error("Anthropic response parser limit exceeded");
           return;
         }
         reasoning->second.signature += signature_delta;
@@ -341,33 +365,6 @@ void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long,
   append_terminal_error("unrecognized Anthropic stream event");
 }
 
-void append_events_for_sse_line(std::vector<StreamEvent>& events, std::map<long long, AnthropicStreamParser::ToolBlock>& tools,
-                                std::map<long long, AnthropicStreamParser::ReasoningBlock>& reasoning_blocks, std::optional<TokenUsage>& usage,
-                                std::optional<ProviderFinishReason>& finish_reason, std::string& data, bool& saw_data, bool& message_stop_seen,
-                                bool& error_seen, std::string line)
-{
-  if (!line.empty() && line.back() == '\r')
-    line.pop_back();
-  if (line.empty())
-  {
-    if (!data.empty())
-    {
-      append_event_for_data(events, tools, reasoning_blocks, usage, finish_reason, saw_data, message_stop_seen, error_seen, data);
-      data.clear();
-    }
-    return;
-  }
-  if (line.starts_with("data:"))
-  {
-    if (!data.empty())
-      data.push_back('\n');
-    auto value = std::string_view(line).substr(5);
-    if (!value.empty() && value.front() == ' ')
-      value.remove_prefix(1);
-    data.append(value);
-  }
-}
-
 }  // namespace
 
 AnthropicProvider::AnthropicProvider(AnthropicProviderOptions options) : options_(std::move(options))
@@ -376,8 +373,7 @@ AnthropicProvider::AnthropicProvider(AnthropicProviderOptions options) : options
     options_.base_url = normalize_anthropic_base_url(std::move(options_.base_url));
 }
 
-AnthropicProvider::AnthropicProvider(std::string base_url)
-    : AnthropicProvider(AnthropicProviderOptions{.base_url = std::move(base_url)})
+AnthropicProvider::AnthropicProvider(std::string base_url) : AnthropicProvider(AnthropicProviderOptions{.base_url = std::move(base_url)})
 {
 }
 
@@ -415,45 +411,22 @@ ava::core::Result<std::vector<StreamEvent>> AnthropicProvider::parse_response(av
 
 ava::core::Result<std::vector<StreamEvent>> AnthropicStreamParser::append(std::string_view chunk)
 {
-  std::vector<StreamEvent> events;
-  pending_line_.append(chunk);
-  std::size_t line_start = 0;
-  std::size_t search_from = scan_offset_;
-  while (true)
-  {
-    auto const newline = pending_line_.find('\n', search_from);
-    if (newline == std::string::npos)
-      break;
-    append_events_for_sse_line(events, tool_blocks_, reasoning_blocks_, usage_, finish_reason_, data_, saw_data_, message_stop_seen_, error_seen_,
-                               pending_line_.substr(line_start, newline - line_start));
-    line_start = newline + 1;
-    search_from = line_start;
-  }
-  if (line_start > 0)
-    pending_line_.erase(0, line_start);
-  scan_offset_ = pending_line_.size();
-  return events;
+  return sse_.append(chunk, "Anthropic", [this](auto& events, std::string_view data) {
+    append_event_for_data(events, tool_blocks_, reasoning_blocks_, usage_, finish_reason_, saw_data_, message_stop_seen_, error_seen_, data, sse_);
+  });
 }
 
 ava::core::Result<std::vector<StreamEvent>> AnthropicStreamParser::finish()
 {
-  std::vector<StreamEvent> events;
-  if (!pending_line_.empty())
-  {
-    append_events_for_sse_line(events, tool_blocks_, reasoning_blocks_, usage_, finish_reason_, data_, saw_data_, message_stop_seen_, error_seen_,
-                               std::move(pending_line_));
-    pending_line_.clear();
-  }
-  scan_offset_ = 0;
-  if (!data_.empty())
-  {
-    append_event_for_data(events, tool_blocks_, reasoning_blocks_, usage_, finish_reason_, saw_data_, message_stop_seen_, error_seen_, data_);
-    data_.clear();
-  }
-  if (saw_data_ && !message_stop_seen_ && !error_seen_)
-  {
-    append_stream_error(events, "Anthropic SSE stream ended before message_stop");
-  }
+  auto events = sse_.finish(
+      "Anthropic",
+      [this](auto& output, std::string_view data) {
+        append_event_for_data(output, tool_blocks_, reasoning_blocks_, usage_, finish_reason_, saw_data_, message_stop_seen_, error_seen_, data, sse_);
+      },
+      [this](auto& output) {
+        if (saw_data_ && !message_stop_seen_ && !error_seen_)
+          append_stream_error(output, "Anthropic SSE stream ended before message_stop");
+      });
   tool_blocks_.clear();
   reasoning_blocks_.clear();
   usage_ = std::nullopt;
@@ -495,6 +468,8 @@ ava::core::Result<std::vector<StreamEvent>> parse_anthropic_response(ava::http::
 {
   if (response.status_code < 200 || response.status_code >= 300)
     return parse_anthropic_sse_response(response);
+  if (response.body.size() > kMaxProviderSseBufferedBytes)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "Anthropic response parser limit exceeded"));
   if (!is_valid_json_object(response.body))
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "Anthropic response was malformed JSON"));
   std::vector<StreamEvent> events;
@@ -632,7 +607,7 @@ ava::core::Result<std::vector<StreamEvent>> parse_anthropic_response(ava::http::
                                .error_message = "",
                                .usage = parse_anthropic_usage(response.body),
                                .finish_reason = finish_reason});
-  return events;
+  return bounded_provider_events(std::move(events), "Anthropic");
 }
 
 std::optional<TokenUsage> parse_anthropic_usage(std::string_view body)

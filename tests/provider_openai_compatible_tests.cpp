@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/provider_openai_test_suite.h"
+#include "tests/support/provider_parser_budget_tests.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/provider/openai_compatible_provider.h"
@@ -271,6 +272,18 @@ void test_openai_compatible_provider_contract()
 
 void test_openai_compatible_parsing()
 {
+  ava::provider::OpenAICompatibleProvider const budget_provider({});
+  ava::tests::test_provider_parser_budgets(
+      budget_provider, [](std::string const& text) { return R"({"choices":[{"message":{"content":")" + text + R"("}}]})"; },
+      [](std::string const& text) { return R"(data: {"choices":[{"delta":{"content":")" + text + R"("}}]})"; },
+      {R"({"choices":)" + ava::tests::provider_budget_array("{}") + "}",
+       R"({"choices":[{"message":{"tool_calls":)" + ava::tests::provider_budget_array(R"({"function":{"name":"read_file","arguments":"{}"}})") +
+           R"(},"delta":{"tool_calls":)" + ava::tests::provider_budget_array(R"({"function":{"name":"read_file","arguments":"{}"}})") + "}}]}"},
+      R"(data: {"choices":[]})");
+  ava::tests::test_provider_tool_fragment_budget(
+      budget_provider, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"budget_call\",\"function\":{\"name\":\"read_file\"}}]}}]}\n\n",
+      [](std::string const& text) { return R"(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":")" + text + R"("}}]}}]})"; },
+      "data: [DONE]\n\n");
   auto stream = ava::provider::parse_openai_compatible_sse(
       "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\"}}]}\n\n"
       "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n"

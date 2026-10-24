@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/provider/parser_budget.h"
 #include "ava/provider/provider.h"
 #include "ava/core/result.h"
 
@@ -54,7 +55,8 @@ class OpenAIStreamParser final : public StreamParser
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> append(std::string_view chunk) override;
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> finish() override;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // Framing buffers and native reasoning payloads remain private.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   enum class EventHandling
@@ -82,7 +84,6 @@ class OpenAIStreamParser final : public StreamParser
   };
 
   void append_event_for_data(std::vector<StreamEvent>& events, std::string_view data);
-  void append_events_for_sse_line(std::vector<StreamEvent>& events, std::string line);
   [[nodiscard]] EventHandling handle_documented_output_item_lifecycle(std::vector<StreamEvent>& events, std::string_view data, std::string_view type);
   [[nodiscard]] EventHandling handle_message_event(std::vector<StreamEvent>& events, std::string_view data, std::string_view type,
                                                    EventRoutingPhase routing_phase);
@@ -114,9 +115,7 @@ class OpenAIStreamParser final : public StreamParser
 
   void reset_state() noexcept;
 
-  std::string pending_line_;
-  std::string data_;
-  std::size_t scan_offset_ = 0;
+  ProviderSseBuffer sse_;
   bool saw_content_ = false;
   bool saw_refusal_ = false;
   bool reasoning_open_ = false;
@@ -137,12 +136,6 @@ class OpenAIStreamParser final : public StreamParser
   std::unordered_map<std::size_t, std::string> documented_output_item_ids_by_index_;
   bool done_seen_ = false;
   bool error_seen_ = false;
-  bool parser_limit_exceeded_ = false;
-  // Counts events handed to the caller across all append() calls for one
-  // response; a peer must not evade the event budget by fragmenting chunks.
-  std::size_t events_emitted_ = 0;
-  std::size_t data_records_seen_ = 0;
-  bool data_record_limit_exceeded_ = false;
 };
 
 }  // namespace ava::provider

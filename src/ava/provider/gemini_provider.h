@@ -1,6 +1,7 @@
 #pragma once
 #include "ava/debug/print_members_on.h"
 #include "ava/http/transport.h"
+#include "ava/provider/parser_budget.h"
 #include "ava/provider/provider.h"
 
 #include <memory>
@@ -57,9 +58,7 @@ class GeminiStreamParser final : public StreamParser
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> finish() override;
 
  private:
-  std::string pending_line_;
-  std::string data_;
-  std::size_t scan_offset_ = 0;
+  ProviderSseBuffer sse_;
   detail::GeminiParseState state_;
   bool saw_data_ = false;
   bool done_seen_ = false;

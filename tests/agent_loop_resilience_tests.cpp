@@ -374,7 +374,8 @@ void test_agent_loop_cancellation_boundaries()
     {
       auto projection = ava::session::classify_assistant_output(*entries);
       for (auto const& turn : projection.turns)
-        for (auto const& item : turn.items) functions += std::holds_alternative<ava::session::AssistantOutputFunctionCall>(item.item.payload);
+        for (auto const& item : turn.items)
+          functions += std::holds_alternative<ava::session::AssistantOutputFunctionCall>(item.item.payload);
       for (auto const& entry : *entries)
         bound_canceled_results += entry.type == ava::session::EntryType::ToolResult && entry.data_json.find("call_unstarted") != std::string::npos &&
                                   entry.data_json.find("\"status\":\"canceled\"") != std::string::npos &&
@@ -601,6 +602,101 @@ void test_agent_loop_error_paths_and_bounds()
     auto result = loop.run_turn("long id", store, provider, transport);
     expect(!result && result.error().message().find("too long") != std::string::npos, "agent loop rejects overlong provider tool call ids");
   }
+}
+
+void test_agent_loop_provider_parser_budgets_never_dispatch_tools()
+{
+  ava::provider::OpenAICompatibleProvider const compatible({});
+  ava::provider::AnthropicProvider const anthropic;
+  ava::provider::GeminiProvider const gemini;
+  std::string const arguments = R"({"path":"budget-must-not-exist.txt","content":"forbidden"})";
+  auto const escaped = ava::core::json::escape(arguments);
+  struct BudgetCase
+  {
+    ava::provider::Provider const* provider;
+    std::string provider_id;
+    std::string api_family;
+    std::string buffered_prefix;
+    std::string buffered_suffix;
+    std::string stream_start;
+    std::string delta_prefix;
+    std::string delta_suffix;
+  };
+  std::vector<BudgetCase> const cases{
+      {&compatible, "compatible", "openai_chat_completions",
+       R"({"choices":[{"message":{"tool_calls":[{"id":"budget_call","function":{"name":"write_file","arguments":")" + escaped + R"("}}],"content":")",
+       R"("},"finish_reason":"tool_calls"}]})",
+       R"(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"budget_call","function":{"name":"write_file","arguments":")" + escaped + "\"}}]}}]}\n\n",
+       R"(data: {"choices":[{"delta":{"content":")", "\"}}]}\n\n"},
+      {&anthropic, "anthropic", "anthropic_messages",
+       R"({"content":[{"type":"tool_use","id":"budget_call","name":"write_file","input":)" + arguments + R"(},{"type":"text","text":")",
+       R"("}],"stop_reason":"tool_use"})",
+       "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"budget_call\",\"name\":\"write_file\"}}\n\n"
+       "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"" +
+           escaped + "\"}}\n\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+       R"(data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":")", "\"}}\n\n"},
+      {&gemini, "gemini", "gemini_generate_content",
+       R"({"candidates":[{"content":{"parts":[{"functionCall":{"id":"budget_call","name":"write_file","args":)" + arguments + R"(}},{"text":")",
+       R"("}]},"finishReason":"STOP"}]})",
+       R"(data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"budget_call","name":"write_file","args":)" + arguments + "}}]}}]}\n\n",
+       R"(data: {"candidates":[{"content":{"parts":[{"text":")", "\"}]}}]}\n\n"},
+  };
+  for (auto const& item : cases)
+    for (bool const stream : {false, true})
+    {
+      auto const root = create_empty_root("agent-parser-budget-" + item.provider_id + (stream ? "-stream" : "-buffered"));
+      auto const workspace = root / "workspace";
+      std::filesystem::create_directories(workspace);
+      ava::session::SessionStore store(
+          ava::session::SessionStoreOptions{.root_dir = root / "sessions", .workspace_dir = workspace, .session_id = "parser-budget"});
+      std::string body;
+      if (stream)
+      {
+        body = item.stream_start;
+        for (int index = 0; index < 65; ++index)
+          body += item.delta_prefix + std::string(4096, 'x') + item.delta_suffix;
+      }
+      else
+        body = item.buffered_prefix + std::string(ava::provider::kMaxProviderSseBufferedBytes, 'x') + item.buffered_suffix;
+      SequencedProviderTransport transport({sse_response(std::move(body))}, stream);
+      int permissions = 0;
+      int preflights = 0;
+      int tool_events = 0;
+      auto model = agent_loop_test::model_invocation_options("system", item.provider_id, "budget-test");
+      model.api_family = item.api_family;
+      model.stream = stream;
+      ava::agent::AgentLoop loop(ava::agent::AgentLoopOptions{
+          .workspace_dir = workspace,
+          .mode = ava::agent::Mode::Build,
+          .model = std::move(model),
+          .access_token = "token",
+          .tool_execution = ava::agent::ToolExecutionOptions{.require_explicit_file_permissions = true},
+          .on_tool_event = [&tool_events](ava::agent::ToolTimelineEntry const&) { ++tool_events; },
+          .permission_resolver =
+              [&permissions](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+            ++permissions;
+            return ava::permissions::PermissionResolution::Allow;
+          },
+          .auto_allow_deny_preflight =
+              [&preflights](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+            ++preflights;
+            return ava::permissions::PermissionResolution::Allow;
+          },
+          .append_entry = append_route_for_test(store),
+          .append_batch = append_batch_route_for_test(store),
+          .session_read_authority = read_authority_for_test(store),
+      });
+      auto const result = loop.run_turn("reject over-budget calls", store, *item.provider, transport);
+      auto const entries = store.load();
+      bool const persisted_output = entries && std::ranges::any_of(*entries, [](auto const& entry) {
+                                      return entry.type == ava::session::EntryType::AssistantOutputItem ||
+                                             entry.type == ava::session::EntryType::AssistantTurnCommit || entry.type == ava::session::EntryType::ToolResult;
+                                    });
+      expect(!result && result.error().category() == ava::core::ErrorCategory::Provider && permissions == 0 && preflights == 0 && tool_events == 0 && entries &&
+                 !persisted_output && !std::filesystem::exists(workspace / "budget-must-not-exist.txt"),
+             item.provider_id + (stream ? " streamed" : " buffered") +
+                 " parser budget errors reject valid tool calls before persistence, permission, preflight, dispatch, or side effects");
+    }
 }
 
 void test_agent_loop_truncated_provider_output_never_dispatches_tools()
@@ -1153,6 +1249,7 @@ void run_agent_loop_resilience_tests()
 {
   test_agent_loop_cancellation_boundaries();
   test_agent_loop_error_paths_and_bounds();
+  test_agent_loop_provider_parser_budgets_never_dispatch_tools();
   test_agent_loop_truncated_provider_output_never_dispatches_tools();
   test_agent_loop_unknown_incomplete_reason_remains_fail_closed();
   test_child_auto_compacts_after_large_tool_result();

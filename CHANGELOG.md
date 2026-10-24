@@ -53,6 +53,9 @@ These notes are ready for owner review. AVA 1.0.0 has not been published.
 - Tool calls cut short by a provider token limit never run, even if their
   partial arguments look valid. Gemini requests do not follow redirects that
   could expose API keys, and streamed tool-call IDs stay distinct.
+- Every provider family (OpenAI, OpenAI-compatible, Anthropic, and Gemini)
+  now applies the same size limits to streamed and buffered replies. An
+  oversized reply fails with an error before any tool runs.
 - Session writes are synced before AVA reports success. Torn final records can
   recover on supported older kernels. Attachment reads reject symlinks and
   FIFOs. Trace and support files have bounded retention and safer cleanup.

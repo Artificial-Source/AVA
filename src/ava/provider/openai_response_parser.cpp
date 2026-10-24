@@ -231,6 +231,8 @@ ava::core::Result<std::vector<StreamEvent>> parse_openai_sse_response(ava::http:
 
 ava::core::Result<std::string> parse_openai_response_text(std::string_view body)
 {
+  if (body.size() > kMaxProviderSseBufferedBytes)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "OpenAI response parser limit exceeded"));
   // Native Responses output is authoritative over the convenience top-level
   // output_text field. A refusal is visible assistant text, not an error blob.
   auto const output_start = ava::core::json::field_value_start(body, "output");
@@ -290,6 +292,8 @@ namespace detail {
 
 ava::core::Result<std::vector<StreamEvent>> parse_openai_non_stream_response(std::string_view body)
 {
+  if (body.size() > kMaxProviderSseBufferedBytes)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "OpenAI response parser limit exceeded"));
   if (!ava::core::json::is_valid_object(body))
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "OpenAI response was malformed JSON"));
 
@@ -604,7 +608,7 @@ ava::core::Result<std::vector<StreamEvent>> parse_openai_non_stream_response(std
                                .error_message = "",
                                .usage = parse_openai_usage(body),
                                .finish_reason = terminal_finish_reason});
-  return events;
+  return bounded_provider_events(std::move(events), "OpenAI");
 }
 
 }  // namespace detail

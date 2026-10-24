@@ -1,5 +1,6 @@
 #pragma once
 #include "ava/http/transport.h"
+#include "ava/provider/parser_budget.h"
 #include "ava/provider/provider.h"
 
 #include <map>
@@ -44,12 +45,11 @@ class AnthropicStreamParser final : public StreamParser
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> append(std::string_view chunk) override;
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> finish() override;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // Framing buffers and native reasoning payloads remain private.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  std::string pending_line_;
-  std::string data_;
-  std::size_t scan_offset_ = 0;
+  ProviderSseBuffer sse_;
   std::map<long long, ToolBlock> tool_blocks_;
   std::map<long long, ReasoningBlock> reasoning_blocks_;
   std::optional<TokenUsage> usage_;

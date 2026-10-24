@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/provider_openai_test_suite.h"
+#include "tests/support/provider_parser_budget_tests.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/agent/assistant_turn.h"
@@ -113,6 +114,14 @@ void test_closed_provider_finish_reason_catalog()
 void test_openai_provider_parser_budgets()
 {
   ava::provider::OpenAIProvider const provider("https://api.example.test");
+  ava::tests::test_provider_parser_budgets(
+      provider, [](std::string const& text) { return R"({"status":"completed","output_text":")" + text + R"("})"; },
+      [](std::string const& text) { return R"(data: {"type":"response.output_text.delta","delta":")" + text + R"("})"; }, {},
+      R"(data: {"type":"response.created"})");
+  ava::tests::test_provider_tool_fragment_budget(
+      provider, "data: {\"type\":\"response.function_call.added\",\"call_id\":\"budget_call\",\"name\":\"read_file\"}\n\n",
+      [](std::string const& text) { return R"(data: {"type":"response.function_call_arguments.delta","call_id":"budget_call","delta":")" + text + R"("})"; },
+      "data: [DONE]\n\n");
   auto array_json = [](std::size_t count, auto const& item) {
     std::string array = "[";
     for (std::size_t index = 0; index < count; ++index)
