@@ -21,7 +21,7 @@ struct TestPad : public terminal::Pad
 int main()
 {
   Application application("linux09-layout");
-  application.terminal_context().initialize();
+  application.initialize_terminal_context();
 
   terminal::HorizontalLayout horizontal_layout1;
 

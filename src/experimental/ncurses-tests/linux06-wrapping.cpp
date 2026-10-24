@@ -10,8 +10,8 @@ namespace terminal = ava::tui::terminal;
 int main()
 {
   Application application("linux06-wrapping");
+  application.initialize_terminal_context();
   terminal::Context& terminal_context = application.terminal_context();
-  terminal_context.initialize();
 
   int wch;
   {

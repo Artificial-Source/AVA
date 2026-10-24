@@ -26,7 +26,7 @@ struct TestPad : public terminal::Pad
 int main()
 {
   Application application("linux08-pad");
-  application.terminal_context().initialize();
+  application.initialize_terminal_context();
 
   namespace terminal = ava::tui::terminal;
   terminal::BasicWindow const& stdscr = application.terminal_context().stdscr();

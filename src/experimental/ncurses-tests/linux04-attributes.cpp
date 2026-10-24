@@ -18,8 +18,8 @@ void add_text(std::string& text, char const* attr_str)
 int main()
 {
   Application application("linux04-attributes");
+  application.initialize_terminal_context();
   terminal::Context& terminal_context = application.terminal_context();
-  terminal_context.initialize();
 
   wint_t wch;
   {

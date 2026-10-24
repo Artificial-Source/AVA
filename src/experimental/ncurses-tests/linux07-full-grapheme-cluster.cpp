@@ -38,8 +38,8 @@ bool same_storage(terminal::GraphemeCluster const& grapheme_cluster, Storage con
 int main()
 {
   Application application("linux07-full-grapheme-cluster");
+  application.initialize_terminal_context();
   terminal::Context& terminal_context = application.terminal_context();
-  terminal_context.initialize();
 
   Storage const expected_full_cluster = {L'a', L'\u0301', L'\u0302', L'\u0303', L'\u0308'};
 

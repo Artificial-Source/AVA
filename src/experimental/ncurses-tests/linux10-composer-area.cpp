@@ -13,7 +13,7 @@ namespace terminal = ava::tui::terminal;
 int main()
 {
   Application application("linux10-composer-area");
-  application.terminal_context().initialize();
+  application.initialize_terminal_context();
 
   constexpr terminal::Color tui_background = 0x0a0a0a;
   constexpr terminal::Color composer_foreground = 0xeeeeee;

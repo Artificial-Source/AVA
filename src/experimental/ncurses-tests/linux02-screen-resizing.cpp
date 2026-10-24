@@ -32,8 +32,7 @@ int main()
   initscr();
 #else
   Application application("linux04-attributes");
-  ava::tui::terminal::Context& terminal_context = application.terminal_context();
-  terminal_context.initialize();
+  application.initialize_terminal_context();
   noraw();
   curs_set(TRUE);
 #endif

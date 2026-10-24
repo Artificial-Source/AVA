@@ -10,8 +10,8 @@ namespace terminal = ava::tui::terminal;
 int main()
 {
   Application application("linux05-colors");
+  application.initialize_terminal_context();
   terminal::Context& terminal_context = application.terminal_context();
-  terminal_context.initialize();
 
   terminal::BasicWindow& window = terminal_context.stdscr();
   window.move({10, 0});
