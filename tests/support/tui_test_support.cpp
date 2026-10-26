@@ -66,11 +66,12 @@ void select_frontend_test_model(ava::app::runtime::session_ts& session, TuiTestM
 } // namespace
 
 // Own the frontend and its registered session data at stable addresses until the rendering fixture is destroyed.
+// The frontend owns empty runtime options because this fixture exercises projections without starting the runtime.
 // The temporary configuration root outlives both objects and no provider requests are made.
 struct TuiFrontEndFixture::Impl
 {
   explicit Impl(TuiTestModel model)
-      : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")), frontend(), session(open_frontend_test_session(root.path()))
+      : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")), frontend(ava::tui::TuiRuntimeOptions{}), session(open_frontend_test_session(root.path()))
   {
     select_frontend_test_model(session, model);
     frontend.register_frontend_data(session);

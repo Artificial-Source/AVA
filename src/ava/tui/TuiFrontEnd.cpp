@@ -6,10 +6,10 @@
 
 namespace ava::tui {
 
-int TuiFrontEnd::run(TuiRuntimeOptions options)
+int TuiFrontEnd::run()
 {
   // FIXME: Delegate to the existing runtime until its UI state and orchestration have been moved into this frontend.
-  return run_interactive_composer(std::move(options));
+  return run_interactive_composer();
 }
 
 } // namespace ava::tui
