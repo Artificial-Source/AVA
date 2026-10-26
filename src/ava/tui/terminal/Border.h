@@ -36,6 +36,9 @@ class Border
   Box const& box() const { return box_; }
   ColorPair const colors(int index) const { return colors_[index]; }
 
+  // Change color pair by index.
+  void set_color(int index, ColorPair color_pair) { colors_[index] = color_pair; }
+
   // Convenience accessor.
   bool empty() const { return margin_.empty(); }
 

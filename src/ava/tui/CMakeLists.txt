@@ -2,6 +2,7 @@ add_library(ava_tui
   "command_completions.cpp"
   "command_output.cpp"
   "composer.cpp"
+  "ComposerArea.cpp"
   "composer_diff.cpp"
   "composer_editor.cpp"
   "composer_input.cpp"

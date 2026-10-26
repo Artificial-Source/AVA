@@ -40,4 +40,15 @@ void WindowBorder::set_height(uint32_t window_height)
     draw_border();
 }
 
+void WindowBorder::change_lhs_border_color_pair(ColorPair lhs_border_color_pair)
+{
+  border_.set_color(Box::pos_to_index(Box::tl), lhs_border_color_pair);
+  border_.set_color(Box::pos_to_index(Box::ls), lhs_border_color_pair);
+  border_.set_color(Box::pos_to_index(Box::bl), lhs_border_color_pair);
+
+  // If the window wasn't initialized yet then it wasn't drawn yet either; we therefore also do not need a redraw. Just changed the colors above is sufficient.
+  if (outer_window_.is_initialized())
+    draw_border();
+}
+
 } // namespace ava::tui::terminal

@@ -33,7 +33,10 @@ void Box::print_members(std::ostream& os, char const* prefix) const
      << __write__(", br:") << br
      << __write__(", index_to_pos:") << index_to_pos
      << __write__(", default_box")                              // We are not showing `default_box`.
-     << __write__(", box_characters:") << box_characters_;
+     << __write__(", box_characters:");
+  // Still uses the same PRELUDE.
+  for (wchar_t wc : box_characters_)
+    os << wc;
 }
 
 void GraphemeCluster::print_members(std::ostream& os, char const* prefix) const

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "Application.h"
+#include "ComposerArea.h"
 #include "lorem_ipsum_paragraphs.h"
 #include "terminal/Context.h"
 #include "terminal/WindowPad.h"
@@ -24,40 +25,15 @@ int main()
   terminal_context.apply_cursor_settings({terminal::CursorStyle::Block, true});
   terminal_context.stdscr().set_background(terminal_context.create_color_pair({}, tui_background));
 
-  terminal::Box const composer_box{L"┃██"
-                                   L"┃ █"
-                                   L"╹▀▀"};
-  //                     accent bar--^
-  //                                  ^^-- top, right and bottom.
-
   // The colors used for the left-most column of the border.
   terminal::ColorPair const accent_bar_color_pair = terminal_context.create_color_pair(info_color, tui_background);
-  // The colors used for the remaining box characters of the border.
-  terminal::ColorPair const border_color_pair = terminal_context.create_color_pair(composer_background, tui_background);
-  // The rendition used for the margin and the pad viewport.
-  terminal::Rendition const composer_rendition(terminal_context.create_color_pair(composer_foreground, composer_background));
 
-  // The margin used by the composer:
-  //
-  //  ╳  123 (left)                      (right) 12  ╳
-  //  ╳  ╾─╼                                     ╾╼  ╳
-  //  ╳  ┃█████████████████████████████████████████]1╳ (top)    █ : composer_box characters
-  //  ╳  ┃░░·← 0,0▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█  ╳          ░ : additional composer_margin area
-  //  ╳╾╼┃░░▒▒▒▒▒▒▒▒▒▒▒pad viewport▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█╾╼╳          ▒ : pad viewport area
-  //  ╳12┃░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░█12╳          ╳ : terminal edge
-  //  ╳  ┃░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░█  ╳
-  //  ╳  ┃░░Coder░·░GPT-5.6░Sol░OpenAI░░░░░░░░░░░░█⎤2╳ (bottom)
-  //  ╳  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀⎦1╳
-  //  ╳  /project/path          2 (screen margin)    ╳
-  //  ╳  ↑ accent bar           1                    ╳
-  //  ╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳╳
   constexpr terminal::Margin const screen_margin{.top = 0, .bottom = 2, .left = 2, .right = 2};
-  constexpr terminal::Margin const composer_margin{.top = 1, .bottom = 3, .left = 3, .right = 2};
-
   terminal::columns_t const composer_area_width = terminal_context.cols() - screen_margin.width();
   terminal::Position const bottom_left{terminal_context.rows() - screen_margin.bottom, screen_margin.left};
-  terminal::Border const composer_border{composer_margin, border_color_pair, accent_bar_color_pair, composer_box};
-  terminal::WindowPad composer_area(composer_area_width, bottom_left, composer_rendition, composer_border);
+
+  ava::tui::ComposerArea composer_area(composer_area_width, bottom_left, composer_foreground, composer_background, tui_background);
+  composer_area.set_accent_bar_color_pair(accent_bar_color_pair);
 
   constexpr int total_paragraph_count = 2;
   for (int paragraph_number = 0; paragraph_number < total_paragraph_count; ++paragraph_number)
@@ -66,9 +42,25 @@ int main()
   // Generate the graphemes content of the pad, determine the required window height and create the window.
   composer_area.generate(true, true);
 
+  // A test string for the bottom of the margin area.
+  std::string const agent_label = "Coder";
+  std::string const agent_model_separator = " · ";
+  std::string const model_label = "GPT-6.1 Sol";
+  std::string const provider_label = "OpenAI";
+
   // Write the background color to the virtual screen (erase it).
   terminal_context.stdscr().wnoutrefresh();
   // Show the contents of `pad` in the pad viewport of `composer_area`.
+  composer_area.pnoutrefresh(terminal::ScrollPosition::end);
+
+  // Publish the virtual screen to the physical screen and wait for a key press.
+  terminal_context.doupdate();
+  terminal_context.get_wch();
+
+  // Change the accent bar color.
+  constexpr terminal::Color color = 0x880000;
+  terminal::ColorPair const accent_bar_color_pair2 = terminal_context.create_color_pair(color, tui_background);
+  composer_area.set_accent_bar_color_pair(accent_bar_color_pair2);
   composer_area.pnoutrefresh(terminal::ScrollPosition::end);
 
   // Publish the virtual screen to the physical screen and wait for a key press.

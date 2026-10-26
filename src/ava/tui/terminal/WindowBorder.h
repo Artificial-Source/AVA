@@ -27,7 +27,7 @@ class WindowBorder
  protected:
   DelayedInitializationData data_;      // Data used to construct outer_window_ once set_height is being called.
   BasicWindow outer_window_;            // The margin-inclusive parent, or an empty wrapper when the margin is empty.
-  Border const border_;                 // The immutable border and margin configuration.
+  Border border_;                       // The immutable (except for the lhs color) border and margin configuration.
   bool need_border_refresh_ = false;    // True iff the outer border must be staged before refreshing the writable area.
 
  public:
@@ -56,6 +56,9 @@ class WindowBorder
   // Change, or set the height of the window. This might create the window, or move/resize it, keeping its bottom-left
   // corner in the same place.
   void set_height(uint32_t window_height);
+
+  // Update the color of the left-hand-side of the border, and redraw the border.
+  void change_lhs_border_color_pair(ColorPair lhs_border_color_pair);
 
   // Accessors.
 

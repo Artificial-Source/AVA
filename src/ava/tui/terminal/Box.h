@@ -3,7 +3,6 @@
 #include "ComplexChar.h"
 
 #include <array>
-#include <string>
 
 namespace ava::tui::terminal {
 
@@ -44,6 +43,15 @@ class Box
 
   static constexpr std::array<int, 8> index_to_pos = { ls, rs, ts, bs, tl, tr, bl, br };
 
+  // The inverse of index_to_pos.
+  static consteval int pos_to_index(int pos)
+  {
+    for (int i = 0; i < index_to_pos.size(); ++i)
+      if (index_to_pos[i] == pos)
+        return i;
+    throw "pos must be one of the eight Box border positions";
+  }
+
   // Default string.
   static constexpr wchar_t const* default_box =
     L"┏━┓"    // Corresponds with indices into box_characters_: 012
@@ -51,14 +59,15 @@ class Box
      "┗━┛";   //                                                678
 
  private:
-  std::wstring const box_characters_;
+  std::array<wchar_t, 11> const box_characters_{};
 
  public:
-  // Construct an uninitialed Box (don't use it).
-  Box() = default;
+  // Construct an empty Box whose character slots are all null.
+  constexpr Box() = default;
 
-  // Construct a Box from `box`.
-  Box(wchar_t const* box) : box_characters_{box[4], box[7], box[1], wchar_t{}, box[3], box[6], box[0], wchar_t{}, box[5], box[8], box[2]} { }
+  // Construct a Box from box, which must point to at least nine readable characters
+  // arranged as a three-by-three border sample, including its center character.
+  constexpr Box(wchar_t const* box) : box_characters_{box[4], box[7], box[1], wchar_t{}, box[3], box[6], box[0], wchar_t{}, box[5], box[8], box[2]} { }
 
   // Return the i-th border character as a ComplexChar using Rendition rendition,
   // where i = 0 corresponds to the left hand side, i = 1 corresponds to right hand side, etc.

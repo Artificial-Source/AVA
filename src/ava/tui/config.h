@@ -17,4 +17,7 @@ constexpr bool default_cursor_blink = true;
 // If the environment variable ESCDELAY is set, it takes precedence and this value is ignored.
 constexpr int default_terminal_escape_delay_ms = 100;
 
+// The "info" color as used by opencode.
+constexpr uint32_t opencode_info_color = 0x56b6c2;
+
 } // namespace ava::tui::config
