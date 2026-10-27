@@ -74,20 +74,16 @@ struct TuiFrontEndFixture::Impl
 
   Impl(ava::tui::TuiRuntimeOptions options, TuiTestModel model)
       : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")),
-        frontend(std::move(options),
-                 [this]() {
-                   ava::app::runtime::session_ts::crat session_r(session);
-                   return session_r->store.options_r()->session_id;
-                 }),
-        session(open_frontend_test_session(root.path()))
+        session(open_frontend_test_session(root.path())),
+        frontend(session, std::move(options))
   {
     select_frontend_test_model(session, model);
     frontend.register_frontend_data(session);
   }
 
   ScopedTestDirectory root;
-  ava::tui::TuiFrontEnd frontend;
   ava::app::runtime::session_ts session;
+  ava::tui::TuiFrontEnd frontend;
 };
 
 TuiFrontEndFixture::TuiFrontEndFixture(TuiTestModel model) : impl_(std::make_unique<Impl>(std::move(model)))

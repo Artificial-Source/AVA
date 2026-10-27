@@ -870,7 +870,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     // Read backend identity and the retained catalog/todo transports after the
     // worker has committed, before acquiring the UI lock. Action results never
     // carry session transition authority. A quit completion pulls nothing.
-    auto committed_session_id = frontend_.read_committed_session_id_ ? frontend_.read_committed_session_id_() : std::string{};
+    auto committed_session_id = frontend_.read_committed_session_id();
     auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_.options());
     {
       std::lock_guard<std::recursive_mutex> lock(ui_mutex);

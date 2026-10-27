@@ -979,14 +979,14 @@ int TuiFrontEnd::run_interactive_composer()
         return values;
       };
       auto settle_opened_session = [&](std::string status) {
-        auto committed_session_id = this->read_committed_session_id_ ? this->read_committed_session_id_() : std::string{};
+        auto committed_session_id = read_committed_session_id();
         static_cast<void>(apply_committed_session_transition_and_refresh(options_, presentation_state, draft_state, renderer, transcript_search,
                                                                          subagent_workspace, active_select_list, std::move(committed_session_id)));
         if (!status.empty())
           settle_local_command_status(snapshot, std::move(status));
       };
       auto synchronize_committed_session = [&]() {
-        auto const committed_session_id = this->read_committed_session_id_ ? this->read_committed_session_id_() : std::string{};
+        auto const committed_session_id = read_committed_session_id();
         return apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                   std::move(committed_session_id));
       };

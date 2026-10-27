@@ -150,8 +150,7 @@ RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend)
       applied_workspace_catalog_generation_(frontend->options().workspace_catalog_generation),
       sidebar{.todos = frontend->options().initial_todos, .mode = snapshot.mode, .version = frontend->options().app_version}
 {
-  if (frontend->read_committed_session_id_)
-    snapshot.session_id = frontend->read_committed_session_id_();
+  snapshot.session_id = frontend->read_committed_session_id();
 }
 
 void RuntimePresentationState::refresh_prompt_metadata()

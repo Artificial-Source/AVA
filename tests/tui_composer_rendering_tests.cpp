@@ -251,7 +251,7 @@ bool test_changed_session_snapshot_resets_presentation()
   renderer.transcript_layout_cache.valid = true;
   auto const previous_generation = presentation.snapshot.transcript_generation;
   auto const replaced_session = frontend.replace_session_identity();
-  auto const committed_session_id = frontend.frontend()->read_committed_session_id_();
+  auto const committed_session_id = frontend.frontend()->read_committed_session_id();
 
   int todo_pulls = 0;
   options.read_committed_todos = [&]() {
@@ -294,7 +294,7 @@ bool test_changed_session_snapshot_resets_presentation()
     return std::vector<ava::tui::TodoItem>{{.id = "todo-same", .content = "same-session todo"}};
   };
   auto unchanged = ava::tui::apply_committed_session_transition_and_refresh(options, presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                            active_select_list, frontend.frontend()->read_committed_session_id_());
+                                                                            active_select_list, frontend.frontend()->read_committed_session_id());
   auto const unchanged_state_ok = !unchanged && presentation.snapshot.transcript_generation == unchanged_generation &&
                                   presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().text == "new receipt only" &&
                                   presentation.snapshot.queued_messages.size() == 1 && presentation.sidebar.activity.size() == 1 && todo_pulls == 2 &&
@@ -308,9 +308,9 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
   auto const before_replacements = presentation.snapshot.transcript_generation;
   auto const first_replaced = frontend.replace_session_identity();
-  auto const intermediate_identity = frontend.frontend()->read_committed_session_id_();
+  auto const intermediate_identity = frontend.frontend()->read_committed_session_id();
   auto const second_replaced = frontend.replace_session_identity();
-  auto const final_identity = frontend.frontend()->read_committed_session_id_();
+  auto const final_identity = frontend.frontend()->read_committed_session_id();
   static_cast<void>(frontend.session_id_metadata());
   auto const transitioned = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
                                                                          active_select_list, final_identity);
@@ -326,7 +326,7 @@ bool test_changed_session_snapshot_resets_presentation()
   frontend.set_session_identity_metadata("intermediate-session");
   frontend.set_session_identity_metadata(final_identity);
   auto const round_trip_transition = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                                  active_select_list, frontend.frontend()->read_committed_session_id_());
+                                                                                  active_select_list, frontend.frontend()->read_committed_session_id());
   bool const identity_round_trip_ok = !round_trip_transition && presentation.snapshot.session_id == final_identity &&
                                       presentation.snapshot.input == "same-identity draft" && presentation.snapshot.transcript_generation == before_round_trip;
   expect(identity_round_trip_ok, "identity A-to-B-to-A before one boundary preserves the A-bound presentation without a reset");
@@ -448,7 +448,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
                                                   navigation, action_controller, transcript_search, subagent_workspace);
 
   auto const outcome = active_run.run("OLD SUBMITTED PROMPT");
-  auto const committed_session_id = frontend.frontend()->read_committed_session_id_();
+  auto const committed_session_id = frontend.frontend()->read_committed_session_id();
   auto history_probe = ava::tui::ComposerDraftState{};
   auto history_index = std::optional<std::size_t>{};
   auto history_scratch = std::string{};

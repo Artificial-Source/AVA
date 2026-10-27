@@ -271,7 +271,7 @@ int run_tui(InteractiveState state)
   }
   auto initial_catalog_snapshot = application_catalog.snapshot();
   static_cast<void>(ava::app::runtime::refresh_git_branch(unlocked_session));
-  ava::tui::TuiFrontEnd frontend(ava::tui::TuiRuntimeOptions{
+  ava::tui::TuiFrontEnd frontend(unlocked_session, ava::tui::TuiRuntimeOptions{
       .app_version = std::string(version::kDisplayVersion),
       .initial_status = keybind_status,
       .initial_transcript = std::move(initial_transcript),
@@ -824,11 +824,7 @@ int run_tui(InteractiveState state)
           [&display_settings, branch_summary_coordinator]() {
             display_settings.shutdown();
             branch_summary_coordinator->shutdown();
-          }},
-          [&unlocked_session]() {
-            SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-            return session_r->store.options_r()->session_id;
-          });
+          }});
   frontend.register_frontend_data(unlocked_session);
   auto result = frontend.run();
   display_settings.shutdown();
