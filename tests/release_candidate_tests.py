@@ -23,6 +23,7 @@ class CandidateTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="ava-candidate-test-")
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
+        self.version = "9.8.7"
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.build = self.root / "build"
@@ -53,10 +54,10 @@ class CandidateTests(unittest.TestCase):
         binary = (self.build / "ava").read_bytes()
         provenance = {"source": {"revision": self.revision}, "release_qualified": True,
                       "binary_sha256": hashlib.sha256(binary).hexdigest(), "architecture": "x86_64"}
-        archive = self.directory / "ava-1.0.0-linux-x64.tar.gz"
+        archive = self.directory / f"ava-{self.version}-linux-x64.tar.gz"
         with tarfile.open(archive, "w:gz") as stream:
             for name, data in (("bin/ava", binary), ("share/doc/ava/PROVENANCE.json", json.dumps(provenance).encode())):
-                member = tarfile.TarInfo("ava-1.0.0-linux-x64/" + name)
+                member = tarfile.TarInfo(f"ava-{self.version}-linux-x64/" + name)
                 member.size = len(data)
                 stream.addfile(member, io.BytesIO(data))
         archive.with_name(archive.name + ".sha256").write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + "  " + archive.name + "\n")
@@ -110,15 +111,12 @@ class CandidateTests(unittest.TestCase):
         self.run_candidate("verify", "--manifest-sha256", manifest, "--revision", "0" * 40, success=False)
 
     def draft_arguments(self):
-        (self.build / "ava").write_bytes(b"#!/bin/sh\nprintf 'ava 1.0.0\\n'\n")
+        (self.build / "ava").write_text(f"#!/bin/sh\nprintf 'ava {self.version}\\n'\n")
         self.run_candidate("seal")
         manifest = self.package()
         self.directory.chmod(0o700)
         body = self.root / "release-body.md"
-        body.write_text(
-            "# AVA 1.0.0\nCommit: @AVA_COMMIT@\n"
-            "Archive: @AVA_ARCHIVE_SHA256@\nChecksum: @AVA_CHECKSUM_SHA256@\n"
-            "Manifest: @AVA_MANIFEST_SHA256@\n")
+        body.write_text((ROOT / "docs/operations/release-body-template.md").read_text())
         return ["draft", "--dry-run", "--revision", self.revision,
                 "--manifest-sha256", manifest, "--repository", "example/ava",
                 "--body", str(body), "--output", str(self.root / "draft-plan")]
@@ -130,11 +128,14 @@ class CandidateTests(unittest.TestCase):
         result = self.run_candidate(*arguments)
         self.assertIn("no remote commands were run", result.stdout)
         notes = (output / "release-body.md").read_text()
+        self.assertIn(f"# AVA {self.version}\n", notes)
+        self.assertIn(f"ava-{self.version}-linux-x64.tar.gz", notes)
+        self.assertIn(f"`ava {self.version}`", notes)
         self.assertIn(self.revision, notes)
         self.assertIn(manifest, notes)
         self.assertNotIn("@AVA_", notes)
         commands = (output / "draft-commands.sh").read_text()
-        self.assertIn("gh release create v1.0.0 --repo example/ava --draft", commands)
+        self.assertIn(f"gh release create v{self.version} --repo example/ava --draft", commands)
         self.assertIn("--verify-tag", commands)
         self.assertIn("git ls-remote", commands)
         self.assertIn("gh api --paginate", commands)
@@ -142,14 +143,14 @@ class CandidateTests(unittest.TestCase):
         self.assertNotIn("cmake", commands)
         self.assertFalse(subprocess.run(
             ["git", "-C", str(self.repo), "show-ref", "--verify", "--quiet",
-             "refs/tags/v1.0.0"]).returncode == 0)
+             f"refs/tags/v{self.version}"]).returncode == 0)
 
     def test_draft_preflight_rejects_existing_release_in_large_listing(self):
         self.run_candidate(*self.draft_arguments())
         tools = self.root / "tools"
         tools.mkdir()
         releases = self.root / "remote-releases.txt"
-        releases.write_text("v1.0.0\n" + "other-version\n" * 20000)
+        releases.write_text(f"v{self.version}\n" + "other-version\n" * 20000)
         (tools / "gh").write_text(f'#!/bin/sh\ncat "{releases}"\n')
         (tools / "git").write_text(
             '#!/bin/sh\nif [ "$1" = ls-remote ]; then exit 0; fi\n'
@@ -184,7 +185,7 @@ class CandidateTests(unittest.TestCase):
 
     def test_draft_rejects_existing_local_tag(self):
         arguments = self.draft_arguments()
-        subprocess.run(["git", "-C", str(self.repo), "tag", "v1.0.0"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "tag", f"v{self.version}"], check=True)
         self.assertIn("local tag already exists", self.run_candidate(*arguments, success=False).stderr)
 
     def test_draft_rejects_extra_or_symlink_inputs(self):
@@ -198,14 +199,20 @@ class CandidateTests(unittest.TestCase):
 
     def test_draft_rejects_incomplete_notes(self):
         arguments = self.draft_arguments()
-        (self.root / "release-body.md").write_text("# AVA 1.0.0\nNo identity\n")
+        (self.root / "release-body.md").write_text("# AVA @AVA_VERSION@\nNo identity\n")
         self.assertIn("missing @AVA_COMMIT@", self.run_candidate(*arguments, success=False).stderr)
 
     def test_draft_rejects_wrong_body_version(self):
         arguments = self.draft_arguments()
         body = self.root / "release-body.md"
-        body.write_text(body.read_text().replace("# AVA 1.0.0", "# AVA 9.0.0"))
+        body.write_text(body.read_text().replace("# AVA @AVA_VERSION@", "# AVA 9.0.0"))
         self.assertIn("body version differs", self.run_candidate(*arguments, success=False).stderr)
+
+    def test_draft_rejects_missing_version_placeholder(self):
+        arguments = self.draft_arguments()
+        body = self.root / "release-body.md"
+        body.write_text(body.read_text().replace("@AVA_VERSION@", self.version))
+        self.assertIn("missing @AVA_VERSION@", self.run_candidate(*arguments, success=False).stderr)
 
     def test_supplied_binary_cannot_claim_reused_build(self):
         result = subprocess.run([str(ROOT / "scripts/package-linux.sh"), "--build-dir", str(self.build),

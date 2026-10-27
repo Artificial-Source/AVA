@@ -1,21 +1,30 @@
-# AVA Release Readiness
+# AVA Release Plan — No Release Scheduled
 
-This is the single current cut line for AVA's first official release. It records the frozen decision and actionable ledger; dated audit detail is preserved in the [2026-08-23 audit history](../history/2026-08-23-release-readiness-audit.md). Runtime version `1.0.0` is **not** a published release, and this audit creates no tag, release, or official artifact.
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. No release is scheduled yet.
+
+This page keeps the release tooling work and its evidence in one place.
+The earlier audit is preserved in the
+[2026-08-23 history](../history/2026-08-23-release-readiness-audit.md).
+That audit does not set the current release schedule.
 
 > **Integration status:** the audit scope and the isolated `AVA-REL-001`, `AVA-REL-002`, `AVA-REL-003`, and `AVA-REL-014` fixes are integrated on `develop`. The sanitizer policy is applied centrally to `ava_terminal`; no terminal frontend source was changed for that integration. GitHub Actions run `32795413575` passed every required job at commit `546fa0aa7a9faece8adb9937796464b01a5d86f9`. This is still not an exact retained release candidate.
 
 ## Candidate decision
 
-| Field | Frozen value |
+| Field | Current value |
 | --- | --- |
-| Candidate version | `1.0.0` |
-| Baseline commit | `c43794e91bb8d4f706ad4c916387f5487fca14ee` |
-| Audit integration state | Safety, documentation, package-policy, and CI fixes are integrated through `546fa0aa7a9faece8adb9937796464b01a5d86f9`; exact retained candidate bytes are still required |
-| Freeze date | 2026-08-23 |
-| Verdict | **READY AFTER LISTED BLOCKERS** |
-| Open release blockers | `AVA-REL-011`, then `AVA-REL-013`, then `AVA-REL-012` as ordered below |
-| First-publication target | Linux x86-64 only; no other architecture may publish without native exact-candidate evidence |
-| Publication state | No official release or tag exists; none is created by this audit |
+| Runtime version | `0.32.0`; not a stable release |
+| Release schedule | No release is scheduled yet |
+| Stable 1.0 prerequisite | Unmet: the terminal frontend is still in active development; completion is required first |
+| Baseline commit for the earlier audit | `c43794e91bb8d4f706ad4c916387f5487fca14ee` |
+| Audit integration state | Safety, documentation, package-policy, and CI fixes are integrated through `546fa0aa7a9faece8adb9937796464b01a5d86f9`; this evidence is kept for future release work |
+| Earlier audit freeze date | 2026-08-23 |
+| Verdict | **NO RELEASE PLANNED YET** |
+| Later release gates | After frontend completion: `AVA-REL-011`, then `AVA-REL-013`, then `AVA-REL-012` |
+| Proposed first-publication target | Linux x86-64 only; other architectures need native exact-candidate evidence |
+| Publication state | No official release or tag exists |
 
 The comparison audit used fetched pins Pi.dev `460191cfcf27d60ff81fc0178812f4ff09e8df06` (`0.84.2`), OpenCode `03bba464d46f3eddf74195919b1344aa937f7b11` (`1.18.21`), and Grok Build `07b2f7144fd5c5c9d3dd1966937a87852d2dbdb8` (core `1.0.8`, npm wrapper `0.1.220-alpha.4`). The repository's separately preserved comparison checkouts remain at Pi.dev `936aff00918de1187f085f123c2812d8f2d67745`, OpenCode `38e10eb1408feb700021b8e8766fb0ab41bf84e2`, and Grok Build `8a14c91d88875a831a38b3a066b1683116bcb31c`; they were not moved to perform the audit.
 
@@ -33,6 +42,10 @@ The comparison audit used fetched pins Pi.dev `460191cfcf27d60ff81fc0178812f4ff0
 
 ## Frozen scope and admission rule
 
+The freeze below records the earlier audit scope. It is not a current release
+commitment. Frontend completion remains an unmet prerequisite for stable 1.0.
+The tooling gates below will apply when release work is scheduled.
+
 The frozen P0 scope is `AVA-REL-001` and `AVA-REL-002`; both are fixed on `develop`. The frozen P1 scope contains integrated `AVA-REL-003` and `AVA-REL-014`, plus open `AVA-REL-011`, `AVA-REL-012`, and `AVA-REL-013`. Documentation closure `AVA-REL-015` is a completed P2 audit deliverable, not a release blocker. `AVA-REL-010` is not a separate blocker: its exact-candidate terminal gate is merged into `AVA-REL-011`. All former release candidates `AVA-REL-004` through `AVA-REL-009` remain downgraded to P2 after independent scope review.
 
 After this freeze, a new P0/P1 requires all of: a reproducible impact on the narrow Linux x86-64 first release, exact AVA source/runtime evidence, measurable acceptance, and independent technical and scope approval. Competitor parity, breadth, cleanup value, or an untested concern is insufficient. Existing downgrades stay downgraded unless new evidence satisfies the same rule.
@@ -42,8 +55,9 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 | Milestone | Status | Exit condition |
 | --- | --- | --- |
 | M0 — Documentation audit closure | Completed and validated in this consolidation | `AVA-REL-015` current docs, history, navigation, package inventory, and checks agree |
-| M1 — Exact-byte and support qualification | Open | `AVA-REL-011` and `AVA-REL-013` close for the same retained Linux x64 candidate bytes |
-| M2 — Publication | Blocked by M1 | `AVA-REL-012` closes through reviewed, no-clobber official publication and post-publication verification |
+| Prerequisite — Terminal frontend | Unmet; active development | Complete the terminal frontend before a stable 1.0 release is considered |
+| M1 — Exact-byte and support qualification | Not scheduled; follows frontend completion | `AVA-REL-011` and `AVA-REL-013` close for the same retained Linux x64 candidate bytes |
+| M2 — Publication | Not scheduled; follows frontend completion and M1 | `AVA-REL-012` closes through reviewed, no-clobber official publication and post-publication verification |
 | M3 — Post-1.0 work | Deferred | P2/P3 items receive separate approved goals; none blocks M1 or M2 |
 
 ## P0, completed P1, and audit-deliverable ledger
@@ -98,12 +112,16 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 - **Subsystem:** documentation, build guidance, package inventory, and release operations.
 - **Exact evidence:** this ledger and [principles](principles.md) are canonical; the dated audit is under history; publication has a current runbook; the completed TUI plan moved to history and left the runtime artifact; current build/platform/package statements and closed goals were reconciled. Direct source links verified 128 files; structure verified 108/108 reachable documents; four focused documentation CTests passed 4/4; Release provenance/install/package CTests passed 3/3; the live-dogfood CTest and direct harness passed; Python/JSON/shell syntax, assertion comments, exact 32-document inventory, old-path/stale-command searches, C++ formatting, Release build, focused TUI CTest, and final `git diff --check` passed.
 - **Impact:** contradictory current docs could direct unsafe builds, advertise unsupported artifacts, revive closed parity work, or ship history as runtime guidance.
-- **Measurable acceptance:** every current page links to one principles/cut authority; runtime `1.0.0` is not called published; package payload is exactly 32 documents (30 Markdown, 2 JSON) and artifact index matches; all required gates pass.
+- **Measurable acceptance:** current pages use the same product principles and release plan. They state the runtime version and release status accurately. The package contains exactly 32 documents (30 Markdown, 2 JSON), its index matches, and the required gates pass.
 - **Verification:** exact gates named above.
 - **Dependencies/size/milestone:** fixed code/test work remains authoritative; M; M0.
 - **Intentional difference:** history and comparison evidence remain preserved but cannot become current product authority.
 
 ## Open P1 blockers
+
+The dated packet records below are historical evidence. Their version numbers
+and digests describe the bytes tested at the time. They do not qualify the
+current `0.32.0` runtime or set a release schedule.
 
 ### AVA-REL-011 — Qualify and retain the exact release bytes
 
@@ -132,11 +150,20 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 - **Dependencies/size/milestone:** `AVA-REL-011` exact bytes; M; M1.
 - **Intentional difference:** support is evidence-driven, not inferred from portable-looking CMake conditionals or another project's matrix.
 
-### AVA-REL-012 — Official publication lifecycle and reviewed 1.0 notes
+### AVA-REL-012 — Official publication lifecycle and release notes
 
-- **Tier/status/owner:** P1; **prepared; awaiting owner approval and GitHub run**; shared.
+- **Tier/status/owner:** P1; **release tooling prepared; no release scheduled**; shared.
 - **Subsystem:** release operations, changelog/release notes, publication, rollback, and withdrawal.
-- **Exact evidence:** `CHANGELOG.md` has a user-facing `1.0.0 - UNRELEASED` section. The [canonical release body](../operations/release-body-1.0.0.md) has exact-commit/digest placeholders and the REL-013 support floor. [publication.md](../operations/publication.md) gives owner commands, approval records, no-clobber draft staging from retained assets, remote verification, patch correction, withdrawal, and supported-version policy. `scripts/release-candidate.py draft --dry-run` verifies local packet identity, renders notes, smokes the extracted version, and prints remote commands without running them; its nine black-box cases pass, including refusal of an existing release in a large paginated listing. No tag, release, or GitHub write was made.
+- **Exact evidence:** `CHANGELOG.md` keeps the readable notes under `Unreleased`.
+  The [release body template](../operations/release-body-template.md) uses the
+  archive version, approved commit, and digest placeholders. It records the
+  REL-013 platform floor. The [publication runbook](../operations/publication.md)
+  covers owner commands, approvals, draft creation without overwrites, remote
+  checks, corrections, withdrawal, and support policy.
+  `scripts/release-candidate.py draft --dry-run` verifies the local packet,
+  renders the notes, and checks the extracted binary's version. It prints
+  remote commands but does not run them. Its tests cover refusal of an
+  existing release in a large paginated listing. No release is scheduled.
 - **Local rehearsal (2026-10-24):** packet source
   `1c2fe2ee9a29e6639ce14b46edf819ff3ae9a89d`; GCC 13.3 Release configured with
   `cmake --preset release-candidate -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF`.
@@ -172,7 +199,12 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
   This evidence-only ledger update does not change the rehearsal packet's
   source identity or authorize promotion of local bytes.
 - **Impact:** an ad hoc first release can publish the wrong commit or bytes, overwrite assets, omit limitations, or leave no correction/withdrawal procedure.
-- **Measurable acceptance:** owners review the exact version/commit, 1.0 changelog and release body, supported floor, known limits, checksums, approval record, immutable correction policy, post-publication checks, rollback/withdrawal decision tree, and supported-version policy; a no-clobber draft dry-run uses the retained `AVA-REL-011` assets; final tag/commit equality and remote assets are verified. This audit itself creates no tag or release.
+- **Measurable acceptance:** after frontend completion and a release decision,
+  owners review the exact version, commit, changelog, body, platform floor,
+  limitations, checksums, and approvals. They review correction, withdrawal,
+  support, and post-publication procedures. A dry-run prepares a draft from
+  retained `AVA-REL-011` assets without overwrites. Remote checks confirm the
+  tag, commit, and asset identities. This ledger creates no tag or release.
 - **Verification:** reviewed release packet, dry-run record, approvals, remote tag/commit/API checks, downloaded asset hashes, extracted smoke, clean-install smoke, and withdrawal/patch drill evidence.
 - **Dependencies/size/milestone:** `AVA-REL-011` and `AVA-REL-013`; L; M2.
 - **Intentional difference:** corrections use a new patch release; published version/tag/assets are never silently replaced.

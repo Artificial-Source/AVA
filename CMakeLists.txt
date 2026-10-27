@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.27...4.3.4)
 
 project(ava
-  VERSION 1.0.0
+  VERSION 0.32.0
   LANGUAGES CXX
-  DESCRIPTION "OpenAI-first C++23 terminal coding agent with an ncursesw TUI"
+  DESCRIPTION "Local-first coding agent written in C++23 that works with any LLM"
 )
 
 include(GNUInstallDirs)

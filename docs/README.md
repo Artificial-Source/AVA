@@ -55,7 +55,12 @@ The [engineering index](engineering/README.md) contains active, evidence-backed 
 
 ## Product and current status
 
-The [product index](product/README.md) contains canonical [product principles](product/principles.md), the single current [release-readiness cut](product/release-readiness.md), feature/capability baselines, and evidence mapping. Runtime version `1.0.0` is not a published release; complete candidate qualification and publication require the release ledger, [release checklist](operations/release-checklist.md), and publication runbook.
+The [product index](product/README.md) links the [product principles](product/principles.md),
+[release plan](product/release-readiness.md), capability baselines, and evidence.
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. No release is scheduled yet. The
+[release checklist](operations/release-checklist.md) and publication runbook
+remain available for future releases.
 
 ## Plans
 

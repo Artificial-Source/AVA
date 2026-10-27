@@ -1,7 +1,7 @@
-# AVA 1.0.0
+# AVA @AVA_VERSION@
 
-AVA is a native terminal coding assistant. Version 1.0.0 is the first official
-Linux x64 release.
+AVA is a native terminal coding assistant. This release provides version
+@AVA_VERSION@ for Linux x64.
 
 Source commit: `@AVA_COMMIT@`
 
@@ -20,7 +20,7 @@ Source commit: `@AVA_COMMIT@`
 - Persistent operation permissions and command containment. Deny rules take
   precedence. Tool calls truncated by a provider token limit do not run.
 
-The [1.0 changelog](https://github.com/Artificial-Source/AVA/blob/@AVA_COMMIT@/CHANGELOG.md)
+The [changelog](https://github.com/Artificial-Source/AVA/blob/@AVA_COMMIT@/CHANGELOG.md)
 has the full summary. Review the
 [product principles](https://github.com/Artificial-Source/AVA/blob/@AVA_COMMIT@/docs/product/principles.md)
 and [release ledger](https://github.com/Artificial-Source/AVA/blob/@AVA_COMMIT@/docs/product/release-readiness.md)
@@ -43,28 +43,28 @@ Nehalem hardware or an independently booted minimum kernel.
 
 ## Download, verify, and install
 
-Download `ava-1.0.0-linux-x64.tar.gz` and
-`ava-1.0.0-linux-x64.tar.gz.sha256` from this release's assets. In a new
+Download `ava-@AVA_VERSION@-linux-x64.tar.gz` and
+`ava-@AVA_VERSION@-linux-x64.tar.gz.sha256` from this release's assets. In a new
 private directory containing both files, run:
 
 ```sh
-sha256sum --check --strict ava-1.0.0-linux-x64.tar.gz.sha256
-tar -xzf ava-1.0.0-linux-x64.tar.gz
-./ava-1.0.0-linux-x64/bin/ava --version
-./ava-1.0.0-linux-x64/bin/ava --help
-./ava-1.0.0-linux-x64/bin/ava doctor
+sha256sum --check --strict ava-@AVA_VERSION@-linux-x64.tar.gz.sha256
+tar -xzf ava-@AVA_VERSION@-linux-x64.tar.gz
+./ava-@AVA_VERSION@-linux-x64/bin/ava --version
+./ava-@AVA_VERSION@-linux-x64/bin/ava --help
+./ava-@AVA_VERSION@-linux-x64/bin/ava doctor
 ```
 
-The version must be `ava 1.0.0`. Missing optional credentials or local tools
-may cause doctor warnings. Read the included `share/doc/ava/README.md`, then
-add the extracted `bin` directory to your `PATH` if desired. Keep the rest of
+The version must be `ava @AVA_VERSION@`. Missing optional credentials or local
+tools may cause doctor warnings. Read the included `share/doc/ava/README.md`,
+then add the extracted `bin` directory to your `PATH` if desired. Keep the rest of
 the extracted directory for its license notices and runtime guides.
 
 Approved SHA-256 values:
 
 ```text
-@AVA_ARCHIVE_SHA256@  ava-1.0.0-linux-x64.tar.gz
-@AVA_CHECKSUM_SHA256@  ava-1.0.0-linux-x64.tar.gz.sha256
+@AVA_ARCHIVE_SHA256@  ava-@AVA_VERSION@-linux-x64.tar.gz
+@AVA_CHECKSUM_SHA256@  ava-@AVA_VERSION@-linux-x64.tar.gz.sha256
 @AVA_MANIFEST_SHA256@  candidate.json (retained CI record; not a release asset)
 ```
 
@@ -85,8 +85,8 @@ This release has no detached signatures, SBOM, or artifact attestations.
   Ordinary tools run sequentially by default. Only print/RPC have an opt-in
   for bounded parallel read/search calls.
 - JSONL export does not include attachment bytes. Back up local session and
-  attachment files before changing installations. This is the first official
-  version; compatibility with development snapshots is not a release promise.
+  attachment files before changing installations. Compatibility with
+  development snapshots is not a release promise.
 - There is no cloud sharing, remote plugin installer, package marketplace,
   automatic update, remote catalog refresh, or telemetry. No desktop client or
   web service is part of this release.
@@ -106,7 +106,7 @@ can help narrow the problem.
 
 Report suspected vulnerabilities privately using the
 [security policy](https://github.com/Artificial-Source/AVA/blob/@AVA_COMMIT@/SECURITY.md),
-not a public issue. Only the latest published `1.0.x` patch is supported once
-1.0.0 is published. Corrections ship as a new patch; old tags and assets are
-never silently replaced. See the
+not a public issue. The publication policy names any supported release line.
+Corrections ship as a new patch. Old tags and assets are never silently
+replaced. See the
 [publication policy](https://github.com/Artificial-Source/AVA/blob/@AVA_COMMIT@/docs/operations/publication.md).

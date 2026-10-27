@@ -1,9 +1,10 @@
 # AVA Official Publication Runbook
 
-**Status: prepared; awaiting owner approval and GitHub run.** Local preparation
-never authorizes publication. No command in the preparation tool contacts
-GitHub. Only an owner may run the remote commands below. The current cut and
-remaining gates are in the [release ledger](../product/release-readiness.md).
+**Status: release tooling prepared; no release scheduled.** The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. Local preparation never authorizes publication. The
+preparation tool does not contact GitHub. Only an owner may run the remote
+commands below. See the [release plan](../product/release-readiness.md).
 
 ## Roles and invariants
 
@@ -14,7 +15,7 @@ remaining gates are in the [release ledger](../product/release-readiness.md).
 - Publish Linux x64 only. The qualified floor is Ubuntu 24.04, x86-64-v2
   (Nehalem-class; no BMI2 or AVX), glibc 2.39, libstdc++ with `GLIBCXX_3.4.32`
   and `CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), terminfo, and curl 8.5+.
-  The [canonical release body](release-body-1.0.0.md) records the loader,
+  The [release body template](release-body-template.md) records the loader,
   libraries, symbol ceilings, and limitations. Do not add another architecture
   without native exact-candidate qualification and a new owner decision.
 - Existing tags, releases (including drafts), or asset names stop creation.
@@ -25,7 +26,7 @@ remaining gates are in the [release ledger](../product/release-readiness.md).
 
 ## 1. Select and qualify the exact candidate
 
-Review the [1.0 changelog](../../CHANGELOG.md),
+Review the [changelog](../../CHANGELOG.md),
 [product principles](../product/principles.md),
 [testing guide](testing.md), [artifact checklist](release-checklist.md), and
 [security policy](../../SECURITY.md). Choose the final integrated source commit
@@ -41,8 +42,8 @@ Run these commands from the matching clean checkout with its pinned gitlinks.
 export REPOSITORY=Artificial-Source/AVA
 export REVISION=FULL_40_CHARACTER_APPROVED_SOURCE_COMMIT
 export CANDIDATE_REF=OWNER_SELECTED_BRANCH_AT_THAT_COMMIT
-export VERSION=1.0.0
-export TAG=v1.0.0
+export VERSION='<x.y.z>' # Replace with the approved archive/binary version.
+export TAG="v${VERSION}"
 
 # Owner: make the integrated branch available, then request exact-byte CI.
 git push origin "$CANDIDATE_REF"
@@ -100,12 +101,12 @@ gh run download "$RUN" --repo "$REPOSITORY" \
 python3 scripts/release-candidate.py verify --directory "$PACKET_ROOT/candidate" \
   --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256"
 python3 scripts/inspect-linux-artifact.py \
-  "$PACKET_ROOT/candidate/ava-1.0.0-linux-x64.tar.gz" \
+  "$PACKET_ROOT/candidate/ava-${VERSION}-linux-x64.tar.gz" \
   --output "$PACKET_ROOT/inspection.json"
 python3 scripts/release-candidate.py draft --dry-run \
   --directory "$PACKET_ROOT/candidate" --revision "$REVISION" \
   --manifest-sha256 "$MANIFEST_SHA256" --repository "$REPOSITORY" \
-  --body docs/operations/release-body-1.0.0.md --output "$PACKET_ROOT/plan"
+  --body docs/operations/release-body-template.md --output "$PACKET_ROOT/plan"
 sha256sum "$PACKET_ROOT/plan/release-body.md" "$PACKET_ROOT/plan/draft-commands.sh"
 ```
 
@@ -114,9 +115,9 @@ manifest/digests, checksum, safe member inventory, commit, packaged provenance,
 version, release-body placeholders, and absence of the local tag. It extracts
 and runs `bin/ava --version` with fresh HOME/XDG roots and no inherited
 credentials. It creates a new private plan directory with exclusive writes,
-renders the canonical body, and prints the owner commands. It never runs
-`gh`, pushes a tag, creates a release, or builds anything. Reusing an output
-directory fails without changing the existing plan.
+renders the template with that version, and prints the owner commands. It
+never runs `gh`, pushes a tag, creates a release, or builds anything. Reusing
+an output directory fails without changing the existing plan.
 
 An offline dry-run cannot prove that a remote name is free or that GitHub
 retained the packet. The generated commands check remote tag absence and all
@@ -143,7 +144,7 @@ packet or public notes. Fill every field. Missing names, digests, evidence,
 or decisions block the next step. An agent cannot approve for an owner.
 
 ```text
-Version / tag: 1.0.0 / v1.0.0
+Version / tag: <x.y.z> / v<x.y.z>
 Repository: Artificial-Source/AVA
 Source commit (full SHA):
 Candidate workflow URL / run ID / attempt:
@@ -192,8 +193,8 @@ with the exact retained paths (not a new build):
 ```sh
 gh release create "$TAG" --repo "$REPOSITORY" --draft --verify-tag \
   --title "AVA $VERSION" --notes-file "$PACKET_ROOT/plan/release-body.md" \
-  "$PACKET_ROOT/candidate/ava-1.0.0-linux-x64.tar.gz" \
-  "$PACKET_ROOT/candidate/ava-1.0.0-linux-x64.tar.gz.sha256"
+  "$PACKET_ROOT/candidate/ava-${VERSION}-linux-x64.tar.gz" \
+  "$PACKET_ROOT/candidate/ava-${VERSION}-linux-x64.tar.gz.sha256"
 ```
 
 **Pushing a tag makes the tag public even while the release is a draft.** The
@@ -253,28 +254,29 @@ gh release view "$TAG" --repo "$REPOSITORY" \
 # (true before final approval, false after publication). targetCommitish
 # alone does not prove the tag's peeled commit.
 gh release download "$TAG" --repo "$REPOSITORY" --dir "$CHECK_ROOT" \
-  --pattern ava-1.0.0-linux-x64.tar.gz \
-  --pattern ava-1.0.0-linux-x64.tar.gz.sha256
+  --pattern "ava-${VERSION}-linux-x64.tar.gz" \
+  --pattern "ava-${VERSION}-linux-x64.tar.gz.sha256"
 cp "$PACKET_ROOT/candidate/candidate.json" "$CHECK_ROOT/candidate.json"
 python3 scripts/release-candidate.py verify --directory "$CHECK_ROOT" \
   --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256"
-(cd "$CHECK_ROOT" && sha256sum --check --strict ava-1.0.0-linux-x64.tar.gz.sha256)
-python3 scripts/inspect-linux-artifact.py "$CHECK_ROOT/ava-1.0.0-linux-x64.tar.gz"
-python3 - "$CHECK_ROOT/remote-release.json" "$PACKET_ROOT/plan/release-body.md" <<'PY'
+(cd "$CHECK_ROOT" && sha256sum --check --strict "ava-${VERSION}-linux-x64.tar.gz.sha256")
+python3 scripts/inspect-linux-artifact.py "$CHECK_ROOT/ava-${VERSION}-linux-x64.tar.gz"
+python3 - "$CHECK_ROOT/remote-release.json" "$PACKET_ROOT/plan/release-body.md" "$VERSION" <<'PY'
 import json, pathlib, sys
 remote = json.loads(pathlib.Path(sys.argv[1]).read_text())
 assert remote['body'].replace('\r\n', '\n').rstrip() == pathlib.Path(sys.argv[2]).read_text().rstrip(), 'release body mismatch'
+archive = f'ava-{sys.argv[3]}-linux-x64.tar.gz'
 assert sorted(asset['name'] for asset in remote['assets']) == [
-    'ava-1.0.0-linux-x64.tar.gz', 'ava-1.0.0-linux-x64.tar.gz.sha256'], 'unexpected assets'
+    archive, archive + '.sha256'], 'unexpected assets'
 print('release body and asset names match')
 PY
 mkdir -m 0700 "$CHECK_ROOT/extracted" "$CHECK_ROOT/home" \
   "$CHECK_ROOT/config" "$CHECK_ROOT/state"
-tar -xzf "$CHECK_ROOT/ava-1.0.0-linux-x64.tar.gz" -C "$CHECK_ROOT/extracted"
-export CHECK_BINARY="$CHECK_ROOT/extracted/ava-1.0.0-linux-x64/bin/ava"
+tar -xzf "$CHECK_ROOT/ava-${VERSION}-linux-x64.tar.gz" -C "$CHECK_ROOT/extracted"
+export CHECK_BINARY="$CHECK_ROOT/extracted/ava-${VERSION}-linux-x64/bin/ava"
 test "$(env -i PATH=/usr/bin:/bin HOME="$CHECK_ROOT/home" \
   XDG_CONFIG_HOME="$CHECK_ROOT/config" XDG_STATE_HOME="$CHECK_ROOT/state" \
-  "$CHECK_BINARY" --version)" = 'ava 1.0.0'
+  "$CHECK_BINARY" --version)" = "ava ${VERSION}"
 env -i PATH=/usr/bin:/bin HOME="$CHECK_ROOT/home" \
   XDG_CONFIG_HOME="$CHECK_ROOT/config" XDG_STATE_HOME="$CHECK_ROOT/state" \
   "$CHECK_BINARY" --help
@@ -317,14 +319,14 @@ starts the incident decision below; never fix an asset in place.
 ### After publication
 
 1. **Only code or documentation needs correction, with no urgent risk?** Keep
-   the old version intact. Prepare `1.0.1` (or the next unused patch) and
-   repeat this entire lifecycle with new notes, approvals, and exact bytes.
+   the old version intact. Prepare the next unused patch version and repeat
+   this entire lifecycle with new notes, approvals, and exact bytes.
 2. **The release is unsafe and a safe prior release exists?** Append a dated
    withdrawal warning that names affected/safe versions. Remove the unsafe
    release from latest, point latest to the safe release, and tell users how
    to install its unchanged archive. There is no in-place downgrade command.
-3. **This is 1.0.0 and no safe prior release exists?** Mark it withdrawn and
-   non-latest, warn users to stop using it, and state that no supported safe
+3. **First release of a line, with no safe prior release?** Mark it withdrawn
+   and non-latest. Warn users to stop using it. State that no supported safe
    binary is available until a qualified patch ships. Do not recommend an
    arbitrary development build as a supported fallback.
 4. **Digest mismatch, suspected compromise, or security issue?** Stop all
@@ -355,11 +357,11 @@ dry-run.
 
 ## 8. Supported versions
 
-Before first publication there is no officially supported released version.
-After publication, only the latest published, non-withdrawn `1.0.x` patch is
-supported unless owners announce another line. Support is best-effort, not a
-response-time or maintenance-duration promise. Security reports must name
-affected and fixed versions; an unreleased runtime number is not a release.
+AVA has no officially supported released version. The runtime version is
+`0.32.0`, which is not a stable release. No release is scheduled yet.
+Owners will name supported lines when a release is published.
+Support is best-effort, not a response-time or maintenance-duration promise.
+Security reports must name affected and fixed versions.
 
 A new major/minor line does not silently end support. Owners must publish a
 dated policy naming the supported lines, replacement path, and any end date,

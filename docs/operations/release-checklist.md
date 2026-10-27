@@ -1,6 +1,10 @@
 # AVA Release Artifact Checklist
 
-This checklist covers the local Linux host artifact and exact-byte candidate CI. Runtime version `1.0.0` is not a published release. Candidate CI retains archives and evidence, but does **not** commit, tag, push, publish a release, sign, notarize, generate an SBOM, or call a live provider.
+This checklist covers the local Linux host artifact and candidate CI.
+The runtime version is `0.32.0`. This is not a stable release. No release is
+scheduled yet. Candidate CI retains archives and evidence. It does **not**
+commit, tag, push, publish, sign, notarize, generate an SBOM, or call a live
+provider.
 
 For the current decision and exact-byte blockers, see the [release-readiness ledger](https://github.com/Artificial-Source/AVA/blob/develop/docs/product/release-readiness.md). For owner approvals, retained-byte draft preparation, publication, and withdrawal, see [publication.md](https://github.com/Artificial-Source/AVA/blob/develop/docs/operations/publication.md). For deterministic, sanitizer, terminal, and opt-in live-provider evidence, see [testing.md](testing.md).
 
@@ -178,6 +182,7 @@ scripts/run-tests.sh -R '^ava_release\.package_linux$'
 Official candidate preparation uses the tested build, never the fresh-build packaging mode. In a clean checkout:
 
 ```sh
+VERSION='<x.y.z>' # Replace with the candidate archive/binary version.
 CC=gcc-13 CXX=g++-13 cmake --preset release-candidate -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
 scripts/build.sh --build-dir build-candidate --jobs 6
 python3 scripts/release-candidate.py seal --build-dir build-candidate
@@ -186,7 +191,7 @@ scripts/run-tests.sh --build-dir build-candidate --jobs 6
 scripts/package-linux.sh --build-dir "$PWD/build-candidate" --require-release-qualified \
   --output-dir /absolute/private/output
 python3 scripts/release-candidate.py record --build-dir build-candidate --directory /absolute/private/output
-python3 scripts/inspect-linux-artifact.py /absolute/private/output/ava-1.0.0-linux-x64.tar.gz
+python3 scripts/inspect-linux-artifact.py "/absolute/private/output/ava-${VERSION}-linux-x64.tar.gz"
 scripts/smoke-linux-minimum-host.sh /absolute/private/output "$PWD/build-candidate/tests/ava_fake_provider_server"
 ```
 

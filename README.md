@@ -4,7 +4,11 @@
 
 AVA is a native C++23, terminal-first, local-first coding agent with explicit backend authority for permissions, tools, providers, processes, and append-only sessions. The active default branch is `develop`.
 
-The source reports runtime version `1.0.0`, but **AVA 1.0.0 is not a published release**. The dated audit verdict is **READY AFTER LISTED BLOCKERS**; see [product principles](docs/product/principles.md) and the single current [release-readiness ledger](docs/product/release-readiness.md).
+The runtime version is `0.32.0`. **This is not a stable release.** The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. No release is scheduled yet. See the
+[product principles](docs/product/principles.md) and
+[release plan](docs/product/release-readiness.md).
 
 **Choose a path:** [use AVA](docs/core/usage.md), [configure AVA](docs/core/configuration.md), [delegate work](docs/core/subagents.md), [understand model tools](docs/core/tools.md), [troubleshoot](docs/operations/troubleshooting.md), [contribute](CONTRIBUTING.md), or browse the [documentation index](docs/README.md).
 

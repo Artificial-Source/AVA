@@ -22,6 +22,9 @@ if SPEC is None or SPEC.loader is None:
 PROVENANCE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = PROVENANCE
 SPEC.loader.exec_module(PROVENANCE)
+AVA_VERSION = PROVENANCE.project_version(SOURCE)
+if AVA_VERSION is None:
+    raise RuntimeError("cannot read AVA version from CMakeLists.txt")
 
 
 def clean_dependencies() -> list[dict[str, object]]:
@@ -133,7 +136,7 @@ def with_fabricated_empty_dynamic_section(contents: bytes) -> bytes:
 
 
 class ReleaseProvenanceTests(unittest.TestCase):
-    def collect(self, *, build_mode: str = "source-build", qualification_mode: bool = True, binary_version: str | None = "1.0.0", host_architecture: str | None = "x86_64", architecture: str | None = "x86_64", needed: list[str] | None = None, dependency_reasons: list[str] | None = None) -> dict[str, object]:
+    def collect(self, *, build_mode: str = "source-build", qualification_mode: bool = True, binary_version: str | None = AVA_VERSION, host_architecture: str | None = "x86_64", architecture: str | None = "x86_64", needed: list[str] | None = None, dependency_reasons: list[str] | None = None) -> dict[str, object]:
         with tempfile.TemporaryDirectory() as directory:
             binary = pathlib.Path(directory) / "ava"
             binary.write_bytes(b"deterministic provenance fixture\n")
@@ -154,7 +157,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
         second = self.collect()
         self.assertEqual(first, second)
         self.assertEqual(first["schema_version"], 3)
-        self.assertEqual(first["ava_version"], "1.0.0")
+        self.assertEqual(first["ava_version"], AVA_VERSION)
         self.assertEqual(first["host_architecture"], "x86_64")
         self.assertIs(first["host_architecture_matches_binary"], True)
         self.assertTrue(first["release_qualified"])
@@ -170,7 +173,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
             ), mock.patch.object(PROVENANCE, "dependency_records", return_value=(clean_dependencies(), [])):
                 source_dirty = PROVENANCE.collect_provenance(
                     SOURCE, binary, "source-build", host_architecture="x86_64",
-                    qualification_mode=True, binary_version="1.0.0", architecture="x86_64",
+                    qualification_mode=True, binary_version=AVA_VERSION, architecture="x86_64",
                     needed=sorted(PROVENANCE.HOST_DYNAMIC_ALLOWLIST),
                 )
         self.assertFalse(dirty["release_qualified"])
@@ -326,7 +329,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
             ):
                 provenance = PROVENANCE.collect_provenance(
                     SOURCE, binary, "source-build", host_architecture="x86_64",
-                    qualification_mode=True, binary_version="1.0.0"
+                    qualification_mode=True, binary_version=AVA_VERSION
                 )
         self.assertEqual(provenance["elf_dt_needed"], ["libc.so.6", "libsurprise.so.1"])
         self.assertEqual(provenance["unexpected_dynamic_dependencies"], ["libsurprise.so.1"])

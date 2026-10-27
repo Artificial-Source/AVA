@@ -126,9 +126,8 @@ def prepare_draft(args: argparse.Namespace) -> dict:
     if git(args.repo, "rev-parse", args.revision + "^{commit}") != args.revision:
         raise ValueError("approved revision is not a local commit")
     body = args.body.read_text()
-    if f"# AVA {version}\n" not in body:
-        raise ValueError("release body version differs from archive")
     replacements = {
+        "@AVA_VERSION@": version,
         "@AVA_COMMIT@": args.revision,
         "@AVA_ARCHIVE_SHA256@": candidate["files"][archive_name],
         "@AVA_CHECKSUM_SHA256@": candidate["files"][archive_name + ".sha256"],
@@ -140,6 +139,8 @@ def prepare_draft(args: argparse.Namespace) -> dict:
         body = body.replace(placeholder, value)
     if re.search(r"@AVA_[A-Z_]+@", body):
         raise ValueError("release body contains an unresolved placeholder")
+    if f"# AVA {version}\n" not in body:
+        raise ValueError("release body version differs from archive")
     # Read the executable only after manifest, archive and provenance verification.
     with tempfile.TemporaryDirectory(prefix="ava-draft-smoke-") as temp:
         root = pathlib.Path(temp)

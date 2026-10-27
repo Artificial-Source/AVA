@@ -7,15 +7,18 @@ A version here does not mean that a tag or public release exists.
 
 ## [Unreleased]
 
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. No release is scheduled yet.
+
 ### Changed
 
+- Restore the runtime version to `0.32.0`. The May backend version bump did
+  not mark a stable product release. Keep the release tooling and its recorded
+  evidence available for future releases.
 - CI Release builds no longer restore the SDK job's compiler cache by
   mistake, which had forced an almost full rebuild. Local ccache use is now
   documented.
-
-## [1.0.0] - UNRELEASED
-
-These notes are ready for owner review. AVA 1.0.0 has not been published.
 
 ### Added
 
@@ -77,8 +80,8 @@ These notes are ready for owner review. AVA 1.0.0 has not been published.
 
 ### Supported platform
 
-- The first official artifact is **Linux x64 only**. The CPU must support
-  **x86-64-v2** (Nehalem-class or newer). BMI2 and AVX are not required.
+- The current Linux x64 package target requires **x86-64-v2**
+  (Nehalem-class or newer). BMI2 and AVX are not required.
 - The minimum qualified host is Ubuntu 24.04 with glibc 2.39. The host needs
   libstdc++ providing `GLIBCXX_3.4.32` and `CXXABI_1.3.13`, ncursesw/tinfo ABI 6
   (6.4 or newer), a usable terminfo database, and `curl` 8.5 or newer on `PATH`.
@@ -111,8 +114,8 @@ These notes are ready for owner review. AVA 1.0.0 has not been published.
   publication, detached signatures, SBOM, or artifact attestations. SHA-256
   checksums detect changed downloads; they are not independent proof of origin.
 
-See the [release ledger](docs/product/release-readiness.md) for the remaining
-approval and exact-candidate GitHub gates, and the
+See the [release ledger](docs/product/release-readiness.md) for the current
+release plan and the
 [publication runbook](docs/operations/publication.md) for release policy.
 
 ## Historical release-position documentation
