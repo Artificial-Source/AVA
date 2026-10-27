@@ -99,7 +99,7 @@ class RuntimePresentationState final
   RuntimePresentationState(TuiFrontEnd* frontend);
 
   void refresh_prompt_metadata();
-  void apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery delivery);
+  void apply_catalog_delivery(TuiFrontEnd const& frontend, TuiCatalogDelivery delivery);
   // The retained catalog/todo transports read at one serialized boundary.
   struct BoundaryReads
   {
@@ -109,19 +109,19 @@ class RuntimePresentationState final
   };
   // Reads the retained transports through the options callbacks. Like
   // read_committed_session_id, call this without holding the UI lock.
-  static BoundaryReads read_boundary_data(TuiRuntimeOptions const& options);
+  static BoundaryReads read_boundary_data(TuiFrontEnd& frontend);
   // Applies previously read transports without reading or replacing popup-only facts.
-  void apply_boundary_data(TuiRuntimeOptions const& options, BoundaryReads reads);
+  void apply_boundary_data(TuiFrontEnd const& frontend, BoundaryReads reads);
   // Reads and applies in one step for callers that hold no lock.
-  void refresh_after_backend_action(TuiRuntimeOptions const& options);
+  void refresh_after_backend_action(TuiFrontEnd& frontend);
   // Applies TUI-owned bindings and refreshes every local hint projection.
   // This never changes backend catalog generations or applies a backend snapshot.
-  void apply_local_key_bindings(TuiRuntimeOptions& options, TuiKeyBindings bindings);
+  void apply_local_key_bindings(TuiFrontEnd& frontend, TuiKeyBindings bindings);
   // Applies TUI-owned display values without changing backend runtime state.
-  void apply_local_display_settings(TuiRuntimeOptions const& options, TuiLocalDisplaySettings settings);
+  void apply_local_display_settings(TuiFrontEnd const& frontend, TuiLocalDisplaySettings settings);
   // Starts one popup-local overview lifetime from fresh backend facts, then
   // composes current UI-owned theme and keybinding hints.
-  void initialize_startup_overview(TuiRuntimeOptions const& options, StartupOverviewSnapshot overview);
+  void initialize_startup_overview(TuiFrontEnd const& frontend, StartupOverviewSnapshot overview);
 
   ComposerSnapshot snapshot;
 
@@ -146,7 +146,7 @@ void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, Activ
 
 // Applies the local effects of a committed backend session transition. The
 // committed_session_id parameter must be read through
-// TuiRuntimeOptions::read_committed_session_id before taking the TUI UI lock.
+// TuiFrontEnd::read_committed_session_id before taking the TUI UI lock.
 // Returns true only when the committed identity differs from local control
 // tracking; same-session refreshes preserve session-scoped presentation.
 [[nodiscard]] bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
@@ -154,7 +154,7 @@ void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, Activ
                                                       ActiveSelectList& active_select_list, std::string committed_session_id);
 
 // Synchronizes session-scoped presentation before pulling retained backend data.
-[[nodiscard]] bool apply_committed_session_transition_and_refresh(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
+[[nodiscard]] bool apply_committed_session_transition_and_refresh(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state,
                                                                   RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                                                                   TranscriptSearchController& transcript_search,
                                                                   RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,

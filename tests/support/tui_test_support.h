@@ -23,6 +23,10 @@ class TuiFrontEnd;
 struct TuiRuntimeOptions;
 } // namespace ava::tui
 
+namespace ava::app {
+struct ApplicationCatalogCache;
+} // namespace ava::app
+
 namespace tui_test_support {
 
 struct TuiTestModel
@@ -43,6 +47,7 @@ class TuiFrontEndFixture final
  public:
   explicit TuiFrontEndFixture(TuiTestModel model = {});
   explicit TuiFrontEndFixture(ava::tui::TuiRuntimeOptions options);
+  TuiFrontEndFixture(ava::tui::TuiRuntimeOptions options, ava::app::ApplicationCatalogCache catalog_cache);
   TuiFrontEndFixture(TuiFrontEndFixture const&) = delete;
   TuiFrontEndFixture& operator=(TuiFrontEndFixture const&) = delete;
   TuiFrontEndFixture(TuiFrontEndFixture&&) = delete;
@@ -52,6 +57,7 @@ class TuiFrontEndFixture final
   [[nodiscard]] ava::tui::TuiFrontEnd* frontend() noexcept;
   // Runtime-controller tests use the same owned options object as production composition.
   [[nodiscard]] ava::tui::TuiRuntimeOptions& runtime_options() noexcept;
+  void refresh_application_catalog_values();
   [[nodiscard]] std::pair<std::string, std::string> selected_model_metadata();
   [[nodiscard]] std::pair<std::string, bool> git_branch_metadata();
   [[nodiscard]] std::pair<std::string, bool> workspace_root_metadata();

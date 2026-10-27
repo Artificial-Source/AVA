@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/event/events.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_input_internal.h"
@@ -44,9 +45,9 @@ PendingQuestionRequest::PendingQuestionRequest(ava::agent::QuestionPrompt prompt
 {
 }
 
-RuntimePromptCoordinator::RuntimePromptCoordinator(TuiRuntimeOptions& options, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants,
+RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants,
                                                    RuntimeRenderer& renderer, ActiveSelectList* active_select_list)
-    : options_(options), snapshot_(snapshot), session_grants_(session_grants), renderer_(renderer), active_select_list_(active_select_list)
+    : frontend_(frontend), snapshot_(snapshot), session_grants_(session_grants), renderer_(renderer), active_select_list_(active_select_list)
 {
 }
 
@@ -106,7 +107,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     ava::permissions::PermissionPrompt const& prompt, std::function<bool()> const& stop_requested, std::function<bool()> const& request_stop)
 {
   using Key = terminal::Key;
-  auto& options = options_;
+  auto const& options = frontend_.options();
   auto& snapshot = snapshot_;
   auto& command_session_grants = session_grants_;
   auto& ui_mutex = renderer_.ui_mutex;
@@ -118,8 +119,8 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
   if (prompt.target_path.has_filename())
     permission_label += " " + prompt.target_path.generic_string();
   emit_prompt_audit("tui:permission_request", std::move(permission_label), prompt.permission_request_id, prompt.tool_name, prompt.reason);
-    // A durable Deny never grants execution authority, so preserve it even
-    // when one-shot Critical/unverified commands cannot be remembered as Allows.
+  // A durable Deny never grants execution authority, so preserve it even
+  // when one-shot Critical/unverified commands cannot be remembered as Allows.
   auto const remember_availability = permission_prompt_remember_availability(prompt, static_cast<bool>(options.remember_permission_rule));
   auto const allow_remember_available = remember_availability.allow_remember_available;
   auto const deny_remember_available = remember_availability.deny_remember_available;
@@ -181,7 +182,8 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         decision.resolution_source = "tui_remember_unavailable";
         return decision;
       }
-      auto remembered = options.remember_permission_rule(prompt, allow ? ava::permissions::PermissionAction::Allow : ava::permissions::PermissionAction::Deny);
+      auto remembered =
+          options.remember_permission_rule(frontend_, prompt, allow ? ava::permissions::PermissionAction::Allow : ava::permissions::PermissionAction::Deny);
       if (!remembered)
       {
         auto reason = "failed to remember permission rule: " + remembered.error().format();

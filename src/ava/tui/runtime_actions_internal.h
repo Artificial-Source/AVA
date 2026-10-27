@@ -17,13 +17,13 @@ struct ImageAttachmentRef;
 namespace ava::tui {
 
 struct RuntimeDraftState;
-struct TuiRuntimeOptions;
+class TuiFrontEnd;
 class RuntimeRenderer;
 
 class RuntimeActionController final
 {
  public:
-  RuntimeActionController(TuiRuntimeOptions& options, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+  RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                           ActiveSelectList& active_select_list, std::optional<PendingSessionArchiveAction>& session_archive_confirmation);
   RuntimeActionController(RuntimeActionController const&) = delete;
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
@@ -56,7 +56,7 @@ class RuntimeActionController final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  TuiRuntimeOptions& options_;
+  TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
   RuntimeDraftState& draft_state_;
   RuntimeRenderer& renderer_;

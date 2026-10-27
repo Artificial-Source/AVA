@@ -160,8 +160,9 @@ void RuntimePresentationState::refresh_prompt_metadata()
   sidebar.mode = mode.value;
 }
 
-void RuntimePresentationState::apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery delivery)
+void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& frontend, TuiCatalogDelivery delivery)
 {
+  auto const& options = frontend.options();
   bool completion_sources_changed = false;
   if (!delivery.slash_catalog_generation || !applied_slash_catalog_generation_ || *delivery.slash_catalog_generation != *applied_slash_catalog_generation_)
   {
@@ -184,40 +185,42 @@ void RuntimePresentationState::apply_catalog_delivery(TuiRuntimeOptions const& o
 }
 
 //static
-RuntimePresentationState::BoundaryReads RuntimePresentationState::read_boundary_data(TuiRuntimeOptions const& options)
+RuntimePresentationState::BoundaryReads RuntimePresentationState::read_boundary_data(TuiFrontEnd& frontend)
 {
+  TuiRuntimeOptions const& options = frontend.options();
   BoundaryReads reads;
-  if (options.read_catalog_delivery)
-    reads.catalog = options.read_catalog_delivery();
+  reads.catalog = frontend.read_catalog_delivery();
   if (options.read_committed_todos)
-    reads.todos = options.read_committed_todos();
+    reads.todos = options.read_committed_todos(frontend);
   return reads;
 }
 
-void RuntimePresentationState::apply_boundary_data(TuiRuntimeOptions const& options, BoundaryReads reads)
+void RuntimePresentationState::apply_boundary_data(TuiFrontEnd const& frontend, BoundaryReads reads)
 {
   refresh_prompt_metadata();
   if (reads.catalog)
-    apply_catalog_delivery(options, std::move(*reads.catalog));
+    apply_catalog_delivery(frontend, std::move(*reads.catalog));
   if (reads.todos)
     sidebar.todos = std::move(*reads.todos);
 }
 
-void RuntimePresentationState::refresh_after_backend_action(TuiRuntimeOptions const& options)
+void RuntimePresentationState::refresh_after_backend_action(TuiFrontEnd& frontend)
 {
-  apply_boundary_data(options, read_boundary_data(options));
+  apply_boundary_data(frontend, read_boundary_data(frontend));
 }
 
-void RuntimePresentationState::apply_local_key_bindings(TuiRuntimeOptions& options, TuiKeyBindings bindings)
+void RuntimePresentationState::apply_local_key_bindings(TuiFrontEnd& frontend, TuiKeyBindings bindings)
 {
+  auto& options = frontend.options();
   options.key_bindings = std::move(bindings);
   snapshot.active_run_hint = runtime_views::active_run_hint_for(options.key_bindings);
   refresh_local_palette_hints(snapshot, options.key_bindings);
   refresh_local_overview_hints(snapshot, options);
 }
 
-void RuntimePresentationState::apply_local_display_settings(TuiRuntimeOptions const& options, TuiLocalDisplaySettings settings)
+void RuntimePresentationState::apply_local_display_settings(TuiFrontEnd const& frontend, TuiLocalDisplaySettings settings)
 {
+  auto const& options = frontend.options();
   snapshot.custom_themes = std::move(settings.custom_themes);
   snapshot.show_images = settings.show_images;
   snapshot.image_width_cells = settings.image_width_cells;
@@ -238,10 +241,10 @@ void RuntimePresentationState::apply_local_display_settings(TuiRuntimeOptions co
   refresh_local_overview_hints(snapshot, options);
 }
 
-void RuntimePresentationState::initialize_startup_overview(TuiRuntimeOptions const& options, StartupOverviewSnapshot overview)
+void RuntimePresentationState::initialize_startup_overview(TuiFrontEnd const& frontend, StartupOverviewSnapshot overview)
 {
   snapshot.startup_overview = std::move(overview);
-  refresh_local_overview_hints(snapshot, options);
+  refresh_local_overview_hints(snapshot, frontend.options());
 }
 
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list)
@@ -327,14 +330,14 @@ bool apply_committed_session_transition(RuntimePresentationState& presentation_s
   return session_changed;
 }
 
-bool apply_committed_session_transition_and_refresh(TuiRuntimeOptions const& options, RuntimePresentationState& presentation_state,
-                                                    RuntimeDraftState& draft_state, RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
+bool apply_committed_session_transition_and_refresh(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
+                                                    RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
                                                     RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
                                                     std::string committed_session_id)
 {
   auto const session_changed = apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace,
                                                                   active_select_list, std::move(committed_session_id));
-  presentation_state.refresh_after_backend_action(options);
+  presentation_state.refresh_after_backend_action(frontend);
   return session_changed;
 }
 

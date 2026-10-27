@@ -108,7 +108,7 @@ class ApplicationCatalogCoordinator final
   [[nodiscard]] ava::core::Result<std::optional<std::string>> child_target(std::string_view session_id, SessionSelectorSort sort = SessionSelectorSort::Recent,
                                                                            bool include_archived = false) const;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   void refresh_values_during_operation(runtime::session_ts const& unlocked_session);

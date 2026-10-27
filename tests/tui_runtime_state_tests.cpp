@@ -2186,11 +2186,11 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
   ava::tui::RuntimePresentationState presentation(options_frontend.frontend());
   expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "runtime options hydrate sidebar todos at startup");
   int todo_pulls = 0;
-  options.read_committed_todos = [&]() {
+  options_frontend.runtime_options().read_committed_todos = [&](ava::tui::TuiFrontEnd const&) {
     ++todo_pulls;
     return std::vector<ava::tui::TodoItem>{{.id = "switched", .content = "After switch", .status = ava::tui::TodoStatus::InProgress}};
   };
-  presentation.refresh_after_backend_action(options);
+  presentation.refresh_after_backend_action(*options_frontend.frontend());
   expect(todo_pulls == 1 && presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "switched",
          "boundary refresh replaces todos from committed session history");
 }

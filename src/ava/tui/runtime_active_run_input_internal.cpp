@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
@@ -19,7 +20,6 @@
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/terminal.h"
 #include "ava/tui/tool_cards.h"
-#include "ava/tui/TuiFrontEnd.h"
 #include "ava/core/Application.h"
 
 #include <optional>
@@ -184,7 +184,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
   {
     push_history(input_history, submitted_command);
     clear_local_command_draft();
-    auto applied = frontend_.options().on_local_display_settings_action(submitted_command);
+    auto applied = frontend_.options().on_local_display_settings_action(frontend_, submitted_command);
     if (!applied)
     {
       open_command_error(snapshot, submitted_command, applied.error().format());
@@ -192,7 +192,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     }
     else
     {
-      presentation_state_.apply_local_display_settings(frontend_.options(), std::move(applied->settings));
+      presentation_state_.apply_local_display_settings(frontend_, std::move(applied->settings));
       settle_local_command_completion(snapshot, submitted_command, std::move(applied->output));
     }
     return renderer_.request_render();

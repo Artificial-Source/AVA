@@ -16,7 +16,7 @@ class RuntimePromptStashController;
 class RuntimeRenderer;
 class RuntimeSubagentWorkspaceController;
 class TranscriptSearchController;
-struct TuiRuntimeOptions;
+class TuiFrontEnd;
 
 enum class RuntimeSubmitDisposition
 {
@@ -37,7 +37,7 @@ struct RuntimeSubmitOutcome
 class RuntimeSubmitController final
 {
  public:
-  RuntimeSubmitController(TuiRuntimeOptions& options, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+  RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                           RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                           RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
                           TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
@@ -48,7 +48,7 @@ class RuntimeSubmitController final
   [[nodiscard]] RuntimeSubmitOutcome submit(std::optional<std::string> forced_submission = std::nullopt);
 
  private:
-  TuiRuntimeOptions& options_;
+  TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
   RuntimeDraftState& draft_state_;
   RuntimeRenderer& renderer_;

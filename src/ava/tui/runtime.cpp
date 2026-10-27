@@ -95,7 +95,7 @@ constexpr auto kTerminalBackgroundProbeDeadline = std::chrono::milliseconds(50);
 class RuntimeBeforeShutdownGuard
 {
  public:
-  explicit RuntimeBeforeShutdownGuard(TuiRuntimeOptions& options) : options_(options) { }
+  explicit RuntimeBeforeShutdownGuard(TuiFrontEnd const& frontend) : frontend_(frontend) { }
   RuntimeBeforeShutdownGuard(RuntimeBeforeShutdownGuard const&) = delete;
   RuntimeBeforeShutdownGuard& operator=(RuntimeBeforeShutdownGuard const&) = delete;
   ~RuntimeBeforeShutdownGuard() { static_cast<void>(invoke()); }
@@ -105,11 +105,11 @@ class RuntimeBeforeShutdownGuard
     if (invoked_)
       return true;
     invoked_ = true;
-    if (!options_.on_before_tui_shutdown)
+    if (!frontend_.options().on_before_tui_shutdown)
       return true;
     try
     {
-      options_.on_before_tui_shutdown();
+      frontend_.options().on_before_tui_shutdown(frontend_);
       return true;
     }
     catch (...)
@@ -121,7 +121,7 @@ class RuntimeBeforeShutdownGuard
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  TuiRuntimeOptions& options_;
+  TuiFrontEnd const& frontend_;
   bool invoked_ = false;
 };
 
@@ -212,7 +212,7 @@ int TuiFrontEnd::run_interactive_composer()
 {
   DoutEntering(dc::notice, "TuiFrontEnd::run_interactive_composer()");
 
-  RuntimeBeforeShutdownGuard before_shutdown(options_);
+  RuntimeBeforeShutdownGuard before_shutdown(*this);
   if (!terminal_is_tty())
   {
     std::cerr << "interactive TUI requires stdin and stdout to be terminals\n";
@@ -267,7 +267,7 @@ int TuiFrontEnd::run_interactive_composer()
   auto& draft_selection_cursor = draft_state.draft_selection_cursor;
   auto& pending_escape_clear = draft_state.pending_escape_clear;
   RuntimeRenderer renderer(this, snapshot, sidebar, draft_state, &terminal_context);
-  RuntimeNavigationController navigation(options_, snapshot, sidebar, draft_state, renderer);
+  RuntimeNavigationController navigation(*this, snapshot, sidebar, draft_state, renderer);
   auto& transcript_scroll_offset = renderer.transcript_scroll_offset;
   auto& completion_cache = renderer.completion_cache;
   ActiveSelectList active_select_list = ActiveSelectList::None;
@@ -360,7 +360,7 @@ int TuiFrontEnd::run_interactive_composer()
   };
   TranscriptSearchController transcript_search(presentation_state, renderer, navigation, active_select_list);
   std::optional<PendingSessionArchiveAction> session_archive_confirmation;
-  RuntimePromptCoordinator prompt_coordinator(options_, snapshot, command_session_grants, renderer, &active_select_list);
+  RuntimePromptCoordinator prompt_coordinator(*this, snapshot, command_session_grants, renderer, &active_select_list);
   [[maybe_unused]] auto permission_resolver = prompt_coordinator.permission_resolver();
   [[maybe_unused]] auto question_resolver = prompt_coordinator.question_resolver();
   auto render = [&]() -> bool { return renderer.render(); };
@@ -388,7 +388,7 @@ int TuiFrontEnd::run_interactive_composer()
       {
         try
         {
-          auto refreshed = options_.on_branch_summary_refresh_catalog();
+          auto refreshed = options_.on_branch_summary_refresh_catalog(*this);
           if (refreshed)
             restored = std::move(*refreshed);
           else
@@ -440,7 +440,7 @@ int TuiFrontEnd::run_interactive_composer()
     }
     try
     {
-      return apply_branch_summary_snapshot(options_.branch_summary_snapshot());
+      return apply_branch_summary_snapshot(options_.branch_summary_snapshot(*this));
     }
     catch (...)
     {
@@ -464,7 +464,7 @@ int TuiFrontEnd::run_interactive_composer()
         std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "parent summary prepare callback failed"));
     try
     {
-      prepared = options_.on_branch_summary_prepare(selected_value);
+      prepared = options_.on_branch_summary_prepare(*this, selected_value);
     }
     catch (...)
     {
@@ -491,7 +491,7 @@ int TuiFrontEnd::run_interactive_composer()
     try
     {
       if (options_.on_branch_summary_cancel)
-        canceled = options_.on_branch_summary_cancel(branch_summary_ui.generation);
+        canceled = options_.on_branch_summary_cancel(*this, branch_summary_ui.generation);
     }
     catch (...)
     {
@@ -511,7 +511,7 @@ int TuiFrontEnd::run_interactive_composer()
     try
     {
       if (options_.on_branch_summary_confirm)
-        confirmed = options_.on_branch_summary_confirm(branch_summary_ui.generation);
+        confirmed = options_.on_branch_summary_confirm(*this, branch_summary_ui.generation);
     }
     catch (...)
     {
@@ -548,8 +548,8 @@ int TuiFrontEnd::run_interactive_composer()
     return renderer.request_render(FrameRenderKind::Full);
   };
 
-  RuntimeActionController action_controller(options_, presentation_state, draft_state, renderer, active_select_list, session_archive_confirmation);
-  RuntimeSubagentWorkspaceController subagent_workspace(options_, snapshot);
+  RuntimeActionController action_controller(*this, presentation_state, draft_state, renderer, active_select_list, session_archive_confirmation);
+  RuntimeSubagentWorkspaceController subagent_workspace(*this, snapshot);
   RuntimeActiveRunController active_run_controller(*this, presentation_state, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui, navigation,
                                                    action_controller, transcript_search, subagent_workspace, service_mermaid_presentation);
   auto maybe_reload_display_settings = [&]() -> bool {
@@ -635,7 +635,7 @@ int TuiFrontEnd::run_interactive_composer()
   auto jump_to_bottom = [&](std::string status) { navigation.jump_to_bottom(std::move(status)); };
   auto scroll_to_message_boundary = [&](bool previous) { navigation.scroll_to_message_boundary(previous); };
 
-  RuntimeSubmitController submit_controller(options_, presentation_state, draft_state, renderer, navigation, action_controller, active_run_controller,
+  RuntimeSubmitController submit_controller(*this, presentation_state, draft_state, renderer, navigation, action_controller, active_run_controller,
                                             prompt_stash, transcript_search, subagent_workspace, active_select_list);
   auto handle_submit = [&](std::optional<std::string> forced_submission = std::nullopt) {
     auto const outcome = submit_controller.submit(std::move(forced_submission));
@@ -980,7 +980,7 @@ int TuiFrontEnd::run_interactive_composer()
       };
       auto settle_opened_session = [&](std::string status) {
         auto committed_session_id = read_committed_session_id();
-        static_cast<void>(apply_committed_session_transition_and_refresh(options_, presentation_state, draft_state, renderer, transcript_search,
+        static_cast<void>(apply_committed_session_transition_and_refresh(*this, presentation_state, draft_state, renderer, transcript_search,
                                                                          subagent_workspace, active_select_list, std::move(committed_session_id)));
         if (!status.empty())
           settle_local_command_status(snapshot, std::move(status));
@@ -1086,7 +1086,7 @@ int TuiFrontEnd::run_interactive_composer()
           }
           else
           {
-            auto reloaded = options_.on_reload_key_bindings();
+            auto reloaded = options_.on_reload_key_bindings(*this);
             if (!reloaded)
             {
               snapshot.status = reloaded.error().format();
@@ -1094,7 +1094,7 @@ int TuiFrontEnd::run_interactive_composer()
             }
             else
             {
-              presentation_state.apply_local_key_bindings(options_, std::move(*reloaded));
+              presentation_state.apply_local_key_bindings(*this, std::move(*reloaded));
               snapshot.status = "keybindings reloaded";
             }
           }
@@ -1139,11 +1139,11 @@ int TuiFrontEnd::run_interactive_composer()
         {
           auto const confirm_token = selected_value;
           clear_settings_preview();
-          auto selected = options_.on_local_display_settings_action(confirm_token);
+          auto selected = options_.on_local_display_settings_action(*this, confirm_token);
           if (selected)
           {
             auto status = selected->status;
-            presentation_state.apply_local_display_settings(options_, std::move(selected->settings));
+            presentation_state.apply_local_display_settings(*this, std::move(selected->settings));
             begin_settings_preview_baseline();
             rebuild_settings_view(settings_nav.section, current_query, current_selected);
             snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
@@ -1161,10 +1161,10 @@ int TuiFrontEnd::run_interactive_composer()
           // authoritative reload becomes the new baseline.
           auto const confirm_token = selected_value;
           clear_settings_preview();
-          auto selected = options_.on_settings_selected(confirm_token);
+          auto selected = options_.on_settings_selected(*this, confirm_token);
           if (selected)
           {
-            presentation_state.refresh_after_backend_action(options_);
+            presentation_state.refresh_after_backend_action(*this);
             auto status = std::move(*selected);
             snapshot.status = status;
             begin_settings_preview_baseline();
@@ -1212,7 +1212,7 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else
         {
-          auto updated = options_.on_scoped_model_toggled(*snapshot.select_list, selected_item->value);
+          auto updated = options_.on_scoped_model_toggled(*this, *snapshot.select_list, selected_item->value);
           if (updated)
           {
             preserve_session_selector_state(std::move(*updated), "scoped model toggled");
@@ -1233,7 +1233,7 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else
         {
-          auto updated = options_.on_scoped_model_enable_all(*snapshot.select_list, visible_select_list_values());
+          auto updated = options_.on_scoped_model_enable_all(*this, *snapshot.select_list, visible_select_list_values());
           if (updated)
           {
             preserve_session_selector_state(std::move(*updated), "scoped models enabled");
@@ -1254,7 +1254,7 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else
         {
-          auto updated = options_.on_scoped_model_clear_all(*snapshot.select_list, visible_select_list_values());
+          auto updated = options_.on_scoped_model_clear_all(*this, *snapshot.select_list, visible_select_list_values());
           if (updated)
           {
             preserve_session_selector_state(std::move(*updated), "scoped models cleared");
@@ -1282,7 +1282,7 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else
         {
-          auto updated = options_.on_scoped_model_toggle_provider(*snapshot.select_list, selected_item->value);
+          auto updated = options_.on_scoped_model_toggle_provider(*this, *snapshot.select_list, selected_item->value);
           if (updated)
           {
             preserve_session_selector_state(std::move(*updated), "scoped provider toggled");
@@ -1310,8 +1310,8 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else
         {
-          auto updated =
-              options_.on_scoped_model_reorder(*snapshot.select_list, selected_item->value, input_result.action == SelectListInputAction::ModelsReorderUp);
+          auto updated = options_.on_scoped_model_reorder(*this, *snapshot.select_list, selected_item->value,
+                                                          input_result.action == SelectListInputAction::ModelsReorderUp);
           if (updated)
           {
             preserve_session_selector_state(std::move(*updated), "scoped model order updated");
@@ -1332,7 +1332,7 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else
         {
-          auto saved = options_.on_scoped_model_save();
+          auto saved = options_.on_scoped_model_save(*this);
           if (saved)
           {
             snapshot.status = *saved;
@@ -1369,27 +1369,27 @@ int TuiFrontEnd::run_interactive_composer()
       else if (input_result.action == SelectListInputAction::CycleSort && active_select_list == ActiveSelectList::Session && snapshot.select_list &&
                options_.on_session_selector_sort_cycle)
       {
-        preserve_session_selector_state(options_.on_session_selector_sort_cycle(), "session selector sort cycled");
+        preserve_session_selector_state(options_.on_session_selector_sort_cycle(*this), "session selector sort cycled");
       }
       else if (input_result.action == SelectListInputAction::ToggleNamedFilter && active_select_list == ActiveSelectList::Session && snapshot.select_list &&
                options_.on_session_selector_named_filter_toggle)
       {
-        preserve_session_selector_state(options_.on_session_selector_named_filter_toggle(), "session selector filter toggled");
+        preserve_session_selector_state(options_.on_session_selector_named_filter_toggle(*this), "session selector filter toggled");
       }
       else if (input_result.action == SelectListInputAction::TogglePathDisplay && active_select_list == ActiveSelectList::Session && snapshot.select_list &&
                options_.on_session_selector_path_display_toggle)
       {
-        preserve_session_selector_state(options_.on_session_selector_path_display_toggle(), "session selector path display toggled");
+        preserve_session_selector_state(options_.on_session_selector_path_display_toggle(*this), "session selector path display toggled");
       }
       else if (input_result.action == SelectListInputAction::ToggleArchivedFilter && active_select_list == ActiveSelectList::Session && snapshot.select_list &&
                options_.on_session_selector_archived_filter_toggle)
       {
-        preserve_session_selector_state(options_.on_session_selector_archived_filter_toggle(), "session selector archived filter toggled");
+        preserve_session_selector_state(options_.on_session_selector_archived_filter_toggle(*this), "session selector archived filter toggled");
       }
       else if (input_result.action == SelectListInputAction::ToggleLabelTimestamp && active_select_list == ActiveSelectList::Session && snapshot.select_list &&
                options_.on_session_selector_label_timestamp_toggle)
       {
-        preserve_session_selector_state(options_.on_session_selector_label_timestamp_toggle(), "session selector label timestamps toggled");
+        preserve_session_selector_state(options_.on_session_selector_label_timestamp_toggle(*this), "session selector label timestamps toggled");
       }
       else if (input_result.action == SelectListInputAction::Rename && active_select_list == ActiveSelectList::Session && snapshot.select_list)
       {
@@ -1459,8 +1459,8 @@ int TuiFrontEnd::run_interactive_composer()
         {
           auto const selected_value = selected_item->value;
           auto opened = dispatch_tui_selector_authority(snapshot, "opening session…", render, [&]() {
-            return input_result.action == SelectListInputAction::BranchParent ? options_.on_session_selector_branch_parent(selected_value)
-                                                                              : options_.on_session_selector_branch_child(selected_value);
+            return input_result.action == SelectListInputAction::BranchParent ? options_.on_session_selector_branch_parent(*this, selected_value)
+                                                                              : options_.on_session_selector_branch_child(*this, selected_value);
           });
           if (opened)
           {
@@ -1517,7 +1517,8 @@ int TuiFrontEnd::run_interactive_composer()
           else if (session_archive_confirmation && session_archive_confirmation->session_id == selected_item->value &&
                    session_archive_confirmation->archive == archive)
           {
-            auto updated = archive ? options_.on_session_selector_archive(selected_item->value) : options_.on_session_selector_unarchive(selected_item->value);
+            auto updated = archive ? options_.on_session_selector_archive(*this, selected_item->value)
+                                   : options_.on_session_selector_unarchive(*this, selected_item->value);
             session_archive_confirmation.reset();
             if (updated)
             {
@@ -1602,7 +1603,7 @@ int TuiFrontEnd::run_interactive_composer()
           }
           else
           {
-            auto reloaded = options_.on_reload_key_bindings();
+            auto reloaded = options_.on_reload_key_bindings(*this);
             if (!reloaded)
             {
               snapshot.status = reloaded.error().format();
@@ -1610,17 +1611,18 @@ int TuiFrontEnd::run_interactive_composer()
             }
             else
             {
-              presentation_state.apply_local_key_bindings(options_, std::move(*reloaded));
+              presentation_state.apply_local_key_bindings(*this, std::move(*reloaded));
               snapshot.status = "keybindings reloaded";
             }
           }
         }
         else if (resolved_list == ActiveSelectList::Model && options_.on_model_selected)
         {
-          auto selected = dispatch_tui_selector_authority(snapshot, "switching model…", render, [&]() { return options_.on_model_selected(selected_value); });
+          auto selected =
+              dispatch_tui_selector_authority(snapshot, "switching model…", render, [&]() { return options_.on_model_selected(*this, selected_value); });
           if (selected)
           {
-            presentation_state.refresh_after_backend_action(options_);
+            presentation_state.refresh_after_backend_action(*this);
             snapshot.status = std::move(*selected);
             if (!open_reasoning_selector(true))
             {
@@ -1637,11 +1639,11 @@ int TuiFrontEnd::run_interactive_composer()
         else if (resolved_list == ActiveSelectList::Reasoning && options_.on_reasoning_selected)
         {
           auto level = selected_value == "default" ? std::optional<std::string>{} : std::optional<std::string>{selected_value};
-          auto selected =
-              dispatch_tui_selector_authority(snapshot, "setting thinking mode…", render, [&]() { return options_.on_reasoning_selected(std::move(level)); });
+          auto selected = dispatch_tui_selector_authority(snapshot, "setting thinking mode…", render,
+                                                          [&]() { return options_.on_reasoning_selected(*this, std::move(level)); });
           if (selected)
           {
-            presentation_state.refresh_after_backend_action(options_);
+            presentation_state.refresh_after_backend_action(*this);
             snapshot.status = std::move(*selected);
           }
           else
@@ -1652,7 +1654,8 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else if (resolved_list == ActiveSelectList::Session && options_.on_session_selected)
         {
-          auto selected = dispatch_tui_selector_authority(snapshot, "opening session…", render, [&]() { return options_.on_session_selected(selected_value); });
+          auto selected =
+              dispatch_tui_selector_authority(snapshot, "opening session…", render, [&]() { return options_.on_session_selected(*this, selected_value); });
           if (selected)
           {
             settle_opened_session(std::move(*selected));
@@ -1681,7 +1684,7 @@ int TuiFrontEnd::run_interactive_composer()
               terminal_write_failed = true;
               break;
             }
-            auto opened = options_.on_fork_user_turn_selected(selected_value);
+            auto opened = options_.on_fork_user_turn_selected(*this, selected_value);
             if (opened)
             {
               // Session open and fork share the committed identity boundary.
@@ -1699,7 +1702,8 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else if (resolved_list == ActiveSelectList::CopyUserTurn && options_.on_read_user_turn_text)
         {
-          auto decision = evaluate_copy_user_turn_selection(selected_value, options_.on_read_user_turn_text, copy_text_to_terminal_clipboard);
+          auto decision = evaluate_copy_user_turn_selection(
+              selected_value, [&](std::string_view entry_id) { return options_.on_read_user_turn_text(*this, entry_id); }, copy_text_to_terminal_clipboard);
           settle_local_command_status(snapshot, decision.status);
           if (decision.beep)
             do_beep(terminal_context);
@@ -1707,11 +1711,11 @@ int TuiFrontEnd::run_interactive_composer()
         else if (resolved_list == ActiveSelectList::Settings && settings_nav.in_display() && options_.on_local_display_settings_action)
         {
           clear_settings_preview();
-          auto selected = options_.on_local_display_settings_action(selected_value);
+          auto selected = options_.on_local_display_settings_action(*this, selected_value);
           if (selected)
           {
             auto status = selected->status;
-            presentation_state.apply_local_display_settings(options_, std::move(selected->settings));
+            presentation_state.apply_local_display_settings(*this, std::move(selected->settings));
             begin_settings_preview_baseline();
             rebuild_settings_view(settings_nav.section);
             snapshot.status = status.empty() ? std::string("display setting saved") : std::move(status);
@@ -1725,10 +1729,10 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else if (resolved_list == ActiveSelectList::Settings && options_.on_settings_selected)
         {
-          auto selected = options_.on_settings_selected(selected_value);
+          auto selected = options_.on_settings_selected(*this, selected_value);
           if (selected)
           {
-            presentation_state.refresh_after_backend_action(options_);
+            presentation_state.refresh_after_backend_action(*this);
             snapshot.status = std::move(*selected);
           }
           else
@@ -2098,7 +2102,7 @@ int TuiFrontEnd::run_interactive_composer()
       {
         snapshot.status = "mode toggle unavailable";
       }
-      else if (auto result = options_.on_toggle_mode(); !result)
+      else if (auto result = options_.on_toggle_mode(*this); !result)
       {
         snapshot.status = result.error().format();
       }

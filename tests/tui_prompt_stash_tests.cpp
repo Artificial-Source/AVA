@@ -135,7 +135,7 @@ void test_prompt_stash_runtime_controller()
   options.key_bindings = ava::tui::default_key_bindings();
   options.initial_transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "backend transcript stays unchanged"}};
   int backend_submit_calls = 0;
-  options.on_submit = [&](std::string const&, ava::tui::TuiSubmitContext) {
+  options.on_submit = [&](ava::tui::TuiFrontEnd const&, std::string const&, ava::tui::TuiSubmitContext) {
     ++backend_submit_calls;
     return ava::tui::TuiSubmitResult{};
   };
@@ -145,9 +145,9 @@ void test_prompt_stash_runtime_controller()
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   auto active_list = ava::tui::ActiveSelectList::None;
   ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, options.key_bindings);
-  ava::tui::RuntimeNavigationController navigation(options, presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_list);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(options, presentation.snapshot);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot);
   auto const transcript_unchanged = [&]() {
     return presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().label == "ava" &&
            presentation.snapshot.transcript.front().text == "backend transcript stays unchanged";
@@ -187,8 +187,9 @@ void test_prompt_stash_runtime_controller()
 
   ava::tui::reset_composer_draft(draft_state.draft);
   auto const backend_session_replaced = frontend.replace_session_identity();
-  auto const session_changed = ava::tui::apply_committed_session_transition_and_refresh(
-      options, presentation, draft_state, renderer, transcript_search, subagent_workspace, active_list, frontend.frontend()->read_committed_session_id());
+  auto const session_changed =
+      ava::tui::apply_committed_session_transition_and_refresh(*frontend.frontend(), presentation, draft_state, renderer, transcript_search, subagent_workspace,
+                                                               active_list, frontend.frontend()->read_committed_session_id());
   expect(backend_session_replaced && session_changed && controller.stash().size() == 1 && controller.pop_latest() &&
              draft_state.draft.text == "newest selector draft" && backend_submit_calls == 0 && presentation.snapshot.status == "stashed prompt restored",
          "prompt stash survives a committed session transition in one runtime process, restores LIFO, and never dispatches backend work");

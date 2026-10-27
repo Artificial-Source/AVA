@@ -25,7 +25,7 @@ class RuntimeSubagentWorkspaceController final
   using Clock = std::chrono::steady_clock;
   static constexpr auto kPollInterval = std::chrono::milliseconds(150);
 
-  RuntimeSubagentWorkspaceController(TuiRuntimeOptions const& options, ComposerSnapshot& snapshot);
+  RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot);
   RuntimeSubagentWorkspaceController(RuntimeSubagentWorkspaceController const&) = delete;
   RuntimeSubagentWorkspaceController& operator=(RuntimeSubagentWorkspaceController const&) = delete;
 
@@ -61,7 +61,7 @@ class RuntimeSubagentWorkspaceController final
   void close_to_selector();
   void publish();
 
-  TuiRuntimeOptions const& options_;
+  TuiFrontEnd const& frontend_;
   ComposerSnapshot& snapshot_;
   Mode mode_ = Mode::Closed;
   SelectListView selector_;

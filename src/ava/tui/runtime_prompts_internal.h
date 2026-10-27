@@ -25,7 +25,7 @@ namespace detail {
 } // namespace detail
 
 struct ComposerSnapshot;
-struct TuiRuntimeOptions;
+class TuiFrontEnd;
 enum class ActiveSelectList;
 class RuntimeRenderer;
 class TuiSessionGrantRegistry;
@@ -64,7 +64,7 @@ enum class SearchInputPromptDispatchResult
 class RuntimePromptCoordinator final
 {
  public:
-  RuntimePromptCoordinator(TuiRuntimeOptions& options, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants, RuntimeRenderer& renderer,
+  RuntimePromptCoordinator(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants, RuntimeRenderer& renderer,
                            ActiveSelectList* active_select_list = nullptr);
   RuntimePromptCoordinator(RuntimePromptCoordinator const&) = delete;
   RuntimePromptCoordinator& operator=(RuntimePromptCoordinator const&) = delete;
@@ -109,7 +109,7 @@ class RuntimePromptCoordinator final
                                           ava::core::Result<ava::permissions::PermissionResolutionDecision> result);
   static void complete_question_request(std::shared_ptr<PendingQuestionRequest> const& request, ava::core::Result<ava::agent::QuestionAnswer> result);
 
-  TuiRuntimeOptions& options_;
+  TuiFrontEnd const& frontend_;
   ComposerSnapshot& snapshot_;
   TuiSessionGrantRegistry& session_grants_;
   RuntimeRenderer& renderer_;

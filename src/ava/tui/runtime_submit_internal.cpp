@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_editor.h"
@@ -42,12 +43,12 @@ using runtime_transcript::diff_transcript_text;
 using runtime_transcript::push_history;
 using runtime_views::compact_path_leaf;
 
-RuntimeSubmitController::RuntimeSubmitController(TuiRuntimeOptions& options, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
+RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
                                                  RuntimeRenderer& renderer, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                  RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
                                                  TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
                                                  ActiveSelectList& active_select_list)
-    : options_(options),
+    : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
       renderer_(renderer),
@@ -64,6 +65,7 @@ RuntimeSubmitController::RuntimeSubmitController(TuiRuntimeOptions& options, Run
 RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> forced_submission)
 {
   auto& snapshot = presentation_state_.snapshot;
+  auto& options = frontend_.options();
   auto& sidebar = presentation_state_.sidebar;
   auto& input_history = draft_state_.input_history;
   auto& history_index = draft_state_.history_index;
@@ -84,10 +86,10 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
   {
     immediate_slash_submission = std::move(forced_submission);
   }
-  else if (((exact_command(draft.text, "/models") || exact_command(draft.text, "/model")) && options_.model_selector_view) ||
-           (exact_command(draft.text, "/scoped-models") && options_.scoped_model_selector_view) ||
+  else if (((exact_command(draft.text, "/models") || exact_command(draft.text, "/model")) && options.model_selector_view) ||
+           (exact_command(draft.text, "/scoped-models") && options.scoped_model_selector_view) ||
            ((exact_command(draft.text, "/sessions") || exact_command(draft.text, "/tree") || exact_command(draft.text, "/resume")) &&
-            options_.session_selector_view) ||
+            options.session_selector_view) ||
            exact_command(draft.text, "/jobs") || exact_command(draft.text, "/overview") || exact_command(draft.text, "/stash"))
   {
     immediate_slash_submission = expanded_composer_draft_text(draft);
@@ -227,7 +229,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if ((exact_command(submitted, "/models") || exact_command(submitted, "/model")) && options_.model_selector_view)
+    if ((exact_command(submitted, "/models") || exact_command(submitted, "/model")) && options.model_selector_view)
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_model_selector())
@@ -236,7 +238,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if (exact_command(submitted, "/scoped-models") && options_.scoped_model_selector_view)
+    if (exact_command(submitted, "/scoped-models") && options.scoped_model_selector_view)
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_scoped_model_selector())
@@ -245,7 +247,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if ((exact_command(submitted, "/sessions") || exact_command(submitted, "/tree") || exact_command(submitted, "/resume")) && options_.session_selector_view)
+    if ((exact_command(submitted, "/sessions") || exact_command(submitted, "/tree") || exact_command(submitted, "/resume")) && options.session_selector_view)
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_session_selector())
@@ -254,7 +256,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if (auto fork_from_query = fork_from_command_argument(submitted); fork_from_query && options_.on_open_fork_user_turn_selector)
+    if (auto fork_from_query = fork_from_command_argument(submitted); fork_from_query && options.on_open_fork_user_turn_selector)
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_fork_user_turn_selector(*fork_from_query))
@@ -283,15 +285,15 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         push_history(input_history, submitted);
         if (*parsed_reload_target == ReloadTarget::DisplaySettings)
         {
-          if (!options_.on_reload_display_settings)
+          if (!options.on_reload_display_settings)
           {
             open_command_error(snapshot, submitted, "display reload unavailable");
             ava::core::Application::instance().terminal_context().beep();
           }
-          else if (auto reloaded = options_.on_reload_display_settings())
+          else if (auto reloaded = options.on_reload_display_settings(frontend_))
           {
             auto status = reloaded->status.empty() ? std::string("display theme reloaded") : reloaded->status;
-            presentation_state_.apply_local_display_settings(options_, std::move(reloaded->settings));
+            presentation_state_.apply_local_display_settings(frontend_, std::move(reloaded->settings));
             settle_local_command_status(snapshot, std::move(status));
           }
           else
@@ -300,14 +302,14 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
             ava::core::Application::instance().terminal_context().beep();
           }
         }
-        else if (!options_.on_reload_key_bindings)
+        else if (!options.on_reload_key_bindings)
         {
           open_command_error(snapshot, submitted, "reload unavailable");
           ava::core::Application::instance().terminal_context().beep();
         }
-        else if (auto reloaded = options_.on_reload_key_bindings())
+        else if (auto reloaded = options.on_reload_key_bindings(frontend_))
         {
-          presentation_state_.apply_local_key_bindings(options_, std::move(*reloaded));
+          presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
           settle_local_command_status(snapshot, "keybindings reloaded");
         }
         else
@@ -322,10 +324,10 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
     }
-    if (runtime_commands::local_display_settings_command(submitted) && options_.on_local_display_settings_action)
+    if (runtime_commands::local_display_settings_command(submitted) && options.on_local_display_settings_action)
     {
       push_history(input_history, submitted);
-      auto applied = options_.on_local_display_settings_action(submitted);
+      auto applied = options.on_local_display_settings_action(frontend_, submitted);
       if (!applied)
       {
         open_command_error(snapshot, submitted, applied.error().format());
@@ -333,7 +335,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       else
       {
-        presentation_state_.apply_local_display_settings(options_, std::move(applied->settings));
+        presentation_state_.apply_local_display_settings(frontend_, std::move(applied->settings));
         settle_local_command_completion(snapshot, submitted, std::move(applied->output));
       }
       if (!renderer_.render())
@@ -343,7 +345,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (submitted == "/hotkeys" || submitted == "/keybindings")
     {
       push_history(input_history, submitted);
-      snapshot.select_list = hotkeys_select_list_view(options_.key_bindings);
+      snapshot.select_list = hotkeys_select_list_view(options.key_bindings);
       active_select_list_ = ActiveSelectList::Hotkeys;
       snapshot.status = "keybindings opened";
       transcript_scroll_offset = 0;
@@ -375,13 +377,13 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         snapshot.startup_overview.reset();
       // Workspace trust is popup-only. Refresh it once at initialization so a
       // close/reopen observes backend changes without ordinary snapshot transport.
-      if (options_.read_project_trust)
-        snapshot.project_trust = options_.read_project_trust();
+      if (options.read_project_trust)
+        snapshot.project_trust = options.read_project_trust(frontend_);
       else
         snapshot.project_trust.reset();
       auto settings_snapshot = snapshot;
       settings_snapshot.sidebar = sidebar;
-      snapshot.select_list = settings_select_list_view(settings_snapshot, options_.key_bindings);
+      snapshot.select_list = settings_select_list_view(settings_snapshot, options.key_bindings);
       active_select_list_ = ActiveSelectList::Settings;
       snapshot.status = "settings opened";
       transcript_scroll_offset = 0;
@@ -413,7 +415,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         }
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
-      if (!options_.on_attach_image)
+      if (!options.on_attach_image)
       {
         open_command_error(snapshot, submitted, "image attachment import unavailable");
         ava::core::Application::instance().terminal_context().beep();
@@ -423,7 +425,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         }
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
-      auto imported = options_.on_attach_image(*attach_target);
+      auto imported = options.on_attach_image(frontend_, *attach_target);
       if (!imported)
       {
         open_command_error(snapshot, submitted, imported.error().format());
@@ -494,7 +496,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       auto const target = parse_copy_target(*copy_target);
       // Exact target name "user" opens the public user-turn picker. No alias is
       // accepted; remaining text becomes the selector's initial filter query.
-      if (target.name == "user" && options_.on_open_copy_user_turn_selector)
+      if (target.name == "user" && options.on_open_copy_user_turn_selector)
       {
         if (!action_controller_.open_copy_user_turn_selector(target.query))
         {

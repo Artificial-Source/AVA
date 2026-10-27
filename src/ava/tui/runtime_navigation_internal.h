@@ -13,7 +13,7 @@ struct FileReferenceSelectionText;
 struct InputEvent;
 struct RuntimeDraftState;
 struct SidebarSnapshot;
-struct TuiRuntimeOptions;
+class TuiFrontEnd;
 class RuntimeRenderer;
 
 namespace detail {
@@ -23,7 +23,7 @@ struct CompletionMatchModel;
 class RuntimeNavigationController final
 {
  public:
-  RuntimeNavigationController(TuiRuntimeOptions const& options, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state,
+  RuntimeNavigationController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SidebarSnapshot& sidebar, RuntimeDraftState& draft_state,
                               RuntimeRenderer& renderer);
   RuntimeNavigationController(RuntimeNavigationController const&) = delete;
   RuntimeNavigationController& operator=(RuntimeNavigationController const&) = delete;
@@ -59,7 +59,7 @@ class RuntimeNavigationController final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  TuiRuntimeOptions const& options_;
+  TuiFrontEnd const& frontend_;
   ComposerSnapshot& snapshot_;
   SidebarSnapshot& sidebar_;
   RuntimeDraftState& draft_state_;

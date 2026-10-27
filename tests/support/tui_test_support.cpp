@@ -72,10 +72,12 @@ struct TuiFrontEndFixture::Impl
 {
   explicit Impl(TuiTestModel model) : Impl({}, std::move(model)) { }
 
-  Impl(ava::tui::TuiRuntimeOptions options, TuiTestModel model)
+  Impl(ava::tui::TuiRuntimeOptions options, TuiTestModel model) : Impl(std::move(options), std::move(model), {}) { }
+
+  Impl(ava::tui::TuiRuntimeOptions options, TuiTestModel model, ava::app::ApplicationCatalogCache catalog_cache)
       : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")),
         session(open_frontend_test_session(root.path())),
-        frontend(session, std::move(options))
+        frontend(session, std::move(catalog_cache), 0, std::move(options))
   {
     select_frontend_test_model(session, model);
     frontend.register_frontend_data(session);
@@ -94,6 +96,11 @@ TuiFrontEndFixture::TuiFrontEndFixture(ava::tui::TuiRuntimeOptions options) : im
 {
 }
 
+TuiFrontEndFixture::TuiFrontEndFixture(ava::tui::TuiRuntimeOptions options, ava::app::ApplicationCatalogCache catalog_cache)
+    : impl_(std::make_unique<Impl>(std::move(options), TuiTestModel{}, std::move(catalog_cache)))
+{
+}
+
 TuiFrontEndFixture::~TuiFrontEndFixture() = default;
 
 ava::tui::TuiFrontEnd* TuiFrontEndFixture::frontend() noexcept
@@ -105,6 +112,11 @@ ava::tui::TuiRuntimeOptions& TuiFrontEndFixture::runtime_options() noexcept
 {
   // The fixture exclusively owns the frontend and exposes its options only so controller tests mirror production composition.
   return const_cast<ava::tui::TuiRuntimeOptions&>(impl_->frontend.options());
+}
+
+void TuiFrontEndFixture::refresh_application_catalog_values()
+{
+  impl_->frontend.application_catalog().refresh_values(impl_->session);
 }
 
 std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata()

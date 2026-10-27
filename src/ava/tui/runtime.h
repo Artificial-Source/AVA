@@ -288,6 +288,9 @@ struct TuiBranchSummarySnapshot
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+// Forward declare ava::tui::TuiFrontEnd.
+class TuiFrontEnd;
+
 struct TuiRuntimeOptions
 {
   std::string app_version;
@@ -301,90 +304,91 @@ struct TuiRuntimeOptions
   TuiLocalDisplaySettings initial_display_settings;
   TuiMermaidRenderBridge mermaid_render;
   TuiKeyBindings key_bindings = default_key_bindings();
-  // Pending-review catalog and todo transports. Pull and apply only at
-  // serialized action/completion boundaries, never during rendering, and
-  // like read_committed_session_id never while holding the UI lock.
-  std::function<TuiCatalogDelivery()> read_catalog_delivery;
-  std::function<std::vector<TodoItem>()> read_committed_todos;
+  // The first callback argument is the frontend that owns these options. It is
+  // const unless the callback must mutate frontend-owned application state.
+  std::function<std::vector<TodoItem>(TuiFrontEnd const&)> read_committed_todos;
   // UI-thread popup initialization callbacks. Inputs: none. Outputs: owning,
   // already-filtered DTOs from current in-memory Session state. Side effects:
   // briefly acquire the backend Session read guard. Call once per popup open,
   // never during ordinary boundary refreshes or rendering.
-  std::function<StartupOverviewSnapshot()> read_startup_overview;
-  std::function<ProjectTrustSnapshot()> read_project_trust;
-  std::function<TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;
-  std::function<TuiSubmitResult(std::string const&, TuiSubmitContext)> on_submit;
-  std::function<ava::core::Result<ava::session::ImageAttachmentRef>(std::string const&)> on_attach_image;
-  std::function<ava::core::Result<std::optional<ava::session::ImageAttachmentRef>>()> on_paste_clipboard_image;
-  std::function<ava::core::Result<std::optional<std::string>>(std::string_view)> on_external_editor;
-  std::function<ava::core::Result<ava::session::LoadedImageAttachment>(ava::session::ImageAttachmentRef const&)> on_load_image_attachment;
-  std::function<ava::core::VoidResult()> on_toggle_mode;
-  std::function<ava::core::Result<std::string>()> on_cycle_reasoning;
-  std::function<ava::core::Result<std::string>(bool)> on_cycle_model;
+  std::function<StartupOverviewSnapshot(TuiFrontEnd const&)> read_startup_overview;
+  std::function<ProjectTrustSnapshot(TuiFrontEnd const&)> read_project_trust;
+  std::function<TuiActiveRunQueues(TuiFrontEnd const&, ava::event::EventEnvelopeSink)> create_active_run_queues;
+  std::function<TuiSubmitResult(TuiFrontEnd&, std::string const&, TuiSubmitContext)> on_submit;
+  std::function<ava::core::Result<ava::session::ImageAttachmentRef>(TuiFrontEnd const&, std::string const&)> on_attach_image;
+  std::function<ava::core::Result<std::optional<ava::session::ImageAttachmentRef>>(TuiFrontEnd const&)> on_paste_clipboard_image;
+  std::function<ava::core::Result<std::optional<std::string>>(TuiFrontEnd const&, std::string_view)> on_external_editor;
+  std::function<ava::core::Result<ava::session::LoadedImageAttachment>(TuiFrontEnd const&, ava::session::ImageAttachmentRef const&)> on_load_image_attachment;
+  std::function<ava::core::VoidResult(TuiFrontEnd const&)> on_toggle_mode;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd const&)> on_cycle_reasoning;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, bool)> on_cycle_model;
   // Loads validated bindings for application by the TUI thread. The callback
   // must not refresh backend catalogs or return backend runtime snapshots.
-  std::function<ava::core::Result<TuiKeyBindings>()> on_reload_key_bindings;
-  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>()> on_reload_display_settings;
+  std::function<ava::core::Result<TuiKeyBindings>(TuiFrontEnd const&)> on_reload_key_bindings;
+  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>(TuiFrontEnd const&)> on_reload_display_settings;
   // Optional local result is the explicit applied/unchanged signal from the frontend owner:
   // nullopt = unchanged, some(result) = applied. unexpected = terminal apply/watch failure.
   // The TUI action layer maps this to DisplaySettingsReloadPollOutcome and must not compare values.
-  std::function<ava::core::Result<std::optional<TuiLocalDisplaySettingsResult>>()> on_maybe_reload_display_settings;
+  std::function<ava::core::Result<std::optional<TuiLocalDisplaySettingsResult>>(TuiFrontEnd const&)> on_maybe_reload_display_settings;
   // Persists and applies a recognized display command or settings action on the TUI thread.
-  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>(std::string_view)> on_local_display_settings_action;
-  std::function<SelectListView()> model_selector_view;
+  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>(TuiFrontEnd const&, std::string_view)> on_local_display_settings_action;
+  std::function<SelectListView(TuiFrontEnd const&)> model_selector_view;
   // The bool is true for the staged model-selection handoff, allowing an
   // accurate "Esc keep default" footer. No value means no configurable mode.
-  std::function<std::optional<SelectListView>(bool)> reasoning_selector_view;
-  std::function<SelectListView()> scoped_model_selector_view;
-  std::function<SelectListView()> session_selector_view;
+  std::function<std::optional<SelectListView>(TuiFrontEnd const&, bool)> reasoning_selector_view;
+  std::function<SelectListView(TuiFrontEnd const&)> scoped_model_selector_view;
+  std::function<SelectListView(TuiFrontEnd&)> session_selector_view;
   // Path-free, owner-bound live subagent workspace callbacks. Exact ids are
   // accepted only as hidden selector values and callback authority. Cancel and
   // promote return narrow typed TUI outcomes only — never free-form backend text.
-  std::function<ava::core::Result<SelectListView>()> list_subagents;
-  std::function<ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>>(std::string_view, std::optional<std::uint64_t>)> inspect_subagent;
-  std::function<SubagentWorkspaceCancelOutcome(std::string_view)> cancel_subagent;
-  std::function<SubagentWorkspacePromoteOutcome(std::string_view)> promote_subagent;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&)> list_subagents;
+  std::function<ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>>(TuiFrontEnd const&, std::string_view,
+                                                                                             std::optional<std::uint64_t>)>
+      inspect_subagent;
+  std::function<SubagentWorkspaceCancelOutcome(TuiFrontEnd const&, std::string_view)> cancel_subagent;
+  std::function<SubagentWorkspacePromoteOutcome(TuiFrontEnd const&, std::string_view)> promote_subagent;
   // Open searchable public user-turn pickers. Fail closed with Result when the
   // bound session authority has no public user turns, is sessionless for fork-from,
   // or cannot list them. Optional initial_query seeds the picker filter.
-  std::function<ava::core::Result<SelectListView>(std::string_view initial_query)> on_open_fork_user_turn_selector;
-  std::function<ava::core::Result<SelectListView>(std::string_view initial_query)> on_open_copy_user_turn_selector;
-  std::function<SelectListView()> on_session_selector_sort_cycle;
-  std::function<SelectListView()> on_session_selector_named_filter_toggle;
-  std::function<SelectListView()> on_session_selector_path_display_toggle;
-  std::function<SelectListView()> on_session_selector_archived_filter_toggle;
-  std::function<SelectListView()> on_session_selector_label_timestamp_toggle;
-  std::function<ava::core::Result<SelectListView>(std::string_view)> on_session_selector_archive;
-  std::function<ava::core::Result<SelectListView>(std::string_view)> on_session_selector_unarchive;
-  std::function<ava::core::Result<std::string>(std::string_view)> on_session_selector_branch_parent;
-  std::function<ava::core::Result<std::string>(std::string_view)> on_session_selector_branch_child;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, std::string_view initial_query)> on_open_fork_user_turn_selector;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, std::string_view initial_query)> on_open_copy_user_turn_selector;
+  std::function<SelectListView(TuiFrontEnd&)> on_session_selector_sort_cycle;
+  std::function<SelectListView(TuiFrontEnd&)> on_session_selector_named_filter_toggle;
+  std::function<SelectListView(TuiFrontEnd&)> on_session_selector_path_display_toggle;
+  std::function<SelectListView(TuiFrontEnd&)> on_session_selector_archived_filter_toggle;
+  std::function<SelectListView(TuiFrontEnd&)> on_session_selector_label_timestamp_toggle;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd&, std::string_view)> on_session_selector_archive;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd&, std::string_view)> on_session_selector_unarchive;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::string_view)> on_session_selector_branch_parent;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::string_view)> on_session_selector_branch_child;
   // Hidden selector values are the only session identities crossing this boundary.
   // All returned operation state is path-free and fixed-code only.
-  std::function<ava::core::Result<TuiBranchSummarySnapshot>(std::string_view)> on_branch_summary_prepare;
-  std::function<TuiBranchSummarySnapshot()> branch_summary_snapshot;
-  std::function<ava::core::Result<bool>(std::uint64_t)> on_branch_summary_confirm;
-  std::function<ava::core::Result<bool>(std::uint64_t)> on_branch_summary_cancel;
-  std::function<ava::core::Result<SelectListView>()> on_branch_summary_refresh_catalog;
-  std::function<ava::core::Result<TuiRememberedPermissionRule>(ava::permissions::PermissionPrompt const&, ava::permissions::PermissionAction)>
+  std::function<ava::core::Result<TuiBranchSummarySnapshot>(TuiFrontEnd const&, std::string_view)> on_branch_summary_prepare;
+  std::function<TuiBranchSummarySnapshot(TuiFrontEnd const&)> branch_summary_snapshot;
+  std::function<ava::core::Result<bool>(TuiFrontEnd const&, std::uint64_t)> on_branch_summary_confirm;
+  std::function<ava::core::Result<bool>(TuiFrontEnd const&, std::uint64_t)> on_branch_summary_cancel;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd&)> on_branch_summary_refresh_catalog;
+  std::function<ava::core::Result<TuiRememberedPermissionRule>(TuiFrontEnd const&, ava::permissions::PermissionPrompt const&,
+                                                               ava::permissions::PermissionAction)>
       remember_permission_rule;
-  std::function<ava::core::Result<std::string>(std::string_view)> on_settings_selected;
-  std::function<ava::core::Result<std::string>(std::string_view)> on_model_selected;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::string_view)> on_settings_selected;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::string_view)> on_model_selected;
   // No value clears the explicit AVA level and restores model/provider default.
-  std::function<ava::core::Result<std::string>(std::optional<std::string>)> on_reasoning_selected;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::optional<std::string>)> on_reasoning_selected;
   // Fork at the selected public user entry id through the normal branch path.
-  std::function<ava::core::Result<std::string>(std::string_view entry_id)> on_fork_user_turn_selected;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::string_view entry_id)> on_fork_user_turn_selected;
   // Re-read exact public user-turn text by stable entry id at action time.
-  std::function<ava::core::Result<std::string>(std::string_view entry_id)> on_read_user_turn_text;
-  std::function<ava::core::Result<SelectListView>(SelectListView const&, std::string_view)> on_scoped_model_toggled;
-  std::function<ava::core::Result<SelectListView>(SelectListView const&, std::vector<std::string>)> on_scoped_model_enable_all;
-  std::function<ava::core::Result<SelectListView>(SelectListView const&, std::vector<std::string>)> on_scoped_model_clear_all;
-  std::function<ava::core::Result<SelectListView>(SelectListView const&, std::string_view)> on_scoped_model_toggle_provider;
-  std::function<ava::core::Result<SelectListView>(SelectListView const&, std::string_view, bool)> on_scoped_model_reorder;
-  std::function<ava::core::Result<std::string>()> on_scoped_model_save;
-  std::function<ava::core::Result<std::string>(std::string_view)> on_session_selected;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd const&, std::string_view entry_id)> on_read_user_turn_text;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, SelectListView const&, std::string_view)> on_scoped_model_toggled;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, SelectListView const&, std::vector<std::string>)> on_scoped_model_enable_all;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, SelectListView const&, std::vector<std::string>)> on_scoped_model_clear_all;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, SelectListView const&, std::string_view)> on_scoped_model_toggle_provider;
+  std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, SelectListView const&, std::string_view, bool)> on_scoped_model_reorder;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd const&)> on_scoped_model_save;
+  std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::string_view)> on_session_selected;
   // Runs after the composer loop exits while curses is still active. Application-scoped
   // workers that can notify this runtime must be canceled and joined here.
-  std::function<void()> on_before_tui_shutdown;
+  std::function<void(TuiFrontEnd const&)> on_before_tui_shutdown;
 
   // This struct has a custom print_on.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

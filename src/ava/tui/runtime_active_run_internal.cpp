@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/agent/question.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/event_state.h"
 #include "ava/tui/runtime_actions_internal.h"
@@ -17,7 +18,6 @@
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/terminal.h"
-#include "ava/tui/TuiFrontEnd.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/Application.h"
 #include "ava/core/ids.h"
@@ -571,7 +571,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   std::string submit_request_id;
   if (supports_active_queue && frontend_.options().create_active_run_queues)
   {
-    active_queues = frontend_.options().create_active_run_queues(control_sink);
+    active_queues = frontend_.options().create_active_run_queues(frontend_, control_sink);
     if (!active_queues->active_request_id.empty())
     {
       submit_request_id = active_queues->active_request_id;
@@ -633,7 +633,8 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       auto skip_active_steering = active_queues ? active_queues->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{};
       auto take_next_follow_up = active_queues ? active_queues->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{};
       auto mark_follow_up_started = active_queues ? active_queues->mark_follow_up_started : std::function<ava::core::VoidResult(TuiQueuedFollowUp const&)>{};
-      return frontend_.options().on_submit(submitted, TuiSubmitContext{.request_id = submit_request_id,
+      return frontend_.options().on_submit(frontend_, submitted,
+                                           TuiSubmitContext{.request_id = submit_request_id,
                                                             .permission_resolver = permission_resolver,
                                                             .question_resolver = question_resolver,
                                                             .event_sink = event_sink,
@@ -871,13 +872,13 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     // worker has committed, before acquiring the UI lock. Action results never
     // carry session transition authority. A quit completion pulls nothing.
     auto committed_session_id = frontend_.read_committed_session_id();
-    auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_.options());
+    auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
     {
       std::lock_guard<std::recursive_mutex> lock(ui_mutex);
       session_changed = apply_committed_session_transition(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_,
                                                            action_controller_.active_select_list(), std::move(committed_session_id));
       if (!result.quit)
-        presentation_state_.apply_boundary_data(frontend_.options(), std::move(boundary_reads));
+        presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
     }
     if (active_queues && active_queues->finish)
     {
