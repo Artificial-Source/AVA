@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Artificial-Source/AVA/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Artificial-Source/AVA/actions/workflows/ci.yml)
 
-AVA is a native C++23, terminal-first, local-first coding agent with explicit backend authority for permissions, tools, providers, processes, and append-only sessions. The active default branch is `develop`.
+AVA is a local-first coding agent written in C++23 that works with any LLM. Its backend keeps explicit authority over permissions, tools, providers, processes, and append-only sessions. The active default branch is `develop`.
 
 The runtime version is `0.32.0`. **This is not a stable release.** The terminal
 frontend is still in active development. A stable 1.0 release will follow once
