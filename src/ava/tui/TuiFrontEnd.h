@@ -3,6 +3,7 @@
 #include "ava/frontend/FrontEnd.h"
 // For OLD API
 #include "ava/tui/runtime.h"    // TuiRuntimeOptions, TuiCatalogDelivery
+#include "ava/tui/composer.h"   // StartupOverviewSnapshot
 
 namespace ava::tui {
 
@@ -27,6 +28,12 @@ class TuiFrontEnd : public frontend::FrontEnd
   // The first callback argument is the frontend that owns these options. It is
   // const unless the callback must mutate frontend-owned application state.
   virtual std::vector<agent::TodoItem> read_committed_todos() const = 0;
+
+  // UI-thread popup initialization callbacks. Inputs: none. Outputs: owning,
+  // already-filtered DTOs from current in-memory Session state. Side effects:
+  // briefly acquire the backend Session read guard. Call once per popup open,
+  // never during ordinary boundary refreshes or rendering.
+  virtual StartupOverviewSnapshot read_startup_overview() const = 0;
 
   // Launch the terminal user interface (TUI) using runtime options `options`.
   // Called by ava::app::interactive_internal::run_tui after registering all frontend::Data objects.

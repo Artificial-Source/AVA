@@ -1,8 +1,9 @@
 #include "sys.h"
 #include "TuiFrontEnd.h"
 #include "ava/app/runtime/Session.h"
-#include "ava/app/tui/command_palette_views.h"  // project_slash_command_items, project_file_reference_items
-#include "ava/app/tui/interactive_tui_internal.h"
+#include "ava/app/tui/command_palette_views.h"          // project_slash_command_items, project_file_reference_items
+#include "ava/app/tui/startup_overview.h"               // build_startup_overview_snapshot
+#include "ava/agent/todo.h"                             // ava::agent::latest_committed_todowrite_snapshot
 
 namespace ava::app {
 
@@ -31,6 +32,18 @@ std::vector<agent::TodoItem> TuiFrontEnd::read_committed_todos() const
     return {};
   auto snapshot = ava::agent::latest_committed_todowrite_snapshot(*entries);
   return std::move(snapshot.todos);
+}
+
+tui::StartupOverviewSnapshot TuiFrontEnd::read_startup_overview() const
+{
+  // The builder holds one Session read guard while performing only bounded,
+  // in-memory safe aggregation and returns an owning path-filtered DTO.
+
+  // Static empty bindings keep backend-only overview construction free of
+  // mutable frontend preferences while avoiding a per-snapshot allocation.
+  static ava::tui::TuiKeyBindings const kNoBindings;
+  static ava::tui::TuiThemeInfo const kNoTheme{.kind = ava::tui::TuiThemeKind::Dark, .name = {}, .detail = {}, .badge = {}, .palette = {}, .revision = {}};
+  return build_startup_overview_snapshot(unlocked_session_, kNoBindings, kNoTheme);
 }
 
 } // namespace ava::app

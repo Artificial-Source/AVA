@@ -303,11 +303,6 @@ struct TuiRuntimeOptions
   TuiLocalDisplaySettings initial_display_settings;
   TuiMermaidRenderBridge mermaid_render;
   TuiKeyBindings key_bindings = default_key_bindings();
-  // UI-thread popup initialization callbacks. Inputs: none. Outputs: owning,
-  // already-filtered DTOs from current in-memory Session state. Side effects:
-  // briefly acquire the backend Session read guard. Call once per popup open,
-  // never during ordinary boundary refreshes or rendering.
-  std::function<StartupOverviewSnapshot(TuiFrontEnd const&)> read_startup_overview;
   std::function<ProjectTrustSnapshot(TuiFrontEnd const&)> read_project_trust;
   std::function<TuiActiveRunQueues(TuiFrontEnd const&, ava::event::EventEnvelopeSink)> create_active_run_queues;
   std::function<TuiSubmitResult(TuiFrontEnd&, std::string const&, TuiSubmitContext)> on_submit;

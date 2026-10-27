@@ -439,16 +439,9 @@ bool RuntimeActionController::toggle_startup_overview()
     snapshot.status = "overview closed";
     return renderer_.request_render();
   }
-  auto const& options = frontend_.options();
-  if (!options.read_startup_overview)
-  {
-    snapshot.status = "startup overview unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return renderer_.request_render();
-  }
   // Read current backend facts exactly once for this popup lifetime. The callback
   // returns an owning safe DTO; local display and keybinding hints are composed here.
-  presentation_state_.initialize_startup_overview(frontend_, options.read_startup_overview(frontend_));
+  presentation_state_.initialize_startup_overview(frontend_, frontend_.read_startup_overview());
   // Replace any other modal with the read-only overview; Enter/Esc close without mutation.
   snapshot.sidebar_drawer_visible = false;
   snapshot.sidebar_drawer_scroll_offset = 0;

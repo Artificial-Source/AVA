@@ -289,12 +289,6 @@ int run_tui(InteractiveState state)
       .initial_display_settings = display_settings.presentation(),
       .mermaid_render = display_settings.mermaid_bridge(),
       .key_bindings = key_bindings,
-      .read_startup_overview =
-          [&unlocked_session](ava::tui::TuiFrontEnd const&) {
-            // The builder holds one Session read guard while performing only bounded,
-            // in-memory safe aggregation and returns an owning path-filtered DTO.
-            return build_startup_overview_snapshot(unlocked_session);
-          },
       .read_project_trust =
           [&unlocked_session](ava::tui::TuiFrontEnd const&) {
             // Copy the existing trust DTO under one brief Session read guard;

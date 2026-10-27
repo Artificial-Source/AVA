@@ -505,13 +505,4 @@ ava::tui::StartupOverviewSnapshot build_startup_overview_snapshot(runtime::sessi
   return build_startup_overview_snapshot(input);
 }
 
-ava::tui::StartupOverviewSnapshot build_startup_overview_snapshot(runtime::session_ts const& session)
-{
-  // Static empty bindings keep backend-only overview construction free of
-  // mutable frontend preferences while avoiding a per-snapshot allocation.
-  static ava::tui::TuiKeyBindings const kNoBindings;
-  static ava::tui::TuiThemeInfo const kNoTheme{.kind = ava::tui::TuiThemeKind::Dark, .name = {}, .detail = {}, .badge = {}, .palette = {}, .revision = {}};
-  return build_startup_overview_snapshot(session, kNoBindings, kNoTheme);
-}
-
 }  // namespace ava::app

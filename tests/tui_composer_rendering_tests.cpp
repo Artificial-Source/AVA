@@ -347,12 +347,6 @@ bool test_active_run_session_transition_discards_prior_session_events()
       ava::tui::TranscriptItem{.label = "ava", .text = "OLD-INITIAL-TRANSCRIPT"},
       ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "old_initial_tool"}},
   };
-#if 0 // FIXME: this member doesn't exist anymore.
-  options.read_catalog_delivery = [&]() {
-    ++catalog_pulls;
-    return ava::tui::TuiCatalogDelivery{};
-  };
-#endif
   options.create_active_run_queues = [&finish_called, &queues_enabled](ava::tui::TuiFrontEnd const&, ava::event::EventEnvelopeSink sink) {
     if (!queues_enabled)
       return ava::tui::TuiActiveRunQueues{};
@@ -1027,17 +1021,6 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
       count_completion(presentation.snapshot, "/reload", 0, "theme") == 1 &&
       count_completion(presentation.snapshot, "/hotkeys", 1, "mode_toggle", {"set"}) == 1 && key_display(presentation.snapshot, "/mode") == initial_mode_keys;
 
-#if 0 // FIXME: this member doesn't exist anymore.
-  options.read_catalog_delivery = [&]() {
-    ++catalog_pulls;
-    if (catalog_pulls == 1)
-      return ava::tui::TuiCatalogDelivery{.slash_commands = backend_commands(),
-                                          .slash_catalog_generation = 2,
-                                          .file_references = {{.value = "src/catalog.cpp", .description = "catalog source"}},
-                                          .workspace_catalog_generation = 2};
-    return ava::tui::TuiCatalogDelivery{.slash_catalog_generation = 2, .workspace_catalog_generation = 2};
-  };
-#endif
   auto const initial_generation = presentation.snapshot.file_references_generation;
   presentation.refresh_after_backend_action(*frontend.frontend());
   auto const delivered_generation = presentation.snapshot.file_references_generation;
@@ -1196,23 +1179,10 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme("dark");
 
-  ava::tui::StartupOverviewSnapshot initial_overview{
-      .mode = "build",
-      //.provider = "openai",
-      //.model = "gpt-5.5",
-      .theme_name = "dark",
-      .theme_badge = "built-in",
-      .compact_line = "build · openai/gpt-5.5 · dark · /overview",
-  };
   int applied_callback_count = 0;
-  int overview_read_count = 0;
   ava::tui::TuiRuntimeOptions options;
   //  options.provider = "openai";
   //  options.model = "gpt-5.5";
-  options.read_startup_overview = [&](ava::tui::TuiFrontEnd const&) {
-    ++overview_read_count;
-    return initial_overview;
-  };
   options.on_maybe_reload_display_settings = [&](ava::tui::TuiFrontEnd const&) -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
     ++applied_callback_count;
     ava::tui::set_tui_config_theme(
@@ -1247,16 +1217,18 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
                                                       session_archive_confirmation);
 
-  bool const no_read_during_snapshot_apply = overview_read_count == 0;
+  bool const no_read_during_snapshot_apply = !presentation.snapshot.startup_overview;
   bool const opened = action_controller.toggle_startup_overview();
   presentation.snapshot.select_list->query = "theme";
   presentation.snapshot.select_list->selected_item_index = 0;
+  // A local display reload must recompose the open DTO without pulling changed backend facts.
+  frontend.set_model({.provider_id = "openai", .model_id = "gpt-fresh", .display_name = "gpt-fresh"});
 
   auto const outcome = action_controller.maybe_reload_display_settings();
-  bool const rebuilt = opened && overview_read_count == 1 && outcome == ava::tui::DisplaySettingsReloadPollOutcome::Applied && applied_callback_count == 1 &&
+  bool const rebuilt = opened && outcome == ava::tui::DisplaySettingsReloadPollOutcome::Applied && applied_callback_count == 1 &&
                        active_select_list == ava::tui::ActiveSelectList::Overview && presentation.snapshot.startup_overview &&
-                       presentation.snapshot.startup_overview->theme_name == "sunrise" && presentation.snapshot.select_list &&
-                       presentation.snapshot.select_list->query == "theme" &&
+                       presentation.snapshot.startup_overview->model == "gpt-5.5" && presentation.snapshot.startup_overview->theme_name == "sunrise" &&
+                       presentation.snapshot.select_list && presentation.snapshot.select_list->query == "theme" &&
                        std::ranges::any_of(presentation.snapshot.select_list->items,
                                            [](auto const& item) { return item.group == "Display" && item.label == "Theme" && item.detail == "sunrise"; }) &&
                        // Open overview suppresses the idle transcript receipt; status still updates.
@@ -1268,11 +1240,8 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   bool const rendered = renderer.render();
 
   bool const closed = action_controller.toggle_startup_overview();
-  initial_overview.model = "gpt-fresh";
-  initial_overview.compact_line = "build · openai/gpt-fresh · /overview";
   bool const reopened = action_controller.toggle_startup_overview();
-  bool const fresh_reopen =
-      closed && reopened && overview_read_count == 2 && presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->model == "gpt-fresh";
+  bool const fresh_reopen = closed && reopened && presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->model == "gpt-fresh";
 
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme(std::nullopt);
@@ -1361,18 +1330,6 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
                                  .argument_completions = {ava::tui::SlashCommandArgumentCompletion{
                                      .value = "init", .description = "initialize keybindings", .category = "General", .argument_index = 0}}}};
   options.slash_catalog_generation = 1;
-#if 0 // FIXME: this member doesn't exist anymore.
-  options.read_catalog_delivery = [&]() {
-    ++catalog_pulls;
-    if (trust_action_committed)
-      return ava::tui::TuiCatalogDelivery{.slash_commands = {{.command = "/trusted-project-command", .description = "trusted resource"}},
-                                          .slash_catalog_generation = 2};
-    return ava::tui::TuiCatalogDelivery{.slash_catalog_generation = 1};
-  };
-#endif
-  options.read_startup_overview = [](ava::tui::TuiFrontEnd const&) {
-    return ava::tui::StartupOverviewSnapshot{.theme_name = "dark", .theme_badge = "built-in", .compact_line = "build · provider/model · /overview"};
-  };
   options.read_project_trust = [&](ava::tui::TuiFrontEnd const&) {
     ++project_trust_reads;
     return current_project_trust;
@@ -1463,7 +1420,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   active_select_list = ava::tui::ActiveSelectList::None;
   bool const settings_popup_ok = settings_not_read_by_snapshot && first_settings_trust && fresh_settings_trust;
 
-  presentation.initialize_startup_overview(*frontend.frontend(), frontend_options.read_startup_overview(*frontend.frontend()));
+  presentation.initialize_startup_overview(*frontend.frontend(), frontend.frontend()->read_startup_overview());
 
   auto const models = submit_controller.submit(std::string("/reload models"));
   bool const models_ok =
@@ -1541,8 +1498,7 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   {
     expect(test_active_run_session_transition_discards_prior_session_events(),
            "an active-run authoritative session transition discards old submitted/event/tool/queue/finish/sidebar/todo state, resets event receipt suppression "
-           "and "
-           "history, and presents only the new-session receipt and hydrated state");
+           "and history, and presents only the new-session receipt and hydrated state");
   }
   else if (test_case == "atomic_search")
   {
@@ -1555,9 +1511,8 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   {
     expect(test_transcript_message_boundary_navigation_and_live_tail_reset(),
            "transcript user-turn navigation clamps at the oldest retained user turn, skips assistant turns, advances/retreats across retained user turns, "
-           "resets to "
-           "live tail, applies the shared three-row transcript wheel step with reverse reattach and hard clamp, and leaves the composer draft untouched while "
-           "defaults keep MessagePrev/Next/JumpToBottom on Alt+K/Alt+J/Ctrl+End");
+           "resets to live tail, applies the shared three-row transcript wheel step with reverse reattach and hard clamp, and leaves the composer draft "
+           "untouched while defaults keep MessagePrev/Next/JumpToBottom on Alt+K/Alt+J/Ctrl+End");
   }
   else if (test_case == "detached_completion")
   {

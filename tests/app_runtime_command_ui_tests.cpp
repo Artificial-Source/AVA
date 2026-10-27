@@ -5,6 +5,7 @@
 #include "ava/command/command.h"
 #include "ava/app/commands.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/app/tui/TuiFrontEnd.h"
 #include "ava/app/tui/configuration_commands.h"
 #include "ava/app/tui/display_reload.h"
 #include "ava/app/tui/startup_overview.h"
@@ -1062,7 +1063,9 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
              plugins_after_enable->output[0].find("com.example.project  enabled") != std::string::npos,
          "command dispatcher /plugins list reflects enablement state");
 
-  auto const backend_overview = ava::app::build_startup_overview_snapshot(unlocked_session);
+  // Read backend facts through the frontend member without starting the terminal UI or supplying local theme preferences.
+  ava::app::TuiFrontEnd frontend(unlocked_session, ava::app::ApplicationCatalogCache{}, 0, ava::tui::TuiRuntimeOptions{});
+  auto const backend_overview = frontend.read_startup_overview();
   expect(backend_overview.theme_name.empty() && backend_overview.theme_badge.empty() && backend_overview.compact_line.find("ava-dark") == std::string::npos,
          "backend-only startup overview snapshots do not inject the default TUI theme");
   auto overview_cmd = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/overview"});
