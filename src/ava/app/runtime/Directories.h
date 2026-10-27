@@ -14,7 +14,7 @@ struct Directories
   std::filesystem::path current_dir;
   std::vector<std::filesystem::path> additional_writable_dirs = {};
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 using Directories_ts = frontend::UnlockedData<Directories>;

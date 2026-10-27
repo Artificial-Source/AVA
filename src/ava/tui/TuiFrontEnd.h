@@ -37,7 +37,7 @@ class TuiFrontEnd : public frontend::FrontEnd
 
   TuiRuntimeOptions const& options() const { return options_; }
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON_BASE(frontend::FrontEnd)
 };
 
 } // namespace ava::tui

@@ -35,7 +35,7 @@ class Directories
   RefreshResult<std::string const&> workspace_root_refresh();
   RefreshResult<std::string const&> current_directory_refresh();
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 } // namespace ava::frontend

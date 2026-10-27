@@ -84,7 +84,7 @@ class SessionStats
     return {percentage_.display_, percentage_changed};
   }
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 } // namespace ava::frontend

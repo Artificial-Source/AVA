@@ -102,7 +102,7 @@ class ModelSelection
     return {model_snapshot_.context_window_tokens, changed};
   }
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 } // namespace ava::frontend

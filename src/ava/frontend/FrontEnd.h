@@ -86,8 +86,7 @@ class FrontEnd
   GitBranch& git_branch() { return git_branch_; }
   SessionIdentity& session_identity() { return session_identity_; }
 
-  // Projection caches remain frontend-thread-owned and must not be traversed by generic debug printing.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 } // namespace ava::frontend

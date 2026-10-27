@@ -44,7 +44,7 @@ class PromptModeAndContextSources
   // Return the decimal number of context sources, consuming only that display's change flag.
   RefreshResult<std::string const&> context_source_count_refresh();
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 } // namespace ava::frontend
