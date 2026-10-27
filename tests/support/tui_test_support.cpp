@@ -4,7 +4,7 @@
 #include "ava/app/runtime/OpenContext.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_reasoning.h"
-#include "ava/tui/TuiFrontEnd.h"
+#include "ava/app/tui/TuiFrontEnd.h"
 #include "ava/config/model_config.h"
 #include "ava/core/Application.h"
 #include "ava/core/string_utils.h"
@@ -83,7 +83,7 @@ struct TuiFrontEndFixture::Impl
 
   ScopedTestDirectory root;
   ava::app::runtime::session_ts session;
-  ava::tui::TuiFrontEnd frontend;
+  ava::app::TuiFrontEnd frontend;
 };
 
 TuiFrontEndFixture::TuiFrontEndFixture(TuiTestModel model) : impl_(std::make_unique<Impl>(std::move(model)))

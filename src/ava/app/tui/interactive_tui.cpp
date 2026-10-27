@@ -21,7 +21,7 @@
 #include "ava/app/tui/startup_overview.h"
 #include "ava/app/tui/subagent_workspace.h"
 #include "ava/app/tui/tui_display_settings.h"
-#include "ava/tui/TuiFrontEnd.h"
+#include "ava/app/tui/TuiFrontEnd.h"
 #include "ava/tui/keybindings.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/theme.h"
@@ -271,7 +271,7 @@ int run_tui(InteractiveState state)
   }
   auto initial_catalog_snapshot = application_catalog.snapshot();
   static_cast<void>(ava::app::runtime::refresh_git_branch(unlocked_session));
-  ava::tui::TuiFrontEnd frontend(unlocked_session, ava::tui::TuiRuntimeOptions{
+  ava::app::TuiFrontEnd frontend(unlocked_session, ava::tui::TuiRuntimeOptions{
       .app_version = std::string(version::kDisplayVersion),
       .initial_status = keybind_status,
       .initial_transcript = std::move(initial_transcript),

@@ -121,6 +121,7 @@ target_sources(ava_app
     "runtime/GitBranch.cpp"
     "runtime/markdown_files.cpp"
     "runtime/command_names.cpp"
+    "tui/TuiFrontEnd.cpp"
 )
 
 target_include_directories(ava_app
