@@ -2,6 +2,7 @@
 #include "ava/agent/job_control.h"
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_job.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/json.h"
 #include "ava/core/strict_json.h"
 
@@ -24,7 +25,7 @@ struct JobToolRequest
 {
   std::string action;
   std::string job_id;
-  std::string message;
+  ava::core::NoLogString message;
   std::chrono::milliseconds timeout{std::chrono::milliseconds(kDefaultPublicJobWaitTimeoutMs)};
 };
 

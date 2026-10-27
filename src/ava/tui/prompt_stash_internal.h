@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/composer_editor.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -38,7 +39,7 @@ enum class PromptStashRestoreResult
 struct PromptStashEntry
 {
   std::uint64_t id = 0;
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t cursor = 0;
   std::vector<ComposerPasteEntry> paste_entries;
   std::size_t next_paste_id = 1;

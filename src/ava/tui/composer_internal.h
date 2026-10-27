@@ -2,6 +2,7 @@
 
 #include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
+#include "ava/core/NoLogString.h"
 
 #include <array>
 #include <chrono>
@@ -154,7 +155,7 @@ struct ComposerInputLayout
 
 struct ComposerInputRenderLine
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t start = 0;
   std::size_t end = 0;
   bool first_line = false;

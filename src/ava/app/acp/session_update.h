@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/event/RuntimeEvent.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -20,13 +21,13 @@ inline constexpr std::size_t kMaxToolUpdateContentBytes = 128U * 1024U;
 
 struct AcpTextContent
 {
-  std::string text;
+  ava::core::NoLogString text;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct AcpToolCallLocation
 {
-  std::string path;
+  ava::core::NoLogString path;
   std::optional<std::size_t> line = std::nullopt;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -58,7 +59,7 @@ struct AcpToolCallUpdate
 {
   bool initial = false;
   std::string tool_call_id;
-  std::optional<std::string> title = std::nullopt;
+  std::optional<ava::core::NoLogString> title = std::nullopt;
   std::optional<std::string> kind = std::nullopt;
   std::optional<std::string> status = std::nullopt;
   std::optional<std::vector<AcpToolCallContent>> content = std::nullopt;

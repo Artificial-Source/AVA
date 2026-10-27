@@ -2,6 +2,7 @@
 
 #include "ava/http/transport.h"
 #include "ava/config/xdg_paths.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -20,10 +21,10 @@ enum class OpenAICredentialType
 struct OpenAICredential
 {
   OpenAICredentialType type = OpenAICredentialType::OAuth;
-  std::string access_token;
-  std::string refresh_token;
+  ava::core::NoLogString access_token;
+  ava::core::NoLogString refresh_token;
   long long expires_at = 0;
-  std::string account_id = "";
+  ava::core::NoLogString account_id = "";
   std::filesystem::path source_path;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -32,13 +33,13 @@ struct OpenAICredential
 struct ProviderCredential
 {
   std::string provider_id = {};
-  std::string access_token = {};
+  ava::core::NoLogString access_token = {};
   std::string credential_type = {};
-  std::string account_id = {};
-  std::string source = {};
-  std::string refresh_token = {};
+  ava::core::NoLogString account_id = {};
+  ava::core::NoLogString source = {};
+  ava::core::NoLogString refresh_token = {};
   long long expires_at = 0;
-  std::string source_metadata = {};
+  ava::core::NoLogString source_metadata = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

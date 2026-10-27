@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -21,9 +22,9 @@ struct McpServerConfig
 {
   std::string id;
   std::string name;
-  std::string command;
-  std::vector<std::string> args;
-  std::vector<std::pair<std::string, std::string>> env;
+  ava::core::NoLogString command;
+  std::vector<ava::core::NoLogString> args;
+  std::vector<std::pair<ava::core::NoLogString, ava::core::NoLogString>> env;
   bool enabled = true;
   McpServerScope scope = McpServerScope::Global;
   std::filesystem::path source_path;

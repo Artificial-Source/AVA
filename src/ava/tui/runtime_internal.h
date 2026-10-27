@@ -4,6 +4,7 @@
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_commands_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
+#include "ava/core/NoLogString.h"
 
 #include <functional>
 #include <optional>
@@ -26,8 +27,8 @@ enum class TuiActiveNonblockingCommandDispatchKind
 struct TuiActiveNonblockingCommandDispatchResult
 {
   TuiActiveNonblockingCommandDispatchKind kind = TuiActiveNonblockingCommandDispatchKind::Unrecognized;
-  std::string status = {};
-  std::vector<std::string> output = {};
+  ava::core::NoLogString status = {};
+  std::vector<ava::core::NoLogString> output = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

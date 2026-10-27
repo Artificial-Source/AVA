@@ -11,6 +11,7 @@
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/fd_io.h"
 #include "ava/core/ids.h"
 #include "ava/core/path.h"
@@ -32,7 +33,7 @@ constexpr std::size_t kMaxPermissionDiffBytes = 32 * 1024;
 
 struct PermissionDiffPreview
 {
-  std::string text;
+  ava::core::NoLogString text;
   bool truncated = false;
 };
 

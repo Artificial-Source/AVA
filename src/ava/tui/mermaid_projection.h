@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/composer.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +27,7 @@ struct MermaidFenceBlock
   std::size_t source_start = 0;
   std::size_t source_end = 0;
   std::size_t fence_end = 0;
-  std::string source;
+  ava::core::NoLogString source;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -45,8 +46,8 @@ struct MermaidAcceptedPresentation
   std::size_t block_index = 0;
   std::size_t fence_start = 0;
   std::size_t fence_end = 0;
-  std::string source;
-  std::string text;
+  ava::core::NoLogString source;
+  ava::core::NoLogString text;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };

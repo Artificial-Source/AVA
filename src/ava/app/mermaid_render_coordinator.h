@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -30,7 +31,7 @@ struct MermaidRenderConfiguration
 {
   std::uint64_t epoch = 0;
   bool enabled = false;
-  std::vector<std::string> argv;
+  std::vector<ava::core::NoLogString> argv;
 
   // argv may contain sensitive local arguments and must not enter debug output.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -42,7 +43,7 @@ struct MermaidRenderRequest
 {
   std::uint64_t identity = 0;
   std::uint64_t config_epoch = 0;
-  std::string source;
+  ava::core::NoLogString source;
 
   // Mermaid source is user payload and must not enter debug output.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -78,7 +79,7 @@ struct MermaidRenderCompletion
   std::uint64_t identity = 0;
   std::uint64_t config_epoch = 0;
   MermaidRenderOutcome outcome = MermaidRenderOutcome::LaunchFailed;
-  std::string text;
+  ava::core::NoLogString text;
   bool from_cache = false;
 
   // Accepted text is helper output derived from user payload and is never logged.

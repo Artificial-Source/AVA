@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tools/tool_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -45,7 +46,7 @@ struct BashResult
   std::size_t total_lines = 0;
   std::size_t output_lines = 0;
   std::size_t omitted_lines = 0;
-  std::string output;
+  ava::core::NoLogString output;
   std::filesystem::path spill_path;
   // Containment status reported only after the parent verifies the child
   // installed containment before exec. Pre-permission metadata never claims

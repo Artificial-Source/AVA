@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -26,7 +27,7 @@ class OpenAIStreamParser final : public StreamParser
     std::optional<std::size_t> provider_output_index = std::nullopt;
     std::string logical_call_id;
     std::string name;
-    std::string arguments;
+    ava::core::NoLogString arguments;
     std::size_t emitted_argument_bytes = 0;
     bool started = false;
     bool ended = false;
@@ -41,9 +42,9 @@ class OpenAIStreamParser final : public StreamParser
     // Responses exposes independent output_text and refusal content parts on
     // one message item. Retain separate completion state so a refusal.done
     // never conflicts with a preceding output_text.done.
-    std::string text;
-    std::string output_text;
-    std::string refusal_text;
+    ava::core::NoLogString text;
+    ava::core::NoLogString output_text;
+    ava::core::NoLogString refusal_text;
     bool output_text_completed = false;
     bool refusal_completed = false;
     bool ended = false;
@@ -114,8 +115,8 @@ class OpenAIStreamParser final : public StreamParser
 
   void reset_state() noexcept;
 
-  std::string pending_line_;
-  std::string data_;
+  ava::core::NoLogString pending_line_;
+  ava::core::NoLogString data_;
   std::size_t scan_offset_ = 0;
   bool saw_content_ = false;
   bool saw_refusal_ = false;
@@ -123,9 +124,9 @@ class OpenAIStreamParser final : public StreamParser
   bool reasoning_text_seen_ = false;
   std::string active_reasoning_item_id_;
   std::optional<std::size_t> active_reasoning_output_index_ = std::nullopt;
-  std::string active_reasoning_text_;
+  ava::core::NoLogString active_reasoning_text_;
   std::vector<std::string> completed_reasoning_item_ids_;
-  std::vector<std::string> completed_reasoning_texts_;
+  std::vector<ava::core::NoLogString> completed_reasoning_texts_;
   // Documented output-item events bind these maps once. Legacy event-family
   // state remains separate so it cannot turn an item ID into a logical call ID.
   std::unordered_map<std::string, FunctionCallState> function_calls_;

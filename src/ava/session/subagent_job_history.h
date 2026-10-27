@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -60,12 +61,12 @@ struct SubagentJobHistoryRecord
   std::string started_at = {};
   std::string updated_at = {};
   std::optional<std::string> terminal_at = std::nullopt;
-  std::optional<std::string> summary = std::nullopt;
+  std::optional<ava::core::NoLogString> summary = std::nullopt;
   bool summary_truncated = false;
-  std::optional<std::string> error = std::nullopt;
+  std::optional<ava::core::NoLogString> error = std::nullopt;
   bool error_truncated = false;
   std::optional<std::string> error_category = std::nullopt;
-  std::optional<std::string> stop_reason = std::nullopt;
+  std::optional<ava::core::NoLogString> stop_reason = std::nullopt;
   bool stop_reason_truncated = false;
   std::size_t provider_iterations = 0;
   std::size_t tool_calls = 0;

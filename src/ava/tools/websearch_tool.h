@@ -2,6 +2,7 @@
 
 #include "ava/http/transport.h"
 #include "ava/tools/tool_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -23,16 +24,16 @@ struct WebSearchOptions
 
 struct WebSearchResultItem
 {
-  std::string title;
-  std::string url;
-  std::string snippet;
+  ava::core::NoLogString title;
+  ava::core::NoLogString url;
+  ava::core::NoLogString snippet;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct WebSearchResult
 {
-  std::string query;
+  ava::core::NoLogString query;
   std::string engine;
   std::vector<WebSearchResultItem> results;
   bool truncated = false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <functional>
@@ -11,16 +12,16 @@ namespace ava::agent {
 
 struct QuestionOption
 {
-  std::string value;
-  std::string label;
+  ava::core::NoLogString value;
+  ava::core::NoLogString label;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct QuestionPrompt
 {
-  std::string header;
-  std::string question;
+  ava::core::NoLogString header;
+  ava::core::NoLogString question;
   std::vector<QuestionOption> options;
   bool multiple = false;
   bool allow_custom = false;
@@ -34,8 +35,8 @@ struct QuestionPrompt
 
 struct QuestionAnswer
 {
-  std::vector<std::string> selected_options;
-  std::string custom_text;
+  std::vector<ava::core::NoLogString> selected_options;
+  ava::core::NoLogString custom_text;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

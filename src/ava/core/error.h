@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <string>
 #include <utility>
@@ -34,7 +35,7 @@ enum class ErrorCode
 struct ErrorContext
 {
   std::string key;
-  std::string value;
+  ava::core::NoLogString value;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -57,7 +58,7 @@ class Error
  private:
   ErrorCategory category_;
   ErrorCode code_;
-  std::string message_;
+  ava::core::NoLogString message_;
   std::vector<ErrorContext> context_;
 };
 

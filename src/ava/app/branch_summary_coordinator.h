@@ -7,6 +7,7 @@
 #include "ava/config/xdg_paths.h"
 #include "ava/session/session_branch.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -46,8 +47,8 @@ inline constexpr std::size_t kMaxBranchSummaryDisplayLabelBytes = 256;
 // prompt, tool, path, ID, credential, or provider context is admitted here.
 struct BranchSummaryGenerationPrompt
 {
-  std::string system_instruction;
-  std::string user_payload;
+  ava::core::NoLogString system_instruction;
+  ava::core::NoLogString user_payload;
 
   // Prompt payloads can contain user data and must never enter debug output.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -67,9 +68,9 @@ using BranchSummaryTransportFactory = ava::http::TransportFactory;
 // copied into BranchSummarySnapshot.
 struct BranchSummaryProviderOptions
 {
-  std::string access_token = {};
+  ava::core::NoLogString access_token = {};
   std::string credential_type = "bearer";
-  std::string account_id = {};
+  ava::core::NoLogString account_id = {};
   bool openai_oauth = false;
   bool offline = false;
   BranchSummaryTransportFactory transport_factory = nullptr;
@@ -87,7 +88,7 @@ struct BranchSummaryOperationRequest
   std::string current_session_id;
   std::string source_session_id;
   std::filesystem::path source_session_path;
-  std::string source_label;
+  ava::core::NoLogString source_label;
   std::filesystem::path workspace_dir;
   std::filesystem::path root_dir;
   ava::session::SessionReadLimits read_limits;
@@ -158,7 +159,7 @@ struct BranchSummarySnapshot
 {
   std::uint64_t generation = 0;
   BranchSummaryPhase phase = BranchSummaryPhase::Idle;
-  std::string source_label = {};
+  ava::core::NoLogString source_label = {};
   std::string model_label = {};
   std::optional<BranchSummaryEligibilityCode> eligibility_code = std::nullopt;
   std::optional<BranchSummaryFailureCode> failure_code = std::nullopt;

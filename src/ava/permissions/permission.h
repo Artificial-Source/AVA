@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/command/command.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/mode.h"
 #include "ava/core/result.h"
 
@@ -78,7 +79,7 @@ struct CommandPermissionMetadata
   std::string recipe_payload_version;
   std::string global_recipe_key;
   std::string workspace_recipe_key;
-  std::string recipe_display;
+  ava::core::NoLogString recipe_display;
   std::vector<ava::command::InteractiveScope> effective_allowed_scopes;
   std::string environment_profile_id;
   std::string environment_digest;
@@ -116,7 +117,7 @@ struct PermissionRequest
   ava::core::Mode mode;
   std::filesystem::path workspace_dir;
   std::filesystem::path target_path;
-  std::string command;
+  ava::core::NoLogString command;
   std::optional<CommandPermissionMetadata> command_metadata = std::nullopt;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -125,7 +126,7 @@ struct PermissionRequest
 struct PermissionDecision
 {
   PermissionAction action;
-  std::string reason;
+  ava::core::NoLogString reason;
   PermissionRisk risk = PermissionRisk::Low;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -142,12 +143,12 @@ enum class PermissionResolution
 struct PermissionResolutionDecision
 {
   PermissionResolution resolution = PermissionResolution::Deny;
-  std::string reason;
+  ava::core::NoLogString reason;
   // Optional one-shot user-authored denial guidance. Carried only until the
   // per-dispatch ToolContext capture revalidates and stores it for the
   // model/provider replay channel. Never a remembered-rule reason and never
   // part of permission audit/event/Error serialization.
-  std::string user_guidance;
+  ava::core::NoLogString user_guidance;
   std::string resolution_source;
   std::string rule_id;
   bool authoritative = false;
@@ -191,11 +192,11 @@ struct PermissionPrompt
   ava::core::Mode mode;
   std::filesystem::path workspace_dir;
   std::filesystem::path target_path;
-  std::string command;
+  ava::core::NoLogString command;
   std::string tool_name;
-  std::string reason;
+  ava::core::NoLogString reason;
   PermissionRisk risk = PermissionRisk::Low;
-  std::string diff_preview = {};
+  ava::core::NoLogString diff_preview = {};
   bool diff_truncated = false;
   std::optional<CommandPermissionMetadata> command_metadata = std::nullopt;
 

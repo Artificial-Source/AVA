@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -11,7 +12,7 @@ namespace ava::tools {
 
 struct DiffPreview
 {
-  std::string text;
+  ava::core::NoLogString text;
   bool truncated = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

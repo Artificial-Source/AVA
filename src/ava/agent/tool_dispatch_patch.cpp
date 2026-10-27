@@ -9,6 +9,7 @@
 #include "ava/tools/mutation_queue.h"
 #include "ava/tools/secure_workspace.h"
 #include "ava/tools/tool_permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 
@@ -237,15 +238,15 @@ ToolDispatchResult apply_patch_result(ava::tools::ToolContext const& context, Pr
   struct PatchEdit
   {
     std::filesystem::path target;
-    std::string old_text;
-    std::string new_text;
+    ava::core::NoLogString old_text;
+    ava::core::NoLogString new_text;
   };
 
   struct PatchReplacement
   {
     std::size_t position = 0;
     std::size_t old_size = 0;
-    std::string new_text;
+    ava::core::NoLogString new_text;
   };
 
   std::vector<PatchEdit> parsed_edits;

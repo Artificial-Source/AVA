@@ -4,6 +4,7 @@
 #include "ava/agent/agent_loop_session.h"
 #include "ava/agent/run_phase.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -67,7 +68,7 @@ struct RunCommand
   };
   Kind kind = Kind::Wake;
   std::string correlation_id;
-  std::string message;
+  ava::core::NoLogString message;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

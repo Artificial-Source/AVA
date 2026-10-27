@@ -5,6 +5,7 @@
 #include "ava/event/RuntimeEvent.h"
 #include "ava/agent/subagent_launch.h"
 #include "ava/tui/composer.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/mode.h"
 
 #include <cstddef>
@@ -42,9 +43,9 @@ struct TuiEventState
   // sidebar/status data are intentionally separate so live runs and replayed event streams settle
   // into the same visible story without mutating completed transcript history.
   std::vector<TranscriptItem> transcript;
-  std::string pending_assistant_text;
-  std::string pending_assistant_meta;
-  std::string pending_reasoning_text;
+  ava::core::NoLogString pending_assistant_text;
+  ava::core::NoLogString pending_assistant_meta;
+  ava::core::NoLogString pending_reasoning_text;
   bool pending_reasoning_redacted = false;
   std::vector<PendingToolItem> pending_tools;
   std::vector<ToolPermissionAuditItem> permission_audits;
@@ -61,9 +62,9 @@ struct TuiEventState
   std::string current_provider_id;
   std::string current_model_id;
   TuiEventRunStatus run_status = TuiEventRunStatus::Idle;
-  std::string stop_reason;
-  std::string error_text;
-  std::string error_details;
+  ava::core::NoLogString stop_reason;
+  ava::core::NoLogString error_text;
+  ava::core::NoLogString error_details;
   std::size_t provider_iterations = 0;
   std::size_t tool_calls = 0;
 

@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -32,7 +33,7 @@ enum class TodoStatus
 struct TodoItem
 {
   std::string id;
-  std::string content;
+  ava::core::NoLogString content;
   TodoStatus status = TodoStatus::Pending;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

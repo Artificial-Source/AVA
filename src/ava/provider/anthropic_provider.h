@@ -1,6 +1,8 @@
 #pragma once
+
 #include "ava/http/transport.h"
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 
 #include <map>
 #include <memory>
@@ -34,8 +36,8 @@ class AnthropicStreamParser final : public StreamParser
   };
   struct ReasoningBlock
   {
-    std::string signature;
-    std::string redacted_data;
+    ava::core::NoLogString signature;
+    ava::core::NoLogString redacted_data;
     bool redacted = false;
 
     AVA_DEBUG_PRINT_MEMBERS_ON
@@ -47,8 +49,8 @@ class AnthropicStreamParser final : public StreamParser
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  std::string pending_line_;
-  std::string data_;
+  ava::core::NoLogString pending_line_;
+  ava::core::NoLogString data_;
   std::size_t scan_offset_ = 0;
   std::map<long long, ToolBlock> tool_blocks_;
   std::map<long long, ReasoningBlock> reasoning_blocks_;

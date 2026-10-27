@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -31,8 +32,8 @@ enum class PluginScope
 
 struct PluginEntrypoint
 {
-  std::string command;
-  std::vector<std::string> args;
+  ava::core::NoLogString command;
+  std::vector<ava::core::NoLogString> args;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -40,8 +41,8 @@ struct PluginEntrypoint
 struct PluginToolContribution
 {
   std::string name;
-  std::string description;
-  std::string input_schema_json;
+  ava::core::NoLogString description;
+  ava::core::NoLogString input_schema_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -49,7 +50,7 @@ struct PluginToolContribution
 struct PluginCommandContribution
 {
   std::string name;
-  std::string description;
+  ava::core::NoLogString description;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -57,8 +58,8 @@ struct PluginCommandContribution
 struct PluginResourceContribution
 {
   std::string name;
-  std::string description;
-  std::string path;
+  ava::core::NoLogString description;
+  ava::core::NoLogString path;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -88,7 +89,7 @@ struct PluginManifest
   std::string name;
   std::string version;
   std::string api_version;
-  std::string description;
+  ava::core::NoLogString description;
   PluginEntrypoint entrypoint;
   std::vector<std::string> capabilities;
   PluginContributions contributes;

@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/app/acp/protocol.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <expected>
@@ -20,13 +21,13 @@ inline constexpr std::size_t kMaxAcpPromptImageTotalBytes = 720U * 1024U;
 struct AcpPromptImage
 {
   std::string mime_type;
-  std::string bytes;
+  ava::core::NoLogString bytes;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct AcpPromptContent
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::vector<AcpPromptImage> images;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };

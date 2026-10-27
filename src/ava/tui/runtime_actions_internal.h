@@ -2,6 +2,7 @@
 
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_state_internal.h"
+#include "ava/core/NoLogString.h"
 
 #include <chrono>
 #include <functional>
@@ -62,7 +63,7 @@ class RuntimeActionController final
   ActiveSelectList& active_select_list_;
   std::optional<PendingSessionArchiveAction>& session_archive_confirmation_;
   std::chrono::steady_clock::time_point next_display_reload_check_;
-  std::optional<std::string> last_display_reload_error_;
+  std::optional<ava::core::NoLogString> last_display_reload_error_;
 };
 
 }  // namespace ava::tui

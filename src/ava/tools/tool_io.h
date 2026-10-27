@@ -2,6 +2,7 @@
 
 #include "ava/command/command.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <algorithm>
@@ -125,7 +126,7 @@ struct CommandExecutionPlanMetadata
 
 struct CommandExecutionRequest
 {
-  std::vector<std::string> argv;
+  std::vector<ava::core::NoLogString> argv;
   std::filesystem::path cwd;
   std::chrono::milliseconds timeout{0};
   std::size_t output_byte_limit = 0;
@@ -141,7 +142,7 @@ struct CommandExecutionResult
   bool timed_out = false;
   bool canceled = false;
   bool truncated = false;
-  std::string output;
+  ava::core::NoLogString output;
   // Containment status reported by a delegated executor only after it
   // verifies the child installed containment before exec.
   bool containment_applied = false;

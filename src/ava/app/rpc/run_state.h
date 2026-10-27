@@ -1,8 +1,9 @@
 #pragma once
 
-#include "threadsafe/threadsafe.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
+#include "threadsafe/threadsafe.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -64,7 +65,7 @@ struct QueuedRpcMessage
 {
   std::string request_id;
   std::string correlation_id;
-  std::string message;
+  ava::core::NoLogString message;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

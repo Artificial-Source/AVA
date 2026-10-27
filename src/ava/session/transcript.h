@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <string>
@@ -20,7 +21,7 @@ struct TranscriptItem
   TranscriptRole role = TranscriptRole::User;
   std::string message_id;
   std::string timestamp;
-  std::string text;
+  ava::core::NoLogString text;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

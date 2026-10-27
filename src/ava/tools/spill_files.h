@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tools/tool_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -29,7 +30,7 @@ class SpillBuffer
   std::size_t max_bytes_ = 0;
   std::size_t total_bytes_ = 0;
   bool truncated_ = false;
-  std::string content_;
+  ava::core::NoLogString content_;
 };
 
 struct SpillFileResult

@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -22,7 +23,7 @@ struct SessionUserTurn
 {
   std::string entry_id;
   std::string timestamp;
-  std::string preview;
+  ava::core::NoLogString preview;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

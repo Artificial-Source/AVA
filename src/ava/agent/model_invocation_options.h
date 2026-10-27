@@ -3,6 +3,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/config/model_config.h"
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 
 #include <optional>
 #include <string>
@@ -14,7 +15,7 @@ struct ModelInvocationOptions
 {
   std::string provider_id = "openai";
   std::string model_id = "gpt-5.5";
-  std::string system_prompt = {};
+  ava::core::NoLogString system_prompt = {};
   bool stream = true;
   bool supports_tools = true;
   bool supports_streaming = true;

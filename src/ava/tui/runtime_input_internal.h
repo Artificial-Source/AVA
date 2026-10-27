@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/terminal.h"
+#include "ava/core/NoLogString.h"
 
 #include <chrono>
 #include <cstddef>
@@ -17,7 +18,7 @@ namespace ava::tui::runtime_input {
 struct RuntimeInput
 {
   InputEvent event;
-  std::string text;
+  ava::core::NoLogString text;
   bool bracketed_paste = false;
   bool resize = false;
 

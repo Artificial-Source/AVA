@@ -6,6 +6,7 @@
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/agent/tool_scheduler.h"
 #include "ava/tools/tool_context.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -47,7 +48,7 @@ struct ProviderTurn
 struct ActiveTurnUserMessage
 {
   std::string id;
-  std::string text;
+  ava::core::NoLogString text;
   std::vector<ava::session::ImageAttachmentRef> image_attachments;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -151,7 +152,7 @@ class AgentTurnExecutor final
   [[nodiscard]] ava::core::Result<TaskSubagentResult> run_task_subagent(TaskSubagentRequest const& request);
 
   AgentLoopOptions const& options_;
-  std::string const& user_message_;
+  ava::core::NoLogString const& user_message_;
   std::vector<ava::session::ImageAttachmentRef> const& image_attachments_;
   ava::session::SessionStore& store_;
   ava::provider::Provider const& provider_;

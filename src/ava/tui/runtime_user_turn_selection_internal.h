@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/runtime.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <functional>
@@ -22,7 +23,7 @@ enum class UserTurnCopySelectionAction
 struct UserTurnCopySelectionDecision
 {
   UserTurnCopySelectionAction action = UserTurnCopySelectionAction::MissingSelection;
-  std::string status = {};
+  ava::core::NoLogString status = {};
   bool beep = false;
   // "status" on success, "error" otherwise — matches production transcript labels.
   std::string transcript_label = "error";

@@ -2,6 +2,7 @@
 
 #include "ava/agent/agent_definition_types.h"
 #include "ava/agent/tool_visibility.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -17,8 +18,8 @@ namespace ava::agent {
 struct AgentDefinition
 {
   std::string name;
-  std::string description;
-  std::string system_prompt;
+  ava::core::NoLogString description;
+  ava::core::NoLogString system_prompt;
   AgentToolPreset tool_preset = AgentToolPreset::Inherit;
   std::optional<std::size_t> max_tool_iterations = std::nullopt;
   bool hidden = false;
@@ -42,7 +43,7 @@ struct AgentDefinition
 struct AgentDiagnostic
 {
   std::filesystem::path path;
-  std::string message;
+  ava::core::NoLogString message;
   std::optional<std::string> agent_name = std::nullopt;
   bool blocks_primary_selection = false;
 

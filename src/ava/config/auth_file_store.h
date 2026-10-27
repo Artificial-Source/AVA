@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/config/xdg_paths.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -12,7 +13,7 @@ namespace ava::config {
 
 struct CandidateRead
 {
-  std::optional<std::string> content;
+  std::optional<ava::core::NoLogString> content;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

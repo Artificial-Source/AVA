@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/composer.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <optional>
@@ -54,7 +55,7 @@ struct TuiSubmissionSettlement
 {
   TuiSubmissionProjectionPolicy policy;
   std::vector<TranscriptItem> transcript;
-  std::vector<std::string> command_output;
+  std::vector<ava::core::NoLogString> command_output;
   std::vector<ToolTimelineItem> command_tools;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

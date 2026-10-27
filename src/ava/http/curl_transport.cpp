@@ -3,6 +3,7 @@
 #include "ava/http/curl_transport_test_support.h"
 #include "ava/process/environment.h"
 #include "ava/process/supervisor.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/error.h"
 
 #include <algorithm>
@@ -138,7 +139,7 @@ class TempBodyFile
     }
   }
 
-  std::string path_;
+  ava::core::NoLogString path_;
 };
 
 [[nodiscard]] Clock::time_point saturating_add(Clock::time_point value, Clock::duration duration) noexcept
@@ -248,7 +249,7 @@ int http_status_line_code(std::string_view line)
 struct StreamingResponseHead
 {
   int status_code = 0;
-  std::map<std::string, std::string> headers;
+  std::map<ava::core::NoLogString, ava::core::NoLogString> headers;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -1095,11 +1096,11 @@ class CurlRequest final
   Clock::time_point reservation_settlement_deadline_;
   std::optional<Clock::time_point> failure_cleanup_deadline_;
   std::optional<Clock::time_point> failure_settlement_deadline_;
-  std::string stdout_output_;
-  std::string pending_stdout_;
-  std::string streamed_body_;
-  std::string stderr_output_;
-  std::string pending_streaming_metadata_;
+  ava::core::NoLogString stdout_output_;
+  ava::core::NoLogString pending_stdout_;
+  ava::core::NoLogString streamed_body_;
+  ava::core::NoLogString stderr_output_;
+  ava::core::NoLogString pending_streaming_metadata_;
   std::optional<StreamingResponseHead> streaming_head_;
   std::optional<ava::core::Error> streaming_metadata_error_;
   std::optional<HttpResponse> parsed_response_;

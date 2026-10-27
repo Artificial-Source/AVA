@@ -9,6 +9,7 @@
 #include "ava/tui/terminal_image.h"
 #include "ava/tui/text.h"
 #include "ava/tui/theme.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -58,10 +59,10 @@ struct ToolPermissionAuditItem
   std::string operation = {};
   std::string tool_name = {};
   std::string risk = {};
-  std::string reason = {};
-  std::string target = {};
-  std::string command = {};
-  std::string resolution_reason = {};
+  ava::core::NoLogString reason = {};
+  ava::core::NoLogString target = {};
+  ava::core::NoLogString command = {};
+  ava::core::NoLogString resolution_reason = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -70,10 +71,10 @@ struct ToolTimelineItem
 {
   ToolTimelineStatus status = ToolTimelineStatus::Running;
   std::string name = {};
-  std::string argument_summary = {};
-  std::string result_summary = {};
-  std::string arguments_json = {};
-  std::string result_json = {};
+  ava::core::NoLogString argument_summary = {};
+  ava::core::NoLogString result_summary = {};
+  ava::core::NoLogString arguments_json = {};
+  ava::core::NoLogString result_json = {};
   std::string call_id = {};
   std::string request_id = {};
   std::string correlation_id = {};
@@ -83,9 +84,9 @@ struct ToolTimelineItem
   std::optional<bool> details_visible = std::nullopt;
   std::vector<std::string> permission_request_ids = {};
   std::vector<ToolPermissionAuditItem> permissions = {};
-  std::string diff = {};
+  ava::core::NoLogString diff = {};
   bool diff_truncated = false;
-  std::vector<std::string> changed_paths = {};
+  std::vector<ava::core::NoLogString> changed_paths = {};
   bool truncated = false;
   bool byte_limited = false;
   bool line_limited = false;
@@ -100,7 +101,7 @@ struct ToolTimelineItem
   std::optional<std::size_t> omitted_lines = std::nullopt;
   std::optional<std::size_t> visible_matches = std::nullopt;
   std::optional<std::size_t> total_matches = std::nullopt;
-  std::string spill_path = {};
+  ava::core::NoLogString spill_path = {};
   bool spill_truncated = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -123,11 +124,11 @@ struct TuiToolIndexEntry
 
 struct TranscriptItem
 {
-  std::string label = {};
-  std::string text = {};
+  ava::core::NoLogString label = {};
+  ava::core::NoLogString text = {};
   Text text_model = {};
-  std::string meta = {};
-  std::string thinking = {};
+  ava::core::NoLogString meta = {};
+  ava::core::NoLogString thinking = {};
   Text thinking_model = {};
   // Presentation-only: completed long thinking defaults to a bounded preview.
   // Live append-only pending reasoning ignores this and always renders fully.
@@ -146,8 +147,8 @@ struct TranscriptItem
 // blocks and tools are bounded before storage and never enter session/provider content.
 struct CommandOutputView
 {
-  std::string title_token = {};
-  std::vector<std::string> blocks = {};
+  ava::core::NoLogString title_token = {};
+  std::vector<ava::core::NoLogString> blocks = {};
   std::vector<ToolTimelineItem> tools = {};
   std::size_t scroll_offset = 0;
   bool truncated = false;
@@ -159,7 +160,7 @@ struct SidebarActivityItem
 {
   std::string id = {};
   std::string label = {};
-  std::string detail = {};
+  ava::core::NoLogString detail = {};
   ToolTimelineStatus status = ToolTimelineStatus::Running;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -167,7 +168,7 @@ struct SidebarActivityItem
 
 struct SidebarModifiedFile
 {
-  std::string path = {};
+  ava::core::NoLogString path = {};
   std::optional<int> added = std::nullopt;
   std::optional<int> removed = std::nullopt;
 
@@ -184,7 +185,7 @@ enum class TodoStatus
 struct TodoItem
 {
   std::string id = {};
-  std::string content = {};
+  ava::core::NoLogString content = {};
   TodoStatus status = TodoStatus::Pending;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -194,19 +195,19 @@ struct QueuedMessageItem
 {
   std::string id = {};
   std::string kind = {};
-  std::string text = {};
+  ava::core::NoLogString text = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct PendingAttachmentItem
 {
-  std::string label = {};
-  std::string detail = {};
+  ava::core::NoLogString label = {};
+  ava::core::NoLogString detail = {};
   struct Preview
   {
     TerminalImageProtocol protocol = TerminalImageProtocol::None;
-    std::shared_ptr<std::string const> base64_data = {};
+    std::shared_ptr<ava::core::NoLogString const> base64_data = {};
     ImageDimensions dimensions = {};
     std::optional<std::size_t> image_id = std::nullopt;
 
@@ -225,14 +226,14 @@ struct TerminalGraphicOverlay
   std::size_t rows = 1;
   std::size_t columns = 1;
   std::optional<std::size_t> image_id = std::nullopt;
-  std::string sequence = {};
+  ava::core::NoLogString sequence = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct ComposerFrame
 {
-  std::vector<std::string> lines;
+  std::vector<ava::core::NoLogString> lines;
   std::vector<TerminalGraphicOverlay> graphics;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -314,11 +315,11 @@ struct ProjectTrustSnapshot
 {
   std::string decision;
   std::string project_resources;
-  std::string workspace;
-  std::string matched_path;
-  std::string trust_file;
+  ava::core::NoLogString workspace;
+  ava::core::NoLogString matched_path;
+  ava::core::NoLogString trust_file;
   std::size_t protected_resource_count = 0;
-  std::string diagnostic = {};
+  ava::core::NoLogString diagnostic = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -405,7 +406,7 @@ struct PermissionPromptInputResult
   PermissionPromptChoice selected_choice = PermissionPromptChoice::Deny;
   PermissionPromptInputAction action = PermissionPromptInputAction::None;
   bool guidance_mode = false;
-  std::string guidance_text = {};
+  ava::core::NoLogString guidance_text = {};
 
   // guidance_text must never appear in debug/log representations.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -423,21 +424,21 @@ struct PermissionPromptView
 {
   std::string tool_name;
   std::string operation;
-  std::string target;
-  std::string command = {};
-  std::string reason;
+  ava::core::NoLogString target;
+  ava::core::NoLogString command = {};
+  ava::core::NoLogString reason;
   std::string risk = {};
-  std::string diff_preview = {};
+  ava::core::NoLogString diff_preview = {};
   bool diff_truncated = false;
   bool allow_session_available = false;
   bool allow_remember_available = false;
   bool deny_remember_available = false;
-  std::string recipe_display = {};
-  std::string workspace_recipe_key = {};
+  ava::core::NoLogString recipe_display = {};
+  ava::core::NoLogString workspace_recipe_key = {};
   std::string effective_allowed_scopes = {};
   PermissionPromptChoice selected_choice = PermissionPromptChoice::Deny;
   bool guidance_mode = false;
-  std::string guidance_text = {};
+  ava::core::NoLogString guidance_text = {};
   std::string request_id = {};
 
   // guidance_text must never appear in debug/log representations.
@@ -446,8 +447,8 @@ struct PermissionPromptView
 
 struct QuestionPromptOptionView
 {
-  std::string value;
-  std::string label;
+  ava::core::NoLogString value;
+  ava::core::NoLogString label;
   bool selected = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -466,8 +467,8 @@ struct QuestionPromptInputResult
 {
   std::size_t selected_option_index = 0;
   std::vector<QuestionPromptOptionView> options;
-  std::string custom_text;
-  std::string copy_text;
+  ava::core::NoLogString custom_text;
+  ava::core::NoLogString copy_text;
   QuestionPromptInputAction action = QuestionPromptInputAction::None;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -475,8 +476,8 @@ struct QuestionPromptInputResult
 
 struct QuestionPromptView
 {
-  std::string header;
-  std::string question;
+  ava::core::NoLogString header;
+  ava::core::NoLogString question;
   std::vector<QuestionPromptOptionView> options;
   bool multiple = false;
   bool allow_custom = false;
@@ -484,7 +485,7 @@ struct QuestionPromptView
   bool modal = false;
   bool searchable = false;
   std::size_t selected_option_index = 0;
-  std::string custom_text;
+  ava::core::NoLogString custom_text;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -492,19 +493,19 @@ struct QuestionPromptView
 struct SelectListItemView
 {
   // Rendered as a muted suffix but deliberately omitted from selector matching.
-  std::string non_searchable_suffix = {};
+  ava::core::NoLogString non_searchable_suffix = {};
   // Renderer-reserved authority/status text. When present, the primary row
   // truncates the label before this field and optional details.
-  std::string priority_suffix = {};
-  std::string value;
-  std::string label;
-  std::string description;
+  ava::core::NoLogString priority_suffix = {};
+  ava::core::NoLogString value;
+  ava::core::NoLogString label;
+  ava::core::NoLogString description;
   std::string group;
-  std::string detail;
+  ava::core::NoLogString detail;
   std::string badge;
   bool current = false;
   bool enabled = true;
-  std::string disabled_reason;
+  ava::core::NoLogString disabled_reason;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -538,7 +539,7 @@ enum class SelectListInputAction
 struct SelectListInputResult
 {
   std::size_t selected_item_index = 0;
-  std::string query;
+  ava::core::NoLogString query;
   SelectListInputAction action = SelectListInputAction::None;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -546,14 +547,14 @@ struct SelectListInputResult
 
 struct SelectListView
 {
-  std::string title;
-  std::string subtitle;
+  ava::core::NoLogString title;
+  ava::core::NoLogString subtitle;
   std::vector<SelectListItemView> items;
   std::size_t selected_item_index = 0;
-  std::string query;
+  ava::core::NoLogString query;
   std::string placeholder = "Search";
   std::string empty_text = "No matches";
-  std::string footer_hint;
+  ava::core::NoLogString footer_hint;
   // Settings-only chrome: omit the empty search row and honor the supplied compact footer.
   bool compact_settings_chrome = false;
   // When set, RuntimeRenderer freezes the pre-modal transcript layout cache for draws
@@ -565,11 +566,11 @@ struct SelectListView
 
 struct SubagentWorkspaceView
 {
-  std::string title;
-  std::string status;
-  std::string notice;
+  ava::core::NoLogString title;
+  ava::core::NoLogString status;
+  ava::core::NoLogString notice;
   // Private selector-derived presentation; never part of child message text.
-  std::string launch_detail;
+  ava::core::NoLogString launch_detail;
   std::vector<ava::agent::SubagentLiveMessage> messages;
   std::size_t scroll_offset = 0;
   bool terminal = false;
@@ -606,9 +607,9 @@ enum class ToolPresentation
 struct ComposerSnapshot
 {
   std::string mode;
-  std::string session_id;
-  std::string input;
-  std::string status;
+  ava::core::NoLogString session_id;
+  ava::core::NoLogString input;
+  ava::core::NoLogString status;
   // One-action presentation feedback from a successful reasoning cycle. It is
   // neither persistent runtime status nor session/transcript content.
   std::optional<std::string> reasoning_feedback = std::nullopt;
@@ -708,7 +709,7 @@ struct ComposerCanvasLayout
                                                        std::size_t selected_index);
 struct SlashCommandSelectionText
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t cursor = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -732,7 +733,7 @@ struct SlashCommandSelectionText
                                                         std::size_t selected_index);
 struct FileReferenceSelectionText
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t cursor = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -755,7 +756,7 @@ struct FileReferenceSelectionText
                                                          std::size_t selected_index, bool force = false);
 struct PathCompletionSelectionText
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t cursor = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

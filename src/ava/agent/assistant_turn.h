@@ -2,6 +2,7 @@
 
 #include "ava/agent/tool_types.h"
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -15,12 +16,12 @@ namespace ava::agent {
 
 struct ParsedReasoningBlock
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::string format;
-  std::string signature;
-  std::string redacted_data;
+  ava::core::NoLogString signature;
+  ava::core::NoLogString redacted_data;
   // Opaque provider-only JSON retained only for exact native replay.
-  std::string native_item_json;
+  ava::core::NoLogString native_item_json;
   bool redacted = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -42,7 +43,7 @@ struct AssistantItemMetadata
 struct AssistantTextItem
 {
   AssistantItemMetadata metadata = {};
-  std::string text = {};
+  ava::core::NoLogString text = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -78,7 +79,7 @@ struct ParsedAssistantTurn
   // This is the sole mutable representation produced by the parser. The
   // legacy aggregate fields below are rebuilt from it once at completion.
   std::vector<OrderedAssistantItem> ordered_items;
-  std::string text;
+  ava::core::NoLogString text;
   std::vector<ParsedReasoningBlock> reasoning_blocks;
   std::vector<ProviderToolCall> tool_calls;
   std::optional<ava::provider::TokenUsage> usage;

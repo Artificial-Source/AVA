@@ -3,6 +3,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/http/transport.h"
 #include "ava/provider/finish_reason.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -47,20 +48,20 @@ struct ContentPart
   // Provider-neutral native content item. Providers that do not support native
   // parts can ignore these fields and serialize ChatMessage::content instead.
   ContentPartType type = ContentPartType::Text;
-  std::string text = {};
+  ava::core::NoLogString text = {};
   std::string tool_call_id = {};
   std::string tool_name = {};
-  std::string input_json = {};
+  ava::core::NoLogString input_json = {};
   bool is_error = false;
   std::string cache_control_ttl = {};
   // Provider-native reasoning/thinking metadata. `text` carries the visible or
   // summarized reasoning content; signatures stay provider-private for replay.
   std::string reasoning_format = {};
-  std::string reasoning_signature = {};
-  std::string reasoning_redacted_data = {};
+  ava::core::NoLogString reasoning_signature = {};
+  ava::core::NoLogString reasoning_redacted_data = {};
   // Opaque provider-only JSON for exact reasoning-item replay. It must never
   // cross public stream/event boundaries or be included in exports.
-  std::string reasoning_native_item_json = {};
+  ava::core::NoLogString reasoning_native_item_json = {};
   bool redacted = false;
   // Internal provider-output identity retained for exact continuation. Other
   // provider families may ignore it. It is never exposed through public
@@ -72,12 +73,12 @@ struct ContentPart
   // provider serializers may load bytes transiently after validation.
   std::string attachment_id = {};
   std::string mime_type = {};
-  std::string storage_path = {};
+  ava::core::NoLogString storage_path = {};
   std::string sha256 = {};
   std::size_t byte_size = 0;
   // Transient provider payload populated only after session attachment storage
   // has verified size, hash, and path containment. Never persist this field.
-  std::string data_base64 = {};
+  ava::core::NoLogString data_base64 = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -87,7 +88,7 @@ struct ChatMessage
   std::string role = {};
   // Readable legacy fallback content. This remains populated for providers that
   // do not understand content_parts and for diagnostics/session reconstruction.
-  std::string content = {};
+  ava::core::NoLogString content = {};
   // Optional native structure for providers that support text/tool-use/tool-result
   // content blocks. When non-empty, native-capable providers should serialize
   // these parts as canonical and treat content only as fallback/diagnostic text.
@@ -110,9 +111,9 @@ struct ProviderRequest
 {
   std::string provider_id;
   std::string model_id;
-  std::string system_prompt;
+  ava::core::NoLogString system_prompt;
   std::vector<ChatMessage> messages;
-  std::vector<std::string> tools_json;
+  std::vector<ava::core::NoLogString> tools_json;
   bool stream = true;
   std::optional<long long> max_output_tokens = std::nullopt;
   std::optional<ProviderReasoningOptions> reasoning = std::nullopt;
@@ -126,9 +127,9 @@ struct ProviderRequest
 
 struct ProviderAuthContext
 {
-  std::string access_token;
+  ava::core::NoLogString access_token;
   std::string credential_type;
-  std::string account_id;
+  ava::core::NoLogString account_id;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -180,10 +181,10 @@ enum class ProviderErrorKind
 struct StreamEvent
 {
   StreamEventType type = StreamEventType::Done;
-  std::string text;
+  ava::core::NoLogString text;
   std::string tool_call_id;
   std::string tool_name;
-  std::string error_message;
+  ava::core::NoLogString error_message;
   std::optional<TokenUsage> usage;
   // Native output-item identity is intentionally distinct from the logical
   // function call ID used for tool dispatch. It remains internal to provider
@@ -195,11 +196,11 @@ struct StreamEvent
   // provider boundary; unknown native values normalize to Error.
   std::optional<ProviderFinishReason> finish_reason = std::nullopt;
   std::string reasoning_format = {};
-  std::string reasoning_signature = {};
-  std::string reasoning_redacted_data = {};
+  ava::core::NoLogString reasoning_signature = {};
+  ava::core::NoLogString reasoning_redacted_data = {};
   // Opaque provider-only JSON for exact reasoning-item replay. Stream bridges
   // must clear this field before publishing an event outside the agent loop.
-  std::string reasoning_native_item_json = {};
+  ava::core::NoLogString reasoning_native_item_json = {};
   bool redacted = false;
   bool reasoning_signature_present = false;
 

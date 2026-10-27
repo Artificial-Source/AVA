@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <optional>
@@ -13,8 +14,8 @@ namespace ava::app {
 struct SettingsJsonEntry
 {
   std::string key;
-  std::string raw_key;
-  std::string raw_value;
+  ava::core::NoLogString raw_key;
+  ava::core::NoLogString raw_value;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

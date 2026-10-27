@@ -7,6 +7,7 @@
 #include "ava/agent/agent_loop.h"
 #include "ava/session/attachments.h"
 #include "ava/permissions/permission_rules.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <functional>
@@ -39,7 +40,7 @@ struct InteractiveResult
   bool quit = false;
   bool session_tree_changed = false;
   bool ordinary_turn_committed = false;
-  std::vector<std::string> output;
+  std::vector<ava::core::NoLogString> output;
   std::vector<ava::agent::ToolTimelineEntry> tool_timeline;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

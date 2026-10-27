@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/tools/tool_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -13,7 +14,7 @@ namespace ava::tools {
 
 struct TextOutput
 {
-  std::string content;
+  ava::core::NoLogString content;
   bool truncated = false;
   bool byte_limited = false;
   bool line_limited = false;
@@ -33,7 +34,7 @@ struct FileMutationResult
 {
   std::filesystem::path path;
   std::size_t bytes_written = 0;
-  std::string diff;
+  ava::core::NoLogString diff;
   bool diff_truncated = false;
   std::string line_endings;
   bool had_utf8_bom = false;

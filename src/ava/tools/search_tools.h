@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tools/tool_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -58,7 +59,7 @@ struct GrepMatch
 {
   std::filesystem::path path;
   std::size_t line_number = 0;
-  std::string line;
+  ava::core::NoLogString line;
   bool line_truncated = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

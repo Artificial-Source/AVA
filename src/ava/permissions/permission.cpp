@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/command/environment.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/json.h"
 #include "ava/core/mode.h"
 #include "ava/core/open_beneath.h"
@@ -142,8 +143,8 @@ namespace {
 struct ParsedCommand
 {
   bool ok = false;
-  std::string reason;
-  std::vector<std::string> argv;
+  ava::core::NoLogString reason;
+  std::vector<ava::core::NoLogString> argv;
 };
 
 std::string lowercase(std::string_view value)
@@ -452,8 +453,8 @@ struct RecipeArgument
   // kind into a value prefix: a caller-controlled literal must not collide with
   // a normalized workspace path such as "workspace:foo".
   std::string_view kind;
-  std::string value;
-  std::string display;
+  ava::core::NoLogString value;
+  ava::core::NoLogString display;
 };
 
 RecipeArgument recipe_argument(std::string_view value, std::filesystem::path const& workspace)

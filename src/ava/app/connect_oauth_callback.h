@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -14,7 +15,7 @@ namespace ava::app {
 
 struct OAuthCallbackResult
 {
-  std::string code;
+  ava::core::NoLogString code;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

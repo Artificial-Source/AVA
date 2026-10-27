@@ -5,6 +5,7 @@
 #include "ava/process/execution_capability.h"
 #include "ava/process/owner.h"
 #include "ava/process/types.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -56,10 +57,10 @@ class PipeWatchV1
 
 struct SpawnSpecV1
 {
-  std::string executable;
-  std::vector<std::string> argv;
+  ava::core::NoLogString executable;
+  std::vector<ava::core::NoLogString> argv;
   ExactEnvironmentV1 environment;
-  std::string cwd;
+  ava::core::NoLogString cwd;
   // Independent optional descriptor authorities. When present, each private
   // logical spelling must exactly match its corresponding string above.
   std::optional<PreopenedExecutableV1> preopened_executable = std::nullopt;
@@ -79,8 +80,8 @@ struct SpawnSpecV1
 struct SecureAdoptionSpecV1
 {
   ExactEnvironmentV1 environment;
-  std::vector<std::string> argv;
-  std::string cwd;
+  std::vector<ava::core::NoLogString> argv;
+  ava::core::NoLogString cwd;
   // Secure adoption has no pathname-open cwd seam; this capability is required.
   AnchoredWorkingDirectoryV1 anchored_cwd{};
   BashContainmentHandshakeV1 bash_containment = BashContainmentHandshakeV1::None;

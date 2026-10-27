@@ -2,6 +2,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/http/transport.h"
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 
 #include <memory>
 #include <optional>
@@ -20,7 +21,7 @@ struct GeminiParseState
   // because the parser's unique prefix is retained too, preventing ID reuse.
   std::size_t next_tool_call_index = 0;
   // Bounded native parts use the existing private reasoning replay channel.
-  std::string native_parts_json = {};
+  ava::core::NoLogString native_parts_json = {};
   std::size_t native_part_count = 0;
   bool native_parts_overflowed = false;
   bool has_thought_signature = false;
@@ -57,8 +58,8 @@ class GeminiStreamParser final : public StreamParser
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> finish() override;
 
  private:
-  std::string pending_line_;
-  std::string data_;
+  ava::core::NoLogString pending_line_;
+  ava::core::NoLogString data_;
   std::size_t scan_offset_ = 0;
   detail::GeminiParseState state_;
   bool saw_data_ = false;

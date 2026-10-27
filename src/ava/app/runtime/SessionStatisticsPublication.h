@@ -3,6 +3,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/app/runtime/session_ts.h"
 #include "ava/app/session_run_controller.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -26,7 +27,7 @@ struct SessionStatisticsPublicationIdentity
   std::shared_ptr<ava::session::SessionAppendTarget> append_target;
   std::shared_ptr<SessionRunController> run_controller;
   SessionStatisticsMutationIdentity mutation_identity;
-  std::string system_prompt;
+  ava::core::NoLogString system_prompt;
 
   // Compare durable statistics inputs. append_order_generation is deliberately
   // excluded: it validates stale work while in flight, but completed conditional

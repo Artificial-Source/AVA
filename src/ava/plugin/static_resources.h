@@ -3,6 +3,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/plugin/diagnostics.h"
 #include "ava/context/skill_loader.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -17,7 +18,7 @@ inline constexpr std::size_t kStaticPluginResourceMaxBytes = 64 * 1024;
 struct LoadedPluginStaticResource
 {
   std::filesystem::path path;
-  std::string content;
+  ava::core::NoLogString content;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -26,9 +27,9 @@ struct PluginStaticSkillFile
   std::string scope;
   std::string plugin_id;
   std::string name;
-  std::string description;
+  ava::core::NoLogString description;
   std::filesystem::path path;
-  std::string content;
+  ava::core::NoLogString content;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

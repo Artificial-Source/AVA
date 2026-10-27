@@ -2,6 +2,7 @@
 
 #include "ava/config/xdg_paths.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -45,14 +46,14 @@ struct CompactionDecision
 
 struct ManualCompactionRequest
 {
-  std::string summary;
-  std::string instructions;
+  ava::core::NoLogString summary;
+  ava::core::NoLogString instructions;
   CompactionConfig config;
   std::size_t estimated_tokens = 0;
   std::size_t threshold_tokens = 0;
   std::size_t retained_tokens = 0;
   std::string trigger = "manual";
-  std::string recent_context;
+  ava::core::NoLogString recent_context;
   bool recent_context_omitted = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

@@ -2,6 +2,7 @@
 
 #include "ava/config/model_config.h"
 #include "ava/config/xdg_paths.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/mode.h"
 #include "ava/core/result.h"
 
@@ -13,7 +14,7 @@ namespace ava::config {
 
 struct PromptSelection
 {
-  std::string text;
+  ava::core::NoLogString text;
   bool from_override = false;
   std::optional<std::filesystem::path> source_path = std::nullopt;
 

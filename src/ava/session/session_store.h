@@ -5,6 +5,7 @@
 #include "ava/frontend/UnlockedData.h"
 #include "ava/observability/trace_context.h"
 #include "ava/session/assistant_output.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <array>
@@ -73,7 +74,7 @@ struct SessionEntry
   std::string parent_id;
   EntryType type;
   std::string timestamp;
-  std::string data_json;
+  ava::core::NoLogString data_json;
   long long version = kCurrentSessionEntryVersion;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -165,7 +166,7 @@ struct SessionSummary
   std::string last_updated = {};
   std::size_t entry_count = 0;
   std::filesystem::path original_cwd = {};
-  std::string title = {};
+  ava::core::NoLogString title = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

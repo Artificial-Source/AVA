@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/observability/trace_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/thread.h"
 
 #include <atomic>
@@ -91,7 +92,7 @@ enum class FieldProvenance
 struct TraceField
 {
   std::string key;
-  std::string value;
+  ava::core::NoLogString value;
   FieldProvenance provenance = FieldProvenance::PublicMetadata;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -320,7 +321,7 @@ class QueuedJsonlRunObserver final : public RunObserver
   std::once_flag close_once_;
   mutable std::mutex mutex_;
   std::condition_variable_any wake_;
-  std::deque<std::string> queue_;
+  std::deque<ava::core::NoLogString> queue_;
   std::size_t queue_bytes_ = 0, high_water_bytes_ = 0, high_water_events_ = 0;
   std::atomic<std::uint64_t> queue_dropped_ = 0;
   std::atomic<std::uint64_t> queue_failures_ = 0;

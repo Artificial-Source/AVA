@@ -4,6 +4,7 @@
 #include "ava/tools/tool_context.h"
 #include "ava/tools/tool_types.h"
 #include "ava/mcp/config.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -16,17 +17,17 @@ namespace ava::mcp {
 struct McpBrokeredTool
 {
   std::string model_tool_name;
-  std::string description;
-  std::string schema_json;
+  ava::core::NoLogString description;
+  ava::core::NoLogString schema_json;
   std::string permission_category;
-  std::string output_bound_summary;
+  ava::core::NoLogString output_bound_summary;
   std::string execution_mode;
   std::string event_rendering_hint;
   std::string description_family;
   std::string source_id;
   std::string mcp_server;
   std::string mcp_name;
-  std::string resource_uri;
+  ava::core::NoLogString resource_uri;
   std::function<ava::tools::ToolDispatchResult(ava::tools::ToolContext const&, ava::tools::ProviderToolCall const&)> executor;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

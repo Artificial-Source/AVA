@@ -8,6 +8,7 @@
 #include "ava/session/session_store.h"
 #include "ava/provider/provider.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 #include "ava/core/thread.h"
 
@@ -47,10 +48,10 @@ struct SessionTitleGenerationRequest
   ava::config::SessionTitleConfig config;
   std::shared_ptr<ava::core::AnchorSet> anchor_set;
   std::shared_ptr<ava::provider::ProviderCatalog const> provider_catalog;
-  std::string source_text;
-  std::string access_token;
+  ava::core::NoLogString source_text;
+  ava::core::NoLogString access_token;
   std::string credential_type = "bearer";
-  std::string account_id;
+  ava::core::NoLogString account_id;
   bool openai_oauth = false;
   bool offline = false;
   // Captured from the exact runtime session at scheduling time.
@@ -114,7 +115,7 @@ class SessionTitleCoordinator final
   {
     std::string session_id;
     std::string committed_turn_id;
-    std::string fallback_title;
+    ava::core::NoLogString fallback_title;
     ava::session::SessionReadAuthority read_authority;
     // Retain the controller owner while queued/running so its serialized route
     // remains valid across visible-session navigation. No mutable Session is

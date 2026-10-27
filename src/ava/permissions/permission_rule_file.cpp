@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/permissions/permission_rules_internal.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/fd_io.h"
 
 #include <array>
@@ -59,7 +60,7 @@ class TempPathCleanup final
   }
 
   int parent_fd_ = -1;
-  std::string name_;
+  ava::core::NoLogString name_;
   bool active_ = true;
 };
 

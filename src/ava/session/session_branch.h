@@ -2,6 +2,7 @@
 
 #include "ava/session/session_metadata.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -25,8 +26,8 @@ struct SessionBranchOptions
   std::filesystem::path root_dir;
   std::string source_session_id;
   std::string branch_from_entry_id;
-  std::optional<std::string> name;
-  std::optional<std::vector<std::string>> labels;
+  std::optional<ava::core::NoLogString> name;
+  std::optional<std::vector<ava::core::NoLogString>> labels;
   std::optional<SessionReadLimits> read_limits = std::nullopt;
   // Retained by callers that already own the source while preparing a branch.
   SessionLease const* source_lease = nullptr;
@@ -87,10 +88,10 @@ struct BranchSummaryOptions
   std::string source_session_id;
   std::string branch_root_entry_id;
   std::string branch_tip_entry_id;
-  std::string summary;
+  ava::core::NoLogString summary;
   std::string provider;
   std::string model;
-  std::string reason;
+  ava::core::NoLogString reason;
   // Required explicitly by every caller. The optional representation keeps
   // aggregate initialization source-compatible while omission fails closed.
   std::optional<SessionReadLimits> read_limits = std::nullopt;

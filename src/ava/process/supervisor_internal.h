@@ -3,6 +3,7 @@
 #include "ava/process/environment_internal.h"
 #include "ava/process/execution_capability_internal.h"
 #include "ava/process/supervisor.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/error.h"
 
 #include <array>
@@ -453,11 +454,11 @@ struct AdoptionGate::Impl
   std::uint64_t record = 0;
   ProcessRoleV1 role = ProcessRoleV1::Curl;
   ExactEnvironmentV1 environment;
-  std::string cwd;
+  ava::core::NoLogString cwd;
   AnchoredWorkingDirectoryV1 anchored_cwd;
-  std::vector<std::string> argv_storage;
+  std::vector<ava::core::NoLogString> argv_storage;
   std::vector<char*> argv_pointers;
-  std::vector<std::string> environment_storage;
+  std::vector<ava::core::NoLogString> environment_storage;
   std::vector<char*> environment_pointers;
   BashContainmentHandshakeV1 bash_containment = BashContainmentHandshakeV1::None;
   ProcessDeadline startup_deadline{};

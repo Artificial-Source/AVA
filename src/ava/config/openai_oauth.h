@@ -2,6 +2,7 @@
 
 #include "ava/http/transport.h"
 #include "ava/config/auth.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <optional>
@@ -12,18 +13,18 @@ namespace ava::config {
 
 struct OpenAIOAuthSession
 {
-  std::string code_verifier;
-  std::string state;
-  std::string authorization_url;
+  ava::core::NoLogString code_verifier;
+  ava::core::NoLogString state;
+  ava::core::NoLogString authorization_url;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct OpenAIOAuthDeviceAuthorization
 {
-  std::string device_auth_id;
-  std::string user_code;
-  std::string verification_url;
+  ava::core::NoLogString device_auth_id;
+  ava::core::NoLogString user_code;
+  ava::core::NoLogString verification_url;
   int interval_seconds = 5;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

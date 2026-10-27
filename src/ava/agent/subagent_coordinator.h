@@ -6,6 +6,7 @@
 #include "ava/agent/subagent_job.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -51,7 +52,7 @@ struct SubagentCoordinatorJobSnapshot
   SubagentJobSnapshot job;
   bool timed_out = false;
   bool coordinator_latched = false;
-  std::optional<std::string> coordinator_error = std::nullopt;
+  std::optional<ava::core::NoLogString> coordinator_error = std::nullopt;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -78,7 +79,7 @@ class SubagentSteeringQueue final
   void close();
 
   std::mutex mutex_;
-  std::deque<std::string> messages_;
+  std::deque<ava::core::NoLogString> messages_;
   std::size_t queued_bytes_ = 0;
   bool closed_ = false;
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <string>
@@ -12,22 +13,22 @@ namespace ava::event {
 // byte/line accounting produced by file and search tools.
 struct ToolPayload
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::string call_id;
   std::string tool;
-  std::string args_json;
-  std::string result_json;
-  std::string structured_result_json;
+  ava::core::NoLogString args_json;
+  ava::core::NoLogString result_json;
+  ava::core::NoLogString structured_result_json;
   std::string status;
   std::string error_category;
   std::string error_code;
-  std::string error_message;
-  std::string error_details;
+  ava::core::NoLogString error_message;
+  ava::core::NoLogString error_details;
   std::string content_type;
-  std::string diff;
-  std::vector<std::string> changed_paths;
+  ava::core::NoLogString diff;
+  std::vector<ava::core::NoLogString> changed_paths;
   std::vector<std::string> permission_request_ids;
-  std::string spill_path;
+  ava::core::NoLogString spill_path;
   bool diff_truncated = false;
   bool truncated = false;
   bool byte_limited = false;

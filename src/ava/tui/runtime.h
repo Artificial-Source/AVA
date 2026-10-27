@@ -10,6 +10,7 @@
 #include "ava/tui/terminal/Cursor.h"
 #include "ava/session/attachments.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstdint>
@@ -25,14 +26,14 @@ namespace ava::tui {
 struct TuiQueuedFollowUp
 {
   std::string request_id;
-  std::string message;
+  ava::core::NoLogString message;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct TuiRestoredQueuedMessage
 {
-  std::string message;
+  ava::core::NoLogString message;
   bool steering = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -49,7 +50,7 @@ struct TuiMermaidRenderRequest
 {
   std::uint64_t identity = 0;
   std::uint64_t config_epoch = 0;
-  std::string source;
+  ava::core::NoLogString source;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -66,7 +67,7 @@ struct TuiMermaidRenderCompletion
   std::uint64_t identity = 0;
   std::uint64_t config_epoch = 0;
   bool accepted = false;
-  std::string text;
+  ava::core::NoLogString text;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -134,14 +135,14 @@ struct TuiLocalDisplaySettingsResult
 {
   TuiLocalDisplaySettings settings;
   std::string status;
-  std::vector<std::string> output;
+  std::vector<ava::core::NoLogString> output;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct TuiLocalCommandResult
 {
-  std::vector<std::string> output;
+  std::vector<ava::core::NoLogString> output;
   std::vector<ToolTimelineItem> tool_timeline;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -153,14 +154,14 @@ struct TuiSubmitResult
   // True only when backend handling committed a genuine provider conversation
   // turn. Slash/shell invocation text remains local even when this is true.
   bool ordinary_turn_committed = false;
-  std::vector<std::string> output;
+  std::vector<ava::core::NoLogString> output;
   std::vector<ToolTimelineItem> tool_timeline;
   // TUI-only request authority captured before LineResult queue aggregation.
   // Initial/queued local commands can be presented without granting their
   // RuntimeEvents transcript authority. Missing ids always fail closed.
   std::vector<std::string> ordinary_turn_request_ids;
   std::optional<TuiLocalCommandResult> local_command_result = std::nullopt;
-  std::vector<std::string> conversation_output;
+  std::vector<ava::core::NoLogString> conversation_output;
   std::vector<ToolTimelineItem> conversation_tool_timeline;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -277,7 +278,7 @@ struct TuiBranchSummarySnapshot
 {
   std::uint64_t generation = 0;
   TuiBranchSummaryPhase phase = TuiBranchSummaryPhase::Idle;
-  std::string source_label;
+  ava::core::NoLogString source_label;
   std::string model_label;
   std::optional<TuiBranchSummaryEligibilityCode> eligibility_code = std::nullopt;
   std::optional<TuiBranchSummaryFailureCode> failure_code = std::nullopt;
@@ -290,7 +291,7 @@ struct TuiBranchSummarySnapshot
 struct TuiRuntimeOptions
 {
   std::string app_version;
-  std::string initial_status = "";
+  ava::core::NoLogString initial_status = "";
   std::vector<TranscriptItem> initial_transcript = {};
   std::vector<SlashCommandItem> slash_commands = {};
   std::optional<std::size_t> slash_catalog_generation = std::nullopt;

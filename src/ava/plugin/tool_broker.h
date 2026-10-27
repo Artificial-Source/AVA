@@ -4,6 +4,7 @@
 #include "ava/tools/tool_context.h"
 #include "ava/tools/tool_types.h"
 #include "ava/plugin/runner.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <functional>
@@ -15,10 +16,10 @@ namespace ava::plugin {
 struct PluginBrokeredTool
 {
   std::string model_tool_name;
-  std::string description;
-  std::string schema_json;
+  ava::core::NoLogString description;
+  ava::core::NoLogString schema_json;
   std::string permission_category;
-  std::string output_bound_summary;
+  ava::core::NoLogString output_bound_summary;
   std::string execution_mode;
   std::string event_rendering_hint;
   std::string description_family;

@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/observability/trace_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -23,9 +24,9 @@ namespace ava::http {
 struct HttpRequest
 {
   std::string method;
-  std::string url;
-  std::map<std::string, std::string> headers;
-  std::string body;
+  ava::core::NoLogString url;
+  std::map<ava::core::NoLogString, ava::core::NoLogString> headers;
+  ava::core::NoLogString body;
   // HTTP transports should honor this deadline and tests should preserve it verbatim.
   int timeout_ms = 60000;
   bool follow_redirects = true;
@@ -38,8 +39,8 @@ struct HttpRequest
 struct HttpResponse
 {
   int status_code = 0;
-  std::map<std::string, std::string> headers;
-  std::string body;
+  std::map<ava::core::NoLogString, ava::core::NoLogString> headers;
+  ava::core::NoLogString body;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -97,7 +98,7 @@ struct RetryOptions
     std::size_t max_attempts = 0;
     std::size_t delay_ms = 0;
     std::size_t remaining_ms = 0;
-    std::string reason = {};
+    ava::core::NoLogString reason = {};
     int status_code = 0;
     bool streaming = false;
     bool countdown_tick = false;

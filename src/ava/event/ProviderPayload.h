@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <string>
 #include <vector>
@@ -11,14 +12,14 @@ namespace ava::event {
 // and permission request ids. Omits tool-result/diff accounting and error category/code/trigger fields not produced for ProviderEvent today.
 struct ProviderPayload
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::string call_id;
   std::string tool;
   std::string status;
-  std::string error_message;
-  std::string error_details;
-  std::string stop_reason;
-  std::string reason;
+  ava::core::NoLogString error_message;
+  ava::core::NoLogString error_details;
+  ava::core::NoLogString stop_reason;
+  ava::core::NoLogString reason;
   std::string reasoning_format;
   std::vector<std::string> permission_request_ids;
   bool reasoning_redacted = false;

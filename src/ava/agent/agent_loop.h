@@ -1,6 +1,7 @@
 #pragma once
 #include "ava/http/transport.h"
 #include "ava/observability/run_observer.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/agent_loop_session.h"
 #include "ava/agent/context_compaction.h"
 #include "ava/agent/message_builder.h"
@@ -8,7 +9,6 @@
 #include "ava/agent/model_invocation_options.h"
 #include "ava/agent/question.h"
 #include "ava/agent/run_phase.h"
-#include "ava/agent/agent_config.h"
 #include "ava/agent/subagent_coordinator.h"
 #include "ava/agent/subagent_launch.h"
 #include "ava/agent/tool_execution_options.h"
@@ -20,6 +20,7 @@
 #include "ava/permissions/permission.h"
 #include "ava/provider/provider.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 #include "ava/core/runtime_outcome.h"
 
@@ -46,19 +47,19 @@ struct ToolTimelineEntry
   ToolTimelineStatus status = ToolTimelineStatus::Running;
   std::string call_id = {};
   std::string name = {};
-  std::string argument_summary = {};
-  std::string result_summary = {};
-  std::string arguments_json = {};
-  std::string result_json = {};
-  std::string structured_result_json = {};
+  ava::core::NoLogString argument_summary = {};
+  ava::core::NoLogString result_summary = {};
+  ava::core::NoLogString arguments_json = {};
+  ava::core::NoLogString result_json = {};
+  ava::core::NoLogString structured_result_json = {};
   std::string content_type = {};
   std::string error_category = {};
   std::string error_code = {};
-  std::string error_message = {};
-  std::string error_details = {};
-  std::string diff = {};
+  ava::core::NoLogString error_message = {};
+  ava::core::NoLogString error_details = {};
+  ava::core::NoLogString diff = {};
   bool diff_truncated = false;
-  std::vector<std::string> changed_paths = {};
+  std::vector<ava::core::NoLogString> changed_paths = {};
   std::vector<std::string> permission_request_ids = {};
   bool truncated = false;
   bool byte_limited = false;
@@ -74,7 +75,7 @@ struct ToolTimelineEntry
   std::optional<std::size_t> omitted_lines = std::nullopt;
   std::optional<std::size_t> visible_matches = std::nullopt;
   std::optional<std::size_t> total_matches = std::nullopt;
-  std::string spill_path = {};
+  ava::core::NoLogString spill_path = {};
   bool spill_truncated = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -84,7 +85,7 @@ struct ToolProgressEntry
 {
   std::string call_id = {};
   std::string name = {};
-  std::string text = {};
+  ava::core::NoLogString text = {};
   std::string status = "running";
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -105,10 +106,10 @@ struct AgentLoopOptions
   std::shared_ptr<ava::core::AnchorSet> anchor_set = nullptr;
   Mode mode = Mode::Build;
   ModelInvocationOptions model = {};
-  std::string access_token;
+  ava::core::NoLogString access_token;
   std::string credential_type = "bearer";
   bool openai_oauth = false;
-  std::string openai_account_id = "";
+  ava::core::NoLogString openai_account_id = "";
   std::size_t max_tool_iterations = 10;
   // Child loops opt into one bounded, tool-free wrap-up request after this
   // tool-round ceiling. Parent loops preserve their existing hard stop.
@@ -185,7 +186,7 @@ struct AgentLoopOptions
 
 struct AgentLoopResult
 {
-  std::string final_text;
+  ava::core::NoLogString final_text;
   // Exact id of the final durably committed v4 assistant transaction.
   std::optional<std::string> committed_turn_id = std::nullopt;
   std::optional<ava::provider::TokenUsage> usage = std::nullopt;

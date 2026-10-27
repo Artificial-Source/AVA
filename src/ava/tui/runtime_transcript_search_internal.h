@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/composer_internal.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <optional>
@@ -27,7 +28,7 @@ struct TranscriptSearchMatch
 {
   std::size_t item_index = 0;
   std::string identity;
-  std::string detail;
+  ava::core::NoLogString detail;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -38,10 +39,10 @@ struct TranscriptSearchProjection
   bool context_gathering = false;
   std::size_t context_run_offset = 0;
   std::string identity;
-  std::string searchable_text;
-  std::string unspaced_searchable_text;
+  ava::core::NoLogString searchable_text;
+  ava::core::NoLogString unspaced_searchable_text;
   std::vector<std::size_t> row_boundary_offsets;
-  std::string default_detail;
+  ava::core::NoLogString default_detail;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -105,7 +106,7 @@ class TranscriptSearchProjectionCache final
   [[nodiscard]] TranscriptSearchUpdate replace_affected_matches(std::vector<TranscriptSearchItemInterval> const& affected, std::size_t first_changed_match_row);
 
   std::vector<TranscriptSearchProjection> projections_;
-  std::string query_;
+  ava::core::NoLogString query_;
   std::vector<TranscriptSearchMatch> matches_;
   std::size_t authoritative_mutation_item_render_count_ = 0;
   std::size_t projection_build_count_ = 0;
@@ -154,7 +155,7 @@ class TranscriptSearchController final
   RuntimeRenderer& renderer_;
   RuntimeNavigationController& navigation_;
   ActiveSelectList& active_select_list_;
-  std::string query_;
+  ava::core::NoLogString query_;
   detail::TranscriptSearchProjectionCache projection_cache_;
   detail::TranscriptViewportAnchor saved_viewport_anchor_ = {};
   std::size_t saved_scroll_offset_ = 0;

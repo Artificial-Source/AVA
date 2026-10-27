@@ -9,6 +9,7 @@
 #include "ava/app/runtime_credentials.h"
 #include "ava/mcp/config.h"
 #include "ava/config/xdg_paths.h"
+#include "ava/core/NoLogString.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -96,9 +97,9 @@ class AcpSessionHost
   {
     ava::permissions::Operation operation = ava::permissions::Operation::ReadFile;
     ava::agent::Mode mode = ava::agent::Mode::Build;
-    std::string workspace;
-    std::string target;
-    std::string command;
+    ava::core::NoLogString workspace;
+    ava::core::NoLogString target;
+    ava::core::NoLogString command;
     std::string command_recipe_key;
     std::string tool_name;
 
@@ -170,15 +171,15 @@ class AcpSessionRegistry
   struct ListRecord
   {
     std::string session_id;
-    std::string cwd;
-    std::string title;
+    ava::core::NoLogString cwd;
+    ava::core::NoLogString title;
     std::string updated_at;
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
   struct ListSnapshot
   {
-    std::optional<std::string> cwd;
+    std::optional<ava::core::NoLogString> cwd;
     std::vector<ListRecord> records;
     std::size_t offset = 0;
     std::size_t retained_bytes = 0;

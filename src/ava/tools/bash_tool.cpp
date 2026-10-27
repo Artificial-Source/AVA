@@ -5,6 +5,7 @@
 #include "ava/tools/tool_permission.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/Signals.h"
 #include "ava/core/trusted_home.h"
 
@@ -517,7 +518,7 @@ class SyntheticEnvironmentRoot final
   }
 
   std::filesystem::path root_;
-  std::string name_;
+  ava::core::NoLogString name_;
   UniqueFd parent_fd_;
   UniqueFd root_fd_;
   dev_t device_ = 0;
@@ -580,7 +581,7 @@ struct DescriptorExecution
 {
   std::vector<UniqueFd> descriptors;
   std::vector<std::size_t> retained_script_descriptors;
-  std::vector<std::string> argv;
+  std::vector<ava::core::NoLogString> argv;
   std::size_t executable_descriptor = 0;
 };
 

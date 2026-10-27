@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -42,7 +43,7 @@ enum class AssistantOutputItemKind
 
 struct AssistantOutputText
 {
-  std::string text;
+  ava::core::NoLogString text;
   AssistantOutputTextPhase assistant_phase = AssistantOutputTextPhase::Unknown;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -50,12 +51,12 @@ struct AssistantOutputText
 
 struct AssistantOutputReasoning
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::string format;
   bool redacted = false;
-  std::optional<std::string> signature;
-  std::optional<std::string> redacted_data;
-  std::optional<std::string> native_item_json;
+  std::optional<ava::core::NoLogString> signature;
+  std::optional<ava::core::NoLogString> redacted_data;
+  std::optional<ava::core::NoLogString> native_item_json;
   // Portable archives intentionally remove provider-private replay material.
   // Marking that loss keeps imported reasoning on the safe text-only path.
   bool private_replay_metadata_omitted = false;
@@ -67,7 +68,7 @@ struct AssistantOutputFunctionCall
 {
   std::string call_id;
   std::string name;
-  std::string arguments_json;
+  ava::core::NoLogString arguments_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -101,7 +102,7 @@ struct AssistantTurnCommit
   std::optional<std::string> api_family = std::nullopt;
   std::optional<std::string> reasoning_format = std::nullopt;
   std::string finish_reason;
-  std::optional<std::string> usage_json;
+  std::optional<ava::core::NoLogString> usage_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -126,7 +127,7 @@ struct AssistantOutputDiagnostic
   AssistantOutputDiagnosticKind kind = AssistantOutputDiagnosticKind::MalformedAssistantTurn;
   std::size_t entry_index = 0;
   std::string entry_id;
-  std::string message;
+  ava::core::NoLogString message;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

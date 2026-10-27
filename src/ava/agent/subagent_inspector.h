@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstdint>
@@ -34,7 +35,7 @@ enum class SubagentLiveMessageRole
 struct SubagentLiveMessage
 {
   SubagentLiveMessageRole role = SubagentLiveMessageRole::User;
-  std::string text;
+  ava::core::NoLogString text;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };

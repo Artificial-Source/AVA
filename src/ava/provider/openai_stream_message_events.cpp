@@ -2,6 +2,7 @@
 #include "ava/provider/openai_reasoning.h"
 #include "ava/provider/openai_stream_parser.h"
 #include "ava/provider/openai_stream_parser_internal.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/json.h"
 
 #include <cstddef>
@@ -22,8 +23,8 @@ enum class MessageContentKind
 
 struct CompletedMessageContent
 {
-  std::string output_text;
-  std::string refusal_text;
+  ava::core::NoLogString output_text;
+  ava::core::NoLogString refusal_text;
 };
 
 ava::core::Result<bool> completed_message_content_from_item(std::string_view item, std::string& output_text, std::string& refusal_text)

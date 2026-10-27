@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -51,8 +52,8 @@ enum class EnvelopeIntent
 struct JsonRpcError
 {
   int code = -32603;
-  std::string message;
-  std::optional<std::string> data_json;
+  ava::core::NoLogString message;
+  std::optional<ava::core::NoLogString> data_json;
   std::optional<JsonRpcId> id;
   EnvelopeIntent intent = EnvelopeIntent::Unknown;
   bool suppress_response = false;
@@ -63,21 +64,21 @@ struct Request
 {
   JsonRpcId id;
   std::string method;
-  std::optional<std::string> params_json;
+  std::optional<ava::core::NoLogString> params_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct Notification
 {
   std::string method;
-  std::optional<std::string> params_json;
+  std::optional<ava::core::NoLogString> params_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct Response
 {
   JsonRpcId id;
-  std::string result_json;
+  ava::core::NoLogString result_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -95,7 +96,7 @@ struct ImplementationInfo
   std::string name;
   std::string version;
   std::optional<std::string> title;
-  std::optional<std::string> meta_json;
+  std::optional<ava::core::NoLogString> meta_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -105,11 +106,11 @@ struct ClientCapabilities
   bool write_text_file = false;
   bool terminal = false;
   bool boolean_config_options = false;
-  std::optional<std::string> meta_json;
-  std::optional<std::string> fs_meta_json;
-  std::optional<std::string> session_meta_json;
-  std::optional<std::string> config_options_meta_json;
-  std::optional<std::string> boolean_config_meta_json;
+  std::optional<ava::core::NoLogString> meta_json;
+  std::optional<ava::core::NoLogString> fs_meta_json;
+  std::optional<ava::core::NoLogString> session_meta_json;
+  std::optional<ava::core::NoLogString> config_options_meta_json;
+  std::optional<ava::core::NoLogString> boolean_config_meta_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -118,7 +119,7 @@ struct InitializeRequest
   std::uint16_t protocol_version = 0;
   ClientCapabilities client_capabilities;
   std::optional<ImplementationInfo> client_info;
-  std::optional<std::string> meta_json;
+  std::optional<ava::core::NoLogString> meta_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

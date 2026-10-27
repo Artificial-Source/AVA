@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <optional>
 #include <string>
@@ -19,7 +20,7 @@ struct EventEnvelope
   std::optional<std::string> request_id;
   std::optional<std::string> correlation_id;
   std::string name;
-  std::string payload_json = "{}";
+  ava::core::NoLogString payload_json = "{}";
   std::string payload_type = "";
 
   AVA_DEBUG_PRINT_MEMBERS_ON

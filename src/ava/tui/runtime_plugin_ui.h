@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <chrono>
 #include <cstddef>
@@ -21,7 +22,7 @@ inline constexpr auto kTuiPluginUiInvocationDeadline = std::chrono::seconds(120)
 struct TuiPluginUiBinding
 {
   std::string plugin_id;
-  std::string command;
+  ava::core::NoLogString command;
   std::string invocation_id;
 
   friend bool operator==(TuiPluginUiBinding const&, TuiPluginUiBinding const&) = default;
@@ -42,8 +43,8 @@ struct TuiPluginUiOption
   // The identifier is protocol data returned to the plugin. Host rendering
   // deliberately never includes it.
   std::string id;
-  std::string label;
-  std::optional<std::string> description;
+  ava::core::NoLogString label;
+  std::optional<ava::core::NoLogString> description;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -54,10 +55,10 @@ struct TuiPluginUiRequest
   // Correlation data for the coordinator only. It is never rendered.
   std::string request_id;
   TuiPluginUiKind kind = TuiPluginUiKind::Status;
-  std::string text;
-  std::string title;
-  std::string description;
-  std::vector<std::string> lines;
+  ava::core::NoLogString text;
+  ava::core::NoLogString title;
+  ava::core::NoLogString description;
+  std::vector<ava::core::NoLogString> lines;
   std::vector<TuiPluginUiOption> options;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -105,8 +106,8 @@ struct TuiPluginUiEndpoint
 
 struct TuiPluginUiWidgetView
 {
-  std::string title;
-  std::vector<std::string> lines;
+  ava::core::NoLogString title;
+  std::vector<ava::core::NoLogString> lines;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -114,7 +115,7 @@ struct TuiPluginUiWidgetView
 struct TuiPluginUiDockView
 {
   TuiPluginUiBinding binding;
-  std::optional<std::string> status;
+  std::optional<ava::core::NoLogString> status;
   std::vector<TuiPluginUiWidgetView> widgets;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -126,8 +127,8 @@ struct TuiPluginUiModalView
   // Correlation data remains hidden from host rendering.
   std::string request_id;
   TuiPluginUiKind kind = TuiPluginUiKind::Select;
-  std::string title;
-  std::string description;
+  ava::core::NoLogString title;
+  ava::core::NoLogString description;
   std::vector<TuiPluginUiOption> options;
   std::size_t selected_option = 0;
 

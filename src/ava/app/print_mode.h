@@ -3,6 +3,7 @@
 #include "ava/app/headless_policy.h"
 #include "ava/app/runtime.h"
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -21,8 +22,8 @@ enum class PrintOutputFormat
 
 struct PrintPromptInputs
 {
-  std::optional<std::string> explicit_prompt;
-  std::optional<std::string> stdin_prompt;
+  std::optional<ava::core::NoLogString> explicit_prompt;
+  std::optional<ava::core::NoLogString> stdin_prompt;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -42,7 +43,7 @@ struct PrintModeOptions
 {
   runtime::OpenContext open_context;
   runtime::SessionLifecycleRequest lifecycle_request;
-  std::optional<std::string> explicit_prompt;
+  std::optional<ava::core::NoLogString> explicit_prompt;
   bool read_stdin = false;
   PrintOutputFormat output_format = PrintOutputFormat::Text;
   HeadlessPermissionPolicyOptions permission_policy;

@@ -2,6 +2,7 @@
 #include "ava/http/transport.h"
 #include "ava/provider/gemini_provider.h"
 #include "ava/provider/provider_utils.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 
@@ -215,8 +216,8 @@ std::string thought_signature_member(std::string_view signature)
 
 struct ReplayHistory
 {
-  std::string text;
-  std::string thought;
+  ava::core::NoLogString text;
+  ava::core::NoLogString thought;
   // These parts belong to the message used throughout replay canonicalization.
   std::vector<ContentPart const*> calls;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

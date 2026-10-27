@@ -8,6 +8,7 @@
 #include "ava/permissions/permission.h"
 #include "ava/permissions/permission_rules.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/mode.h"
 #include "ava/core/result.h"
 
@@ -40,13 +41,13 @@ struct PermissionAuditEvent
   ava::core::Mode mode = ava::core::Mode::Build;
   std::string tool_name;
   ava::permissions::PermissionAction action = ava::permissions::PermissionAction::Deny;
-  std::string reason;
+  ava::core::NoLogString reason;
   ava::permissions::PermissionRisk risk = ava::permissions::PermissionRisk::Low;
   std::filesystem::path target_path = {};
-  std::string command;
+  ava::core::NoLogString command;
   std::string resolution;
   std::string resolution_source;
-  std::string resolution_reason;
+  ava::core::NoLogString resolution_reason;
   std::string actor = "agent";
   std::string rule_id;
   // Durable audit serialization must suppress command and recipe-display
@@ -61,7 +62,7 @@ using PermissionAuditSink = std::function<ava::core::VoidResult(PermissionAuditE
 
 struct ToolProgressEvent
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::string call_id;
   std::string tool_name;
   std::string status = "running";
@@ -76,7 +77,7 @@ using ToolProgressSink = std::function<ava::core::VoidResult(ToolProgressEvent c
 // race-free. Direct app command contexts leave this null and discard guidance.
 struct PermissionDenialGuidanceCapture
 {
-  std::string provider_user_guidance = {};
+  ava::core::NoLogString provider_user_guidance = {};
 
   // Guidance text must never appear in debug/log representations.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

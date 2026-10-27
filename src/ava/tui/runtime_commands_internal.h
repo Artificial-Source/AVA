@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,7 +17,7 @@ namespace runtime_commands {
 struct CopyTarget
 {
   std::string name;
-  std::string query = {};
+  ava::core::NoLogString query = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

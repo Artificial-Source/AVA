@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -134,8 +135,8 @@ struct CommandLimits
 struct CommandEnvironmentOptions
 {
   std::string profile_id;
-  std::string user;
-  std::string logname;
+  ava::core::NoLogString user;
+  ava::core::NoLogString logname;
   std::filesystem::path home;
   std::filesystem::path xdg_config_home;
   std::filesystem::path xdg_cache_home;
@@ -149,7 +150,7 @@ struct CommandEnvironmentOptions
 struct WorkspaceScriptRecipe
 {
   std::filesystem::path script;
-  std::vector<std::string> argv_tail;
+  std::vector<ava::core::NoLogString> argv_tail;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -174,7 +175,7 @@ struct CommandBuildOptions
   // Controls automatic trusted-home .local/bin discovery only; explicitly
   // supplied and workspace-local PATH entries stay enabled.
   bool discover_host_user_tools = true;
-  std::optional<std::string> startup_path;
+  std::optional<ava::core::NoLogString> startup_path;
   // Raw shell plans resolve and bind this exact logical executable; it is never
   // found by basename lookup. The local executor reopens it through the shared
   // anchor authority and executes the verified descriptor.
@@ -325,7 +326,7 @@ struct ExecutableMetadata
 struct ShebangInterpreter
 {
   ExecutableMetadata interpreter;
-  std::string argument;
+  ava::core::NoLogString argument;
   // True for the executable selected by a preceding simple
   // /usr/bin/env <name> shebang. Local execution bypasses env's mutable PATH
   // lookup and invokes this already-sealed descriptor directly.
@@ -371,7 +372,7 @@ struct CommandCapabilities
 struct RecipeDescriptor
 {
   CommandRecipe recipe = CommandRecipe::Pwd;
-  std::vector<std::string> canonical_argv;
+  std::vector<ava::core::NoLogString> canonical_argv;
   std::vector<PathMetadata> path_arguments;
 
   friend bool operator==(RecipeDescriptor const&, RecipeDescriptor const&) = default;
@@ -396,7 +397,7 @@ struct CommandClassification
 struct EnvironmentVariable
 {
   std::string key;
-  std::string value;
+  ava::core::NoLogString value;
 
   friend bool operator==(EnvironmentVariable const&, EnvironmentVariable const&) = default;
 
@@ -473,9 +474,9 @@ class CommandIntent final
   CommandIntent(CommandIntentLane lane, std::vector<std::string> argv, std::optional<std::filesystem::path> cwd, std::string source_text);
 
   CommandIntentLane lane_ = CommandIntentLane::Compatibility;
-  std::vector<std::string> argv_;
+  std::vector<ava::core::NoLogString> argv_;
   std::optional<std::filesystem::path> cwd_;
-  std::string source_text_;
+  ava::core::NoLogString source_text_;
 };
 
 class CommandPlan final
@@ -531,8 +532,8 @@ class CommandPlan final
   std::vector<std::filesystem::path> ava_authority_roots_;
   std::vector<PathMetadata> ava_authority_root_metadata_;
   SyntheticEnvironmentRoots synthetic_environment_roots_;
-  std::vector<std::string> argv_;
-  std::string raw_shell_text_;
+  std::vector<ava::core::NoLogString> argv_;
+  ava::core::NoLogString raw_shell_text_;
   std::vector<CommandPathEntry> path_entries_;
   std::optional<ResolvedExecutable> resolved_executable_;
   CommandClassification classification_;

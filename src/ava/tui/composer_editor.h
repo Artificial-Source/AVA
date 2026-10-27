@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/keybindings.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <optional>
@@ -14,7 +15,7 @@ struct ComposerPasteEntry
 {
   std::size_t id = 0;
   std::string marker;
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t start = std::string::npos;
 
   friend bool operator==(ComposerPasteEntry const&, ComposerPasteEntry const&) = default;
@@ -24,7 +25,7 @@ struct ComposerPasteEntry
 
 struct ComposerDraftSnapshot
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t cursor = 0;
   std::vector<ComposerPasteEntry> paste_entries;
   std::size_t next_paste_id = 1;
@@ -42,12 +43,12 @@ enum class ComposerKillSequence
 
 struct ComposerDraftState
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::size_t cursor = 0;
-  std::string kill_buffer;
+  ava::core::NoLogString kill_buffer;
   std::vector<ComposerDraftSnapshot> undo_stack;
   std::vector<ComposerDraftSnapshot> redo_stack;
-  std::vector<std::string> kill_ring;
+  std::vector<ava::core::NoLogString> kill_ring;
   std::size_t yank_start = std::string::npos;
   std::size_t yank_end = std::string::npos;
   std::size_t yank_ring_index = 0;

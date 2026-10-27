@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/event/events.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -21,7 +22,7 @@ struct InteractiveQueuedMessage
 {
   std::string request_id;
   std::string correlation_id;
-  std::string message;
+  ava::core::NoLogString message;
   std::size_t sequence = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -30,7 +31,7 @@ struct InteractiveQueuedMessage
 struct InteractiveRestoredMessage
 {
   std::string request_id;
-  std::string message;
+  ava::core::NoLogString message;
   bool steering = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

@@ -1,12 +1,13 @@
 #pragma once
 
 #include "ava/command/command.h"
+#include "ava/core/NoLogString.h"
 
 namespace ava::command::detail {
 
 struct CompatibilityParse
 {
-  std::vector<std::string> argv;
+  std::vector<ava::core::NoLogString> argv;
   bool requires_raw_shell = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

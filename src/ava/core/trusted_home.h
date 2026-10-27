@@ -1,7 +1,8 @@
 #pragma once
 
-#include "ava/core/result.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
+#include "ava/core/result.h"
 
 #include <filesystem>
 #include <optional>
@@ -19,7 +20,7 @@ namespace ava::core {
 struct TrustedAccount
 {
   std::filesystem::path home;
-  std::string user;
+  ava::core::NoLogString user;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

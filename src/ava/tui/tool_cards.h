@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/tui/composer.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <string>
@@ -11,7 +12,7 @@ namespace ava::tui::detail {
 
 struct ToolCardRenderResult
 {
-  std::vector<std::string> lines = {};
+  std::vector<ava::core::NoLogString> lines = {};
   std::vector<bool> presentation_private_rows = {};
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

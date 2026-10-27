@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <string>
 
@@ -10,10 +11,10 @@ namespace ava::event {
 // metadata.
 struct ReasoningPayload
 {
-  std::string text;
+  ava::core::NoLogString text;
   std::string status;
-  std::string error_message;
-  std::string stop_reason;
+  ava::core::NoLogString error_message;
+  ava::core::NoLogString stop_reason;
   std::string reasoning_format;
   bool reasoning_redacted = false;
   bool reasoning_signature_present = false;

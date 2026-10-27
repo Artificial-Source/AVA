@@ -4,6 +4,7 @@
 #include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/theme.h"
 #include "ava/config/xdg_paths.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -46,7 +47,7 @@ struct MermaidDisplaySettings
 {
   bool enabled = false;
   bool enabled_configured = false;
-  std::vector<std::string> argv;
+  std::vector<ava::core::NoLogString> argv;
   bool argv_configured = false;
   std::vector<std::pair<std::string, std::string>> unknown_fields;
 

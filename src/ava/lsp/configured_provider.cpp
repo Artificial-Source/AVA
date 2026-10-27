@@ -2,6 +2,7 @@
 #include "ava/command/environment.h"
 #include "ava/lsp/bounded_file_reader.h"
 #include "ava/lsp/configured_provider.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/process_args.h"
@@ -33,7 +34,7 @@ constexpr long long kMaxTimeoutMs = 30000;
 struct ConfiguredServer
 {
   std::string id;
-  std::vector<std::string> argv;
+  std::vector<ava::core::NoLogString> argv;
   std::vector<std::string> file_extensions;
   std::string language_id = "plaintext";
   std::chrono::milliseconds startup_timeout{3000};

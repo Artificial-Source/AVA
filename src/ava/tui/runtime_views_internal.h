@@ -4,6 +4,7 @@
 #include "ava/tui/runtime.h"
 #include "ava/tui/terminal/Cursor.h"
 #include "ava/tui/theme.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -69,7 +70,7 @@ inline constexpr std::string_view kSettingsSectionTools = "settings:section.tool
 struct SettingsFrameState
 {
   SettingsSection section = SettingsSection::Root;
-  std::string query;
+  ava::core::NoLogString query;
   std::size_t selected_item_index = 0;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

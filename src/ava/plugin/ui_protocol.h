@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -26,7 +27,7 @@ inline constexpr std::size_t kPluginUiModalMaxCount = 8;
 struct PluginUiStatusRequest
 {
   std::string id;
-  std::string text;
+  ava::core::NoLogString text;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -34,8 +35,8 @@ struct PluginUiStatusRequest
 struct PluginUiWidgetRequest
 {
   std::string id;
-  std::string title;
-  std::vector<std::string> lines;
+  ava::core::NoLogString title;
+  std::vector<ava::core::NoLogString> lines;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -43,8 +44,8 @@ struct PluginUiWidgetRequest
 struct PluginUiChoice
 {
   std::string id;
-  std::string label;
-  std::optional<std::string> description = std::nullopt;
+  ava::core::NoLogString label;
+  std::optional<ava::core::NoLogString> description = std::nullopt;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
@@ -52,8 +53,8 @@ struct PluginUiChoice
 struct PluginUiSelectRequest
 {
   std::string id;
-  std::string title;
-  std::string description;
+  ava::core::NoLogString title;
+  ava::core::NoLogString description;
   std::vector<PluginUiChoice> choices;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -62,8 +63,8 @@ struct PluginUiSelectRequest
 struct PluginUiConfirmRequest
 {
   std::string id;
-  std::string title;
-  std::string description;
+  ava::core::NoLogString title;
+  ava::core::NoLogString description;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };

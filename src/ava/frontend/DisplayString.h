@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <string>
 
@@ -11,7 +12,7 @@ namespace ava::frontend {
 // that are members of the final frontend class.
 struct DisplayString
 {
-  std::string display_;
+  ava::core::NoLogString display_;
   bool changed_{true};
 
   bool clear_changed()

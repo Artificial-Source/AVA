@@ -3,6 +3,7 @@
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_task.h"
 #include "ava/tools/tool_permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/json.h"
 #include "ava/core/strict_json.h"
 
@@ -69,11 +70,11 @@ ava::core::VoidResult reject_oversized_task_arg(std::string_view value, std::str
 
 struct ParsedTaskRequest
 {
-  std::string description;
-  std::string prompt;
+  ava::core::NoLogString description;
+  ava::core::NoLogString prompt;
   std::string subagent_type;
   std::optional<std::string> task_id;
-  std::string command;
+  ava::core::NoLogString command;
   bool background = false;
   std::optional<std::size_t> max_tool_iterations;
 

@@ -2,6 +2,7 @@
 #include "ava/http/transport.h"
 #include "ava/provider/provider.h"
 #include "ava/provider/provider_utils.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ class DefaultStreamParser final : public StreamParser
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> finish() override;
 
  private:
-  std::string pending_;
+  ava::core::NoLogString pending_;
 };
 
 std::string lower_copy(std::string_view value)

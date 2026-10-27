@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -25,12 +26,12 @@ enum class SkillSourceType
 struct LoadedSkill
 {
   std::string name;
-  std::string description;
+  ava::core::NoLogString description;
   std::filesystem::path path;
   std::filesystem::path directory;
   SkillSourceType source_type = SkillSourceType::Project;
   std::size_t byte_count = 0;
-  std::string content;
+  ava::core::NoLogString content;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -38,7 +39,7 @@ struct LoadedSkill
 struct SkillDiagnostic
 {
   std::filesystem::path path;
-  std::string message;
+  ava::core::NoLogString message;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -47,9 +48,9 @@ struct DeclaredSkillFileOptions
 {
   std::filesystem::path path;
   std::string name;
-  std::string description;
+  ava::core::NoLogString description;
   SkillSourceType source_type = SkillSourceType::Project;
-  std::optional<std::string> preloaded_content;
+  std::optional<ava::core::NoLogString> preloaded_content;
   std::size_t max_file_bytes = 64 * 1024;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

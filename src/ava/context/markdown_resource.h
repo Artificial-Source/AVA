@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -21,8 +22,8 @@ struct ResourceFileReadOptions
 
 struct ParsedMarkdown
 {
-  std::map<std::string, std::string> frontmatter;
-  std::string body;
+  std::map<ava::core::NoLogString, ava::core::NoLogString> frontmatter;
+  ava::core::NoLogString body;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

@@ -6,6 +6,7 @@
 #include "ava/app/runtime.h"
 #include "ava/session/attachments.h"
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/thread.h"
 
 #include <mutex>
@@ -28,7 +29,7 @@ struct RpcPromptWorkerOptions
   runtime::RunOptions runtime_options;
   ava::config::XdgPaths paths;
   std::string request_id;
-  std::string message;
+  ava::core::NoLogString message;
   std::vector<ava::session::ImageAttachmentRef> image_attachments = {};
 
   // Owns runtime credential-bearing options and non-owning process state.

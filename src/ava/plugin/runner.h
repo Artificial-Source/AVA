@@ -5,6 +5,7 @@
 #include "ava/process/supervisor.h"
 #include "ava/plugin/manifest.h"
 #include "ava/plugin/ui_protocol.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -57,8 +58,8 @@ struct PluginInitialization
 {
   std::string api_version;
   std::string plugin_version;
-  std::string contributions_json;
-  std::string raw_json;
+  ava::core::NoLogString contributions_json;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -66,9 +67,9 @@ struct PluginInitialization
 struct PluginToolCallResult
 {
   bool ok = false;
-  std::string content;
-  std::string metadata_json;
-  std::string raw_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString metadata_json;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -76,9 +77,9 @@ struct PluginToolCallResult
 struct PluginCommandCallResult
 {
   bool ok = false;
-  std::string content;
-  std::string metadata_json;
-  std::string raw_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString metadata_json;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -86,9 +87,9 @@ struct PluginCommandCallResult
 struct PluginEventObserveResult
 {
   bool ok = false;
-  std::string content;
-  std::string metadata_json;
-  std::string raw_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString metadata_json;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -96,8 +97,8 @@ struct PluginEventObserveResult
 struct PluginDynamicResource
 {
   std::string name;
-  std::string description;
-  std::string raw_json;
+  ava::core::NoLogString description;
+  ava::core::NoLogString raw_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -105,18 +106,18 @@ struct PluginDynamicResourceListResult
 {
   bool ok = false;
   std::vector<PluginDynamicResource> resources;
-  std::string content;
-  std::string metadata_json;
-  std::string raw_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString metadata_json;
+  ava::core::NoLogString raw_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct PluginDynamicResourceReadResult
 {
   bool ok = false;
-  std::string content;
-  std::string metadata_json;
-  std::string raw_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString metadata_json;
+  ava::core::NoLogString raw_json;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -124,8 +125,8 @@ struct PluginProxyRequest
 {
   std::string id;
   std::string operation;
-  std::string arguments_json;
-  std::string raw_json;
+  ava::core::NoLogString arguments_json;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -133,11 +134,11 @@ struct PluginProxyRequest
 struct PluginProxyResponse
 {
   bool ok = false;
-  std::string content;
-  std::string metadata_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString metadata_json;
   std::string error_category;
-  std::string error_message;
-  std::string error_details;
+  ava::core::NoLogString error_message;
+  ava::core::NoLogString error_details;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -244,8 +245,8 @@ class PluginProcess final
   bool stop_requested_ = false;
   bool stderr_truncated_ = false;
   std::size_t next_request_id_ = 2;
-  std::string stdout_buffer_;
-  std::string stderr_tail_;
+  ava::core::NoLogString stdout_buffer_;
+  ava::core::NoLogString stderr_tail_;
 };
 
 }  // namespace ava::plugin

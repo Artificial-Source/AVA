@@ -7,6 +7,7 @@
 #include "ava/tui/runtime.h"
 #include "ava/tui/session_grants.h"
 #include "ava/session/attachments.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <mutex>
@@ -86,7 +87,7 @@ enum class ComposerJumpMode
 
 struct PendingSessionArchiveAction
 {
-  std::string session_id;
+  ava::core::NoLogString session_id;
   bool archive = true;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

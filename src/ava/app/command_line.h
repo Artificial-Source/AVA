@@ -6,6 +6,7 @@
 #include "ava/app/print_mode.h"
 #include "ava/app/runtime.h"
 #include "ava/agent/tool_visibility.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -30,7 +31,7 @@ struct ImmediateInvocation
   ImmediateOutputKind kind = ImmediateOutputKind::Text;
   int status = 0;
   bool stderr_output = false;
-  std::string text;
+  ava::core::NoLogString text;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -71,7 +72,7 @@ struct ConnectInvocation
   std::optional<std::string> provider;
   ConnectCredentialSource source = ConnectCredentialSource::None;
   std::optional<ConnectCredentialType> credential_type;
-  std::optional<std::string> env_var;
+  std::optional<ava::core::NoLogString> env_var;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
@@ -90,14 +91,14 @@ struct RuntimeInvocation
   ava::agent::Mode mode = ava::agent::Mode::Build;
   std::optional<std::string> requested_session_id;
   std::optional<std::string> fork_session_id;
-  std::optional<std::string> initial_session_name;
+  std::optional<ava::core::NoLogString> initial_session_name;
   std::optional<std::filesystem::path> session_dir;
   std::optional<std::filesystem::path> requested_current_dir;
   bool continue_last_session = false;
   bool sessionless = false;
   bool offline = false;
   bool trace_requested = false;
-  std::optional<std::string> print_prompt;
+  std::optional<ava::core::NoLogString> print_prompt;
   PrintOutputFormat print_output_format = PrintOutputFormat::Text;
   runtime::PromptOverrides prompt_overrides;
   HeadlessPermissionPolicyOptions headless_permission_policy;

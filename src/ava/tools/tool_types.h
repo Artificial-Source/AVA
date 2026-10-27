@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <optional>
@@ -13,7 +14,7 @@ struct ProviderToolCall
 {
   std::string id;
   std::string name;
-  std::string arguments_json;
+  ava::core::NoLogString arguments_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -28,15 +29,15 @@ enum class ToolResultStatus
 struct ToolResultPayload
 {
   ToolResultStatus status = ToolResultStatus::Success;
-  std::string summary;
-  std::string content;
+  ava::core::NoLogString summary;
+  ava::core::NoLogString content;
   std::string content_type;
   std::string error_category;
   std::string error_code;
-  std::string error_message;
-  std::string error_details;
-  std::string diff;
-  std::vector<std::string> changed_paths;
+  ava::core::NoLogString error_message;
+  ava::core::NoLogString error_details;
+  ava::core::NoLogString diff;
+  std::vector<ava::core::NoLogString> changed_paths;
   std::vector<std::string> permission_request_ids;
   bool diff_truncated = false;
   bool truncated = false;
@@ -53,7 +54,7 @@ struct ToolResultPayload
   std::optional<std::size_t> omitted_lines = std::nullopt;
   std::optional<std::size_t> visible_matches = std::nullopt;
   std::optional<std::size_t> total_matches = std::nullopt;
-  std::string spill_path;
+  ava::core::NoLogString spill_path;
   bool spill_truncated = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -64,11 +65,11 @@ struct ToolDispatchResult
   std::string call_id;
   std::string name;
   bool success = false;
-  std::string result_text;
+  ava::core::NoLogString result_text;
   ToolResultPayload payload = {};
   // Model/provider-only one-shot denial guidance. Never enters result_text,
   // ToolResultPayload, timeline, events, audits, RPC, ACP, or Error::format.
-  std::string provider_user_guidance = {};
+  ava::core::NoLogString provider_user_guidance = {};
 
   // provider_user_guidance must never appear in debug/log representations.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

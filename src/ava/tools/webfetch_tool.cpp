@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/tools/tool_permission.h"
 #include "ava/tools/webfetch_tool.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/string_utils.h"
 
 #include <algorithm>
@@ -25,7 +26,7 @@ constexpr int kMaxWebFetchTimeoutMs = 120000;
 
 struct ValidatedUrl
 {
-  std::string url;
+  ava::core::NoLogString url;
   std::string host;
   std::string port;
 };

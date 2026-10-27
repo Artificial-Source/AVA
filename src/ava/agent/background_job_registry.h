@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -32,8 +33,8 @@ enum class BackgroundJobState
 struct BackgroundJobSnapshot
 {
   std::string job_id = {};
-  std::string title = {};
-  std::string description = {};
+  ava::core::NoLogString title = {};
+  ava::core::NoLogString description = {};
   std::string subagent_type = {};
   std::string child_session_id = {};
   std::filesystem::path child_session_path = {};
@@ -41,11 +42,11 @@ struct BackgroundJobSnapshot
   std::string created_at = {};
   std::optional<std::string> completed_at = std::nullopt;
   bool cancel_requested = false;
-  std::string final_text = {};
+  ava::core::NoLogString final_text = {};
   bool description_truncated = false;
   bool final_text_truncated = false;
-  std::string stop_reason = {};
-  std::optional<std::string> error = std::nullopt;
+  ava::core::NoLogString stop_reason = {};
+  std::optional<ava::core::NoLogString> error = std::nullopt;
   std::size_t provider_iterations = 0;
   std::size_t tool_calls = 0;
   std::size_t tool_iterations = 0;
@@ -59,8 +60,8 @@ struct BackgroundJobStartOptions
   // Coordinators supply their process-local identity before publication.
   // Standalone registry callers may leave this empty to retain generated IDs.
   std::string job_id = {};
-  std::string title = {};
-  std::string description = {};
+  ava::core::NoLogString title = {};
+  ava::core::NoLogString description = {};
   std::string subagent_type = {};
   std::string child_session_id = {};
   std::filesystem::path child_session_path = {};
@@ -81,8 +82,8 @@ struct BackgroundJobContext
 struct BackgroundJobCompletion
 {
   BackgroundJobState state = BackgroundJobState::Completed;
-  std::string final_text;
-  std::string stop_reason;
+  ava::core::NoLogString final_text;
+  ava::core::NoLogString stop_reason;
   std::optional<ava::core::Error> error = std::nullopt;
   std::size_t provider_iterations = 0;
   std::size_t tool_calls = 0;

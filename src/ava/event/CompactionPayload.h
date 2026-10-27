@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <string>
@@ -15,7 +16,7 @@ struct CompactionPayload
   std::string model;
   std::string status;
   std::string trigger;
-  std::string reason;
+  ava::core::NoLogString reason;
   std::size_t attempt = 0;
   std::size_t max_attempts = 0;
   std::size_t estimated_tokens = 0;

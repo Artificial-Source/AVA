@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -23,10 +24,10 @@ struct SessionMetadataView
   std::string session_id;
   // `name` remains the latest manual value. Presence is tracked separately so
   // a historical name:"" durably suppresses generated titles.
-  std::string name;
+  ava::core::NoLogString name;
   bool has_manual_name = false;
-  std::string generated_title = {};
-  std::vector<std::string> labels;
+  ava::core::NoLogString generated_title = {};
+  std::vector<ava::core::NoLogString> labels;
   std::string labels_updated = {};
   bool archived = false;
   std::string parent_session_id = {};
@@ -46,8 +47,8 @@ struct SessionMetadataView
 
 struct SessionMetadataUpdate
 {
-  std::optional<std::string> name = std::nullopt;
-  std::optional<std::vector<std::string>> labels = {};
+  std::optional<ava::core::NoLogString> name = std::nullopt;
+  std::optional<std::vector<ava::core::NoLogString>> labels = {};
   std::optional<bool> archived = {};
   std::string parent_session_id = {};
   std::string source_session_id = {};
@@ -55,7 +56,7 @@ struct SessionMetadataUpdate
   std::string branch_origin = {};
   std::string actor = "rpc";
   std::optional<std::filesystem::path> original_cwd = std::nullopt;
-  std::optional<std::string> generated_title = std::nullopt;
+  std::optional<ava::core::NoLogString> generated_title = std::nullopt;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

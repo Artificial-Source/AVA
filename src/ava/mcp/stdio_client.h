@@ -4,6 +4,7 @@
 #include "ava/process/scope.h"
 #include "ava/process/supervisor.h"
 #include "ava/mcp/config.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -39,8 +40,8 @@ struct McpInitialization
 {
   std::string server_name;
   std::string server_version;
-  std::string capabilities_json;
-  std::string raw_json;
+  ava::core::NoLogString capabilities_json;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -48,8 +49,8 @@ struct McpInitialization
 struct McpToolDescription
 {
   std::string name;
-  std::string description;
-  std::string input_schema_json;
+  ava::core::NoLogString description;
+  ava::core::NoLogString input_schema_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -57,7 +58,7 @@ struct McpToolDescription
 struct McpPromptArgumentDescription
 {
   std::string name;
-  std::string description;
+  ava::core::NoLogString description;
   bool required = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -66,7 +67,7 @@ struct McpPromptArgumentDescription
 struct McpPromptDescription
 {
   std::string name;
-  std::string description;
+  ava::core::NoLogString description;
   std::vector<McpPromptArgumentDescription> arguments;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -74,9 +75,9 @@ struct McpPromptDescription
 
 struct McpResourceDescription
 {
-  std::string uri;
+  ava::core::NoLogString uri;
   std::string name;
-  std::string description;
+  ava::core::NoLogString description;
   std::string mime_type;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -85,26 +86,26 @@ struct McpResourceDescription
 struct McpToolCallResult
 {
   bool is_error = false;
-  std::string content;
-  std::string raw_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct McpPromptGetResult
 {
-  std::string content;
-  std::string raw_json;
+  ava::core::NoLogString content;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct McpResourceReadResult
 {
-  std::string content;
-  std::string uri;
+  ava::core::NoLogString content;
+  ava::core::NoLogString uri;
   std::string mime_type;
-  std::string raw_json;
+  ava::core::NoLogString raw_json;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -145,8 +146,8 @@ class McpStdioClient final
  private:
   struct JsonRpcResponse
   {
-    std::string result_json;
-    std::string raw_json;
+    ava::core::NoLogString result_json;
+    ava::core::NoLogString raw_json;
 
     AVA_DEBUG_PRINT_MEMBERS_ON
   };
@@ -198,8 +199,8 @@ class McpStdioClient final
   bool stop_requested_ = false;
   bool stderr_truncated_ = false;
   std::size_t next_request_id_ = 1;
-  std::string stdout_buffer_;
-  std::string stderr_tail_;
+  ava::core::NoLogString stdout_buffer_;
+  ava::core::NoLogString stderr_tail_;
 };
 
 }  // namespace ava::mcp

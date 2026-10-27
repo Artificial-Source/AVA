@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <string>
@@ -53,7 +54,7 @@ struct SessionReplayIssue
   std::size_t entry_index = 0;
   std::string entry_id;
   std::string call_id;
-  std::string message;
+  ava::core::NoLogString message;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/agent/subagent_launch.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -86,10 +87,10 @@ struct SubagentJobSnapshot
   std::optional<std::string> delivery_pending_at = std::nullopt;
   std::optional<std::string> last_delivery_attempt_at = std::nullopt;
   std::optional<std::string> delivery_acknowledged_at = std::nullopt;
-  std::optional<std::string> summary = std::nullopt;
+  std::optional<ava::core::NoLogString> summary = std::nullopt;
   std::optional<std::string> error_category = std::nullopt;
-  std::optional<std::string> error = std::nullopt;
-  std::optional<std::string> stop_reason = std::nullopt;
+  std::optional<ava::core::NoLogString> error = std::nullopt;
+  std::optional<ava::core::NoLogString> stop_reason = std::nullopt;
   bool summary_truncated = false;
   bool error_truncated = false;
   bool stop_reason_truncated = false;
@@ -99,7 +100,7 @@ struct SubagentJobSnapshot
   std::optional<std::string> acknowledged_attempt_id = std::nullopt;
   std::optional<std::string> committed_turn_id = std::nullopt;
   // Interactive display only; omitted from every public serializer.
-  std::string display_title = {};
+  ava::core::NoLogString display_title = {};
   std::string display_subagent_type = {};
   SubagentLaunchDisplay launch_display = {};
 

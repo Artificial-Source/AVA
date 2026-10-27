@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -17,7 +18,7 @@ inline constexpr std::size_t kMaxImageAttachmentBytes = 20 * 1024 * 1024;
 struct ImageAttachmentRef {
   std::string id;
   std::string mime_type;
-  std::string storage_path;
+  ava::core::NoLogString storage_path;
   std::string sha256;
   std::size_t byte_size = 0;
 
@@ -26,7 +27,7 @@ struct ImageAttachmentRef {
 
 struct LoadedImageAttachment {
   ImageAttachmentRef metadata;
-  std::string bytes;
+  ava::core::NoLogString bytes;
   std::filesystem::path path;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

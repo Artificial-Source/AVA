@@ -2,6 +2,7 @@
 
 #include "ava/diagnostics/safe_failure.h"
 #include "ava/plugin/discovery.h"
+#include "ava/core/NoLogString.h"
 
 #include <filesystem>
 #include <string>
@@ -23,8 +24,8 @@ struct PluginFailure
   std::filesystem::path path;
   PluginFailureKind kind = PluginFailureKind::Discovery;
   ava::diagnostics::SafeFailure failure = ava::diagnostics::external_failure(ava::diagnostics::ComponentClass::Plugin);
-  std::string message;
-  std::string details;
+  ava::core::NoLogString message;
+  ava::core::NoLogString details;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

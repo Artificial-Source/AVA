@@ -1,6 +1,7 @@
 #pragma once
 #include "ava/http/transport.h"
 #include "ava/provider/provider.h"
+#include "ava/core/NoLogString.h"
 
 #include <map>
 #include <optional>
@@ -40,8 +41,8 @@ class OpenAICompatibleStreamParser final : public StreamParser
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  std::string pending_line_;
-  std::string data_;
+  ava::core::NoLogString pending_line_;
+  ava::core::NoLogString data_;
   std::size_t scan_offset_ = 0;
   std::string reasoning_format_;
   std::string fallback_tool_call_prefix_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/app/rpc/catalog.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -15,7 +16,7 @@ namespace ava::app {
 struct RpcImageUpload
 {
   std::string type;
-  std::string data_base64;
+  ava::core::NoLogString data_base64;
   std::string mime_type;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -26,13 +27,13 @@ struct RpcCommand
   std::string id;
   std::string type;
   std::optional<long long> protocol_version;
-  std::optional<std::string> message;
+  std::optional<ava::core::NoLogString> message;
   std::optional<std::string> session_id;
   std::optional<std::string> job_id;
   std::optional<long long> timeout_ms;
   std::optional<std::string> provider;
   std::optional<std::string> model;
-  std::optional<std::string> instructions;
+  std::optional<ava::core::NoLogString> instructions;
   std::optional<std::string> reasoning_level;
   std::optional<long long> reasoning_budget_tokens;
   std::optional<std::string> reasoning_display;
@@ -45,30 +46,30 @@ struct RpcCommand
   std::optional<std::string> operation;
   std::optional<std::string> scope;
   std::optional<std::string> mode;
-  std::optional<std::string> reason;
-  std::optional<std::string> session_name;
-  std::optional<std::vector<std::string>> labels;
+  std::optional<ava::core::NoLogString> reason;
+  std::optional<ava::core::NoLogString> session_name;
+  std::optional<std::vector<ava::core::NoLogString>> labels;
   std::optional<std::string> branch_from_entry_id;
   std::optional<std::string> branch_root_entry_id;
   std::optional<std::string> branch_tip_entry_id;
-  std::optional<std::string> summary;
-  std::optional<std::string> answer;
-  std::optional<std::string> selected;
-  std::optional<std::vector<std::string>> selected_options;
-  std::optional<std::vector<std::string>> attachments;
+  std::optional<ava::core::NoLogString> summary;
+  std::optional<ava::core::NoLogString> answer;
+  std::optional<ava::core::NoLogString> selected;
+  std::optional<std::vector<ava::core::NoLogString>> selected_options;
+  std::optional<std::vector<ava::core::NoLogString>> attachments;
   std::optional<std::vector<RpcImageUpload>> images;
   std::optional<std::string> plugin_id;
   std::optional<std::string> name;
-  std::optional<std::string> arguments;
-  std::optional<std::string> command_arguments;
+  std::optional<ava::core::NoLogString> arguments;
+  std::optional<ava::core::NoLogString> command_arguments;
   std::optional<std::string> server_id;
-  std::optional<std::string> output_path;
-  std::optional<std::string> path;
-  std::optional<std::string> target_path;
-  std::optional<std::string> command;
+  std::optional<ava::core::NoLogString> output_path;
+  std::optional<ava::core::NoLogString> path;
+  std::optional<ava::core::NoLogString> target_path;
+  std::optional<ava::core::NoLogString> command;
   std::optional<std::string> tool_name;
   std::optional<std::string> command_recipe_key;
-  std::optional<std::string> recipe_display;
+  std::optional<ava::core::NoLogString> recipe_display;
   std::optional<bool> critical_acknowledged;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

@@ -1,9 +1,10 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
-#include "ava/agent/question.h"
 #include "ava/agent/agent_config.h"
+#include "ava/agent/question.h"
 #include "ava/agent/subagent_launch.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -20,14 +21,14 @@ class SubagentCoordinator;
 
 struct TaskSubagentRequest
 {
-  std::string description;
-  std::string prompt;
+  ava::core::NoLogString description;
+  ava::core::NoLogString prompt;
   std::string subagent_type;
-  std::string subagent_system_prompt;
+  ava::core::NoLogString subagent_system_prompt;
   AgentToolPreset tool_preset = AgentToolPreset::Inherit;
   std::optional<std::size_t> max_tool_iterations = std::nullopt;
   std::optional<std::string> task_id = std::nullopt;
-  std::string command;
+  ava::core::NoLogString command;
   bool background = false;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
@@ -40,8 +41,8 @@ struct TaskSubagentResult
   std::filesystem::path session_path;
   std::string subagent_type;
   std::string state = "completed";
-  std::string final_text;
-  std::string stop_reason;
+  ava::core::NoLogString final_text;
+  ava::core::NoLogString stop_reason;
   std::size_t provider_iterations = 0;
   std::size_t tool_calls = 0;
   std::size_t tool_iterations = 0;

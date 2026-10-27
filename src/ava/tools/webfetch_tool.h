@@ -2,6 +2,7 @@
 
 #include "ava/http/transport.h"
 #include "ava/tools/tool_context.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -30,10 +31,10 @@ struct WebFetchOptions
 
 struct WebFetchResult
 {
-  std::string url;
+  ava::core::NoLogString url;
   int status_code = 0;
   std::string content_type;
-  std::string content;
+  ava::core::NoLogString content;
   bool truncated = false;
   bool byte_limited = false;
   bool line_limited = false;

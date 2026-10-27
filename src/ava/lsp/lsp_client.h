@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/core/AnchorSet.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -22,7 +23,7 @@ using CancelCallback = std::function<bool()>;
 struct Diagnostic
 {
   int severity = 0;
-  std::string message;
+  ava::core::NoLogString message;
   int line = 0;
   int column = 0;
   std::string code;
@@ -42,11 +43,11 @@ struct Range
 
 struct Symbol
 {
-  std::string name;
+  ava::core::NoLogString name;
   int kind = 0;
   std::filesystem::path path;
   Range range;
-  std::string container;
+  ava::core::NoLogString container;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
@@ -79,7 +80,7 @@ struct ExecutableIdentity
 
 struct ServerConfig
 {
-  std::vector<std::string> argv;
+  std::vector<ava::core::NoLogString> argv;
   std::filesystem::path workspace_root;
   std::filesystem::path server_root = {};
   std::shared_ptr<ava::core::AnchorSet const> anchor_set = nullptr;
@@ -173,11 +174,11 @@ class SubprocessLspClient final : public DiagnosticsProvider
   int stdin_fd_ = -1;
   int stdout_fd_ = -1;
   int next_id_ = 1;
-  std::string read_buffer_;
-  std::unordered_map<std::string, std::string> open_document_contents_;
-  std::unordered_map<std::string, int> open_document_versions_;
-  std::unordered_map<std::string, std::vector<Diagnostic>> diagnostics_cache_;
-  std::unordered_map<std::string, std::size_t> diagnostics_cache_bytes_;
+  ava::core::NoLogString read_buffer_;
+  std::unordered_map<ava::core::NoLogString, ava::core::NoLogString> open_document_contents_;
+  std::unordered_map<ava::core::NoLogString, int> open_document_versions_;
+  std::unordered_map<ava::core::NoLogString, std::vector<Diagnostic>> diagnostics_cache_;
+  std::unordered_map<ava::core::NoLogString, std::size_t> diagnostics_cache_bytes_;
   std::size_t diagnostics_cache_total_bytes_ = 0;
   bool supports_pull_diagnostics_ = false;
 };

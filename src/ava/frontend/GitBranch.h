@@ -4,6 +4,7 @@
 #include "DisplayString.h"
 #include "RefreshResult.h"
 #include "ava/app/runtime/GitBranch.h"
+#include "ava/core/NoLogString.h"
 
 #include <atomic>
 #include <string>
@@ -20,7 +21,7 @@ class GitBranch
  private:
   FrontEnd const* frontend_;
   // Exact copy of canonical ava::app::runtime::GitBranch::name protected by GitBranch_ts.
-  std::string git_branch_snapshot_;
+  ava::core::NoLogString git_branch_snapshot_;
   DisplayString git_branch_;
   std::atomic_bool dirty_;
   DataListIndex index_;

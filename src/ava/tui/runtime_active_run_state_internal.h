@@ -4,6 +4,7 @@
 #include "ava/tui/event_state.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_state_internal.h"
+#include "ava/core/NoLogString.h"
 
 #include <atomic>
 #include <chrono>
@@ -32,7 +33,7 @@ struct RuntimeActiveRunState final
 
   void discard_for_session_transition();
 
-  std::string submitted;
+  ava::core::NoLogString submitted;
   bool const is_command_submission;
   bool const supports_active_queue;
   bool command_events_released = false;

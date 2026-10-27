@@ -6,6 +6,7 @@
 #include "PromptReadiness.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/agent/mode.h"
+#include "ava/core/NoLogString.h"
 
 #include <string>
 #include <vector>
@@ -23,8 +24,8 @@ struct PromptState
   BasePromptMetadata base_prompt;
   std::vector<ContextSourceMetadata> context_sources;
   std::vector<FreshnessSourceMetadata> freshness_sources;
-  std::string system_prompt;
-  std::string ambient_extension_free_system_prompt;
+  ava::core::NoLogString system_prompt;
+  ava::core::NoLogString ambient_extension_free_system_prompt;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

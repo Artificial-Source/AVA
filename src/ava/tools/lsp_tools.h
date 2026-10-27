@@ -2,6 +2,7 @@
 
 #include "ava/tools/tool_context.h"
 #include "ava/lsp/lsp_client.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -18,7 +19,7 @@ struct LspDiagnosticsResult {
 
 struct LspSymbolsResult {
   std::filesystem::path path;
-  std::string query;
+  ava::core::NoLogString query;
   std::vector<ava::lsp::Symbol> symbols;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

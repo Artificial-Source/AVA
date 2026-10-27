@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -21,7 +22,7 @@ struct LoadedContextFile
   std::filesystem::path path;
   ContextSourceType source_type = ContextSourceType::Workspace;
   std::size_t byte_count = 0;
-  std::string content;
+  ava::core::NoLogString content;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

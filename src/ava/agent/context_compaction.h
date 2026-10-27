@@ -5,6 +5,7 @@
 #include "ava/agent/model_invocation_options.h"
 #include "ava/session/compaction.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <functional>
@@ -23,7 +24,7 @@ namespace ava::agent {
 struct PreparedCompactionContext
 {
   std::vector<ava::session::SessionEntry> active_entries;
-  std::string recent_context;
+  ava::core::NoLogString recent_context;
   std::size_t estimated_tokens = 0;
   std::size_t retained_tokens = 0;
   bool recent_context_omitted = false;
@@ -53,10 +54,10 @@ struct ChildContextCompactionBinding
 struct ContextCompactionInvocation
 {
   ModelInvocationOptions model;
-  std::string access_token;
+  ava::core::NoLogString access_token;
   std::string credential_type = "bearer";
   bool openai_oauth = false;
-  std::string openai_account_id;
+  ava::core::NoLogString openai_account_id;
   std::function<bool()> cancel_requested = nullptr;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

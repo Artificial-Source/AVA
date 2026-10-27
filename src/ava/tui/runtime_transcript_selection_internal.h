@@ -5,6 +5,7 @@
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/runtime_draft_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/core/NoLogString.h"
 
 #include <chrono>
 #include <cstddef>
@@ -55,7 +56,7 @@ struct TranscriptSelectionRange
 
 struct TranscriptSelectionExtractResult
 {
-  std::string text = {};
+  ava::core::NoLogString text = {};
   // True when construction stopped after observing more than the OSC52 ceiling
   // (kMaxTerminalClipboardTextBytes + 1). Callers must not copy oversize text.
   bool oversize = false;
@@ -179,10 +180,10 @@ class RuntimeTranscriptSelectionState final
  private:
   struct ItemSourceAuthority
   {
-    std::string label = {};
-    std::string text = {};
-    std::string meta = {};
-    std::string thinking = {};
+    ava::core::NoLogString label = {};
+    ava::core::NoLogString text = {};
+    ava::core::NoLogString meta = {};
+    ava::core::NoLogString thinking = {};
     std::string stream_id = {};
     bool append_only_stream = false;
     bool tool = false;
@@ -190,7 +191,7 @@ class RuntimeTranscriptSelectionState final
     std::string tool_call_id = {};
     std::string tool_request_id = {};
     std::string tool_correlation_id = {};
-    std::string tool_arguments = {};
+    ava::core::NoLogString tool_arguments = {};
 
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };

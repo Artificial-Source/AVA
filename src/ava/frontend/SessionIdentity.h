@@ -4,6 +4,7 @@
 #include "DisplayString.h"
 #include "RefreshResult.h"
 #include "ava/session/session_store.h"
+#include "ava/core/NoLogString.h"
 #include "utils/macros.h"
 
 #include <atomic>
@@ -23,7 +24,7 @@ class SessionIdentity
   session::SessionStoreOptions options_snapshot_;
   // Derived cache, not a canonical member copy: session_path_for_options uses ava::session::SessionStoreOptions::{root_dir, workspace_dir, session_id}.
   // The source is read under SessionStoreOptions_ts; changes are detected by comparing the derived path strings.
-  std::string session_path_snapshot_;
+  ava::core::NoLogString session_path_snapshot_;
   DataListIndex index_;
   std::atomic_bool dirty_;
 

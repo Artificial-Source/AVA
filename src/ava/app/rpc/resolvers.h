@@ -6,6 +6,7 @@
 #include "ava/agent/mode.h"
 #include "ava/agent/question.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <condition_variable>
@@ -30,11 +31,11 @@ struct PendingPermissionRequest
   ava::agent::Mode mode = ava::agent::Mode::Build;
   std::string tool_name;
   std::filesystem::path target_path;
-  std::string command;
+  ava::core::NoLogString command;
   std::string command_recipe_key;
-  std::string command_recipe_display;
+  ava::core::NoLogString command_recipe_display;
   bool command_allows_reusable_grant = true;
-  std::string reason;
+  ava::core::NoLogString reason;
   ava::permissions::PermissionRisk risk = ava::permissions::PermissionRisk::Low;
   std::optional<ava::permissions::PermissionResolutionDecision> resolution;
   std::optional<ava::core::Error> error;
@@ -53,10 +54,10 @@ struct PermissionSessionGrant
   std::filesystem::path target_path;
   // For RunCommand session grants, matching is recipe-key authoritative; raw
   // command text is retained only for display and audit.
-  std::string command;
+  ava::core::NoLogString command;
   std::string command_recipe_key;
-  std::string command_recipe_display;
-  std::string reason;
+  ava::core::NoLogString command_recipe_display;
+  ava::core::NoLogString reason;
   ava::permissions::PermissionRisk risk = ava::permissions::PermissionRisk::Low;
 
   AVA_DEBUG_PRINT_MEMBERS_ON

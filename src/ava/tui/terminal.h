@@ -3,6 +3,7 @@
 #include "terminal/Context.h"
 #include "terminal/MouseEvent.h"
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/Signals.h"
 #include "ava/core/result.h"
 
@@ -19,7 +20,7 @@ struct InputEvent
 {
   terminal::Key key = terminal::Key::Unknown;
   char character = '\0';
-  std::string text = {};
+  ava::core::NoLogString text = {};
   std::size_t mouse_column = 0;
   std::size_t mouse_row = 0;
 

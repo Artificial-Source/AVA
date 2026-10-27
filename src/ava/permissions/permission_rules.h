@@ -2,11 +2,12 @@
 
 #include "ava/permissions/permission.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
-#include <optional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,12 +72,12 @@ struct PersistentPermissionRule
   PermissionRuleMode mode = PermissionRuleMode::Any;
   std::string tool_name;
   std::filesystem::path target_path;
-  std::string command;
+  ava::core::NoLogString command;
   std::string command_recipe_key;
-  std::string recipe_display;
+  ava::core::NoLogString recipe_display;
   bool critical_acknowledged = false;
   long long schema_version = kCurrentPermissionRulesSchemaVersion;
-  std::string reason;
+  ava::core::NoLogString reason;
   std::string actor;
   std::string created_at;
 
@@ -91,12 +92,12 @@ struct PermissionRuleDraft
   PermissionRuleMode mode = PermissionRuleMode::Any;
   std::string tool_name;
   std::filesystem::path target_path;
-  std::string command;
+  ava::core::NoLogString command;
   // RunCommand recipe keys must originate in sealed prompt/audit metadata.
   std::string command_recipe_key;
-  std::string recipe_display;
+  ava::core::NoLogString recipe_display;
   bool critical_acknowledged = false;
-  std::string reason;
+  ava::core::NoLogString reason;
   std::string actor = "rpc";
 
   AVA_DEBUG_PRINT_MEMBERS_ON

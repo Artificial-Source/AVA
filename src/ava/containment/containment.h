@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/command/command.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstdint>
@@ -67,7 +68,7 @@ struct DevelopmentContainmentPlan
 {
   ContainmentAvailability availability = ContainmentAvailability::Unavailable;
   std::string profile_id;
-  std::string unavailable_reason;
+  ava::core::NoLogString unavailable_reason;
   std::uint32_t landlock_abi_version = 0;
   bool network_allowed = false;
   // True when the plan calls for a mode-aware seccomp filter (planned, not

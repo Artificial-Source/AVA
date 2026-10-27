@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <string>
@@ -11,8 +12,8 @@ namespace ava::event {
 struct CompletionPayload
 {
   std::string status;
-  std::string stop_reason;
-  std::string reason;
+  ava::core::NoLogString stop_reason;
+  ava::core::NoLogString reason;
   std::size_t provider_iterations = 0;
   std::size_t tool_calls = 0;
 

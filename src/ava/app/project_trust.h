@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/config/xdg_paths.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -34,7 +35,7 @@ struct ProjectTrustState
   ProjectTrustDecision decision = ProjectTrustDecision::Unknown;
   std::filesystem::path matched_path;
   std::vector<ProjectTrustResource> protected_resources;
-  std::string diagnostic;
+  ava::core::NoLogString diagnostic;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

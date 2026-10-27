@@ -9,6 +9,7 @@
 #include "ava/tools/tool_io.h"
 #include "ava/session/attachments.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
@@ -29,10 +30,10 @@ struct RunOptions
 {
   // Caller-supplied request identity. run_prompt generates one when absent.
   std::optional<std::string> request_id = std::nullopt;
-  std::string access_token;
+  ava::core::NoLogString access_token;
   std::string credential_type = "bearer";
   bool openai_oauth = false;
-  std::string openai_account_id;
+  ava::core::NoLogString openai_account_id;
   bool stream = true;
   bool enable_transport_retries = false;
   std::optional<std::vector<std::string>> exact_builtin_tool_names = std::nullopt;

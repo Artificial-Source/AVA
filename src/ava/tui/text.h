@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <string>
@@ -42,16 +43,16 @@ struct NewLine
 
 struct String
 {
-  std::string text;
+  ava::core::NoLogString text;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 struct TextSpan
 {
-  std::string text;
+  ava::core::NoLogString text;
   Rendition rendition;
-  std::string link_target = {};
+  ava::core::NoLogString link_target = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

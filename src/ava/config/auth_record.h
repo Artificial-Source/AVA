@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/config/auth.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
@@ -13,7 +14,7 @@ namespace ava::config {
 struct AuthRecordMember
 {
   std::string key;
-  std::string raw_value;
+  ava::core::NoLogString raw_value;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

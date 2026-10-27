@@ -7,6 +7,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/frontend/UnlockedData.h"
 #include "ava/agent/mode.h"
+#include "ava/core/NoLogString.h"
 
 #include <string>
 #include <vector>
@@ -40,8 +41,8 @@ struct ResolvedPromptState
   PromptReadiness readiness = PromptReadiness::Ready;
   BasePromptMetadata base_prompt;
   std::vector<FreshnessSourceMetadata> freshness_sources;
-  std::string system_prompt;
-  std::string ambient_extension_free_system_prompt;
+  ava::core::NoLogString system_prompt;
+  ava::core::NoLogString ambient_extension_free_system_prompt;
   // Keep observable prompt metadata last so its address remains stable while
   // the surrounding resolved state is updated in place.
   PromptModeAndContextSources_ts mode_and_context_sources;

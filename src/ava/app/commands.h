@@ -5,6 +5,7 @@
 #include "ava/app/runtime.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
 #include <functional>
@@ -19,7 +20,7 @@ class PluginUiInvocationCapability;
 
 struct CommandRequest
 {
-  std::string command;
+  ava::core::NoLogString command;
   ava::event::RuntimeEventSink event_sink = nullptr;
   ava::permissions::PermissionResolver permission_resolver = nullptr;
   ava::agent::QuestionResolver question_resolver = nullptr;
@@ -37,11 +38,11 @@ struct CommandResult
   bool handled = false;
   bool quit = false;
   bool session_tree_changed = false;
-  std::vector<std::string> output;
+  std::vector<ava::core::NoLogString> output;
   std::vector<ava::agent::ToolTimelineEntry> tool_timeline;
-  std::optional<std::string> prompt_message = std::nullopt;
-  std::string prompt_command = {};
-  std::string prompt_source = {};
+  std::optional<ava::core::NoLogString> prompt_message = std::nullopt;
+  ava::core::NoLogString prompt_command = {};
+  ava::core::NoLogString prompt_source = {};
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 };

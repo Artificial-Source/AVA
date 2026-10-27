@@ -2,6 +2,7 @@
 
 #include "ava/debug/print_members_on.h"
 #include "ava/app/acp/protocol.h"
+#include "ava/core/NoLogString.h"
 
 #include <memory>
 #include <string>
@@ -20,8 +21,8 @@ enum class ReadRecordStatus
 struct ReadRecord
 {
   ReadRecordStatus status = ReadRecordStatus::FatalError;
-  std::string record;
-  std::string diagnostic;
+  ava::core::NoLogString record;
+  ava::core::NoLogString diagnostic;
   // Set for discarded oversized records from a constant-memory top-level scan.
   EnvelopeIntent intent = EnvelopeIntent::Unknown;
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

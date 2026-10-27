@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ava/debug/print_members_on.h"
+#include "ava/core/NoLogString.h"
 
 #include <chrono>
 #include <cstddef>
@@ -212,7 +213,7 @@ struct LifecyclePolicyV1
 struct EnvironmentVariableV1
 {
   std::string name;
-  std::string value;
+  ava::core::NoLogString value;
 
   // Environment content must never be emitted by generated debug output.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
