@@ -143,12 +143,16 @@ bool RuntimeEventQueue::received_any()
   return received;
 }
 
+// Startup hydration reads backend state before the UI lock exists, so it cannot
+// invert the backend-to-UI lock order. RuntimePresentationState is created only
+// after the concrete frontend has finished construction, making virtual backend
+// reads safe here.
 RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend)
     : snapshot(initial_snapshot(frontend)),
       frontend_(frontend),
       applied_slash_catalog_generation_(frontend->options().slash_catalog_generation),
       applied_workspace_catalog_generation_(frontend->options().workspace_catalog_generation),
-      sidebar{.todos = frontend->options().initial_todos, .mode = snapshot.mode, .version = frontend->options().app_version}
+      sidebar{.todos = frontend->read_committed_todos(), .mode = snapshot.mode, .version = frontend->options().app_version}
 {
   snapshot.session_id = frontend->read_committed_session_id();
 }
@@ -187,11 +191,9 @@ void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& fronten
 //static
 RuntimePresentationState::BoundaryReads RuntimePresentationState::read_boundary_data(TuiFrontEnd& frontend)
 {
-  TuiRuntimeOptions const& options = frontend.options();
   BoundaryReads reads;
   reads.catalog = frontend.read_catalog_delivery();
-  if (options.read_committed_todos)
-    reads.todos = options.read_committed_todos(frontend);
+  reads.todos = frontend.read_committed_todos();
   return reads;
 }
 

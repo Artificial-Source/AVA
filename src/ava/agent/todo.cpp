@@ -344,9 +344,9 @@ std::string serialize_todowrite_error_json(ava::core::Error const& error)
   return out;
 }
 
-std::optional<TodoSnapshot> latest_committed_todowrite_snapshot(std::vector<ava::session::SessionEntry> const& entries)
+TodoSnapshot latest_committed_todowrite_snapshot(std::vector<ava::session::SessionEntry> const& entries)
 {
-  std::optional<TodoSnapshot> latest;
+  TodoSnapshot latest;
   for (auto const& entry : entries)
   {
     auto result_text = session_tool_result_text(entry);

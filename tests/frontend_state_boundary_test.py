@@ -16,7 +16,7 @@ SEAM_FIELDS = {
     "TuiRuntimeOptions": {
         "app_version", "initial_status", "initial_transcript", "slash_commands",
         "slash_catalog_generation", "file_references", "workspace_catalog_generation",
-        "initial_todos", "initial_display_settings", "mermaid_render", "key_bindings",
+        "initial_display_settings", "mermaid_render", "key_bindings",
     },
     "TuiSubmitResult": {
         "quit", "ordinary_turn_committed", "output", "tool_timeline",

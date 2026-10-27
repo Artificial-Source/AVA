@@ -24,6 +24,9 @@
 #include <vector>
 
 namespace ava::tui {
+
+using TodoStatus = agent::TodoStatus;
+
 namespace {
 
 using detail::kSgrAccent;
@@ -466,14 +469,14 @@ bool sidebar_drawer_active(ComposerSnapshot const& snapshot)
          !snapshot.command_output && !snapshot.plugin_ui_modal && !snapshot.select_list && !snapshot.subagent_workspace;
 }
 
-bool todo_is_active(TodoItem const& item) noexcept
+bool todo_is_active(agent::TodoItem const& item) noexcept
 {
   return item.status == TodoStatus::Pending || item.status == TodoStatus::InProgress;
 }
 
-std::size_t count_todos_with_status(std::vector<TodoItem> const& todos, TodoStatus status) noexcept
+std::size_t count_todos_with_status(std::vector<agent::TodoItem> const& todos, TodoStatus status) noexcept
 {
-  return static_cast<std::size_t>(std::ranges::count_if(todos, [status](TodoItem const& item) { return item.status == status; }));
+  return static_cast<std::size_t>(std::ranges::count_if(todos, [status](agent::TodoItem const& item) { return item.status == status; }));
 }
 
 bool sidebar_has_active_todos(SidebarSnapshot const& sidebar) noexcept
@@ -530,7 +533,7 @@ std::string todo_status_label(TodoStatus status)
   return "pending";
 }
 
-std::string format_todo_counts_header(std::vector<TodoItem> const& todos, bool active_only_title)
+std::string format_todo_counts_header(std::vector<agent::TodoItem> const& todos, bool active_only_title)
 {
   auto const total = todos.size();
   auto const completed = count_todos_with_status(todos, TodoStatus::Completed);
@@ -543,7 +546,7 @@ std::string format_todo_counts_header(std::vector<TodoItem> const& todos, bool a
          std::to_string(pending) + " pending";
 }
 
-std::string format_todo_rail_line(TodoItem const& item, std::size_t width)
+std::string format_todo_rail_line(agent::TodoItem const& item, std::size_t width)
 {
   auto line = std::string(todo_status_sgr(item.status)) + todo_status_marker(item.status) + std::string(kSgrReset) + " #" + sanitize_terminal_text(item.id) +
               " " + sanitize_terminal_text(item.content);
@@ -1398,7 +1401,7 @@ void prepare_main_column_geometry_snapshot(ComposerSnapshot& snapshot, bool rail
     snapshot.sidebar = std::nullopt;
     return;
   }
-  auto todos = snapshot.sidebar ? snapshot.sidebar->todos : std::vector<TodoItem>{};
+  auto todos = snapshot.sidebar ? snapshot.sidebar->todos : std::vector<agent::TodoItem>{};
   snapshot.sidebar = SidebarSnapshot{.todos = std::move(todos)};
 }
 
@@ -1448,7 +1451,7 @@ std::vector<std::string> render_todo_dock_lines(SidebarSnapshot const& sidebar, 
   if (max_lines == 1)
     return lines;
 
-  std::vector<TodoItem const*> active;
+  std::vector<agent::TodoItem const*> active;
   active.reserve(sidebar.todos.size());
   for (auto const& item : sidebar.todos)
   {
@@ -1463,7 +1466,7 @@ std::vector<std::string> render_todo_dock_lines(SidebarSnapshot const& sidebar, 
   if (collapse_to_current)
   {
     // Prefer the in_progress item when collapsing, else the first active item.
-    TodoItem const* current = active.front();
+    agent::TodoItem const* current = active.front();
     for (auto const* item : active)
     {
       if (item->status == TodoStatus::InProgress)

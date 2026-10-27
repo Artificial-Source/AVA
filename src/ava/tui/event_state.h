@@ -52,7 +52,7 @@ struct TuiEventState
   std::vector<QueuedMessageItem> queued_messages;
   std::vector<SidebarActivityItem> activity;
   std::vector<SidebarModifiedFile> modified_files;
-  std::vector<TodoItem> todos;
+  std::vector<agent::TodoItem> todos;
   std::optional<std::string> active_run_id = std::nullopt;
   std::optional<std::string> active_turn_id = std::nullopt;
   std::optional<std::string> active_message_id = std::nullopt;

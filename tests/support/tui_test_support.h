@@ -57,6 +57,8 @@ class TuiFrontEndFixture final
   [[nodiscard]] ava::tui::TuiFrontEnd* frontend() noexcept;
   // Runtime-controller tests use the same owned options object as production composition.
   [[nodiscard]] ava::tui::TuiRuntimeOptions& runtime_options() noexcept;
+  // Append a committed todowrite snapshot to the fixture's current backend session.
+  void seed_committed_todos(std::vector<ava::agent::TodoItem> todos);
   void refresh_application_catalog_values();
   [[nodiscard]] std::pair<std::string, std::string> selected_model_metadata();
   [[nodiscard]] std::pair<std::string, bool> git_branch_metadata();

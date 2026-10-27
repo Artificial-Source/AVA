@@ -3,6 +3,7 @@
 #include "ava/debug/print_members_on.h"
 #include "ava/agent/subagent_inspector.h"
 #include "ava/agent/subagent_launch.h"
+#include "ava/agent/todo.h"
 #include "ava/tui/runtime_plugin_ui.h"
 #include "ava/tui/terminal.h"
 #include "ava/tui/terminal/Cursor.h"
@@ -175,22 +176,6 @@ struct SidebarModifiedFile
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
-enum class TodoStatus
-{
-  Pending,
-  InProgress,
-  Completed,
-};
-
-struct TodoItem
-{
-  std::string id = {};
-  ava::core::NoLogString content = {};
-  TodoStatus status = TodoStatus::Pending;
-
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
-
 struct QueuedMessageItem
 {
   std::string id = {};
@@ -259,7 +244,7 @@ struct SidebarSnapshot
 {
   std::vector<SidebarActivityItem> activity = {};
   std::vector<SidebarModifiedFile> modified_files = {};
-  std::vector<TodoItem> todos = {};
+  std::vector<agent::TodoItem> todos = {};
   std::string mode = {};
   std::string version = {};
   std::optional<std::size_t> context_source_count = std::nullopt;

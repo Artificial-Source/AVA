@@ -286,11 +286,9 @@ int run_tui(InteractiveState state)
       .slash_catalog_generation = initial_catalog_snapshot.slash_catalog_generation,
       .file_references = project_file_reference_items(std::move(initial_catalog_snapshot.file_references)),
       .workspace_catalog_generation = initial_catalog_snapshot.workspace_catalog_generation,
-      .initial_todos = todos_for_session(unlocked_session),
       .initial_display_settings = display_settings.presentation(),
       .mermaid_render = display_settings.mermaid_bridge(),
       .key_bindings = key_bindings,
-      .read_committed_todos = [&unlocked_session](ava::tui::TuiFrontEnd const&) { return todos_for_session(unlocked_session); },
       .read_startup_overview =
           [&unlocked_session](ava::tui::TuiFrontEnd const&) {
             // The builder holds one Session read guard while performing only bounded,

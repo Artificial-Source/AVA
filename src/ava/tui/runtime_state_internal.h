@@ -104,7 +104,7 @@ class RuntimePresentationState final
   struct BoundaryReads
   {
     std::optional<TuiCatalogDelivery> catalog;
-    std::optional<std::vector<TodoItem>> todos;
+    std::optional<std::vector<agent::TodoItem>> todos;
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
   // Reads the retained transports through the options callbacks. Like

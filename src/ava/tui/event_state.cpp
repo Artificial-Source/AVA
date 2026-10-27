@@ -10,6 +10,7 @@
 #include <variant>
 
 namespace ava::tui {
+
 namespace {
 
 std::string first_non_empty(std::initializer_list<std::string_view> values)
@@ -702,8 +703,9 @@ void record_modified_file(TuiEventState& state, ToolTimelineItem const& item)
                                state.modified_files.begin() + static_cast<std::ptrdiff_t>(state.modified_files.size() - kMaxModifiedFiles));
 }
 
-std::optional<TodoStatus> parse_todo_status_view(std::string_view value)
+std::optional<agent::TodoStatus> parse_todo_status_view(std::string_view value)
 {
+  using TodoStatus = agent::TodoStatus;
   if (value == "pending")
     return TodoStatus::Pending;
   if (value == "in_progress")
@@ -715,7 +717,7 @@ std::optional<TodoStatus> parse_todo_status_view(std::string_view value)
 
 // Fail-closed presentation parse of a normalized successful todowrite result.
 // Malformed historical/live payloads leave existing state unchanged.
-std::optional<std::vector<TodoItem>> parse_todowrite_result_todos(std::string_view result_json)
+std::optional<std::vector<agent::TodoItem>> parse_todowrite_result_todos(std::string_view result_json)
 {
   if (!bool_field(result_json, "ok"))
     return std::nullopt;
@@ -729,7 +731,7 @@ std::optional<std::vector<TodoItem>> parse_todowrite_result_todos(std::string_vi
   if (!objects)
     return std::nullopt;
 
-  std::vector<TodoItem> todos;
+  std::vector<agent::TodoItem> todos;
   todos.reserve(objects->size());
   std::size_t in_progress = 0;
   for (auto const& object : *objects)
@@ -742,7 +744,7 @@ std::optional<std::vector<TodoItem>> parse_todowrite_result_todos(std::string_vi
     auto const status = parse_todo_status_view(*status_text);
     if (!status)
       return std::nullopt;
-    if (*status == TodoStatus::InProgress)
+    if (*status == agent::TodoStatus::InProgress)
       ++in_progress;
     if (in_progress > 1)
       return std::nullopt;
@@ -757,9 +759,9 @@ std::optional<std::vector<TodoItem>> parse_todowrite_result_todos(std::string_vi
       if (ch < 0x20 || ch == 0x7F)
         return std::nullopt;
     }
-    if (std::ranges::any_of(todos, [&](TodoItem const& existing) { return existing.id == *id; }))
+    if (std::ranges::any_of(todos, [&](agent::TodoItem const& existing) { return existing.id == *id; }))
       return std::nullopt;
-    todos.push_back(TodoItem{.id = *id, .content = *content, .status = *status});
+    todos.push_back(agent::TodoItem{.id = *id, .content = *content, .status = *status});
   }
   return todos;
 }

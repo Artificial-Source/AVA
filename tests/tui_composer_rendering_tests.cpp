@@ -254,11 +254,7 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const replaced_session = frontend.replace_session_identity();
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
 
-  int todo_pulls = 0;
-  frontend.runtime_options().read_committed_todos = [&](ava::tui::TuiFrontEnd const&) {
-    ++todo_pulls;
-    return std::vector<ava::tui::TodoItem>{{.id = "todo-new", .content = "new todo", .status = ava::tui::TodoStatus::InProgress}};
-  };
+  frontend.seed_committed_todos({{.id = "todo-new", .content = "new todo", .status = ava::agent::TodoStatus::InProgress}});
   auto changed = ava::tui::apply_committed_session_transition_and_refresh(*frontend.frontend(), presentation, draft_state, renderer, transcript_search,
                                                                           subagent_workspace, active_select_list, committed_session_id);
 
@@ -269,7 +265,7 @@ bool test_changed_session_snapshot_resets_presentation()
       ava::tui::browse_composer_input_history(history_probe, draft_state.input_history, history_probe_index, history_probe_scratch, true);
   auto const changed_state_ok =
       replaced_session && changed && search_opened && presentation.snapshot.session_id == committed_session_id && presentation.snapshot.mode == "build" &&
-      todo_pulls == 1 && presentation.snapshot.transcript.empty() && presentation.snapshot.transcript_generation == previous_generation + 1 &&
+      presentation.snapshot.transcript.empty() && presentation.snapshot.transcript_generation == previous_generation + 1 &&
       presentation.snapshot.queued_messages.empty() && presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() &&
       presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().content == "new todo" &&
       presentation.sidebar.session_entry_count == std::nullopt && draft_state.draft.text.empty() && draft_state.input_history.empty() && !history_restored &&
@@ -290,16 +286,13 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.snapshot.queued_messages = {{.id = "queued-new", .kind = "follow-up", .text = "new queued message"}};
   presentation.sidebar.activity = {{.id = "activity-new", .label = "tool", .detail = "new activity"}};
   auto const unchanged_generation = presentation.snapshot.transcript_generation;
-  frontend.runtime_options().read_committed_todos = [&](ava::tui::TuiFrontEnd const&) {
-    ++todo_pulls;
-    return std::vector<ava::tui::TodoItem>{{.id = "todo-same", .content = "same-session todo"}};
-  };
+  frontend.seed_committed_todos({{.id = "todo-same", .content = "same-session todo"}});
   auto unchanged =
       ava::tui::apply_committed_session_transition_and_refresh(*frontend.frontend(), presentation, draft_state, renderer, transcript_search, subagent_workspace,
                                                                active_select_list, frontend.frontend()->read_committed_session_id());
   auto const unchanged_state_ok = !unchanged && presentation.snapshot.transcript_generation == unchanged_generation &&
                                   presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().text == "new receipt only" &&
-                                  presentation.snapshot.queued_messages.size() == 1 && presentation.sidebar.activity.size() == 1 && todo_pulls == 2 &&
+                                  presentation.snapshot.queued_messages.size() == 1 && presentation.sidebar.activity.size() == 1 &&
                                   presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().content == "same-session todo";
 
   auto const jobs_still_available = subagent_workspace.open_selector() && subagent_workspace.active() && job_list_calls == 1;
@@ -347,7 +340,6 @@ bool test_active_run_session_transition_discards_prior_session_events()
   bool quit_requested = false;
   bool queues_enabled = true;
   tui_test_support::TuiFrontEndFixture* frontend_fixture = nullptr;
-  int todo_pulls = 0;
   ava::tui::TuiRuntimeOptions options;
   //  options.provider = "fake";
   //  options.model = "old-model";
@@ -355,20 +347,12 @@ bool test_active_run_session_transition_discards_prior_session_events()
       ava::tui::TranscriptItem{.label = "ava", .text = "OLD-INITIAL-TRANSCRIPT"},
       ava::tui::TranscriptItem{.tool = ava::tui::ToolTimelineItem{.status = ava::tui::ToolTimelineStatus::Success, .name = "old_initial_tool"}},
   };
-  options.initial_todos = {{.id = "old-todo", .content = "OLD TODO", .status = ava::tui::TodoStatus::InProgress}};
 #if 0 // FIXME: this member doesn't exist anymore.
   options.read_catalog_delivery = [&]() {
     ++catalog_pulls;
     return ava::tui::TuiCatalogDelivery{};
   };
 #endif
-  options.read_committed_todos = [&](ava::tui::TuiFrontEnd const&) {
-    ++todo_pulls;
-    std::vector<ava::tui::TodoItem> todos;
-    if (backend_session_replaced)
-      todos.push_back({.id = "new-todo", .content = "NEW TODO", .status = ava::tui::TodoStatus::Pending});
-    return todos;
-  };
   options.create_active_run_queues = [&finish_called, &queues_enabled](ava::tui::TuiFrontEnd const&, ava::event::EventEnvelopeSink sink) {
     if (!queues_enabled)
       return ava::tui::TuiActiveRunQueues{};
@@ -423,6 +407,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
     old_tool.changed_paths = {"old-event.cpp"};
     static_cast<void>(context.event_sink(ava::event::RuntimeEvent{{}, ava::event::ToolResultEvent{.payload = std::move(old_tool)}}));
     backend_session_replaced = frontend_fixture->replace_session_identity();
+    frontend_fixture->seed_committed_todos({{.id = "new-todo", .content = "NEW TODO", .status = ava::agent::TodoStatus::Pending}});
     auto result = ava::tui::TuiSubmitResult{};
     result.output = {"NEW-SESSION-RECEIPT"};
     return result;
@@ -430,6 +415,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
 
   tui_test_support::TuiFrontEndFixture frontend(options);
   frontend_fixture = &frontend;
+  frontend.seed_committed_todos({{.id = "old-todo", .content = "OLD TODO", .status = ava::agent::TodoStatus::InProgress}});
   ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.snapshot.sidebar = presentation.sidebar;
   presentation.snapshot.queued_messages = {{.id = "old-preloaded-queue", .kind = "follow-up", .text = "OLD PRELOADED QUEUE"}};
@@ -458,7 +444,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   auto history_scratch = std::string{};
   auto const history_restored = ava::tui::browse_composer_input_history(history_probe, draft_state.input_history, history_index, history_scratch, true);
   auto const passed =
-      !outcome.break_loop && !outcome.terminal_write_failed && finish_called && initial_identity_forwarded && backend_session_replaced && todo_pulls == 1 &&
+      !outcome.break_loop && !outcome.terminal_write_failed && finish_called && initial_identity_forwarded && backend_session_replaced &&
       presentation.snapshot.session_id == committed_session_id && presentation.snapshot.mode == "build" && presentation.snapshot.transcript.size() == 1 &&
       presentation.snapshot.transcript.front().text == "NEW-SESSION-RECEIPT" && !presentation.snapshot.transcript.front().tool &&
       presentation.snapshot.queued_messages.empty() && presentation.sidebar.activity.empty() && presentation.sidebar.modified_files.empty() &&
@@ -467,8 +453,11 @@ bool test_active_run_session_transition_discards_prior_session_events()
 
   queues_enabled = false;
   quit_requested = true;
+  frontend.seed_committed_todos({{.id = "quit-hidden", .content = "QUIT MUST NOT REFRESH", .status = ava::agent::TodoStatus::Pending}});
   auto const quit_outcome = active_run.run("/exit");
-  expect(quit_outcome.break_loop && !quit_outcome.terminal_write_failed && todo_pulls == 1, "quit completion performs no catalog or committed todo pull");
+  expect(quit_outcome.break_loop && !quit_outcome.terminal_write_failed && presentation.sidebar.todos.size() == 1 &&
+             presentation.sidebar.todos.front().id == "new-todo",
+         "quit completion performs no catalog or committed todo pull");
   return passed;
 }
 
@@ -4066,10 +4055,10 @@ void run_tui_composer_rendering_tests_part_4()
              unbound_hint.interrupt.empty() && unbound_hint.jump_to_bottom.empty(),
          "Wave A active_run_hint_for derives Cancel stop and JumpToBottom labels through first_key_display so custom and unbound bindings stay truthful");
 
-  auto const active_todos = std::vector<ava::tui::TodoItem>{
-      {.id = "a", .content = "First task", .status = ava::tui::TodoStatus::Completed},
-      {.id = "b", .content = "Second task", .status = ava::tui::TodoStatus::InProgress},
-      {.id = "c", .content = "Third task", .status = ava::tui::TodoStatus::Pending},
+  auto const active_todos = std::vector<ava::agent::TodoItem>{
+      {.id = "a", .content = "First task", .status = ava::agent::TodoStatus::Completed},
+      {.id = "b", .content = "Second task", .status = ava::agent::TodoStatus::InProgress},
+      {.id = "c", .content = "Third task", .status = ava::agent::TodoStatus::Pending},
   };
   auto const rail_frame =
       ava::tui::render_composer(frontend.frontend(), ava::tui::ComposerSnapshot{.mode = "build",
@@ -4131,7 +4120,7 @@ void run_tui_composer_rendering_tests_part_4()
                                                       .width = 144,
                                                       .height = 22,
                                                       .sidebar = ava::tui::SidebarSnapshot{
-                                                          .todos = {{.id = "a", .content = "Done", .status = ava::tui::TodoStatus::Completed}},
+                                                          .todos = {{.id = "a", .content = "Done", .status = ava::agent::TodoStatus::Completed}},
                                                           .mode = "build",
                                                           //.provider = "openai",
                                                           //.model = "gpt-5.5"

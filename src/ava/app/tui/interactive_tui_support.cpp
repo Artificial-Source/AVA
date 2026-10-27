@@ -178,40 +178,6 @@ std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent
   return items;
 }
 
-ava::tui::TodoStatus to_tui_todo_status(ava::agent::TodoStatus status)
-{
-  switch (status)
-  {
-    case ava::agent::TodoStatus::Pending:
-      return ava::tui::TodoStatus::Pending;
-    case ava::agent::TodoStatus::InProgress:
-      return ava::tui::TodoStatus::InProgress;
-    case ava::agent::TodoStatus::Completed:
-      return ava::tui::TodoStatus::Completed;
-  }
-  return ava::tui::TodoStatus::Pending;
-}
-
-std::vector<ava::tui::TodoItem> todos_for_session(runtime::session_ts const& unlocked_session)
-{
-  auto read_authority = runtime::session_ts::crat(unlocked_session)->read_authority_1();
-  if (!read_authority)
-    return {};
-  auto entries = read_authority->load();
-  if (!entries)
-    return {};
-  auto snapshot = ava::agent::latest_committed_todowrite_snapshot(*entries);
-  if (!snapshot)
-    return {};
-  std::vector<ava::tui::TodoItem> todos;
-  todos.reserve(snapshot->todos.size());
-  for (auto const& item : snapshot->todos)
-  {
-    todos.push_back(ava::tui::TodoItem{.id = item.id, .content = item.content, .status = to_tui_todo_status(item.status)});
-  }
-  return todos;
-}
-
 std::string session_selector_footer_hint(ava::app::SessionSelectorSort sort, bool named_only, bool show_paths, bool show_archived, bool show_label_time)
 {
   static_cast<void>(sort);

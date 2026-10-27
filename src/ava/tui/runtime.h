@@ -300,13 +300,9 @@ struct TuiRuntimeOptions
   std::optional<std::size_t> slash_catalog_generation = std::nullopt;
   std::vector<FileReferenceItem> file_references = {};
   std::optional<std::size_t> workspace_catalog_generation = std::nullopt;
-  std::vector<TodoItem> initial_todos = {};
   TuiLocalDisplaySettings initial_display_settings;
   TuiMermaidRenderBridge mermaid_render;
   TuiKeyBindings key_bindings = default_key_bindings();
-  // The first callback argument is the frontend that owns these options. It is
-  // const unless the callback must mutate frontend-owned application state.
-  std::function<std::vector<TodoItem>(TuiFrontEnd const&)> read_committed_todos;
   // UI-thread popup initialization callbacks. Inputs: none. Outputs: owning,
   // already-filtered DTOs from current in-memory Session state. Side effects:
   // briefly acquire the backend Session read guard. Call once per popup open,

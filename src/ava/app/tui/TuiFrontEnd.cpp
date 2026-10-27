@@ -2,6 +2,7 @@
 #include "TuiFrontEnd.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/app/tui/command_palette_views.h"  // project_slash_command_items, project_file_reference_items
+#include "ava/app/tui/interactive_tui_internal.h"
 
 namespace ava::app {
 
@@ -18,6 +19,18 @@ tui::TuiCatalogDelivery TuiFrontEnd::read_catalog_delivery()
                                  .slash_catalog_generation = delivery.slash_catalog_generation,
                                  .file_references = project_file_reference_items(std::move(delivery.file_references)),
                                  .workspace_catalog_generation = delivery.workspace_catalog_generation};
+}
+
+std::vector<agent::TodoItem> TuiFrontEnd::read_committed_todos() const
+{
+  auto read_authority = runtime::session_ts::crat(unlocked_session_)->read_authority_1();
+  if (!read_authority)
+    return {};
+  auto entries = read_authority->load();
+  if (!entries)
+    return {};
+  auto snapshot = ava::agent::latest_committed_todowrite_snapshot(*entries);
+  return std::move(snapshot.todos);
 }
 
 } // namespace ava::app

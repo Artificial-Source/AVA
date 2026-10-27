@@ -2667,8 +2667,8 @@ void TuiRuntimeOptions::print_on(std::ostream& os) const
   os << '{' << "app_version:" << app_version << ", initial_status:" << initial_status << ", initial_transcript:" << initial_transcript
      << ", slash_commands:{...}"
      << ", slash_catalog_generation:" << slash_catalog_generation << ", file_references:" << file_references
-     << ", workspace_catalog_generation:" << workspace_catalog_generation << ", initial_todos:" << initial_todos
-     << ", initial_display_settings:" << initial_display_settings << ", mermaid_render:" << mermaid_render << ", key_bindings:{...}" << '}';
+     << ", workspace_catalog_generation:" << workspace_catalog_generation << ", initial_display_settings:" << initial_display_settings
+     << ", mermaid_render:" << mermaid_render << ", key_bindings:{...}" << '}';
 }
 #endif
 

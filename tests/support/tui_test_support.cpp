@@ -5,8 +5,11 @@
 #include "ava/app/runtime/Session.h"
 #include "ava/app/runtime_reasoning.h"
 #include "ava/app/tui/TuiFrontEnd.h"
+#include "ava/agent/todo.h"
 #include "ava/config/model_config.h"
 #include "ava/core/Application.h"
+#include "ava/core/ids.h"
+#include "ava/core/json.h"
 #include "ava/core/string_utils.h"
 
 #include <algorithm>
@@ -112,6 +115,34 @@ ava::tui::TuiRuntimeOptions& TuiFrontEndFixture::runtime_options() noexcept
 {
   // The fixture exclusively owns the frontend and exposes its options only so controller tests mirror production composition.
   return const_cast<ava::tui::TuiRuntimeOptions&>(impl_->frontend.options());
+}
+
+void TuiFrontEndFixture::seed_committed_todos(std::vector<ava::agent::TodoItem> todos)
+{
+  using TodoStatus = ava::agent::TodoStatus;
+  ava::agent::TodoSnapshot snapshot;
+  snapshot.todos.reserve(todos.size());
+  for (auto& todo : todos)
+  {
+    auto status = TodoStatus::Pending;
+    if (todo.status == TodoStatus::InProgress)
+      status = TodoStatus::InProgress;
+    else if (todo.status == TodoStatus::Completed)
+      status = TodoStatus::Completed;
+    snapshot.todos.push_back({.id = std::move(todo.id), .content = std::move(todo.content), .status = status});
+  }
+  snapshot.counts = ava::agent::count_todos(snapshot.todos);
+  auto const result = ava::agent::serialize_todowrite_success_json(snapshot);
+  auto const data_json =
+      "{\"call_id\":\"fixture_todo\",\"name\":\"todowrite\",\"success\":true,\"status\":\"success\",\"result\":\"" + ava::core::json::escape(result) + "\"}";
+  ava::app::runtime::session_ts::wat session_w(impl_->session);
+  auto appended = append_session_entry_for_test(session_w->store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
+                                                                                             .parent_id = "",
+                                                                                             .type = ava::session::EntryType::ToolResult,
+                                                                                             .timestamp = ava::session::now_timestamp(),
+                                                                                             .data_json = data_json});
+  if (!appended)
+    throw std::runtime_error("could not seed committed TUI todos: " + appended.error().format());
 }
 
 void TuiFrontEndFixture::refresh_application_catalog_values()

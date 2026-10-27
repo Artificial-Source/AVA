@@ -24,6 +24,10 @@ class TuiFrontEnd : public frontend::FrontEnd
   // like read_committed_session_id never while holding the UI lock.
   virtual TuiCatalogDelivery read_catalog_delivery() = 0;
 
+  // The first callback argument is the frontend that owns these options. It is
+  // const unless the callback must mutate frontend-owned application state.
+  virtual std::vector<agent::TodoItem> read_committed_todos() const = 0;
+
   // Launch the terminal user interface (TUI) using runtime options `options`.
   // Called by ava::app::interactive_internal::run_tui after registering all frontend::Data objects.
   //

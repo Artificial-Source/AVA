@@ -76,6 +76,6 @@ struct TodoSnapshot
 // Latest successful committed todowrite ToolResult wins. Failed/malformed
 // results are ignored. An empty successful list clears. Uses only already-loaded
 // SessionEntry values; does not touch session authority or read limits.
-[[nodiscard]] std::optional<TodoSnapshot> latest_committed_todowrite_snapshot(std::vector<ava::session::SessionEntry> const& entries);
+[[nodiscard]] TodoSnapshot latest_committed_todowrite_snapshot(std::vector<ava::session::SessionEntry> const& entries);
 
 }  // namespace ava::agent

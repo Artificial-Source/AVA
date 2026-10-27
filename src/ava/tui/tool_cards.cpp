@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/agent/todo.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/tool_card_task_job.h"
 #include "ava/tui/tool_cards.h"
@@ -12,6 +13,9 @@
 #include <vector>
 
 namespace ava::tui {
+
+using TodoStatus = agent::TodoStatus;
+
 namespace {
 
 constexpr auto kBlockMinWidth = std::size_t{32};
@@ -1385,7 +1389,7 @@ bool bool_json_true(std::string_view object, std::string_view key)
   return value.starts_with("true");
 }
 
-std::optional<std::vector<TodoItem>> parse_todowrite_card_todos(std::string_view result_json)
+std::optional<std::vector<agent::TodoItem>> parse_todowrite_card_todos(std::string_view result_json)
 {
   if (!bool_json_true(result_json, "ok"))
     return std::nullopt;
@@ -1395,7 +1399,7 @@ std::optional<std::vector<TodoItem>> parse_todowrite_card_todos(std::string_view
   auto const objects = ava::core::json::strict_objects_in_array_field(result_json, "todos", 50);
   if (!objects)
     return std::nullopt;
-  std::vector<TodoItem> todos;
+  std::vector<agent::TodoItem> todos;
   todos.reserve(objects->size());
   for (auto const& object : *objects)
   {
@@ -1407,7 +1411,7 @@ std::optional<std::vector<TodoItem>> parse_todowrite_card_todos(std::string_view
     auto const status = parse_card_todo_status(*status_text);
     if (!status)
       return std::nullopt;
-    todos.push_back(TodoItem{.id = *id, .content = *content, .status = *status});
+    todos.push_back(agent::TodoItem{.id = *id, .content = *content, .status = *status});
   }
   return todos;
 }

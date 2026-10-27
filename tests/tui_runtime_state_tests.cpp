@@ -2161,8 +2161,8 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
 
   ava::tui::TuiEventState state;
   ava::tui::apply_runtime_event(state, tool_result_event(make_todo_payload("1/3 completed", "call_todo_1", success_json, "completed")));
-  expect(state.todos.size() == 3 && state.todos[0].id == "a" && state.todos[0].status == ava::tui::TodoStatus::Completed &&
-             state.todos[1].status == ava::tui::TodoStatus::InProgress && state.todos[2].status == ava::tui::TodoStatus::Pending,
+  expect(state.todos.size() == 3 && state.todos[0].id == "a" && state.todos[0].status == ava::agent::TodoStatus::Completed &&
+             state.todos[1].status == ava::agent::TodoStatus::InProgress && state.todos[2].status == ava::agent::TodoStatus::Pending,
          "successful todowrite ToolResult replaces event-state todos");
 
   ava::tui::apply_runtime_event(
@@ -2180,18 +2180,13 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
           R"({"schema_version":1,"tool":"todowrite","ok":true,"todos":[],"counts":{"total":0,"pending":0,"in_progress":0,"completed":0}})", "completed")));
   expect(state.todos.empty(), "empty successful todowrite snapshot clears event-state todos");
 
-  ava::tui::TuiRuntimeOptions options;
-  options.initial_todos = {ava::tui::TodoItem{.id = "seed", .content = "Hydrated", .status = ava::tui::TodoStatus::Pending}};
-  tui_test_support::TuiFrontEndFixture options_frontend(options);
+  tui_test_support::TuiFrontEndFixture options_frontend;
+  options_frontend.seed_committed_todos({ava::agent::TodoItem{.id = "seed", .content = "Hydrated", .status = ava::agent::TodoStatus::Pending}});
   ava::tui::RuntimePresentationState presentation(options_frontend.frontend());
-  expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "runtime options hydrate sidebar todos at startup");
-  int todo_pulls = 0;
-  options_frontend.runtime_options().read_committed_todos = [&](ava::tui::TuiFrontEnd const&) {
-    ++todo_pulls;
-    return std::vector<ava::tui::TodoItem>{{.id = "switched", .content = "After switch", .status = ava::tui::TodoStatus::InProgress}};
-  };
+  expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "committed backend todos hydrate the sidebar at startup");
+  options_frontend.seed_committed_todos({ava::agent::TodoItem{.id = "switched", .content = "After switch", .status = ava::agent::TodoStatus::InProgress}});
   presentation.refresh_after_backend_action(*options_frontend.frontend());
-  expect(todo_pulls == 1 && presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "switched",
+  expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "switched",
          "boundary refresh replaces todos from committed session history");
 }
 

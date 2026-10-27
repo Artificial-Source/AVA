@@ -26,6 +26,7 @@ class TuiFrontEnd final : public tui::TuiFrontEnd
 
   std::string read_committed_session_id() const override;
   tui::TuiCatalogDelivery read_catalog_delivery() override;
+  std::vector<agent::TodoItem> read_committed_todos() const override;
 
   // Accessor (this can be removed once all std::function's of tui::TuiRuntimeOptions have been turned into member functions).
   app::ApplicationCatalogCoordinator& application_catalog() { return application_catalog_; }

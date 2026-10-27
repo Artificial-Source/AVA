@@ -146,28 +146,28 @@ void test_todowrite_session_projection()
       R"({"call_id":"c4","name":"todowrite","success":true,"status":"success","result":"{\"schema_version\":1,\"tool\":\"todowrite\",\"ok\":true,\"todos\":[{\"id\":\"a\",\"content\":\"First\",\"status\":\"completed\"},{\"id\":\"b\",\"content\":\"Second\",\"status\":\"in_progress\"}],\"counts\":{\"total\":2,\"pending\":0,\"in_progress\":1,\"completed\":1}}"})"));
 
   auto latest = ava::agent::latest_committed_todowrite_snapshot(entries);
-  expect(latest && latest->todos.size() == 2 && latest->todos[0].status == ava::agent::TodoStatus::Completed &&
-             latest->todos[1].status == ava::agent::TodoStatus::InProgress,
+  expect(latest.todos.size() == 2 && latest.todos[0].status == ava::agent::TodoStatus::Completed &&
+             latest.todos[1].status == ava::agent::TodoStatus::InProgress,
          "latest successful committed todowrite snapshot wins over earlier and failed results");
 
   entries.push_back(tool_result_entry(
       "e5",
       R"({"call_id":"c5","name":"todowrite","success":true,"status":"success","result":"{\"schema_version\":1,\"tool\":\"todowrite\",\"ok\":true,\"todos\":[],\"counts\":{\"total\":0,\"pending\":0,\"in_progress\":0,\"completed\":0}}"})"));
   latest = ava::agent::latest_committed_todowrite_snapshot(entries);
-  expect(latest && latest->todos.empty(), "empty successful todowrite snapshot clears projected todos");
+  expect(latest.todos.empty(), "empty successful todowrite snapshot clears projected todos");
 
   entries.push_back(entries[3]);
   entries.push_back(tool_result_entry("e6", R"({"call_id":"c6","name":"todowrite","success":true,"status":"success","result":"{\"ok\":true,\"todos\":[}"})"));
   latest = ava::agent::latest_committed_todowrite_snapshot(entries);
-  if (!ava::tests::require(latest && latest->todos.size() == 2, "malformed later todowrite success preserves the non-empty committed snapshot"))
+  if (!ava::tests::require(latest.todos.size() == 2, "malformed later todowrite success preserves the non-empty committed snapshot"))
     return;
   ava::tests::expect_all("malformed later todowrite success leaves both prior items unchanged",
-                         {{"first id", latest->todos[0].id == "a"},
-                          {"first content", latest->todos[0].content == "First"},
-                          {"first status", latest->todos[0].status == ava::agent::TodoStatus::Completed},
-                          {"second id", latest->todos[1].id == "b"},
-                          {"second content", latest->todos[1].content == "Second"},
-                          {"second status", latest->todos[1].status == ava::agent::TodoStatus::InProgress}});
+                         {{"first id", latest.todos[0].id == "a"},
+                          {"first content", latest.todos[0].content == "First"},
+                          {"first status", latest.todos[0].status == ava::agent::TodoStatus::Completed},
+                          {"second id", latest.todos[1].id == "b"},
+                          {"second content", latest.todos[1].content == "Second"},
+                          {"second status", latest.todos[1].status == ava::agent::TodoStatus::InProgress}});
 }
 
 void test_todowrite_result_parser_rejects_invalid_snapshots()
