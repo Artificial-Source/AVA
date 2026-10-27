@@ -65,16 +65,17 @@ void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiRuntimeOptions 
   append_bounded(open_hint);
 }
 
-ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend, TuiRuntimeOptions& options)
+ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend)
 {
+  TuiRuntimeOptions const& options = frontend->options();
   auto const mode = frontend->prompt_metadata().mode_refresh();
   ComposerSnapshot snapshot{.mode = mode.value,
                             .session_id = {},
                             .input = "",
                             .status = options.initial_status,
-                            .transcript = std::move(options.initial_transcript),
-                            .slash_commands = std::move(options.slash_commands),
-                            .file_references = std::move(options.file_references),
+                            .transcript = options.initial_transcript,
+                            .slash_commands = options.slash_commands,
+                            .file_references = options.file_references,
                             .custom_themes = options.initial_display_settings.custom_themes,
                             .show_images = options.initial_display_settings.show_images,
                             .image_width_cells = options.initial_display_settings.image_width_cells,
@@ -142,15 +143,15 @@ bool RuntimeEventQueue::received_any()
   return received;
 }
 
-RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend, TuiRuntimeOptions& options)
-    : snapshot(initial_snapshot(frontend, options)),
+RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend)
+    : snapshot(initial_snapshot(frontend)),
       frontend_(frontend),
-      applied_slash_catalog_generation_(options.slash_catalog_generation),
-      applied_workspace_catalog_generation_(options.workspace_catalog_generation),
-      sidebar{.todos = std::move(options.initial_todos), .mode = snapshot.mode, .version = options.app_version}
+      applied_slash_catalog_generation_(frontend->options().slash_catalog_generation),
+      applied_workspace_catalog_generation_(frontend->options().workspace_catalog_generation),
+      sidebar{.todos = frontend->options().initial_todos, .mode = snapshot.mode, .version = frontend->options().app_version}
 {
-  if (options.read_committed_session_id)
-    snapshot.session_id = options.read_committed_session_id();
+  if (frontend->read_committed_session_id_)
+    snapshot.session_id = frontend->read_committed_session_id_();
 }
 
 void RuntimePresentationState::refresh_prompt_metadata()

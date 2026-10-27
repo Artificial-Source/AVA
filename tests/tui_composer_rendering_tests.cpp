@@ -116,7 +116,6 @@ bool test_composer_draw_preserves_context_color_pair_allocations()
 
 bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(20, 180));
 
@@ -128,7 +127,8 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   {
     options.initial_transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "retained item [" + std::to_string(index) + "]"});
   }
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.snapshot.sidebar = presentation.sidebar;
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
@@ -184,13 +184,11 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
 
 bool test_changed_session_snapshot_resets_presentation()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
   std::size_t job_list_calls = 0;
   ava::tui::TuiRuntimeOptions options;
-  options.read_committed_session_id = [&]() { return frontend.session_store_options().session_id; };
   //  options.provider = "fake";
   //  options.model = "old-model";
   options.initial_transcript = {
@@ -204,7 +202,8 @@ bool test_changed_session_snapshot_resets_presentation()
     return view;
   };
 
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.snapshot.sidebar = presentation.sidebar;
   presentation.snapshot.queued_messages = {{.id = "queued-old", .kind = "follow-up", .text = "old queued message"}};
   presentation.snapshot.sidebar_drawer_visible = true;
@@ -252,7 +251,7 @@ bool test_changed_session_snapshot_resets_presentation()
   renderer.transcript_layout_cache.valid = true;
   auto const previous_generation = presentation.snapshot.transcript_generation;
   auto const replaced_session = frontend.replace_session_identity();
-  auto const committed_session_id = options.read_committed_session_id();
+  auto const committed_session_id = frontend.frontend()->read_committed_session_id_();
 
   int todo_pulls = 0;
   options.read_committed_todos = [&]() {
@@ -295,7 +294,7 @@ bool test_changed_session_snapshot_resets_presentation()
     return std::vector<ava::tui::TodoItem>{{.id = "todo-same", .content = "same-session todo"}};
   };
   auto unchanged = ava::tui::apply_committed_session_transition_and_refresh(options, presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                            active_select_list, options.read_committed_session_id());
+                                                                            active_select_list, frontend.frontend()->read_committed_session_id_());
   auto const unchanged_state_ok = !unchanged && presentation.snapshot.transcript_generation == unchanged_generation &&
                                   presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().text == "new receipt only" &&
                                   presentation.snapshot.queued_messages.size() == 1 && presentation.sidebar.activity.size() == 1 && todo_pulls == 2 &&
@@ -309,9 +308,9 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
   auto const before_replacements = presentation.snapshot.transcript_generation;
   auto const first_replaced = frontend.replace_session_identity();
-  auto const intermediate_identity = options.read_committed_session_id();
+  auto const intermediate_identity = frontend.frontend()->read_committed_session_id_();
   auto const second_replaced = frontend.replace_session_identity();
-  auto const final_identity = options.read_committed_session_id();
+  auto const final_identity = frontend.frontend()->read_committed_session_id_();
   static_cast<void>(frontend.session_id_metadata());
   auto const transitioned = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
                                                                          active_select_list, final_identity);
@@ -327,7 +326,7 @@ bool test_changed_session_snapshot_resets_presentation()
   frontend.set_session_identity_metadata("intermediate-session");
   frontend.set_session_identity_metadata(final_identity);
   auto const round_trip_transition = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                                  active_select_list, options.read_committed_session_id());
+                                                                                  active_select_list, frontend.frontend()->read_committed_session_id_());
   bool const identity_round_trip_ok = !round_trip_transition && presentation.snapshot.session_id == final_identity &&
                                       presentation.snapshot.input == "same-identity draft" && presentation.snapshot.transcript_generation == before_round_trip;
   expect(identity_round_trip_ok, "identity A-to-B-to-A before one boundary preserves the A-bound presentation without a reset");
@@ -337,17 +336,18 @@ bool test_changed_session_snapshot_resets_presentation()
 
 bool test_active_run_session_transition_discards_prior_session_events()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
   bool finish_called = false;
   bool initial_identity_forwarded = false;
   bool backend_session_replaced = false;
+  bool quit_requested = false;
+  bool queues_enabled = true;
+  tui_test_support::TuiFrontEndFixture* frontend_fixture = nullptr;
   int catalog_pulls = 0;
   int todo_pulls = 0;
   ava::tui::TuiRuntimeOptions options;
-  options.read_committed_session_id = [&]() { return frontend.session_store_options().session_id; };
   //  options.provider = "fake";
   //  options.model = "old-model";
   options.initial_transcript = {
@@ -366,7 +366,9 @@ bool test_active_run_session_transition_discards_prior_session_events()
       todos.push_back({.id = "new-todo", .content = "NEW TODO", .status = ava::tui::TodoStatus::Pending});
     return todos;
   };
-  options.create_active_run_queues = [&finish_called](ava::event::EventEnvelopeSink sink) {
+  options.create_active_run_queues = [&finish_called, &queues_enabled](ava::event::EventEnvelopeSink sink) {
+    if (!queues_enabled)
+      return ava::tui::TuiActiveRunQueues{};
     auto queued = ava::event::EventEnvelope{};
     queued.schema_version = 1;
     queued.event_id = "old-queued-event";
@@ -393,7 +395,14 @@ bool test_active_run_session_transition_discards_prior_session_events()
     };
     return queues;
   };
-  options.on_submit = [&frontend, &initial_identity_forwarded, &backend_session_replaced](std::string const&, ava::tui::TuiSubmitContext context) {
+  options.on_submit = [&frontend_fixture, &initial_identity_forwarded, &backend_session_replaced, &quit_requested](std::string const&,
+                                                                                                                   ava::tui::TuiSubmitContext context) {
+    if (quit_requested)
+    {
+      auto result = ava::tui::TuiSubmitResult{};
+      result.quit = true;
+      return result;
+    }
     initial_identity_forwarded = context.request_id == "old-request" && static_cast<bool>(context.on_subagent_launch);
     context.on_subagent_launch(
         ava::agent::SubagentLaunchNotification{.tool_call_id = "old-tool-call",
@@ -410,13 +419,15 @@ bool test_active_run_session_transition_discards_prior_session_events()
     old_tool.status = "success";
     old_tool.changed_paths = {"old-event.cpp"};
     static_cast<void>(context.event_sink(ava::event::RuntimeEvent{{}, ava::event::ToolResultEvent{.payload = std::move(old_tool)}}));
-    backend_session_replaced = frontend.replace_session_identity();
+    backend_session_replaced = frontend_fixture->replace_session_identity();
     auto result = ava::tui::TuiSubmitResult{};
     result.output = {"NEW-SESSION-RECEIPT"};
     return result;
   };
 
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  frontend_fixture = &frontend;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.snapshot.sidebar = presentation.sidebar;
   presentation.snapshot.queued_messages = {{.id = "old-preloaded-queue", .kind = "follow-up", .text = "OLD PRELOADED QUEUE"}};
   presentation.sidebar.activity = {{.id = "old-activity", .label = "tool", .detail = "OLD ACTIVITY"}};
@@ -433,11 +444,11 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::RuntimePluginUiCoordinator plugin_ui;
   ava::tui::RuntimeActionController action_controller(options, presentation, draft_state, renderer, active_select_list, session_archive_confirmation);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(options, presentation.snapshot);
-  ava::tui::RuntimeActiveRunController active_run(options, presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui, navigation,
-                                                  action_controller, transcript_search, subagent_workspace);
+  ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
+                                                  navigation, action_controller, transcript_search, subagent_workspace);
 
   auto const outcome = active_run.run("OLD SUBMITTED PROMPT");
-  auto const committed_session_id = options.read_committed_session_id();
+  auto const committed_session_id = frontend.frontend()->read_committed_session_id_();
   auto history_probe = ava::tui::ComposerDraftState{};
   auto history_index = std::optional<std::size_t>{};
   auto history_scratch = std::string{};
@@ -451,12 +462,8 @@ bool test_active_run_session_transition_discards_prior_session_events()
                       !presentation.snapshot.context_source_count && !presentation.sidebar.context_source_count && draft_state.input_history.empty() &&
                       !history_restored;
 
-  options.create_active_run_queues = {};
-  options.on_submit = [](std::string const&, ava::tui::TuiSubmitContext) {
-    auto result = ava::tui::TuiSubmitResult{};
-    result.quit = true;
-    return result;
-  };
+  queues_enabled = false;
+  quit_requested = true;
   auto const quit_outcome = active_run.run("/exit");
   expect(quit_outcome.break_loop && !quit_outcome.terminal_write_failed && catalog_pulls == 1 && todo_pulls == 1,
          "quit completion performs no catalog or committed todo pull");
@@ -574,7 +581,6 @@ bool test_atomic_search_input_prompt_precedence()
 
 bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 80));
 
@@ -595,7 +601,8 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
       ava::tui::TranscriptItem{.label = "ava", .text = tall_message("delta", 16)},
   };
 
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.snapshot.sidebar = presentation.sidebar;
   presentation.snapshot.input = "NAV-DRAFT-KEEP";
   presentation.snapshot.input_cursor = presentation.snapshot.input.size();
@@ -721,7 +728,6 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 
 bool test_detached_completion_publish_preserves_numbered_window()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(32, 120));
 
@@ -760,7 +766,8 @@ bool test_detached_completion_publish_preserves_numbered_window()
   options.key_bindings = ava::tui::default_key_bindings();
   options.initial_transcript = {ava::tui::TranscriptItem{.label = "ava", .text = build_stream_text(0, 29)}};
 
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.snapshot.sidebar = presentation.sidebar;
   presentation.snapshot.processing = true;
   presentation.snapshot.input = "STREAM-DRAFT-KEEP";
@@ -824,7 +831,6 @@ bool test_detached_completion_publish_preserves_numbered_window()
 
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 80));
 
@@ -835,7 +841,8 @@ bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless
     options.key_bindings = ava::tui::default_key_bindings();
     options.initial_transcript = std::move(transcript);
 
-    ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+    tui_test_support::TuiFrontEndFixture frontend(options);
+    ava::tui::RuntimePresentationState presentation(frontend.frontend());
     presentation.snapshot.sidebar = presentation.sidebar;
     presentation.snapshot.input = "FIT-DRAFT-KEEP";
     presentation.snapshot.input_cursor = presentation.snapshot.input.size();
@@ -952,7 +959,6 @@ bool test_selected_agent_projection_and_rendering()
 // backend values survive, stale local themes disappear, and records stay unique.
 bool test_local_slash_completion_composition_tracks_current_ui_facts()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   auto bindings = ava::tui::default_key_bindings();
   auto const initial_mode_keys = ava::tui::keys_display(bindings, ava::tui::TuiAction::ModeToggle);
 
@@ -990,7 +996,8 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
   options.slash_catalog_generation = 1;
   options.initial_display_settings.custom_themes = {ava::tui::ThemeOptionItem{.name = "sunrise", .detail = "/themes/sunrise.json"}};
   options.key_bindings = bindings;
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   bool const initial =
       count_completion(presentation.snapshot, "/theme", 0, "sunrise") == 1 && count_completion(presentation.snapshot, "/theme", 0, "backend-theme-fact") == 1 &&
       count_completion(presentation.snapshot, "/cursor", 1, "steady", {"bar"}) == 1 && count_completion(presentation.snapshot, "/details", 0, "compact") == 1 &&
@@ -1051,7 +1058,6 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
 
 bool test_display_settings_reload_poll_outcome_and_preview_staging()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   // Reproduces W2-001 through RuntimeActionController + preview reapply: optional snapshot is the
   // applied signal (no value inference), hydrate does not final-render, overlay is staged before paint.
   ScopedEnvVar no_color_guard("NO_COLOR", "");
@@ -1095,7 +1101,8 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
             .output = {}}};
   };
 
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   auto active_select_list = ava::tui::ActiveSelectList::None;
@@ -1155,7 +1162,6 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
 
 bool test_display_settings_reload_rebuilds_open_startup_overview()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 100));
 
@@ -1203,7 +1209,8 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
         .output = {}}};
   };
 
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.refresh_after_backend_action(options);
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
@@ -1245,14 +1252,14 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
 
 bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   ScopedEnvVar theme_override("AVA_TUI_THEME", "");
   ScopedEnvVar no_color("NO_COLOR", "");
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme("dark");
 
   ava::tui::TuiRuntimeOptions options;
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   presentation.initialize_startup_overview(
       options, ava::tui::StartupOverviewSnapshot{
                    .theme_name = "ava-dark", .theme_badge = "display.json", .compact_line = "build · provider/model · ava-dark · /overview"});
@@ -1286,7 +1293,8 @@ bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
   auto const capped_factual_line = std::string(160 - factual_suffix.size(), 'x') + factual_suffix;
   ava::tui::TuiRuntimeOptions capped_options;
   capped_options.key_bindings = *bindings;
-  ava::tui::RuntimePresentationState capped(frontend.frontend(), capped_options);
+  tui_test_support::TuiFrontEndFixture capped_frontend(capped_options);
+  ava::tui::RuntimePresentationState capped(capped_frontend.frontend());
   capped.initialize_startup_overview(
       capped_options, ava::tui::StartupOverviewSnapshot{
                           .theme_name = "ava-light", .theme_badge = "display.json", .overview_toggle_keys = "F6", .compact_line = capped_factual_line});
@@ -1302,7 +1310,6 @@ bool test_local_overview_hint_refresh_is_idempotent_and_bounded()
 
 bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   ScopedEnvVar term_guard("TERM", "xterm-256color");
   static_cast<void>(ava::tui::terminal::Context::resizeterm(18, 96));
 
@@ -1369,39 +1376,41 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
     return ava::tui::parse_key_bindings_json(R"({"mode_toggle":"Alt+Y","app.overview.toggle":"F6"})");
   };
 
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  auto& frontend_options = frontend.runtime_options();
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  ava::tui::RuntimeNavigationController navigation(options, presentation.snapshot, presentation.sidebar, draft_state, renderer);
+  ava::tui::RuntimeNavigationController navigation(frontend_options, presentation.snapshot, presentation.sidebar, draft_state, renderer);
   auto active_select_list = ava::tui::ActiveSelectList::None;
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
-  ava::tui::RuntimePromptCoordinator prompt_coordinator(options, presentation.snapshot, presentation.command_session_grants, renderer);
-  ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, options.key_bindings);
+  ava::tui::RuntimePromptCoordinator prompt_coordinator(frontend_options, presentation.snapshot, presentation.command_session_grants, renderer);
+  ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend_options.key_bindings);
   ava::tui::RuntimePluginUiCoordinator plugin_ui;
-  ava::tui::RuntimeActionController action_controller(options, presentation, draft_state, renderer, active_select_list, session_archive_confirmation);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(options, presentation.snapshot);
-  ava::tui::RuntimeActiveRunController active_run(options, presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui, navigation,
-                                                  action_controller, transcript_search, subagent_workspace);
-  ava::tui::RuntimeSubmitController submit_controller(options, presentation, draft_state, renderer, navigation, action_controller, active_run, prompt_stash,
-                                                      transcript_search, subagent_workspace, active_select_list);
+  ava::tui::RuntimeActionController action_controller(frontend_options, presentation, draft_state, renderer, active_select_list, session_archive_confirmation);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(frontend_options, presentation.snapshot);
+  ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
+                                                  navigation, action_controller, transcript_search, subagent_workspace);
+  ava::tui::RuntimeSubmitController submit_controller(frontend_options, presentation, draft_state, renderer, navigation, action_controller, active_run,
+                                                      prompt_stash, transcript_search, subagent_workspace, active_select_list);
 
   auto continued = [](ava::tui::RuntimeSubmitOutcome const& outcome) {
     return outcome.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && !outcome.terminal_write_failed;
   };
 
-  presentation.refresh_after_backend_action(options);
+  presentation.refresh_after_backend_action(frontend_options);
   bool const settings_not_read_by_snapshot = project_trust_reads == 0;
   auto const first_settings = submit_controller.submit(std::string("/settings"));
   auto const first_workspace = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::SessionsAndWorkspace,
-                                                                               presentation.snapshot, options.key_bindings);
+                                                                               presentation.snapshot, frontend_options.key_bindings);
   bool const first_settings_trust = continued(first_settings) && project_trust_reads == 1 && presentation.snapshot.project_trust &&
                                     presentation.snapshot.project_trust->decision == "trusted" && first_workspace.subtitle.find("trusted") != std::string::npos;
   current_project_trust.decision = "denied";
   current_project_trust.project_resources = "skipped";
   auto const reopened_settings = submit_controller.submit(std::string("/settings"));
   auto const reopened_workspace = ava::tui::settings_select_list_view_for_section(frontend.frontend(), ava::tui::SettingsSection::SessionsAndWorkspace,
-                                                                                  presentation.snapshot, options.key_bindings);
+                                                                                  presentation.snapshot, frontend_options.key_bindings);
   bool const fresh_settings_trust = continued(reopened_settings) && project_trust_reads == 2 && presentation.snapshot.project_trust &&
                                     presentation.snapshot.project_trust->decision == "denied" &&
                                     reopened_workspace.subtitle.find("denied") != std::string::npos;
@@ -1409,7 +1418,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   active_select_list = ava::tui::ActiveSelectList::None;
   bool const settings_popup_ok = settings_not_read_by_snapshot && first_settings_trust && fresh_settings_trust;
 
-  presentation.initialize_startup_overview(options, options.read_startup_overview());
+  presentation.initialize_startup_overview(frontend_options, frontend_options.read_startup_overview());
 
   auto const models = submit_controller.submit(std::string("/reload models"));
   bool const models_ok =
@@ -1431,7 +1440,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   auto const keybindings = submit_controller.submit(std::string("/reload keybindings"));
   auto const mode_command = std::ranges::find_if(presentation.snapshot.slash_commands, [](auto const& item) { return item.command == "/mode"; });
   auto const hotkeys_command = std::ranges::find_if(presentation.snapshot.slash_commands, [](auto const& item) { return item.command == "/hotkeys"; });
-  auto const help_view = ava::tui::hotkeys_select_list_view(options.key_bindings);
+  auto const help_view = ava::tui::hotkeys_select_list_view(frontend_options.key_bindings);
   auto const mode_help = std::ranges::find_if(help_view.items, [](auto const& item) { return item.value == "mode_toggle"; });
   bool const palette_hints_updated =
       mode_command != presentation.snapshot.slash_commands.end() && mode_command->key_display == "Alt+Y" &&
@@ -4239,7 +4248,7 @@ void run_tui_composer_rendering_tests_part_4()
       ava::tui::TuiRuntimeOptions options;
       //      options.provider = "fake";
       //      options.model = "m1";
-      ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+      ava::tui::RuntimePresentationState presentation(frontend.frontend());
       presentation.snapshot.startup_overview = overview;
       presentation.snapshot.select_list = ava::tui::overview_select_list_view(overview);
       presentation.snapshot.select_list->query = "mode";

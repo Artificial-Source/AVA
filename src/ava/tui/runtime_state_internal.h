@@ -95,7 +95,7 @@ struct PendingSessionArchiveAction
 class RuntimePresentationState final
 {
  public:
-  RuntimePresentationState(TuiFrontEnd* frontend, TuiRuntimeOptions& options);
+  RuntimePresentationState(TuiFrontEnd* frontend);
 
   void refresh_prompt_metadata();
   void apply_catalog_delivery(TuiRuntimeOptions const& options, TuiCatalogDelivery delivery);

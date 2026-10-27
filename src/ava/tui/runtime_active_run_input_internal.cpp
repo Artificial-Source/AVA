@@ -19,6 +19,7 @@
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/terminal.h"
 #include "ava/tui/tool_cards.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/core/Application.h"
 
 #include <optional>
@@ -34,7 +35,7 @@ using runtime_transcript::push_history;
 
 bool RuntimeActiveRunController::is_action(InputEvent const& event, TuiAction action) const
 {
-  return key_matches_action(options_.key_bindings, action, event.key);
+  return key_matches_action(frontend_.options().key_bindings, action, event.key);
 }
 
 RuntimeActiveRunController::InputHandling RuntimeActiveRunController::to_input_handling(bool render_result)
@@ -179,11 +180,11 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     static_cast<void>(transcript_search_.open(std::move(*search_query)));
     return renderer_.request_render();
   }
-  if (runtime_commands::local_display_settings_command(submitted_command) && options_.on_local_display_settings_action)
+  if (runtime_commands::local_display_settings_command(submitted_command) && frontend_.options().on_local_display_settings_action)
   {
     push_history(input_history, submitted_command);
     clear_local_command_draft();
-    auto applied = options_.on_local_display_settings_action(submitted_command);
+    auto applied = frontend_.options().on_local_display_settings_action(submitted_command);
     if (!applied)
     {
       open_command_error(snapshot, submitted_command, applied.error().format());
@@ -191,7 +192,7 @@ std::optional<bool> RuntimeActiveRunController::run_active_command(RuntimeActive
     }
     else
     {
-      presentation_state_.apply_local_display_settings(options_, std::move(applied->settings));
+      presentation_state_.apply_local_display_settings(frontend_.options(), std::move(applied->settings));
       settle_local_command_completion(snapshot, submitted_command, std::move(applied->output));
     }
     return renderer_.request_render();

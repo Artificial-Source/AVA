@@ -283,11 +283,6 @@ int run_tui(InteractiveState state)
       .initial_display_settings = display_settings.presentation(),
       .mermaid_render = display_settings.mermaid_bridge(),
       .key_bindings = key_bindings,
-      .read_committed_session_id =
-          [&unlocked_session]() {
-            SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
-            return session_r->store.options_r()->session_id;
-          },
       .read_catalog_delivery =
           [&application_catalog]() {
             auto delivery = application_catalog.delivery_snapshot();
@@ -829,7 +824,11 @@ int run_tui(InteractiveState state)
           [&display_settings, branch_summary_coordinator]() {
             display_settings.shutdown();
             branch_summary_coordinator->shutdown();
-          }});
+          }},
+          [&unlocked_session]() {
+            SCOPED_CRITICAL_AREA_R(session_r, unlocked_session);
+            return session_r->store.options_r()->session_id;
+          });
   frontend.register_frontend_data(unlocked_session);
   auto result = frontend.run();
   display_settings.shutdown();

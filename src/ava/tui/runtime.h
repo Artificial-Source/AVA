@@ -300,11 +300,6 @@ struct TuiRuntimeOptions
   TuiLocalDisplaySettings initial_display_settings;
   TuiMermaidRenderBridge mermaid_render;
   TuiKeyBindings key_bindings = default_key_bindings();
-  // Reads the backend's currently committed session identity. The application
-  // acquires and releases the backend Session lock inside this callback; the
-  // TUI calls it only at serialized action/completion boundaries and never
-  // while holding its UI lock.
-  std::function<std::string()> read_committed_session_id;
   // Pending-review catalog and todo transports. Pull and apply only at
   // serialized action/completion boundaries, never during rendering, and
   // like read_committed_session_id never while holding the UI lock.

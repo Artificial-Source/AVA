@@ -118,7 +118,7 @@ struct RuntimeActiveRunOutcome
 class RuntimeActiveRunController final
 {
  public:
-  RuntimeActiveRunController(TuiRuntimeOptions& options, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
+  RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
                              RuntimeRenderer& renderer, RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash,
                              RuntimePluginUiCoordinator& plugin_ui, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                              TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
@@ -166,7 +166,7 @@ class RuntimeActiveRunController final
   InputHandling handle_mouse_input(runtime_input::RuntimeInput const& active_input);
   InputHandling handle_restricted_toggle_input(runtime_input::RuntimeInput const& active_input);
 
-  TuiRuntimeOptions& options_;
+  TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
   RuntimeDraftState& draft_state_;
   RuntimeRenderer& renderer_;

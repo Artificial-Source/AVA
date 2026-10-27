@@ -66,12 +66,20 @@ void select_frontend_test_model(ava::app::runtime::session_ts& session, TuiTestM
 } // namespace
 
 // Own the frontend and its registered session data at stable addresses until the rendering fixture is destroyed.
-// The frontend owns empty runtime options because this fixture exercises projections without starting the runtime.
+// Most projection tests use empty runtime options; runtime-state tests can provide the options that the frontend owns.
 // The temporary configuration root outlives both objects and no provider requests are made.
 struct TuiFrontEndFixture::Impl
 {
-  explicit Impl(TuiTestModel model)
-      : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")), frontend(ava::tui::TuiRuntimeOptions{}), session(open_frontend_test_session(root.path()))
+  explicit Impl(TuiTestModel model) : Impl({}, std::move(model)) { }
+
+  Impl(ava::tui::TuiRuntimeOptions options, TuiTestModel model)
+      : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")),
+        frontend(std::move(options),
+                 [this]() {
+                   ava::app::runtime::session_ts::crat session_r(session);
+                   return session_r->store.options_r()->session_id;
+                 }),
+        session(open_frontend_test_session(root.path()))
   {
     select_frontend_test_model(session, model);
     frontend.register_frontend_data(session);
@@ -86,11 +94,21 @@ TuiFrontEndFixture::TuiFrontEndFixture(TuiTestModel model) : impl_(std::make_uni
 {
 }
 
+TuiFrontEndFixture::TuiFrontEndFixture(ava::tui::TuiRuntimeOptions options) : impl_(std::make_unique<Impl>(std::move(options), TuiTestModel{}))
+{
+}
+
 TuiFrontEndFixture::~TuiFrontEndFixture() = default;
 
 ava::tui::TuiFrontEnd* TuiFrontEndFixture::frontend() noexcept
 {
   return &impl_->frontend;
+}
+
+ava::tui::TuiRuntimeOptions& TuiFrontEndFixture::runtime_options() noexcept
+{
+  // The fixture exclusively owns the frontend and exposes its options only so controller tests mirror production composition.
+  return const_cast<ava::tui::TuiRuntimeOptions&>(impl_->frontend.options());
 }
 
 std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata()

@@ -235,7 +235,7 @@ int TuiFrontEnd::run_interactive_composer()
   TerminalBackgroundDetectionGuard terminal_background_detection;
   maybe_probe_terminal_background_appearance(terminal_context);
 
-  RuntimePresentationState presentation_state(this, options_);
+  RuntimePresentationState presentation_state(this);
   auto& snapshot = presentation_state.snapshot;
   auto& sidebar = presentation_state.sidebar;
   auto& command_session_grants = presentation_state.command_session_grants;
@@ -550,7 +550,7 @@ int TuiFrontEnd::run_interactive_composer()
 
   RuntimeActionController action_controller(options_, presentation_state, draft_state, renderer, active_select_list, session_archive_confirmation);
   RuntimeSubagentWorkspaceController subagent_workspace(options_, snapshot);
-  RuntimeActiveRunController active_run_controller(options_, presentation_state, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui, navigation,
+  RuntimeActiveRunController active_run_controller(*this, presentation_state, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui, navigation,
                                                    action_controller, transcript_search, subagent_workspace, service_mermaid_presentation);
   auto maybe_reload_display_settings = [&]() -> bool {
     auto const outcome = action_controller.maybe_reload_display_settings();
@@ -979,14 +979,14 @@ int TuiFrontEnd::run_interactive_composer()
         return values;
       };
       auto settle_opened_session = [&](std::string status) {
-        auto committed_session_id = options_.read_committed_session_id ? options_.read_committed_session_id() : std::string{};
+        auto committed_session_id = this->read_committed_session_id_ ? this->read_committed_session_id_() : std::string{};
         static_cast<void>(apply_committed_session_transition_and_refresh(options_, presentation_state, draft_state, renderer, transcript_search,
                                                                          subagent_workspace, active_select_list, std::move(committed_session_id)));
         if (!status.empty())
           settle_local_command_status(snapshot, std::move(status));
       };
       auto synchronize_committed_session = [&]() {
-        auto const committed_session_id = options_.read_committed_session_id ? options_.read_committed_session_id() : std::string{};
+        auto const committed_session_id = this->read_committed_session_id_ ? this->read_committed_session_id_() : std::string{};
         return apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                   std::move(committed_session_id));
       };

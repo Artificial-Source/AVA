@@ -2182,7 +2182,8 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
 
   ava::tui::TuiRuntimeOptions options;
   options.initial_todos = {ava::tui::TodoItem{.id = "seed", .content = "Hydrated", .status = ava::tui::TodoStatus::Pending}};
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture options_frontend(options);
+  ava::tui::RuntimePresentationState presentation(options_frontend.frontend());
   expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "runtime options hydrate sidebar todos at startup");
   int todo_pulls = 0;
   options.read_committed_todos = [&]() {
@@ -2256,12 +2257,12 @@ void test_frontend_data_changed_routes_each_canonical()
 
 void test_runtime_initialization_preserves_local_and_retained_inputs()
 {
-  tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::TuiRuntimeOptions options;
   options.app_version = "boundary-test-version";
   options.initial_status = "keybinding load warning";
   options.initial_transcript = {{.label = "ava", .text = "onboarding instructions"}};
-  ava::tui::RuntimePresentationState presentation(frontend.frontend(), options);
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  ava::tui::RuntimePresentationState presentation(frontend.frontend());
   expect(presentation.sidebar.version == "boundary-test-version" && presentation.snapshot.status == "keybinding load warning" &&
              presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().text == "onboarding instructions",
          "immutable version, startup diagnostics and retained onboarding content survive initialization without backend-state transport");

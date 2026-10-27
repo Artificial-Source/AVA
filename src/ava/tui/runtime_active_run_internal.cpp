@@ -17,6 +17,7 @@
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/tui/TuiFrontEnd.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/Application.h"
 #include "ava/core/ids.h"
@@ -306,13 +307,13 @@ void RuntimeActiveRunState::discard_for_session_transition()
   request_event_states.clear();
 }
 
-RuntimeActiveRunController::RuntimeActiveRunController(TuiRuntimeOptions& options, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
+RuntimeActiveRunController::RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
                                                        RuntimeRenderer& renderer, RuntimePromptCoordinator& prompt_coordinator,
                                                        RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
                                                        RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                        TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
                                                        std::function<bool()> service_mermaid_presentation)
-    : options_(options),
+    : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
       renderer_(renderer),
@@ -568,9 +569,9 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     current_event_context.correlation_id = std::move(request_id);
   };
   std::string submit_request_id;
-  if (supports_active_queue && options_.create_active_run_queues)
+  if (supports_active_queue && frontend_.options().create_active_run_queues)
   {
-    active_queues = options_.create_active_run_queues(control_sink);
+    active_queues = frontend_.options().create_active_run_queues(control_sink);
     if (!active_queues->active_request_id.empty())
     {
       submit_request_id = active_queues->active_request_id;
@@ -622,17 +623,17 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   }
   auto result = TuiSubmitResult{};
   bool session_changed = false;
-  if (options_.on_submit)
+  if (frontend_.options().on_submit)
   {
     permission_resolver = prompt_coordinator_.permission_resolver();
     question_resolver = prompt_coordinator_.question_resolver();
-    auto const request_key_bindings = options_.key_bindings;
+    auto const request_key_bindings = frontend_.options().key_bindings;
     auto submit_future = ava::core::make_async("tui_submit", [&, request_key_bindings]() {
       auto take_steering_messages = active_queues ? active_queues->take_steering_messages : std::function<ava::core::Result<std::vector<std::string>>()>{};
       auto skip_active_steering = active_queues ? active_queues->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{};
       auto take_next_follow_up = active_queues ? active_queues->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{};
       auto mark_follow_up_started = active_queues ? active_queues->mark_follow_up_started : std::function<ava::core::VoidResult(TuiQueuedFollowUp const&)>{};
-      return options_.on_submit(submitted, TuiSubmitContext{.request_id = submit_request_id,
+      return frontend_.options().on_submit(submitted, TuiSubmitContext{.request_id = submit_request_id,
                                                             .permission_resolver = permission_resolver,
                                                             .question_resolver = question_resolver,
                                                             .event_sink = event_sink,
@@ -869,14 +870,14 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     // Read backend identity and the retained catalog/todo transports after the
     // worker has committed, before acquiring the UI lock. Action results never
     // carry session transition authority. A quit completion pulls nothing.
-    auto committed_session_id = options_.read_committed_session_id ? options_.read_committed_session_id() : std::string{};
-    auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(options_);
+    auto committed_session_id = frontend_.read_committed_session_id_ ? frontend_.read_committed_session_id_() : std::string{};
+    auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_.options());
     {
       std::lock_guard<std::recursive_mutex> lock(ui_mutex);
       session_changed = apply_committed_session_transition(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_,
                                                            action_controller_.active_select_list(), std::move(committed_session_id));
       if (!result.quit)
-        presentation_state_.apply_boundary_data(options_, std::move(boundary_reads));
+        presentation_state_.apply_boundary_data(frontend_.options(), std::move(boundary_reads));
     }
     if (active_queues && active_queues->finish)
     {
