@@ -65,9 +65,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 namespace {
@@ -356,6 +358,18 @@ void test_context_loader()
     expect(!intermediate && intermediate.error().category() == ava::core::ErrorCategory::Io,
            "context loader rejects symlinked intermediate directories instead of following swapped ancestors");
   }
+
+  auto const dot_prefix_workspace = root / "dot-prefix-workspace";
+  auto const dot_prefix_child = dot_prefix_workspace / "..notes";
+  std::filesystem::create_directories(dot_prefix_child);
+  {
+    std::ofstream file(dot_prefix_child / "AGENTS.md", std::ios::binary);
+    file << "contained dot-prefix instructions\n";
+  }
+  auto dot_prefix = ava::context::load_context_files(ava::context::ContextLoadOptions{
+      .workspace_root = dot_prefix_workspace, .current_dir = dot_prefix_child, .global_agents_file = {}, .max_file_bytes = 1024});
+  expect(dot_prefix && dot_prefix->size() == 1 && dot_prefix->front().content == "contained dot-prefix instructions\n",
+         "context loader allows contained names beginning with two dots");
 }
 
 void test_markdown_resource_parser_and_reader()
@@ -582,6 +596,11 @@ void test_auth_record_helpers()
   expect(!trailing && trailing.error().format().find("trailing content") != std::string::npos, "auth record parser rejects trailing content");
   auto const missing_value = ava::config::parse_auth_record_members("{\"openai\": }", path);
   expect(!missing_value && missing_value.error().format().find("invalid value") != std::string::npos, "auth record parser rejects missing member values");
+  for (std::string_view const malformed :
+       {R"({"openai":truth})", R"({"openai":01})", R"({"openai":{"token":"x",}})", R"({"openai":[1,,2]})", R"({"openai":"\q"})"})
+    expect(!ava::config::parse_auth_record_members(malformed, path), "auth record merge rejects malformed raw JSON values");
+  expect(!ava::config::parse_openai_credential(R"({"openai":{"type":"api_key","api_key":"secret"}}trailing)"),
+         "OpenAI credential discovery does not extract a token from malformed JSON");
 }
 
 void test_auth_load_and_store()
@@ -884,6 +903,33 @@ void test_auth_load_and_store()
     target_read >> target_content;
     expect(target_content == "unchanged", "OpenAI credential store does not write through symlink");
   }
+  std::filesystem::remove(paths.auth_file, remove_error);
+  auto const lock_path = paths.auth_file.parent_path() / (paths.auth_file.filename().string() + ".lock");
+  std::filesystem::remove(lock_path, remove_error);
+  auto const hardlink_target = root / "lock-hardlink-target";
+  {
+    std::ofstream file(hardlink_target, std::ios::binary);
+    file << "unrelated file";
+  }
+  expect(::chmod(hardlink_target.c_str(), 0644) == 0, "auth lock hardlink fixture has known permissions");
+  std::error_code hardlink_error;
+  std::filesystem::create_hard_link(hardlink_target, lock_path, hardlink_error);
+  if (ava::tests::require(!hardlink_error, "auth lock hardlink fixture creates the alias"))
+  {
+    auto locked = ava::config::store_provider_credential(
+        paths, ava::config::ProviderCredential{.provider_id = "openai", .access_token = "unused", .credential_type = "api_key"});
+    expect(!locked && locked.error().category() == ava::core::ErrorCategory::PermissionDenied, "auth storage rejects hard-linked lock files");
+    struct stat target_status{};
+    expect(::stat(hardlink_target.c_str(), &target_status) == 0 && (target_status.st_mode & 0777) == 0644,
+           "auth lock rejection does not chmod an unrelated hard-linked file");
+    expect(!std::filesystem::exists(paths.auth_file), "unsafe auth locks cannot publish credentials");
+  }
+  {
+    std::ofstream file(paths.auth_file, std::ios::binary);
+    file << R"({"anthropic":{"type":"api_key","api_key":"secret"}}trailing)";
+  }
+  expect(::chmod(paths.auth_file.c_str(), 0600) == 0, "malformed provider auth fixture has private permissions");
+  expect(!ava::config::provider_credential_for_startup(paths, "anthropic"), "provider credential discovery rejects tokens inside malformed auth JSON");
 }
 
 void test_openai_oauth_helpers()
@@ -894,6 +940,17 @@ void test_openai_oauth_helpers()
   expect(ava::config::openai_oauth_account_id_from_token(
              "header.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xMjMifX0.sig") == "acct_123",
          "OpenAI OAuth account id extracts from compatibility JWT claim");
+  ava::tests::FakeTransport refresh_boundary_transport({});
+  auto refresh_boundary = ava::config::openai_credential_for_request({},
+                                                                     ava::config::OpenAICredential{.type = ava::config::OpenAICredentialType::OAuth,
+                                                                                                   .access_token = "access",
+                                                                                                   .refresh_token = {},
+                                                                                                   .expires_at = LLONG_MAX,
+                                                                                                   .account_id = {},
+                                                                                                   .source_path = {}},
+                                                                     refresh_boundary_transport, LLONG_MAX - 1);
+  expect(!refresh_boundary && refresh_boundary.error().message().find("needs refresh") != std::string::npos,
+         "OAuth refresh skew does not overflow near the signed timestamp boundary");
 
   auto session = ava::config::make_openai_oauth_session(verifier, "state value");
   expect(session.has_value(), "OpenAI OAuth deterministic session builds");
@@ -928,6 +985,7 @@ void test_openai_oauth_helpers()
   auto const& requests = transport.requests();
   expect(requests.size() == 1 && requests.front().url == "https://auth.openai.com/oauth/token" && requests.front().method == "POST",
          "OpenAI OAuth code exchange posts to token endpoint");
+  expect(requests.size() == 1 && !requests.front().follow_redirects, "OAuth code and verifier cannot be forwarded to a redirected endpoint");
   if (!requests.empty())
   {
     expect(requests.front().body.find("grant_type=authorization_code") != std::string::npos &&
@@ -935,6 +993,21 @@ void test_openai_oauth_helpers()
                requests.front().body.find("code_verifier=" + verifier) != std::string::npos,
            "OpenAI OAuth code exchange form-encodes authorization code and verifier");
   }
+  for (std::string const& body :
+       {std::string(R"({"access_token":"secret" "expires_in":120})"), std::string(R"({"access_token":"secret","expires_in":})"),
+        std::string(R"({"access_token":"secret","expires_in":-1})"), std::string(R"({"access_token":"secret","expires_in":1.5})"),
+        std::string(R"({"access_token":"secret","expires_in":9223372036854775807})"), std::string(R"({"access_token":"secret","expires_at":"invalid"})")})
+  {
+    ava::tests::FakeTransport invalid_transport({ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = body}});
+    auto invalid = ava::config::exchange_openai_oauth_code("code", verifier, invalid_transport, 1000);
+    expect(!invalid && invalid.error().category() == ava::core::ErrorCategory::Provider,
+           "OpenAI OAuth rejects malformed JSON and invalid or overflowing expiry");
+    expect(!invalid && invalid.error().format().find("secret") == std::string::npos, "OAuth parse errors do not expose token values");
+  }
+  ava::tests::FakeTransport default_expiry_overflow_transport(
+      {ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = R"({"access_token":"secret"})"}});
+  expect(!ava::config::exchange_openai_oauth_code("code", verifier, default_expiry_overflow_transport, LLONG_MAX),
+         "OpenAI OAuth rejects overflow while applying the default expiry");
 
   ava::tests::FakeTransport device_start_transport({ava::http::HttpResponse{
       .status_code = 200,
@@ -949,6 +1022,12 @@ void test_openai_oauth_helpers()
   expect(device_start_requests.size() == 1 && device_start_requests.front().url == "https://auth.openai.com/api/accounts/deviceauth/usercode" &&
              device_start_requests.front().body.find("app_EMoamEEZ73f0CkXaXp7hrann") != std::string::npos,
          "OpenAI headless OAuth starts device authorization with the compatibility client id");
+  expect(device_start_requests.size() == 1 && !device_start_requests.front().follow_redirects,
+         "OAuth device authorization does not follow redirected endpoints");
+  ava::tests::FakeTransport malformed_device_transport(
+      {ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = R"({"device_auth_id":"device" "user_code":"CODE"})"}});
+  expect(!ava::config::start_openai_oauth_device_authorization(malformed_device_transport),
+         "OpenAI device authorization rejects missing JSON member separators");
 
   if (device)
   {
@@ -982,6 +1061,8 @@ void test_openai_oauth_helpers()
                approved_requests[1].url == "https://auth.openai.com/oauth/token" &&
                approved_requests[1].body.find("redirect_uri=https%3A%2F%2Fauth.openai.com%2Fdeviceauth%2Fcallback") != std::string::npos,
            "OpenAI headless OAuth uses the device callback redirect during token exchange");
+    expect(approved_requests.size() == 2 && !approved_requests[0].follow_redirects && !approved_requests[1].follow_redirects,
+           "OAuth device codes and exchange credentials cannot be forwarded by redirects");
   }
 }
 
@@ -1958,17 +2039,25 @@ void test_oauth_loopback_callback()
               return false;
             offset += static_cast<std::size_t>(written);
           }
+          if (request.find("\r\n\r\n") == std::string_view::npos &&
+              !ava::tests::require(::shutdown(client.get(), SHUT_WR) == 0, "incomplete OAuth request ends at EOF"))
+            return false;
           std::string response;
           return ava::tests::require(ava::tests::read_until(client.get(), response, "\r\n\r\n", deadline),
                                      "OAuth callback sends an HTTP response for each received request");
         };
         if (scenario == "ignore-invalid-then-accept")
         {
+          std::string oversized = "GET /auth/callback?code=oversized&state=expected-state HTTP/1.1\r\nX-Long: ";
+          oversized.resize(16384, 'x');
+          if (!send_request(oversized))
+            requests_succeeded = false;
           for (std::string_view const request :
                {"POST /auth/callback?code=wrong&state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback?code=wrong&state=expected-state\r\n\r\n",
                 "GET /other?code=wrong&state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback HTTP/1.1\r\n\r\n",
                 "GET /auth/callback?state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback?code=wrong HTTP/1.1\r\n\r\n",
                 "GET /auth/callback?code=&state=expected-state HTTP/1.1\r\n\r\n", "GET /auth/callback?code=wrong&state=wrong-state HTTP/1.1\r\n\r\n",
+                "GET /auth/callback?code=incomplete&state=expected-state HTTP/1.1\r\n",
                 "GET /auth/callback?error=access_denied&state=wrong-state HTTP/1.1\r\n\r\n",
                 "GET /auth/callback?code=accepted%2Bcode&state=expected-state HTTP/1.1\r\n\r\n"})
           {
@@ -2049,6 +2138,65 @@ void test_auth_creation_and_replacement_ignore_ambient_umask()
   }
 }
 
+void test_auth_directory_sync_failure()
+{
+  ava::tests::HermeticTestEnvironment environment("auth-directory-sync-");
+  auto const paths = ava::config::xdg_paths();
+  auto const status = ava::tests::run_in_child_with_syscall_errno(
+      SYS_openat, ava::tests::SyscallArgumentFilter{.index = 2, .value = O_RDONLY | O_CLOEXEC | O_DIRECTORY}, EIO, [&] {
+        auto const stored = ava::config::store_provider_credential(
+            paths, ava::config::ProviderCredential{.provider_id = "openai", .access_token = "published-token", .credential_type = "api_key"});
+        return !stored && stored.error().message() == "failed to open auth directory for sync" &&
+                       std::ranges::any_of(
+                           stored.error().context(),
+                           [](auto const& item) { return item.key == "publication" && item.value == "auth file replaced; directory durability not confirmed"; })
+                   ? 0
+                   : 1;
+      });
+  if (ava::tests::expect_child_success(status, "auth publication reports parent-directory sync setup failure") != ava::tests::ChildTestOutcome::Passed)
+    return;
+  auto const loaded = ava::config::load_openai_credential(paths);
+  expect(loaded && *loaded && (*loaded)->access_token == "published-token",
+         "auth durability failure does not roll back or delete the already-published credential");
+}
+
+void test_auth_rejects_non_regular_and_oversized_files()
+{
+  ava::tests::HermeticTestEnvironment environment("auth-bounded-reader-");
+  auto const paths = ava::config::xdg_paths();
+  std::filesystem::create_directories(paths.auth_file.parent_path());
+  if (!ava::tests::require(::mkfifo(paths.auth_file.c_str(), 0600) == 0, "auth reader fixture creates a FIFO"))
+    return;
+  auto const fifo = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    auto const loaded = ava::config::load_openai_credential(paths);
+    return !loaded && loaded.error().category() == ava::core::ErrorCategory::PermissionDenied ? 0 : 1;
+  });
+  ava::tests::expect_child_success(fifo, "auth reader rejects a FIFO without waiting for a writer");
+
+  std::error_code error;
+  std::filesystem::remove(paths.auth_file, error);
+  auto const target = paths.auth_file.parent_path() / "target.json";
+  {
+    std::ofstream file(target, std::ios::binary);
+    file << R"({"openai":{"type":"api_key","key":"must-not-follow"}})";
+  }
+  expect(::chmod(target.c_str(), 0600) == 0, "auth symlink target has private permissions");
+  std::filesystem::create_symlink(target, paths.auth_file, error);
+  if (!ava::tests::require(!error, "auth reader fixture creates a symlink"))
+    return;
+  auto const linked = ava::config::load_openai_credential(paths);
+  expect(!linked && linked.error().message() == "auth file is a symbolic link", "auth reader rejects symbolic links even to private regular files");
+
+  std::filesystem::remove(paths.auth_file, error);
+  {
+    std::ofstream file(paths.auth_file, std::ios::binary);
+    file << std::string(1024 * 1024 + 1, ' ');
+  }
+  expect(::chmod(paths.auth_file.c_str(), 0600) == 0, "oversized auth fixture has private permissions");
+  auto const oversized = ava::config::load_openai_credential(paths);
+  expect(!oversized && oversized.error().message() == "auth file is too large", "auth reader preserves its one-MiB cap and error label");
+}
+
 }  // namespace
 
 void run_config_context_auth_oauth_tests()
@@ -2061,6 +2209,8 @@ void run_config_context_auth_oauth_tests()
   test_auth_record_helpers();
   test_auth_load_and_store();
   test_auth_creation_and_replacement_ignore_ambient_umask();
+  test_auth_directory_sync_failure();
+  test_auth_rejects_non_regular_and_oversized_files();
   test_openai_oauth_helpers();
   test_oauth_loopback_callback();
   test_openai_oauth_refresh();

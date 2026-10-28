@@ -284,6 +284,15 @@ void test_openai_compatible_parsing()
       budget_provider, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"budget_call\",\"function\":{\"name\":\"read_file\"}}]}}]}\n\n",
       [](std::string const& text) { return R"(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":")" + text + R"("}}]}}]})"; },
       "data: [DONE]\n\n");
+  for (auto const index : {"-1", "2147483648", "4294967296", "9223372036854775807"})
+  {
+    auto const invalid_index =
+        ava::provider::parse_openai_compatible_sse(std::string(R"(data: {"choices":[{"delta":{"tool_calls":[{"index":)") + index +
+                                                   R"(,"id":"invalid","function":{"name":"read_file","arguments":"{}"}}]}}]})" + "\n\ndata: [DONE]\n\n");
+    expect(invalid_index && invalid_index->size() == 1 && invalid_index->front().type == ava::provider::StreamEventType::Error,
+           "OpenAI-compatible SSE rejects invalid tool indices before narrowing or publishing tool calls");
+  }
+
   auto stream = ava::provider::parse_openai_compatible_sse(
       "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\"}}]}\n\n"
       "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n"

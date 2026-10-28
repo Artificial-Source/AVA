@@ -79,6 +79,7 @@ class CancelAfterRequestTransport final : public ava::http::Transport
  public:
   explicit CancelAfterRequestTransport(ava::http::HttpResponse response) : response_(std::move(response)) { }
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     requests_.push_back(request);

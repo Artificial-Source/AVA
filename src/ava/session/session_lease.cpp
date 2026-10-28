@@ -144,18 +144,14 @@ ava::core::Result<SessionLease> SessionLease::create_and_acquire(std::filesystem
     std::ranges::reverse(ancestor_sync_paths);
     ancestor_sync_paths.push_back(std::move(receiving_directory));
   }
-  std::error_code permissions_error;
-  std::filesystem::permissions(parent_path, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, permissions_error);
-  if (permissions_error)
-  {
-    auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed to set session lease directory permissions");
-    error.with_context("path", parent_path.string()).with_context("cause", permissions_error.message());
-    return std::unexpected(std::move(error));
-  }
 
   ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   if (!parent_fd)
     return std::unexpected(path_io_error("failed to open new session lease directory", parent_path, errno));
+  // Change permissions only on the no-follow directory descriptor used for
+  // publication, never on a pathname that might resolve to a symlink target.
+  if (::fchmod(parent_fd.get(), 0700) != 0)
+    return std::unexpected(path_io_error("failed to set session lease directory permissions", parent_path, errno));
 
   static std::atomic<std::uint64_t> temporary_sequence = 0;
   std::string temporary_name;

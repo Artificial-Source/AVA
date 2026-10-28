@@ -2,14 +2,12 @@
 #include "ava/permissions/permission_rules_internal.h"
 #include "ava/core/ids.h"
 #include "ava/core/mode.h"
+#include "ava/core/utc_timestamp.h"
 
 #include <algorithm>
 #include <chrono>
-#include <ctime>
 #include <filesystem>
-#include <iomanip>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -208,11 +206,7 @@ std::string now_timestamp()
 {
   auto const now = std::chrono::system_clock::now();
   auto const time = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{};
-  gmtime_r(&time, &tm);
-  std::ostringstream out;
-  out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-  return out.str();
+  return ava::core::format_utc_timestamp(time);
 }
 
 PersistentPermissionRule const& prefer_more_specific(PersistentPermissionRule const& current, PersistentPermissionRule const& candidate)
@@ -228,7 +222,9 @@ PersistentPermissionRule const& prefer_more_specific(PersistentPermissionRule co
 
 namespace ava::permissions {
 
-using namespace permission_rules_internal;
+using permission_rules_internal::command_allow_is_authoritative;
+using permission_rules_internal::prefer_more_specific;
+using permission_rules_internal::rule_matches;
 
 ava::core::Result<std::optional<PersistentPermissionRule>> match_persistent_permission_rule(PermissionRuleStore const& store, PermissionPrompt const& prompt)
 {

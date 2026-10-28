@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/command/environment.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 #include "ava/core/mode.h"
 #include "ava/core/open_beneath.h"
@@ -27,18 +28,9 @@ PermissionResolutionDecision::PermissionResolutionDecision(PermissionResolution 
 {
 }
 
-namespace {
-
-bool guidance_has_forbidden_byte(std::string_view value) noexcept
-{
-  return std::ranges::any_of(value, [](unsigned char ch) { return ch < 0x20 || ch == 0x7F; });
-}
-
-}  // namespace
-
 std::optional<std::string> validated_permission_user_guidance(std::string_view value)
 {
-  if (value.empty() || value.size() > kMaxPermissionUserGuidanceBytes || guidance_has_forbidden_byte(value) || !ava::core::json::is_valid_utf8(value))
+  if (value.empty() || value.size() > kMaxPermissionUserGuidanceBytes || ava::core::has_c0_or_del(value) || !ava::core::json::is_valid_utf8(value))
   {
     return std::nullopt;
   }
@@ -330,13 +322,15 @@ std::filesystem::path policy_path(std::filesystem::path const& path)
 
 bool is_secret_path(std::filesystem::path const& path)
 {
+  bool previous_is_config = false;
   for (auto const& part : path.lexically_normal())
   {
     auto const component = lowercase(part.string());
-    if (equals_any(component, {".ssh", ".aws", ".gnupg", ".config/gcloud"}))
+    if (equals_any(component, {".ssh", ".aws", ".gnupg"}) || (previous_is_config && component == "gcloud"))
     {
       return true;
     }
+    previous_is_config = component == ".config";
   }
 
   auto const filename = lowercase(path.filename().string());

@@ -105,9 +105,21 @@ struct SubagentCoordinatorStartRequest
 
 // Owns foreground-only frontend callbacks. Promotion reserves this gate before
 // changing coordinator state, preventing a new callback from racing promotion.
+// Resolver closures and the coordinator share the gate across child promotion
+// and completion, so it cannot be uniquely owned by either endpoint.
 class SubagentInteractionGate final : public std::enable_shared_from_this<SubagentInteractionGate>
 {
+  class ConstructionKey
+  {
+    friend class SubagentInteractionGate;
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
+  SubagentInteractionGate(ConstructionKey, SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver, QuestionResolver question_resolver);
   [[nodiscard]] static std::shared_ptr<SubagentInteractionGate> create(SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver,
                                                                        QuestionResolver question_resolver);
   [[nodiscard]] ava::permissions::PermissionResolver permission_resolver();
@@ -120,8 +132,6 @@ class SubagentInteractionGate final : public std::enable_shared_from_this<Subage
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  SubagentInteractionGate(SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver, QuestionResolver question_resolver);
-
   std::mutex mutex_;
   SubagentJobMode mode_ = SubagentJobMode::Foreground;
   bool promotion_pending_ = false;
@@ -179,6 +189,7 @@ class SubagentCoordinatorMaintenanceReservation
                                             std::uint64_t generation);
   void release() noexcept;
 
+  // Keep the coordinator alive until this reservation releases its admission keys.
   std::shared_ptr<SubagentCoordinator> coordinator_;
   std::vector<std::string> parent_session_ids_;
   std::uint64_t generation_ = 0;
@@ -187,7 +198,17 @@ class SubagentCoordinatorMaintenanceReservation
 
 class SubagentCoordinator final : public std::enable_shared_from_this<SubagentCoordinator>
 {
+  class ConstructionKey
+  {
+    friend class SubagentCoordinator;
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
+  SubagentCoordinator(ConstructionKey, SubagentCoordinatorOptions options);
   [[nodiscard]] static ava::core::Result<std::shared_ptr<SubagentCoordinator>> create(SubagentCoordinatorOptions options = {});
   ~SubagentCoordinator();
 
@@ -261,7 +282,6 @@ class SubagentCoordinator final : public std::enable_shared_from_this<SubagentCo
     std::string const* parent_session_id_;
   };
 
-  explicit SubagentCoordinator(SubagentCoordinatorOptions options);
   [[nodiscard]] std::shared_ptr<JobState> find_owned_locked(std::string_view parent_session_id, std::string_view job_id) const;
   [[nodiscard]] SubagentCoordinatorJobSnapshot public_snapshot_locked(JobState const& state, bool timed_out = false) const;
   [[nodiscard]] BackgroundJobCompletion complete(std::shared_ptr<JobState> const& state, BackgroundJobCompletion completion);
@@ -282,6 +302,8 @@ class SubagentCoordinator final : public std::enable_shared_from_this<SubagentCo
   bool accepting_ = true;
   bool shutdown_complete_ = false;
   std::size_t next_job_sequence_ = 1;
+  // Workers, waiters and inspectors retain JobState after releasing mutex_ or
+  // after its map entry is pruned; the map is not the sole lifetime owner.
   std::unordered_map<std::string, std::shared_ptr<JobState>> jobs_;
   SubagentTerminalSink terminal_sink_ = nullptr;
 

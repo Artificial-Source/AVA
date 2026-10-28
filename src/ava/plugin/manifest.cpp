@@ -1,7 +1,7 @@
 #include "sys.h"
 #include "ava/plugin/manifest.h"
-
 #include "ava/core/json.h"
+#include "ava/core/strict_json.h"
 
 #include <array>
 #include <cctype>
@@ -192,11 +192,17 @@ ava::core::Result<PluginEntrypoint> parse_entrypoint(std::string_view manifest_j
   auto const entrypoint = ava::core::json::object_field(manifest_json, "entrypoint");
   if (!entrypoint) return std::unexpected(manifest_error("plugin manifest requires entrypoint object"));
   auto command = ava::core::json::string_field(*entrypoint, "command");
-  if (!command || command->empty()) {
-    return std::unexpected(manifest_error("plugin manifest entrypoint.command must be a non-empty string"));
+  if (!command || command->empty() || command->find('\0') != std::string::npos)
+  {
+    return std::unexpected(manifest_error("plugin manifest entrypoint.command must be a non-empty string without NUL bytes"));
   }
   auto args = string_array_field(*entrypoint, "args");
   if (!args) return std::unexpected(args.error());
+  for (auto const& arg : *args)
+  {
+    if (arg.find('\0') != std::string::npos)
+      return std::unexpected(manifest_error("plugin manifest entrypoint.args must not contain NUL bytes"));
+  }
   return PluginEntrypoint{.command = std::move(*command), .args = std::move(*args)};
 }
 
@@ -204,7 +210,12 @@ ava::core::Result<PluginContributions> parse_contributions(std::string_view mani
 {
   PluginContributions contributions;
   auto const contributes = ava::core::json::object_field(manifest_json, "contributes");
-  if (!contributes) return contributions;
+  if (!contributes)
+  {
+    if (ava::core::json::field_value_start(manifest_json, "contributes"))
+      return std::unexpected(manifest_error("plugin manifest contributes must be an object"));
+    return contributions;
+  }
 
   for (auto const& tool : object_array_field(*contributes, "tools")) {
     auto name = ava::core::json::string_field(tool, "name");
@@ -293,7 +304,8 @@ ava::core::Result<PluginManifest> parse_plugin_manifest(std::string_view json, s
   if (auto depth = validate_manifest_json_depth(json); !depth) {
     return std::unexpected(depth.error());
   }
-  if (!ava::core::json::is_valid_object(json)) {
+  if (ava::core::validate_strict_json(json, kMaxManifestJsonDepth) != ava::core::StrictJsonStatus::Valid || !ava::core::json::is_valid_object(json))
+  {
     return std::unexpected(manifest_error("plugin manifest must be a valid JSON object"));
   }
 

@@ -52,6 +52,37 @@ void test_acp_peer_shutdown_cancels_blocked_transport()
 
   std::lock_guard lock(state->mutex);
   expect(state->canceled && state->cancel_calls > 0 && run_result.has_value(), "ACP shutdown cancels transport and wakes a peer blocked in read_record");
+
+  {
+    auto callback_state = std::make_shared<MemoryTransportState>();
+    std::promise<void> callback_ready;
+    auto ready = callback_ready.get_future();
+    std::atomic_bool callback_completed = false;
+    JsonRpcPeer* callback_peer = nullptr;
+    auto stopped_handler = [&](std::stop_token token) {
+      std::stop_callback callback(token, [&] {
+        expect(!callback_peer->commit_inbound_request(JsonRpcId(std::string("stop"))), "shutdown cancellation wins before invoking an inbound stop callback");
+        callback_peer->shutdown();
+        callback_completed.store(true, std::memory_order_release);
+      });
+      callback_ready.set_value();
+      while (!token.stop_requested())
+        std::this_thread::sleep_for(1ms);
+    };
+    JsonRpcPeer reentrant_peer(std::make_unique<MemoryTransport>(callback_state), [&](Request const&, std::stop_token token) -> RequestResult {
+      stopped_handler(token);
+      return std::string("{}");
+    });
+    callback_peer = &reentrant_peer;
+    ava::core::VoidResult callback_run;
+    auto callback_thread = ava::core::JoinThread::create("stop_callback_reader", [&] { callback_run = reentrant_peer.run(); });
+    wait_reader(callback_state);
+    feed(callback_state, R"({"jsonrpc":"2.0","id":"stop","method":"stop"})");
+    expect(ready.wait_until(ava::tests::now_plus_seconds(2)) == std::future_status::ready, "stop callback is installed before shutdown");
+    reentrant_peer.shutdown();
+    callback_thread.join();
+    expect(callback_run && callback_completed.load(std::memory_order_acquire), "ACP shutdown invokes inbound stop callbacks outside peer locks");
+  }
 }
 
 void test_acp_peer_lifecycle_notifications_and_duplicate_ids()
@@ -243,13 +274,20 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   std::atomic_int started = 0;
   std::promise<void> first_started;
   auto started_signal = first_started.get_future();
-  JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [&started, &first_started](Request const&, std::stop_token token) -> RequestResult {
+  JsonRpcPeer* callback_peer = nullptr;
+  std::atomic_bool cancellation_callback_ran = false;
+  JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [&](Request const& request, std::stop_token token) -> RequestResult {
+    std::stop_callback callback(token, [&] {
+      expect(!callback_peer->commit_inbound_request(request.id), "wire cancellation wins before invoking the stop callback");
+      cancellation_callback_ran.store(true, std::memory_order_release);
+    });
     if (started.fetch_add(1, std::memory_order_release) == 0)
       first_started.set_value();
     while (!token.stop_requested())
       std::this_thread::sleep_for(1ms);
     return std::unexpected(JsonRpcError{.code = -32800, .message = "cancelled", .data_json = std::nullopt, .id = std::nullopt, .suppress_response = false});
   });
+  callback_peer = &peer;
   ava::core::VoidResult run_result;
   ava::core::JoinThread thread = ava::core::JoinThread::create("thread", [&] { run_result = peer.run(); });
   wait_reader(state);
@@ -286,6 +324,7 @@ void test_acp_peer_cancel_duplicate_inflight_and_saturation()
   for (std::size_t index = 0; index < kMaxInflightRequests; ++index)
     inflight_released = inflight_released && output_has_code(take_output(state), -32800);
   expect(inflight_released, "ACP cancellation releases every saturated in-flight slot");
+  expect(cancellation_callback_ran.load(std::memory_order_acquire), "ACP wire cancellation invokes stop callbacks without holding the in-flight mutex");
 
   std::deque<PendingCall> pending;
   for (std::size_t index = 0; index < kMaxPendingCalls; ++index)
@@ -438,6 +477,45 @@ void test_acp_peer_outbound_queue_saturation()
   close_input(state);
   thread.join();
   expect(run_result.has_value(), "ACP saturation rollback regression shuts down cleanly");
+
+  auto saturated_state = std::make_shared<MemoryTransportState>();
+  saturated_state->block_writes = true;
+  std::mutex workers_mutex;
+  std::condition_variable workers_cv;
+  std::size_t workers_started = 0;
+  JsonRpcPeer saturated_peer(
+      std::make_unique<MemoryTransport>(saturated_state), [](Request const&, std::stop_token) -> RequestResult { return std::string("{}"); },
+      [&](Notification const&, std::stop_token token) {
+        {
+          std::lock_guard lock(workers_mutex);
+          ++workers_started;
+        }
+        workers_cv.notify_all();
+        while (!token.stop_requested())
+          std::this_thread::sleep_for(1ms);
+      });
+  ReaderBarrier saturated_reader(saturated_peer);
+  ava::core::VoidResult saturated_result;
+  auto saturated_thread = ava::core::JoinThread::create("saturated_reader", [&] { saturated_result = saturated_peer.run(); });
+  wait_reader(saturated_state);
+  for (std::size_t index = 0; index < kWorkerCount; ++index)
+    feed(saturated_state, R"({"jsonrpc":"2.0","method":"test/block-worker"})");
+  {
+    std::unique_lock lock(workers_mutex);
+    expect(workers_cv.wait_for(lock, 2s, [&] { return workers_started == kWorkerCount; }), "queue rejection fixture occupies every worker");
+  }
+  for (std::size_t index = 0; index < kMaxWorkerQueue; ++index)
+    feed(saturated_state, R"({"jsonrpc":"2.0","method":"test/queued"})");
+  expect(saturated_reader.synchronize(saturated_state), "queue rejection fixture fills the worker queue");
+  expect(saturated_peer.send_notification("test/block-writer", std::string("{}")).has_value(), "queue rejection fixture blocks the writer");
+  wait_writer(saturated_state);
+  bool filled_output = true;
+  for (std::size_t index = 0; index < kMaxOutboundRecords; ++index)
+    filled_output = saturated_peer.send_notification("test/queued-output", std::string("{}")).has_value() && filled_output;
+  expect(filled_output, "queue rejection fixture fills the output queue");
+  feed(saturated_state, R"({"jsonrpc":"2.0","id":"rejected","method":"test/request"})");
+  saturated_thread.join();
+  expect(!saturated_result, "ACP rejects work and shuts down without recursive locking when both queues are saturated");
 }
 
 void test_acp_peer_delivered_fail_stop_cancellation()

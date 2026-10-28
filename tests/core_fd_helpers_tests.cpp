@@ -2,15 +2,22 @@
 #include "tests/support/session_test_support.h"
 #include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
+#include "ava/process/deadline.h"
 #include "ava/core/UniqueFd.h"
+#include "ava/core/ascii.h"
 #include "ava/core/atomic_file.h"
+#include "ava/core/environment_value.h"
 #include "ava/core/fd_io.h"
 #include "ava/core/json.h"
 #include "ava/core/saturating.h"
+#include "ava/core/string_utils.h"
+#include "ava/core/text_case.h"
+#include "ava/core/utc_timestamp.h"
 #include "ava/core/utf8_prefix.h"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -372,6 +379,68 @@ void test_rename_and_directory_stream()
   expect(!invalid && invalid.error() == EBADF, "directory stream reports invalid-descriptor errno");
 }
 
+void test_text_environment_and_deadline_helpers()
+{
+  for (unsigned int byte = 0; byte < 256; ++byte)
+  {
+    auto const ch = static_cast<char>(byte);
+    auto const control = byte < 0x20 || byte == 0x7f;
+    expect(ava::core::is_c0_or_del(static_cast<unsigned char>(byte)) == control && ava::core::has_c0_or_del(std::string_view(&ch, 1)) == control,
+           "shared C0/DEL predicates preserve all 256 byte classifications");
+    auto const ascii_space = byte == ' ' || byte == '\t' || byte == '\n' || byte == '\r' || byte == '\f' || byte == '\v';
+    expect(ava::core::is_ascii_space(static_cast<unsigned char>(byte)) == ascii_space, "ASCII whitespace classification is exact for all 256 bytes");
+    auto const expected_ascii = byte >= 'A' && byte <= 'Z' ? static_cast<char>(byte + ('a' - 'A')) : ch;
+    expect(ava::core::ascii_lower(ch) == expected_ascii && ava::core::ascii_lower_copy(std::string_view(&ch, 1)) == std::string(1, expected_ascii),
+           "ASCII folding preserves every non-ASCII byte");
+    auto folded = std::string(1, ch);
+    ava::core::locale_lower_in_place(folded);
+    auto const expected_locale = std::string(1, static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    expect(folded == expected_locale && ava::core::locale_lower_copy(std::string_view(&ch, 1)) == expected_locale,
+           "locale folding preserves the unsigned-byte cctype contract");
+  }
+  expect(!ava::core::has_c0_or_del({}) && ava::core::ascii_lower_copy({}).empty() && ava::core::locale_lower_copy({}).empty(),
+         "shared byte helpers accept empty text");
+  expect(ava::core::trim_view(std::string_view{" \t\r\n\f\vtext \t\r\n\f\v"}) == "text" && ava::core::trim(" \t\r\n\f\v").empty(),
+         "shared trim preserves the six C-locale whitespace bytes");
+  expect(ava::core::ascii_trim(" \t\r\n\f\vtext \t\r\n\f\v") == "text" && ava::core::ascii_trim(" \t\r\n\f\v").empty() &&
+             ava::core::ascii_trim("\xa0text\xa0") == "\xa0text\xa0",
+         "ASCII trimming removes only its explicit whitespace set");
+
+  using Clock = std::chrono::steady_clock;
+  constexpr auto tick = Clock::duration{1};
+  constexpr auto origin = Clock::time_point{};
+  constexpr auto maximum = Clock::time_point::max();
+  constexpr auto minimum = Clock::time_point::min();
+  expect(ava::process::saturating_deadline_add(origin, Clock::duration::zero()) == origin && ava::process::saturating_deadline_add(origin, -tick) == origin &&
+             ava::process::saturating_deadline_add(origin, Clock::duration::min()) == origin,
+         "nonpositive deadline budgets leave the original deadline unchanged");
+  expect(ava::process::saturating_deadline_add(origin, tick) == origin + tick && ava::process::saturating_deadline_add(maximum - tick, tick) == maximum &&
+             ava::process::saturating_deadline_add(maximum, tick) == maximum && ava::process::saturating_deadline_add(maximum - tick, tick + tick) == maximum,
+         "deadline addition preserves ordinary sums and saturates at the exact maximum");
+  expect(ava::process::saturating_deadline_add(minimum, Clock::duration::max()) == minimum + Clock::duration::max(),
+         "deadline addition remains safe for negative time points and the largest positive budget");
+
+  expect(ava::core::format_utc_timestamp(0) == "1970-01-01T00:00:00Z", "UTC timestamp retains the persisted epoch representation");
+  auto const leap_day = std::chrono::sys_days(std::chrono::year{2000} / 2 / 29) + std::chrono::hours{12} + std::chrono::minutes{34} + std::chrono::seconds{56};
+  expect(ava::core::format_utc_timestamp(std::chrono::system_clock::to_time_t(leap_day)) == "2000-02-29T12:34:56Z",
+         "UTC timestamp preserves leap-day and whole-second formatting");
+
+  constexpr auto variable = "AVA_TEST_NONEMPTY_ENVIRONMENT_VALUE";
+  ::ScopedEnvVar absent(variable, std::nullopt);
+  expect(!ava::core::nonempty_environment_value(variable), "missing environment values remain absent");
+  {
+    ::ScopedEnvVar empty(variable, "");
+    expect(!ava::core::nonempty_environment_value(variable), "empty environment values remain absent");
+  }
+  {
+    ::ScopedEnvVar present(variable, "  retained value  ");
+    auto const value = ava::core::nonempty_environment_value(variable);
+    expect(value && *value == "  retained value  ", "nonempty environment lookup does not trim or normalize bytes");
+    ::ScopedEnvVar changed(variable, "replacement");
+    expect(value && *value == "  retained value  ", "environment lookup owns its copied value");
+  }
+}
+
 void test_saturating_add_and_utf8_prefix()
 {
   constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
@@ -505,6 +574,7 @@ void run_core_fd_helpers_tests()
   test_rename_and_directory_stream();
   test_atomic_publication_failure_preserves_previous_file();
   test_saturating_add_and_utf8_prefix();
+  test_text_environment_and_deadline_helpers();
   test_json_compact();
   test_restart_on_eintr();
   test_child_wait_deadlines();

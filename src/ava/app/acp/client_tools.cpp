@@ -1,5 +1,7 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/app/acp/client_tools.h"
+#include "ava/app/acp/codec_json_internal.h"
 #include "ava/app/acp/protocol.h"
 
 #include <algorithm>
@@ -17,7 +19,8 @@ namespace ava::app::acp {
 namespace {
 
 using Json = nlohmann::json;
-using namespace std::chrono_literals;
+using std::chrono_literals::operator""ms;
+using std::chrono_literals::operator""s;
 
 constexpr auto kFileCallTimeout = 5s;
 constexpr auto kTerminalCallTimeout = 5s;
@@ -63,18 +66,28 @@ bool cancel_requested(ava::tools::ToolIoCancelCallback const& callback)
 
 ava::core::Result<Json> response_object(std::string_view method, std::string_view result_json)
 {
-  auto parsed = Json::parse(result_json, nullptr, false, true);
-  if (!parsed.is_object())
+  auto parsed = decode_json_value(result_json);
+  if (!parsed)
+    return std::unexpected(dto_error(method, parsed.error().message));
+  if (!parsed->is_object())
     return std::unexpected(dto_error(method, std::string(method) + " result must be an object"));
-  return parsed;
+  return std::move(*parsed);
 }
 
 ava::core::Result<std::string> bounded_json(Json const& value, std::string_view method)
 {
-  auto encoded = value.dump(-1, ' ', false, Json::error_handler_t::strict);
-  if (encoded.size() > kMaxRecordBytes)
-    return std::unexpected(dto_error(method, std::string(method) + " params exceed the ACP record limit"));
-  return encoded;
+  try
+  {
+    auto encoded = value.dump(-1, ' ', false, Json::error_handler_t::strict);
+    if (encoded.size() > kMaxRecordBytes)
+      return std::unexpected(dto_error(method, std::string(method) + " params exceed the ACP record limit"));
+    return encoded;
+  }
+  catch (Json::exception const&)
+  {
+    // Paths, command arguments, and exact file contents must never be silently repaired.
+    return std::unexpected(dto_error(method, std::string(method) + " params contain invalid UTF-8"));
+  }
 }
 
 ava::core::Result<std::shared_ptr<ClientRequestGateway>> gateway_for(std::weak_ptr<ClientRequestGateway> const& weak)
@@ -194,6 +207,8 @@ class ClientExactFileAccess final : public ava::tools::ExactFileAccess
     return object_result("fs/write_text_file", *response);
   }
 
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
  private:
   [[nodiscard]] ava::core::Result<std::string> read_text_file_impl(std::filesystem::path const& absolute_path, ava::tools::ExactFileReadOptions options,
                                                                    ava::tools::ToolIoCancelCallback cancel) const
@@ -252,6 +267,7 @@ struct ExitStatus
 {
   std::optional<std::int64_t> exit_code;
   std::optional<std::string> signal;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 std::optional<std::int64_t> optional_exit_code(Json const& object)
@@ -341,6 +357,8 @@ class TerminalLease
     release_attempted_ = true;
     return release_();
   }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   ReleaseCallback release_;
@@ -577,6 +595,8 @@ class ClientCommandExecutor final : public ava::tools::CommandExecutor
       return std::unexpected(std::move(*failure));
     return result;
   }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   [[nodiscard]] ava::core::Result<std::string> terminal_params(std::string_view terminal_id) const

@@ -12,7 +12,6 @@
 namespace ava::app::session_command_support {
 
 [[nodiscard]] std::string trim_ascii(std::string_view text);
-[[nodiscard]] std::string lower_ascii(std::string_view text);
 [[nodiscard]] bool contains_ascii_case_insensitive(std::string_view text, std::string_view query);
 [[nodiscard]] ava::core::Result<std::vector<ava::session::SessionEntry>> load_runtime_entries(runtime::session_ts const& unlocked_session);
 [[nodiscard]] std::string labels_text(std::vector<std::string> const& labels);

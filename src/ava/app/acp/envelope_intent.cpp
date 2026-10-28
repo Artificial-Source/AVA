@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/app/acp/envelope_intent.h"
+#include "ava/core/hex.h"
 
 #include <limits>
 
@@ -17,17 +18,6 @@ bool is_json_whitespace(char ch) noexcept
 bool is_value_delimiter(char ch) noexcept
 {
   return is_json_whitespace(ch) || ch == ',' || ch == '}';
-}
-
-int hex_value(char ch) noexcept
-{
-  if (ch >= '0' && ch <= '9')
-    return ch - '0';
-  if (ch >= 'a' && ch <= 'f')
-    return ch - 'a' + 10;
-  if (ch >= 'A' && ch <= 'F')
-    return ch - 'A' + 10;
-  return -1;
 }
 
 }  // namespace
@@ -127,7 +117,7 @@ void EnvelopeIntentScanner::consume_string(char ch) noexcept
 {
   if (unicode_digits_remaining_ != 0)
   {
-    int const digit = hex_value(ch);
+    int const digit = ava::core::hex_digit_value(ch);
     if (digit < 0)
     {
       mark_malformed();

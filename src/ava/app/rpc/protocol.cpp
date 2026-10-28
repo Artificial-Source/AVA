@@ -9,10 +9,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <initializer_list>
 #include <istream>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 #include "debug.h"
@@ -102,19 +104,18 @@ ava::core::Result<std::optional<long long>> exact_optional_integer_field(std::st
   {
     return std::unexpected(invalid_rpc("RPC " + field_name + " must be an integer"));
   }
+  auto const integer_end = end;
   while (end < object.size() && std::isspace(static_cast<unsigned char>(object[end])) != 0) ++end;
   if (end < object.size() && object[end] != ',' && object[end] != '}')
   {
     return std::unexpected(invalid_rpc("RPC " + field_name + " must be an integer"));
   }
-  try
-  {
-    return std::optional<long long>{std::stoll(std::string(object.substr(*start, end - *start)))};
-  }
-  catch (...)
-  {
+  long long value = 0;
+  auto const token = object.substr(*start, integer_end - *start);
+  auto const parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+  if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size())
     return std::unexpected(invalid_rpc("RPC " + field_name + " is out of range"));
-  }
+  return std::optional<long long>{value};
 }
 
 ava::core::Result<std::optional<bool>> exact_optional_bool_field(std::string_view object, std::string_view key)

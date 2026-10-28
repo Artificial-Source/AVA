@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/session_test_support.h"
 #include "tests/support/test_harness.h"
+#include "ava/http/transport.h"
 #include "ava/agent/mode.h"
 #include "ava/tools/bash_tool.h"
 #include "ava/tools/file_tools.h"
@@ -8,9 +9,12 @@
 #include "ava/tools/mutation_queue.h"
 #include "ava/tools/secure_workspace.h"
 #include "ava/tools/tool_permission.h"
+#include "ava/tools/tool_types.h"
+#include "ava/session/assistant_output.h"
 #include "ava/session/export.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission.h"
+#include "ava/context/markdown_resource.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/json.h"
@@ -179,6 +183,26 @@ void test_mutation_queue_cleans_drained_path_entries()
 
 void test_file_tools()
 {
+#ifdef CWDEBUG
+  {
+    ava::http::HttpRequest request;
+    request.method = "POST";
+    request.url = "https://example.test/credential";
+    request.headers = {{"Authorization", "Bearer secret-canary"}};
+    request.body = "prompt-canary";
+    ava::http::HttpResponse response{.status_code = 200, .headers = {{"Set-Cookie", "secret-canary"}}, .body = "response-canary"};
+    ava::tools::ProviderToolCall call{.id = "call", .name = "write_file", .arguments_json = "file-content-canary"};
+    ava::session::AssistantOutputText output{.text = "assistant-canary"};
+    ava::context::ParsedMarkdown markdown{.frontmatter = {{"secret", "frontmatter-canary"}}, .body = "file-content-canary"};
+    std::ostringstream printed;
+    request.print_on(printed);
+    response.print_on(printed);
+    call.print_on(printed);
+    output.print_on(printed);
+    markdown.print_on(printed);
+    expect(printed.str() == "<redacted><redacted><redacted><redacted><redacted>", "sensitive backend debug printers emit only opaque text");
+  }
+#endif
   auto const root = create_empty_root("test_file_tools");
 
   auto const workspace = root / "workspace";
@@ -362,6 +386,21 @@ void test_file_tools()
   }
   auto direct_secret = ava::tools::read_file(build_context, workspace / ".env");
   expect(!direct_secret, "read_file denies direct .env reads");
+  auto const gcloud_path = workspace / ".config" / "gcloud" / "configurations" / "config_default";
+  std::filesystem::create_directories(gcloud_path.parent_path());
+  ava::tests::write_test_file(gcloud_path, "private cloud configuration");
+  auto gcloud_read = ava::tools::read_file(build_context, gcloud_path);
+  expect(!gcloud_read && gcloud_read.error().category() == ava::core::ErrorCategory::PermissionDenied,
+         "read_file denies the gcloud configuration subtree even when the filename contains no secret keyword");
+  auto unrelated_gcloud = ava::permissions::decide(ava::permissions::PermissionRequest{
+      .operation = ava::permissions::Operation::ReadFile,
+      .mode = ava::agent::Mode::Build,
+      .workspace_dir = workspace,
+      .target_path = workspace / "examples" / "gcloud" / "guide.txt",
+      .command = "",
+  });
+  expect(unrelated_gcloud.action == ava::permissions::PermissionAction::Allow,
+         "gcloud secret-directory matching requires an immediately preceding .config component");
   auto external_ssh_secret = ava::permissions::decide(ava::permissions::PermissionRequest{
       .operation = ava::permissions::Operation::ReadFile,
       .mode = ava::agent::Mode::Build,
@@ -2078,6 +2117,13 @@ void test_secure_outside_reads_require_anchors()
   auto opened = ava::tools::file_tools_internal::open_secure_read_file(context, outside);
   int const flags = opened ? ::fcntl(opened->fd(), F_GETFL) : -1;
   expect(opened && flags >= 0 && (flags & O_NONBLOCK) == 0, "outside-workspace regular files retain their original owner and use blocking reads");
+
+  auto missing_edit_anchors = context;
+  missing_edit_anchors.anchor_set.reset();
+  auto denied_edit = ava::tools::edit_file(missing_edit_anchors, outside, "approved", "changed");
+  expect(!denied_edit && denied_edit.error().category() == ava::core::ErrorCategory::InvalidArgument &&
+             denied_edit.error().message().find("ToolContext::anchor_set") != std::string::npos && read_text_file_for_test(outside) == "approved outside bytes",
+         "edit_file full reads require the same external descriptor authority as read_file");
 }
 
 void test_secure_edit_caps_files_that_grow_after_open()
@@ -2127,6 +2173,13 @@ void test_secure_edit_caps_files_that_grow_after_open()
   std::array<char, 3> prefix{};
   file.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
   expect(std::string_view(prefix.data(), prefix.size()) == "old", "size-limit failure leaves the growing file unedited");
+
+  file.close();
+  std::filesystem::resize_file(path, 3, grow_error);
+  grew = false;
+  auto read = ava::tools::read_file(context, path, ava::tools::ReadOptions{.max_bytes = 16});
+  expect(grew && !grow_error && !read && read.error().code() == ava::core::ErrorCode::FileSizeLimit,
+         "read_file enforces its input byte cap after open even when its output byte cap is small");
 #endif
 }
 

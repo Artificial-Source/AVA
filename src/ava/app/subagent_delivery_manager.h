@@ -69,6 +69,15 @@ struct SubagentDeliveryManagerOptions
 // and processes remain independent.
 class SubagentDeliveryManager final : public std::enable_shared_from_this<SubagentDeliveryManager>
 {
+  class ConstructionKey
+  {
+    friend class SubagentDeliveryManager;
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
   // Process-local, manager-scoped trust writer serialization. This deliberately
   // makes no singleton or cross-process coordination claim.
@@ -150,6 +159,7 @@ class SubagentDeliveryManager final : public std::enable_shared_from_this<Subage
   };
 
   [[nodiscard]] static ava::core::Result<std::shared_ptr<SubagentDeliveryManager>> create(SubagentDeliveryManagerOptions options);
+  SubagentDeliveryManager(ConstructionKey, SubagentDeliveryManagerOptions options);
   ~SubagentDeliveryManager();
 
   SubagentDeliveryManager(SubagentDeliveryManager const&) = delete;
@@ -201,7 +211,6 @@ class SubagentDeliveryManager final : public std::enable_shared_from_this<Subage
  private:
   struct ParentCapsule;
   struct WorkspaceRecord;
-  explicit SubagentDeliveryManager(SubagentDeliveryManagerOptions options);
   void start();
   void enqueue(ava::agent::SubagentCoordinatorJobSnapshot const& snapshot) noexcept;
   void worker_loop(std::stop_token stop_token);

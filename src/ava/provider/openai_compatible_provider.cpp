@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cctype>
 #include <initializer_list>
+#include <limits>
 #include <locale>
 #include <map>
 #include <optional>
@@ -75,6 +76,8 @@ bool append_tool_call_delta_events(std::vector<StreamEvent>& events, std::map<in
   for (auto const& call : *tool_calls)
   {
     auto const index_value = ava::core::json::integer_field(call, "index").value_or(0);
+    if (index_value < 0 || index_value > std::numeric_limits<int>::max())
+      return false;
     auto const index = static_cast<int>(index_value);
     auto const function = ava::core::json::object_field(call, "function");
     auto id = ava::core::json::string_field(call, "id").value_or("");

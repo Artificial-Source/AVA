@@ -2,6 +2,7 @@
 
 #include "ava/session/session_store.h"
 #include "ava/frontend/UnlockedData.h"
+#include "ava/debug/print_members_on.h"
 
 #include <cstddef>
 #include <optional>

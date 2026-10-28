@@ -639,6 +639,15 @@ void test_mcp_stdio_client_lists_and_calls_tools()
   expect(result && !result->is_error && result->content == "MCP call ok",
          result ? "MCP stdio client sends newline-delimited compact JSON to standard stdio servers"
                 : "MCP stdio client sends newline-delimited compact JSON to standard stdio servers: " + result.error().format());
+  for (std::string_view const invalid : {"{\"text\":\"raw\nline\"}", "{\"text\":\"raw\rline\"}"})
+  {
+    auto rejected = (*client)->call_tool("echo", invalid);
+    expect(!rejected && rejected.error().category() == ava::core::ErrorCategory::InvalidArgument,
+           "MCP rejects raw line breaks in JSON strings before writing a frame");
+  }
+  auto escaped = (*client)->call_tool("echo", " \r\n{\t\"text\": \"space \\\\ slash \\\" quote \\n escaped newline\"\r\n}\t");
+  expect(escaped && !escaped->is_error && escaped->content == "MCP call ok",
+         "MCP framing preserves escaped string bytes and remains usable after invalid arguments");
   auto resources = (*client)->list_resources();
   expect(resources && resources->size() == 1 && resources->front().uri == "file:///workspace/notes.md" && resources->front().mime_type == "text/markdown",
          resources ? "MCP stdio client lists resources" : "MCP stdio client lists resources: " + resources.error().format());
@@ -954,7 +963,10 @@ void test_mcp_tool_dispatcher()
   });
   expect(resource_schema != schemas.end(), "enabled MCP resource is exported as an opaque no-argument provider schema");
 
-  ava::agent::ToolDispatcher dispatcher(context);
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto dispatched = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_mcp", .name = model_tool_name, .arguments_json = "{\"text\":\"hello\"}"});
   expect(dispatched && dispatched->success && dispatched->result_text.find("MCP call ok") != std::string::npos,
          dispatched ? "dispatcher calls enabled MCP tool through broker" : "dispatcher calls enabled MCP tool through broker: " + dispatched.error().format());
@@ -1016,7 +1028,11 @@ void test_mcp_tool_dispatcher()
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "renamed MCP interruption", ava::core::ErrorCode::Canceled));
     return {};
   };
-  ava::agent::ToolDispatcher typed_cancel_dispatcher(typed_cancel_context);
+  auto typed_cancel_dispatcher_result = ava::agent::ToolDispatcher::create_strict(typed_cancel_context);
+  if (!ava::tests::require(typed_cancel_dispatcher_result.has_value(),
+                           typed_cancel_dispatcher_result ? "dispatcher fixture composes" : typed_cancel_dispatcher_result.error().format()))
+    return;
+  auto& typed_cancel_dispatcher = *typed_cancel_dispatcher_result;
   auto typed_cancel =
       typed_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_mcp_typed_cancel", .name = model_tool_name, .arguments_json = "{}"});
   expect(typed_cancel && !typed_cancel->success && typed_cancel->payload.status == ava::agent::ToolResultStatus::Canceled,
@@ -1030,7 +1046,11 @@ void test_mcp_tool_dispatcher()
     error.with_context("canceled", "true");
     return std::unexpected(std::move(error));
   };
-  ava::agent::ToolDispatcher legacy_cancel_dispatcher(legacy_cancel_context);
+  auto legacy_cancel_dispatcher_result = ava::agent::ToolDispatcher::create_strict(legacy_cancel_context);
+  if (!ava::tests::require(legacy_cancel_dispatcher_result.has_value(),
+                           legacy_cancel_dispatcher_result ? "dispatcher fixture composes" : legacy_cancel_dispatcher_result.error().format()))
+    return;
+  auto& legacy_cancel_dispatcher = *legacy_cancel_dispatcher_result;
   auto legacy_cancel =
       legacy_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_mcp_legacy_cancel", .name = model_tool_name, .arguments_json = "{}"});
   expect(legacy_cancel && !legacy_cancel->success && legacy_cancel->payload.status == ava::agent::ToolResultStatus::Error,
@@ -1081,7 +1101,10 @@ void test_mcp_tool_dispatcher_audits_permission_denials()
                                      ? ava::mcp::mcp_model_resource_tool_name("demo", "file:///workspace/notes.md")
                                      : ava::mcp::mcp_model_tool_name("demo", "echo");
     auto const arguments_json = denied_operation == ava::permissions::Operation::McpResourceRead ? "{}" : "{\"text\":\"hello\"}";
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto const records_before_denial = authority ? mcp_records(*authority->supervisor).size() : 0;
     prompts.clear();
     audits.clear();
@@ -1167,7 +1190,10 @@ void test_mcp_tool_dispatcher_contains_tool_errors()
   attach_mcp_process_scope(context);
 
   auto const model_tool_name = ava::mcp::mcp_model_tool_name("demo", "echo");
-  ava::agent::ToolDispatcher dispatcher(context);
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto dispatched =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_mcp_tool_error", .name = model_tool_name, .arguments_json = "{\"text\":\"hello\"}"});
   expect(dispatched && !dispatched->success && dispatched->payload.status == ava::agent::ToolResultStatus::Error &&
@@ -1192,7 +1218,11 @@ void test_mcp_tool_dispatcher_contains_tool_errors()
     return ava::permissions::PermissionResolution::Allow;
   };
   attach_mcp_process_scope(text_context);
-  ava::agent::ToolDispatcher text_dispatcher(text_context);
+  auto text_dispatcher_result = ava::agent::ToolDispatcher::create_strict(text_context);
+  if (!ava::tests::require(text_dispatcher_result.has_value(),
+                           text_dispatcher_result ? "dispatcher fixture composes" : text_dispatcher_result.error().format()))
+    return;
+  auto& text_dispatcher = *text_dispatcher_result;
   auto text_dispatched = text_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_mcp_canceled_text_error", .name = model_tool_name, .arguments_json = "{\"text\":\"hello\"}"});
   expect(text_dispatched && !text_dispatched->success && text_dispatched->payload.status == ava::agent::ToolResultStatus::Error &&
@@ -1717,6 +1747,31 @@ void test_mcp_supervisor_lifecycle()
   auto const root = create_empty_root("mcp-supervisor-lifecycle");
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
+
+  for (std::size_t const message_bytes : {511U, 512U, 513U})
+  {
+    auto authority = make_mcp_test_authority();
+    if (!ava::tests::require(authority.has_value(), "MCP message-boundary fixture authority is available"))
+      return;
+    std::string response =
+        R"({"jsonrpc":"2.0","id":"ava_mcp_1","result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"boundary","version":"1"}}})";
+    response.resize(message_bytes, ' ');
+    auto const script = root / ("boundary-" + std::to_string(message_bytes) + ".sh");
+    write_executable_script(script, "#!/bin/sh\nIFS= read -r req || exit 1\nprintf '%s\\n' '" + response + "'\ncat >/dev/null\n");
+    auto server = fake_server_config(root);
+    server.command = script.string();
+    server.args.clear();
+    auto options = fake_client_options(workspace, authority->run);
+    options.max_message_bytes = 512;
+    auto client = ava::mcp::McpStdioClient::start(server, options);
+    if (message_bytes <= options.max_message_bytes)
+      expect(client.has_value(), "MCP message cap excludes the terminating newline, including at the exact byte limit");
+    else
+      expect(!client && client.error().format().find("output_limit: true") != std::string::npos, "MCP rejects a message one byte over its payload limit");
+    if (client)
+      expect(shutdown_for_test(**client).has_value(), "MCP message-boundary fixture shuts down");
+    finish_mcp_supervisor(*authority);
+  }
 
   auto missing_authority = make_mcp_test_authority();
   if (!ava::tests::require(missing_authority.has_value(), "MCP missing-scope fixture authority is available"))

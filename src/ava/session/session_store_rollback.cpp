@@ -2,6 +2,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_store_internal.h"
 #include "ava/core/fd_io.h"
+#include "ava/core/hex.h"
 
 #include <array>
 #include <cerrno>
@@ -44,15 +45,7 @@ ava::core::Result<std::string> rollback_quarantine_name(std::string_view session
     offset += static_cast<std::size_t>(count);
   }
 
-  constexpr char hex[] = "0123456789abcdef";
-  std::string suffix;
-  suffix.reserve(random_bytes.size() * 2);
-  for (auto const byte : random_bytes)
-  {
-    suffix.push_back(hex[byte >> 4]);
-    suffix.push_back(hex[byte & 0x0F]);
-  }
-  return "." + std::string(session_name) + ".rollback." + suffix;
+  return "." + std::string(session_name) + ".rollback." + ava::core::hex_encode(random_bytes);
 }
 
 }  // namespace

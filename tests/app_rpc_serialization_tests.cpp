@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <expected>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <set>
@@ -394,6 +395,17 @@ void test_app_rpc_parsing_and_response_serialization()
   auto invalid_job_timeout = ava::app::parse_rpc_command_line(R"JSON({"id":"job","type":"wait_job","job_id":"job_123","timeout_ms":"1"})JSON");
   expect(!invalid_job_timeout && invalid_job_timeout.error().category() == ava::core::ErrorCategory::InvalidArgument,
          "RPC parser rejects wrong-typed job wait timeouts");
+
+  auto maximum_integer = ava::app::parse_rpc_command_line(R"({"id":"max","type":"get_protocol","protocol_version":9223372036854775807 })");
+  auto minimum_integer = ava::app::parse_rpc_command_line(R"({"id":"min","type":"get_protocol","protocol_version":-9223372036854775808 })");
+  expect(maximum_integer && maximum_integer->protocol_version == std::numeric_limits<long long>::max() && minimum_integer &&
+             minimum_integer->protocol_version == std::numeric_limits<long long>::min(),
+         "RPC integer parsing preserves both signed limits with trailing JSON whitespace");
+  for (auto const* token : {"9223372036854775808", "-9223372036854775809", "1.5", "1e3"})
+  {
+    auto rejected = ava::app::parse_rpc_command_line(std::string(R"({"id":"overflow","type":"get_protocol","protocol_version":)") + token + "}");
+    expect(!rejected, "RPC integer parsing rejects overflow and non-integral tokens without exceptions");
+  }
 
   auto direct_run_command = ava::app::parse_rpc_command_line(R"JSON({"id":"cmd","type":"run_command","command":"printf rpc-direct"})JSON");
   expect(direct_run_command && direct_run_command->command && *direct_run_command->command == "printf rpc-direct",

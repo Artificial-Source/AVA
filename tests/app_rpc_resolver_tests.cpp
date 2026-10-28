@@ -1292,6 +1292,57 @@ void test_app_rpc_grants_clear_requires_permission_again()
                 {"denied new content absent", transport.requests()[3].body.find("GRANT_CLEAR_AFTER_CLEAR_CONTENT") == std::string::npos}});
 }
 
+void test_app_rpc_session_grant_capacity_preserves_pending_reply()
+{
+  using namespace ava::app::rpc;
+  PendingResolverState state;
+  auto enqueue = [&](std::string path, std::string reason = {}) {
+    auto request = std::make_shared<PendingPermissionRequest>();
+    request->correlation_id = "run";
+    request->session_id = "session";
+    request->target_path = std::move(path);
+    request->reason = std::move(reason);
+    state.permission_requests.emplace("pending", request);
+    return request;
+  };
+  for (std::size_t index = 0; index < kMaxPermissionSessionGrants; ++index)
+  {
+    enqueue("/file-" + std::to_string(index));
+    if (!require(resolve_permission_reply(state, "pending", "run", "allow_session").has_value(), "session grant fits count limit"))
+      return;
+  }
+  enqueue("/file-0");
+  expect(
+      resolve_permission_reply(state, "pending", "run", "allow_session").has_value() && state.permission_session_grants.size() == kMaxPermissionSessionGrants,
+      "duplicate session grants remain usable at capacity without retaining another grant");
+  auto blocked = enqueue("/new-file");
+  auto full = resolve_permission_reply(state, "pending", "run", "allow_session");
+  expect(!full && full.error().format().find("permission_grants_clear") != std::string::npos && !blocked->resolved &&
+             state.permission_requests.contains("pending") && state.permission_session_grants.size() == kMaxPermissionSessionGrants,
+         "grant count rejection preserves the unresolved request and returns actionable recovery");
+  expect(resolve_permission_reply(state, "pending", "run", "allow").has_value() && blocked->resolved,
+         "a rejected reusable grant can be answered with one-shot allow");
+  static_cast<void>(permission_session_grants_clear_result_json(state));
+  auto oversized = enqueue("/oversized", std::string(kMaxPermissionSessionGrantBytes, 'x'));
+  auto bytes = resolve_permission_reply(state, "pending", "run", "allow_session");
+  expect(!bytes && !oversized->resolved && state.permission_requests.contains("pending") && state.permission_session_grants.empty(),
+         "retained grant bytes are bounded independently of grant count without consuming pending authority");
+  expect(resolve_permission_reply(state, "pending", "run", "deny").has_value(), "an oversized session grant can still be denied");
+  enqueue("/after-clear");
+  expect(resolve_permission_reply(state, "pending", "run", "allow_session").has_value(), "clearing grants restores admission capacity");
+  static_cast<void>(permission_session_grants_clear_result_json(state));
+  enqueue("/half-one", std::string(kMaxPermissionSessionGrantBytes / 2, 'x'));
+  if (!require(resolve_permission_reply(state, "pending", "run", "allow_session").has_value(), "one half-budget grant fits"))
+    return;
+  auto second_half = enqueue("/half-two", std::string(kMaxPermissionSessionGrantBytes / 2, 'x'));
+  auto aggregate = resolve_permission_reply(state, "pending", "run", "allow_session");
+  expect(!aggregate && !second_half->resolved && state.permission_session_grants.size() == 1,
+         "grant byte accounting bounds aggregate retained state, including metadata overhead");
+  auto revoked = permission_session_grant_revoke_result_json(state, state.permission_session_grants.front().grant_id);
+  expect(revoked && resolve_permission_reply(state, "pending", "run", "allow_session").has_value(),
+         "revoking a grant restores byte capacity without replacing the pending request");
+}
+
 }  // namespace
 
 void run_app_rpc_resolver_tests()
@@ -1307,6 +1358,7 @@ void run_app_rpc_resolver_tests()
   test_app_rpc_grant_clear_and_foreign_identity_isolation();
   test_app_rpc_grants_clear_requires_permission_again();
   test_app_rpc_session_grants_are_exact_session_scoped_and_cannot_override_deny();
+  test_app_rpc_session_grant_capacity_preserves_pending_reply();
   test_app_rpc_command_one_shot_blocks_reusable_grants();
   test_app_rpc_permission_request_includes_mutation_diff_preview();
   test_app_rpc_persistent_permission_rule_lifecycle();

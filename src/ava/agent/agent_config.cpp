@@ -4,6 +4,8 @@
 #include "ava/context/markdown_resource.h"
 #include "ava/core/error.h"
 #include "ava/core/string_utils.h"
+#include "ava/core/text_case.h"
+#include "ava/core/text_escape.h"
 
 #include <algorithm>
 #include <cctype>
@@ -55,37 +57,6 @@ bool has_control_byte(std::string_view value)
   });
 }
 
-std::string xml_escape(std::string_view value)
-{
-  std::string escaped;
-  escaped.reserve(value.size());
-  for (char const ch : value)
-  {
-    switch (ch)
-    {
-      case '&':
-        escaped += "&amp;";
-        break;
-      case '<':
-        escaped += "&lt;";
-        break;
-      case '>':
-        escaped += "&gt;";
-        break;
-      case '"':
-        escaped += "&quot;";
-        break;
-      case '\'':
-        escaped += "&apos;";
-        break;
-      default:
-        escaped.push_back(ch);
-        break;
-    }
-  }
-  return escaped;
-}
-
 std::optional<std::string> field(std::map<std::string, std::string> const& frontmatter, std::string_view name)
 {
   auto const it = frontmatter.find(std::string(name));
@@ -97,7 +68,7 @@ std::optional<std::string> field(std::map<std::string, std::string> const& front
 std::optional<AgentToolPreset> parse_tool_preset(std::string value)
 {
   value = core::trim(value);
-  std::ranges::transform(value, value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  ava::core::locale_lower_in_place(value);
   if (value == "read-only" || value == "read_only" || value == "readonly" || value == "explore")
     return AgentToolPreset::ReadOnly;
   if (value.empty() || value == "inherit" || value == "inherited" || value == "default")
@@ -111,7 +82,7 @@ bool hidden_field(std::map<std::string, std::string> const& frontmatter)
   if (!value)
     return false;
   auto text = core::trim(*value);
-  std::ranges::transform(text, text.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  ava::core::locale_lower_in_place(text);
   return text == "true" || text == "yes" || text == "1";
 }
 
@@ -201,7 +172,7 @@ void load_subagent_file(std::vector<AgentDefinition>& subagents, std::vector<Age
   auto const candidate_name = diagnostic_agent_name(path, name);
   auto mode = field(parsed.frontmatter, "mode").value_or("subagent");
   mode = core::trim(mode);
-  std::ranges::transform(mode, mode.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  ava::core::locale_lower_in_place(mode);
   if (mode != "subagent" && mode != "primary" && mode != "all")
   {
     add_diagnostic(diagnostics, path, "agent mode is invalid: " + mode, candidate_name, true);
@@ -557,8 +528,8 @@ std::string format_available_subagents_for_prompt(std::vector<AgentDefinition> c
           "<available_subagents>\n";
     }
     output += "  <subagent>\n";
-    output += "    <name>" + xml_escape(subagent.name) + "</name>\n";
-    output += "    <description>" + xml_escape(subagent.description) + "</description>\n";
+    output += "    <name>" + ava::core::xml_escape(subagent.name) + "</name>\n";
+    output += "    <description>" + ava::core::xml_escape(subagent.description) + "</description>\n";
     output += "    <tools>" + std::string(subagent.tool_preset == AgentToolPreset::ReadOnly ? "read-only" : "inherited") + "</tools>\n";
     output += "  </subagent>\n";
   }

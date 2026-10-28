@@ -50,9 +50,9 @@ ava::core::Result<int> poll_activity(std::span<pollfd> descriptors, ProcessDeadl
   while (true)
   {
     int const result = ::poll(descriptors.data(), descriptors.size(), blocking ? poll_timeout(deadline) : 0);
-    if (result >= 0)
+    if (result > 0)
       return result;
-    if (errno != EINTR)
+    if (result < 0 && errno != EINTR)
       return std::unexpected(detail::io_error("failed while waiting for process activity", errno));
     if (!blocking || Clock::now() >= deadline)
       return 0;

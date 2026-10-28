@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -93,7 +94,8 @@ ava::core::Result<std::vector<SessionSummary>> SessionStore::list_sessions(std::
     return std::vector<SessionSummary>{};
   }
 
-  std::vector<SessionSummary> summaries;
+  using CatalogEntry = std::pair<std::optional<std::filesystem::file_time_type>, SessionSummary>;
+  std::vector<CatalogEntry> catalog;
   std::error_code iter_error;
   for (std::filesystem::directory_iterator iter(directory, iter_error), end; iter != end; iter.increment(iter_error))
   {
@@ -131,20 +133,24 @@ ava::core::Result<std::vector<SessionSummary>> SessionStore::list_sessions(std::
       }
       continue;
     }
-    summaries.push_back(std::move(*summary));
+    std::error_code time_error;
+    auto const timestamp = std::filesystem::last_write_time(summary->path, time_error);
+    catalog.emplace_back(time_error ? std::nullopt : std::optional(timestamp), std::move(*summary));
   }
+  if (iter_error)
+    return std::unexpected(path_io_error("failed to list sessions", directory, iter_error.value()));
 
-  std::ranges::sort(summaries, [](SessionSummary const& left, SessionSummary const& right) {
-    std::error_code left_error;
-    std::error_code right_error;
-    auto const left_time = std::filesystem::last_write_time(left.path, left_error);
-    auto const right_time = std::filesystem::last_write_time(right.path, right_error);
-    if (!left_error && !right_error && left_time != right_time)
-    {
-      return left_time > right_time;
-    }
-    return left.session_id > right.session_id;
+  // Snapshot each key once. Missing timestamps sort last, never by a different
+  // pair-dependent ordering rule; concurrent changes cannot affect comparison.
+  std::ranges::sort(catalog, [](CatalogEntry const& left, CatalogEntry const& right) {
+    if (left.first != right.first)
+      return left.first > right.first;
+    return left.second.session_id > right.second.session_id;
   });
+  std::vector<SessionSummary> summaries;
+  summaries.reserve(catalog.size());
+  for (auto& entry : catalog)
+    summaries.push_back(std::move(entry.second));
 
   return summaries;
 }

@@ -74,6 +74,21 @@ std::shared_ptr<ava::agent::SubagentCoordinator> coordinator_with(ava::agent::Su
   return created ? *created : nullptr;
 }
 
+void test_factories_preserve_shared_from_this_ownership()
+{
+  auto coordinator = coordinator_with();
+  if (!coordinator)
+    return;
+  auto coordinator_owner = coordinator->weak_from_this().lock();
+  expect(coordinator_owner.get() == coordinator.get() && !coordinator_owner.owner_before(coordinator) && !coordinator.owner_before(coordinator_owner),
+         "coordinator factory initializes shared_from_this with the returned shared owner");
+
+  auto gate = ava::agent::SubagentInteractionGate::create(ava::agent::SubagentJobMode::Foreground, nullptr, nullptr);
+  auto gate_owner = gate->weak_from_this().lock();
+  expect(gate_owner.get() == gate.get() && !gate_owner.owner_before(gate) && !gate.owner_before(gate_owner),
+         "interaction gate factory initializes shared_from_this with the returned shared owner");
+}
+
 ava::agent::SubagentCoordinatorJobSnapshot complete_background(std::shared_ptr<ava::agent::SubagentCoordinator> const& coordinator, std::string const& parent,
                                                                std::string child, std::string summary)
 {
@@ -1926,6 +1941,7 @@ void test_summary_utf8_boundary_and_malformed_input()
 
 void run_subagent_coordinator_tests()
 {
+  test_factories_preserve_shared_from_this_ownership();
   test_hidden_immediate_completion_publishes_once_after_visibility();
   test_process_locality_after_prior_coordinator_shutdown();
   test_owner_filter_wait_result_cancel_and_wire_contract();

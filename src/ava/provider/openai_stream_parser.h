@@ -1,11 +1,12 @@
 #pragma once
-
+#include "ava/debug/print_members_on.h"
 #include "ava/provider/parser_budget.h"
 #include "ava/provider/provider.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -32,7 +33,10 @@ class OpenAIStreamParser final : public StreamParser
     bool started = false;
     bool ended = false;
 
-    AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+    void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
   struct MessageItemState
@@ -49,7 +53,10 @@ class OpenAIStreamParser final : public StreamParser
     bool refusal_completed = false;
     bool ended = false;
 
-    AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+    void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> append(std::string_view chunk) override;

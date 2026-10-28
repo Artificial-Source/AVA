@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/lsp/lsp_client.h"
 #include "ava/lsp/lsp_client_internal.h"
+#include "ava/core/hex.h"
 #include "ava/core/json.h"
 
 #include <cstddef>
@@ -54,17 +55,6 @@ std::string percent_encoded_file_path(std::filesystem::path const& path)
   return encoded;
 }
 
-int hex_value(char ch)
-{
-  if (ch >= '0' && ch <= '9')
-    return ch - '0';
-  if (ch >= 'a' && ch <= 'f')
-    return 10 + (ch - 'a');
-  if (ch >= 'A' && ch <= 'F')
-    return 10 + (ch - 'A');
-  return -1;
-}
-
 ava::core::Result<std::filesystem::path> path_from_file_uri(std::string_view uri, ServerConfig const& config)
 {
   constexpr std::string_view prefix = "file://";
@@ -83,8 +73,8 @@ ava::core::Result<std::filesystem::path> path_from_file_uri(std::string_view uri
       {
         return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP location URI has invalid escaping", config));
       }
-      int const hi = hex_value(path[index + 1]);
-      int const lo = hex_value(path[index + 2]);
+      int const hi = ava::core::hex_digit_value(path[index + 1]);
+      int const lo = ava::core::hex_digit_value(path[index + 2]);
       if (hi < 0 || lo < 0)
       {
         return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP location URI has invalid escaping", config));

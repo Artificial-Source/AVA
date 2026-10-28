@@ -1,5 +1,4 @@
 #pragma once
-
 #include "sys.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/frontend/UnlockedData.h"
@@ -9,12 +8,14 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -130,7 +131,10 @@ struct SessionRecoverableSnapshot
   std::vector<SessionEntry> entries;
   SessionByteFingerprint fingerprint;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 // Opening/resuming is the only recovery boundary for a complete but
@@ -200,7 +204,10 @@ class SessionLease
 
   void swap(SessionLease& other);
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   friend class SessionStore;
@@ -292,14 +299,22 @@ class SessionStore
   // Repairs only a structurally valid final complete-line v4 staging suffix
   // after torn-tail recovery. Persistent callers must retain the exact active
   // lease; the ephemeral overload exists only for an in-memory session.
+  // Removing a suffix invalidates all append-target caches sharing this store.
   [[nodiscard]] ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> recover_incomplete_assistant_output_suffix(
       SessionLease const& lease, SessionReadLimits limits, SessionCancelCallback cancel_requested = nullptr) const;
   [[nodiscard]] ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> recover_incomplete_assistant_output_suffix(
       SessionReadLimits limits, SessionCancelCallback cancel_requested = nullptr) const;
+  // Compatibility loader: a missing persistent file is empty, but filesystem
+  // inspection failures are errors. It does not provide lease-bound authority.
+  // Persistent compatibility reads use no-follow/CLOEXEC descriptor snapshots
+  // with the historical line cap and decoding policy (including replacement of
+  // lone surrogates); strict bounded/leased readers retain strict JSON parsing.
   [[nodiscard]] ava::core::Result<std::vector<SessionEntry>> load() const;
   // Authority-sensitive persistent reads are pinned to the active leased inode
   // and to the exact canonical parent/name publication for their full snapshot.
   [[nodiscard]] ava::core::Result<std::vector<SessionEntry>> load(SessionLease const& lease) const;
+  // File and line budgets also apply to ephemeral histories, measured using
+  // their serialized JSONL representation (including LF in the file budget).
   [[nodiscard]] ava::core::Result<std::vector<SessionEntry>> load_bounded(SessionReadLimits limits, SessionCancelCallback cancel_requested = nullptr) const;
   [[nodiscard]] ava::core::Result<std::vector<SessionEntry>> load_bounded(SessionLease const& lease, SessionReadLimits limits,
                                                                           SessionCancelCallback cancel_requested = nullptr) const;
@@ -422,7 +437,10 @@ class SessionReadAuthority
   [[nodiscard]] ava::core::Result<std::vector<SessionEntry>> load_bounded(SessionReadLimits limits, SessionCancelCallback cancel_requested = nullptr) const;
   [[nodiscard]] ava::core::Result<SessionSummary> inspect_bounded(SessionReadLimits limits, SessionCancelCallback cancel_requested = nullptr) const;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   struct State;
@@ -443,7 +461,10 @@ struct SessionConditionalAppendResult
   SessionEntry entry;
   SessionAppendDisposition disposition = SessionAppendDisposition::Appended;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 enum class SessionCompactionAppendResult
@@ -496,7 +517,10 @@ class SessionAppendTarget
   [[nodiscard]] ava::core::Result<SessionReadAuthority> read_authority() const;
   [[nodiscard]] bool is_ephemeral() const noexcept;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   enum class ConditionalAppendCompletion
@@ -512,7 +536,10 @@ class SessionAppendTarget
     std::optional<SessionConditionalAppendResult> result;
     std::optional<ava::core::Error> error;
 
-    AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+    void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
   struct CompactionAppendOutcome
@@ -521,7 +548,10 @@ class SessionAppendTarget
     std::optional<SessionCompactionAppendResult> result;
     std::optional<ava::core::Error> error;
 
-    AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+    void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
   // Controller queue policy needs this typed mutation-boundary outcome so only

@@ -6,6 +6,7 @@
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/Signals.h"
+#include "ava/core/close_descriptors.h"
 #include "ava/core/trusted_home.h"
 
 #include <algorithm>
@@ -209,7 +210,7 @@ ava::core::Result<std::array<int, 2>> make_pipe_cloexec()
   return pipe_fds;
 }
 
-void close_nonstandard_fds_except(std::vector<int> const& keep_fds) noexcept
+[[maybe_unused]] void close_nonstandard_fds_except(std::vector<int> const& keep_fds) noexcept
 {
   constexpr std::size_t kMaxKeptDescriptors = 16;
   std::array<int, kMaxKeptDescriptors> sorted{};
@@ -363,7 +364,7 @@ void finalize_output(BashResult& result, BashOptions const& options, bool saw_ou
 
 ava::core::VoidResult remove_tree_at(int directory_fd, std::size_t& remaining_entries)
 {
-  auto duplicate = ::dup(directory_fd);
+  auto duplicate = ::fcntl(directory_fd, F_DUPFD_CLOEXEC, 0);
   if (duplicate < 0)
     return std::unexpected(errno_error("failed to duplicate synthetic environment cleanup directory"));
   DIR* directory = ::fdopendir(duplicate);
@@ -1003,6 +1004,15 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
         ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "approved bound descriptor changed before execution; prepare and approve a new command"));
   }
 
+  std::optional<ava::containment::PreparedContainment> prepared_containment;
+  if (containment_available)
+  {
+    auto prepared = ava::containment::prepare_containment_application(*containment_plan);
+    if (!prepared)
+      return std::unexpected(std::move(prepared.error()));
+    prepared_containment.emplace(std::move(*prepared));
+  }
+
   std::vector<char*> argv;
   argv.reserve(descriptor_execution->argv.size() + 1);
   for (auto& argument : descriptor_execution->argv) argv.push_back(argument.data());
@@ -1036,6 +1046,14 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
   UniqueFd control_write((*control_pipe)[1]);
   UniqueFd sentinel_read((*sentinel_pipe)[0]);
   UniqueFd sentinel_write((*sentinel_pipe)[1]);
+  // Prepare all owned storage before fork: allocating in the child can deadlock
+  // on an allocator lock held by another parent thread at the fork boundary.
+  std::vector<int> keep_descriptors;
+  keep_descriptors.reserve(2 + descriptor_execution->retained_script_descriptors.size());
+  keep_descriptors.push_back(status_write.get());
+  keep_descriptors.push_back(descriptor_execution->descriptors[descriptor_execution->executable_descriptor].get());
+  for (auto const index : descriptor_execution->retained_script_descriptors)
+    keep_descriptors.push_back(descriptor_execution->descriptors[index].get());
 
   pid_t const pid = ::fork();
   if (pid < 0)
@@ -1083,17 +1101,15 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
     write_fd.reset();
     if (null_input.get() != STDIN_FILENO)
       null_input.reset();
+    // Open the child's fd table before Landlock can deny /proc. The closer
+    // consumes this fd, including when close_range is unavailable or denied.
+    int const descriptor_directory = ::open("/proc/self/fd", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (containment_available)
     {
-      // Landlock rule paths are opened through the inherited shared AnchorSet.
-      // No user code runs here; install containment first, then close every
-      // inherited descriptor except the handshake and approved execution
-      // descriptors before descriptor exec.
-      int containment_status = 0;
-      if (auto containment_result = ava::containment::apply_containment_in_child(*containment_plan); !containment_result)
-        containment_status = errno == 0 ? EIO : errno;
+      // Every rule and all error storage were prepared in the parent.
+      auto const containment_status = ava::containment::apply_containment_in_child(*prepared_containment);
       static_cast<void>(write_retry(status_write.get(), &containment_status, sizeof(containment_status)));
-      if (containment_status != 0)
+      if (!containment_status)
         _exit(127);
       char final_release = '\0';
       if (read_retry(control_read.get(), &final_release, 1) != 1 || final_release != 'X')
@@ -1106,8 +1122,6 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
       static_cast<void>(write_retry(status_write.get(), &descriptor_error, sizeof(descriptor_error)));
       _exit(127);
     }
-    std::vector<int> keep_descriptors{status_write.get(), descriptor_execution->descriptors[descriptor_execution->executable_descriptor].get()};
-    keep_descriptors.reserve(keep_descriptors.size() + descriptor_execution->retained_script_descriptors.size());
     for (auto const index : descriptor_execution->retained_script_descriptors)
     {
       int const fd = descriptor_execution->descriptors[index].get();
@@ -1118,14 +1132,20 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
         static_cast<void>(write_retry(status_write.get(), &descriptor_error, sizeof(descriptor_error)));
         _exit(127);
       }
-      keep_descriptors.push_back(fd);
     }
-    close_nonstandard_fds_except(keep_descriptors);
+    if (int const close_error = ava::core::close_nonstandard_fds_except(keep_descriptors, descriptor_directory); close_error != 0)
+    {
+      static_cast<void>(write_retry(status_write.get(), &close_error, sizeof(close_error)));
+      _exit(127);
+    }
     ::fexecve(descriptor_execution->descriptors[descriptor_execution->executable_descriptor].get(), argv.data(), environment.data());
     int const descriptor_error = errno == 0 ? EIO : errno;
     static_cast<void>(write_retry(status_write.get(), &descriptor_error, sizeof(descriptor_error)));
     _exit(127);
   }
+  // Only the leader needs these pinned rules; release the parent's copies
+  // before creating the sentinel or waiting for command completion.
+  prepared_containment.reset();
 
   write_fd.reset();
   status_write.reset();
@@ -1196,7 +1216,8 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
     char const ack = 'S';
     static_cast<void>(write_retry(sentinel_write.get(), &ack, 1));
     sentinel_write.reset();
-    close_nonstandard_fds_except({});
+    if (ava::core::close_nonstandard_fds_except({}) != 0)
+      _exit(127);
     // The sentinel keeps the verified group identity from being recycled
     // between leader completion and descendant cleanup. It never execs user
     // code and has no stdio or control descriptors.
@@ -1247,7 +1268,7 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
     {
       containment_poll_result = ::poll(&containment_poll, 1, static_cast<int>(kGateTimeout.count()));
     } while (containment_poll_result < 0 && errno == EINTR);
-    int containment_status = EIO;
+    ava::containment::ContainmentChildStatus containment_status{ava::containment::ContainmentFailureStage::None, EIO};
     if (containment_poll_result <= 0 || (containment_poll.revents & POLLIN) == 0 ||
         read_retry(status_read.get(), &containment_status, sizeof(containment_status)) != sizeof(containment_status))
     {
@@ -1258,14 +1279,13 @@ ava::core::Result<BashResult> run_bash(ToolContext const& context, std::string_v
       return std::unexpected(containment_poll_result == 0 ? ava::core::Error(ava::core::ErrorCategory::Io, "sealed command containment installation timed out")
                                                           : errno_error("sealed command containment installation failed"));
     }
-    if (containment_status != 0)
+    if (!containment_status)
     {
       int cleanup_status = 0;
       bool cleanup_leader_reaped = false;
       bool cleanup_sentinel_reaped = false;
       static_cast<void>(terminate_verified_group(pid, pid, sentinel_pid, cleanup_status, cleanup_leader_reaped, cleanup_sentinel_reaped));
-      return std::unexpected(
-          ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "sealed command containment installation failed before exec; user code did not start"));
+      return std::unexpected(ava::containment::containment_child_error(containment_status));
     }
     char const final_release = 'X';
     if (write_retry(control_write.get(), &final_release, 1) != 1)

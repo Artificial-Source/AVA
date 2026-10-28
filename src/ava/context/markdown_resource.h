@@ -1,11 +1,11 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <ostream>
 #include <string>
 #include <string_view>
 
@@ -24,7 +24,10 @@ struct ParsedMarkdown
   std::map<std::string, std::string> frontmatter;
   std::string body;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 [[nodiscard]] ava::core::Result<std::string> read_resource_file(std::filesystem::path const& path, ResourceFileReadOptions options = {});

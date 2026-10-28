@@ -1,32 +1,27 @@
 #include "sys.h"
 #include "ava/command/policy.h"
+#include "ava/core/text_case.h"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <span>
 #include <utility>
 
 namespace ava::command::detail {
 namespace {
 
-std::string lowercase(std::string_view value)
-{
-  std::string result(value);
-  std::ranges::transform(result, result.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return result;
-}
-
 bool has_argument(std::vector<std::string> const& argv, std::initializer_list<std::string_view> candidates)
 {
   return std::ranges::any_of(argv, [&candidates](std::string const& argument) {
-    auto const lower = lowercase(argument);
+    auto const lower = ava::core::locale_lower_copy(argument);
     return std::ranges::find(candidates, std::string_view(lower)) != candidates.end();
   });
 }
 
 bool has_argument_prefix(std::vector<std::string> const& argv, std::string_view prefix)
 {
-  return std::ranges::any_of(argv, [prefix](std::string const& argument) { return lowercase(argument).starts_with(prefix); });
+  return std::ranges::any_of(argv, [prefix](std::string const& argument) { return ava::core::locale_lower_copy(argument).starts_with(prefix); });
 }
 
 bool is_simple_script_name(std::string_view value)
@@ -104,7 +99,7 @@ bool is_inline_interpreter(std::string_view executable_name, std::vector<std::st
 
 std::optional<CommandClassification> classify_destructive_or_privileged(std::string_view executable_name, std::vector<std::string> const& argv)
 {
-  if (executable_name == "git" && argv.size() >= 2 && lowercase(argv[1]) == "push" &&
+  if (executable_name == "git" && argv.size() >= 2 && ava::core::locale_lower_copy(argv[1]) == "push" &&
       (has_argument(argv, {"--force", "-f", "--force-with-lease", "--force-if-includes"}) || has_argument_prefix(argv, "--force-with-lease=")))
   {
     return critical_classification(CommandFamily::DestructiveOrPrivileged, CommandCapabilities{.network_enabled = true, .destructive_or_privileged = true});
@@ -120,7 +115,7 @@ std::optional<CommandClassification> classify_destructive_or_privileged(std::str
   }
   if (executable_name == "git" && argv.size() >= 2)
   {
-    auto const subcommand = lowercase(argv[1]);
+    auto const subcommand = ava::core::locale_lower_copy(argv[1]);
     if (subcommand == "clean" || (subcommand == "reset" && has_argument(argv, {"--hard"})))
       return critical_classification(CommandFamily::DestructiveOrPrivileged, CommandCapabilities{.destructive_or_privileged = true});
   }
@@ -129,7 +124,7 @@ std::optional<CommandClassification> classify_destructive_or_privileged(std::str
 
 std::optional<CommandClassification> classify_sensitive(std::string_view executable_name, std::vector<std::string> const& argv)
 {
-  auto const second = argv.size() >= 2 ? lowercase(argv[1]) : std::string{};
+  auto const second = argv.size() >= 2 ? ava::core::locale_lower_copy(argv[1]) : std::string{};
   if (executable_name == "git")
   {
     if (second == "pull" || second == "fetch" || second == "clone")
@@ -142,7 +137,7 @@ std::optional<CommandClassification> classify_sensitive(std::string_view executa
       return sensitive_classification(CommandFamily::RemoteGitMutation, CommandCapabilities{.network_enabled = true});
     if (second == "submodule")
     {
-      auto const action = argv.size() >= 3 ? lowercase(argv[2]) : std::string{};
+      auto const action = argv.size() >= 3 ? ava::core::locale_lower_copy(argv[2]) : std::string{};
       bool const network = action.empty() || action == "update" || action == "add" || action == "sync" || action == "foreach";
       bool const mutates = action.empty() || action == "update" || action == "init" || action == "add" || action == "deinit" || action == "set-url" ||
                            action == "sync" || action == "absorbgitdirs" || action == "foreach";
@@ -150,7 +145,7 @@ std::optional<CommandClassification> classify_sensitive(std::string_view executa
     }
     if (second == "remote")
     {
-      auto const action = argv.size() >= 3 ? lowercase(argv[2]) : std::string{};
+      auto const action = argv.size() >= 3 ? ava::core::locale_lower_copy(argv[2]) : std::string{};
       CommandCapabilities capabilities;
       if (action == "add" || action == "set-url" || action == "remove" || action == "rm" || action == "rename")
         capabilities.mutates_workspace = true;
@@ -226,11 +221,11 @@ std::optional<CommandClassification> classify_standard(std::string_view executab
   // Git inspection can invoke repository-controlled fsmonitor, textconv,
   // external-diff, and related helpers. Keep the recipe Standard, but never
   // auto-run it without the mutable-project-code containment boundary.
-  if (system_inspection_executable && executable_name == "git" && argv.size() == 2 && lowercase(argv[1]) == "status")
+  if (system_inspection_executable && executable_name == "git" && argv.size() == 2 && ava::core::locale_lower_copy(argv[1]) == "status")
     return standard_classification(CommandFamily::Inspection, CommandRecipe::GitStatus, canonical(), {}, true);
-  if (system_inspection_executable && executable_name == "git" && argv.size() == 2 && lowercase(argv[1]) == "diff")
+  if (system_inspection_executable && executable_name == "git" && argv.size() == 2 && ava::core::locale_lower_copy(argv[1]) == "diff")
     return standard_classification(CommandFamily::Inspection, CommandRecipe::GitDiff, canonical(), {}, true);
-  if (system_inspection_executable && executable_name == "git" && argv.size() == 3 && lowercase(argv[1]) == "log" && argv[2] == "-1")
+  if (system_inspection_executable && executable_name == "git" && argv.size() == 3 && ava::core::locale_lower_copy(argv[1]) == "log" && argv[2] == "-1")
     return standard_classification(CommandFamily::Inspection, CommandRecipe::GitLogOne, canonical(), {}, true);
 
   if (executable_name == "cmake" && argv.size() == 3 && argv[1] == "--build")
@@ -264,7 +259,7 @@ std::optional<CommandClassification> classify_standard(std::string_view executab
       return standard_classification(CommandFamily::Make, CommandRecipe::Make, canonical({{2, *path}}), {*path}, true);
   }
   if ((executable_name == "npm" || executable_name == "pnpm" || executable_name == "yarn" || executable_name == "bun") && argv.size() == 3 &&
-      lowercase(argv[1]) == "run" && is_simple_script_name(argv[2]))
+      ava::core::locale_lower_copy(argv[1]) == "run" && is_simple_script_name(argv[2]))
   {
     return standard_classification(CommandFamily::PackageManagerScript, CommandRecipe::PackageManagerRunScript, canonical(), {}, true);
   }
@@ -315,7 +310,7 @@ CommandClassification classify_command(std::vector<std::string> const& argv, Res
   // spellings of the same alias cannot select different authority.
   auto const& classification_path =
       executable.executable.requested_path_is_symlink ? executable.executable.requested_path : executable.executable.canonical_path;
-  auto const executable_name = lowercase(classification_path.filename().string());
+  auto const executable_name = ava::core::locale_lower_copy(classification_path.filename().string());
   CommandClassification classification;
   if (!executable.shebang_fully_resolved)
     classification = critical_classification(CommandFamily::UnknownWrapper, CommandCapabilities{.unknown_wrapper = true});

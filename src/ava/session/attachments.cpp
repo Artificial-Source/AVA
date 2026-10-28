@@ -1,22 +1,23 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/session/attachments.h"
 #include "ava/session/session_store.h"
 #include "ava/core/UniqueFd.h"
+#include "ava/core/ascii.h"
 #include "ava/core/error.h"
 #include "ava/core/fd_io.h"
+#include "ava/core/ids.h"
 #include "ava/core/open_beneath.h"
+#include "ava/core/sha256.h"
 
-#include <array>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
-#include <iomanip>
 #include <optional>
-#include <sstream>
+#include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,16 +28,8 @@ namespace {
 struct DetectedImageType {
   std::string_view mime_type;
   std::string_view extension;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
-
-bool has_control_byte(std::string_view value)
-{
-  for (auto const ch : value) {
-    auto const byte = static_cast<unsigned char>(ch);
-    if (byte < 0x20 || byte == 0x7F) return true;
-  }
-  return false;
-}
 
 bool hex_string(std::string_view value)
 {
@@ -48,7 +41,8 @@ bool hex_string(std::string_view value)
 
 bool valid_attachment_storage_path(std::string_view path)
 {
-  if (path.empty() || path.size() > 4096 || has_control_byte(path)) return false;
+  if (path.empty() || path.size() > 4096 || ava::core::has_c0_or_del(path))
+    return false;
   if (!path.starts_with("attachments/")) return false;
   if (path.starts_with('/') || path.starts_with('~') || path.find('\\') != std::string_view::npos) return false;
   if (path.find(':') != std::string_view::npos) return false;
@@ -128,6 +122,14 @@ ava::core::Result<ava::core::UniqueFd> walk_attachment_directories(ava::core::Un
       return std::unexpected(attachment_io_error("failed to open image attachment directory without following symlinks", path, storage_path, errno));
     if (owner_only && ::fchmod(next.get(), 0700) != 0)
       return std::unexpected(attachment_io_error("failed to set image attachment directory permissions", path, storage_path, errno));
+    if (create)
+    {
+      // Persist both the new directory inode and its name before descending.
+      if (int const cause = ava::core::fsync_with_restart(next.get()); cause != 0)
+        return std::unexpected(attachment_io_error("failed to sync image attachment directory", path, storage_path, cause));
+      if (int const cause = ava::core::fsync_with_restart(directory.get()); cause != 0)
+        return std::unexpected(attachment_io_error("failed to sync image attachment ancestor", path, storage_path, cause));
+    }
     directory = std::move(next);
   }
   return directory;
@@ -230,6 +232,59 @@ ava::core::Result<std::string> read_import_source(std::filesystem::path const& s
   return read_attachment_snapshot(file.get(), source_path);
 }
 
+// Borrows the directory, descriptor and basename until this guard is destroyed.
+// Keep it before the descriptor's destruction so cleanup can verify the inode.
+class AttachmentTemporaryName
+{
+ public:
+  AttachmentTemporaryName(int directory_fd, ava::core::UniqueFd const& file, std::string const& name) noexcept
+      : directory_fd_(directory_fd), file_(file), name_(name)
+  {
+  }
+  AttachmentTemporaryName(AttachmentTemporaryName const&) = delete;
+  AttachmentTemporaryName& operator=(AttachmentTemporaryName const&) = delete;
+  AttachmentTemporaryName(AttachmentTemporaryName&&) = delete;
+  AttachmentTemporaryName& operator=(AttachmentTemporaryName&&) = delete;
+  ~AttachmentTemporaryName() noexcept
+  {
+    if (active_ && remove_checked() == 0)
+      static_cast<void>(ava::core::fsync_with_restart(directory_fd_));
+  }
+
+  void arm() noexcept { active_ = true; }
+
+  [[nodiscard]] int remove_checked() noexcept
+  {
+    if (!active_)
+      return 0;
+    struct stat opened{};
+    struct stat named{};
+    if (ava::core::restart_on_eintr([&] { return ::fstat(file_.get(), &opened); }) != 0)
+      return errno;
+    if (ava::core::restart_on_eintr([&] { return ::fstatat(directory_fd_, name_.c_str(), &named, AT_SYMLINK_NOFOLLOW); }) != 0)
+    {
+      if (errno != ENOENT)
+        return errno;
+      active_ = false;
+      return 0;
+    }
+    if (opened.st_dev != named.st_dev || opened.st_ino != named.st_ino)
+      return ESTALE;
+    if (ava::core::restart_on_eintr([&] { return ::unlinkat(directory_fd_, name_.c_str(), 0); }) != 0)
+      return errno;
+    active_ = false;
+    return 0;
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  int directory_fd_;
+  ava::core::UniqueFd const& file_;
+  std::string const& name_;
+  bool active_ = false;
+};
+
 ava::core::VoidResult write_stored_attachment(SessionStore const& store, ImageAttachmentRef const& metadata, std::string_view bytes)
 {
   auto destination = resolve_attachment_storage_path(store, metadata.storage_path);
@@ -244,18 +299,9 @@ ava::core::VoidResult write_stored_attachment(SessionStore const& store, ImageAt
   if (!directory)
     return std::unexpected(std::move(directory.error()));
 
-  ava::core::UniqueFd file(ava::core::open_beneath(directory->get(), destination->filename(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
-  if (!file)
-  {
-    int const cause = errno;
-    if (cause != EEXIST)
-      return std::unexpected(attachment_io_error("failed to create image attachment destination", *destination, metadata.storage_path, cause));
-    // Content-addressed duplicates are read-only. Never truncate a raced-in file
-    // (including a hardlink), and never reopen its parent by pathname.
-    file.reset(ava::core::open_beneath(directory->get(), destination->filename(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
-    if (!file)
-      return std::unexpected(attachment_io_error("failed to open existing image attachment destination", *destination, metadata.storage_path, errno));
-    auto existing = read_attachment_snapshot(file.get(), *destination, metadata.byte_size);
+  auto reuse_existing = [&](ava::core::UniqueFd existing_file) -> ava::core::VoidResult {
+    // Content-addressed duplicates are read-only, including raced-in hardlinks.
+    auto existing = read_attachment_snapshot(existing_file.get(), *destination, metadata.byte_size);
     if (!existing)
     {
       existing.error().with_context("storage_path", metadata.storage_path);
@@ -268,106 +314,97 @@ ava::core::VoidResult write_stored_attachment(SessionStore const& store, ImageAt
       error.with_context("path", destination->string());
       return std::unexpected(std::move(error));
     }
+    if (int const cause = ava::core::fsync_with_restart(existing_file.get()); cause != 0)
+      return std::unexpected(attachment_io_error("failed to sync existing image attachment", *destination, metadata.storage_path, cause));
+    if (int const cause = existing_file.close_checked(); cause != 0)
+      return std::unexpected(attachment_io_error("failed to close existing image attachment", *destination, metadata.storage_path, cause));
+    if (int const cause = ava::core::fsync_with_restart(directory->get()); cause != 0)
+      return std::unexpected(attachment_io_error("failed to sync image attachment publication", *destination, metadata.storage_path, cause));
+    return {};
+  };
+  ava::core::UniqueFd existing_file(ava::core::open_beneath(directory->get(), destination->filename(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+  if (existing_file)
+    return reuse_existing(std::move(existing_file));
+  if (errno != ENOENT)
+    return std::unexpected(attachment_io_error("failed to inspect existing image attachment", *destination, metadata.storage_path, errno));
+
+  // Prefer an unnamed inode. Filesystems without O_TMPFILE use an exclusively
+  // created basename in this same held directory; neither path publishes bytes
+  // until the completed inode has been synced.
+  ava::core::UniqueFd file(::openat(directory->get(), ".", O_TMPFILE | O_WRONLY | O_CLOEXEC, 0600));
+  std::string temporary_name;
+  AttachmentTemporaryName temporary(directory->get(), file, temporary_name);
+  if (!file)
+  {
+    int const cause = errno;
+    if (cause != EOPNOTSUPP && cause != EISDIR && cause != EINVAL)
+      return std::unexpected(attachment_io_error("failed to create private image attachment inode", *destination, metadata.storage_path, cause));
+    for (int attempt = 0; attempt < 16; ++attempt)
+    {
+      temporary_name = ".ava-attachment-" + ava::core::make_id("tmp");
+      file.reset(::openat(directory->get(), temporary_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600));
+      if (file)
+      {
+        temporary.arm();
+        break;
+      }
+      if (errno != EEXIST)
+        return std::unexpected(attachment_io_error("failed to create temporary image attachment", *destination, metadata.storage_path, errno));
+    }
+    if (!file)
+      return std::unexpected(attachment_io_error("image attachment temporary names collided", *destination, metadata.storage_path, EEXIST));
+  }
+  auto fail = [&](ava::core::Error error) -> ava::core::VoidResult {
+    if (int const cleanup_error = temporary.remove_checked(); cleanup_error != 0)
+      error.with_context("temporary_cleanup", cleanup_error == ESTALE ? "temporary name changed; replacement preserved" : std::strerror(cleanup_error));
+    else if (!temporary_name.empty())
+    {
+      if (int const sync_error = ava::core::fsync_with_restart(directory->get()); sync_error != 0)
+        error.with_context("temporary_cleanup_sync", std::strerror(sync_error));
+    }
+    return std::unexpected(std::move(error));
+  };
+  if (::fchmod(file.get(), 0600) != 0)
+    return fail(attachment_io_error("failed to set image attachment file permissions", *destination, metadata.storage_path, errno));
+  if (int const cause = ava::core::write_all(file.get(), bytes); cause != 0)
+    return fail(attachment_io_error("failed to write image attachment destination", *destination, metadata.storage_path, cause));
+  if (int const cause = ava::core::fsync_with_restart(file.get()); cause != 0)
+    return fail(attachment_io_error("failed to sync image attachment data", *destination, metadata.storage_path, cause));
+
+  int publication_error = 0;
+  if (::linkat(file.get(), "", directory->get(), destination->filename().c_str(), AT_EMPTY_PATH) != 0)
+  {
+    publication_error = errno;
+    if (publication_error == ENOENT || publication_error == EPERM)
+    {
+      // Match session recovery's unprivileged descriptor-link publication.
+      auto const descriptor_path = ava::core::descriptor_proc_path(file.get());
+      publication_error = ::linkat(AT_FDCWD, descriptor_path.c_str(), directory->get(), destination->filename().c_str(), AT_SYMLINK_FOLLOW) == 0 ? 0 : errno;
+    }
+  }
+  // Descriptor-link publication never consults the temporary basename. Remove
+  // only our verified temporary inode; the final directory sync covers both the
+  // published name and this unlink. RAII also covers exceptional unwinding.
+  if (int const cause = temporary.remove_checked(); cause != 0)
+    return fail(attachment_io_error("failed to clean temporary image attachment", *destination, metadata.storage_path, cause));
+  if (publication_error == EEXIST)
+  {
+    existing_file.reset(ava::core::open_beneath(directory->get(), destination->filename(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+    if (!existing_file)
+      return fail(attachment_io_error("failed to open raced image attachment", *destination, metadata.storage_path, errno));
+    auto reused = reuse_existing(std::move(existing_file));
+    if (!reused)
+      return fail(std::move(reused.error()));
     return {};
   }
-  if (::fchmod(file.get(), 0600) != 0)
-    return std::unexpected(attachment_io_error("failed to set image attachment file permissions", *destination, metadata.storage_path, errno));
-  if (int const cause = ava::core::write_all(file.get(), bytes); cause != 0)
-    return std::unexpected(attachment_io_error("failed to write image attachment destination", *destination, metadata.storage_path, cause));
+  if (publication_error != 0)
+    return fail(attachment_io_error("failed to publish image attachment", *destination, metadata.storage_path, publication_error));
+  // After link publication, failures leave a complete file for verified retry.
+  if (int const cause = ava::core::fsync_with_restart(directory->get()); cause != 0)
+    return std::unexpected(attachment_io_error("failed to sync image attachment publication", *destination, metadata.storage_path, cause));
   if (int const cause = file.close_checked(); cause != 0)
     return std::unexpected(attachment_io_error("failed to close image attachment destination", *destination, metadata.storage_path, cause));
   return {};
-}
-
-std::uint32_t rotr(std::uint32_t value, std::uint32_t count)
-{
-  return (value >> count) | (value << (32U - count));
-}
-
-std::array<std::uint8_t, 32> sha256(std::string_view bytes)
-{
-  static constexpr std::array<std::uint32_t, 64> k{
-      0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
-      0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
-      0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
-      0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
-      0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
-      0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
-      0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
-      0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
-
-  std::vector<std::uint8_t> data(bytes.begin(), bytes.end());
-  auto const bit_len = static_cast<std::uint64_t>(data.size()) * 8ULL;
-  data.push_back(0x80U);
-  while ((data.size() % 64U) != 56U) data.push_back(0U);
-  for (int shift = 56; shift >= 0; shift -= 8) data.push_back(static_cast<std::uint8_t>((bit_len >> shift) & 0xFFU));
-
-  std::array<std::uint32_t, 8> hash{0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
-                                    0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
-  for (std::size_t chunk = 0; chunk < data.size(); chunk += 64U) {
-    std::array<std::uint32_t, 64> w{};
-    for (std::size_t i = 0; i < 16U; ++i) {
-      auto const offset = chunk + i * 4U;
-      w[i] = (static_cast<std::uint32_t>(data[offset]) << 24U) |
-             (static_cast<std::uint32_t>(data[offset + 1]) << 16U) |
-             (static_cast<std::uint32_t>(data[offset + 2]) << 8U) | static_cast<std::uint32_t>(data[offset + 3]);
-    }
-    for (std::size_t i = 16U; i < 64U; ++i) {
-      auto const s0 = rotr(w[i - 15U], 7U) ^ rotr(w[i - 15U], 18U) ^ (w[i - 15U] >> 3U);
-      auto const s1 = rotr(w[i - 2U], 17U) ^ rotr(w[i - 2U], 19U) ^ (w[i - 2U] >> 10U);
-      w[i] = w[i - 16U] + s0 + w[i - 7U] + s1;
-    }
-    auto a = hash[0];
-    auto b = hash[1];
-    auto c = hash[2];
-    auto d = hash[3];
-    auto e = hash[4];
-    auto f = hash[5];
-    auto g = hash[6];
-    auto h = hash[7];
-    for (std::size_t i = 0; i < 64U; ++i) {
-      auto const s1 = rotr(e, 6U) ^ rotr(e, 11U) ^ rotr(e, 25U);
-      auto const ch = (e & f) ^ ((~e) & g);
-      auto const temp1 = h + s1 + ch + k[i] + w[i];
-      auto const s0 = rotr(a, 2U) ^ rotr(a, 13U) ^ rotr(a, 22U);
-      auto const maj = (a & b) ^ (a & c) ^ (b & c);
-      auto const temp2 = s0 + maj;
-      h = g;
-      g = f;
-      f = e;
-      e = d + temp1;
-      d = c;
-      c = b;
-      b = a;
-      a = temp1 + temp2;
-    }
-    hash[0] += a;
-    hash[1] += b;
-    hash[2] += c;
-    hash[3] += d;
-    hash[4] += e;
-    hash[5] += f;
-    hash[6] += g;
-    hash[7] += h;
-  }
-
-  std::array<std::uint8_t, 32> digest{};
-  for (std::size_t index = 0; index < hash.size(); ++index) {
-    digest[index * 4U] = static_cast<std::uint8_t>((hash[index] >> 24U) & 0xFFU);
-    digest[index * 4U + 1U] = static_cast<std::uint8_t>((hash[index] >> 16U) & 0xFFU);
-    digest[index * 4U + 2U] = static_cast<std::uint8_t>((hash[index] >> 8U) & 0xFFU);
-    digest[index * 4U + 3U] = static_cast<std::uint8_t>(hash[index] & 0xFFU);
-  }
-  return digest;
-}
-
-std::string sha256_hex(std::string_view bytes)
-{
-  auto digest = sha256(bytes);
-  std::ostringstream out;
-  out << std::hex << std::setfill('0');
-  for (auto const byte : digest) out << std::setw(2) << static_cast<int>(byte);
-  return out.str();
 }
 
 ava::core::Error bytes_attachment_error(ava::core::ErrorCategory category, std::string_view message)
@@ -379,7 +416,7 @@ ava::core::Result<ImageAttachmentRef> import_detected_image_attachment(SessionSt
                                                                        std::string_view bytes,
                                                                        DetectedImageType const& detected)
 {
-  auto const sha = sha256_hex(bytes);
+  auto const sha = ava::core::sha256_hex(bytes);
   auto const id = "img_" + sha.substr(0, 16);
   auto const storage_path = "attachments/" + id + std::string(detected.extension);
   ImageAttachmentRef metadata{.id = id,
@@ -486,7 +523,8 @@ ava::core::Result<LoadedImageAttachment> load_image_attachment(SessionStore cons
     return std::unexpected(std::move(snapshot.error()));
   }
   auto bytes = std::move(*snapshot);
-  if (sha256_hex(bytes) != attachment.sha256) {
+  if (ava::core::sha256_hex(bytes) != attachment.sha256)
+  {
     return std::unexpected(attachment_error(ava::core::ErrorCategory::InvalidArgument,
                                             "image attachment sha256 does not match metadata", attachment.storage_path));
   }

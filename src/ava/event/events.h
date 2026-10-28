@@ -6,10 +6,10 @@
 #include "RuntimeEvent.h"
 #include "ava/core/result.h"
 
+#include <deque>
 #include <functional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace ava::event {
 
@@ -37,12 +37,13 @@ class EventBus
  public:
   void subscribe(EventEnvelopeSink sink);
   // Subscribers are called synchronously in registration order. Publishing stops on the first failure.
+  // Subscribers added by a callback participate in the next publication.
   [[nodiscard]] ava::core::VoidResult publish(EventEnvelope const& envelope) const;
 
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  std::vector<EventEnvelopeSink> sinks_;
+  std::deque<EventEnvelopeSink> sinks_;
 };
 
 [[nodiscard]] std::string to_string(RuntimeEventType type);

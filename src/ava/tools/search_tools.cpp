@@ -6,6 +6,7 @@
 #include "ava/tools/secure_workspace.h"
 #include "ava/tools/spill_files.h"
 #include "ava/tools/tool_permission.h"
+#include "ava/core/text_case.h"
 
 #include <algorithm>
 #include <cctype>
@@ -125,17 +126,6 @@ bool looks_binary(std::string_view line)
   return line.find('\0') != std::string_view::npos;
 }
 
-std::string lowercase_ascii(std::string_view text)
-{
-  std::string lowered;
-  lowered.reserve(text.size());
-  for (char const ch : text)
-  {
-    lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-  }
-  return lowered;
-}
-
 std::string search_permission_tool_name(ToolContext const& context)
 {
   return context.permission_tool_name.empty() ? std::string("search") : context.permission_tool_name;
@@ -252,7 +242,7 @@ bool grep_line_matches(std::string_view line, std::string_view pattern, GrepOpti
   {
     return line.find(pattern) != std::string_view::npos;
   }
-  return lowercase_ascii(line).find(case_folded_pattern) != std::string::npos;
+  return ava::core::locale_lower_copy(line).find(case_folded_pattern) != std::string::npos;
 }
 
 }  // namespace
@@ -517,7 +507,7 @@ ava::core::Result<GrepResult> grep_files(ToolContext const& context, std::string
   auto matcher = compile_grep_regex(literal_pattern, options);
   if (!matcher)
     return std::unexpected(std::move(matcher.error()));
-  auto const case_folded_pattern = options.case_insensitive && options.literal ? lowercase_ascii(literal_pattern) : std::string{};
+  auto const case_folded_pattern = options.case_insensitive && options.literal ? ava::core::locale_lower_copy(literal_pattern) : std::string{};
 
   auto files = glob_files(context, include_glob, GlobOptions{.max_results = 100000, .no_ignore = options.no_ignore, .skip_symlinks = options.skip_symlinks});
   if (!files)
@@ -787,8 +777,8 @@ ava::core::Result<ListDirectoryResult> list_directory(ToolContext const& context
   std::ranges::sort(visible_entries, [](DirectoryEntry const& lhs, DirectoryEntry const& rhs) {
     if (lhs.directory != rhs.directory)
       return lhs.directory && !rhs.directory;
-    auto const left = lowercase_ascii(lhs.name);
-    auto const right = lowercase_ascii(rhs.name);
+    auto const left = ava::core::locale_lower_copy(lhs.name);
+    auto const right = ava::core::locale_lower_copy(rhs.name);
     if (left != right)
       return left < right;
     return lhs.name < rhs.name;

@@ -1,6 +1,7 @@
 #pragma once
 #include "ava/debug/print_members_on.h"
 #include "ava/http/transport.h"
+#include "ava/app/runtime/session_ts.h"
 #include "ava/agent/agent_loop_session.h"
 #include "ava/config/model_config.h"
 #include "ava/config/session_title_config.h"
@@ -88,7 +89,17 @@ struct SessionTitleCoordinatorOptions
 // retains a mutable runtime session or reacquires session state by pathname.
 class SessionTitleCoordinator final
 {
+  class ConstructionKey
+  {
+    friend class SessionTitleCoordinator;
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
+  SessionTitleCoordinator(ConstructionKey, SessionTitleCoordinatorOptions options);
   [[nodiscard]] static ava::core::Result<std::shared_ptr<SessionTitleCoordinator>> create(SessionTitleCoordinatorOptions options);
   ~SessionTitleCoordinator();
 
@@ -126,7 +137,6 @@ class SessionTitleCoordinator final
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
-  explicit SessionTitleCoordinator(SessionTitleCoordinatorOptions options);
   void start();
   void worker_loop(std::stop_token stop_token);
   void process(Work work, std::stop_token stop_token) noexcept;

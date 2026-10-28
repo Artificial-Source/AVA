@@ -16,6 +16,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -168,7 +169,10 @@ struct BranchSummarySnapshot
 
   [[nodiscard]] bool terminal() const noexcept;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 // Trusted application/test observer under the same cooperative, nonblocking,
@@ -194,7 +198,18 @@ struct BranchSummaryCoordinatorOptions
 // provider, revalidation, and append work without ever entering curses.
 class BranchSummaryCoordinator final
 {
+  struct Impl;
+  class ConstructionKey
+  {
+    friend class BranchSummaryCoordinator;
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
+  BranchSummaryCoordinator(ConstructionKey, std::unique_ptr<Impl> impl);
   [[nodiscard]] static ava::core::Result<std::shared_ptr<BranchSummaryCoordinator>> create(BranchSummaryCoordinatorOptions options = {});
   ~BranchSummaryCoordinator();
 
@@ -218,9 +233,6 @@ class BranchSummaryCoordinator final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  struct Impl;
-  explicit BranchSummaryCoordinator(std::unique_ptr<Impl> impl);
-
   std::unique_ptr<Impl> impl_;
 };
 

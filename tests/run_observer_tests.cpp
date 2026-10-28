@@ -701,7 +701,10 @@ void test_dispatcher_trace_correlation_and_ordering()
   context.permission_resolver = [](ava::permissions::PermissionPrompt const&) {
     return ava::permissions::PermissionResolutionDecision(ava::permissions::PermissionResolution::Allow);
   };
-  ava::agent::ToolDispatcher dispatcher(context);
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto serial = dispatcher.dispatch({.id = "CANARY_PROVIDER_CALL", .name = "bash", .arguments_json = "{\"command\":\"true\"}"});
   expect(serial && serial->success, "serial dispatcher call succeeds through trace boundary");
   std::thread parallel_one(
@@ -1625,6 +1628,7 @@ void test_provider_stream_event_outcomes_are_exhaustive()
   class AllEventsProvider final : public ava::provider::Provider
   {
    public:
+    using ava::provider::Provider::build_request;
     [[nodiscard]] ava::core::Result<ava::http::HttpRequest> build_request(ava::provider::ProviderRequest const&, std::string_view) const override
     {
       return ava::http::HttpRequest{.method = "POST",

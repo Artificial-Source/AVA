@@ -38,6 +38,7 @@ class CallbackTransport final : public ava::http::Transport
   {
   }
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     requests_.push_back(request);
@@ -65,6 +66,7 @@ class SequencedProviderTransport final : public ava::http::Transport
  public:
   SequencedProviderTransport(std::vector<ava::http::HttpResponse> responses, bool streaming) : responses_(std::move(responses)), streaming_(streaming) { }
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     requests_.push_back(request);

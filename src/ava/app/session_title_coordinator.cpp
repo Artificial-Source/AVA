@@ -7,6 +7,7 @@
 #include "ava/app/session_title_coordinator.h"
 #include "ava/provider/catalog.h"
 #include "ava/provider/registry.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 #include "ava/core/thread.h"
 #include "ava/core/utf8.h"
@@ -25,11 +26,6 @@
 namespace ava::app {
 namespace {
 
-bool ascii_space(unsigned char ch)
-{
-  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
-}
-
 std::size_t utf8_prefix_size(std::string_view text, std::size_t limit)
 {
   std::size_t index = 0;
@@ -43,18 +39,6 @@ std::size_t utf8_prefix_size(std::string_view text, std::size_t limit)
     last = index;
   }
   return last;
-}
-
-std::string lower_ascii(std::string_view text)
-{
-  std::string result;
-  result.reserve(text.size());
-  for (char ch : text)
-  {
-    auto const byte = static_cast<unsigned char>(ch);
-    result.push_back(byte >= 'A' && byte <= 'Z' ? static_cast<char>(byte + ('a' - 'A')) : ch);
-  }
-  return result;
 }
 
 bool ascii_punctuation(unsigned char ch)
@@ -72,7 +56,7 @@ void trim_ascii_punctuation(std::string& word)
 
 void remove_tagged_section(std::string& text, std::string_view tag)
 {
-  auto lower = lower_ascii(text);
+  auto lower = ava::core::ascii_lower_copy(text);
   auto const open_prefix = "<" + std::string(tag);
   auto const close = "</" + std::string(tag) + ">";
   std::size_t search = 0;
@@ -82,7 +66,7 @@ void remove_tagged_section(std::string& text, std::string_view tag)
     if (start == std::string::npos)
       break;
     auto const boundary = start + open_prefix.size();
-    if (boundary >= lower.size() || (lower[boundary] != '>' && !ascii_space(static_cast<unsigned char>(lower[boundary]))))
+    if (boundary >= lower.size() || (lower[boundary] != '>' && !ava::core::is_ascii_space(static_cast<unsigned char>(lower[boundary]))))
     {
       search = boundary;
       continue;
@@ -111,7 +95,7 @@ std::string normalized_whitespace(std::string_view text)
     auto const byte = static_cast<unsigned char>(text[index]);
     if (byte < 0x80U)
     {
-      if (ascii_space(byte))
+      if (ava::core::is_ascii_space(byte))
       {
         pending_space = !result.empty();
       }
@@ -145,47 +129,36 @@ std::string normalized_whitespace(std::string_view text)
   return result;
 }
 
-std::string trim_ascii(std::string_view text)
-{
-  std::size_t begin = 0;
-  while (begin < text.size() && ascii_space(static_cast<unsigned char>(text[begin])))
-    ++begin;
-  std::size_t end = text.size();
-  while (end > begin && ascii_space(static_cast<unsigned char>(text[end - 1])))
-    --end;
-  return std::string(text.substr(begin, end - begin));
-}
-
 bool contains_control(std::string_view text)
 {
   return std::ranges::any_of(text, [](char ch) {
     auto const byte = static_cast<unsigned char>(ch);
-    return (byte < 0x20U && !ascii_space(byte)) || byte == 0x7fU;
+    return (byte < 0x20U && !ava::core::is_ascii_space(byte)) || byte == 0x7fU;
   });
 }
 
 void strip_line_markup(std::string& line)
 {
-  auto trimmed = trim_ascii(line);
+  auto trimmed = ava::core::ascii_trim(line);
   while (!trimmed.empty() && (trimmed.front() == '#' || trimmed.front() == '>' || trimmed.front() == '-' || trimmed.front() == '*' || trimmed.front() == '`'))
   {
     trimmed.erase(trimmed.begin());
-    trimmed = trim_ascii(trimmed);
+    trimmed = ava::core::ascii_trim(trimmed);
   }
   while (!trimmed.empty() && trimmed.back() == '`')
     trimmed.pop_back();
-  trimmed = trim_ascii(trimmed);
+  trimmed = ava::core::ascii_trim(trimmed);
   if (trimmed.size() >= 2 && ((trimmed.front() == '"' && trimmed.back() == '"') || (trimmed.front() == '\'' && trimmed.back() == '\'') ||
                               (trimmed.front() == '`' && trimmed.back() == '`')))
   {
-    trimmed = trim_ascii(std::string_view(trimmed).substr(1, trimmed.size() - 2));
+    trimmed = ava::core::ascii_trim(std::string_view(trimmed).substr(1, trimmed.size() - 2));
   }
-  auto lower = lower_ascii(trimmed);
+  auto lower = ava::core::ascii_lower_copy(trimmed);
   for (auto const prefix : {std::string_view("conversation title:"), std::string_view("title:")})
   {
     if (lower.starts_with(prefix))
     {
-      trimmed = trim_ascii(std::string_view(trimmed).substr(prefix.size()));
+      trimmed = ava::core::ascii_trim(std::string_view(trimmed).substr(prefix.size()));
       break;
     }
   }
@@ -354,7 +327,7 @@ ava::core::Result<std::string> default_generate_title(SessionTitleGenerationRequ
   auto response = transport.send(*request, [&] { return stop_token.stop_requested() || std::chrono::steady_clock::now() >= deadline; });
   for (auto& [name, value] : request->headers)
   {
-    auto const lower_name = lower_ascii(name);
+    auto const lower_name = ava::core::ascii_lower_copy(name);
     if (lower_name == "authorization" || lower_name == "x-api-key" || lower_name == "x-goog-api-key")
       clear_secret(value);
   }
@@ -480,7 +453,7 @@ ava::core::Result<std::string> sanitize_generated_session_title(std::string_view
   {
     auto const end = cleaned.find_first_of("\r\n", start);
     auto line = std::string_view(cleaned).substr(start, end == std::string::npos ? cleaned.size() - start : end - start);
-    auto candidate = trim_ascii(line);
+    auto candidate = ava::core::ascii_trim(line);
     if (!candidate.empty() && candidate != "```" && !candidate.starts_with("```") && !candidate.starts_with("<think"))
     {
       strip_line_markup(candidate);
@@ -572,7 +545,7 @@ std::string fallback_session_title(std::string_view normalized_source)
   return title;
 }
 
-SessionTitleCoordinator::SessionTitleCoordinator(SessionTitleCoordinatorOptions options) : options_(std::move(options))
+SessionTitleCoordinator::SessionTitleCoordinator(ConstructionKey, SessionTitleCoordinatorOptions options) : options_(std::move(options))
 {
   if (!options_.generator)
   {
@@ -589,7 +562,7 @@ ava::core::Result<std::shared_ptr<SessionTitleCoordinator>> SessionTitleCoordina
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "session title coordinator limits are invalid"));
   try
   {
-    auto coordinator = std::shared_ptr<SessionTitleCoordinator>(new SessionTitleCoordinator(std::move(options)));
+    auto coordinator = std::make_shared<SessionTitleCoordinator>(ConstructionKey{}, std::move(options));
     coordinator->start();
     return coordinator;
   }
@@ -654,7 +627,7 @@ void SessionTitleCoordinator::schedule(runtime::session_ts const& unlocked_sessi
         std::move(*session_snapshot);
     {
       std::lock_guard lock(mutex_);
-      if (!admitted_session_ids_.insert(session_id).second)
+      if (!accepting_ || !admitted_session_ids_.insert(session_id).second)
         return;
     }
 
@@ -811,8 +784,6 @@ void SessionTitleCoordinator::shutdown() noexcept
     if (!accepting_ && workers_.empty())
       return;
     accepting_ = false;
-    for (auto& worker : workers_)
-      worker.request_stop();
     for (auto& work : queue_)
       clear_secret(work.request.access_token);
     queue_.clear();
@@ -820,6 +791,10 @@ void SessionTitleCoordinator::shutdown() noexcept
     workers.swap(workers_);
     changed_.notify_all();
   }
+  // Stop callbacks run synchronously and may inspect the coordinator.
+  // Publish shutdown under the mutex, then request cancellation without it.
+  for (auto& worker : workers)
+    worker.request_stop();
   workers.clear();
 }
 

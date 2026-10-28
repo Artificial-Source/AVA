@@ -95,6 +95,37 @@ void test_neutral_emit_invokes_once_and_is_null_safe()
   expect(emit_event(null_sink, event).has_value(), "neutral typed emit treats a null sink as a successful no-op");
 }
 
+void test_event_bus_subscription_during_publication()
+{
+  ava::event::EventBus bus;
+  std::vector<std::string> calls;
+  bus.subscribe([&bus, &calls, registered = false](ava::event::EventEnvelope const&) mutable {
+    if (!registered)
+    {
+      registered = true;
+      for (int index = 0; index < 128; ++index)
+        bus.subscribe([&calls](ava::event::EventEnvelope const&) {
+          calls.push_back("late");
+          return ava::core::VoidResult{};
+        });
+    }
+    calls.push_back("first");
+    return ava::core::VoidResult{};
+  });
+  bus.subscribe([&calls](ava::event::EventEnvelope const&) {
+    calls.push_back("second");
+    return ava::core::VoidResult{};
+  });
+  ava::event::EventEnvelope const envelope{};
+  auto const first = bus.publish(envelope);
+  expect(first && calls == std::vector<std::string>{"first", "second"},
+         "event publication keeps active callbacks alive and defers newly registered subscribers");
+  calls.clear();
+  auto const second = bus.publish(envelope);
+  expect(second && calls.size() == 130 && calls[0] == "first" && calls[1] == "second" && calls.back() == "late",
+         "the next event reaches subscribers added during publication in registration order");
+}
+
 void test_event_bus_preserves_order_and_stops_on_first_failure()
 {
   ava::event::EventBus bus;
@@ -754,6 +785,7 @@ void run_app_event_bus_tests()
   test_typed_runtime_event_preserves_metadata_and_payload_shape();
   test_neutral_emit_invokes_once_and_is_null_safe();
   test_event_bus_preserves_order_and_stops_on_first_failure();
+  test_event_bus_subscription_during_publication();
   test_runtime_event_bus_adapter_publishes_and_forwards();
   test_runtime_event_bus_adapter_failure_order();
   test_runtime_event_bus_adapter_allows_default_next_sink();

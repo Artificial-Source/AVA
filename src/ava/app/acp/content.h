@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <expected>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ava::app::acp {

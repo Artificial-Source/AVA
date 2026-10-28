@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/process/deadline.h"
 #include "ava/process/supervisor_internal.h"
 
 #include <algorithm>
@@ -22,21 +23,11 @@ using namespace std::chrono_literals;
 
 namespace {
 
-ProcessDeadline saturating_deadline_add(ProcessDeadline deadline, Clock::duration budget) noexcept
-{
-  if (budget <= Clock::duration::zero())
-    return deadline;
-  auto const maximum_duration = ProcessDeadline::max().time_since_epoch();
-  if (deadline.time_since_epoch() > maximum_duration - budget)
-    return ProcessDeadline::max();
-  return deadline + budget;
-}
-
 std::optional<ProcessDeadline> cleanup_horizon(LifecyclePolicyV1 const& policy) noexcept
 {
   if (!policy.execution_deadline)
     return std::nullopt;
-  return saturating_deadline_add(*policy.execution_deadline, std::chrono::duration_cast<Clock::duration>(kDefaultCleanupBudget));
+  return ava::process::saturating_deadline_add(*policy.execution_deadline, std::chrono::duration_cast<Clock::duration>(kDefaultCleanupBudget));
 }
 
 }  // namespace
@@ -180,8 +171,16 @@ void finalize_locked(SupervisorState& state, Record& record, CleanupStateV1 clea
   if (record.state == ProcessStateV1::Finished)
     return;
 #if !defined(_WIN32)
-  // Detach authoritative record ownership before terminal retention. Any
-  // in-flight poll batch keeps its shared descriptor identities alive.
+  // Bounded settlement is not the end of native-child ownership. Transfer only
+  // exact unreaped identities to the joinable reaper before terminal pruning.
+  if (record.deferred_cleanup)
+  {
+    record.deferred_cleanup->children = {record.leader_reaped ? -1 : record.leader, record.sentinel_reaped ? -1 : record.sentinel};
+    state.child_reaper.retain(std::move(record.deferred_cleanup));
+  }
+  record.leader = -1;
+  record.sentinel = -1;
+  // In-flight poll batches keep their shared descriptor identities alive.
   detach_record_watches_locked(record);
 #endif
   if (!record.reason)

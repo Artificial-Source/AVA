@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/process/deadline.h"
 #include "ava/plugin/runner.h"
 #include "ava/plugin/runner_support.h"
 #include "ava/core/json.h"
@@ -227,7 +228,7 @@ ava::core::Result<std::string> PluginProcess::read_record(Clock::time_point dead
 
     if (!standard_output_.valid())
     {
-      auto const status_deadline = std::min(deadline, saturating_add(Clock::now(), kNaturalStatusObservation));
+      auto const status_deadline = std::min(deadline, ava::process::saturating_deadline_add(Clock::now(), kNaturalStatusObservation));
       auto observed = operation_scope_.supervisor().wait(process_handle_, status_deadline);
       if (observed)
         settlement_ = *observed;
@@ -258,7 +259,7 @@ ava::core::Result<std::string> PluginProcess::read_record(Clock::time_point dead
       watches.push_back(std::move(*stderr_watch));
     }
 
-    auto const activity_deadline = std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval));
+    auto const activity_deadline = std::min(deadline, ava::process::saturating_deadline_add(Clock::now(), kCancellationObservationInterval));
     auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches, activity_deadline);
     if (!activity)
     {
@@ -317,8 +318,8 @@ ava::core::VoidResult PluginProcess::wait_for_writable(Clock::time_point deadlin
       watches.push_back(std::move(*stderr_watch));
     }
 
-    auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches,
-                                                                    std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval)));
+    auto activity = operation_scope_.supervisor().wait_for_activity(
+        process_handle_, watches, std::min(deadline, ava::process::saturating_deadline_add(Clock::now(), kCancellationObservationInterval)));
     if (!activity)
     {
       auto error = process_io_error("failed while observing the plugin request stream", manifest_);

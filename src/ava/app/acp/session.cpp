@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/diagnostics/runtime_diagnostics.h"
 #include "ava/app/acp/client_tools.h"
 #include "ava/app/acp/session.h"
@@ -89,6 +90,7 @@ class ScopeExit
   ~ScopeExit() { callback_(); }
   ScopeExit(ScopeExit const&) = delete;
   ScopeExit& operator=(ScopeExit const&) = delete;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::function<void()> callback_;
@@ -205,17 +207,6 @@ bool AcpSessionHost::accepts_images() const noexcept
   SCOPED_CRITICAL_AREA_CR(session_r, unlocked_session_);
   runtime::ModelSelection_ts::crat model_selection_r = session_r->model_selection_r();
   return std::ranges::find(model_selection_r->model.input_modalities, "image") != model_selection_r->model.input_modalities.end();
-}
-
-ava::core::VoidResult AcpSessionHost::send_text_update(std::string_view kind, std::string_view text, std::string_view message_id) const
-{
-  auto gateway = options_.updates.lock();
-  if (!gateway)
-    return std::unexpected(protocol_error("ACP update gateway is unavailable"));
-  Json update{{"sessionUpdate", kind}, {"content", Json{{"type", "text"}, {"text", text}}}};
-  if (!message_id.empty())
-    update["messageId"] = message_id;
-  return gateway->send(session_id_, update.dump(-1, ' ', false, Json::error_handler_t::strict));
 }
 
 ava::core::Result<std::uint64_t> AcpSessionHost::reserve_prompt()
@@ -936,6 +927,32 @@ ava::core::Result<std::string> AcpSessionRegistry::list_json(std::optional<std::
   std::vector<ListRecord> page;
   bool has_more = false;
   auto const cwd_key = cwd ? std::optional<std::string>(cwd->string()) : std::nullopt;
+  auto encode_page = [&]() -> ava::core::Result<std::string> {
+    try
+    {
+      Json sessions = Json::array();
+      for (auto const& record : page)
+      {
+        Json item{{"sessionId", record.session_id}, {"cwd", record.cwd}};
+        if (!record.title.empty())
+          item["title"] = record.title;
+        if (!record.updated_at.empty())
+          item["updatedAt"] = record.updated_at;
+        sessions.push_back(std::move(item));
+      }
+      Json result{{"sessions", std::move(sessions)}};
+      if (has_more)
+        result["nextCursor"] = cursor_token;
+      auto encoded = result.dump(-1, ' ', false, Json::error_handler_t::strict);
+      if (encoded.size() > kMaxSessionListResultBytes || encoded.size() + 1024 > kMaxRecordBytes)
+        return std::unexpected(session_error("session/list page exceeds bounded result size"));
+      return encoded;
+    }
+    catch (Json::exception const&)
+    {
+      return std::unexpected(session_error("session/list page contains invalid UTF-8"));
+    }
+  };
 
   if (cursor)
   {
@@ -948,16 +965,22 @@ ava::core::Result<std::string> AcpSessionRegistry::list_json(std::optional<std::
     auto& snapshot = found->second;
     auto const end = std::min(snapshot.records.size(), snapshot.offset + kSessionListPageSize);
     page.assign(snapshot.records.begin() + static_cast<std::ptrdiff_t>(snapshot.offset), snapshot.records.begin() + static_cast<std::ptrdiff_t>(end));
-    snapshot.offset = end;
     has_more = end < snapshot.records.size();
     if (has_more)
       cursor_token = *cursor;
-    else
+    // Serialize while holding the snapshot lock so concurrent uses of one cursor
+    // consume distinct pages. A rejected page leaves both offset and lifetime intact.
+    auto encoded = encode_page();
+    if (!encoded)
+      return encoded;
+    snapshot.offset = end;
+    if (!has_more)
     {
       list_snapshot_bytes_ -= snapshot.retained_bytes;
       list_snapshots_.erase(found);
       std::erase(list_snapshot_order_, *cursor);
     }
+    return encoded;
   }
   else
   {
@@ -987,6 +1010,10 @@ ava::core::Result<std::string> AcpSessionRegistry::list_json(std::optional<std::
         retained_bytes += record.session_id.capacity() + record.cwd.capacity() + record.title.capacity() + record.updated_at.capacity();
       if (retained_bytes > options_.max_session_list_snapshot_bytes)
         return std::unexpected(session_error("session/list cursor snapshot exceeds retained byte budget"));
+      cursor_token = "ava-acp-list-v1-" + ava::core::make_id("cursor");
+      auto encoded = encode_page();
+      if (!encoded)
+        return encoded;
 
       std::lock_guard lock(mutex_);
       while (!list_snapshot_order_.empty() &&
@@ -1001,30 +1028,14 @@ ava::core::Result<std::string> AcpSessionRegistry::list_json(std::optional<std::
           list_snapshots_.erase(evicted);
         }
       }
-      cursor_token = "ava-acp-list-v1-" + ava::core::make_id("cursor");
       list_snapshot_bytes_ += retained_bytes;
       list_snapshot_order_.push_back(cursor_token);
       list_snapshots_.emplace(cursor_token, ListSnapshot{.cwd = cwd_key, .records = std::move(records), .offset = end, .retained_bytes = retained_bytes});
+      return encoded;
     }
   }
 
-  Json sessions = Json::array();
-  for (auto const& record : page)
-  {
-    Json item{{"sessionId", record.session_id}, {"cwd", record.cwd}};
-    if (!record.title.empty())
-      item["title"] = record.title;
-    if (!record.updated_at.empty())
-      item["updatedAt"] = record.updated_at;
-    sessions.push_back(std::move(item));
-  }
-  Json result{{"sessions", std::move(sessions)}};
-  if (has_more)
-    result["nextCursor"] = cursor_token;
-  auto encoded = result.dump(-1, ' ', false, Json::error_handler_t::strict);
-  if (encoded.size() > kMaxSessionListResultBytes || encoded.size() + 1024 > kMaxRecordBytes)
-    return std::unexpected(session_error("session/list page exceeds bounded result size"));
-  return encoded;
+  return encode_page();
 }
 
 void AcpSessionRegistry::cancel(std::string_view session_id) noexcept

@@ -21,6 +21,7 @@
 #include "ava/agent/tool_dispatch_common.h"
 #include "ava/agent/tool_dispatch_services.h"
 #include "ava/agent/tool_dispatcher.h"
+#include "ava/agent/tool_registration.h"
 #include "ava/agent/tool_registry.h"
 #include "ava/agent/tool_result.h"
 #include "ava/agent/tool_summaries.h"
@@ -49,6 +50,7 @@
 #include "ava/provider/openai_provider.h"
 #include "ava/context/context_loader.h"
 #include "ava/lsp/lsp_client.h"
+#include "ava/core/AnchorSet.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
@@ -71,6 +73,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #include <sys/stat.h>
@@ -190,7 +193,11 @@ void test_tool_dispatcher()
   ava::tests::write_test_file(workspace / "note.txt", "hello dispatcher");
   ava::tests::write_test_file(workspace / "lines.txt", "one\nTwo\nthree\n");
 
-  ava::agent::ToolDispatcher const dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build});
+  auto const dispatcher_result =
+      ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build});
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
   test_dispatcher_visibility(workspace);
   test_dispatcher_read_search_and_validation(root, workspace, dispatcher);
   test_dispatcher_skill(root, workspace);
@@ -212,12 +219,19 @@ void test_dispatcher_visibility(std::filesystem::path const& workspace)
   {
     ava::tools::ToolContext allowlisted_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build};
     ava::agent::ToolVisibilityOptions const allowlisted_visibility{.included_tools = {"read_file", "grep"}};
-    auto const schemas = ava::agent::ToolDispatcher::tool_schemas_json(allowlisted_context, allowlisted_visibility);
+    auto const schemas_result = ava::agent::ToolDispatcher::compose_tool_schemas_json(allowlisted_context, allowlisted_visibility);
+    if (!ava::tests::require(schemas_result.has_value(), schemas_result ? "schema fixture composes" : schemas_result.error().format()))
+      return;
+    auto const& schemas = *schemas_result;
     expect(schemas_contain_tool(schemas, "read_file") && schemas_contain_tool(schemas, "grep") && !schemas_contain_tool(schemas, "bash") &&
                !schemas_contain_tool(schemas, "write_file"),
            "tool visibility allowlist limits exported provider schemas");
 
-    ava::agent::ToolDispatcher const allowlisted_dispatcher(allowlisted_context, {}, allowlisted_visibility);
+    auto const allowlisted_dispatcher_result = ava::agent::ToolDispatcher::create_strict(allowlisted_context, {}, allowlisted_visibility);
+    if (!ava::tests::require(allowlisted_dispatcher_result.has_value(),
+                             allowlisted_dispatcher_result ? "dispatcher fixture composes" : allowlisted_dispatcher_result.error().format()))
+      return;
+    auto const& allowlisted_dispatcher = *allowlisted_dispatcher_result;
     auto hidden =
         allowlisted_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_hidden_bash", .name = "bash", .arguments_json = "{\"command\":\"pwd\"}"});
     expect(hidden && !hidden->success && hidden->result_text.find("unknown tool") != std::string::npos,
@@ -226,13 +240,19 @@ void test_dispatcher_visibility(std::filesystem::path const& workspace)
   {
     ava::tools::ToolContext excluded_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build};
     ava::agent::ToolVisibilityOptions const excluded_visibility{.included_tools = {"read_file", "grep"}, .excluded_tools = {"grep"}};
-    auto const schemas = ava::agent::ToolDispatcher::tool_schemas_json(excluded_context, excluded_visibility);
+    auto const schemas_result = ava::agent::ToolDispatcher::compose_tool_schemas_json(excluded_context, excluded_visibility);
+    if (!ava::tests::require(schemas_result.has_value(), schemas_result ? "schema fixture composes" : schemas_result.error().format()))
+      return;
+    auto const& schemas = *schemas_result;
     expect(schemas_contain_tool(schemas, "read_file") && !schemas_contain_tool(schemas, "grep"), "tool visibility exclusion overrides an explicit allowlist");
   }
   {
     ava::tools::ToolContext pi_alias_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build};
     ava::agent::ToolVisibilityOptions const pi_alias_visibility{.included_tools = {"read", "grep", "find", "ls"}, .excluded_tools = {"find"}};
-    auto const schemas = ava::agent::ToolDispatcher::tool_schemas_json(pi_alias_context, pi_alias_visibility);
+    auto const schemas_result = ava::agent::ToolDispatcher::compose_tool_schemas_json(pi_alias_context, pi_alias_visibility);
+    if (!ava::tests::require(schemas_result.has_value(), schemas_result ? "schema fixture composes" : schemas_result.error().format()))
+      return;
+    auto const& schemas = *schemas_result;
     expect(schemas_contain_tool(schemas, "read_file") && schemas_contain_tool(schemas, "grep") && schemas_contain_tool(schemas, "list_directory") &&
                !schemas_contain_tool(schemas, "glob") && !schemas_contain_tool(schemas, "write_file"),
            "tool visibility accepts Pi read/find/ls aliases while exporting native AVA schema names");
@@ -240,10 +260,17 @@ void test_dispatcher_visibility(std::filesystem::path const& workspace)
   {
     ava::tools::ToolContext no_tools_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build};
     ava::agent::ToolVisibilityOptions const no_tools_visibility{.mode = ava::agent::ToolVisibilityMode::NoTools};
-    auto const schemas = ava::agent::ToolDispatcher::tool_schemas_json(no_tools_context, no_tools_visibility);
+    auto const schemas_result = ava::agent::ToolDispatcher::compose_tool_schemas_json(no_tools_context, no_tools_visibility);
+    if (!ava::tests::require(schemas_result.has_value(), schemas_result ? "schema fixture composes" : schemas_result.error().format()))
+      return;
+    auto const& schemas = *schemas_result;
     expect(schemas.empty(), "tool visibility no-tools hides built-in provider schemas");
 
-    ava::agent::ToolDispatcher const no_tools_dispatcher(no_tools_context, {}, no_tools_visibility);
+    auto const no_tools_dispatcher_result = ava::agent::ToolDispatcher::create_strict(no_tools_context, {}, no_tools_visibility);
+    if (!ava::tests::require(no_tools_dispatcher_result.has_value(),
+                             no_tools_dispatcher_result ? "dispatcher fixture composes" : no_tools_dispatcher_result.error().format()))
+      return;
+    auto const& no_tools_dispatcher = *no_tools_dispatcher_result;
     auto hidden =
         no_tools_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_hidden_read", .name = "read_file", .arguments_json = "{\"path\":\"note.txt\"}"});
     expect(hidden && !hidden->success && hidden->result_text.find("unknown tool") != std::string::npos,
@@ -252,7 +279,10 @@ void test_dispatcher_visibility(std::filesystem::path const& workspace)
   {
     ava::tools::ToolContext no_builtin_context{.workspace_dir = workspace, .mode = ava::agent::Mode::Build};
     ava::agent::ToolVisibilityOptions const no_builtin_visibility{.mode = ava::agent::ToolVisibilityMode::NoBuiltinTools};
-    auto const schemas = ava::agent::ToolDispatcher::tool_schemas_json(no_builtin_context, no_builtin_visibility);
+    auto const schemas_result = ava::agent::ToolDispatcher::compose_tool_schemas_json(no_builtin_context, no_builtin_visibility);
+    if (!ava::tests::require(schemas_result.has_value(), schemas_result ? "schema fixture composes" : schemas_result.error().format()))
+      return;
+    auto const& schemas = *schemas_result;
     expect(schemas.empty(), "tool visibility no-builtin-tools hides built-in provider schemas when no external tools exist");
   }
 }
@@ -356,8 +386,12 @@ void test_dispatcher_read_search_and_validation(std::filesystem::path const& roo
          "tool dispatcher rejects provider-controlled grep no_ignore");
 
   auto const dispatcher_spill_dir = root / "session" / "spill";
-  ava::agent::ToolDispatcher const spilling_dispatcher(
+  auto const spilling_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .spill_dir = dispatcher_spill_dir, .mode = ava::agent::Mode::Build});
+  if (!ava::tests::require(spilling_dispatcher_result.has_value(),
+                           spilling_dispatcher_result ? "dispatcher fixture composes" : spilling_dispatcher_result.error().format()))
+    return;
+  auto const& spilling_dispatcher = *spilling_dispatcher_result;
   auto dispatcher_spill = spilling_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call/dispatcher-spill", .name = "glob", .arguments_json = "{\"pattern\":\"**/*\",\"max_results\":1}"});
   auto const dispatcher_spill_file =
@@ -384,7 +418,7 @@ void test_dispatcher_skill(std::filesystem::path const& root, std::filesystem::p
   std::filesystem::create_directories(skill_root / "debugging");
   ava::tests::write_test_file(skill_root / "debugging" / "SKILL.md", "---\nname: debugging\ndescription: Debug failures\n---\nUse systematic debugging.\n");
   int skill_permission_prompts = 0;
-  ava::agent::ToolDispatcher const skill_dispatcher(ava::tools::ToolContext{
+  auto const skill_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
       .permission_resolver =
@@ -400,6 +434,10 @@ void test_dispatcher_skill(std::filesystem::path const& root, std::filesystem::p
       .mcp_project_config_file = root / "no-project-mcp.json",
       .skill_global_dirs = {root / "no-global-skills"},
       .skill_project_dirs = {skill_root}});
+  if (!ava::tests::require(skill_dispatcher_result.has_value(),
+                           skill_dispatcher_result ? "dispatcher fixture composes" : skill_dispatcher_result.error().format()))
+    return;
+  auto const& skill_dispatcher = *skill_dispatcher_result;
   auto loaded_skill =
       skill_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_skill", .name = "skill", .arguments_json = "{\"name\":\"debugging\"}"});
   expect(loaded_skill && loaded_skill->success && loaded_skill->result_text.find("Use systematic debugging") != std::string::npos &&
@@ -459,7 +497,7 @@ void test_dispatcher_permission_audit(std::filesystem::path const& root, std::fi
   ava::tests::write_test_file(linked_permission_path, "linked permission");
   std::vector<ava::tools::PermissionAuditEvent> linked_permission_audits;
   std::string linked_prompt_request_id;
-  ava::agent::ToolDispatcher const linked_permission_dispatcher(ava::tools::ToolContext{
+  auto const linked_permission_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
       .permission_resolver =
@@ -471,6 +509,10 @@ void test_dispatcher_permission_audit(std::filesystem::path const& root, std::fi
         linked_permission_audits.push_back(event);
         return {};
       }});
+  if (!ava::tests::require(linked_permission_dispatcher_result.has_value(),
+                           linked_permission_dispatcher_result ? "dispatcher fixture composes" : linked_permission_dispatcher_result.error().format()))
+    return;
+  auto const& linked_permission_dispatcher = *linked_permission_dispatcher_result;
   auto linked_permission_read = linked_permission_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_linked_permission_read",
                                    .name = "read_file",
@@ -488,7 +530,7 @@ void test_dispatcher_permission_audit(std::filesystem::path const& root, std::fi
   ava::tests::write_test_file(first_per_dispatch_permission_path, "first per-dispatch permission");
   ava::tests::write_test_file(second_per_dispatch_permission_path, "second per-dispatch permission");
   std::vector<std::string> per_dispatch_permission_request_ids;
-  ava::agent::ToolDispatcher const per_dispatch_permission_dispatcher(ava::tools::ToolContext{
+  auto const per_dispatch_permission_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
       .permission_resolver = [&per_dispatch_permission_request_ids](
@@ -496,6 +538,11 @@ void test_dispatcher_permission_audit(std::filesystem::path const& root, std::fi
         per_dispatch_permission_request_ids.push_back(prompt.permission_request_id);
         return ava::permissions::PermissionResolution::Allow;
       }});
+  if (!ava::tests::require(per_dispatch_permission_dispatcher_result.has_value(), per_dispatch_permission_dispatcher_result
+                                                                                      ? "dispatcher fixture composes"
+                                                                                      : per_dispatch_permission_dispatcher_result.error().format()))
+    return;
+  auto const& per_dispatch_permission_dispatcher = *per_dispatch_permission_dispatcher_result;
   auto first_per_dispatch_permission_read = per_dispatch_permission_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_first_per_dispatch_permission",
                                    .name = "read_file",
@@ -552,12 +599,16 @@ void test_dispatcher_exact_file_patch(std::filesystem::path const& workspace)
   auto remote_files = std::make_shared<DispatcherExactFileAccess>();
   auto const remote_patch_path = ava::core::normalized_absolute_path(workspace) / "remote-patch.txt";
   remote_files->files[remote_patch_path] = "remote old stale";
-  ava::agent::ToolDispatcher const remote_patch_dispatcher(ava::tools::ToolContext{
+  auto const remote_patch_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = ava::core::normalized_absolute_path(workspace),
       .mode = ava::agent::Mode::Build,
       .secure_workspace = remote_workspace ? *remote_workspace : nullptr,
       .exact_file_access = remote_files,
   });
+  if (!ava::tests::require(remote_patch_dispatcher_result.has_value(),
+                           remote_patch_dispatcher_result ? "dispatcher fixture composes" : remote_patch_dispatcher_result.error().format()))
+    return;
+  auto const& remote_patch_dispatcher = *remote_patch_dispatcher_result;
   auto remote_patch = remote_patch_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_remote_patch",
                                    .name = "apply_patch",
@@ -574,7 +625,7 @@ void test_dispatcher_exact_file_patch(std::filesystem::path const& workspace)
   multi_remote_files->files[multi_remote_b] = "remote beta old";
   auto multi_remote_started = std::make_shared<std::atomic_bool>(false);
   int multi_remote_progress = 0;
-  ava::agent::ToolDispatcher const multi_remote_dispatcher(ava::tools::ToolContext{
+  auto const multi_remote_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = ava::core::normalized_absolute_path(workspace),
       .mode = ava::agent::Mode::Build,
       .progress_sink = [&multi_remote_progress](ava::tools::ToolProgressEvent const&) -> ava::core::VoidResult {
@@ -586,6 +637,10 @@ void test_dispatcher_exact_file_patch(std::filesystem::path const& workspace)
       .secure_workspace = remote_workspace ? *remote_workspace : nullptr,
       .exact_file_access = multi_remote_files,
   });
+  if (!ava::tests::require(multi_remote_dispatcher_result.has_value(),
+                           multi_remote_dispatcher_result ? "dispatcher fixture composes" : multi_remote_dispatcher_result.error().format()))
+    return;
+  auto const& multi_remote_dispatcher = *multi_remote_dispatcher_result;
   auto multi_remote_patch = multi_remote_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_remote_multi_patch",
                                    .name = "apply_patch",
@@ -602,7 +657,7 @@ void test_dispatcher_exact_file_patch(std::filesystem::path const& workspace)
   partial_remote_files->supports_writes = false;
   int partial_patch_permissions = 0;
   int partial_patch_progress = 0;
-  ava::agent::ToolDispatcher const partial_patch_dispatcher(ava::tools::ToolContext{
+  auto const partial_patch_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = ava::core::normalized_absolute_path(workspace),
       .mode = ava::agent::Mode::Build,
       .permission_resolver = [&](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -617,6 +672,10 @@ void test_dispatcher_exact_file_patch(std::filesystem::path const& workspace)
       .secure_workspace = remote_workspace ? *remote_workspace : nullptr,
       .exact_file_access = partial_remote_files,
   });
+  if (!ava::tests::require(partial_patch_dispatcher_result.has_value(),
+                           partial_patch_dispatcher_result ? "dispatcher fixture composes" : partial_patch_dispatcher_result.error().format()))
+    return;
+  auto const& partial_patch_dispatcher = *partial_patch_dispatcher_result;
   auto partial_capability_patch = partial_patch_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_partial_patch",
                                    .name = "apply_patch",
@@ -656,13 +715,17 @@ void test_dispatcher_diff_and_permissions(std::filesystem::path const& workspace
   auto const audit_patch_path = workspace / "audit-patch.txt";
   ava::tests::write_test_file(audit_patch_path, "audit old");
   std::vector<ava::tools::PermissionAuditEvent> patch_audits;
-  ava::agent::ToolDispatcher const audit_patch_dispatcher(
+  auto const audit_patch_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace,
                               .mode = ava::agent::Mode::Build,
                               .permission_audit_sink = [&patch_audits](ava::tools::PermissionAuditEvent const& event) -> ava::core::VoidResult {
                                 patch_audits.push_back(event);
                                 return {};
                               }});
+  if (!ava::tests::require(audit_patch_dispatcher_result.has_value(),
+                           audit_patch_dispatcher_result ? "dispatcher fixture composes" : audit_patch_dispatcher_result.error().format()))
+    return;
+  auto const& audit_patch_dispatcher = *audit_patch_dispatcher_result;
   auto audited_patch = audit_patch_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_audit_patch",
                                    .name = "apply_patch",
@@ -712,8 +775,12 @@ void test_dispatcher_same_file_patch(std::filesystem::path const& workspace, ava
   ava::tests::write_test_file(workspace / "queued-a.txt", "a old");
   ava::tests::write_test_file(workspace / "queued-b.txt", "b old");
   auto dispatcher_queue = std::make_shared<ava::tools::MutationQueue>();
-  ava::agent::ToolDispatcher const queued_patch_dispatcher(
+  auto const queued_patch_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build, .mutation_queue = dispatcher_queue});
+  if (!ava::tests::require(queued_patch_dispatcher_result.has_value(),
+                           queued_patch_dispatcher_result ? "dispatcher fixture composes" : queued_patch_dispatcher_result.error().format()))
+    return;
+  auto const& queued_patch_dispatcher = *queued_patch_dispatcher_result;
   auto queued_patch = queued_patch_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_queued_patch",
                                    .name = "apply_patch",
@@ -937,11 +1004,15 @@ void test_dispatcher_transactional_staging(std::filesystem::path const& workspac
     auto secure_patch_workspace = ava::tools::SecureWorkspace::open(ava::core::normalized_absolute_path(workspace));
     if (ava::tests::require(secure_patch_workspace.has_value(), "secure staging fixture opens workspace authority"))
     {
-      ava::agent::ToolDispatcher const secure_patch_dispatcher(ava::tools::ToolContext{
+      auto const secure_patch_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
           .workspace_dir = ava::core::normalized_absolute_path(workspace),
           .mode = ava::agent::Mode::Build,
           .secure_workspace = *secure_patch_workspace,
       });
+      if (!ava::tests::require(secure_patch_dispatcher_result.has_value(),
+                               secure_patch_dispatcher_result ? "dispatcher fixture composes" : secure_patch_dispatcher_result.error().format()))
+        return;
+      auto const& secure_patch_dispatcher = *secure_patch_dispatcher_result;
       auto secure_staged_patch = secure_patch_dispatcher.dispatch(ava::agent::ProviderToolCall{
           .id = "call_secure_staged_patch_failure",
           .name = "apply_patch",
@@ -1035,12 +1106,16 @@ void test_dispatcher_patch_cancellation_and_bounds(std::filesystem::path const& 
       secure_precommit_cancellation_observed = true;
       return true;
     };
-    ava::agent::ToolDispatcher const secure_patch_cancel_dispatcher(ava::tools::ToolContext{
+    auto const secure_patch_cancel_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
         .workspace_dir = ava::core::normalized_absolute_path(workspace),
         .mode = ava::agent::Mode::Build,
         .cancel_requested = cancel_at_secure_precommit_boundary,
         .secure_workspace = *secure_cancel_workspace,
     });
+    if (!ava::tests::require(secure_patch_cancel_dispatcher_result.has_value(),
+                             secure_patch_cancel_dispatcher_result ? "dispatcher fixture composes" : secure_patch_cancel_dispatcher_result.error().format()))
+      return;
+    auto const& secure_patch_cancel_dispatcher = *secure_patch_cancel_dispatcher_result;
     auto secure_patch_canceled_after_stage = secure_patch_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{
         .id = "call_secure_patch_cancel_after_stage",
         .name = "apply_patch",
@@ -1074,7 +1149,7 @@ void test_dispatcher_question(std::filesystem::path const& workspace, ava::agent
          "question tool fails closed when no backend resolver is supplied");
 
   int question_prompts = 0;
-  ava::agent::ToolDispatcher const question_dispatcher(
+  auto const question_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build},
       ava::agent::ToolDispatchServices{
           .question_resolver = [&question_prompts](ava::agent::QuestionPrompt const& prompt) -> ava::core::Result<ava::agent::QuestionAnswer> {
@@ -1085,6 +1160,10 @@ void test_dispatcher_question(std::filesystem::path const& workspace, ava::agent
             expect(!prompt.multiple && !prompt.allow_custom, "question resolver receives default selection flags");
             return ava::agent::QuestionAnswer{.selected_options = {"safe"}, .custom_text = ""};
           }});
+  if (!ava::tests::require(question_dispatcher_result.has_value(),
+                           question_dispatcher_result ? "dispatcher fixture composes" : question_dispatcher_result.error().format()))
+    return;
+  auto const& question_dispatcher = *question_dispatcher_result;
   auto question =
       question_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_question",
                                                                 .name = "question",
@@ -1094,13 +1173,17 @@ void test_dispatcher_question(std::filesystem::path const& workspace, ava::agent
   expect(question && question->success && question_prompts == 1 && question->result_text.find("\"selected_options\":[\"safe\"]") != std::string::npos,
          "question tool calls resolver and serializes selected answer");
 
-  ava::agent::ToolDispatcher const multi_question_dispatcher(
+  auto const multi_question_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build},
       ava::agent::ToolDispatchServices{.question_resolver = [](ava::agent::QuestionPrompt const& prompt) -> ava::core::Result<ava::agent::QuestionAnswer> {
         expect(prompt.multiple && prompt.allow_custom, "question resolver receives multi/custom flags");
         expect(prompt.options.size() == 2 && prompt.options[1].value == "Beta", "question resolver accepts string options");
         return ava::agent::QuestionAnswer{.selected_options = {"alpha", "Beta"}, .custom_text = "Use both"};
       }});
+  if (!ava::tests::require(multi_question_dispatcher_result.has_value(),
+                           multi_question_dispatcher_result ? "dispatcher fixture composes" : multi_question_dispatcher_result.error().format()))
+    return;
+  auto const& multi_question_dispatcher = *multi_question_dispatcher_result;
   auto multi_question =
       multi_question_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_question_multi",
                                                                       .name = "question",
@@ -1116,44 +1199,60 @@ void test_dispatcher_question(std::filesystem::path const& workspace, ava::agent
   expect(secret_question && !secret_question->success && secret_question->result_text.find("trusted local commands") != std::string::npos,
          "question tool rejects model-originated secret prompts");
 
-  ava::agent::ToolDispatcher const too_many_answers_dispatcher(
+  auto const too_many_answers_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build},
       ava::agent::ToolDispatchServices{.question_resolver = [](ava::agent::QuestionPrompt const&) -> ava::core::Result<ava::agent::QuestionAnswer> {
         return ava::agent::QuestionAnswer{.selected_options = std::vector<std::string>(65, "option"), .custom_text = ""};
       }});
+  if (!ava::tests::require(too_many_answers_dispatcher_result.has_value(),
+                           too_many_answers_dispatcher_result ? "dispatcher fixture composes" : too_many_answers_dispatcher_result.error().format()))
+    return;
+  auto const& too_many_answers_dispatcher = *too_many_answers_dispatcher_result;
   auto too_many_answers = too_many_answers_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_question_too_many_answers", .name = "question", .arguments_json = "{\"question\":\"Pick\"}"});
   expect(too_many_answers && !too_many_answers->success && too_many_answers->result_text.find("too many selected options") != std::string::npos,
          "question tool rejects resolver answers with too many selected options");
 
   std::string const oversized_answer_text(9000, 'x');
-  ava::agent::ToolDispatcher const oversized_selected_dispatcher(
+  auto const oversized_selected_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build},
       ava::agent::ToolDispatchServices{
           .question_resolver = [&oversized_answer_text](ava::agent::QuestionPrompt const&) -> ava::core::Result<ava::agent::QuestionAnswer> {
             return ava::agent::QuestionAnswer{.selected_options = {oversized_answer_text}, .custom_text = ""};
           }});
+  if (!ava::tests::require(oversized_selected_dispatcher_result.has_value(),
+                           oversized_selected_dispatcher_result ? "dispatcher fixture composes" : oversized_selected_dispatcher_result.error().format()))
+    return;
+  auto const& oversized_selected_dispatcher = *oversized_selected_dispatcher_result;
   auto oversized_selected = oversized_selected_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_question_oversized_selected", .name = "question", .arguments_json = "{\"question\":\"Pick\"}"});
   expect(oversized_selected && !oversized_selected->success && oversized_selected->result_text.find("selected option is too long") != std::string::npos,
          "question tool rejects oversized resolver selected option strings");
 
-  ava::agent::ToolDispatcher const oversized_custom_dispatcher(
+  auto const oversized_custom_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build},
       ava::agent::ToolDispatchServices{
           .question_resolver = [&oversized_answer_text](ava::agent::QuestionPrompt const&) -> ava::core::Result<ava::agent::QuestionAnswer> {
             return ava::agent::QuestionAnswer{.selected_options = {}, .custom_text = oversized_answer_text};
           }});
+  if (!ava::tests::require(oversized_custom_dispatcher_result.has_value(),
+                           oversized_custom_dispatcher_result ? "dispatcher fixture composes" : oversized_custom_dispatcher_result.error().format()))
+    return;
+  auto const& oversized_custom_dispatcher = *oversized_custom_dispatcher_result;
   auto oversized_custom = oversized_custom_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_question_oversized_custom", .name = "question", .arguments_json = "{\"question\":\"Pick\"}"});
   expect(oversized_custom && !oversized_custom->success && oversized_custom->result_text.find("custom text is too long") != std::string::npos,
          "question tool rejects oversized resolver custom text");
 
-  ava::agent::ToolDispatcher const failing_question_dispatcher(
+  auto const failing_question_dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Build},
       ava::agent::ToolDispatchServices{.question_resolver = [](ava::agent::QuestionPrompt const&) -> ava::core::Result<ava::agent::QuestionAnswer> {
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "question UI unavailable"));
       }});
+  if (!ava::tests::require(failing_question_dispatcher_result.has_value(),
+                           failing_question_dispatcher_result ? "dispatcher fixture composes" : failing_question_dispatcher_result.error().format()))
+    return;
+  auto const& failing_question_dispatcher = *failing_question_dispatcher_result;
   auto failed_question = failing_question_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_question_failed", .name = "question", .arguments_json = "{\"question\":\"Continue?\"}"});
   expect(failed_question && !failed_question->success && failed_question->result_text.find("question UI unavailable") != std::string::npos,
@@ -1197,6 +1296,70 @@ void test_dispatcher_question(std::filesystem::path const& workspace, ava::agent
   auto unknown = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_unknown", .name = "missing_tool", .arguments_json = "{}"});
   expect(unknown && !unknown->success && unknown->result_text.find("unknown tool") != std::string::npos,
          "tool dispatcher returns structured unknown tool errors");
+}
+
+void test_dispatcher_contains_executor_exceptions()
+{
+  for (bool const standard_exception : {true, false})
+  {
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(
+        ava::tools::ToolContext{},
+        ava::agent::ToolDispatchServices{.question_resolver = [standard_exception](auto const&) -> ava::core::Result<ava::agent::QuestionAnswer> {
+          if (standard_exception)
+            throw std::runtime_error("question resolver failed");
+          throw 7;
+        }});
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
+    auto result = dispatcher.dispatch({.id = "call_throw", .name = "question", .arguments_json = R"({"question":"Continue?"})"});
+    expect(result && !result->success && result->payload.status == ava::agent::ToolResultStatus::Error &&
+               result->result_text.find(standard_exception ? "question resolver failed" : "unknown exception") != std::string::npos,
+           "dispatcher converts executor exceptions into structured tool failures");
+  }
+}
+
+void test_dispatcher_context_metadata_owns_strings()
+{
+  auto metadata_result = ava::agent::ToolDispatcher::tool_metadata(ava::tools::ToolContext{});
+  if (!ava::tests::require(metadata_result.has_value(), metadata_result ? "metadata fixture composes" : metadata_result.error().format()))
+    return;
+  auto metadata = std::move(*metadata_result);
+  static_assert(std::is_same_v<typename decltype(metadata)::value_type, ava::agent::RegisteredToolMetadata>);
+  auto const read = std::ranges::find_if(metadata, [](auto const& tool) { return tool.name == "read_file"; });
+  expect(read != metadata.end() && read->schema_json.find("read_file") != std::string::npos && !read->description.empty(),
+         "context metadata owns its strings after the temporary registry is destroyed");
+}
+
+void test_dispatcher_composition_errors_remain_errors()
+{
+  ava::tools::ToolContext context;
+  context.include_plugin_tools = false;
+  context.exact_builtin_tool_names = std::vector<std::string>{"missing_builtin"};
+  context.session_mcp_config = std::make_shared<ava::mcp::McpConfig const>();
+  auto registry = ava::agent::compose_tool_registry(context, {});
+  auto dispatcher = ava::agent::ToolDispatcher::create_strict(context);
+  auto schemas = ava::agent::ToolDispatcher::compose_tool_schemas_json(context);
+  auto metadata = ava::agent::ToolDispatcher::tool_metadata(context);
+  auto const reports_missing_builtin = [](auto const& result) {
+    return !result && result.error().category() == ava::core::ErrorCategory::InvalidArgument &&
+           result.error().message() == "requested built-in tool is unavailable" && result.error().format().find("missing_builtin") != std::string::npos;
+  };
+  expect(reports_missing_builtin(registry) && reports_missing_builtin(dispatcher) && reports_missing_builtin(schemas) && reports_missing_builtin(metadata),
+         "composition, dispatcher, schema and metadata APIs preserve unavailable-tool errors instead of returning empty registries");
+
+  context.exact_builtin_tool_names = std::vector<std::string>{};
+  auto empty_dispatcher = ava::agent::ToolDispatcher::create_strict(context);
+  auto empty_schemas = ava::agent::ToolDispatcher::compose_tool_schemas_json(context);
+  auto empty_metadata = ava::agent::ToolDispatcher::tool_metadata(context);
+  expect(empty_dispatcher && empty_dispatcher->registered_tool_metadata().empty() && empty_schemas && empty_schemas->empty() && empty_metadata &&
+             empty_metadata->empty(),
+         "an intentionally empty composition remains a successful result");
+
+  context.session_mcp_config.reset();
+  auto missing_config = ava::agent::ToolDispatcher::compose_tool_schemas_json(context);
+  expect(!missing_config && missing_config.error().message() == "exact tool composition requires an immutable session MCP configuration",
+         "schema composition preserves missing immutable-session configuration errors");
 }
 
 void test_dispatcher_schemas_and_registry()
@@ -1344,7 +1507,7 @@ void test_task_persistent_deny_preflight_blocks_runner()
   int resolver_prompts = 0;
   int runner_invocations = 0;
   std::vector<ava::tools::PermissionAuditEvent> audits;
-  ava::agent::ToolDispatcher dispatcher(
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace,
                               .permission_resolver = [&resolver_prompts](ava::permissions::PermissionPrompt const&)
                                   -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -1361,6 +1524,9 @@ void test_task_persistent_deny_preflight_blocks_runner()
             ++runner_invocations;
             return ava::agent::TaskSubagentResult{};
           }});
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
 
   auto result = dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "task_persistent_deny", .name = "task", .arguments_json = R"({"description":"blocked","prompt":"do not run","subagent_type":"general"})"});
@@ -1402,7 +1568,11 @@ void test_task_mode_and_job_tool_controls()
                                                   .tool_iterations = 0};
           },
       .subagents = {ava::agent::AgentDefinition{.name = "general", .description = "general", .system_prompt = "general", .max_tool_iterations = 7}}};
-  ava::agent::ToolDispatcher task_dispatcher(task_context, task_services);
+  auto task_dispatcher_result = ava::agent::ToolDispatcher::create_strict(task_context, task_services);
+  if (!ava::tests::require(task_dispatcher_result.has_value(),
+                           task_dispatcher_result ? "dispatcher fixture composes" : task_dispatcher_result.error().format()))
+    return;
+  auto& task_dispatcher = *task_dispatcher_result;
   auto preferred = task_dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "task_mode", .name = "task", .arguments_json = R"({"description":"mode","prompt":"run","subagent_type":"general","mode":"background"})"});
   expect(preferred && preferred->success && captured_background, "task prefers explicit background mode while preserving the runner contract");
@@ -1457,7 +1627,11 @@ void test_task_mode_and_job_tool_controls()
       },
       .subagent_launch = {.sink = [&unknown_launches](ava::agent::SubagentLaunchNotification const&) { ++unknown_launches; }},
       .subagents = {ava::agent::AgentDefinition{.name = "general", .description = "general", .system_prompt = "general"}}};
-  ava::agent::ToolDispatcher unknown_dispatcher(unknown_context, unknown_services);
+  auto unknown_dispatcher_result = ava::agent::ToolDispatcher::create_strict(unknown_context, unknown_services);
+  if (!ava::tests::require(unknown_dispatcher_result.has_value(),
+                           unknown_dispatcher_result ? "dispatcher fixture composes" : unknown_dispatcher_result.error().format()))
+    return;
+  auto& unknown_dispatcher = *unknown_dispatcher_result;
   auto typo_iterations = unknown_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "task_typo_iterations",
                                    .name = "task",
@@ -1522,8 +1696,11 @@ void test_task_mode_and_job_tool_controls()
     expect(state->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return state->started; }), "job dispatcher worker reaches running state");
   }
   auto const job_id = started->job.identity.job_id;
-  ava::agent::ToolDispatcher job_dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "owner"},
-                                            ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  auto job_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "owner"},
+                                                                         ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  if (!ava::tests::require(job_dispatcher_result.has_value(), job_dispatcher_result ? "dispatcher fixture composes" : job_dispatcher_result.error().format()))
+    return;
+  auto& job_dispatcher = *job_dispatcher_result;
   auto list = job_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "job_list", .name = "job", .arguments_json = R"({"action":"list"})"});
   auto status = job_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "job_status", .name = "job", .arguments_json = "{\"action\":\"status\",\"job_id\":\"" + job_id + "\"}"});
@@ -1545,8 +1722,11 @@ void test_task_mode_and_job_tool_controls()
              timed->result_text.find("MODEL_JOB_SENTINEL") == std::string::npos && not_ready->result_text.find("REASONING_JOB_SENTINEL") == std::string::npos,
          "job tool shares bounded snapshots, strict parsing, timeout snapshots, and stable not-ready status");
 
-  ava::agent::ToolDispatcher other_owner(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "other"},
-                                         ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  auto other_owner_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "other"},
+                                                                      ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  if (!ava::tests::require(other_owner_result.has_value(), other_owner_result ? "dispatcher fixture composes" : other_owner_result.error().format()))
+    return;
+  auto& other_owner = *other_owner_result;
   auto hidden = other_owner.dispatch(
       ava::agent::ProviderToolCall{.id = "job_hidden", .name = "job", .arguments_json = "{\"action\":\"status\",\"job_id\":\"" + job_id + "\"}"});
   expect(hidden && !hidden->success && hidden->result_text.find("not_found") != std::string::npos, "job tool maps owner mismatch to NotFound");
@@ -1644,15 +1824,19 @@ void exercise_job_wait_parent_cancellation_keeps_background_running(std::filesys
     expect(state->changed.wait_until(lock, ava::tests::now_plus_seconds(3), [&] { return state->started; }), "independent background worker starts");
   }
   auto const job_id = started->job.identity.job_id;
-  ava::agent::ToolDispatcher deadline_dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "wait-owner"},
-                                                 ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  auto deadline_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{.workspace_dir = workspace, .session_id = "wait-owner"},
+                                                                              ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  if (!ava::tests::require(deadline_dispatcher_result.has_value(),
+                           deadline_dispatcher_result ? "dispatcher fixture composes" : deadline_dispatcher_result.error().format()))
+    return;
+  auto& deadline_dispatcher = *deadline_dispatcher_result;
   auto timed_out = deadline_dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "sliced_deadline_wait", .name = "job", .arguments_json = "{\"action\":\"wait\",\"job_id\":\"" + job_id + "\",\"timeout_ms\":125}"});
   expect(timed_out && timed_out->success && timed_out->result_text.find("\"timed_out\":true") != std::string::npos,
          "job wait reports the overall deadline expiring while its background worker remains blocked");
   std::atomic_bool cancel_requested = false;
   auto const deadline = ava::tests::now_plus_seconds(5);
-  ava::agent::ToolDispatcher dispatcher(
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace,
                               .cancel_requested =
                                   [&] {
@@ -1665,6 +1849,9 @@ void exercise_job_wait_parent_cancellation_keeps_background_running(std::filesys
                                   },
                               .session_id = "wait-owner"},
       ava::agent::ToolDispatchServices{.subagent_coordinator = coordinator});
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto waiting = std::async(std::launch::async, [&] {
     auto result = dispatcher.dispatch(ava::agent::ProviderToolCall{
         .id = "parent_long_wait", .name = "job", .arguments_json = "{\"action\":\"wait\",\"job_id\":\"" + job_id + "\",\"timeout_ms\":30000}"});
@@ -1756,7 +1943,7 @@ void test_empty_worker_services_disable_interactive_tools()
                                               .final_text = "done",
                                               .stop_reason = {}};
       }};
-  ava::agent::ToolDispatcher const dispatcher(
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(
       ava::tools::ToolContext{.workspace_dir = workspace,
                               .mode = ava::agent::Mode::Build,
                               .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -1764,6 +1951,9 @@ void test_empty_worker_services_disable_interactive_tools()
                               },
                               .session_id = "owner"},
       owned_services);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
 
   auto owned_question =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "owned_question", .name = "question", .arguments_json = R"({"question":"Ready?"})"});
@@ -1795,7 +1985,10 @@ void test_tool_dispatcher_plan_mode_denies_mutation()
   auto const workspace = root / "workspace";
   std::filesystem::create_directories(workspace);
 
-  ava::agent::ToolDispatcher const dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Plan});
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::agent::Mode::Plan});
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
   auto denied = dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_write", .name = "write_file", .arguments_json = "{\"path\":\"main.cpp\",\"content\":\"bad\"}"});
   expect(denied && !denied->success && denied->result_text.find("permission_denied") != std::string::npos &&
@@ -1849,7 +2042,10 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
                           .request_id = "request-exact",
                           .correlation_id = "correlation-exact",
                           .sink = [&notifications](ava::agent::SubagentLaunchNotification const& notification) { notifications.push_back(notification); }}};
-  ava::agent::ToolDispatcher dispatcher(allow_context, services);
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(allow_context, services);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto valid = dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "backend-call-exact", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
   expect(valid && valid->success && runs == 1 && notifications.size() == 1 && notifications.front().tool_call_id == "backend-call-exact" &&
@@ -1861,7 +2057,10 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "malformed", .name = "task", .arguments_json = R"({"description":"missing fields"})"});
   auto similar = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "similar", .name = "task_similar", .arguments_json = "{}"});
   auto job = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "job", .name = "job", .arguments_json = R"({"action":"list"})"});
-  ava::agent::ToolDispatcher excluded(allow_context, services, ava::agent::ToolVisibilityOptions{.excluded_tools = {"task"}});
+  auto excluded_result = ava::agent::ToolDispatcher::create_strict(allow_context, services, ava::agent::ToolVisibilityOptions{.excluded_tools = {"task"}});
+  if (!ava::tests::require(excluded_result.has_value(), excluded_result ? "dispatcher fixture composes" : excluded_result.error().format()))
+    return;
+  auto& excluded = *excluded_result;
   auto excluded_task = excluded.dispatch(
       ava::agent::ProviderToolCall{.id = "excluded", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
   expect(malformed_task && !malformed_task->success && similar && !similar->success && job && !job->success && excluded_task && !excluded_task->success &&
@@ -1874,7 +2073,11 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
     ++preflights;
     return ava::permissions::PermissionResolution::Allow;
   };
-  ava::agent::ToolDispatcher checked_dispatcher(checked_context, services);
+  auto checked_dispatcher_result = ava::agent::ToolDispatcher::create_strict(checked_context, services);
+  if (!ava::tests::require(checked_dispatcher_result.has_value(),
+                           checked_dispatcher_result ? "dispatcher fixture composes" : checked_dispatcher_result.error().format()))
+    return;
+  auto& checked_dispatcher = *checked_dispatcher_result;
   for (auto const* field : {"task_id", "command"})
   {
     for (auto const* value : {"null", "true", "42", "[]", "{}"})
@@ -1896,7 +2099,11 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
                                        }};
   auto denied_services = services;
   denied_services.subagent_launch.sink = [&](auto const&) { ++denied_notifications; };
-  ava::agent::ToolDispatcher denied_dispatcher(deny_context, denied_services);
+  auto denied_dispatcher_result = ava::agent::ToolDispatcher::create_strict(deny_context, denied_services);
+  if (!ava::tests::require(denied_dispatcher_result.has_value(),
+                           denied_dispatcher_result ? "dispatcher fixture composes" : denied_dispatcher_result.error().format()))
+    return;
+  auto& denied_dispatcher = *denied_dispatcher_result;
   auto denied = denied_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "denied", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
 
@@ -1909,7 +2116,11 @@ void test_subagent_launch_display_normalization_and_validated_task_callback()
     ++failed_notifications;
     throw std::runtime_error("private sink failure");
   };
-  ava::agent::ToolDispatcher failed_dispatcher(allow_context, failed_services);
+  auto failed_dispatcher_result = ava::agent::ToolDispatcher::create_strict(allow_context, failed_services);
+  if (!ava::tests::require(failed_dispatcher_result.has_value(),
+                           failed_dispatcher_result ? "dispatcher fixture composes" : failed_dispatcher_result.error().format()))
+    return;
+  auto& failed_dispatcher = *failed_dispatcher_result;
   auto failed = failed_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "failed", .name = "task", .arguments_json = R"({"description":"work","prompt":"do it","subagent_type":"general"})"});
   expect(denied && !denied->success && denied_notifications == 1 && failed && !failed->success && failed_notifications == 1 && runs == 1,
@@ -1926,7 +2137,7 @@ void test_permission_denial_guidance_provider_only_channel()
 
   constexpr char const* kGuidance = "stay on the sealed workspace path";
   std::vector<ava::tools::PermissionAuditEvent> audits;
-  ava::agent::ToolDispatcher const dispatcher(ava::tools::ToolContext{
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
       .permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -1938,6 +2149,9 @@ void test_permission_denial_guidance_provider_only_channel()
         audits.push_back(event);
         return {};
       }});
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
 
   auto const path_args = std::string("{\"path\":\"") + ava::core::json::escape(outside.string()) + "\"}";
   auto denied = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_guided_read", .name = "read_file", .arguments_json = path_args});
@@ -2044,7 +2258,7 @@ void test_permission_denial_guidance_provider_only_channel()
            "ACP session update content built from the timeline stays guidance-free");
   }
 
-  ava::agent::ToolDispatcher const forged_dispatcher(ava::tools::ToolContext{
+  auto const forged_dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
       .workspace_dir = workspace,
       .mode = ava::agent::Mode::Build,
       .permission_resolver = [](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -2052,6 +2266,10 @@ void test_permission_denial_guidance_provider_only_channel()
         denied_decision.user_guidance = "evil\nforged\x01";
         return denied_decision;
       }});
+  if (!ava::tests::require(forged_dispatcher_result.has_value(),
+                           forged_dispatcher_result ? "dispatcher fixture composes" : forged_dispatcher_result.error().format()))
+    return;
+  auto const& forged_dispatcher = *forged_dispatcher_result;
   auto forged = forged_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_forged", .name = "read_file", .arguments_json = path_args});
   expect(forged && !forged->success && forged->provider_user_guidance.empty() && forged->result_text.find("evil") == std::string::npos,
          "invalid forged capture guidance is omitted fail-closed");
@@ -2099,11 +2317,14 @@ void test_apply_patch_rejects_symlink_targets()
   };
   for (bool const secure_mode : {true, false})
   {
-    ava::agent::ToolDispatcher const dispatcher(ava::tools::ToolContext{
+    auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{
         .workspace_dir = workspace,
         .mode = ava::agent::Mode::Build,
         .secure_workspace = secure_mode ? *secure : nullptr,
     });
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto const& dispatcher = *dispatcher_result;
     auto patched = dispatcher.dispatch(ava::agent::ProviderToolCall{
         .id = "call_patch_symlink_target",
         .name = "apply_patch",
@@ -2149,6 +2370,10 @@ void test_mixed_patch_reports_all_committed_paths()
   expect(secure.has_value(), "mixed patch fixture opens its secure workspace");
   if (!secure)
     return;
+  auto anchors = ava::core::AnchorSet::open({workspace});
+  expect(anchors.has_value(), "mixed patch fixture opens explicit authority for approved external reads");
+  if (!anchors)
+    return;
   bool sabotaged = false;
   ava::tools::ToolContext context{.workspace_dir = workspace,
                                   .permission_resolver = [](auto const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
@@ -2174,7 +2399,17 @@ void test_mixed_patch_reports_all_committed_paths()
                                         return false;
                                       },
                                   .secure_workspace = *secure};
-  ava::agent::ToolDispatcher const dispatcher(context);
+  // External reads require AnchorSet authority even though their later patch
+  // writes still use the non-strict pathname staging/commit path.
+  context.anchor_set = *anchors;
+  auto outside_read = ava::tools::read_file(context, first);
+  expect(outside_read && outside_read->content == "old", "mixed patch fixture authorizes its external read before exercising partial commit");
+  if (!outside_read)
+    return;
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
   std::string edits = "{\"edits\":[";
   for (auto const& path : {inside, first, second})
   {
@@ -2210,6 +2445,9 @@ void run_agent_tool_dispatcher_tests()
                           {"typed error canceled", typed.payload.status == ava::agent::ToolResultStatus::Canceled}});
   test_tool_dispatcher_plugin_tool_inclusion_control();
   test_tool_dispatcher();
+  test_dispatcher_contains_executor_exceptions();
+  test_dispatcher_context_metadata_owns_strings();
+  test_dispatcher_composition_errors_remain_errors();
   test_task_persistent_deny_preflight_blocks_runner();
   test_subagent_launch_display_normalization_and_validated_task_callback();
   test_task_mode_and_job_tool_controls();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/core/result.h"
 
 #include <chrono>
@@ -147,6 +148,8 @@ class BackgroundJobRegistry final
   std::condition_variable changed_;
   BackgroundJobRegistryOptions options_;
   bool accepting_ = true;
+  // Waiters and joiners retain records after unlocking the map or pruning it.
+  // Workers borrow the registry; shutdown joins them before member destruction.
   std::unordered_map<std::string, std::shared_ptr<JobRecord>> jobs_;
 
   // BackgroundJobRegistry owns synchronization primitives (mutex, condition

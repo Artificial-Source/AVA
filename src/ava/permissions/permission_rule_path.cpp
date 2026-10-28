@@ -428,7 +428,11 @@ ava::core::Result<RuleLock> acquire_rule_lock(std::filesystem::path const& file_
 
 namespace ava::permissions {
 
-using namespace permission_rules_internal;
+using permission_rules_internal::append_protected_rule_path;
+using permission_rules_internal::paths_refer_to_same_file;
+using permission_rules_internal::protected_rule_paths;
+using permission_rules_internal::protected_rule_paths_mutex;
+using permission_rules_internal::workspace_rules_key;
 
 std::filesystem::path enforceable_permission_rules_file(PermissionRuleStore const& store, PermissionRuleScope scope)
 {

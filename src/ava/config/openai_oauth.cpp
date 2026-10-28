@@ -10,6 +10,7 @@
 #include <charconv>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <span>
 #include <utility>
@@ -255,6 +256,8 @@ std::string_view trim_ascii(std::string_view value)
 
 bool is_complete_json_object(std::string_view value)
 {
+  if (!ava::core::json::is_valid_object(value))
+    return false;
   value = trim_ascii(value);
   if (value.empty() || value.front() != '{')
     return false;
@@ -356,6 +359,20 @@ ava::core::Result<OpenAICredential> parse_openai_oauth_token_response(std::strin
   auto account_id = token_response_account_id(body, *access);
   if (!account_id && !account_id_fallback.empty())
     account_id = std::string(account_id_fallback);
+  // Validate the timestamp before token_response_expiry performs signed arithmetic.
+  if (ava::core::json::field_value_start(body, "expires_at"))
+  {
+    auto const expires_at = ava::core::json::integer_field(body, "expires_at");
+    if (!expires_at || *expires_at <= 0)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "OpenAI OAuth response included an invalid expires_at"));
+  }
+  else
+  {
+    auto const expires_in =
+        ava::core::json::field_value_start(body, "expires_in") ? ava::core::json::integer_field(body, "expires_in") : std::optional<long long>(3600);
+    if (!expires_in || *expires_in <= 0 || now_seconds > std::numeric_limits<long long>::max() - *expires_in)
+      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "OpenAI OAuth response included an invalid expires_in"));
+  }
 
   return OpenAICredential{.type = OpenAICredentialType::OAuth,
                           .access_token = *access,
@@ -372,7 +389,7 @@ ava::core::Result<ava::http::HttpResponse> post_openai_oauth_token_form(std::str
                                                         .headers = {{"Content-Type", "application/x-www-form-urlencoded"}},
                                                         .body = std::move(body),
                                                         .timeout_ms = 60000,
-                                                        .follow_redirects = true,
+                                                        .follow_redirects = false,
                                                         .include_response_headers = false,
                                                         .resolve_hosts = {}});
   if (!response)
@@ -541,7 +558,7 @@ ava::core::Result<OpenAIOAuthDeviceAuthorization> start_openai_oauth_device_auth
                                                         .headers = {{"Content-Type", "application/json"}, {"User-Agent", openai_oauth_user_agent()}},
                                                         .body = "{\"client_id\":\"" + ava::core::json::escape(kClientId) + "\"}",
                                                         .timeout_ms = 60000,
-                                                        .follow_redirects = true,
+                                                        .follow_redirects = false,
                                                         .include_response_headers = false,
                                                         .resolve_hosts = {}});
   if (!response)
@@ -584,7 +601,7 @@ ava::core::Result<std::optional<OpenAICredential>> poll_openai_oauth_device_auth
                                                         .headers = {{"Content-Type", "application/json"}, {"User-Agent", openai_oauth_user_agent()}},
                                                         .body = std::move(body),
                                                         .timeout_ms = 60000,
-                                                        .follow_redirects = true,
+                                                        .follow_redirects = false,
                                                         .include_response_headers = false,
                                                         .resolve_hosts = {}});
   if (!response)

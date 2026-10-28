@@ -2,7 +2,6 @@
 #include "ava/permissions/permission_rules_internal.h"
 #include "ava/core/fd_io.h"
 
-#include <array>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -183,28 +182,20 @@ ava::core::Result<std::optional<std::string>> read_rules_text_if_exists(RuleDire
     return std::unexpected(std::move(error));
   }
 
-  std::string content;
-  std::array<char, 4096> buffer{};
-  while (true)
+  auto content = ava::core::read_descriptor_bounded(fd.get(), kMaxPermissionRulesFileBytes);
+  if (!content)
   {
-    auto const bytes_read = ::read(fd.get(), buffer.data(), buffer.size());
-    if (bytes_read == 0)
-      break;
-    if (bytes_read < 0)
-    {
-      auto error = rule_file_error(ava::core::ErrorCategory::Io, "failed while reading permission rules file", path);
-      error.with_context("cause", errno_message());
-      return std::unexpected(std::move(error));
-    }
-    content.append(buffer.data(), static_cast<std::size_t>(bytes_read));
-    if (content.size() > kMaxPermissionRulesFileBytes)
+    if (content.error() == EFBIG)
     {
       auto error = rule_file_error(ava::core::ErrorCategory::Io, "permission rules file is too large", path);
       error.with_context("max_bytes", std::to_string(kMaxPermissionRulesFileBytes));
       return std::unexpected(std::move(error));
     }
+    auto error = rule_file_error(ava::core::ErrorCategory::Io, "failed while reading permission rules file", path);
+    error.with_context("cause", errno_message(content.error()));
+    return std::unexpected(std::move(error));
   }
-  return content;
+  return std::move(*content);
 }
 ava::core::Result<std::vector<PersistentPermissionRule>> load_scope_rules(PermissionRuleStore const& store, PermissionRuleScope scope,
                                                                           RuleDirectory const* locked_directory = nullptr)
@@ -237,7 +228,15 @@ ava::core::Result<std::vector<PersistentPermissionRule>> load_scope_rules(Permis
 
 namespace ava::permissions {
 
-using namespace permission_rules_internal;
+using permission_rules_internal::acquire_rule_lock;
+using permission_rules_internal::contains_legacy_command_allow;
+using permission_rules_internal::load_scope_rules;
+using permission_rules_internal::rule_from_draft;
+using permission_rules_internal::rule_parse_error;
+using permission_rules_internal::rules_file_json;
+using permission_rules_internal::rules_file_path;
+using permission_rules_internal::valid_identifier;
+using permission_rules_internal::write_rules_file_atomic;
 
 ava::core::Result<std::vector<PersistentPermissionRule>> load_persistent_permission_rules(PermissionRuleStore const& store)
 {

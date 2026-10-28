@@ -24,6 +24,7 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include "ava/process/native_child_reaper.h"
 #include "ava/core/UniqueFd.h"
 
 #include <signal.h>
@@ -260,6 +261,7 @@ struct Record
   bool sentinel_observed = false;
   bool leader_reaped = false;
   bool sentinel_reaped = false;
+  std::unique_ptr<NativeChildCleanup> deferred_cleanup;
 #endif
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -294,6 +296,7 @@ struct SupervisorState
   bool stop_monitor = false;
   bool monitor_joined = false;
 #if !defined(_WIN32)
+  NativeChildReaper child_reaper;
   MonitorBackendMode monitor_backend_mode = MonitorBackendMode::Automatic;
   bool pidfd_runtime_unavailable = false;
   std::uint64_t next_monitor_generation = 1;
@@ -396,6 +399,7 @@ struct GateReleaseDecision
 [[nodiscard]] ava::core::Result<Pipe> make_cloexec_pipe();
 [[nodiscard]] ava::core::VoidResult set_nonblocking(int descriptor);
 [[nodiscard]] ava::core::Result<bool> wait_descriptor(int descriptor, short events, ProcessDeadline deadline);
+// This helper is also used after fork and performs no allocation or locking.
 // Write all `size` bytes from `data` to `descriptor`, retrying interrupted writes.
 //
 // Returns false when a write fails or makes no progress. AVA's process-wide signal policy keeps SIGPIPE ignored and blocked,
@@ -403,12 +407,9 @@ struct GateReleaseDecision
 [[nodiscard]] bool write_all_to_descriptor(int descriptor, void const* data, std::size_t size) noexcept;
 [[nodiscard]] pid_t waitpid_retry(pid_t process, int* status, int options) noexcept;
 [[nodiscard]] int waitid_retry(pid_t process, siginfo_t* information, int options) noexcept;
-[[nodiscard]] bool exact_provisional_cleanup(pid_t leader, pid_t sentinel, ProcessDeadline deadline) noexcept;
+[[nodiscard]] bool exact_provisional_cleanup(NativeChildReaper& reaper, std::unique_ptr<NativeChildCleanup> cleanup, pid_t leader, pid_t sentinel,
+                                             ProcessDeadline deadline) noexcept;
 [[nodiscard]] ssize_t child_read_retry(int descriptor, void* data, std::size_t size) noexcept;
-[[nodiscard]] bool child_write_all(int descriptor, void const* data, std::size_t size) noexcept;
-void close_nonstandard_descriptors(int preserved, int maximum) noexcept;
-void close_nonstandard_descriptors_except(std::span<int const> preserved, int maximum) noexcept;
-[[nodiscard]] int descriptor_limit() noexcept;
 
 void observe_status(Record& record, siginfo_t const& information) noexcept;
 [[nodiscard]] bool observe_member(pid_t process, bool& observed, Record& record, bool leader, bool detect_stops = true) noexcept;
@@ -472,7 +473,10 @@ struct AdoptionGate::Impl
   detail::Pipe containment_control;
   std::optional<detail::Pipe> sentinel_status;
   std::optional<detail::Pipe> sentinel_control;
-  int maximum_descriptor = 4096;
+  // Reserve the slot before fork so a child-side reopen cannot reuse a
+  // caller-owned descriptor closed by an atfork handler.
+  ava::core::UniqueFd descriptor_directory;
+  std::unique_ptr<detail::NativeChildCleanup> deferred_cleanup = std::make_unique<detail::NativeChildCleanup>();
   pid_t leader = -1;
   pid_t sentinel = -1;
 #endif

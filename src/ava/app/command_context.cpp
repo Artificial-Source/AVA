@@ -7,15 +7,14 @@
 #include "ava/app/runtime/Session.h"
 #include "ava/session/Stats.h"
 #include "ava/context/context_loader.h"
+#include "ava/context/markdown_resource.h"
 #include "ava/lsp/configured_provider.h"
 #include "ava/core/fingerprint.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -68,22 +67,12 @@ std::string context_file_status(std::filesystem::path const& path, std::size_t l
   if (current_bytes != loaded_bytes)
     return "status=changed current_bytes=" + std::to_string(current_bytes);
 
-  std::ifstream file(path, std::ios::binary);
-  if (!file)
-    return "status=unreadable cause=open_failed";
-
-  std::string content;
-  content.reserve(loaded_bytes);
-  std::array<char, 4096> buffer{};
-  while (file)
-  {
-    file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    if (file.gcount() > 0)
-      content.append(buffer.data(), static_cast<std::size_t>(file.gcount()));
-  }
-  if (!file.eof() && file.fail())
-    return "status=unreadable cause=read_failed";
-  if (ava::core::content_fingerprint(content) == loaded_fingerprint)
+  // The status checks are only a display fast path. Revalidate the opened file
+  // and bound actual reads in case the path is replaced or grows meanwhile.
+  auto content = ava::context::read_resource_file(path, {.max_bytes = loaded_bytes, .resource_description = "context freshness file"});
+  if (!content)
+    return "status=unreadable cause=" + sanitize_inline_text(content.error().format());
+  if (ava::core::content_fingerprint(*content) == loaded_fingerprint)
     return "status=current current_bytes=" + std::to_string(current_bytes);
   return "status=changed current_bytes=" + std::to_string(current_bytes);
 }

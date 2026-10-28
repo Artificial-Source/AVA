@@ -113,7 +113,6 @@ class AcpSessionHost
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
 
-  [[nodiscard]] ava::core::VoidResult send_text_update(std::string_view kind, std::string_view text, std::string_view message_id = {}) const;
   [[nodiscard]] RequestResult finish_prompt(std::uint64_t reservation, RequestResult result);
   [[nodiscard]] bool prompt_cancel_pending(std::uint64_t reservation) const noexcept;
   [[nodiscard]] ava::permissions::PermissionResolver permission_resolver(std::uint64_t reservation, std::stop_token stop_token);
@@ -153,6 +152,8 @@ class AcpSessionRegistry
                                                                         std::shared_ptr<ava::mcp::McpConfig const> mcp_config);
   [[nodiscard]] std::weak_ptr<AcpSessionHost> find(std::string_view session_id) const;
   [[nodiscard]] ava::core::VoidResult close(std::string_view session_id);
+  // Concurrent uses of a cursor serialize; failed encoding/budget checks do not
+  // consume it. An individually oversized record rejects its page without skipping it.
   [[nodiscard]] ava::core::Result<std::string> list_json(std::optional<std::filesystem::path> const& cwd, std::optional<std::string> const& cursor,
                                                          ava::session::SessionCancelCallback cancel_requested = nullptr);
   void cancel(std::string_view session_id) noexcept;

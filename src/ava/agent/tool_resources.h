@@ -24,6 +24,7 @@ namespace ava::agent {
 struct ToolResourceOptions
 {
   bool include_project_resources = true;
+  // The session and each active dispatcher keep the same diagnostics service alive.
   std::shared_ptr<ava::lsp::DiagnosticsProvider> lsp_diagnostics_provider = nullptr;
   std::filesystem::path plugin_global_plugins_dir = {};
   std::filesystem::path plugin_project_plugins_dir = {};
@@ -32,6 +33,7 @@ struct ToolResourceOptions
   std::filesystem::path mcp_global_config_file = {};
   std::filesystem::path mcp_project_config_file = {};
   bool include_global_mcp_config = true;
+  // Immutable session configuration is retained by concurrent parent/child loops.
   std::shared_ptr<ava::mcp::McpConfig const> session_mcp_config = nullptr;
   std::vector<std::filesystem::path> skill_global_dirs = {};
   std::vector<std::filesystem::path> skill_project_dirs = {};

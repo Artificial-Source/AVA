@@ -1,7 +1,9 @@
 #include "sys.h"
 #include "ava/http/transport.h"
+#include "ava/provider/parser_budget.h"
 #include "ava/provider/provider.h"
 #include "ava/provider/provider_utils.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -25,14 +27,25 @@ class DefaultStreamParser final : public StreamParser
  public:
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> append(std::string_view chunk) override
   {
+    if (failed_)
+      return std::vector<StreamEvent>{};
+    if (chunk.size() > kMaxProviderSseBufferedBytes - pending_.size())
+    {
+      failed_ = true;
+      pending_.clear();
+      return std::vector<StreamEvent>{provider_parser_limit_event("provider")};
+    }
     pending_.append(chunk);
     return std::vector<StreamEvent>{};
   }
 
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> finish() override;
 
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
  private:
   std::string pending_;
+  bool failed_ = false;
 };
 
 std::string lower_copy(std::string_view value)
@@ -50,14 +63,6 @@ bool has_any(std::string_view haystack, std::initializer_list<std::string_view> 
       return true;
   }
   return false;
-}
-
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7f;
-  });
 }
 
 bool is_hex_string(std::string_view value)
@@ -119,9 +124,12 @@ ava::core::Result<std::vector<StreamEvent>> default_parse_response(ava::http::Ht
       error.with_context("retry_after", *retry_after);
     return std::unexpected(std::move(error));
   }
+  if (response.body.size() > kMaxProviderSseBufferedBytes)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "provider response parser limit exceeded"));
   if (stream)
   {
     std::vector<StreamEvent> events;
+    ProviderParserBudget budget;
     std::size_t line_start = 0;
     while (line_start <= response.body.size())
     {
@@ -132,6 +140,8 @@ ava::core::Result<std::vector<StreamEvent>> default_parse_response(ava::http::Ht
         line.remove_suffix(1);
       if (line.starts_with("data:"))
       {
+        if (!budget.record(line) || events.size() >= kMaxProviderParserEvents - 1)
+          return std::vector<StreamEvent>{provider_parser_limit_event("provider")};
         line.remove_prefix(5);
         if (!line.empty() && line.front() == ' ')
           line.remove_prefix(1);
@@ -164,7 +174,9 @@ ava::core::Result<std::vector<StreamEvent>> default_parse_response(ava::http::Ht
 
 ava::core::Result<std::vector<StreamEvent>> DefaultStreamParser::finish()
 {
-  return default_parse_response(ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = std::move(pending_)}, true);
+  if (std::exchange(failed_, false))
+    return std::vector<StreamEvent>{};
+  return default_parse_response(ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = std::exchange(pending_, {})}, true);
 }
 
 }  // namespace
@@ -372,7 +384,7 @@ bool request_has_image_parts(ProviderRequest const& request)
 
 bool valid_image_storage_path(std::string_view path)
 {
-  if (path.empty() || path.size() > kMaxImageStoragePathBytes || has_control_byte(path))
+  if (path.empty() || path.size() > kMaxImageStoragePathBytes || ava::core::has_c0_or_del(path))
     return false;
   if (!path.starts_with("attachments/"))
     return false;
@@ -415,7 +427,7 @@ ava::core::VoidResult validate_image_content_parts(ProviderRequest const& reques
       {
         return std::unexpected(image_part_error("image content requires user role", message_index, part_index));
       }
-      if (part.attachment_id.empty() || part.attachment_id.size() > kMaxImageAttachmentIdBytes || has_control_byte(part.attachment_id))
+      if (part.attachment_id.empty() || part.attachment_id.size() > kMaxImageAttachmentIdBytes || ava::core::has_c0_or_del(part.attachment_id))
       {
         return std::unexpected(image_part_error("image attachment id is invalid", message_index, part_index));
       }

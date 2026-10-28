@@ -30,11 +30,15 @@
 #include "ava/provider/provider_utils.h"
 #include "ava/context/context_loader.h"
 #include "ava/core/atomic_file.h"
+#include "ava/core/base64.h"
+#include "ava/core/hex.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/mode.h"
 #include "ava/core/path.h"
 #include "ava/core/process_args.h"
+#include "ava/core/sha256.h"
+#include "ava/core/text_escape.h"
 
 #include <algorithm>
 #include <array>
@@ -42,6 +46,8 @@
 #include <chrono>
 #include <climits>
 #include <csignal>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
@@ -50,8 +56,10 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -65,6 +73,81 @@
 extern char** environ;
 
 namespace {
+
+void test_core_sha256_known_answers()
+{
+  expect(ava::core::sha256_hex("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "SHA-256 empty-message vector");
+  expect(ava::core::sha256_hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA-256 NIST short-message vector");
+  expect(
+      ava::core::sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+      "SHA-256 NIST 56-byte vector uses a second padding block");
+  expect(ava::core::sha256_hex("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno"
+                               "ijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu") == "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1",
+         "SHA-256 NIST multiblock vector");
+  expect(ava::core::sha256_hex(std::string(1'000'000, 'a')) == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+         "SHA-256 NIST million-a vector with an exact block boundary");
+  std::array<std::uint8_t, 3> const bytes{0x61, 0x62, 0x63};
+  expect(ava::core::sha256(bytes) == ava::core::sha256("abc"), "SHA-256 byte spans and string views agree");
+  expect(bytes == std::array<std::uint8_t, 3>{0x61, 0x62, 0x63}, "SHA-256 leaves borrowed input unchanged");
+}
+
+void test_core_base64_known_answers()
+{
+  using ava::core::Base64Alphabet;
+  using ava::core::Base64Padding;
+  using ava::core::Base64TailBits;
+  std::array<std::string_view, 7> const plain{"", "f", "fo", "foo", "foob", "fooba", "foobar"};
+  std::array<std::string_view, 7> const encoded{"", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy"};
+  for (std::size_t index = 0; index < plain.size(); ++index)
+  {
+    expect(ava::core::base64_encode(plain[index]) == encoded[index], "base64 RFC 4648 encoding vector");
+    auto const decoded = ava::core::base64_decode(encoded[index]);
+    expect(decoded && *decoded == plain[index], "base64 RFC 4648 decoding vector");
+    auto unpadded = encoded[index];
+    while (unpadded.ends_with('='))
+      unpadded.remove_suffix(1);
+    expect(ava::core::base64_encode(plain[index], Base64Alphabet::Url, Base64Padding::Omitted) == unpadded, "base64url RFC 4648 encoding without padding");
+    auto const url_decoded = ava::core::base64_decode(unpadded, Base64Alphabet::Url, Base64Padding::Omitted);
+    expect(url_decoded && *url_decoded == plain[index], "base64url RFC 4648 decoding without padding");
+  }
+  std::string const binary("\xfb\xff", 2);
+  expect(ava::core::base64_encode(binary) == "+/8=", "standard base64 preserves high-bit bytes");
+  expect(ava::core::base64_encode(binary, Base64Alphabet::Url, Base64Padding::Omitted) == "-_8", "base64url selects the URL-safe alphabet");
+  expect(ava::core::base64_decode("-_8=", Base64Alphabet::Url) == std::optional<std::string>(binary), "base64url also supports required padding");
+  for (auto const invalid : {"A", "A===", "====", "=AAA", "AA=A", "Zg=", "Zg", "Zg==AAAA", "Zg==\n", " Zg==", "Zg==?", "-_8="})
+    expect(!ava::core::base64_decode(invalid), "standard base64 rejects invalid alphabet, length and padding");
+  expect(!ava::core::base64_decode("Zh==") && !ava::core::base64_decode("Zm9="), "canonical base64 rejects nonzero unused tail bits");
+  expect(ava::core::base64_decode("Zh==", Base64Alphabet::Standard, Base64Padding::Required, Base64TailBits::Unchecked) == std::optional<std::string>("f"),
+         "unchecked-tail policy retains tolerant decoding without accepting malformed padding");
+  expect(!ava::core::base64_decode("Zg==", Base64Alphabet::Url, Base64Padding::Omitted), "unpadded policy rejects padding");
+  expect(!ava::core::base64_decode("+/8", Base64Alphabet::Url, Base64Padding::Omitted), "base64url rejects the standard alphabet");
+  expect(!ava::core::base64_decode("Zh", Base64Alphabet::Url, Base64Padding::Omitted), "base64url validates unused tail bits");
+  expect(
+      ava::core::base64_decode("Zm8=", Base64Alphabet::Standard, Base64Padding::Required, Base64TailBits::Canonical, 2) == std::optional<std::string>("fo") &&
+          !ava::core::base64_decode("Zm8=", Base64Alphabet::Standard, Base64Padding::Required, Base64TailBits::Canonical, 1),
+      "base64 decoded byte cap accepts its exact boundary and rejects excess");
+}
+
+void test_core_hex_and_markup_escaping()
+{
+  for (unsigned value = 0; value < 256U; ++value)
+  {
+    char const ch = static_cast<char>(value);
+    int const expected = ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+    expect(ava::core::hex_digit_value(ch) == expected && ava::core::is_hex_digit(ch) == (expected >= 0),
+           "hex digits have exact ASCII semantics for every byte");
+  }
+  std::array<std::uint8_t, 6> const bytes{0x00, 0x01, 0x0f, 0x10, 0x80, 0xff};
+  expect(ava::core::hex_encode(bytes) == "00010f1080ff", "hex encoding preserves leading zeroes and lowercase fixed width");
+  expect(ava::core::hex_encode(std::span<std::byte const>{}).empty(), "empty hex input remains empty");
+  expect(ava::core::xml_escape("&<>\"'") == "&amp;&lt;&gt;&quot;&apos;", "XML escapes all five metacharacters");
+  expect(ava::core::html_escape("&<>\"'") == "&amp;&lt;&gt;&quot;&#39;", "HTML retains its distinct apostrophe entity");
+  expect(ava::core::xml_escape("&amp;") == "&amp;amp;", "escaping treats existing entities as literal text");
+  std::string const verbatim("a\0\n\t\xc3\xa9", 6);
+  expect(ava::core::xml_escape(verbatim) == verbatim && ava::core::html_escape(verbatim) == verbatim,
+         "markup escaping preserves NUL, whitespace and UTF-8 bytes");
+  expect(ava::core::xml_escape("").empty() && ava::core::html_escape("").empty(), "empty markup input remains empty");
+}
 
 void test_mode_parsing()
 {
@@ -323,6 +406,10 @@ void test_core_json_duplicate_keys_trailing_and_integer_bounds()
   }
   for (std::string_view const text : {"{\"n\":9223372036854775808}", "{\"n\":-9223372036854775809}", "{\"n\":999999999999999999999999999}"})
     expect(!integer_field(text, "n"), "core integer accessor rejects signed overflow");
+  for (std::string_view const text : {"{\"n\":1.5}", "{\"n\":1e3}", "{\"n\":01}", "{\"n\":-01}", "{\"n\":1oops}", "{\"n\":-}", "{\"n\":+1}"})
+    expect(!integer_field(text, "n"), "core integer accessor rejects non-integer or malformed numeric tokens");
+  expect(integer_field("{\"n\":-0}", "n") == 0 && integer_field("{\"n\":42 \t\r\n}", "n") == 42,
+         "core integer accessor accepts negative zero and JSON whitespace");
 }
 
 void write_test_file(std::filesystem::path const& path, std::string_view content)
@@ -540,6 +627,9 @@ void run_core_mode_tests()
 
 void run_core_json_permission_tests()
 {
+  test_core_sha256_known_answers();
+  test_core_base64_known_answers();
+  test_core_hex_and_markup_escaping();
   test_json_escape_control_characters();
   test_json_invalid_utf8_replacement();
   test_core_json_nesting_limit();

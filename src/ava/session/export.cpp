@@ -4,6 +4,7 @@
 #include "ava/session/record.h"
 #include "ava/session/validation.h"
 #include "ava/core/json.h"
+#include "ava/core/text_escape.h"
 
 #include <algorithm>
 #include <optional>
@@ -16,37 +17,6 @@ namespace {
 std::string json_string(std::string_view value)
 {
   return "\"" + ava::core::json::escape(value) + "\"";
-}
-
-std::string html_escape(std::string_view value)
-{
-  std::string escaped;
-  escaped.reserve(value.size());
-  for (char const ch : value)
-  {
-    switch (ch)
-    {
-      case '&':
-        escaped += "&amp;";
-        break;
-      case '<':
-        escaped += "&lt;";
-        break;
-      case '>':
-        escaped += "&gt;";
-        break;
-      case '"':
-        escaped += "&quot;";
-        break;
-      case '\'':
-        escaped += "&#39;";
-        break;
-      default:
-        escaped.push_back(ch);
-        break;
-    }
-  }
-  return escaped;
 }
 
 std::size_t longest_backtick_run(std::string_view text) noexcept
@@ -450,7 +420,7 @@ std::string format_projected_session_html(std::vector<SessionEntry> const& entri
   out += "<h1>AVA Session Export</h1>\n";
   out += "<div class=\"meta\">Generated from AVA JSONL session entries. Markdown content is escaped as text.</div>\n";
   out += "<pre>";
-  out += html_escape(markdown);
+  out += ava::core::html_escape(markdown);
   out += "</pre>\n";
   out += "</main>\n";
   out += "</body>\n";

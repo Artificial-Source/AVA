@@ -273,6 +273,7 @@ class RecordingTransport final : public ava::http::Transport
   {
   }
 
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     if (body_)

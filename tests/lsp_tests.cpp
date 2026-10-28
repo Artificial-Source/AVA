@@ -4,6 +4,7 @@
 #include "tests/support/session_test_support.h"
 #include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "ava/agent/tool_dispatcher.h"
 #include "ava/tools/file_tools.h"
 #include "ava/tools/lsp_tools.h"
@@ -16,6 +17,9 @@
 #include "ava/core/thread.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <span>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
@@ -32,6 +36,8 @@
 #include <vector>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -673,6 +679,71 @@ void test_lsp_manager_closed_standard_fds()
                                                                                    {"success", status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0}});
 }
 
+void test_lsp_manager_closes_descriptors_above_lowered_limit()
+{
+  auto const workspace = make_lsp_workspace("lsp-high-descriptor");
+  auto const executable = workspace / "bin" / "fake-lsp";
+  copy_fake_lsp_executable(executable);
+  struct stat metadata{};
+  if (!ava::tests::require(::stat(executable.c_str(), &metadata) == 0, "inspect descriptor-bound LSP fixture executable"))
+    return;
+  ava::lsp::ExecutableIdentity const identity{
+      .executable_path = executable,
+      .owner_uid = static_cast<std::uintmax_t>(metadata.st_uid),
+      .owner_gid = static_cast<std::uintmax_t>(metadata.st_gid),
+      .mode = static_cast<std::uintmax_t>(metadata.st_mode),
+      .link_count = static_cast<std::uintmax_t>(metadata.st_nlink),
+      .device = static_cast<std::uintmax_t>(metadata.st_dev),
+      .inode = static_cast<std::uintmax_t>(metadata.st_ino),
+      .size = static_cast<std::uintmax_t>(metadata.st_size),
+      .changed_seconds = static_cast<std::int64_t>(metadata.st_ctim.tv_sec),
+      .changed_nanoseconds = static_cast<std::int64_t>(metadata.st_ctim.tv_nsec),
+  };
+  ava::lsp::ServerConfig const config{
+      .argv = {executable.string()},
+      .workspace_root = workspace,
+      .anchor_set = lsp_anchors(workspace),
+      .process_cwd = workspace,
+      .startup_timeout = std::chrono::milliseconds(1000),
+      .request_timeout = std::chrono::milliseconds(1000),
+      .executable_identity = identity,
+  };
+  for (int const close_range_error : {0, ENOSYS, EPERM})
+  {
+    std::array<ava::tests::SyscallErrno, 1> const failures{{
+        {.number = SYS_close_range, .argument = std::nullopt, .error_number = close_range_error},
+    }};
+    // An empty filter exercises close_range; the other cases force enumeration.
+    auto const rules = std::span(failures).first(close_range_error == 0 ? 0 : 1);
+    auto const status = ava::tests::run_in_child_with_syscall_errno(rules, [&] {
+      std::array<int, 2> pipe{-1, -1};
+      if (::pipe2(pipe.data(), O_CLOEXEC | O_NONBLOCK) != 0)
+        return 1;
+      ava::core::UniqueFd reader(pipe[0]);
+      ava::core::UniqueFd writer(pipe[1]);
+      ava::core::UniqueFd high_writer(::fcntl(writer.get(), F_DUPFD, 256));
+      if (!high_writer)
+        return 2;
+      writer.reset();
+      rlimit const lowered{.rlim_cur = 64, .rlim_max = 64};
+      if (::setrlimit(RLIMIT_NOFILE, &lowered) != 0)
+        return 3;
+      auto client = ava::lsp::SubprocessLspClient::start(config);
+      if (!ava::tests::require(client.has_value(), client ? "descriptor-bound LSP started" : client.error().format()))
+        return 4;
+      high_writer.reset();
+      char byte{};
+      // A leaked high writer keeps this pipe open for the entire LSP lifetime.
+      if (::read(reader.get(), &byte, 1) != 0)
+        return 5;
+      auto diagnostics = (*client)->diagnostics(workspace / "main.cpp");
+      return diagnostics && diagnostics->size() == 1 && diagnostics->front().message == "fake diagnostic from LSP" ? 0 : 6;
+    });
+    static_cast<void>(ava::tests::expect_child_success(status, "LSP closes inherited high descriptors while retaining descriptor exec and stdio"));
+  }
+}
+
+
 void test_lsp_manager_malformed_symbols_error()
 {
   auto const workspace = make_lsp_workspace("lsp-malformed-symbols");
@@ -906,7 +977,11 @@ void test_lsp_manager_cancellation_after_server_receives_request()
       .workspace_dir = timeout_workspace,
       .cancel_requested = timeout_cancel,
       .lsp_diagnostics_provider = timeout_client ? std::shared_ptr<ava::lsp::DiagnosticsProvider>(*timeout_client) : nullptr};
-  ava::agent::ToolDispatcher const timeout_dispatcher(timeout_context);
+  auto const timeout_dispatcher_result = ava::agent::ToolDispatcher::create_strict(timeout_context);
+  if (!ava::tests::require(timeout_dispatcher_result.has_value(),
+                           timeout_dispatcher_result ? "dispatcher fixture composes" : timeout_dispatcher_result.error().format()))
+    return;
+  auto const& timeout_dispatcher = *timeout_dispatcher_result;
   auto timeout_dispatched = timeout_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_cancel_timeout", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
   auto const timeout_process = wait_for_process_marker_for_test(timeout_marker);
@@ -1102,6 +1177,46 @@ void test_lsp_manager_huge_response_caps()
                     : ava::core::Result<std::vector<ava::lsp::Diagnostic>>{std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "missing client"))};
   expect(!header_result && header_result.error().format().find("header exceeds size cap") != std::string::npos,
          "LSP manager rejects oversized response headers");
+
+  std::string const initialize_body = R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}})";
+  auto const valid_header = "Content-Length: " + std::to_string(initialize_body.size());
+  std::vector<std::string> const invalid_headers{
+      "X-" + valid_header,
+      valid_header + "garbage",
+      valid_header + "\r\n" + valid_header,
+      "Content-Length: 184467440737095516160",
+      "X-Padding: " + std::string(65526, 'x') + "\r\n" + valid_header,
+  };
+  for (auto const& header : invalid_headers)
+  {
+    auto rejected = ava::lsp::SubprocessLspClient::start(ava::lsp::ServerConfig{
+        .argv = {"/bin/sh", "-c", "printf '%s' '" + header + "\r\n\r\n" + initialize_body + "'; cat >/dev/null"},
+        .workspace_root = header_workspace,
+        .anchor_set = lsp_anchors(header_workspace),
+        .process_cwd = header_workspace,
+        .startup_timeout = std::chrono::milliseconds(1000),
+    });
+    expect(
+        !rejected && rejected.error().message().find("LSP response") != std::string::npos && rejected.error().message().find("timed out") == std::string::npos,
+        "LSP rejects prefixed, ambiguous, malformed, overflowing and oversized complete headers");
+  }
+
+  std::vector<std::string> const invalid_bodies{
+      R"({"jsonrpc":"2.0","id":1,"id":2,"result":{"capabilities":{}}})",
+      initialize_body + "trailing",
+      R"({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}},"extra":)" + std::string(130, '[') + "0" + std::string(130, ']') + "}",
+  };
+  for (auto const& body : invalid_bodies)
+  {
+    auto rejected = ava::lsp::SubprocessLspClient::start(ava::lsp::ServerConfig{
+        .argv = {"/bin/sh", "-c", "printf '%s' 'Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body + "'; cat >/dev/null"},
+        .workspace_root = header_workspace,
+        .anchor_set = lsp_anchors(header_workspace),
+        .process_cwd = header_workspace,
+        .startup_timeout = std::chrono::milliseconds(1000),
+    });
+    expect(!rejected && rejected.error().message().find("JSON") != std::string::npos, "LSP validates complete bounded JSON before extracting response fields");
+  }
 }
 
 void test_lsp_diagnostics_tool_and_dispatcher_json()
@@ -1218,7 +1333,10 @@ void test_lsp_dispatcher_preserves_safe_error_context_only()
 {
   auto const workspace = make_lsp_workspace("lsp-safe-error-context");
   ava::tools::ToolContext const context{.workspace_dir = workspace, .lsp_diagnostics_provider = std::make_shared<ContextualLspFailureProvider>()};
-  ava::agent::ToolDispatcher const dispatcher(context);
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
   auto dispatched =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_lsp_safe_context", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
   expect(
@@ -1255,7 +1373,11 @@ void test_lsp_dispatcher_bounds_provider_json()
          "lsp_diagnostics rejects oversized provider path arguments before JSON reflection can exceed the cap");
 
   ava::tools::ToolContext const symbol_context{.workspace_dir = workspace, .lsp_diagnostics_provider = std::make_shared<ManySymbolsProvider>(workspace)};
-  ava::agent::ToolDispatcher const symbol_dispatcher(symbol_context);
+  auto const symbol_dispatcher_result = ava::agent::ToolDispatcher::create_strict(symbol_context);
+  if (!ava::tests::require(symbol_dispatcher_result.has_value(),
+                           symbol_dispatcher_result ? "dispatcher fixture composes" : symbol_dispatcher_result.error().format()))
+    return;
+  auto const& symbol_dispatcher = *symbol_dispatcher_result;
   auto many_symbols = symbol_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_lsp_many_symbols", .name = "lsp_document_symbols", .arguments_json = "{\"path\":\"main.cpp\"}"});
   expect(many_symbols && many_symbols->success && many_symbols->result_text.size() <= 64 * 1024 &&
@@ -1290,7 +1412,10 @@ void test_lsp_configured_provider_loads_project_config_lazily()
                                                     : "configured LSP provider loads explicit project config: " + provider.error().format());
 
   ava::tools::ToolContext const context{.workspace_dir = workspace, .lsp_diagnostics_provider = provider ? *provider : nullptr};
-  auto schemas = ava::agent::ToolDispatcher::tool_schemas_json(context);
+  auto schemas_result = ava::agent::ToolDispatcher::compose_tool_schemas_json(context);
+  if (!ava::tests::require(schemas_result.has_value(), schemas_result ? "schema fixture composes" : schemas_result.error().format()))
+    return;
+  auto const& schemas = *schemas_result;
   bool saw_lsp_references = false;
   for (auto const& schema : schemas)
   {
@@ -1299,7 +1424,10 @@ void test_lsp_configured_provider_loads_project_config_lazily()
   }
   expect(saw_lsp_references, "configured LSP provider exposes LSP schemas without launching eagerly");
 
-  ava::agent::ToolDispatcher const dispatcher(context);
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
   auto references = dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "call_configured_refs", .name = "lsp_references", .arguments_json = "{\"path\":\"main.cpp\",\"line\":0,\"column\":4}"});
   expect(references && references->success && references->result_text.find("\"total_locations\":2") != std::string::npos,
@@ -1311,6 +1439,50 @@ void test_lsp_configured_provider_loads_project_config_lazily()
       ava::agent::ProviderToolCall{.id = "call_configured_no_match", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"README.md\"}"});
   expect(no_match && !no_match->success && no_match->result_text.find("LSP query failed") != std::string::npos,
          "configured LSP provider rejects unmatched file extensions through redacted tool error");
+}
+
+void test_lsp_configured_provider_reentrant_admission()
+{
+  auto const workspace = make_lsp_workspace("lsp-reentrant-admission");
+  std::filesystem::create_directories(workspace / ".ava");
+  {
+    std::ofstream config(workspace / ".ava" / "lsp.json");
+    config << "{\"version\":1,\"servers\":[{\"id\":\"fake\",\"argv\":[\"" << ava::core::json::escape(AVA_FAKE_LSP_SERVER_PATH)
+           << "\"],\"file_extensions\":[\".cpp\"]}]}";
+  }
+  std::shared_ptr<ava::lsp::DiagnosticsProvider> active;
+  int permission_calls = 0;
+  auto provider = ava::lsp::make_configured_lsp_provider({
+      .global_config_file = {},
+      .project_config_file = workspace / ".ava" / "lsp.json",
+      .workspace_root = workspace,
+      .anchor_set = lsp_anchors(workspace),
+      .permission_resolver = [&](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        ++permission_calls;
+        auto nested = active->diagnostics(workspace / "main.cpp");
+        expect(!nested && nested.error().format().find("startup is already in progress") != std::string::npos,
+               "a permission resolver can reenter the provider without deadlocking or launching the reserved key twice");
+        return ava::permissions::PermissionResolutionDecision{
+            permission_calls == 1 ? ava::permissions::PermissionResolution::Deny : ava::permissions::PermissionResolution::Allow, "test"};
+      },
+  });
+  if (!ava::tests::require(provider && *provider, "reentrant admission fixture creates provider"))
+    return;
+  active = *provider;
+  expect(!active->diagnostics(workspace / "main.cpp"), "permission denial rolls back in-flight admission");
+  bool startup_reentered = false;
+  auto started = active->diagnostics(workspace / "main.cpp", [&] {
+    if (!startup_reentered)
+    {
+      startup_reentered = true;
+      auto nested = active->diagnostics(workspace / "main.cpp");
+      expect(!nested && nested.error().format().find("startup is already in progress") != std::string::npos,
+             "startup cancellation callbacks run outside the client-cache lock with the launch still reserved");
+    }
+    return false;
+  });
+  expect(started && startup_reentered && permission_calls == 2, "a denied reservation is reusable and successful startup publishes one client");
+  expect(active->diagnostics(workspace / "main.cpp").has_value() && permission_calls == 2, "published client is reused without another launch prompt");
 }
 
 void test_lsp_configured_provider_launch_permission_cancel_and_deny()
@@ -1352,7 +1524,11 @@ void test_lsp_configured_provider_launch_permission_cancel_and_deny()
          "configured LSP direct query maps launch-permission cancel to canceled without launching");
 
   ava::tools::ToolContext const cancel_context{.workspace_dir = cancel_workspace, .lsp_diagnostics_provider = *cancel_provider};
-  ava::agent::ToolDispatcher const cancel_dispatcher(cancel_context);
+  auto const cancel_dispatcher_result = ava::agent::ToolDispatcher::create_strict(cancel_context);
+  if (!ava::tests::require(cancel_dispatcher_result.has_value(),
+                           cancel_dispatcher_result ? "dispatcher fixture composes" : cancel_dispatcher_result.error().format()))
+    return;
+  auto const& cancel_dispatcher = *cancel_dispatcher_result;
   auto canceled = cancel_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_lsp_launch_canceled", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
   expect(canceled && !canceled->success && canceled->payload.status == ava::agent::ToolResultStatus::Canceled &&
@@ -1425,7 +1601,10 @@ void test_lsp_configured_provider_loads_global_config_from_safe_cwd()
   expect(provider && *provider != nullptr, provider ? "configured LSP provider loads explicit global config"
                                                     : "configured LSP provider loads explicit global config: " + provider.error().format());
   ava::tools::ToolContext const context{.workspace_dir = workspace, .lsp_diagnostics_provider = provider ? *provider : nullptr};
-  ava::agent::ToolDispatcher const dispatcher(context);
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
   auto diagnostics =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_global_cwd", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
   expect(diagnostics && diagnostics->success, diagnostics ? "configured global LSP server returns diagnostics from safe cwd"
@@ -1455,7 +1634,11 @@ void test_lsp_configured_provider_timeout_defaults()
   });
   ava::tools::ToolContext const fallback_context{.workspace_dir = fallback_workspace,
                                                  .lsp_diagnostics_provider = fallback_provider ? *fallback_provider : nullptr};
-  ava::agent::ToolDispatcher const fallback_dispatcher(fallback_context);
+  auto const fallback_dispatcher_result = ava::agent::ToolDispatcher::create_strict(fallback_context);
+  if (!ava::tests::require(fallback_dispatcher_result.has_value(),
+                           fallback_dispatcher_result ? "dispatcher fixture composes" : fallback_dispatcher_result.error().format()))
+    return;
+  auto const& fallback_dispatcher = *fallback_dispatcher_result;
   auto fallback_result = fallback_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_lsp_startup_fallback", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
   expect(fallback_provider && fallback_result && !fallback_result->success && fallback_result->result_text.find("timeout_ms: 200") != std::string::npos &&
@@ -1482,7 +1665,11 @@ void test_lsp_configured_provider_timeout_defaults()
   });
   ava::tools::ToolContext const explicit_context{.workspace_dir = explicit_workspace,
                                                  .lsp_diagnostics_provider = explicit_provider ? *explicit_provider : nullptr};
-  ava::agent::ToolDispatcher const explicit_dispatcher(explicit_context);
+  auto const explicit_dispatcher_result = ava::agent::ToolDispatcher::create_strict(explicit_context);
+  if (!ava::tests::require(explicit_dispatcher_result.has_value(),
+                           explicit_dispatcher_result ? "dispatcher fixture composes" : explicit_dispatcher_result.error().format()))
+    return;
+  auto const& explicit_dispatcher = *explicit_dispatcher_result;
   auto explicit_result = explicit_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_lsp_startup_explicit", .name = "lsp_diagnostics", .arguments_json = "{\"path\":\"main.cpp\"}"});
   expect(explicit_provider && explicit_result && explicit_result->success && explicit_result->result_text.find("fake diagnostic from LSP") != std::string::npos,
@@ -1710,6 +1897,41 @@ ava::core::Result<std::shared_ptr<ava::lsp::DiagnosticsProvider>> make_root_cach
       },
       .builtin_discovery = builtin_discovery_for_test(bin),
   });
+}
+
+void test_lsp_inflight_reservations_enforce_capacity()
+{
+  auto const root = create_empty_root("lsp-reserved-capacity");
+  auto fixture = make_root_cache_provider_for_test(root);
+  if (!ava::tests::require(fixture && *fixture, "reserved-capacity fixture creates configured roots"))
+    return;
+  auto const workspace = root / "workspace";
+  std::shared_ptr<ava::lsp::DiagnosticsProvider> active;
+  int prompts = 0;
+  bool capacity_rejected = false;
+  auto provider = ava::lsp::make_configured_lsp_provider({
+      .global_config_file = root / "lsp.json",
+      .project_config_file = {},
+      .workspace_root = workspace,
+      .anchor_set = lsp_anchors(workspace),
+      .permission_resolver = [&](ava::permissions::PermissionPrompt const&) -> ava::core::Result<ava::permissions::PermissionResolutionDecision> {
+        auto const depth = ++prompts;
+        auto nested = active->diagnostics(workspace / std::to_string(depth) / "one.cpp");
+        if (depth == 8)
+          capacity_rejected = !nested && nested.error().format().find("capacity") != std::string::npos;
+        return ava::permissions::PermissionResolutionDecision{ava::permissions::PermissionResolution::Deny, "test"};
+      },
+      .builtin_discovery = builtin_discovery_for_test(root / "bin"),
+  });
+  if (!ava::tests::require(provider && *provider, "reserved-capacity fixture creates reentrant provider"))
+    return;
+  active = *provider;
+  auto denied = active->diagnostics(workspace / "0" / "one.cpp");
+  expect(!denied && prompts == 8 && capacity_rejected, "eight in-flight reservations exhaust capacity before any process is launched");
+  prompts = 0;
+  capacity_rejected = false;
+  auto retried = active->diagnostics(workspace / "0" / "one.cpp");
+  expect(!retried && prompts == 8 && capacity_rejected, "nested denial rolls back every reservation and restores the full capacity");
 }
 
 bool root_cache_process_observation_available_for_test()
@@ -2425,6 +2647,7 @@ void run_lsp_tests()
   test_lsp_manager_definition_reference_share_one_deadline();
   test_lsp_manager_filters_child_environment();
   test_lsp_manager_closed_standard_fds();
+  test_lsp_manager_closes_descriptors_above_lowered_limit();
   test_lsp_manager_malformed_symbols_error();
   test_lsp_manager_malformed_response_error();
   test_lsp_manager_crash_error();
@@ -2443,6 +2666,8 @@ void run_lsp_tests()
   test_lsp_dispatcher_bounds_provider_json();
   test_lsp_configured_provider_loads_project_config_lazily();
   test_lsp_configured_provider_launch_permission_cancel_and_deny();
+  test_lsp_configured_provider_reentrant_admission();
+  test_lsp_inflight_reservations_enforce_capacity();
   test_lsp_configured_provider_loads_global_config_from_safe_cwd();
   test_lsp_configured_provider_timeout_defaults();
   test_lsp_configured_provider_inspection_does_not_launch_servers();

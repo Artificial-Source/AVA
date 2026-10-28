@@ -3,6 +3,7 @@
 #include "ava/app/commands.h"
 #include "ava/config/model_config.h"
 
+#include <string>
 #include <string_view>
 #include <vector>
 

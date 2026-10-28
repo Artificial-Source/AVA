@@ -1,11 +1,12 @@
 #pragma once
-
+#include "ava/debug/print_members_on.h"
 #include "ava/agent/tool_types.h"
 #include "ava/provider/provider.h"
 #include "ava/core/result.h"
 
 #include <cstddef>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <variant>
 #include <vector>
@@ -44,7 +45,10 @@ struct AssistantTextItem
   AssistantItemMetadata metadata = {};
   std::string text = {};
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct AssistantReasoningItem
@@ -52,7 +56,10 @@ struct AssistantReasoningItem
   AssistantItemMetadata metadata = {};
   ParsedReasoningBlock reasoning = {};
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct AssistantFunctionCallItem
@@ -60,7 +67,10 @@ struct AssistantFunctionCallItem
   AssistantItemMetadata metadata = {};
   ProviderToolCall tool_call = {};
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 using AssistantItem = std::variant<AssistantTextItem, AssistantReasoningItem, AssistantFunctionCallItem>;
@@ -70,7 +80,10 @@ struct OrderedAssistantItem
   std::size_t sequence = 0;
   AssistantItem item = AssistantTextItem{};
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct ParsedAssistantTurn

@@ -249,7 +249,7 @@ class PluginUiInvocationCapability::Impl final
   bool presenting_ = false;
 };
 
-PluginUiInvocationCapability::PluginUiInvocationCapability(std::unique_ptr<Impl> impl) : impl_(std::move(impl))
+PluginUiInvocationCapability::PluginUiInvocationCapability(ConstructionKey, std::unique_ptr<Impl> impl) : impl_(std::move(impl))
 {
 }
 
@@ -335,7 +335,7 @@ ava::core::Result<std::shared_ptr<PluginUiInvocationCapability>> make_tui_plugin
       .plugin_id = std::move(parsed->plugin_id), .command_name = std::move(parsed->command_name), .invocation_id = std::move(invocation_id)};
   auto impl = std::make_unique<PluginUiInvocationCapability::Impl>(std::move(canonical_command), std::move(binding), deadline, std::move(runtime_token),
                                                                    std::move(presenter), std::move(close_presenter));
-  return std::shared_ptr<PluginUiInvocationCapability>(new PluginUiInvocationCapability(std::move(impl)));
+  return std::make_shared<PluginUiInvocationCapability>(PluginUiInvocationCapability::ConstructionKey{}, std::move(impl));
 }
 
 ava::core::Result<PluginUiInvocationClaim> claim_plugin_ui_invocation_capability(std::shared_ptr<PluginUiInvocationCapability> const& capability,

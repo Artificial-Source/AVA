@@ -1,10 +1,13 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/app/rpc/input.h"
 #include "ava/app/rpc/protocol.h"
+#include "ava/core/UniqueFd.h"
 
 #include <array>
 #include <cerrno>
 #include <istream>
+#include <memory>
 #include <utility>
 #include <fcntl.h>
 #include <poll.h>
@@ -22,15 +25,6 @@ void notify_terminal(RpcInputTerminalCallback const& on_terminal, RpcInputTermin
 {
   if (on_terminal)
     on_terminal(outcome);
-}
-
-bool configure_wake_fd(int fd)
-{
-  auto const descriptor_flags = fcntl(fd, F_GETFD);
-  if (descriptor_flags == -1 || fcntl(fd, F_SETFD, descriptor_flags | FD_CLOEXEC) == -1)
-    return false;
-  auto const status_flags = fcntl(fd, F_GETFL);
-  return status_flags != -1 && fcntl(fd, F_SETFL, status_flags | O_NONBLOCK) != -1;
 }
 
 class PosixRpcLineReader final : public RpcLineReader
@@ -147,6 +141,8 @@ class PosixRpcLineReader final : public RpcLineReader
     } while (written == -1 && errno == EINTR);
   }
 
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
  private:
   int input_fd_ = -1;
   int wake_read_fd_ = -1;
@@ -175,7 +171,16 @@ ava::core::Result<bool> StreamRpcLineReader::read_line(std::string& line, RpcInp
       return false;
     }
 
-    auto const next = input_.get();
+    auto next = std::istream::traits_type::eof();
+    try
+    {
+      next = input_.get();
+    }
+    catch (...)
+    {
+      // Streams may throw on EOF or rethrow streambuf failures. Translate their
+      // state below, after giving a concurrent cancellation precedence.
+    }
     // A wake callback can cause get() to return with badbit rather than eofbit. Cancellation takes
     // precedence over stream classification so output failure always has a prompt, stable terminal outcome.
     if (canceled_.load(std::memory_order_acquire))
@@ -185,7 +190,7 @@ ava::core::Result<bool> StreamRpcLineReader::read_line(std::string& line, RpcInp
     }
     if (next == std::istream::traits_type::eof())
     {
-      if (!input_.eof())
+      if (!input_.eof() || input_.bad())
       {
         notify_terminal(on_terminal, RpcInputTerminalOutcome::Error);
         return std::unexpected(input_io_error("failed to read RPC stdin"));
@@ -238,16 +243,17 @@ void StreamRpcLineReader::cancel() noexcept
 
 ava::core::Result<std::unique_ptr<RpcLineReader>> make_posix_rpc_line_reader(int input_fd)
 {
+  if (input_fd < 0)
+    return std::unexpected(input_io_error("RPC line reader requires a valid input descriptor"));
   int wake_fds[2] = {-1, -1};
-  if (pipe(wake_fds) == -1)
+  if (pipe2(wake_fds, O_CLOEXEC | O_NONBLOCK) == -1)
     return std::unexpected(input_io_error("failed to create RPC stdin wake pipe"));
-  if (!configure_wake_fd(wake_fds[0]) || !configure_wake_fd(wake_fds[1]))
-  {
-    close(wake_fds[0]);
-    close(wake_fds[1]);
-    return std::unexpected(input_io_error("failed to configure RPC stdin wake pipe"));
-  }
-  return std::unique_ptr<RpcLineReader>(new PosixRpcLineReader(input_fd, wake_fds[0], wake_fds[1]));
+  ava::core::UniqueFd wake_read(wake_fds[0]);
+  ava::core::UniqueFd wake_write(wake_fds[1]);
+  std::unique_ptr<RpcLineReader> reader = std::make_unique<PosixRpcLineReader>(input_fd, wake_read.get(), wake_write.get());
+  static_cast<void>(wake_read.release());
+  static_cast<void>(wake_write.release());
+  return reader;
 }
 
 }  // namespace ava::app::rpc

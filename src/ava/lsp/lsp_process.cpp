@@ -2,6 +2,8 @@
 #include "ava/lsp/lsp_client.h"
 #include "ava/lsp/lsp_client_internal.h"
 #include "ava/core/AnchorOpen.h"
+#include "ava/core/close_descriptors.h"
+#include "ava/core/fd_io.h"
 
 #include <algorithm>
 #include <array>
@@ -20,33 +22,19 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#ifdef __linux__
-#include <sys/syscall.h>
-#endif
 #include <unistd.h>
 
 namespace ava::lsp::lsp_client_internal {
 
 ssize_t read_retry(int fd, char* data, std::size_t size)
 {
-  while (true)
-  {
-    auto const bytes = read(fd, data, size);
-    if (bytes < 0 && errno == EINTR)
-      continue;
-    return bytes;
-  }
+  return ava::core::restart_on_eintr([&] { return ::read(fd, data, size); });
 }
 
 ssize_t write_retry(int fd, char const* data, std::size_t size)
 {
-  while (true)
-  {
-    auto const bytes = write(fd, data, size);
-    if (bytes < 0 && errno == EINTR)
-      continue;
-    return bytes;
-  }
+  // Keep partial writes observable: the transport owns readiness and cancellation.
+  return ava::core::restart_on_eintr([&] { return ::write(fd, data, size); });
 }
 }  // namespace ava::lsp::lsp_client_internal
 
@@ -83,7 +71,7 @@ void close_fd(int& fd) noexcept
 ava::core::Result<std::array<int, 2>> make_pipe(ServerConfig const& config)
 {
   std::array<int, 2> fds{-1, -1};
-  if (pipe(fds.data()) != 0)
+  if (pipe2(fds.data(), O_CLOEXEC) != 0)
     return std::unexpected(errno_error("failed to create LSP process pipe", config));
 
   for (auto& fd : fds)
@@ -106,21 +94,6 @@ ava::core::Result<std::array<int, 2>> make_pipe(ServerConfig const& config)
     fd = moved;
   }
   return fds;
-}
-
-void close_nonstandard_fds(int preserved_fd, int second_preserved_fd = -1)
-{
-#if defined(__linux__) && defined(SYS_close_range)
-  if (preserved_fd < 0 && second_preserved_fd < 0 && syscall(SYS_close_range, static_cast<unsigned int>(STDERR_FILENO + 1), ~0U, 0U) == 0)
-    return;
-#endif
-  long const open_max = sysconf(_SC_OPEN_MAX);
-  int const max_fd = open_max > 0 ? static_cast<int>(open_max) : 1024;
-  for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd)
-  {
-    if (fd != preserved_fd && fd != second_preserved_fd)
-      close(fd);
-  }
 }
 
 bool allowlisted_lsp_environment_name(std::string_view name)
@@ -357,7 +330,12 @@ ava::core::VoidResult SubprocessLspClient::launch()
     if (fchdir(child_cwd_fd) != 0)
       _exit(127);
     close(child_cwd_fd);
-    close_nonstandard_fds(executable_fd);
+    // The pipes now occupy stdin/stdout; the closer always preserves stdio.
+    // Keep only the approved executable above stdio, and fail closed on any
+    // closure error rather than executing with inherited ambient authority.
+    std::array<int, 1> const preserved{executable_fd};
+    if (ava::core::close_nonstandard_fds_except(preserved) != 0)
+      _exit(127);
     if (executable_fd >= 0)
       fexecve(executable_fd, argv.data(), environment.data());
     else
@@ -464,44 +442,65 @@ void SubprocessLspClient::terminate_child() noexcept
   pid_t const pid = pid_;
   pid_t const pgid = owned_pgid_;
   close_fd(stdin_fd_);
-
-  bool const verified_group = pid > 1 && pgid > 1 && pgid == pid && getpgid(pid) == pgid;
-  if (!verified_group)
-  {
-    if (pid > 1)
-    {
-      kill(pid, SIGKILL);
-      int status = 0;
-      waitpid_retry(pid, &status, 0);
-    }
+  auto forget_reaped_child = [&]() noexcept {
     pid_ = -1;
     owned_pgid_ = -1;
+  };
+  if (pid <= 1)
+  {
+    forget_reaped_child();
     return;
   }
+  auto signal_child = [](pid_t target, int signal) noexcept {
+    int result;
+    do
+      result = ::kill(target, signal);
+    while (result < 0 && errno == EINTR);
+    return result == 0 || errno == ESRCH;
+  };
 
-  kill(-pgid, SIGTERM);
-  bool group_still_verified = true;
-  auto const grace_deadline = std::chrono::steady_clock::now() + kTerminationGrace;
-  while (std::chrono::steady_clock::now() < grace_deadline)
+  // Establish exact-child ownership before using either numeric identity.
+  // ECHILD retires the PID permanently; never signal a possibly recycled PID.
+  siginfo_t info{};
+  if (waitid_retry(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) != 0)
   {
-    siginfo_t info{};
-    if (waitid_retry(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) != 0)
+    if (errno == ECHILD)
+      forget_reaped_child();
+    return;
+  }
+  pid_t observed_group;
+  do
+    observed_group = ::getpgid(pid);
+  while (observed_group < 0 && errno == EINTR);
+  bool const verified_group = pgid > 1 && pgid == pid && observed_group == pgid;
+  if (verified_group && signal_child(-pgid, SIGTERM))
+  {
+    auto const grace_deadline = std::chrono::steady_clock::now() + kTerminationGrace;
+    while (std::chrono::steady_clock::now() < grace_deadline)
     {
-      if (errno == ECHILD)
-        group_still_verified = false;
-      break;
+      if (waitid_retry(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) != 0)
+      {
+        if (errno == ECHILD)
+          forget_reaped_child();
+        return;
+      }
+      if (info.si_pid != 0)
+        break;
+      std::this_thread::sleep_for(kTerminationPollInterval);
     }
-    if (info.si_pid != 0)
-      break;
-    std::this_thread::sleep_for(kTerminationPollInterval);
   }
 
-  if (group_still_verified)
-    kill(-pgid, SIGKILL);
+  // Retain pid_/owned_pgid_ on a real signal or reap error so a subsequent
+  // shutdown can retry. Never block waiting for a child we failed to terminate.
+  bool killed = verified_group && signal_child(-pgid, SIGKILL);
+  if (!killed)
+    killed = signal_child(pid, SIGKILL);
+  if (!killed)
+    return;
   int status = 0;
-  waitpid_retry(pid, &status, 0);
-  pid_ = -1;
-  owned_pgid_ = -1;
+  auto const waited = waitpid_retry(pid, &status, 0);
+  if (waited == pid || (waited < 0 && errno == ECHILD))
+    forget_reaped_child();
 }
 
 }  // namespace ava::lsp

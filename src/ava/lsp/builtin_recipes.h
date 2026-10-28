@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/lsp/lsp_client.h"
 
 #include <filesystem>

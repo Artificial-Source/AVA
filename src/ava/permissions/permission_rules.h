@@ -26,8 +26,8 @@ namespace ava::permissions {
 // Deny decisions are never upgraded by durable allow rules. Schema-v2
 // RunCommand Allows are exact stable recipe-key grants; schema-v1 command
 // Allows remain inspectable but are non-authoritative, while exact v1 Denies
-// remain authoritative. An exact Critical Allow is an advanced manual-only
-// exception requiring explicit acknowledgement. Matching deny rules always win over
+// remain authoritative. Critical command approvals are one-shot only; old
+// Critical Allows remain inspectable but cannot authorize execution. Matching deny rules always win over
 // matching allow rules, and malformed or unsupported storage fails closed by
 // returning an authoritative deny
 // instead of falling through to a resolver prompt.

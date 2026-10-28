@@ -17,6 +17,8 @@ namespace ava::agent {
 class ToolDispatcher
 {
  public:
+  // Legacy entry point retained only for ownership-protected callers.
+  // New callers must use create_strict so composition errors remain visible.
   explicit ToolDispatcher(ava::tools::ToolContext context, ToolDispatchServices services = {}, ToolVisibilityOptions visibility = {});
   [[nodiscard]] static ava::core::Result<ToolDispatcher> create_strict(ava::tools::ToolContext context, ToolDispatchServices services = {},
                                                                        ToolVisibilityOptions visibility = {});
@@ -24,10 +26,17 @@ class ToolDispatcher
   [[nodiscard]] ava::core::Result<ToolDispatchResult> dispatch(ProviderToolCall const& call) const;
   [[nodiscard]] ava::core::Result<ToolDispatchResult> dispatch_with_context(ava::tools::ToolContext context, ToolDispatchServices const& services,
                                                                             ProviderToolCall const& call) const;
+  // Views borrow this dispatcher's registry and must not outlive it.
   [[nodiscard]] std::vector<ToolMetadata> registered_tool_metadata() const;
   [[nodiscard]] std::vector<std::string> registered_tool_schemas_json() const;
   [[nodiscard]] static std::span<ToolMetadata const> tool_metadata();
-  [[nodiscard]] static std::vector<ToolMetadata> tool_metadata(ava::tools::ToolContext const& context, ToolVisibilityOptions const& visibility = {});
+  // This overload builds a temporary registry, so its metadata must own strings.
+  [[nodiscard]] static ava::core::Result<std::vector<RegisteredToolMetadata>> tool_metadata(ava::tools::ToolContext const& context,
+                                                                                            ToolVisibilityOptions const& visibility = {});
+  [[nodiscard]] static ava::core::Result<std::vector<std::string>> compose_tool_schemas_json(ava::tools::ToolContext const& context = {},
+                                                                                             ToolVisibilityOptions const& visibility = {});
+  // Legacy schema entry points retained only for ownership-protected callers.
+  // New callers must use compose_tool_schemas_json.
   [[nodiscard]] static std::vector<std::string> tool_schemas_json();
   [[nodiscard]] static std::vector<std::string> tool_schemas_json(ava::tools::ToolContext const& context, ToolVisibilityOptions const& visibility = {});
 

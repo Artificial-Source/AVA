@@ -220,13 +220,14 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
         }
         continue;
       }
+      bool const is_publication = replacement.write && info.entry.nr == SYS_linkat;
       bool is_open = info.entry.nr == SYS_openat;
 #ifdef SYS_openat2
       is_open = is_open || info.entry.nr == SYS_openat2;
 #endif
-      if (!is_open)
+      if (!is_open && !is_publication)
         continue;
-      if (!replacement.canary.empty())
+      if (!replacement.canary.empty() && !is_publication)
       {
         auto flags = info.entry.args[2];
 #ifdef SYS_openat2
@@ -247,10 +248,11 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
           continue;
       }
       std::string opened_path;
+      auto const path_argument = info.entry.args[is_publication ? 3 : 1];
       for (std::size_t offset = 0; offset < 4096; offset += sizeof(long))
       {
         errno = 0;
-        auto const word = ::ptrace(PTRACE_PEEKDATA, child, reinterpret_cast<void*>(static_cast<std::uintptr_t>(info.entry.args[1]) + offset), nullptr);
+        auto const word = ::ptrace(PTRACE_PEEKDATA, child, reinterpret_cast<void*>(static_cast<std::uintptr_t>(path_argument) + offset), nullptr);
         if (word == -1 && errno != 0)
           break;
         std::array<char, sizeof(word)> bytes{};
@@ -272,7 +274,7 @@ void test_attachment_replacement_before_open(std::filesystem::path const& path, 
       if (!replacement.canary.empty() && !actual.is_absolute())
       {
         std::array<char, 4096> directory{};
-        auto const descriptor = "/proc/" + std::to_string(child) + "/fd/" + std::to_string(static_cast<int>(info.entry.args[0]));
+        auto const descriptor = "/proc/" + std::to_string(child) + "/fd/" + std::to_string(static_cast<int>(info.entry.args[is_publication ? 2 : 0]));
         auto const count = ::readlink(descriptor.c_str(), directory.data(), directory.size());
         if (count <= 0 || static_cast<std::size_t>(count) == directory.size())
         {
@@ -760,6 +762,93 @@ void test_image_attachment_import()
   auto loaded = ava::session::load_image_attachment(*store, *imported);
   expect(loaded && loaded->bytes == bytes, "imported image attachment reloads only after size and sha verification");
 
+  // A failed publication must not reserve a corrupt content-addressed name.
+  // Retry in the unfiltered parent, using exactly the same bytes and store.
+  for (auto const syscall : {SYS_write, SYS_fsync, SYS_linkat})
+  {
+    auto failed_store = ava::session::SessionStore::create(workspace, root / ("failed-publication-" + std::to_string(syscall)));
+    if (!ava::tests::require(failed_store.has_value(), "failed attachment publication fixture creates"))
+      return;
+    auto const injected = ava::tests::run_in_child_with_syscall_errno(syscall, std::nullopt, EIO, [&] {
+      auto result = ava::session::import_image_attachment_bytes(*failed_store, bytes);
+      return !result && result.error().category() == ava::core::ErrorCategory::Io ? 0 : 1;
+    });
+    if (ava::tests::expect_child_success(injected, "attachment publication reports write/sync/link failure") != ava::tests::ChildTestOutcome::Passed)
+      continue;
+    auto const failed_path = ava::session::resolve_attachment_storage_path(*failed_store, imported->storage_path);
+    expect(failed_path && !std::filesystem::exists(*failed_path), "failed attachment publication leaves no final partial file");
+    auto retried = ava::session::import_image_attachment_bytes(*failed_store, bytes);
+    auto reloaded = retried ? ava::session::load_image_attachment(*failed_store, *retried)
+                            : ava::core::Result<ava::session::LoadedImageAttachment>(std::unexpected(retried.error()));
+    expect(reloaded && reloaded->bytes == bytes, "failed attachment publication permits a complete retry");
+  }
+
+  auto no_attachment_temporaries = [](std::filesystem::path const& directory) {
+    std::error_code iter_error;
+    for (std::filesystem::directory_iterator iter(directory, iter_error), end; !iter_error && iter != end; iter.increment(iter_error))
+      if (iter->path().filename().string().starts_with(".ava-attachment-"))
+        return false;
+    return !iter_error;
+  };
+  ava::tests::SyscallArgumentFilter const tmpfile_flags{.index = 2, .value = static_cast<std::uint32_t>(O_TMPFILE | O_WRONLY | O_CLOEXEC)};
+  for (int const unsupported_error : {EOPNOTSUPP, EISDIR, EINVAL})
+  {
+    auto fallback_store = ava::session::SessionStore::create(workspace, root / ("named-attachment-" + std::to_string(unsupported_error)));
+    if (!ava::tests::require(fallback_store.has_value(), "named attachment fallback fixture creates"))
+      return;
+    auto const fallback_path = ava::session::resolve_attachment_storage_path(*fallback_store, imported->storage_path);
+    if (!ava::tests::require(fallback_path.has_value(), "named attachment fallback path resolves"))
+      return;
+    auto const fallback = ava::tests::run_in_child_with_syscall_errno(SYS_openat, tmpfile_flags, unsupported_error, [&] {
+      auto result = ava::session::import_image_attachment_bytes(*fallback_store, bytes);
+      auto restored = result ? ava::session::load_image_attachment(*fallback_store, *result)
+                             : ava::core::Result<ava::session::LoadedImageAttachment>(std::unexpected(result.error()));
+      return restored && restored->bytes == bytes && no_attachment_temporaries(fallback_path->parent_path()) ? 0 : 1;
+    });
+    if (ava::tests::expect_child_success(fallback, "unsupported O_TMPFILE uses byte-identical named publication without temporary leftovers") !=
+        ava::tests::ChildTestOutcome::Passed)
+      continue;
+    auto restored = ava::session::load_image_attachment(*fallback_store, *imported);
+    expect(restored && restored->bytes == bytes && no_attachment_temporaries(fallback_path->parent_path()),
+           "named attachment publication remains readable after its publisher exits");
+
+    auto const conflict = bytes + "existing destination must not be replaced";
+    ava::tests::write_session_test_binary_file(*fallback_path, conflict);
+    auto const no_replace = ava::tests::run_in_child_with_syscall_errno(SYS_openat, tmpfile_flags, unsupported_error, [&] {
+      auto rejected = ava::session::import_image_attachment_bytes(*fallback_store, bytes);
+      return !rejected && ava::tests::read_session_test_binary_file(*fallback_path) == conflict && no_attachment_temporaries(fallback_path->parent_path()) ? 0
+                                                                                                                                                           : 1;
+    });
+    static_cast<void>(ava::tests::expect_child_success(no_replace, "named fallback never overwrites different existing attachment bytes"));
+  }
+  for (long const failed_syscall : {SYS_write, SYS_fchmod, SYS_linkat})
+  {
+    auto fallback_store = ava::session::SessionStore::create(workspace, root / ("named-attachment-failure-" + std::to_string(failed_syscall)));
+    if (!ava::tests::require(fallback_store.has_value(), "named attachment failure fixture creates"))
+      return;
+    auto const fallback_path = ava::session::resolve_attachment_storage_path(*fallback_store, imported->storage_path);
+    if (!ava::tests::require(fallback_path.has_value(), "named attachment failure path resolves"))
+      return;
+    std::array<ava::tests::SyscallErrno, 2> const rules{{
+        {.number = SYS_openat, .argument = tmpfile_flags, .error_number = EOPNOTSUPP},
+        {.number = failed_syscall,
+         .argument = failed_syscall == SYS_fchmod ? std::optional(ava::tests::SyscallArgumentFilter{.index = 1, .value = 0600}) : std::nullopt,
+         .error_number = EIO},
+    }};
+    auto const failed = ava::tests::run_in_child_with_syscall_errno(rules, [&] {
+      auto result = ava::session::import_image_attachment_bytes(*fallback_store, bytes);
+      return !result && result.error().category() == ava::core::ErrorCategory::Io && !std::filesystem::exists(*fallback_path) &&
+                     no_attachment_temporaries(fallback_path->parent_path())
+                 ? 0
+                 : 1;
+    });
+    if (ava::tests::expect_child_success(failed, "named attachment write/chmod/link failure cleans its temporary inode") !=
+        ava::tests::ChildTestOutcome::Passed)
+      continue;
+    auto retried = ava::session::import_image_attachment_bytes(*fallback_store, bytes);
+    expect(retried && no_attachment_temporaries(fallback_path->parent_path()), "named attachment failure permits a clean retry");
+  }
+
   auto const unsupported_path = root / "not-image.txt";
   ava::tests::write_session_test_binary_file(unsupported_path, "hello");
   auto unsupported = ava::session::import_image_attachment(*store, unsupported_path);
@@ -860,7 +949,7 @@ void test_image_attachment_import()
     test_attachment_replacement_before_open(image_path, [&] { return ava::session::import_image_attachment(*store, image_path); },
                                             {.canary = source_canary, .directory = directory});
     test_attachment_replacement_before_open(imported_path, [&] { return ava::session::import_image_attachment_bytes(*store, bytes); },
-                                            {.canary = destination_canary, .directory = directory, .write = true});
+                                            {.canary = destination_canary, .directory = directory});
   }
 
   auto const user = append_session_entry_for_test(

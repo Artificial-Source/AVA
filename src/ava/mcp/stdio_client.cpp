@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/diagnostics/safe_failure.h"
+#include "ava/process/deadline.h"
 #include "ava/process/environment.h"
 #include "ava/mcp/protocol.h"
 #include "ava/mcp/stdio_client.h"
@@ -90,39 +91,6 @@ std::vector<ava::process::EnvironmentVariableV1> explicit_environment(McpServerC
   return variables;
 }
 
-std::string compact_json_line(std::string_view message)
-{
-  std::string compact;
-  compact.reserve(message.size() + 1);
-  bool in_string = false;
-  bool escaped = false;
-  for (char const ch : message)
-  {
-    if (in_string)
-    {
-      compact.push_back(ch);
-      if (escaped)
-        escaped = false;
-      else if (ch == '\\')
-        escaped = true;
-      else if (ch == '"')
-        in_string = false;
-      continue;
-    }
-    if (ch == '"')
-    {
-      in_string = true;
-      compact.push_back(ch);
-    }
-    else if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n')
-    {
-      compact.push_back(ch);
-    }
-  }
-  compact.push_back('\n');
-  return compact;
-}
-
 ava::core::Result<std::optional<std::string>> pagination_cursor(std::string_view result_json, McpServerConfig const& server)
 {
   if (!ava::core::json::field_value_start(result_json, "nextCursor"))
@@ -168,7 +136,8 @@ McpStdioClient::McpStdioClient(McpServerConfig server, McpStdioClientOptions opt
                                Clock::time_point startup_deadline)
     : server_(std::move(server)),
       options_(std::move(options)),
-      startup_deadline_(startup_deadline == Clock::time_point{} ? saturating_add(Clock::now(), options_.startup_timeout) : startup_deadline),
+      startup_deadline_(startup_deadline == Clock::time_point{} ? ava::process::saturating_deadline_add(Clock::now(), options_.startup_timeout)
+                                                                : startup_deadline),
       operation_scope_(std::move(operation_scope))
 {
   options_.process_scope.reset();
@@ -190,8 +159,9 @@ McpStdioClient::~McpStdioClient() noexcept
         cleanup_deadline_.reset();
         observation_deadline_.reset();
       }
-      auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kMcpCleanupBudget));
-      auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kMcpSettlementObservationBudget));
+      auto const cleanup_deadline = cleanup_deadline_.value_or(ava::process::saturating_deadline_add(Clock::now(), kMcpCleanupBudget));
+      auto const observation_deadline =
+          observation_deadline_.value_or(ava::process::saturating_deadline_add(cleanup_deadline, kMcpSettlementObservationBudget));
       static_cast<void>(settle_until(ava::process::TerminationReasonV1::OwnerShutdown, cleanup_deadline, observation_deadline));
     }
   }
@@ -248,7 +218,7 @@ ava::core::Result<std::unique_ptr<McpStdioClient>> McpStdioClient::start(McpServ
   }
   options.process_scope.reset();
 
-  auto const startup_deadline = saturating_add(Clock::now(), options.startup_timeout);
+  auto const startup_deadline = ava::process::saturating_deadline_add(Clock::now(), options.startup_timeout);
   auto client = std::make_unique<McpStdioClient>(std::move(server), std::move(options), std::move(*operation_scope), startup_deadline);
   if (auto launched = client->launch(cancel_requested); !launched)
     return std::unexpected(std::move(launched.error()));
@@ -442,7 +412,7 @@ ava::core::VoidResult McpStdioClient::settle_until(ava::process::TerminationReas
     // Supervisor cleanup authority for one destructor retry beyond that bound
     // so a surfaced wait error cannot immediately strand a runnable child at
     // the Supervisor's hard cleanup horizon.
-    auto const supervisor_cleanup_deadline = saturating_add(observation_deadline, kMcpCleanupBudget);
+    auto const supervisor_cleanup_deadline = ava::process::saturating_deadline_add(observation_deadline, kMcpCleanupBudget);
     auto stopped = operation_scope_.supervisor().request_stop(process_handle_, reason, supervisor_cleanup_deadline);
     if (!stopped)
     {
@@ -455,7 +425,7 @@ ava::core::VoidResult McpStdioClient::settle_until(ava::process::TerminationReas
 
   while (!settlement_ && Clock::now() < observation_deadline)
   {
-    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, saturating_add(Clock::now(), 10ms))));
+    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
     if (auto observed = observe_settlement())
       settlement_ = *observed;
   }
@@ -466,7 +436,7 @@ ava::core::VoidResult McpStdioClient::settle_until(ava::process::TerminationReas
       settlement_ = *observed;
   }
   while (settlement_ && (standard_output_.valid() || standard_error_.valid()) && Clock::now() < observation_deadline)
-    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, saturating_add(Clock::now(), 10ms))));
+    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
   static_cast<void>(drain_for_cleanup(Clock::now()));
   close_endpoints();
 
@@ -482,8 +452,8 @@ ava::core::VoidResult McpStdioClient::settle_failure(ava::process::TerminationRe
 {
   if (settlement_ || settlement_error_)
     return settled_cleanup_result();
-  auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kMcpCleanupBudget));
-  auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kMcpSettlementObservationBudget));
+  auto const cleanup_deadline = cleanup_deadline_.value_or(ava::process::saturating_deadline_add(Clock::now(), kMcpCleanupBudget));
+  auto const observation_deadline = observation_deadline_.value_or(ava::process::saturating_deadline_add(cleanup_deadline, kMcpSettlementObservationBudget));
   return settle_until(reason, cleanup_deadline, observation_deadline);
 }
 
@@ -503,10 +473,10 @@ ava::core::VoidResult McpStdioClient::shutdown(std::chrono::milliseconds grace)
     return settled_cleanup_result();
 
   standard_input_.close();
-  auto const natural_deadline = saturating_add(Clock::now(), grace);
+  auto const natural_deadline = ava::process::saturating_deadline_add(Clock::now(), grace);
   while (!settlement_ && Clock::now() < natural_deadline)
   {
-    static_cast<void>(drain_for_cleanup(std::min(natural_deadline, saturating_add(Clock::now(), 10ms))));
+    static_cast<void>(drain_for_cleanup(std::min(natural_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
     if (auto observed = observe_settlement())
       settlement_ = *observed;
   }
@@ -514,16 +484,16 @@ ava::core::VoidResult McpStdioClient::shutdown(std::chrono::milliseconds grace)
     settlement_ = *observed;
   if (settlement_)
   {
-    auto const drain_deadline = saturating_add(Clock::now(), kMcpSettlementObservationBudget);
+    auto const drain_deadline = ava::process::saturating_deadline_add(Clock::now(), kMcpSettlementObservationBudget);
     while ((standard_output_.valid() || standard_error_.valid()) && Clock::now() < drain_deadline)
-      static_cast<void>(drain_for_cleanup(std::min(drain_deadline, saturating_add(Clock::now(), 10ms))));
+      static_cast<void>(drain_for_cleanup(std::min(drain_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
     static_cast<void>(drain_for_cleanup(Clock::now()));
     close_endpoints();
     return settled_cleanup_result();
   }
 
-  auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kMcpCleanupBudget));
-  auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kMcpSettlementObservationBudget));
+  auto const cleanup_deadline = cleanup_deadline_.value_or(ava::process::saturating_deadline_add(Clock::now(), kMcpCleanupBudget));
+  auto const observation_deadline = observation_deadline_.value_or(ava::process::saturating_deadline_add(cleanup_deadline, kMcpSettlementObservationBudget));
   return settle_until(ava::process::TerminationReasonV1::OwnerShutdown, cleanup_deadline, observation_deadline);
 }
 
@@ -894,7 +864,11 @@ ava::core::VoidResult McpStdioClient::write_message(std::string_view message, Cl
 {
   if (auto stopped = check_committed_stop(); !stopped)
     return stopped;
-  auto const frame = compact_json_line(message);
+  auto compacted = ava::core::json::compact(message);
+  if (!compacted)
+    return std::unexpected(protocol_error("MCP request contains invalid JSON string framing", server_));
+  auto frame = std::move(*compacted);
+  frame.push_back('\n');
   if (frame.size() - 1 > options_.max_message_bytes)
   {
     auto error = protocol_error("MCP request exceeds message size cap", server_);
@@ -1001,7 +975,7 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
 
     if (process_finished || !standard_output_.valid())
     {
-      auto const status_deadline = std::min(deadline, saturating_add(Clock::now(), kNaturalStatusObservation));
+      auto const status_deadline = std::min(deadline, ava::process::saturating_deadline_add(Clock::now(), kNaturalStatusObservation));
       if (auto stopped = check_committed_stop(); !stopped)
         return std::unexpected(std::move(stopped.error()));
       auto observed = operation_scope_.supervisor().wait(process_handle_, status_deadline);
@@ -1026,7 +1000,7 @@ ava::core::Result<std::string> McpStdioClient::read_message(Clock::time_point de
       watches.push_back(std::move(*stderr_watch));
     }
 
-    auto const activity_deadline = std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval));
+    auto const activity_deadline = std::min(deadline, ava::process::saturating_deadline_add(Clock::now(), kCancellationObservationInterval));
     if (auto stopped = check_committed_stop(); !stopped)
       return std::unexpected(std::move(stopped.error()));
     auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches, activity_deadline);
@@ -1071,8 +1045,8 @@ ava::core::VoidResult McpStdioClient::wait_for_writable(Clock::time_point deadli
 
     if (auto stopped = check_committed_stop(); !stopped)
       return std::unexpected(std::move(stopped.error()));
-    auto activity = operation_scope_.supervisor().wait_for_activity(process_handle_, watches,
-                                                                    std::min(deadline, saturating_add(Clock::now(), kCancellationObservationInterval)));
+    auto activity = operation_scope_.supervisor().wait_for_activity(
+        process_handle_, watches, std::min(deadline, ava::process::saturating_deadline_add(Clock::now(), kCancellationObservationInterval)));
     if (!activity)
       return std::unexpected(process_io_error("failed while observing the MCP request stream", server_));
     if (auto stopped = check_committed_stop(); !stopped)
@@ -1122,8 +1096,18 @@ ava::core::VoidResult McpStdioClient::drain_stdout(bool enforce_message_limit)
     {
       if (auto stopped = check_committed_stop(); !stopped)
         return stopped;
+      if (stdout_buffer_.find('\n') != std::string::npos)
+        return {};
     }
-    auto read = standard_output_.read(writable_bytes(buffer));
+    auto bytes = writable_bytes(buffer);
+    if (enforce_message_limit)
+    {
+      // Leave coalesced following messages in the pipe once this bounded queue
+      // is full; the framing newline is not part of the JSON payload limit.
+      auto const remaining = options_.max_message_bytes - std::min(options_.max_message_bytes, stdout_buffer_.size()) + 1;
+      bytes = bytes.first(std::min(bytes.size(), remaining));
+    }
+    auto read = standard_output_.read(bytes);
     if (!read)
       return std::unexpected(process_io_error("failed to read MCP stdout", server_));
     if (read->state == ava::process::PipeIoStateV1::WouldBlock)
@@ -1156,7 +1140,7 @@ ava::core::VoidResult McpStdioClient::drain_stdout(bool enforce_message_limit)
         static_cast<void>(operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, read->bytes, true));
         return std::unexpected(process_io_error("failed to retain bounded MCP stdout", server_));
       }
-      bool const truncated = stdout_buffer_.size() > options_.max_message_bytes;
+      bool const truncated = stdout_buffer_.size() > options_.max_message_bytes && stdout_buffer_.find('\n') == std::string::npos;
       if (auto accounted = operation_scope_.supervisor().account_output(process_handle_, ava::process::StreamKindV1::StandardOutput, read->bytes, truncated);
           !accounted)
       {

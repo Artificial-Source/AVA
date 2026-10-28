@@ -150,6 +150,12 @@ not complete. Nearest coverage is in `tests/process_*_tests.cpp`,
 `tests/curl_transport_process_tests.cpp`, `tests/plugin_runner_process_tests.cpp`,
 `tests/clipboard_image_process_tests.cpp`, and `tests/mcp_tests.cpp`.
 
+When a launch settles as Incomplete or monitor shutdown reaches its deadline, the
+Supervisor hands exact remaining native children to a lazily created, joinable
+per-Supervisor reaper. The public shutdown deadline is unchanged; final
+Supervisor state destruction joins that reaper, so destruction can wait for an
+OS-delayed child exit. An idle Supervisor starts no reaper thread.
+
 Important dependency rules:
 
 - `event` is the neutral publication boundary and may depend only on lower-level

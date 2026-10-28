@@ -1,10 +1,13 @@
 #pragma once
 
 #include "ava/app/commands.h"
+#include "ava/session/record.h"
 
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <string_view>
+#include <vector>
 
 namespace ava::app {
 
@@ -15,8 +18,11 @@ inline constexpr std::size_t kMaxSessionImportFileBytes = 8U * 1024U * 1024U;
 inline constexpr std::size_t kMaxSessionImportLineBytes = 1024U * 1024U;
 inline constexpr std::size_t kMaxSessionImportEntries = 16384;
 
-// Narrow deterministic race seam for descriptor-anchoring tests only.
-void set_after_session_import_open_for_test(std::function<void()> hook);
+// Reads and validates an import without publishing it. The optional race-test hook
+// belongs to this invocation only and runs after descriptor validation. Linux
+// close EINTR means ownership is released; close is never retried.
+[[nodiscard]] ava::core::Result<std::vector<ava::session::SessionEntry>> load_import_session_entries(std::filesystem::path const& path,
+                                                                                                     std::function<void()> const& after_open_for_test = {});
 
 [[nodiscard]] ava::core::Result<CommandResult> run_sessions_command(runtime::session_ts& unlocked_session, std::string_view query = {});
 [[nodiscard]] ava::core::Result<CommandResult> run_fork_command(runtime::session_ts& unlocked_session, std::string_view name = {},
@@ -27,6 +33,7 @@ void set_after_session_import_open_for_test(std::function<void()> hook);
 [[nodiscard]] ava::core::Result<CommandResult> run_name_command(runtime::session_ts& unlocked_session, std::string_view name);
 [[nodiscard]] ava::core::Result<CommandResult> run_labels_command(runtime::session_ts& unlocked_session, std::string_view labels);
 [[nodiscard]] ava::core::Result<CommandResult> run_mode_command(runtime::session_ts& unlocked_session);
+// Freshness probes revalidate opened regular files and never read beyond their loaded byte count.
 [[nodiscard]] ava::core::Result<CommandResult> run_context_command(runtime::session_ts& unlocked_session, std::string_view query = {});
 [[nodiscard]] ava::core::Result<CommandResult> run_stats_command(runtime::session_ts& unlocked_session);
 [[nodiscard]] ava::core::Result<CommandResult> run_compact_command(runtime::session_ts& unlocked_session, CommandRequest const& request);

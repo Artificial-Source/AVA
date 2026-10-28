@@ -12,6 +12,7 @@
 #include "ava/provider/catalog.h"
 #include "ava/provider/provider.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
 #include "ava/core/thread.h"
@@ -47,34 +48,6 @@ constexpr std::string_view kBranchSummarySystemInstruction =
 
 constexpr std::string_view kProjectionCodeContext = "branch_summary_projection_code";
 constexpr std::string_view kGenerationCodeContext = "branch_summary_generation_code";
-
-bool ascii_space(unsigned char ch) noexcept
-{
-  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
-}
-
-std::string trim_ascii(std::string_view text)
-{
-  std::size_t begin = 0;
-  while (begin < text.size() && ascii_space(static_cast<unsigned char>(text[begin])))
-    ++begin;
-  std::size_t end = text.size();
-  while (end > begin && ascii_space(static_cast<unsigned char>(text[end - 1])))
-    --end;
-  return std::string(text.substr(begin, end - begin));
-}
-
-std::string lower_ascii(std::string_view text)
-{
-  std::string lowered;
-  lowered.reserve(text.size());
-  for (char ch : text)
-  {
-    auto const byte = static_cast<unsigned char>(ch);
-    lowered.push_back(byte >= 'A' && byte <= 'Z' ? static_cast<char>(byte + ('a' - 'A')) : ch);
-  }
-  return lowered;
-}
 
 void wipe_bytes(void* data, std::size_t size) noexcept
 {
@@ -301,19 +274,8 @@ void clear_provider_auth(ava::provider::ProviderAuthContext& auth) noexcept
   clear_secret(auth.account_id);
 }
 
-void scrub_request_auth(ava::http::HttpRequest& request) noexcept
-{
-  for (auto& [name, value] : request.headers)
-  {
-    auto const lower = lower_ascii(name);
-    if (lower == "authorization" || lower == "x-api-key" || lower == "x-goog-api-key" || lower == "chatgpt-account-id")
-      clear_secret(value);
-  }
-}
-
 void clear_http_request(ava::http::HttpRequest& request) noexcept
 {
-  scrub_request_auth(request);
   clear_secret(request.method);
   clear_secret(request.url);
   for (auto& [name, value] : request.headers)
@@ -375,7 +337,7 @@ bool valid_summary_text(std::string_view text) noexcept
 
 bool has_summarizable_character(std::string_view text) noexcept
 {
-  return std::ranges::any_of(text, [](char ch) { return !ascii_space(static_cast<unsigned char>(ch)); });
+  return std::ranges::any_of(text, [](char ch) { return !ava::core::is_ascii_space(static_cast<unsigned char>(ch)); });
 }
 
 std::size_t utf8_prefix_size(std::string_view text, std::size_t limit) noexcept
@@ -395,7 +357,7 @@ std::string bounded_display_label(std::string_view text, std::string_view fallba
 {
   if (!valid_summary_text(text))
     return std::string(fallback);
-  auto label = trim_ascii(text);
+  auto label = ava::core::ascii_trim(text);
   if (label.empty())
     return std::string(fallback);
   if (label.size() > kMaxBranchSummaryDisplayLabelBytes)
@@ -436,7 +398,7 @@ std::optional<std::pair<std::size_t, std::size_t>> find_open_tag(std::string_vie
     if (start == std::string::npos)
       return std::nullopt;
     auto const boundary = start + prefix.size();
-    if (boundary == lowered.size() || lowered[boundary] == '>' || ascii_space(static_cast<unsigned char>(lowered[boundary])))
+    if (boundary == lowered.size() || lowered[boundary] == '>' || ava::core::is_ascii_space(static_cast<unsigned char>(lowered[boundary])))
     {
       auto const end = lowered.find('>', boundary);
       return std::pair{start, end == std::string::npos ? lowered.size() : end + 1};
@@ -447,14 +409,14 @@ std::optional<std::pair<std::size_t, std::size_t>> find_open_tag(std::string_vie
 
 bool contains_tag_token(std::string_view text, std::string_view tag)
 {
-  auto lowered = lower_ascii(text);
+  auto lowered = ava::core::ascii_lower_copy(text);
   ScopeCleanup wipe_lowered([&]() noexcept { clear_secret(lowered); });
   return find_open_tag(lowered, tag, 0).has_value() || lowered.find("</" + std::string(tag) + ">") != std::string::npos;
 }
 
 void remove_tagged_section(std::string& text, std::string_view tag)
 {
-  auto lowered = lower_ascii(text);
+  auto lowered = ava::core::ascii_lower_copy(text);
   ScopeCleanup wipe_lowered([&]() noexcept { clear_secret(lowered); });
   auto const close = "</" + std::string(tag) + ">";
   std::size_t search = 0;
@@ -494,7 +456,7 @@ void remove_tagged_section(std::string& text, std::string_view tag)
 
 void remove_wrapper_tag(std::string& text, std::string_view tag)
 {
-  auto lowered = lower_ascii(text);
+  auto lowered = ava::core::ascii_lower_copy(text);
   ScopeCleanup wipe_lowered([&]() noexcept { clear_secret(lowered); });
   std::size_t search = 0;
   while (auto const opening = find_open_tag(lowered, tag, search))
@@ -515,7 +477,7 @@ void remove_wrapper_tag(std::string& text, std::string_view tag)
 
 void strip_markdown_fence(std::string& text)
 {
-  auto trimmed = trim_ascii(text);
+  auto trimmed = ava::core::ascii_trim(text);
   ScopeCleanup wipe_trimmed([&]() noexcept { clear_secret(trimmed); });
   if (!trimmed.starts_with("```"))
   {
@@ -527,7 +489,7 @@ void strip_markdown_fence(std::string& text)
   auto const last_fence = trimmed.rfind("```");
   if (first_newline != std::string::npos && last_fence != std::string::npos && last_fence > first_newline)
   {
-    auto inner = trim_ascii(std::string_view(trimmed).substr(first_newline + 1, last_fence - first_newline - 1));
+    auto inner = ava::core::ascii_trim(std::string_view(trimmed).substr(first_newline + 1, last_fence - first_newline - 1));
     ScopeCleanup wipe_inner([&]() noexcept { clear_secret(inner); });
     clear_secret(text);
     text.swap(inner);
@@ -1655,7 +1617,7 @@ struct BranchSummaryCoordinator::Impl
   ava::core::JoinThread worker;
 };
 
-BranchSummaryCoordinator::BranchSummaryCoordinator(std::unique_ptr<Impl> impl) : impl_(std::move(impl))
+BranchSummaryCoordinator::BranchSummaryCoordinator(ConstructionKey, std::unique_ptr<Impl> impl) : impl_(std::move(impl))
 {
 }
 
@@ -1665,7 +1627,7 @@ ava::core::Result<std::shared_ptr<BranchSummaryCoordinator>> BranchSummaryCoordi
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "branch summary coordinator deadline is invalid"));
   try
   {
-    auto coordinator = std::shared_ptr<BranchSummaryCoordinator>(new BranchSummaryCoordinator(std::make_unique<Impl>(std::move(options))));
+    auto coordinator = std::make_shared<BranchSummaryCoordinator>(ConstructionKey{}, std::make_unique<Impl>(std::move(options)));
     coordinator->impl_->start();
     return coordinator;
   }

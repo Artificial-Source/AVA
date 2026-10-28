@@ -4,6 +4,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_branch.h"
 #include "ava/session/validation.h"
+#include "ava/core/ascii.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
@@ -38,14 +39,6 @@ bool has_control_byte_except_summary_whitespace(std::string_view value)
   return std::ranges::any_of(value, [](char ch) {
     auto const byte = static_cast<unsigned char>(ch);
     return (byte < 0x20 && ch != '\n' && ch != '\t') || byte == 0x7F;
-  });
-}
-
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7F;
   });
 }
 
@@ -92,7 +85,7 @@ ava::core::VoidResult copy_branch_image_attachments(SessionStore const& source, 
 
 ava::core::VoidResult validate_required_text(std::string_view value, std::string_view field, std::size_t max_bytes, bool allow_summary_whitespace)
 {
-  bool const has_invalid_control = allow_summary_whitespace ? has_control_byte_except_summary_whitespace(value) : has_control_byte(value);
+  bool const has_invalid_control = allow_summary_whitespace ? has_control_byte_except_summary_whitespace(value) : ava::core::has_c0_or_del(value);
   if (value.empty() || value.size() > max_bytes || has_invalid_control)
   {
     auto error = branch_error(ava::core::ErrorCategory::InvalidArgument, "branch summary field is invalid");

@@ -20,6 +20,7 @@
 #include "ava/provider/catalog.h"
 #include "ava/provider/provider_utils.h"
 #include "ava/provider/registry.h"
+#include "ava/core/base64.h"
 #include "ava/core/thread.h"
 
 #include <atomic>
@@ -55,21 +56,6 @@ std::filesystem::path resolve_rpc_attachment_path(std::filesystem::path const& c
   return current_dir / path;
 }
 
-int rpc_base64_value(char ch)
-{
-  if (ch >= 'A' && ch <= 'Z')
-    return ch - 'A';
-  if (ch >= 'a' && ch <= 'z')
-    return ch - 'a' + 26;
-  if (ch >= '0' && ch <= '9')
-    return ch - '0' + 52;
-  if (ch == '+')
-    return 62;
-  if (ch == '/')
-    return 63;
-  return -1;
-}
-
 ava::core::Result<std::string> decode_rpc_image_base64(std::string_view data)
 {
   if (!ava::provider::is_valid_base64(data))
@@ -96,10 +82,10 @@ ava::core::Result<std::string> decode_rpc_image_base64(std::string_view data)
   bytes.reserve(decoded_size);
   for (std::size_t index = 0; index < data.size(); index += 4U)
   {
-    auto const a = rpc_base64_value(data[index]);
-    auto const b = rpc_base64_value(data[index + 1]);
-    auto const c = data[index + 2] == '=' ? 0 : rpc_base64_value(data[index + 2]);
-    auto const d = data[index + 3] == '=' ? 0 : rpc_base64_value(data[index + 3]);
+    auto const a = ava::core::base64_digit_value(data[index]);
+    auto const b = ava::core::base64_digit_value(data[index + 1]);
+    auto const c = data[index + 2] == '=' ? 0 : ava::core::base64_digit_value(data[index + 2]);
+    auto const d = data[index + 3] == '=' ? 0 : ava::core::base64_digit_value(data[index + 3]);
     if (a < 0 || b < 0 || c < 0 || d < 0)
     {
       return std::unexpected(rpc::invalid_rpc("RPC image upload data must be base64"));

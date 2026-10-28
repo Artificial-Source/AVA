@@ -29,7 +29,6 @@ namespace detail {
 [[nodiscard]] std::uint64_t writable_root_mask(std::uint32_t abi_version) noexcept;
 [[nodiscard]] std::uint64_t read_execute_root_mask() noexcept;
 [[nodiscard]] std::uint64_t read_execute_file_root_mask() noexcept;
-[[nodiscard]] std::uint64_t read_only_root_mask() noexcept;
 std::uint64_t device_file_mask() noexcept;
 [[nodiscard]] ava::core::VoidResult validate_synthetic_directory_root(std::filesystem::path const& path, ava::core::AnchorSet const& anchors);
 [[nodiscard]] ava::core::VoidResult validate_writable_directory_root(std::filesystem::path const& path, ava::core::AnchorSet const& anchors);
@@ -38,11 +37,9 @@ std::uint64_t device_file_mask() noexcept;
 void add_filesystem_rule(std::vector<ContainmentFilesystemRule>& rules, std::filesystem::path const& path, std::uint64_t mask);
 }  // namespace detail
 
-// Landlock application is in landlock.cpp.
-[[nodiscard]] ava::core::VoidResult apply_landlock_in_child(DevelopmentContainmentPlan const& plan);
-// Seccomp application is in seccomp_network.cpp.
-[[nodiscard]] ava::core::VoidResult apply_seccomp_network_filter(bool network_allowed);
-[[nodiscard]] ava::core::VoidResult apply_no_new_privs();
+// The installer returns only a fixed frame; diagnostics are parent-only.
+[[nodiscard]] ContainmentChildStatus apply_seccomp_network_filter(bool network_allowed) noexcept;
+[[nodiscard]] ContainmentChildStatus apply_no_new_privs() noexcept;
 
 namespace {
 
@@ -96,7 +93,7 @@ void add_system_roots(std::vector<ContainmentFilesystemRule>& rules, ava::core::
 
 void add_device_files(std::vector<ContainmentFilesystemRule>& rules, ContainmentFilesystemScope& scope, ava::core::AnchorSet const& anchors)
 {
-  // Exact device files needed for normal process/file work. Read-only.
+  // Exact device files needed for normal process/file work, including writable /dev/null.
   for (auto const* dev : {"/dev/null", "/dev/zero", "/dev/urandom", "/dev/random"})
   {
     if (detail::validate_device_root(dev, anchors))
@@ -346,12 +343,11 @@ DevelopmentContainmentPlan prepare_development_containment(ava::command::Command
     }
   }
 
-  // 9. Device files: read-only (/dev/null, /dev/zero, etc.).
+  // 9. Exact device files: read/write without device-ioctl authority.
   add_device_files(rules, scope, *plan.anchor_set);
 
-  // Bind every rule to the descriptor identity validated in the parent. The
-  // child reopens and verifies this identity before adding that same descriptor
-  // to Landlock, closing pathname-replacement races across fork.
+  // Bind approved identity now; application preparation reopens and validates
+  // it in the parent immediately before fork, retaining exact rule descriptors.
   if (auto sealed = seal_filesystem_rule_identities(rules, *plan.anchor_set); !sealed)
   {
     mark_unavailable(plan, "containment filesystem rule identity could not be sealed");
@@ -371,68 +367,52 @@ DevelopmentContainmentPlan prepare_development_containment(ava::command::Command
   return plan;
 }
 
-ava::core::VoidResult apply_containment_in_child(DevelopmentContainmentPlan const& plan)
+ContainmentChildStatus apply_containment_in_child(PreparedContainment& prepared) noexcept
 {
-  if (plan.availability != ContainmentAvailability::Available)
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "containment plan is not available"));
-
-  // Set no_new_privs first. The kernel requires PR_SET_NO_NEW_PRIVS before
-  // both landlock_restrict_self and seccomp filter installation. It is
-  // inherited across execve and prevents privilege escalation through setuid.
-  if (auto result = apply_no_new_privs(); !result)
-    return result;
-
-  // Install Landlock filesystem rules. Landlock is enforced as long as the
-  // ruleset is properly installed and persists across execve.
-  if (auto result = apply_landlock_in_child(plan); !result)
-    return result;
-
-  // Both modes restrict socket domains and io_uring; network-denied commands
-  // additionally reject socket() and connect(), retaining private pair IPC.
-  if (auto result = apply_seccomp_network_filter(plan.network_allowed); !result)
-    return result;
-
-  return {};
+  if (!prepared.ruleset || prepared.rules.empty())
+    return {ContainmentFailureStage::DescriptorIdentity, EINVAL};
+  for (auto const& rule : prepared.rules)
+  {
+    struct stat status{};
+    if (::fstat(rule.descriptor.get(), &status) != 0)
+      return {ContainmentFailureStage::DescriptorIdentity, errno};
+    auto const& approved = rule.identity;
+    if (status.st_dev != approved.st_dev || status.st_ino != approved.st_ino || status.st_mode != approved.st_mode || status.st_uid != approved.st_uid ||
+        status.st_gid != approved.st_gid || status.st_rdev != approved.st_rdev)
+      return {ContainmentFailureStage::DescriptorIdentity, ESTALE};
+  }
+  if (auto status = apply_no_new_privs(); !status)
+    return status;
+  if (::syscall(SYS_landlock_restrict_self, prepared.ruleset.get(), 0) != 0)
+    return {ContainmentFailureStage::Landlock, errno};
+  // Close authority before user code; reset only calls close and scalar stores.
+  prepared.ruleset.reset();
+  for (auto& rule : prepared.rules)
+    rule.descriptor.reset();
+  return apply_seccomp_network_filter(prepared.network_allowed);
 }
 
-void close_inherited_fds_except(int keep_fd_a, int keep_fd_b, int keep_fd_c) noexcept
+ava::core::Error containment_child_error(ContainmentChildStatus status)
 {
-  // Use close_range(2) where available for O(1) bulk closure, then fall back
-  // to a bounded loop. The handshake fds and the approved executable
-  // descriptor are never closed before descriptor exec.
-  int const lo = STDERR_FILENO + 1;
-  auto const close_range_available = [](unsigned int low, unsigned int high) { return ::syscall(SYS_close_range, low, high, 0u) == 0; };
-
-  std::array<int, 3> keep_fds{keep_fd_a, keep_fd_b, keep_fd_c};
-  std::ranges::sort(keep_fds);
-  auto const unique_end = std::unique(keep_fds.begin(), keep_fds.end());
-  unsigned int next = static_cast<unsigned int>(lo);
-  for (auto keep_iterator = keep_fds.begin(); keep_iterator != unique_end; ++keep_iterator)
+  char const* message = "invalid containment child status";
+  switch (status.stage)
   {
-    auto const keep_fd = *keep_iterator;
-    if (keep_fd < lo)
-      continue;
-    auto const keep = static_cast<unsigned int>(keep_fd);
-    if (next < keep)
-      static_cast<void>(close_range_available(next, keep - 1));
-    next = keep + 1;
+    case ContainmentFailureStage::None:
+      break;
+    case ContainmentFailureStage::DescriptorIdentity:
+      message = "Landlock rule descriptor changed after containment approval";
+      break;
+    case ContainmentFailureStage::NoNewPrivileges:
+      message = "failed to set PR_SET_NO_NEW_PRIVS";
+      break;
+    case ContainmentFailureStage::Landlock:
+      message = "failed to enforce Landlock ruleset";
+      break;
+    case ContainmentFailureStage::Seccomp:
+      message = "failed to install seccomp network filter";
+      break;
   }
-  // Close everything above the final kept descriptor (including very high
-  // descriptors beyond the sysconf bound). keep_fd is an int, so next cannot
-  // wrap here.
-  static_cast<void>(close_range_available(next, ~0u));
-
-  // Bounded fallback: iterate and close any remaining non-keep fds. This
-  // catches cases where close_range is unavailable (ENOSYS) or a segment
-  // failed. The bound prevents scanning millions of entries.
-  long const open_max = ::sysconf(_SC_OPEN_MAX);
-  int const max_fd = open_max > 0 ? static_cast<int>(open_max) : 1024;
-  for (int fd = lo; fd < max_fd; ++fd)
-  {
-    if (fd == keep_fd_a || fd == keep_fd_b || fd == keep_fd_c)
-      continue;
-    static_cast<void>(::close(fd));
-  }
+  return ava::core::Error(ava::core::ErrorCategory::PermissionDenied, message).with_context("cause", std::strerror(status.error_number));
 }
 
 bool containment_is_available(DevelopmentContainmentPlan const& plan) noexcept

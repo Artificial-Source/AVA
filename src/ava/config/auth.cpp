@@ -131,6 +131,8 @@ ava::core::Error malformed_provider_credential_error(std::string_view provider_i
 
 std::optional<ProviderCredential> parse_provider_credential(std::string_view content, std::string_view provider_id, std::filesystem::path const& source_path)
 {
+  if (!ava::core::json::is_valid_object(content))
+    return std::nullopt;
   auto const provider = ava::core::json::object_field(content, provider_id);
   if (!provider)
     return std::nullopt;
@@ -252,15 +254,20 @@ long long unix_time_seconds()
   return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+bool oauth_refresh_due(long long expires_at, long long now_seconds)
+{
+  return expires_at > 0 &&
+         (now_seconds > std::numeric_limits<long long>::max() - kOAuthRefreshSkewSeconds || expires_at <= now_seconds + kOAuthRefreshSkewSeconds);
+}
+
 bool should_refresh_openai_credential(OpenAICredential const& credential, long long now_seconds)
 {
-  return credential.type == OpenAICredentialType::OAuth && credential.expires_at > 0 && credential.expires_at <= now_seconds + kOAuthRefreshSkewSeconds;
+  return credential.type == OpenAICredentialType::OAuth && oauth_refresh_due(credential.expires_at, now_seconds);
 }
 
 bool should_refresh_anthropic_credential(ProviderCredential const& credential, long long now_seconds)
 {
-  return credential.provider_id == kAnthropicProviderId && credential.credential_type == "oauth" && credential.expires_at > 0 &&
-         credential.expires_at <= now_seconds + kOAuthRefreshSkewSeconds;
+  return credential.provider_id == kAnthropicProviderId && credential.credential_type == "oauth" && oauth_refresh_due(credential.expires_at, now_seconds);
 }
 
 ava::core::Result<ProviderCredential> parse_anthropic_oauth_refresh_response(std::string_view body, ProviderCredential const& credential, long long now_seconds)
@@ -380,6 +387,8 @@ ava::core::Result<ProviderCredential> anthropic_credential_for_request(XdgPaths 
 
 std::optional<OpenAICredential> parse_openai_credential(std::string_view content, std::filesystem::path const& source_path)
 {
+  if (!ava::core::json::is_valid_object(content))
+    return std::nullopt;
   auto const openai = ava::core::json::object_field(content, "openai");
   std::string_view const scope = openai ? std::string_view(*openai) : content;
   if (auto const type = ava::core::json::string_field(scope, "type"))

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/plugin/manifest.h"
 #include "ava/core/result.h"
 

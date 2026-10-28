@@ -82,6 +82,7 @@ class ChunkedStreamingTransport final : public ava::http::Transport
  public:
   explicit ChunkedStreamingTransport(std::vector<std::string> chunks, int status_code = 200);
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override;
   [[nodiscard]] bool supports_streaming() const noexcept override;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send_streaming(ava::http::HttpRequest const& request, BodyChunkSink on_body_chunk,
@@ -100,6 +101,7 @@ class BlockingResponseTransport final : public ava::http::Transport
  public:
   explicit BlockingResponseTransport(ava::http::HttpResponse response);
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override;
   bool wait_for_request(std::chrono::milliseconds timeout) const;
   void release();
@@ -131,6 +133,7 @@ class MutatingSummaryTransport final : public ava::http::Transport
  public:
   MutatingSummaryTransport(ava::agent::SessionAppendSink append_sink, std::vector<ava::http::HttpResponse> responses, std::size_t mutate_requests = 1);
 
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override;
   [[nodiscard]] std::vector<ava::http::HttpRequest> const& requests() const noexcept;
 

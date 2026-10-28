@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/plugin/manifest.h"
 #include "ava/plugin/ui_protocol.h"
+#include "ava/core/hex.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
@@ -114,17 +115,6 @@ std::optional<std::size_t> value_end(std::string_view text, std::size_t start)
   return std::nullopt;
 }
 
-int hex_value(char ch)
-{
-  if (ch >= '0' && ch <= '9')
-    return ch - '0';
-  if (ch >= 'a' && ch <= 'f')
-    return ch - 'a' + 10;
-  if (ch >= 'A' && ch <= 'F')
-    return ch - 'A' + 10;
-  return -1;
-}
-
 std::optional<std::uint32_t> hex_code_unit(std::string_view text, std::size_t start)
 {
   if (start + 4 > text.size())
@@ -132,7 +122,7 @@ std::optional<std::uint32_t> hex_code_unit(std::string_view text, std::size_t st
   std::uint32_t result = 0;
   for (std::size_t index = start; index < start + 4; ++index)
   {
-    auto const value = hex_value(text[index]);
+    auto const value = ava::core::hex_digit_value(text[index]);
     if (value < 0)
       return std::nullopt;
     result = (result << 4U) | static_cast<std::uint32_t>(value);

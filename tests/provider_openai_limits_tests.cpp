@@ -114,6 +114,33 @@ void test_closed_provider_finish_reason_catalog()
 void test_openai_provider_parser_budgets()
 {
   ava::provider::OpenAIProvider const provider("https://api.example.test");
+  {
+    auto parser = provider.Provider::create_stream_parser();
+    std::string const boundary(ava::provider::kMaxProviderSseBufferedBytes, 'x');
+    auto const accepted = parser->append(boundary);
+    auto const overflow = parser->append("x");
+    auto const ignored = parser->append("data: [DONE]\n\n");
+    auto const finished = parser->finish();
+    expect(accepted && accepted->empty() && overflow && overflow->size() == 1 && overflow->front().type == ava::provider::StreamEventType::Error && ignored &&
+               ignored->empty() && finished && finished->empty(),
+           "default provider parser bounds aggregate bytes and latches overflow until finish");
+    auto const reused = parser->append("data: {\"text\":\"fresh\"}\n\n");
+    auto const reused_finish = parser->finish();
+    expect(reused && reused_finish && reused_finish->size() == 1 && reused_finish->front().text == "fresh",
+           "default provider parser starts with empty state after finishing an overflow");
+    for (bool const streaming : {false, true})
+    {
+      auto const oversized = provider.Provider::parse_response({.status_code = 200, .headers = {}, .body = boundary + "x"}, streaming);
+      expect(!oversized && oversized.error().message().find("parser limit exceeded") != std::string::npos,
+             "default provider buffered response enforces its byte bound before decoding");
+    }
+    std::string records;
+    for (std::size_t index = 0; index < ava::provider::kMaxProviderParserEvents; ++index)
+      records += "data: {\"text\":\"x\"}\n\n";
+    auto const excessive_events = provider.Provider::parse_response({.status_code = 200, .headers = {}, .body = std::move(records)}, true);
+    expect(excessive_events && excessive_events->size() == 1 && excessive_events->front().type == ava::provider::StreamEventType::Error,
+           "default provider response bounds event expansion independently of response bytes");
+  }
   ava::tests::test_provider_parser_budgets(
       provider, [](std::string const& text) { return R"({"status":"completed","output_text":")" + text + R"("})"; },
       [](std::string const& text) { return R"(data: {"type":"response.output_text.delta","delta":")" + text + R"("})"; }, {},

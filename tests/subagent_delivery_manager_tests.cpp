@@ -179,6 +179,7 @@ class DeliveryTransport final : public ava::http::Transport
     state_->changed.notify_all();
   }
 
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     {
@@ -309,6 +310,9 @@ DeliveryFixture make_fixture(std::string_view name, std::shared_ptr<DeliveryFact
   if (!manager)
     return fixture;
   fixture.manager = *manager;
+  auto manager_owner = fixture.manager->weak_from_this().lock();
+  expect(manager_owner.get() == fixture.manager.get() && !manager_owner.owner_before(fixture.manager) && !fixture.manager.owner_before(manager_owner),
+         "delivery manager factory initializes shared_from_this with the returned shared owner");
   ava::app::runtime::OpenContext options;
   options.workspace_dir = workspace;
   options.current_dir = workspace;

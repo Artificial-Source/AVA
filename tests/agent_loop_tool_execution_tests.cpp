@@ -153,6 +153,24 @@ void test_agent_loop_parallel_read_search_enforces_worker_caps()
   }
 }
 
+void test_agent_loop_parallel_tools_preserve_execution_cancellation()
+{
+  agent_loop_test::AgentLoopFixture fixture("parallel-tool-execution-cancel");
+  ava::tests::write_test_file(fixture.workspace / "note.txt", "must not be read");
+  auto options = fixture.options();
+  options.parallel_read_search_tools = true;
+  options.cancel_requested = [] { return false; };
+  options.tool_execution.cancel_requested = [] { return true; };
+  ava::agent::AgentLoop loop(std::move(options));
+  ava::tests::FakeTransport transport({
+      sse_response(tool_call_sse("read_canceled", "read_file", R"({"path":"note.txt"})") + "data: [DONE]\n\n"),
+      sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"unexpected continuation\"}\n\ndata: [DONE]\n\n"),
+  });
+  auto result = loop.run_turn("read", fixture.store, fixture.provider, transport);
+  expect(!result && result.error().code() == ava::core::ErrorCode::Canceled && transport.requests().size() == 1,
+         "parallel workers retain the admitted tool-execution cancellation route instead of falling back to the parent callback");
+}
+
 void test_agent_loop_multiple_tools_and_denied_continuation()
 {
   auto const root = create_empty_root("agent-multi-tools");

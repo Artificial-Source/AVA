@@ -1,6 +1,8 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/app/command_format.h"
 #include "ava/app/command_permissions.h"
+#include "ava/app/command_session_support_internal.h"
 #include "ava/app/runtime/Session.h"
 #include "ava/session/session_store.h"
 #include "ava/permissions/permission_rules.h"
@@ -20,9 +22,13 @@
 namespace ava::app {
 namespace {
 
+using session_command_support::trim_ascii;
+
 struct ParsedAddRule
 {
   ava::permissions::PermissionRuleDraft draft;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct PermissionAuditRow
@@ -47,6 +53,8 @@ struct PermissionAuditRow
   std::string global_recipe_key;
   std::string workspace_recipe_key;
   std::string effective_allowed_scopes;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 std::string permissions_usage()
@@ -67,13 +75,6 @@ std::string permissions_usage()
          "operations: read, search, edit, bash, network.fetch, network.search, lsp.server.launch, lsp.query, "
          "skill, task, plugin.execute, plugin.tool.call, plugin.command.run, plugin.ui.present, plugin.event.observe, mcp.server.launch, "
          "mcp.server.connect, mcp.tool.call, mcp.resource.read";
-}
-
-std::string trim_ascii(std::string_view text)
-{
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) text.remove_prefix(1);
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0) text.remove_suffix(1);
-  return std::string(text);
 }
 
 std::string lower_ascii(std::string_view text)
@@ -1296,7 +1297,7 @@ ava::core::Result<CommandResult> run_permissions_command(runtime::session_ts& un
   CommandResult result;
   result.handled = true;
 
-  auto const argument = command_argument(request.command, "/permissions");
+  auto const argument = trim_ascii(command_argument(request.command, "/permissions"));
   auto tokens = parse_permission_command_tokens(argument);
   if (!tokens)
   {

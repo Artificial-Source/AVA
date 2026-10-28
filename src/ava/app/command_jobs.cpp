@@ -352,6 +352,17 @@ enum class JobsCommandKind
   Usage,
 };
 
+// Keep history eligibility and dispatch validation on the same command grammar.
+bool valid_job_action_arguments(std::vector<std::string_view> const& parts)
+{
+  if (parts.size() < 2)
+    return false;
+  auto const action = parts.front();
+  auto const expected_max = action == "wait" ? std::size_t{3} : std::size_t{2};
+  return (action == "show" || action == "wait" || action == "result" || action == "cancel" || action == "promote") && parts.size() <= expected_max &&
+         safe_job_id(parts[1]);
+}
+
 JobsCommandKind classify_jobs_command(std::string_view arguments)
 {
   auto const parts = split(arguments);
@@ -360,10 +371,7 @@ JobsCommandKind classify_jobs_command(std::string_view arguments)
   if (parts.size() == 1 && parts.front() == "history")
     return JobsCommandKind::DisplayHistory;
   auto const action = parts.front();
-  std::size_t const expected_min = 2;
-  std::size_t const expected_max = action == "wait" ? 3 : 2;
-  if ((action != "show" && action != "wait" && action != "result" && action != "cancel" && action != "promote") || parts.size() < expected_min ||
-      parts.size() > expected_max || !safe_job_id(parts[1]))
+  if (!valid_job_action_arguments(parts))
   {
     return JobsCommandKind::Usage;
   }
@@ -499,10 +507,7 @@ ava::core::Result<CommandResult> run_jobs_command(std::shared_ptr<ava::agent::Su
   }
 
   auto const action = parts.front();
-  std::size_t const expected_min = action == "wait" ? 2 : 2;
-  std::size_t const expected_max = action == "wait" ? 3 : 2;
-  if ((action != "show" && action != "wait" && action != "result" && action != "cancel" && action != "promote") || parts.size() < expected_min ||
-      parts.size() > expected_max || !safe_job_id(parts[1]))
+  if (!valid_job_action_arguments(parts))
   {
     result.output.push_back(usage());
     return result;

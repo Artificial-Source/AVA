@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/app/acp/codec_json_internal.h"
 #include "ava/app/acp/permission.h"
 #include "ava/app/acp/protocol.h"
 #include "ava/app/acp/session_update.h"
@@ -243,7 +244,10 @@ ava::core::Result<std::string> encode_permission_request_params(std::string_view
 
 std::expected<AcpPermissionSelection, JsonRpcError> decode_permission_response(std::string_view result_json)
 {
-  auto result = Json::parse(result_json, nullptr, false, true);
+  auto decoded = decode_json_value(result_json);
+  if (!decoded)
+    return std::unexpected(std::move(decoded.error()));
+  auto const& result = *decoded;
   if (!result.is_object())
     return std::unexpected(invalid_permission_response("session/request_permission result must be an object"));
   auto outcome = result.find("outcome");

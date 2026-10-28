@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "ava/config/auth_file_store.h"
 #include "ava/config/auth_record.h"
+#include "ava/core/UniqueFd.h"
+#include "ava/core/fd_io.h"
 
 #include <algorithm>
 #include <array>
@@ -158,7 +160,7 @@ ava::core::VoidResult write_all_to_fd(int fd, std::string_view body, std::filesy
   std::size_t offset = 0;
   while (offset < body.size())
   {
-    auto const written = ::write(fd, body.data() + offset, body.size() - offset);
+    auto const written = ava::core::restart_on_eintr([&] { return ::write(fd, body.data() + offset, body.size() - offset); });
     if (written < 0)
     {
       auto error = auth_file_error(ava::core::ErrorCategory::Io, "failed to write auth file", path);
@@ -186,14 +188,19 @@ ava::core::VoidResult fsync_fd(int fd, std::filesystem::path const& path, std::s
 ava::core::VoidResult fsync_parent_dir(std::filesystem::path const& path)
 {
   auto const parent = path.parent_path();
-  ScopedFd const dir_fd(::open(parent.c_str(), O_RDONLY | O_CLOEXEC));
+  ava::core::UniqueFd const dir_fd(ava::core::restart_on_eintr([&] { return ::open(parent.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY); }));
   if (dir_fd.get() < 0)
   {
     auto error = auth_file_error(ava::core::ErrorCategory::Io, "failed to open auth directory for sync", parent);
     error.with_context("cause", errno_message());
     return std::unexpected(std::move(error));
   }
-  return fsync_fd(dir_fd.get(), parent, "failed to sync auth directory");
+  int const error_number = ava::core::fsync_with_restart(dir_fd.get());
+  if (error_number == 0)
+    return {};
+  auto error = auth_file_error(ava::core::ErrorCategory::Io, "failed to sync auth directory", parent);
+  error.with_context("cause", std::strerror(error_number));
+  return std::unexpected(std::move(error));
 }
 
 ava::core::Result<ScopedFd> acquire_auth_lock(XdgPaths const& paths)
@@ -222,6 +229,9 @@ ava::core::Result<ScopedFd> acquire_auth_lock(XdgPaths const& paths)
   {
     return std::unexpected(auth_file_error(ava::core::ErrorCategory::PermissionDenied, "auth lock file is not regular", lock_path));
   }
+  if (opened_st.st_uid != ::geteuid() || opened_st.st_nlink != 1)
+    return std::unexpected(
+        auth_file_error(ava::core::ErrorCategory::PermissionDenied, "auth lock file must be owned by the current user and not hard-linked", lock_path));
   if (::fchmod(fd.get(), S_IRUSR | S_IWUSR) != 0)
   {
     auto error = auth_file_error(ava::core::ErrorCategory::Io, "failed to set auth lock permissions", lock_path);
@@ -288,8 +298,10 @@ ava::core::VoidResult write_auth_file_atomic(std::filesystem::path const& path, 
       return std::unexpected(std::move(error));
     }
     cleanup.dismiss();
-    static_cast<void>(fsync_parent_dir(path));
-    return {};
+    auto synced = fsync_parent_dir(path);
+    if (!synced)
+      synced.error().with_context("publication", "auth file replaced; directory durability not confirmed");
+    return synced;
   }
   return std::unexpected(auth_file_error(ava::core::ErrorCategory::Io, "failed to create unique temporary auth file", path));
 }
@@ -334,7 +346,7 @@ ava::core::Result<CandidateRead> read_text_if_exists(std::filesystem::path const
     return std::unexpected(std::move(error));
   }
 
-  int flags = O_RDONLY | O_CLOEXEC;
+  int flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK;
 #ifdef O_NOFOLLOW
   flags |= O_NOFOLLOW;
 #endif
@@ -400,7 +412,7 @@ ava::core::Result<CandidateRead> read_text_if_exists(std::filesystem::path const
   std::array<char, 4096> buffer{};
   while (true)
   {
-    auto const bytes_read = ::read(fd.get(), buffer.data(), buffer.size());
+    auto const bytes_read = ava::core::restart_on_eintr([&] { return ::read(fd.get(), buffer.data(), buffer.size()); });
     if (bytes_read == 0)
       break;
     if (bytes_read < 0)

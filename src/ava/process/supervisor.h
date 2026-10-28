@@ -257,6 +257,9 @@ class Supervisor
   [[nodiscard]] ava::core::VoidResult account_output(ProcessHandle const& handle, StreamKindV1 stream, std::uint64_t bytes, bool truncated);
 
   [[nodiscard]] ProcessSnapshotV1 snapshot() const;
+  // Bounded caller-visible settlement. Incomplete exact children remain owned
+  // by a joinable reaper even after this deadline and monitor shutdown. Final
+  // state destruction waits for that reaper; it never abandons a delayed child.
   [[nodiscard]] ShutdownResultV1 shutdown(ProcessDeadline deadline) noexcept;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

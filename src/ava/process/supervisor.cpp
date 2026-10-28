@@ -622,6 +622,9 @@ ShutdownResultV1 Supervisor::shutdown(ProcessDeadline deadline) noexcept
     implementation_->shutdown_result = ShutdownResultV1{.complete = incomplete == 0,
                                                         .incomplete_count = std::min(incomplete, kMaxLiveProcessRecordsV1),
                                                         .settled_count = state->settled_records - settled_before};
+    // Incomplete exact children have moved to state->child_reaper. Stopping and
+    // joining the monitor here cannot drop that ownership or lengthen this
+    // public deadline; the separately owned reaper joins at state destruction.
     state->stop_monitor = true;
   }
   detail::notify_monitor_state(state);

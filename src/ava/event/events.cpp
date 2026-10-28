@@ -4,6 +4,7 @@
 #include "ava/core/json.h"
 #include "ava/core/mode.h"
 
+#include <cstddef>
 #include <type_traits>
 #include <utility>
 
@@ -459,9 +460,10 @@ void EventBus::subscribe(EventEnvelopeSink sink)
 
 ava::core::VoidResult EventBus::publish(EventEnvelope const& envelope) const
 {
-  for (auto const& sink : sinks_)
+  auto const subscriber_count = sinks_.size();
+  for (std::size_t index = 0; index < subscriber_count; ++index)
   {
-    if (auto published = sink(envelope); !published)
+    if (auto published = sinks_[index](envelope); !published)
       return std::unexpected(std::move(published.error()));
   }
   return {};

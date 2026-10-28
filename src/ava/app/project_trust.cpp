@@ -1,16 +1,19 @@
 #include "sys.h"
 #include "ava/app/project_trust.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/atomic_file.h"
 #include "ava/core/error.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
 
 #include <algorithm>
 #include <cctype>
-#include <fstream>
+#include <cerrno>
+#include <cstring>
 #include <optional>
-#include <sstream>
 #include <utility>
+#include <fcntl.h>
 
 namespace ava::app {
 namespace {
@@ -90,32 +93,37 @@ ava::core::Result<std::string> read_trust_file(std::filesystem::path const& path
 {
   if (path.empty() || !path_exists(path))
     return std::string{};
-  std::error_code size_error;
-  auto const size = std::filesystem::file_size(path, size_error);
-  if (size_error)
+  // Preserve configured symlink resolution, but inspect and bound the exact
+  // opened file rather than trusting a pathname size check before an unbounded read.
+  ava::core::UniqueFd file(ava::core::restart_on_eintr([&path] { return ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK); }));
+  if (!file)
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to inspect project trust file")
+    auto const error_number = errno;
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to open project trust file")
                                .with_context("path", path.string())
-                               .with_context("cause", size_error.message()));
+                               .with_context("cause", std::strerror(error_number)));
   }
-  if (size > kMaxTrustFileBytes)
+  auto metadata = ava::core::prepare_regular_descriptor(file.get());
+  if (!metadata)
+  {
+    auto error = ava::core::open_regular_error(metadata.error(), "project trust file");
+    error.with_context("path", path.string());
+    return std::unexpected(std::move(error));
+  }
+  auto content = ava::core::read_descriptor_bounded(file.get(), kMaxTrustFileBytes);
+  if (!content && content.error() == EFBIG)
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "project trust file is too large")
                                .with_context("path", path.string())
                                .with_context("max_bytes", std::to_string(kMaxTrustFileBytes)));
   }
-  std::ifstream file(path, std::ios::binary);
-  if (!file)
+  if (!content)
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to open project trust file").with_context("path", path.string()));
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to read project trust file")
+                               .with_context("path", path.string())
+                               .with_context("cause", std::strerror(content.error())));
   }
-  std::ostringstream buffer;
-  buffer << file.rdbuf();
-  if (file.bad())
-  {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to read project trust file").with_context("path", path.string()));
-  }
-  return buffer.str();
+  return std::move(*content);
 }
 
 std::string malformed_trust_file_diagnostic(std::filesystem::path const& path, std::string reason)

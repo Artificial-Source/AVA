@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/session/record.h"
 #include "ava/session/session_metadata.h"
+#include "ava/core/ascii.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 
@@ -10,14 +11,6 @@
 
 namespace ava::session {
 namespace {
-
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7F;
-  });
-}
 
 ava::core::Error metadata_error(std::string message, std::string_view field = {})
 {
@@ -31,7 +24,7 @@ ava::core::VoidResult validate_title_field(std::optional<std::string> const& val
 {
   if (!value)
     return {};
-  if ((!allow_empty && value->empty()) || value->size() > max_bytes || has_control_byte(*value) || !ava::core::json::is_valid_utf8(*value))
+  if ((!allow_empty && value->empty()) || value->size() > max_bytes || ava::core::has_c0_or_del(*value) || !ava::core::json::is_valid_utf8(*value))
   {
     auto error = metadata_error("session title field is invalid", field);
     error.with_context("max_bytes", std::to_string(max_bytes));
@@ -53,7 +46,7 @@ ava::core::VoidResult validate_labels(std::optional<std::vector<std::string>> co
   std::vector<std::string> seen;
   for (auto const& label : *labels)
   {
-    if (label.empty() || label.size() > kMaxSessionLabelBytes || has_control_byte(label))
+    if (label.empty() || label.size() > kMaxSessionLabelBytes || ava::core::has_c0_or_del(label))
     {
       auto error = metadata_error("session label is invalid", "labels");
       error.with_context("max_bytes", std::to_string(kMaxSessionLabelBytes));
@@ -133,11 +126,11 @@ ava::core::VoidResult validate_update(SessionMetadataUpdate const& update)
     error.with_context("branch_origin", update.branch_origin);
     return std::unexpected(std::move(error));
   }
-  if (!update.actor.empty() && (update.actor.size() > kMaxSessionLabelBytes || has_control_byte(update.actor)))
+  if (!update.actor.empty() && (update.actor.size() > kMaxSessionLabelBytes || ava::core::has_c0_or_del(update.actor)))
   {
     return std::unexpected(metadata_error("session metadata actor is invalid", "actor"));
   }
-  if (update.original_cwd && (!is_canonical_absolute_path(*update.original_cwd) || has_control_byte(update.original_cwd->string())))
+  if (update.original_cwd && (!is_canonical_absolute_path(*update.original_cwd) || ava::core::has_c0_or_del(update.original_cwd->string())))
     return std::unexpected(metadata_error("session metadata original_cwd must be a canonical absolute path", "original_cwd"));
   return {};
 }

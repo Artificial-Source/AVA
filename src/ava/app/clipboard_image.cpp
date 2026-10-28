@@ -1,18 +1,20 @@
 #include "sys.h"
+#include "ava/process/deadline.h"
 #include "ava/process/environment.h"
 #include "ava/process/supervisor.h"
 #include "ava/app/clipboard_image.h"
 #include "ava/app/clipboard_image_test_support.h"
 #include "ava/session/session_store.h"
+#include "ava/core/environment_value.h"
 #include "ava/core/error.h"
+#include "ava/core/string_utils.h"
+#include "ava/core/text_case.h"
 #include "ava/core/thread.h"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -59,14 +61,6 @@ struct HelperTestInjection
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-std::optional<std::string> env_value(char const* name)
-{
-  auto const* value = std::getenv(name);
-  if (value == nullptr || *value == '\0')
-    return std::nullopt;
-  return std::string(value);
-}
-
 ava::core::Error clipboard_error(ava::core::ErrorCategory category, std::string message)
 {
   return ava::core::Error(category, std::move(message));
@@ -96,19 +90,9 @@ ava::core::Result<testing::ClipboardHelperStatusDisposition> classify_settled_he
   return testing::ClipboardHelperStatusDisposition::Unavailable;
 }
 
-Clock::time_point saturating_add(Clock::time_point value, Clock::duration duration) noexcept
-{
-  if (duration <= Clock::duration::zero())
-    return value;
-  auto const maximum = Clock::time_point::max().time_since_epoch();
-  if (value.time_since_epoch() > maximum - duration)
-    return Clock::time_point::max();
-  return value + duration;
-}
-
 std::span<std::byte> writable_bytes(std::array<char, 4096>& buffer) noexcept
 {
-  return {reinterpret_cast<std::byte*>(buffer.data()), buffer.size()};
+  return std::as_writable_bytes(std::span(buffer));
 }
 
 ava::core::Result<CapturedCommand> capture_command_stdout(ava::process::ProcessScopeV1 const& session_process_scope, std::vector<std::string> argv,
@@ -118,9 +102,9 @@ ava::core::Result<CapturedCommand> capture_command_stdout(ava::process::ProcessS
   if (argv.empty())
     return std::unexpected(clipboard_error(ava::core::ErrorCategory::InvalidArgument, "clipboard helper command is empty"));
 
-  auto const helper_deadline = saturating_add(Clock::now(), timeout);
-  auto const cleanup_deadline = saturating_add(helper_deadline, kCleanupBudget);
-  auto const settlement_deadline = saturating_add(cleanup_deadline, kSettlementObservationBudget);
+  auto const helper_deadline = ava::process::saturating_deadline_add(Clock::now(), timeout);
+  auto const cleanup_deadline = ava::process::saturating_deadline_add(helper_deadline, kCleanupBudget);
+  auto const settlement_deadline = ava::process::saturating_deadline_add(cleanup_deadline, kSettlementObservationBudget);
 
   auto operation = session_process_scope.operation();
   if (!operation)
@@ -214,8 +198,8 @@ ava::core::Result<CapturedCommand> capture_command_stdout(ava::process::ProcessS
     if (failure_reason)
       return;
     failure_reason = reason;
-    failure_cleanup_deadline = std::min(cleanup_deadline, saturating_add(Clock::now(), kCleanupBudget));
-    failure_settlement_deadline = saturating_add(*failure_cleanup_deadline, kSettlementObservationBudget);
+    failure_cleanup_deadline = std::min(cleanup_deadline, ava::process::saturating_deadline_add(Clock::now(), kCleanupBudget));
+    failure_settlement_deadline = ava::process::saturating_deadline_add(*failure_cleanup_deadline, kSettlementObservationBudget);
   };
   auto set_protocol_failure = [&] {
     if (failure_reason)
@@ -381,16 +365,8 @@ ava::core::Result<CapturedCommand> capture_command_stdout(ava::process::ProcessS
 std::string base_mime_type(std::string_view mime_type)
 {
   auto const semicolon = mime_type.find(';');
-  auto base = std::string(mime_type.substr(0, semicolon == std::string_view::npos ? mime_type.size() : semicolon));
-  while (!base.empty() && std::isspace(static_cast<unsigned char>(base.back())) != 0)
-    base.pop_back();
-  auto begin = std::size_t{0};
-  while (begin < base.size() && std::isspace(static_cast<unsigned char>(base[begin])) != 0)
-    ++begin;
-  if (begin > 0)
-    base.erase(0, begin);
-  std::ranges::transform(base, base.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return base;
+  auto const base = ava::core::trim_view(mime_type.substr(0, semicolon));
+  return ava::core::locale_lower_copy(base);
 }
 
 std::vector<std::string> split_lines(std::string_view text)
@@ -483,7 +459,7 @@ ava::core::Result<std::optional<std::string>> read_clipboard_image_xclip(ava::pr
 ava::core::Result<std::optional<std::string>> read_clipboard_image_bytes(std::optional<ava::process::ProcessScopeV1> const& session_process_scope,
                                                                          HelperTestInjection const* test_injection)
 {
-  if (env_value("TERMUX_VERSION"))
+  if (ava::core::nonempty_environment_value("TERMUX_VERSION"))
     return std::optional<std::string>{};
 
   if (!session_process_scope)
@@ -491,7 +467,7 @@ ava::core::Result<std::optional<std::string>> read_clipboard_image_bytes(std::op
     return std::unexpected(clipboard_error(ava::core::ErrorCategory::Configuration, "clipboard helper process scope is unavailable"));
   }
 
-  if (auto wayland = env_value("WAYLAND_DISPLAY"); wayland)
+  if (auto wayland = ava::core::nonempty_environment_value("WAYLAND_DISPLAY"); wayland)
   {
     auto image = read_clipboard_image_wl_paste(*session_process_scope, test_injection);
     if (!image)
@@ -506,7 +482,7 @@ ava::core::Result<std::optional<std::string>> read_clipboard_image_bytes(std::op
   if (*xclip)
     return xclip;
 
-  if (!env_value("WAYLAND_DISPLAY"))
+  if (!ava::core::nonempty_environment_value("WAYLAND_DISPLAY"))
   {
     auto image = read_clipboard_image_wl_paste(*session_process_scope, test_injection);
     if (!image)
@@ -521,7 +497,7 @@ ava::core::Result<std::optional<ava::session::ImageAttachmentRef>> import_clipbo
     ava::session::SessionStore const& store, std::optional<ava::process::ProcessScopeV1> const& session_process_scope,
     HelperTestInjection const* test_injection)
 {
-  if (auto override_file = env_value("AVA_CLIPBOARD_IMAGE_FILE"))
+  if (auto override_file = ava::core::nonempty_environment_value("AVA_CLIPBOARD_IMAGE_FILE"))
   {
     auto imported = ava::session::import_image_attachment(store, std::filesystem::path(*override_file));
     if (!imported)

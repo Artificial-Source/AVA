@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/app/command_format.h"
 #include "ava/app/command_plugins.h"
 #include "ava/app/command_tools.h"
@@ -110,6 +111,8 @@ class ExactPluginEnablementRevocation final
     }
     return revoked_;
   }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::mutex mutex_;
@@ -235,12 +238,16 @@ struct DynamicResourceListEntry
 {
   std::string plugin_id;
   ava::plugin::PluginDynamicResource resource;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct DynamicResourceFailure
 {
   std::string plugin_id;
   std::string message;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 std::string format_dynamic_resource_list_text(ava::plugin::PluginDynamicResourceKind kind, std::vector<DynamicResourceListEntry> const& entries,
@@ -529,6 +536,8 @@ struct PluginRunArguments
   std::string plugin_id;
   std::string command_name;
   std::string arguments_json = "{}";
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 std::optional<std::string_view> consume_token(std::string_view& text)

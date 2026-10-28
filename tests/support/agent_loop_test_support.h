@@ -147,6 +147,7 @@ class SharedFakeTransport final : public ava::http::Transport
   SharedFakeTransport(std::shared_ptr<std::vector<ava::http::HttpResponse>> responses, std::shared_ptr<std::vector<ava::http::HttpRequest>> requests,
                       std::shared_ptr<std::mutex> mutex);
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override;
 
  private:

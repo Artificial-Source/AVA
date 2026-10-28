@@ -1,8 +1,10 @@
 #include "sys.h"
 #include "ava/app/acp/codec.h"
+#include "ava/app/acp/codec_json_internal.h"
 #include "ava/app/acp/service.h"
 #include "ava/provider/catalog.h"
 #include "ava/provider/registry.h"
+#include "ava/core/ascii.h"
 
 #include <algorithm>
 #include <cctype>
@@ -23,15 +25,6 @@ namespace ava::app::acp {
 namespace {
 
 using Json = nlohmann::json;
-
-std::string request_id_key(JsonRpcId const& id)
-{
-  if (std::holds_alternative<NullJsonRpcId>(id))
-    return "n:";
-  if (auto const* number = std::get_if<std::int64_t>(&id))
-    return "i:" + std::to_string(*number);
-  return "s:" + std::get<std::string>(id);
-}
 
 JsonRpcError rpc_error(int code, std::string message)
 {
@@ -79,10 +72,12 @@ std::expected<Json, JsonRpcError> params_object(Request const& request, bool emp
       return Json::object();
     return std::unexpected(rpc_error(-32602, request.method + " requires params"));
   }
-  auto params = Json::parse(*request.params_json, nullptr, false, true);
-  if (empty_allowed && params.is_null())
+  auto params = decode_json_value(*request.params_json);
+  if (!params)
+    return std::unexpected(std::move(params.error()));
+  if (empty_allowed && params->is_null())
     return Json::object();
-  if (params.is_discarded() || !params.is_object())
+  if (!params->is_object())
     return std::unexpected(rpc_error(-32602, request.method + " params must be an object"));
   return params;
 }
@@ -100,14 +95,6 @@ constexpr std::size_t kMaxAcpMcpArgs = 64;
 constexpr std::size_t kMaxAcpMcpEnv = 64;
 constexpr std::size_t kMaxAcpMcpArgumentBytes = 4096;
 constexpr std::size_t kMaxAcpMcpEnvValueBytes = 16 * 1024;
-
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7f;
-  });
-}
 
 bool valid_env_name(std::string_view name)
 {
@@ -154,16 +141,16 @@ std::optional<ava::mcp::McpServerConfig> decode_stdio_mcp_server(Json const& val
   auto args = value.find("args");
   auto env = value.find("env");
   if (name == value.end() || !name->is_string() || name->get_ref<std::string const&>().empty() || name->get_ref<std::string const&>().size() > 128 ||
-      has_control_byte(name->get_ref<std::string const&>()) || command == value.end() || !command->is_string() ||
+      ava::core::has_c0_or_del(name->get_ref<std::string const&>()) || command == value.end() || !command->is_string() ||
       command->get_ref<std::string const&>().empty() || command->get_ref<std::string const&>().size() > kMaxAcpMcpArgumentBytes ||
-      has_control_byte(command->get_ref<std::string const&>()) || !std::filesystem::path(command->get_ref<std::string const&>()).is_absolute() ||
+      ava::core::has_c0_or_del(command->get_ref<std::string const&>()) || !std::filesystem::path(command->get_ref<std::string const&>()).is_absolute() ||
       args == value.end() || !args->is_array() || args->size() > kMaxAcpMcpArgs || env == value.end() || !env->is_array() || env->size() > kMaxAcpMcpEnv)
     return std::nullopt;
 
   std::vector<std::string> parsed_args;
   for (auto const& arg : *args)
   {
-    if (!arg.is_string() || arg.get_ref<std::string const&>().size() > kMaxAcpMcpArgumentBytes || has_control_byte(arg.get_ref<std::string const&>()))
+    if (!arg.is_string() || arg.get_ref<std::string const&>().size() > kMaxAcpMcpArgumentBytes || ava::core::has_c0_or_del(arg.get_ref<std::string const&>()))
       return std::nullopt;
     parsed_args.push_back(arg.get<std::string>());
   }
@@ -401,7 +388,7 @@ std::expected<std::function<void()>, JsonRpcError> AgentService::pre_admit_reque
     return std::unexpected(rpc_error(-32600, reserved.error().format()));
 
   auto admission = std::make_shared<PromptAdmission>(PromptAdmission{.host = std::move(host), .reservation = *reserved});
-  auto const key = request_id_key(request.id);
+  auto const key = id_key(request.id);
   {
     std::lock_guard lock(admissions_mutex_);
     if (prompt_admissions_.contains(key))
@@ -417,7 +404,7 @@ std::expected<std::function<void()>, JsonRpcError> AgentService::pre_admit_reque
 std::shared_ptr<AgentService::PromptAdmission> AgentService::take_prompt_admission(JsonRpcId const& id)
 {
   std::lock_guard lock(admissions_mutex_);
-  auto const found = prompt_admissions_.find(request_id_key(id));
+  auto const found = prompt_admissions_.find(id_key(id));
   if (found == prompt_admissions_.end())
     return {};
   auto admission = std::move(found->second);

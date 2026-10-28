@@ -1,9 +1,13 @@
 #include "sys.h"
 #include "ava/config/provider_config_internal.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 
+#include <algorithm>
+#include <array>
 #include <string>
 #include <string_view>
+#include <arpa/inet.h>
 
 namespace ava::config::provider_config_detail {
 
@@ -15,7 +19,7 @@ bool is_unreserved_hostname_char(char ch) noexcept
 
 bool is_valid_hostname(std::string_view host) noexcept
 {
-  if (host.empty() || host.size() > 253 || has_control_byte(host) || host.front() == '.' || host.back() == '.')
+  if (host.empty() || host.size() > 253 || ava::core::has_c0_or_del(host) || host.front() == '.' || host.back() == '.')
     return false;
   if (host.find("..") != std::string_view::npos)
     return false;
@@ -29,91 +33,25 @@ bool is_valid_hostname(std::string_view host) noexcept
 
 bool is_valid_ipv4(std::string_view host) noexcept
 {
-  int parts = 0;
-  std::size_t i = 0;
-  while (i < host.size())
-  {
-    if (parts >= 4)
-      return false;
-    if (i < host.size() && host[i] == '.')
-      return false;
-    int value = 0;
-    std::size_t digits = 0;
-    while (i < host.size() && host[i] >= '0' && host[i] <= '9')
-    {
-      value = value * 10 + (host[i] - '0');
-      if (value > 255)
-        return false;
-      ++digits;
-      ++i;
-      if (digits > 3)
-        return false;
-    }
-    if (digits == 0)
-      return false;
-    ++parts;
-    if (i == host.size())
-      break;
-    if (host[i] != '.')
-      return false;
-    ++i;
-  }
-  return parts == 4;
+  if (host.empty() || host.size() >= INET_ADDRSTRLEN || host.find('\0') != std::string_view::npos)
+    return false;
+  std::array<char, INET_ADDRSTRLEN> text{};
+  std::ranges::copy(host, text.begin());
+  in_addr address{};
+  return ::inet_pton(AF_INET, text.data(), &address) == 1;
 }
 
 bool is_valid_ipv6_literal(std::string_view host) noexcept
 {
-  // Bracketed form only, e.g. [::1]. Content is hex digits and ':' plus at most one embedded IPv4.
   if (host.size() < 4 || host.front() != '[' || host.back() != ']')
     return false;
   auto const inner = host.substr(1, host.size() - 2);
-  if (inner.empty() || inner.size() > 45)
+  if (inner.size() >= INET6_ADDRSTRLEN || inner.find('\0') != std::string_view::npos)
     return false;
-  bool saw_double_colon = false;
-  std::size_t i = 0;
-  while (i < inner.size())
-  {
-    if (inner[i] == ':')
-    {
-      if (i + 1 < inner.size() && inner[i + 1] == ':')
-      {
-        if (saw_double_colon)
-          return false;
-        saw_double_colon = true;
-        i += 2;
-        continue;
-      }
-      if (i == 0)
-        return false;
-      ++i;
-      continue;
-    }
-    std::size_t hex_digits = 0;
-    while (i < inner.size() && is_hex_digit(inner[i]))
-    {
-      ++hex_digits;
-      ++i;
-      if (hex_digits > 4)
-        return false;
-    }
-    if (hex_digits == 0)
-    {
-      // Allow a single trailing/embedded IPv4 after hex groups, e.g. [::ffff:127.0.0.1].
-      auto const rest = inner.substr(i);
-      auto const dot = rest.find('.');
-      if (dot == std::string_view::npos)
-        return false;
-      return is_valid_ipv4(rest);
-    }
-    if (i < inner.size() && inner[i] == '.')
-    {
-      // Back up over the decimal IPv4 that began with digits mistaken for hex.
-      std::size_t start = i;
-      while (start > 0 && inner[start - 1] != ':') --start;
-      return is_valid_ipv4(inner.substr(start));
-    }
-  }
-  return true;
+  std::array<char, INET6_ADDRSTRLEN> text{};
+  std::ranges::copy(inner, text.begin());
+  in6_addr address{};
+  return ::inet_pton(AF_INET6, text.data(), &address) == 1;
 }
 
 bool is_localhost_host(std::string_view host) noexcept
@@ -149,7 +87,7 @@ ava::core::VoidResult validate_request_path(std::string_view path, std::string_v
     return std::unexpected(config_error("provider request_path length is invalid", field));
   if (path.front() != '/')
     return std::unexpected(config_error("provider request_path must be an absolute path", field));
-  if (has_control_byte(path) || path.find('\\') != std::string_view::npos || path.find('?') != std::string_view::npos ||
+  if (ava::core::has_c0_or_del(path) || path.find('\\') != std::string_view::npos || path.find('?') != std::string_view::npos ||
       path.find('#') != std::string_view::npos)
     return std::unexpected(config_error("provider request_path contains forbidden characters", field));
   if (has_encoded_separator_or_dot_ambiguity(path))
@@ -165,7 +103,7 @@ ava::core::Result<ParsedBaseUrl> parse_and_validate_base_url(std::string_view ra
 {
   if (raw.empty() || raw.size() > kMaxBaseUrlBytes)
     return std::unexpected(config_error("provider base_url length is invalid", "base_url"));
-  if (has_control_byte(raw))
+  if (ava::core::has_c0_or_del(raw))
     return std::unexpected(config_error("provider base_url contains control characters", "base_url"));
   if (raw.find('\\') != std::string_view::npos)
     return std::unexpected(config_error("provider base_url must not contain backslashes", "base_url"));

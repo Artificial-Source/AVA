@@ -77,6 +77,8 @@ void test_app_rpc_posix_line_reader_wake_eof_and_fd_lifetime()
 {
   using ava::app::rpc::RpcInputTerminalOutcome;
 
+  expect(!ava::app::rpc::make_posix_rpc_line_reader(-1), "RPC POSIX line reader rejects an invalid descriptor instead of waiting forever on its wake pipe");
+
   auto fd_count = [] {
     std::error_code error;
     std::size_t count = 0;
@@ -211,6 +213,21 @@ void test_app_rpc_stream_line_reader_terminal_outcomes()
        {"ordered terminal callbacks",
         outcomes == std::vector<RpcInputTerminalOutcome>{RpcInputTerminalOutcome::Eof, RpcInputTerminalOutcome::EofWithFinalRecord,
                                                          RpcInputTerminalOutcome::Eof, RpcInputTerminalOutcome::Canceled, RpcInputTerminalOutcome::Error}}});
+
+  std::istringstream throwing_eof_input("final");
+  throwing_eof_input.exceptions(std::ios::badbit | std::ios::failbit);
+  ava::app::rpc::StreamRpcLineReader throwing_eof_reader(throwing_eof_input);
+  auto throwing_final = throwing_eof_reader.read_line(line);
+  expect(throwing_final && *throwing_final && line == "final", "RPC stream reader preserves the final record when EOF throws");
+  auto throwing_eof = throwing_eof_reader.read_line(line);
+  expect(throwing_eof && !*throwing_eof, "RPC stream reader contains exception-enabled EOF");
+
+  std::istringstream throwing_bad_input;
+  throwing_bad_input.exceptions(std::ios::badbit);
+  throwing_bad_input.setstate(std::ios::failbit);
+  ava::app::rpc::StreamRpcLineReader throwing_bad_reader(throwing_bad_input);
+  auto throwing_bad = throwing_bad_reader.read_line(line);
+  expect(!throwing_bad && throwing_bad.error().category() == ava::core::ErrorCategory::Io, "RPC stream reader reports failed input through Result");
 }
 
 void test_app_rpc_stream_reader_wake_badbit_is_canceled()
@@ -219,6 +236,7 @@ void test_app_rpc_stream_reader_wake_badbit_is_canceled()
 
   WakeBadInputBuf input_buffer;
   std::istream in(&input_buffer);
+  in.exceptions(std::ios::badbit);
   ava::app::rpc::StreamRpcLineReader reader(in, [&] noexcept { input_buffer.wake(); });
   std::vector<RpcInputTerminalOutcome> outcomes;
   std::string line;

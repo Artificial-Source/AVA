@@ -296,6 +296,8 @@ ava::core::Result<std::vector<AuthRecordMember>> parse_auth_record_members(std::
     {
       ++index;
       skip_json_ws(text, index);
+      if (index == text.size() && !ava::core::json::is_valid_object(text))
+        return std::unexpected(auth_record_error(ava::core::ErrorCategory::InvalidArgument, "auth file member has an invalid value", path));
       if (index == text.size())
         return members;
       return std::unexpected(auth_record_error(ava::core::ErrorCategory::InvalidArgument, "auth file has trailing content after JSON object", path));

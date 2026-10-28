@@ -499,22 +499,29 @@ ava::core::Result<PluginInstallSource> inspect_plugin_install_source(std::filesy
   auto manifest = load_install_manifest_at(directory->get(), source_dir / "plugin.json");
   if (!manifest)
     return std::unexpected(std::move(manifest.error()));
-  return PluginInstallSource(std::move(source_dir), std::move(*manifest));
+  return PluginInstallSource(std::move(source_dir), std::move(*manifest), std::move(*directory));
 }
 
 ava::core::Result<PluginInstallResult> install_global_plugin(PluginInstallSource source, std::filesystem::path const& global_root)
 {
   auto const& source_dir = source.directory();
   auto const& initial_manifest = source.manifest();
-
-  auto global_directory = ensure_global_plugin_install_root(global_root);
-  if (!global_directory)
-    return std::unexpected(std::move(global_directory.error()));
-  if (auto separate = ensure_install_source_is_separate(source_dir, global_root); !separate)
-    return std::unexpected(std::move(separate.error()));
   auto source_directory = open_install_directory_at(AT_FDCWD, source_dir.c_str(), source_dir, "failed to open plugin install source directory");
   if (!source_directory)
     return std::unexpected(std::move(source_directory.error()));
+  struct stat inspected_status{};
+  struct stat current_status{};
+  if (::fstat(source.directory_fd_.get(), &inspected_status) != 0 || ::fstat(source_directory->get(), &current_status) != 0)
+    return std::unexpected(filesystem_errno_error(ava::core::ErrorCategory::Io, "failed to verify plugin install source identity", source_dir, errno));
+  if (inspected_status.st_dev != current_status.st_dev || inspected_status.st_ino != current_status.st_ino)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "plugin install source directory identity changed; inspect it again")
+                               .with_context("path", source_dir.string()));
+
+  if (auto separate = ensure_install_source_is_separate(source_dir, global_root); !separate)
+    return std::unexpected(std::move(separate.error()));
+  auto global_directory = ensure_global_plugin_install_root(global_root);
+  if (!global_directory)
+    return std::unexpected(std::move(global_directory.error()));
 
   auto const destination = global_root / initial_manifest.id;
   if (auto available = ensure_destination_available(global_directory->get(), destination); !available)
@@ -575,22 +582,40 @@ ava::core::Result<PluginInstallResult> install_global_plugin(PluginInstallSource
 
 ava::core::Result<PluginRemovalResult> remove_global_plugin(PluginStatus status, std::filesystem::path const& global_root)
 {
-  if (auto root = ensure_global_plugin_install_root(global_root); !root)
+  auto root = ensure_global_plugin_install_root(global_root);
+  if (!root)
     return std::unexpected(std::move(root.error()));
   if (auto removable = ensure_removable_global_plugin(status, global_root); !removable)
     return std::unexpected(std::move(removable.error()));
 
   auto const removed_dir = status.plugin.manifest.directory;
   auto const manifest = status.plugin.manifest;
-  std::error_code remove_error;
-  std::filesystem::remove_all(removed_dir, remove_error);
-  if (remove_error)
+  auto const directory = normalized_absolute(removed_dir);
+  auto const name = directory.filename().string();
+  if (directory.parent_path() != normalized_absolute(global_root) || !valid_install_entry_name(name) || name.find('\0') != std::string::npos)
   {
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to remove plugin directory")
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "plugin removal requires a direct child of the global plugin directory")
                                .with_context("plugin", manifest.id)
-                               .with_context("path", removed_dir.string())
-                               .with_context("cause", remove_error.message()));
+                               .with_context("path", removed_dir.string()));
   }
+  // Retain both directory authorities through traversal; never reopen the checked
+  // plugin pathname after a rename or symlink substitution.
+  auto selected = open_install_directory_at(root->get(), name.c_str(), removed_dir, "failed to open plugin removal directory");
+  if (!selected)
+    return std::unexpected(std::move(selected.error()));
+  struct stat selected_status{};
+  if (::fstat(selected->get(), &selected_status) != 0)
+    return std::unexpected(filesystem_errno_error(ava::core::ErrorCategory::Io, "failed to inspect plugin removal directory", removed_dir, errno));
+  if (auto cleaned = cleanup_install_directory_contents(selected->get(), removed_dir); !cleaned)
+    return std::unexpected(std::move(cleaned.error()));
+  struct stat current_status{};
+  if (::fstatat(root->get(), name.c_str(), &current_status, AT_SYMLINK_NOFOLLOW) != 0)
+    return std::unexpected(filesystem_errno_error(ava::core::ErrorCategory::Io, "failed to inspect plugin removal entry", removed_dir, errno));
+  if (selected_status.st_dev != current_status.st_dev || selected_status.st_ino != current_status.st_ino)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "plugin removal directory changed during cleanup")
+                               .with_context("path", removed_dir.string()));
+  if (::unlinkat(root->get(), name.c_str(), AT_REMOVEDIR) != 0)
+    return std::unexpected(filesystem_errno_error(ava::core::ErrorCategory::Io, "failed to remove plugin directory", removed_dir, errno));
   return PluginRemovalResult{
       .manifest = manifest,
       .removed_directory = removed_dir,

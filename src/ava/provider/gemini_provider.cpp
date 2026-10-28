@@ -2,11 +2,11 @@
 #include "ava/http/transport.h"
 #include "ava/provider/gemini_provider.h"
 #include "ava/provider/provider_utils.h"
+#include "ava/core/environment_value.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 
 #include <cctype>
-#include <cstdlib>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -22,8 +22,8 @@ using detail::GeminiParseState;
 
 std::string configured_base_url()
 {
-  if (char const* value = std::getenv("GEMINI_BASE_URL"); value != nullptr && value[0] != '\0')
-    return value;
+  if (auto value = ava::core::nonempty_environment_value("GEMINI_BASE_URL"))
+    return std::move(*value);
   return std::string(kDefaultGeminiBaseUrl);
 }
 

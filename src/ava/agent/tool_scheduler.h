@@ -21,7 +21,7 @@ enum class ToolScheduleEligibility
   Deferred,
 };
 
-// Scheduler-internal permission gate for the future AgentLoop integration.
+// Permission gate populated by AgentLoop before parallel tool scheduling.
 // A ReadOnlyCandidate is only structurally eligible. It must be marked as
 // PreflightProvenNonInteractive after permission preflight proves the call
 // cannot Ask before the parallel scheduler may include it in a worker epoch.

@@ -2,7 +2,6 @@
 #include "ava/plugin/runner_support.h"
 #include "ava/core/json.h"
 
-#include <chrono>
 #include <utility>
 
 namespace ava::plugin {
@@ -70,16 +69,6 @@ std::filesystem::path child_working_dir(PluginManifest const& manifest, PluginRu
   if (!options.workspace_dir.empty())
     return options.workspace_dir;
   return std::filesystem::current_path();
-}
-
-std::chrono::steady_clock::time_point saturating_add(std::chrono::steady_clock::time_point value, std::chrono::steady_clock::duration duration) noexcept
-{
-  if (duration <= std::chrono::steady_clock::duration::zero())
-    return value;
-  auto const maximum = std::chrono::steady_clock::time_point::max().time_since_epoch();
-  if (value.time_since_epoch() > maximum - duration)
-    return std::chrono::steady_clock::time_point::max();
-  return value + duration;
 }
 
 }  // namespace ava::plugin

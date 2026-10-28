@@ -9,7 +9,9 @@
 #include "ava/agent/mode.h"
 #include "ava/tools/bash_tool.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/AnchorOpen_test_support.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/close_descriptors.h"
 #include "ava/core/trusted_home.h"
 
 #include <algorithm>
@@ -38,6 +40,7 @@
 #include <pwd.h>
 #include <sched.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -216,7 +219,9 @@ void test_containment_fd_closure_keeps_bound_executable()
   if (child == 0)
   {
     static_cast<void>(::close(report[0]));
-    containment::close_inherited_fds_except(report[1], handshake_fd, executable_fd);
+    std::array<int, 3> const preserved{report[1], handshake_fd, executable_fd};
+    if (ava::core::close_nonstandard_fds_except(preserved) != 0)
+      _exit(3);
     child_state = {::fcntl(report[1], F_GETFD), ::fcntl(handshake_fd, F_GETFD), ::fcntl(executable_fd, F_GETFD), ::fcntl(inherited_fd, F_GETFD)};
     bool const reported = write_all_to_descriptor_for_test(report[1], child_state.data(), sizeof(child_state));
     static_cast<void>(::close(report[1]));
@@ -244,6 +249,35 @@ void test_containment_fd_closure_keeps_bound_executable()
                           {"handshake retained", observed[1] >= 0},
                           {"executable retained", observed[2] >= 0},
                           {"inherited fd closed", observed[3] == -1}});
+}
+
+void test_descriptor_closure_above_lowered_hard_limit()
+{
+  for (int const denied : {ENOSYS, EPERM})
+  {
+    auto const status = ava::tests::run_in_child_with_syscall_errno(SYS_close_range, std::nullopt, denied, [] {
+      int const retained = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+      int const high = retained >= 0 ? ::fcntl(retained, F_DUPFD_CLOEXEC, 256) : -1;
+      if (retained < 0 || high < 256)
+        return 1;
+      rlimit const lowered{.rlim_cur = 64, .rlim_max = 64};
+      if (::setrlimit(RLIMIT_NOFILE, &lowered) != 0)
+        return 2;
+      std::array<int, 1> const keep{retained};
+      if (ava::core::close_nonstandard_fds_except(keep) != 0)
+        return 3;
+      if (::fcntl(retained, F_GETFD) < 0)
+        return 4;
+      return ::fcntl(high, F_GETFD) == -1 && errno == EBADF ? 0 : 5;
+    });
+    static_cast<void>(ava::tests::expect_child_success(status, "fallback closes already-open descriptors above both lowered limits"));
+  }
+  std::array<ava::tests::SyscallErrno, 2> const failures{{
+      {.number = SYS_close_range, .argument = std::nullopt, .error_number = EPERM},
+      {.number = SYS_getdents64, .argument = std::nullopt, .error_number = EIO},
+  }};
+  auto const failed = ava::tests::run_in_child_with_syscall_errno(failures, [] { return ava::core::close_nonstandard_fds_except({}) == EIO ? 0 : 1; });
+  static_cast<void>(ava::tests::expect_child_success(failed, "descriptor enumeration failure is reported instead of authorizing exec"));
 }
 
 void test_unavailable_probe_forces_ask()
@@ -491,6 +525,60 @@ void test_feature_probe()
   }
 }
 
+void test_landlock_errors_survive_descriptor_cleanup()
+{
+  if (!landlock_available())
+  {
+    ava::tests::request_skip("Landlock ABI insufficient");
+    return;
+  }
+  ContainmentFixture fix("landlock-error-cleanup");
+  struct stat identity{};
+  if (!ava::tests::require(::stat(fix.workspace.c_str(), &identity) == 0, "Landlock error fixture inspects its rule"))
+    return;
+  containment::DevelopmentContainmentPlan plan{.availability = containment::ContainmentAvailability::Available,
+                                               .profile_id = {},
+                                               .unavailable_reason = {},
+                                               .landlock_abi_version = containment::probe_landlock_abi_version(),
+                                               .filesystem_scope = {},
+                                               .handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE,
+                                               .filesystem_rules = {{.logical_path = fix.workspace,
+                                                                     .access_mask = LANDLOCK_ACCESS_FS_READ_FILE,
+                                                                     .device = static_cast<std::uint64_t>(identity.st_dev),
+                                                                     .inode = static_cast<std::uint64_t>(identity.st_ino),
+                                                                     .mode = static_cast<std::uint64_t>(identity.st_mode),
+                                                                     .owner = static_cast<std::uint64_t>(identity.st_uid),
+                                                                     .group = static_cast<std::uint64_t>(identity.st_gid),
+                                                                     .special_device = static_cast<std::uint64_t>(identity.st_rdev),
+                                                                     .identity_bound = true}},
+                                               .anchor_set = fix.anchors};
+  auto prepared = containment::prepare_containment_application(plan);
+  if (!ava::tests::require(prepared.has_value(), "Landlock application preparation succeeds in the parent"))
+    return;
+  for (long const operation : {SYS_landlock_add_rule, SYS_landlock_restrict_self})
+  {
+    std::array<ava::tests::SyscallErrno, 2> const failures{{
+        {.number = operation, .argument = std::nullopt, .error_number = EACCES},
+        {.number = SYS_close, .argument = std::nullopt, .error_number = EIO},
+    }};
+    auto const status = ava::tests::run_in_child_with_syscall_errno(failures, [&] {
+      if (operation == SYS_landlock_add_rule)
+      {
+        // Exercise the parent preparation routine in an isolated syscall-filter
+        // process; the production post-fork installer never calls this routine.
+        auto const result = containment::prepare_containment_application(plan);
+        if (result || result.error().category() != ava::core::ErrorCategory::PermissionDenied)
+          return 1;
+        auto const message = result.error().format();
+        return message.find("failed to add Landlock filesystem rule") != std::string::npos && message.find(std::strerror(EACCES)) != std::string::npos ? 0 : 2;
+      }
+      auto const result = containment::apply_containment_in_child(*prepared);
+      return !result && result.stage == containment::ContainmentFailureStage::Landlock && result.error_number == EACCES ? 0 : 3;
+    });
+    static_cast<void>(ava::tests::expect_child_success(status, "Landlock reports the failed operation and its errno, not a later close error"));
+  }
+}
+
 void test_replaced_external_path_rule_fails_child_application()
 {
   if (!landlock_available())
@@ -553,10 +641,12 @@ void test_replaced_external_path_rule_fails_child_application()
     return;
   }
 
+  auto prepared = containment::prepare_containment_application(plan);
   pid_t const child = ::fork();
   if (child == 0)
   {
-    auto const applied = containment::apply_containment_in_child(plan);
+    auto const applied = prepared ? containment::apply_containment_in_child(*prepared)
+                                  : containment::ContainmentChildStatus{containment::ContainmentFailureStage::DescriptorIdentity, ESTALE};
     _exit(applied ? 91 : 90);
   }
 
@@ -593,6 +683,21 @@ void test_contained_command_writes_workspace()
                                      ava::tools::BashOptions{.timeout = std::chrono::milliseconds(5000)});
   expect(result && result->exit_code == 0, "contained standard project command succeeds under development containment");
   expect(std::filesystem::exists(fix.build_dir / "marker.txt"), "contained command writes to workspace build directory");
+}
+
+void test_contained_command_with_close_range_denied()
+{
+  ContainmentFixture fix("close-range-denied");
+  if (!ava::tests::require(fix.write_executable("cmake", "#!/bin/sh\nexit 0\n"), "fallback fixture creates its approved command"))
+    return;
+  ScopedEnvVar const path_guard("PATH", fix.bin.string() + ":/usr/bin:/bin");
+  auto const context = fix.make_context();
+  auto const command_text = "cmake --build " + fix.build_dir.generic_string();
+  auto const status = ava::tests::run_in_child_with_syscall_errno(SYS_close_range, std::nullopt, EPERM, [&] {
+    auto const result = ava::tools::run_bash(context, command_text, ava::tools::BashOptions{.timeout = std::chrono::milliseconds(1000)});
+    return result && result->exit_code == 0 && result->containment_applied ? 0 : 1;
+  });
+  static_cast<void>(ava::tests::expect_child_success(status, "contained Bash closes descriptors through its pre-containment proc directory"));
 }
 
 void test_contained_command_writes_private_primary_group_workspace()
@@ -1333,6 +1438,41 @@ std::optional<containment::DevelopmentContainmentPlan> scoped_containment_plan_f
   return plan;
 }
 
+void test_prepared_containment_never_reopens_child_paths()
+{
+  ContainmentFixture fix("parent-prepared-rules");
+  auto options = containment_options_for_test(fix);
+  auto intent = command::CommandIntent::structured({"/bin/sh"});
+  if (!ava::tests::require(intent.has_value(), "prepared containment command is valid"))
+    return;
+  auto preparation = command::prepare_command(*intent, options);
+  if (!ava::tests::require(preparation.has_value(), "prepared containment command seals"))
+    return;
+  auto plan = containment::prepare_development_containment(*preparation, false);
+  auto prepared = containment::prepare_containment_application(plan);
+  if (!ava::tests::require(prepared.has_value(), "containment rules and path authority are prepared in the parent"))
+    return;
+  ava::core::testing::AnchorOpenTestAccess::set_before_external_reopen_hook([] { _exit(99); });
+  std::array<ava::tests::SyscallErrno, 2> const failures{{
+      {.number = SYS_openat, .argument = std::nullopt, .error_number = EDEADLK},
+      {.number = SYS_openat2, .argument = std::nullopt, .error_number = EDEADLK},
+  }};
+  auto const installed = ava::tests::run_in_child_with_syscall_errno(failures, [&] { return containment::apply_containment_in_child(*prepared) ? 0 : 1; });
+  ava::core::testing::AnchorOpenTestAccess::clear_before_external_reopen_hook();
+  static_cast<void>(ava::tests::expect_child_success(installed, "child installs retained rules with every path open denied and no AnchorOpen hook"));
+
+  // The retained inode does not waive metadata freshness. A post-preparation
+  // permission change must still fail before containment is acknowledged.
+  if (!ava::tests::require(::chmod(fix.workspace.c_str(), 0755) == 0, "change prepared workspace metadata"))
+    return;
+  auto const changed = ava::tests::run_in_child_with_syscall_errno(failures, [&] {
+    auto const status = containment::apply_containment_in_child(*prepared);
+    return !status && status.stage == containment::ContainmentFailureStage::DescriptorIdentity && status.error_number == ESTALE ? 0 : 1;
+  });
+  expect(::chmod(fix.workspace.c_str(), 0700) == 0, "restore prepared workspace metadata");
+  static_cast<void>(ava::tests::expect_child_success(changed, "child rejects metadata changed after parent preparation"));
+}
+
 void test_landlock_scopes_parent_signals_and_abstract_sockets()
 {
   ContainmentFixture fix("landlock-ipc-scope");
@@ -1340,6 +1480,9 @@ void test_landlock_scopes_parent_signals_and_abstract_sockets()
   if (!plan)
     return;
 
+  auto prepared = containment::prepare_containment_application(*plan);
+  if (!ava::tests::require(prepared.has_value(), "scope rules are prepared before fork"))
+    return;
   int const listener = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   int const connector = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   sockaddr_un address{};
@@ -1367,7 +1510,7 @@ void test_landlock_scopes_parent_signals_and_abstract_sockets()
     auto const parent = ::getppid();
     if (::kill(parent, 0) != 0)
       ::_exit(1);
-    if (!containment::apply_containment_in_child(*plan))
+    if (!containment::apply_containment_in_child(*prepared))
       ::_exit(2);
     if (::kill(::getpid(), 0) != 0 || ::kill(parent, 0) != -1 || errno != EPERM)
       ::_exit(3);
@@ -1389,6 +1532,9 @@ void test_landlock_scopes_broadcast_signals()
   auto plan = scoped_containment_plan_for_test(fix);
   if (!plan)
     return;
+  auto prepared = containment::prepare_containment_application(*plan);
+  if (!ava::tests::require(prepared.has_value(), "broadcast scope rules are prepared before fork"))
+    return;
   auto const child = ::fork();
   if (child == 0)
   {
@@ -1399,14 +1545,15 @@ void test_landlock_scopes_broadcast_signals()
     if (::unshare(CLONE_NEWPID) != 0 && ::unshare(CLONE_NEWUSER | CLONE_NEWPID) != 0)
       ::_exit(77);
     // User namespaces change numeric UID/GID presentation, not the pinned
-    // files. Translate only those identity fields before child application.
-    for (auto& rule : plan->filesystem_rules)
+    // files. Rebase the prepared identities actually consumed by the child
+    // installer, using those same descriptors rather than reopening paths.
+    for (auto& rule : prepared->rules)
     {
       struct stat status{};
-      if (::stat(rule.logical_path.c_str(), &status) != 0)
+      if (::fstat(rule.descriptor.get(), &status) != 0)
         ::_exit(2);
-      rule.owner = static_cast<std::uint64_t>(status.st_uid);
-      rule.group = static_cast<std::uint64_t>(status.st_gid);
+      rule.identity.st_uid = status.st_uid;
+      rule.identity.st_gid = status.st_gid;
     }
     auto const init = ::fork();
     if (init < 0)
@@ -1433,7 +1580,7 @@ void test_landlock_scopes_broadcast_signals()
           ::_exit(7);
         if (sender == 0)
         {
-          if (!containment::apply_containment_in_child(*plan))
+          if (!containment::apply_containment_in_child(*prepared))
             ::_exit(8);
           // Linux may return success even if every target was denied. Verify
           // delivery at the victim instead of asserting an aggregate errno.
@@ -1468,6 +1615,7 @@ void run_containment_tests()
   // Run policy and path-boundary cases before capability-dependent guards.
   test_containment_summary_redacts_paths();
   test_containment_fd_closure_keeps_bound_executable();
+  test_descriptor_closure_above_lowered_hard_limit();
   test_unavailable_probe_forces_ask();
   test_sensitive_network_enabled_remains_ask();
   test_critical_raw_remains_ask_no_containment();
@@ -1478,7 +1626,10 @@ void run_containment_tests()
   if (landlock_available() && containment::seccomp_network_filter_supported())
   {
     test_replaced_external_path_rule_fails_child_application();
+    test_landlock_errors_survive_descriptor_cleanup();
+    test_prepared_containment_never_reopens_child_paths();
     test_contained_command_writes_workspace();
+    test_contained_command_with_close_range_denied();
     test_contained_command_writes_private_primary_group_workspace();
     test_contained_command_writes_0755_workspace();
     test_contained_command_reads_system_libs();

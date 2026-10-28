@@ -1,8 +1,8 @@
 #include "sys.h"
 #include "ava/app/command_session_support_internal.h"
 #include "ava/app/runtime/Session.h"
+#include "ava/core/text_case.h"
 
-#include <algorithm>
 #include <cctype>
 #include <utility>
 
@@ -15,18 +15,11 @@ std::string trim_ascii(std::string_view text)
   return std::string(text);
 }
 
-std::string lower_ascii(std::string_view text)
-{
-  std::string lowered(text);
-  std::ranges::transform(lowered, lowered.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return lowered;
-}
-
 bool contains_ascii_case_insensitive(std::string_view text, std::string_view query)
 {
   if (query.empty())
     return true;
-  return lower_ascii(text).find(lower_ascii(query)) != std::string::npos;
+  return ava::core::locale_lower_copy(text).find(ava::core::locale_lower_copy(query)) != std::string::npos;
 }
 
 ava::core::Result<std::vector<ava::session::SessionEntry>> load_runtime_entries(runtime::session_ts const& unlocked_session)

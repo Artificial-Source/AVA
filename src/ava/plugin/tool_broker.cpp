@@ -9,6 +9,7 @@
 #include "ava/plugin/runner.h"
 #include "ava/plugin/tool_broker.h"
 #include "ava/permissions/permission.h"
+#include "ava/core/ascii.h"
 #include "ava/core/error.h"
 #include "ava/core/json.h"
 #include "ava/core/mode.h"
@@ -45,16 +46,12 @@ bool is_canceled(ava::tools::ToolContext const& context)
 
 ava::core::VoidResult reject_control_value(std::string_view value, std::string_view field, std::string_view operation)
 {
-  for (char const ch : value)
+  if (ava::core::has_c0_or_del(value))
   {
-    auto const byte = static_cast<unsigned char>(ch);
-    if (byte < 0x20 || byte == 0x7F)
-    {
-      auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "proxy argument contains a forbidden control byte");
-      error.with_context("operation", std::string(operation));
-      error.with_context("argument", std::string(field));
-      return std::unexpected(std::move(error));
-    }
+    auto error = ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "proxy argument contains a forbidden control byte");
+    error.with_context("operation", std::string(operation));
+    error.with_context("argument", std::string(field));
+    return std::unexpected(std::move(error));
   }
   return {};
 }

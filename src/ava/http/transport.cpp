@@ -1,9 +1,11 @@
 #include "sys.h"
 #include "ava/http/transport.h"
 #include "ava/observability/run_observer.h"
+#include "ava/core/text_case.h"
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <limits>
 #include <string>
@@ -13,13 +15,6 @@
 
 namespace ava::http {
 namespace {
-
-std::string lower_copy(std::string_view value)
-{
-  std::string lowered(value);
-  std::ranges::transform(lowered, lowered.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return lowered;
-}
 
 bool is_retryable_transport_error(ava::core::Error const& error) noexcept
 {
@@ -118,24 +113,12 @@ std::optional<int> retry_after_ms(HttpResponse const& response, int max_retry_af
   auto const value = retry_after_header(response);
   if (!value)
     return std::nullopt;
-  std::size_t index = 0;
-  while (index < value->size() && std::isspace(static_cast<unsigned char>((*value)[index])) != 0) ++index;
-  auto const start = index;
-  while (index < value->size() && std::isdigit(static_cast<unsigned char>((*value)[index])) != 0) ++index;
-  if (index == start)
+  int seconds = 0;
+  auto const [end, error] = std::from_chars(value->data(), value->data() + value->size(), seconds);
+  if (error != std::errc{} || end != value->data() + value->size() || seconds < 0)
     return std::nullopt;
-  try
-  {
-    auto const seconds = std::stoi(value->substr(start, index - start));
-    if (seconds < 0)
-      return std::nullopt;
-    long long const delay_ms = static_cast<long long>(seconds) * 1000LL;
-    return static_cast<int>(std::min(delay_ms, static_cast<long long>(max_retry_after_ms)));
-  }
-  catch (...)
-  {
-    return std::nullopt;
-  }
+  long long const delay_ms = static_cast<long long>(seconds) * 1000LL;
+  return static_cast<int>(std::min(delay_ms, static_cast<long long>(std::max(0, max_retry_after_ms))));
 }
 
 }  // namespace
@@ -186,7 +169,7 @@ ava::core::Result<HttpResponse> Transport::send_streaming(HttpRequest const& req
   return response;
 }
 
-RetryTransport::RetryTransport(Transport& inner, RetryOptions options) : inner_(inner), options_(options)
+RetryTransport::RetryTransport(Transport& inner, RetryOptions options) : inner_(inner), options_(std::move(options))
 {
 }
 
@@ -419,7 +402,7 @@ std::optional<std::string> retry_after_header(HttpResponse const& response)
   constexpr unsigned int kMaxRetryAfterSeconds = 86'400;
   for (auto const& [key, value] : response.headers)
   {
-    if (lower_copy(key) != "retry-after" || value.empty() || value.size() > 5)
+    if (ava::core::locale_lower_copy(key) != "retry-after" || value.empty() || value.size() > 5)
       continue;
     unsigned int seconds = 0;
     for (unsigned char const ch : value)

@@ -597,6 +597,11 @@ int main(int argc, char** argv)
         auto configuration = read_message(options);
         if (!configuration || configuration->find("\"id\":900") == std::string::npos || configuration->find("\"result\":[null,null]") == std::string::npos)
           return 2;
+        write_message(R"({"jsonrpc":"2.0","id":"config-\"quoted\"","method":"workspace/configuration","params":{"items":[{"section":"three"}]}})");
+        auto string_configuration = read_message(options);
+        if (!string_configuration || ava::core::json::string_field(*string_configuration, "id") != std::optional<std::string>("config-\"quoted\"") ||
+            string_configuration->find("\"result\":[null]") == std::string::npos)
+          return 2;
       }
       respond_initialize(*id, options);
     }

@@ -239,6 +239,9 @@ ava::core::Result<ToolRegistry> compose_tool_registry(ava::tools::ToolContext co
         return std::unexpected(std::move(registered.error()));
     if (auto registered = register_mcp_brokered_tools(registry, context); !registered)
       return std::unexpected(std::move(registered.error()));
+    // Exact composition caps available capabilities; agent/child visibility
+    // can still narrow that cap and must never be bypassed by this early return.
+    registry.apply_visibility_filter(visibility);
     return registry;
   }
 
@@ -258,12 +261,6 @@ ava::core::Result<ToolRegistry> compose_tool_registry(ava::tools::ToolContext co
     return std::unexpected(std::move(registered.error()));
   registry.apply_visibility_filter(visibility);
   return registry;
-}
-
-ToolRegistry compose_tool_registry_or_empty(ava::tools::ToolContext const& context, ToolVisibilityOptions const& visibility)
-{
-  auto registry = compose_tool_registry(context, visibility);
-  return registry ? std::move(*registry) : ToolRegistry{};
 }
 
 }  // namespace ava::agent

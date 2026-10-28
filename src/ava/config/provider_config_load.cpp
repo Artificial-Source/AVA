@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/config/provider_config_internal.h"
+#include "ava/core/UniqueFd.h"
 
 #include <array>
 #include <cerrno>
@@ -15,39 +16,6 @@
 
 namespace ava::config {
 namespace provider_config_detail {
-namespace {
-
-class ScopedFd
-{
- public:
-  explicit ScopedFd(int fd) noexcept : fd_(fd) { }
-  ScopedFd(ScopedFd const&) = delete;
-  ScopedFd& operator=(ScopedFd const&) = delete;
-  ScopedFd(ScopedFd&& other) noexcept : fd_(std::exchange(other.fd_, -1)) { }
-  ScopedFd& operator=(ScopedFd&& other) noexcept
-  {
-    if (this != &other)
-    {
-      close_if_open();
-      fd_ = std::exchange(other.fd_, -1);
-    }
-    return *this;
-  }
-  ~ScopedFd() { close_if_open(); }
-
-  [[nodiscard]] int get() const noexcept { return fd_; }
-
- private:
-  void close_if_open() noexcept
-  {
-    if (fd_ >= 0)
-      static_cast<void>(::close(fd_));
-  }
-
-  int fd_ = -1;
-};
-
-}  // namespace
 
 // nullopt => path does not exist. empty string => present zero-byte file.
 ava::core::Result<std::optional<std::string>> read_providers_file(std::filesystem::path const& path)
@@ -56,7 +24,7 @@ ava::core::Result<std::optional<std::string>> read_providers_file(std::filesyste
 #ifdef O_NOFOLLOW
   flags |= O_NOFOLLOW;
 #endif
-  ScopedFd fd(::open(path.c_str(), flags));
+  ava::core::UniqueFd fd(::open(path.c_str(), flags));
   if (fd.get() < 0)
   {
     if (errno == ENOENT)

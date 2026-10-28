@@ -4,6 +4,7 @@
 #include "tests/support/test_timeout.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/core/result.h"
+#include "ava/core/thread.h"
 
 #include <algorithm>
 #include <atomic>
@@ -308,4 +309,102 @@ void test_background_job_registry_destructor_stops_running_jobs()
 
   std::lock_guard lock(state->mutex);
   expect(state->canceled, "background registry destructor requests stop and joins running jobs");
+}
+
+void test_background_job_registry_stop_callbacks_can_reenter_cancel()
+{
+  ava::agent::BackgroundJobRegistry registry;
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool ready = false;
+  std::atomic_bool reentered = false;
+  auto started = registry.start({.title = "reentrant cancellation"}, [&](ava::agent::BackgroundJobContext const& context) {
+    std::stop_callback callback(context.stop_token, [&] {
+      auto const canceled = registry.cancel(context.job_id);
+      {
+        std::lock_guard lock(mutex);
+        reentered = canceled.has_value();
+      }
+      changed.notify_all();
+    });
+    std::unique_lock lock(mutex);
+    ready = true;
+    changed.notify_all();
+    changed.wait(lock, [&] { return reentered.load(); });
+    return ava::agent::BackgroundJobCompletion{.state = ava::agent::BackgroundJobState::Canceled, .final_text = {}, .stop_reason = {}};
+  });
+  if (!ava::tests::require(started.has_value(), "reentrant cancellation worker starts"))
+    return;
+  {
+    std::unique_lock lock(mutex);
+    expect(changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return ready; }), "stop callback is registered before cancellation");
+  }
+  auto canceled = registry.cancel(started->job_id);
+  expect(canceled.has_value() && reentered.load(), "stop callbacks can cancel the same job without taking a held thread mutex");
+  registry.shutdown();
+}
+
+void test_background_job_registry_shutdown_racing_start_preflight()
+{
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool preflight_entered = false;
+  bool release_preflight = false;
+  ava::agent::BackgroundJobRegistryOptions options;
+  options.thread_start_preflight = [&]() -> ava::core::VoidResult {
+    std::unique_lock lock(mutex);
+    preflight_entered = true;
+    changed.notify_all();
+    changed.wait(lock, [&] { return release_preflight; });
+    return {};
+  };
+  ava::agent::BackgroundJobRegistry registry(std::move(options));
+  std::atomic_bool launched = false;
+  std::atomic_bool rejected = false;
+  auto starter = ava::core::JoinThread::create("registry_start", [&] {
+    auto result = registry.start({.title = "shutdown during admission"}, [&](auto const&) {
+      launched = true;
+      return ava::agent::BackgroundJobCompletion{};
+    });
+    rejected = !result;
+  });
+  {
+    std::unique_lock lock(mutex);
+    expect(changed.wait_until(lock, ava::tests::now_plus_seconds(5), [&] { return preflight_entered; }), "start pauses at preflight before shutdown");
+  }
+  registry.shutdown();
+  {
+    std::lock_guard lock(mutex);
+    release_preflight = true;
+  }
+  changed.notify_all();
+  starter.join();
+  expect(rejected.load() && !launched.load(), "shutdown rejects a preflight-paused start instead of launching an unjoined worker afterwards");
+}
+
+void test_background_job_registry_preflight_exception_does_not_publish()
+{
+  for (bool const standard_exception : {true, false})
+  {
+    std::size_t attempts = 0;
+    ava::agent::BackgroundJobRegistryOptions options;
+    options.max_running_jobs = 1;
+    options.thread_start_preflight = [&]() -> ava::core::VoidResult {
+      if (++attempts != 1)
+        return {};
+      if (standard_exception)
+        throw std::runtime_error("preflight failed");
+      throw 7;
+    };
+    ava::agent::BackgroundJobRegistry registry(std::move(options));
+    auto worker = [](auto const&) { return ava::agent::BackgroundJobCompletion{}; };
+    auto failed = registry.start({.title = "preflight failure"}, worker);
+    expect(!failed && registry.snapshot().empty(), "throwing preflight returns an error without publishing a running record");
+    if (!failed && standard_exception)
+      expect(failed.error().format().find("preflight failed") != std::string::npos, "preflight preserves exception context");
+    auto replacement = registry.start({.title = "replacement"}, worker);
+    expect(replacement.has_value(), "preflight exception does not consume running capacity");
+    if (replacement)
+      expect(wait_for_terminal(registry, replacement->job_id).has_value(), "replacement worker finishes after preflight failure");
+  }
 }

@@ -1,16 +1,19 @@
 #include "sys.h"
 #include "ava/permissions/permission_rules_internal.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -21,57 +24,6 @@ constexpr std::size_t kMaxPermissionRuleCommandBytes = 8192;
 constexpr std::size_t kMaxPermissionRuleIdentifierBytes = 256;
 constexpr std::size_t kMaxPermissionRecipeKeyBytes = 128;
 constexpr std::size_t kMaxPermissionRecipeDisplayBytes = 1024;
-
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7F;
-  });
-}
-
-bool valid_utf8(std::string_view value)
-{
-  std::size_t index = 0;
-  while (index < value.size())
-  {
-    auto const first = static_cast<unsigned char>(value[index++]);
-    if (first < 0x80)
-      continue;
-    std::size_t continuation = 0;
-    std::uint32_t codepoint = 0;
-    if ((first & 0xe0U) == 0xc0U)
-    {
-      continuation = 1;
-      codepoint = first & 0x1fU;
-    }
-    else if ((first & 0xf0U) == 0xe0U)
-    {
-      continuation = 2;
-      codepoint = first & 0x0fU;
-    }
-    else if ((first & 0xf8U) == 0xf0U)
-    {
-      continuation = 3;
-      codepoint = first & 0x07U;
-    }
-    else
-      return false;
-    if (index + continuation > value.size())
-      return false;
-    for (std::size_t count = 0; count < continuation; ++count)
-    {
-      auto const next = static_cast<unsigned char>(value[index++]);
-      if ((next & 0xc0U) != 0x80U)
-        return false;
-      codepoint = (codepoint << 6U) | (next & 0x3fU);
-    }
-    if ((continuation == 1 && codepoint < 0x80U) || (continuation == 2 && codepoint < 0x800U) ||
-        (continuation == 3 && (codepoint < 0x10000U || codepoint > 0x10ffffU || (codepoint >= 0xd800U && codepoint <= 0xdfffU))))
-      return false;
-  }
-  return true;
-}
 
 std::string_view recipe_key_prefix(PermissionRuleScope scope)
 {
@@ -345,19 +297,17 @@ ava::core::Result<long long> exact_integer_field(std::string_view object, std::s
   {
     return std::unexpected(rule_parse_error("permission rules integer field is malformed", path, key));
   }
+  auto const digits_end = end;
   while (end < object.size() && std::isspace(static_cast<unsigned char>(object[end])) != 0) ++end;
   if (end < object.size() && object[end] != ',' && object[end] != '}')
   {
     return std::unexpected(rule_parse_error("permission rules integer field is malformed", path, key));
   }
-  try
-  {
-    return std::stoll(std::string(object.substr(*start, end - *start)));
-  }
-  catch (...)
-  {
+  long long value = 0;
+  auto const parsed = std::from_chars(object.data() + *start, object.data() + digits_end, value);
+  if (parsed.ec != std::errc{} || parsed.ptr != object.data() + digits_end)
     return std::unexpected(rule_parse_error("permission rules integer field is out of range", path, key));
-  }
+  return value;
 }
 
 ava::core::VoidResult validate_rule(PersistentPermissionRule const& rule, std::filesystem::path const& path, std::optional<std::size_t> rule_index)
@@ -385,19 +335,20 @@ ava::core::VoidResult validate_rule(PersistentPermissionRule const& rule, std::f
     return std::unexpected(rule_parse_error("critical_acknowledged cannot authorize repository-controlled cmake build or ctest commands", path,
                                             "critical_acknowledged", rule_index));
   }
-  if (!rule.actor.empty() && (!valid_identifier(rule.actor) || has_control_byte(rule.actor)))
+  if (!rule.actor.empty() && (!valid_identifier(rule.actor) || ava::core::has_c0_or_del(rule.actor)))
   {
     return std::unexpected(rule_parse_error("permission rule actor is invalid", path, "actor", rule_index));
   }
-  if (rule.reason.empty() || rule.reason.size() > kMaxPermissionRuleReasonBytes || has_control_byte(rule.reason) || !valid_utf8(rule.reason))
+  if (rule.reason.empty() || rule.reason.size() > kMaxPermissionRuleReasonBytes || ava::core::has_c0_or_del(rule.reason) ||
+      !ava::core::json::is_valid_utf8(rule.reason))
   {
     return std::unexpected(rule_parse_error("permission rule reason is invalid", path, "reason", rule_index));
   }
-  if (!rule.tool_name.empty() && (!valid_identifier(rule.tool_name) || has_control_byte(rule.tool_name)))
+  if (!rule.tool_name.empty() && (!valid_identifier(rule.tool_name) || ava::core::has_c0_or_del(rule.tool_name)))
   {
     return std::unexpected(rule_parse_error("permission rule tool_name is invalid", path, "tool_name", rule_index));
   }
-  if (rule.command.size() > kMaxPermissionRuleCommandBytes || has_control_byte(rule.command) || !valid_utf8(rule.command))
+  if (rule.command.size() > kMaxPermissionRuleCommandBytes || ava::core::has_c0_or_del(rule.command) || !ava::core::json::is_valid_utf8(rule.command))
   {
     return std::unexpected(rule_parse_error("permission rule command is invalid", path, "command", rule_index));
   }
@@ -406,12 +357,13 @@ ava::core::VoidResult validate_rule(PersistentPermissionRule const& rule, std::f
   {
     return std::unexpected(rule_parse_error("schema-v1 rules cannot contain stable command recipe fields", path, "command_recipe_key", rule_index));
   }
-  if (rule.command_recipe_key.size() > kMaxPermissionRecipeKeyBytes || has_control_byte(rule.command_recipe_key) ||
+  if (rule.command_recipe_key.size() > kMaxPermissionRecipeKeyBytes || ava::core::has_c0_or_del(rule.command_recipe_key) ||
       (!rule.command_recipe_key.empty() && !valid_recipe_key(rule.command_recipe_key, rule.scope)))
   {
     return std::unexpected(rule_parse_error("permission rule command_recipe_key is invalid for its scope", path, "command_recipe_key", rule_index));
   }
-  if (rule.recipe_display.size() > kMaxPermissionRecipeDisplayBytes || has_control_byte(rule.recipe_display) || !valid_utf8(rule.recipe_display))
+  if (rule.recipe_display.size() > kMaxPermissionRecipeDisplayBytes || ava::core::has_c0_or_del(rule.recipe_display) ||
+      !ava::core::json::is_valid_utf8(rule.recipe_display))
   {
     return std::unexpected(rule_parse_error("permission rule recipe_display is invalid", path, "recipe_display", rule_index));
   }

@@ -19,6 +19,15 @@ std::string id_debug_string(JsonRpcId const& id)
   return std::get<std::string>(id);
 }
 
+std::string id_key(JsonRpcId const& id)
+{
+  if (std::holds_alternative<NullJsonRpcId>(id))
+    return "n:";
+  if (auto const* number = std::get_if<std::int64_t>(&id))
+    return "i:" + std::to_string(*number);
+  return "s:" + std::get<std::string>(id);
+}
+
 ava::core::Error protocol_error(std::string message)
 {
   return ava::core::Error(ava::core::ErrorCategory::InvalidArgument, std::move(message));

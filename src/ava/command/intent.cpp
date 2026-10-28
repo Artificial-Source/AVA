@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/command/intent_internal.h"
+#include "ava/core/ascii.h"
 
 #include <algorithm>
 #include <array>
@@ -86,19 +87,9 @@ ava::core::Error command_error(ava::core::ErrorCategory category, std::string me
   return error;
 }
 
-bool has_forbidden_byte(std::string_view value)
-{
-  for (unsigned char const byte : value)
-  {
-    if (byte == 0 || byte < 0x20 || byte == 0x7f)
-      return true;
-  }
-  return false;
-}
-
 bool has_forbidden_path_byte(std::filesystem::path const& path)
 {
-  return has_forbidden_byte(path.string());
+  return ava::core::has_c0_or_del(path.string());
 }
 
 ava::core::VoidResult validate_limits(CommandLimits const& limits)
@@ -122,7 +113,7 @@ ava::core::Result<CompatibilityParse> parse_compatibility_command(std::string_vi
     return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "command request must not be empty"));
   if (command.size() > limits.max_request_bytes)
     return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "command request exceeds the bounded input size"));
-  if (has_forbidden_byte(command))
+  if (ava::core::has_c0_or_del(command))
     return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "command request contains a NUL or forbidden control byte"));
 
   enum class Quote
@@ -266,7 +257,7 @@ ava::core::VoidResult validate_structured_argv(std::vector<std::string> const& a
   {
     if (argument.size() > limits.max_argument_bytes)
       return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "structured command argument exceeds the bounded field size"));
-    if (has_forbidden_byte(argument))
+    if (ava::core::has_c0_or_del(argument))
       return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "structured command argument contains a NUL or forbidden control byte"));
     if (exceeds_limit(total_size, argument.size(), limits.max_request_bytes))
       return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "structured command exceeds the bounded request size"));

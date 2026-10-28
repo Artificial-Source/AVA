@@ -874,7 +874,7 @@ void test_anthropic_parsing()
            "Anthropic SSE tool input deltas parse");
     expect((*events)[4].type == ava::provider::StreamEventType::ToolCallEnd && (*events)[4].tool_call_id == "toolu_1", "Anthropic SSE tool stop parses");
     expect((*events)[5].type == ava::provider::StreamEventType::Done && (*events)[5].usage && (*events)[5].usage->input_tokens == 12 &&
-               (*events)[5].usage->output_tokens == 7 && (*events)[5].usage->cache_read_tokens == 2 &&
+               (*events)[5].usage->output_tokens == 7 && (*events)[5].usage->cache_read_tokens == 2 && (*events)[5].usage->total_tokens == 19 &&
                (*events)[5].finish_reason == ava::provider::ProviderFinishReason::ToolCalls,
            "Anthropic SSE usage and stop reason accumulate from message_delta");
   }
@@ -963,6 +963,17 @@ void test_anthropic_parsing()
   auto malformed = ava::provider::parse_anthropic_sse("data: not-json\n\n");
   expect(malformed && malformed->size() == 1 && (*malformed)[0].type == ava::provider::StreamEventType::Error,
          "Anthropic malformed SSE data produces a provider error event");
+  for (auto const terminal : {R"({"type":"message_stop"})", R"({"type":"error"})", "not-json"})
+  {
+    ava::provider::AnthropicStreamParser terminal_parser;
+    auto const first = terminal_parser.append(std::string("data: ") + terminal + "\n\n");
+    auto const trailing = terminal_parser.append(
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"after terminal\"}}\n\n"
+        "data: {\"type\":\"message_stop\"}\n\n");
+    auto const final = terminal_parser.finish();
+    expect(first && first->size() == 1 && trailing && trailing->empty() && final && final->empty(),
+           "Anthropic SSE ignores every record after completion or the first parser error");
+  }
   auto private_error = ava::provider::parse_anthropic_sse(
       "data: {\"type\":\"error\",\"error\":{\"message\":\"event: error\\ndata: ANTHROPIC_SSE_MESSAGE_CANARY\","
       "\"signature\":\"ANTHROPIC_SSE_SIGNATURE_CANARY\",\"native\":{\"reasoning\":\"ANTHROPIC_SSE_REASONING_CANARY\"}},"

@@ -124,6 +124,9 @@ struct InitializeRequest
 
 [[nodiscard]] bool ids_equal(JsonRpcId const& lhs, JsonRpcId const& rhs) noexcept;
 [[nodiscard]] std::string id_debug_string(JsonRpcId const& id);
+// Type-tagged identity for connection-local maps; unlike debug text it cannot
+// alias a string id with an integer or null id.
+[[nodiscard]] std::string id_key(JsonRpcId const& id);
 [[nodiscard]] ava::core::Error protocol_error(std::string message);
 
 }  // namespace ava::app::acp

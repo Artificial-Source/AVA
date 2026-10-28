@@ -1,8 +1,8 @@
 #pragma once
 
-#include "threadsafe/threadsafe.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/core/result.h"
+#include "threadsafe/threadsafe.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ava::app::rpc {

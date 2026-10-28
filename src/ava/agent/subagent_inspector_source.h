@@ -29,9 +29,22 @@ class SubagentCoordinator;
 // Opaque lease-bound inspection source. Constructed from a COPY of an existing
 // child SessionReadAuthority so no pathname or prompt escapes agent internals.
 // Session types stay inside this internal header; public DTOs remain path-free.
+// The coordinator and in-flight inspector/freeze operations share this source
+// so removing it from a job cannot revoke a read already holding its lease.
 class SubagentLiveInspectionSource final
 {
+  struct Impl;
+  class ConstructionKey
+  {
+    friend class SubagentLiveInspectionSource;
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
+  SubagentLiveInspectionSource(ConstructionKey, std::unique_ptr<Impl> impl);
   ~SubagentLiveInspectionSource();
 
   SubagentLiveInspectionSource(SubagentLiveInspectionSource const&) = delete;
@@ -45,9 +58,6 @@ class SubagentLiveInspectionSource final
 
  private:
   friend class SubagentCoordinator;
-
-  struct Impl;
-  explicit SubagentLiveInspectionSource(std::unique_ptr<Impl> impl);
 
   // Return an owned identity because the authority's wrapped store options are guard-protected.
   [[nodiscard]] std::string session_id() const;

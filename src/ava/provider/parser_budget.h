@@ -61,7 +61,7 @@ inline StreamEvent provider_parser_limit_event(std::string_view family)
 }
 
 // Enforce the same output bounds on buffered responses before publication.
-inline ava::core::Result<std::vector<StreamEvent>> bounded_provider_events(std::vector<StreamEvent> events, std::string_view family)
+[[nodiscard]] inline ava::core::Result<std::vector<StreamEvent>> bounded_provider_events(std::vector<StreamEvent> events, std::string_view family)
 {
   ProviderParserBudget budget;
   for (auto const& event : events)

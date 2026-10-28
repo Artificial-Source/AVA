@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/app/acp/codec.h"
+#include "ava/app/acp/codec_json_internal.h"
 #include "ava/app/acp/envelope_intent.h"
 #include "ava/core/strict_json.h"
 
@@ -197,6 +198,14 @@ ava::core::Result<std::string> dump_record(Json const& value)
 }
 
 }  // namespace
+
+std::expected<nlohmann::json, JsonRpcError> decode_json_value(std::string_view text)
+{
+  auto value = parse_embedded(text, "ACP JSON value");
+  if (!value)
+    return std::unexpected(codec_error(-32602, value.error().message()));
+  return std::move(*value);
+}
 
 DecodeResult decode_message(std::string_view record)
 {

@@ -2,6 +2,7 @@
 #include "ava/command/environment.h"
 #include "ava/lsp/bounded_file_reader.h"
 #include "ava/lsp/configured_provider.h"
+#include "ava/core/ascii.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/process_args.h"
@@ -9,12 +10,14 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -99,28 +102,23 @@ ava::core::Error config_error(ava::core::ErrorCategory category, std::string mes
   return error;
 }
 
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](unsigned char ch) { return ch < 0x20 || ch == 0x7f; });
-}
-
 bool valid_server_id(std::string_view value)
 {
-  if (value.empty() || value.size() > kMaxIdBytes || has_control_byte(value))
+  if (value.empty() || value.size() > kMaxIdBytes || ava::core::has_c0_or_del(value))
     return false;
   return std::ranges::all_of(value, [](unsigned char ch) { return std::isalnum(ch) != 0 || ch == '_' || ch == '-' || ch == '.'; });
 }
 
 bool valid_extension(std::string_view value)
 {
-  if (value.empty() || value.size() > 32 || value.front() != '.' || has_control_byte(value))
+  if (value.empty() || value.size() > 32 || value.front() != '.' || ava::core::has_c0_or_del(value))
     return false;
   return std::ranges::all_of(value.substr(1), [](unsigned char ch) { return std::isalnum(ch) != 0 || ch == '_' || ch == '-' || ch == '+'; });
 }
 
 bool valid_language_id(std::string_view value)
 {
-  if (value.empty() || value.size() > 64 || has_control_byte(value))
+  if (value.empty() || value.size() > 64 || ava::core::has_c0_or_del(value))
     return false;
   return std::ranges::all_of(value, [](unsigned char ch) { return std::isalnum(ch) != 0 || ch == '_' || ch == '-' || ch == '+' || ch == '#'; });
 }
@@ -462,7 +460,7 @@ ava::core::Result<void> parse_config(std::filesystem::path const& path, std::str
     }
     for (auto const& arg : *argv)
     {
-      if (arg.empty() || arg.size() > kMaxArgBytes || has_control_byte(arg))
+      if (arg.empty() || arg.size() > kMaxArgBytes || ava::core::has_c0_or_del(arg))
       {
         return std::unexpected(config_error(ava::core::ErrorCategory::InvalidArgument, "LSP server argv contains an invalid argument", path));
       }
@@ -605,8 +603,43 @@ struct CachedClient
   // clients may be retired without interrupting a query.
   std::shared_ptr<SubprocessLspClient> client;
   std::uint64_t last_used = 0;
+  // A null client reserves one live-client slot until startup publishes or rolls back.
+  std::thread::id starting_thread;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+class ClientAdmission final
+{
+ public:
+  ClientAdmission(std::mutex& mutex, std::condition_variable& changed, std::unordered_map<std::string, CachedClient>& clients, std::string const& key)
+      : mutex_(mutex), changed_(changed), clients_(clients), key_(key)
+  {
+  }
+  ClientAdmission(ClientAdmission const&) = delete;
+  ClientAdmission& operator=(ClientAdmission const&) = delete;
+  ClientAdmission(ClientAdmission&&) = delete;
+  ClientAdmission& operator=(ClientAdmission&&) = delete;
+  ~ClientAdmission()
+  {
+    if (!published_)
+    {
+      std::lock_guard lock(mutex_);
+      auto found = clients_.find(key_);
+      if (found != clients_.end() && !found->second.client)
+        clients_.erase(found);
+    }
+    changed_.notify_all();
+  }
+  void published() noexcept { published_ = true; }
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  std::mutex& mutex_;
+  std::condition_variable& changed_;
+  std::unordered_map<std::string, CachedClient>& clients_;
+  std::string const& key_;
+  bool published_ = false;
 };
 
 class ConfiguredLspProvider final : public DiagnosticsProvider
@@ -672,7 +705,11 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
     return (*client)->references(path, line, column, std::move(cancel_requested));
   }
 
-  void set_permission_request_ids(std::shared_ptr<std::vector<std::string>> ids) override { permission_request_ids_ = std::move(ids); }
+  void set_permission_request_ids(std::shared_ptr<std::vector<std::string>> ids) override
+  {
+    std::lock_guard lock(clients_mutex_);
+    permission_request_ids_ = std::move(ids);
+  }
 
  private:
   [[nodiscard]] ava::core::Result<std::shared_ptr<SubprocessLspClient>> client_for_path(std::filesystem::path const& path,
@@ -692,8 +729,22 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
   [[nodiscard]] ava::core::Result<std::shared_ptr<SubprocessLspClient>> start_client(ConfiguredServer const& server, std::filesystem::path const& root,
                                                                                      CancelCallback const& cancel_requested)
   {
-    std::lock_guard<std::mutex> lock(clients_mutex_);
     auto const cache_key = server.id + "\n" + root.lexically_normal().generic_string();
+    std::unique_lock lock(clients_mutex_);
+    for (;;)
+    {
+      auto const pending = clients_.find(cache_key);
+      if (pending == clients_.end() || pending->second.client)
+        break;
+      if (pending->second.starting_thread == std::this_thread::get_id())
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Tool, "LSP startup is already in progress; retry after the launch callback returns")
+                                   .with_context("server", server.id)
+                                   .with_context("root", root.string()));
+      clients_changed_.wait(lock, [&] {
+        auto const current = clients_.find(cache_key);
+        return current == clients_.end() || current->second.client != nullptr;
+      });
+    }
     if (auto cached = clients_.find(cache_key); cached != clients_.end())
     {
       if (cached->second.client && cached->second.client->is_alive())
@@ -703,8 +754,8 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
       }
       clients_.erase(cached);
     }
-    // Enforce the process cap before launch. Erasing an idle entry synchronously
-    // runs the client's existing process teardown before another slot is used.
+    // Reservations count toward the process cap and cannot be evicted. Retiring an
+    // idle client completes its process teardown before that slot can be reused.
     while (clients_.size() >= kMaxLiveClients)
     {
       auto oldest = clients_.end();
@@ -725,6 +776,10 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
       }
       clients_.erase(oldest);
     }
+    clients_.emplace(cache_key, CachedClient{.client = nullptr, .last_used = 0, .starting_thread = std::this_thread::get_id()});
+    // The guard removes only an unpublished reservation, including during unwinding.
+    ClientAdmission admission(clients_mutex_, clients_changed_, clients_, cache_key);
+    lock.unlock();
     auto launch = ensure_launch_permission(server);
     if (!launch)
       return std::unexpected(std::move(launch.error()));
@@ -742,11 +797,15 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
                                              cancel_requested);
     if (!client)
       return std::unexpected(std::move(client.error()));
-    clients_.emplace(cache_key, CachedClient{.client = *client, .last_used = ++client_use_sequence_});
+    {
+      std::lock_guard publish_lock(clients_mutex_);
+      clients_.at(cache_key) = CachedClient{.client = *client, .last_used = ++client_use_sequence_, .starting_thread = {}};
+      admission.published();
+    }
     return *client;
   }
 
-  [[nodiscard]] ava::core::VoidResult ensure_launch_permission(ConfiguredServer const& server) const
+  [[nodiscard]] ava::core::VoidResult ensure_launch_permission(ConfiguredServer const& server)
   {
     auto const decision = ava::permissions::decide(ava::permissions::PermissionRequest{
         .operation = ava::permissions::Operation::LspServerLaunch,
@@ -781,9 +840,10 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
         .reason = decision.reason,
         .risk = decision.risk,
     });
-    if (permission_request_ids_ && std::ranges::find(*permission_request_ids_, permission_request_id) == permission_request_ids_->end())
     {
-      permission_request_ids_->push_back(permission_request_id);
+      std::lock_guard lock(clients_mutex_);
+      if (permission_request_ids_ && std::ranges::find(*permission_request_ids_, permission_request_id) == permission_request_ids_->end())
+        permission_request_ids_->push_back(permission_request_id);
     }
     if (!resolved)
       return std::unexpected(std::move(resolved.error()));
@@ -809,6 +869,7 @@ class ConfiguredLspProvider final : public DiagnosticsProvider
   ava::permissions::PermissionResolver permission_resolver_ = nullptr;
   std::vector<ConfiguredServer> servers_;
   std::mutex clients_mutex_;
+  std::condition_variable clients_changed_;
   std::unordered_map<std::string, CachedClient> clients_;
   std::uint64_t client_use_sequence_ = 0;
   std::shared_ptr<std::vector<std::string>> permission_request_ids_ = nullptr;

@@ -1,8 +1,10 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/session/record.h"
 #include "ava/session/session_store_internal.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
+#include "ava/core/sha256.h"
 #include "ava/core/strict_json.h"
 
 #include <algorithm>
@@ -12,7 +14,6 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -106,6 +107,7 @@ class ByteVectorWiper final
   ~ByteVectorWiper() noexcept { wipe_bytes(bytes_.data(), bytes_.size()); }
   ByteVectorWiper(ByteVectorWiper const&) = delete;
   ByteVectorWiper& operator=(ByteVectorWiper const&) = delete;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::vector<std::uint8_t>& bytes_;
@@ -132,6 +134,7 @@ class StringWiper final
   ~StringWiper() noexcept { wipe_string(value_); }
   StringWiper(StringWiper const&) = delete;
   StringWiper& operator=(StringWiper const&) = delete;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::string& value_;
@@ -145,6 +148,7 @@ class CharArrayWiper final
   ~CharArrayWiper() noexcept { wipe_bytes(value_.data(), value_.size()); }
   CharArrayWiper(CharArrayWiper const&) = delete;
   CharArrayWiper& operator=(CharArrayWiper const&) = delete;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::array<char, Size>& value_;
@@ -157,6 +161,7 @@ class SessionEntryWiper final
   ~SessionEntryWiper() noexcept { wipe_session_entry(entry_); }
   SessionEntryWiper(SessionEntryWiper const&) = delete;
   SessionEntryWiper& operator=(SessionEntryWiper const&) = delete;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   SessionEntry& entry_;
@@ -176,95 +181,12 @@ class SessionEntryVectorWiper final
   SessionEntryVectorWiper(SessionEntryVectorWiper const&) = delete;
   SessionEntryVectorWiper& operator=(SessionEntryVectorWiper const&) = delete;
   void dismiss() noexcept { active_ = false; }
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   std::vector<SessionEntry>& entries_;
   bool active_ = true;
 };
-
-std::uint32_t rotate_right(std::uint32_t value, std::uint32_t count) noexcept
-{
-  return (value >> count) | (value << (32U - count));
-}
-
-std::array<std::uint8_t, 32> sha256(std::vector<std::uint8_t> const& bytes)
-{
-  static constexpr std::array<std::uint32_t, 64> constants{
-      0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U, 0x243185beU,
-      0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U, 0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU,
-      0x5cb0a9dcU, 0x76f988daU, 0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U, 0x27b70a85U,
-      0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U, 0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
-      0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U, 0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU,
-      0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
-
-  std::vector<std::uint8_t> data = bytes;
-  ByteVectorWiper wipe_data(data);
-  auto const bit_length = static_cast<std::uint64_t>(data.size()) * 8ULL;
-  data.push_back(0x80U);
-  while ((data.size() % 64U) != 56U) data.push_back(0U);
-  for (int shift = 56; shift >= 0; shift -= 8) data.push_back(static_cast<std::uint8_t>((bit_length >> shift) & 0xffU));
-
-  std::array<std::uint32_t, 8> hash{0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
-  for (std::size_t chunk = 0; chunk < data.size(); chunk += 64U)
-  {
-    std::array<std::uint32_t, 64> words{};
-    for (std::size_t index = 0; index < 16U; ++index)
-    {
-      auto const offset = chunk + index * 4U;
-      words[index] = (static_cast<std::uint32_t>(data[offset]) << 24U) | (static_cast<std::uint32_t>(data[offset + 1U]) << 16U) |
-                     (static_cast<std::uint32_t>(data[offset + 2U]) << 8U) | static_cast<std::uint32_t>(data[offset + 3U]);
-    }
-    for (std::size_t index = 16U; index < words.size(); ++index)
-    {
-      auto const s0 = rotate_right(words[index - 15U], 7U) ^ rotate_right(words[index - 15U], 18U) ^ (words[index - 15U] >> 3U);
-      auto const s1 = rotate_right(words[index - 2U], 17U) ^ rotate_right(words[index - 2U], 19U) ^ (words[index - 2U] >> 10U);
-      words[index] = words[index - 16U] + s0 + words[index - 7U] + s1;
-    }
-    auto a = hash[0];
-    auto b = hash[1];
-    auto c = hash[2];
-    auto d = hash[3];
-    auto e = hash[4];
-    auto f = hash[5];
-    auto g = hash[6];
-    auto h = hash[7];
-    for (std::size_t index = 0; index < words.size(); ++index)
-    {
-      auto const s1 = rotate_right(e, 6U) ^ rotate_right(e, 11U) ^ rotate_right(e, 25U);
-      auto const choose = (e & f) ^ ((~e) & g);
-      auto const temporary_one = h + s1 + choose + constants[index] + words[index];
-      auto const s0 = rotate_right(a, 2U) ^ rotate_right(a, 13U) ^ rotate_right(a, 22U);
-      auto const majority = (a & b) ^ (a & c) ^ (b & c);
-      auto const temporary_two = s0 + majority;
-      h = g;
-      g = f;
-      f = e;
-      e = d + temporary_one;
-      d = c;
-      c = b;
-      b = a;
-      a = temporary_one + temporary_two;
-    }
-    hash[0] += a;
-    hash[1] += b;
-    hash[2] += c;
-    hash[3] += d;
-    hash[4] += e;
-    hash[5] += f;
-    hash[6] += g;
-    hash[7] += h;
-  }
-
-  std::array<std::uint8_t, 32> digest{};
-  for (std::size_t index = 0; index < hash.size(); ++index)
-  {
-    digest[index * 4U] = static_cast<std::uint8_t>((hash[index] >> 24U) & 0xffU);
-    digest[index * 4U + 1U] = static_cast<std::uint8_t>((hash[index] >> 16U) & 0xffU);
-    digest[index * 4U + 2U] = static_cast<std::uint8_t>((hash[index] >> 8U) & 0xffU);
-    digest[index * 4U + 3U] = static_cast<std::uint8_t>(hash[index] & 0xffU);
-  }
-  return digest;
-}
 
 bool exact_snapshot_metadata_matches(struct stat const& before, struct stat const& after) noexcept
 {
@@ -278,10 +200,17 @@ bool exact_snapshot_metadata_matches(struct stat const& before, struct stat cons
 #endif
 }
 
+enum class SnapshotDecoding
+{
+  Strict,
+  Compatibility,
+};
+
+template <typename Visitor>
 ava::core::VoidResult visit_session_snapshot_fd(int fd, off_t snapshot_size, std::filesystem::path const& path, SessionReadLimits const& limits,
-                                                SessionEntryVisitor const& visitor, SessionCancelCallback const& cancel_requested,
-                                                bool tolerate_invalid_final_suffix, std::function<void()> const* after_first_read_for_test = nullptr,
-                                                std::vector<std::uint8_t>* exact_bytes = nullptr)
+                                                Visitor const& visitor, SessionCancelCallback const& cancel_requested, bool tolerate_invalid_final_suffix,
+                                                std::function<void()> const* after_first_read_for_test = nullptr,
+                                                std::vector<std::uint8_t>* exact_bytes = nullptr, SnapshotDecoding decoding = SnapshotDecoding::Strict)
 {
   std::array<char, 8192> buffer{};
   CharArrayWiper wipe_buffer(buffer);
@@ -290,7 +219,12 @@ ava::core::VoidResult visit_session_snapshot_fd(int fd, off_t snapshot_size, std
   line.reserve(std::min<std::size_t>(limits.max_line_bytes, buffer.size()));
   std::size_t entry_count = 0;
   auto consume_line = [&](bool final_unterminated) -> ava::core::Result<bool> {
-    auto const strict_status = ava::core::validate_strict_json(line, ava::core::json::kMaxNestingDepth);
+    if (decoding == SnapshotDecoding::Compatibility && !line.empty() && line.back() == '\r')
+      line.pop_back();
+    // Compatibility load retains legacy surrogate/key handling; only framing
+    // and descriptor ownership are shared with the strict authority reader.
+    auto const strict_status =
+        decoding == SnapshotDecoding::Strict ? ava::core::validate_strict_json(line, ava::core::json::kMaxNestingDepth) : ava::core::StrictJsonStatus::Valid;
     if (tolerate_invalid_final_suffix && final_unterminated && strict_status == ava::core::StrictJsonStatus::Invalid)
     {
       wipe_string(line);
@@ -304,11 +238,11 @@ ava::core::VoidResult visit_session_snapshot_fd(int fd, off_t snapshot_size, std
       error.with_context("max_entries", std::to_string(limits.max_entries));
       return std::unexpected(std::move(error));
     }
-    auto entry = parse_strict_session_record(line, path, final_unterminated);
+    auto entry = decoding == SnapshotDecoding::Strict ? parse_strict_session_record(line, path, final_unterminated) : parse_session_entry_line(line, path);
     if (!entry)
       return std::unexpected(std::move(entry.error()));
     SessionEntryWiper wipe_entry(*entry);
-    auto keep_going = visitor(*entry);
+    auto keep_going = visitor(std::move(*entry));
     if (!keep_going)
       return std::unexpected(std::move(keep_going.error()));
     wipe_string(line);
@@ -400,6 +334,40 @@ ava::core::VoidResult visit_regular_session_snapshot(std::filesystem::path const
   return {};
 }
 
+ava::core::Result<bool> accumulate_session_summary(SessionSummary& summary, bool& has_manual_title, SessionEntry const& entry, bool inspect_metadata)
+{
+  ++summary.entry_count;
+  summary.last_updated = entry.timestamp;
+  if (!inspect_metadata)
+    return true;
+  if (entry.type == EntryType::SessionMetadata)
+  {
+    if (auto name = ava::core::json::string_field(entry.data_json, "name"))
+    {
+      summary.title = std::move(*name);
+      has_manual_title = true;
+    }
+    else if (!has_manual_title)
+    {
+      if (auto generated = ava::core::json::string_field(entry.data_json, "generated_title"))
+        summary.title = std::move(*generated);
+    }
+  }
+  if (entry.type == EntryType::SessionStart || entry.type == EntryType::SessionMetadata)
+  {
+    if (auto cwd = ava::core::json::string_field(entry.data_json, "original_cwd"); cwd && !cwd->empty())
+    {
+      std::filesystem::path candidate(*cwd);
+      if (!candidate.is_absolute() || candidate.lexically_normal() != candidate)
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd is invalid"));
+      if (!summary.original_cwd.empty() && summary.original_cwd != candidate)
+        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd changed"));
+      summary.original_cwd = std::move(candidate);
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 using ava::core::normalized_absolute_path;
@@ -457,7 +425,9 @@ ava::core::Result<std::vector<SessionEntry>> SessionStore::load() const
 
   std::error_code status_error;
   auto const status = std::filesystem::symlink_status(path, status_error);
-  if (status_error || !std::filesystem::exists(status))
+  if (status_error && status_error != std::errc::no_such_file_or_directory)
+    return std::unexpected(path_io_error("failed to inspect session file", path, status_error.value()));
+  if (!std::filesystem::exists(status))
   {
     if (trace)
       trace->succeed();
@@ -478,29 +448,32 @@ ava::core::Result<std::vector<SessionEntry>> SessionStore::load() const
     return std::unexpected(std::move(error));
   }
 
-  std::ifstream file(path);
+  auto file = open_regular_snapshot(path, std::numeric_limits<std::size_t>::max());
   if (!file)
   {
-    auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed to open session file");
+    auto error = std::move(file.error());
     error.with_context("session_id", options_r()->session_id);
     error.with_context("path", path.string());
     return std::unexpected(std::move(error));
   }
 
+  ava::core::UniqueFd snapshot_fd(file->first);
   std::vector<SessionEntry> entries;
-  std::string line;
-  while (true)
-  {
-    auto line_read = read_limited_session_line(file, line);
-    if (!line_read)
-      return std::unexpected(line_read.error());
-    if (!*line_read)
-      break;
-    auto entry = parse_session_entry_line(line, path);
-    if (!entry)
-      return std::unexpected(std::move(entry.error()));
-    entries.push_back(std::move(*entry));
-  }
+  auto visited = visit_session_snapshot_fd(
+      snapshot_fd.get(), file->second, path,
+      SessionReadLimits{.max_file_bytes = std::numeric_limits<std::size_t>::max(),
+                        .max_line_bytes = kMaxSessionLineBytes - 1,
+                        .max_entries = std::numeric_limits<std::size_t>::max()},
+      [&entries](SessionEntry&& entry) -> ava::core::Result<bool> {
+        entries.push_back(std::move(entry));
+        return true;
+      },
+      nullptr, false, nullptr, nullptr, SnapshotDecoding::Compatibility);
+  int const close_error = snapshot_fd.close_checked();
+  if (!visited)
+    return std::unexpected(std::move(visited.error()));
+  if (close_error != 0)
+    return std::unexpected(path_io_error("failed to close compatibility session snapshot", path, close_error));
   if (trace)
     trace->succeed(entries.size());
   return entries;
@@ -522,6 +495,29 @@ ava::core::VoidResult SessionStore::visit_entries(SessionReadLimits limits, Sess
       std::lock_guard lock(ephemeral_state_->entries_mutex);
       if (ephemeral_state_->entries.size() > limits.max_entries)
         return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "session entry count exceeds bounded read limit"));
+      // Apply the same JSONL byte policy before copying an in-memory snapshot;
+      // an ephemeral authority must not silently widen file or line limits.
+      std::size_t total_bytes = 0;
+      for (auto const& entry : ephemeral_state_->entries)
+      {
+        auto serialized = serialize_session_entry_line(entry);
+        if (!serialized)
+          return std::unexpected(std::move(serialized.error()));
+        StringWiper wipe_serialized(*serialized);
+        if (serialized->size() > limits.max_line_bytes)
+        {
+          auto error = ava::core::Error(ava::core::ErrorCategory::Session, "session line exceeds bounded read limit");
+          error.with_context("max_line_bytes", std::to_string(limits.max_line_bytes));
+          return std::unexpected(std::move(error));
+        }
+        if (serialized->size() + 1 > limits.max_file_bytes - total_bytes)
+        {
+          auto error = ava::core::Error(ava::core::ErrorCategory::Session, "session file exceeds bounded read limit");
+          error.with_context("max_file_bytes", std::to_string(limits.max_file_bytes));
+          return std::unexpected(std::move(error));
+        }
+        total_bytes += serialized->size() + 1;
+      }
       snapshot = ephemeral_state_->entries;
     }
     for (auto const& entry : snapshot)
@@ -674,7 +670,7 @@ ava::core::VoidResult SessionStore::visit_entries_leased(SessionLease const& lea
   {
     if (exact_bytes.size() != static_cast<std::size_t>(initial_size))
       return std::unexpected(path_io_error("exact leased session snapshot byte count changed", path));
-    *exact_fingerprint = SessionByteFingerprint{.byte_count = static_cast<std::uint64_t>(exact_bytes.size()), .sha256 = sha256(exact_bytes)};
+    *exact_fingerprint = SessionByteFingerprint{.byte_count = static_cast<std::uint64_t>(exact_bytes.size()), .sha256 = ava::core::sha256(exact_bytes)};
   }
   return {};
 }
@@ -764,37 +760,7 @@ ava::core::Result<SessionSummary> SessionStore::inspect_bounded(SessionReadLimit
   SessionSummary summary{.session_id = options_session_id_copy(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
   bool has_manual_title = false;
   auto visited = visit_entries(
-      limits,
-      [&](SessionEntry const& entry) -> ava::core::Result<bool> {
-        ++summary.entry_count;
-        summary.last_updated = entry.timestamp;
-        if (entry.type == EntryType::SessionMetadata)
-        {
-          if (auto name = ava::core::json::string_field(entry.data_json, "name"))
-          {
-            summary.title = std::move(*name);
-            has_manual_title = true;
-          }
-          else if (!has_manual_title)
-          {
-            if (auto generated = ava::core::json::string_field(entry.data_json, "generated_title"))
-              summary.title = std::move(*generated);
-          }
-        }
-        if (entry.type == EntryType::SessionStart || entry.type == EntryType::SessionMetadata)
-        {
-          if (auto cwd = ava::core::json::string_field(entry.data_json, "original_cwd"); cwd && !cwd->empty())
-          {
-            std::filesystem::path candidate(*cwd);
-            if (!candidate.is_absolute() || candidate.lexically_normal() != candidate)
-              return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd is invalid"));
-            if (!summary.original_cwd.empty() && summary.original_cwd != candidate)
-              return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd changed"));
-            summary.original_cwd = std::move(candidate);
-          }
-        }
-        return true;
-      },
+      limits, [&](SessionEntry const& entry) -> ava::core::Result<bool> { return accumulate_session_summary(summary, has_manual_title, entry, true); },
       std::move(cancel_requested));
   if (!visited)
     return std::unexpected(std::move(visited.error()));
@@ -807,37 +773,7 @@ ava::core::Result<SessionSummary> SessionStore::inspect_bounded(SessionLease con
   SessionSummary summary{.session_id = options_session_id_copy(), .path = session_path(), .last_updated = {}, .entry_count = 0, .original_cwd = {}, .title = {}};
   bool has_manual_title = false;
   auto visited = visit_entries_leased(
-      lease, limits,
-      [&](SessionEntry const& entry) -> ava::core::Result<bool> {
-        ++summary.entry_count;
-        summary.last_updated = entry.timestamp;
-        if (entry.type == EntryType::SessionMetadata)
-        {
-          if (auto name = ava::core::json::string_field(entry.data_json, "name"))
-          {
-            summary.title = std::move(*name);
-            has_manual_title = true;
-          }
-          else if (!has_manual_title)
-          {
-            if (auto generated = ava::core::json::string_field(entry.data_json, "generated_title"))
-              summary.title = std::move(*generated);
-          }
-        }
-        if (entry.type == EntryType::SessionStart || entry.type == EntryType::SessionMetadata)
-        {
-          if (auto cwd = ava::core::json::string_field(entry.data_json, "original_cwd"); cwd && !cwd->empty())
-          {
-            std::filesystem::path candidate(*cwd);
-            if (!candidate.is_absolute() || candidate.lexically_normal() != candidate)
-              return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd is invalid"));
-            if (!summary.original_cwd.empty() && summary.original_cwd != candidate)
-              return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd changed"));
-            summary.original_cwd = std::move(candidate);
-          }
-        }
-        return true;
-      },
+      lease, limits, [&](SessionEntry const& entry) -> ava::core::Result<bool> { return accumulate_session_summary(summary, has_manual_title, entry, true); },
       std::move(cancel_requested));
   if (!visited)
     return std::unexpected(std::move(visited.error()));
@@ -853,36 +789,7 @@ ava::core::Result<SessionSummary> SessionStore::inspect_bounded_for_listing(Sess
   bool has_manual_title = false;
   auto visited = visit_regular_session_snapshot(
       session_path(), limits,
-      [&](SessionEntry const& entry) -> ava::core::Result<bool> {
-        ++summary.entry_count;
-        summary.last_updated = entry.timestamp;
-        if (inspect_metadata && entry.type == EntryType::SessionMetadata)
-        {
-          if (auto name = ava::core::json::string_field(entry.data_json, "name"))
-          {
-            summary.title = std::move(*name);
-            has_manual_title = true;
-          }
-          else if (!has_manual_title)
-          {
-            if (auto generated = ava::core::json::string_field(entry.data_json, "generated_title"))
-              summary.title = std::move(*generated);
-          }
-        }
-        if (inspect_metadata && (entry.type == EntryType::SessionStart || entry.type == EntryType::SessionMetadata))
-        {
-          if (auto cwd = ava::core::json::string_field(entry.data_json, "original_cwd"); cwd && !cwd->empty())
-          {
-            std::filesystem::path candidate(*cwd);
-            if (!candidate.is_absolute() || candidate.lexically_normal() != candidate)
-              return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd is invalid"));
-            if (!summary.original_cwd.empty() && summary.original_cwd != candidate)
-              return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Session, "persisted session cwd changed"));
-            summary.original_cwd = std::move(candidate);
-          }
-        }
-        return true;
-      },
+      [&](SessionEntry const& entry) -> ava::core::Result<bool> { return accumulate_session_summary(summary, has_manual_title, entry, inspect_metadata); },
       cancel_requested, true);
   if (!visited)
     return std::unexpected(std::move(visited.error()));

@@ -4,9 +4,9 @@
 #include "ava/provider/anthropic_request.h"
 #include "ava/provider/provider_utils.h"
 #include "ava/core/json.h"
+#include "ava/core/string_utils.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstddef>
 #include <limits>
 #include <optional>
@@ -21,22 +21,13 @@ namespace {
 constexpr std::size_t kMaxReasoningOpaqueBytes = 64 * 1024;
 constexpr std::string_view kAnthropicOAuthBeta = "oauth-2025-04-20";
 
-std::string_view trim_ascii(std::string_view value)
-{
-  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0)
-    value.remove_prefix(1);
-  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0)
-    value.remove_suffix(1);
-  return value;
-}
-
 bool anthropic_beta_has_marker(std::string_view value, std::string_view marker)
 {
   std::size_t start = 0;
   while (start <= value.size())
   {
     auto const comma = value.find(',', start);
-    auto const item = trim_ascii(comma == std::string_view::npos ? value.substr(start) : value.substr(start, comma - start));
+    auto const item = ava::core::trim_view(comma == std::string_view::npos ? value.substr(start) : value.substr(start, comma - start));
     if (item == marker)
       return true;
     if (comma == std::string_view::npos)
@@ -50,7 +41,7 @@ std::string anthropic_beta_with_marker(std::string existing, std::string_view ma
 {
   if (anthropic_beta_has_marker(existing, marker))
     return existing;
-  if (trim_ascii(existing).empty())
+  if (ava::core::trim_view(existing).empty())
     return std::string(marker);
   existing += ',';
   existing += marker;
@@ -109,6 +100,10 @@ void merge_usage(TokenUsage& target, TokenUsage const& source)
     target.cache_write_tokens = source.cache_write_tokens;
   if (source.total_tokens)
     target.total_tokens = source.total_tokens;
+  // message_delta usage is partial: its output-only total must not discard
+  // the input/cache counts collected from message_start.
+  if (target.input_tokens || target.output_tokens)
+    target.total_tokens = saturating_token_add(target.input_tokens.value_or(0), target.output_tokens.value_or(0));
 }
 
 void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long, AnthropicStreamParser::ToolBlock>& tools,
@@ -116,6 +111,8 @@ void append_event_for_data(std::vector<StreamEvent>& events, std::map<long long,
                            std::optional<ProviderFinishReason>& finish_reason, bool& saw_data, bool& message_stop_seen, bool& error_seen, std::string_view data,
                            ProviderSseBuffer& framing)
 {
+  if (message_stop_seen || error_seen)
+    return;
   auto append_terminal_error = [&](std::string_view message) {
     error_seen = true;
     append_stream_error(events, message);
