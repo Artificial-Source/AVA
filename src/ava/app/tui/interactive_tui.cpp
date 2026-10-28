@@ -187,7 +187,8 @@ int run_tui(InteractiveState state)
   bool session_selector_show_paths = false;
   bool session_selector_show_archived = false;
   bool session_selector_show_label_time = false;
-  auto session_selector_view_from_catalog = [&](ava::tui::TuiFrontEnd const& frontend) {
+  auto session_selector_view_from_catalog = [&session_selector_sort, &session_selector_named_only, &session_selector_show_paths, &session_selector_show_archived,
+                                             &session_selector_show_label_time, &key_bindings](ava::tui::TuiFrontEnd const& frontend) {
     return application_catalog_session_view(static_cast<ava::app::TuiFrontEnd const&>(frontend).application_catalog(), session_selector_sort,
                                             session_selector_footer_hint(session_selector_sort, session_selector_named_only, session_selector_show_paths,
                                                                          session_selector_show_archived, session_selector_show_label_time),
@@ -195,7 +196,7 @@ int run_tui(InteractiveState state)
                                             session_selector_show_label_time,
                                             ava::tui::keys_display(key_bindings, ava::tui::TuiAction::SessionSummarizeParent));
   };
-  auto session_selector_snapshot = [&](ava::tui::TuiFrontEnd& frontend) {
+  auto session_selector_snapshot = [&refresh_title_catalog, &session_selector_view_from_catalog](ava::tui::TuiFrontEnd& frontend) {
     static_cast<void>(refresh_title_catalog(frontend));
     return session_selector_view_from_catalog(frontend);
   };
@@ -364,7 +365,7 @@ int run_tui(InteractiveState state)
                 plugin_ui_capability_unavailable = false;
               }
             }
-            auto line_result = [&] {
+            auto line_result = [&plugin_ui_capability_unavailable, &state, &submitted, &permission_resolver, &context, &request_hotkeys, &plugin_ui_capability] {
               if (plugin_ui_capability_unavailable)
               {
                 InteractiveResult failed;
@@ -377,14 +378,14 @@ int run_tui(InteractiveState state)
             }();
             TuiRequestPresentation request_presentation;
             bool const initial_is_local_command = submitted.starts_with('/') || submitted.starts_with('!');
-            auto capture_request_presentation = [&](std::string_view line, std::string const& request_id, InteractiveResult const& request_result) {
+            auto capture_request_presentation = [&request_presentation, &initial_is_local_command](std::string_view line, std::string const& request_id, InteractiveResult const& request_result) {
               capture_tui_request_presentation(request_presentation, initial_is_local_command, line, request_id, request_result);
             };
             capture_request_presentation(submitted, context.request_id, line_result);
             auto const session_changed = run_queued_follow_ups_until_session_transition(
                 line_result, workspace_catalog_reload, session_id_before, context,
                 [&unlocked_session] { return ava::app::runtime::session_ts::rat(unlocked_session)->store.options_r()->session_id; },
-                [&](ava::tui::TuiQueuedFollowUp const& follow_up) {
+                [&state, &permission_resolver, &context, &request_hotkeys, &capture_request_presentation](ava::tui::TuiQueuedFollowUp const& follow_up) {
                   auto follow_up_result = handle_interactive_submission(
                       state, follow_up.message, permission_resolver, context.question_resolver, request_hotkeys, context.event_sink, context.cancel_requested,
                       context.take_steering_messages, {}, follow_up.request_id, context.on_subagent_launch, nullptr);
