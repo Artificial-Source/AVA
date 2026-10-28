@@ -120,6 +120,31 @@ jobs:
             --require ava_tui.tmux_smoke_main_permission_flow \
             --require ava_tui.tmux_smoke_active_run
 
+  desktop:
+    name: Desktop typecheck and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up exact Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.13.1
+      - name: Install pinned pnpm and locked dependencies
+        run: |
+          npm install --global pnpm@10.29.1 --ignore-scripts --no-audit --no-fund
+          pnpm install --frozen-lockfile --ignore-scripts
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test (no live backend or GUI)
+        run: pnpm test
+
   release-candidate:
     name: Qualify retained Linux x64 candidate
     if: github.event_name == 'workflow_dispatch' && inputs.release_candidate || startsWith(github.ref, 'refs/tags/v')
@@ -209,7 +234,7 @@ jobs:
             cat "${{ runner.temp }}/candidate/candidate.json"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Retain unchanged candidate archive and checksum
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-x64-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate/
@@ -218,7 +243,7 @@ jobs:
           compression-level: 0
       - name: Retain candidate reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-x64-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -237,7 +262,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Re-download retained candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: linux-x64-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/promoted
@@ -336,6 +361,7 @@ jobs:
     env:
       CC: gcc-16
       CXX: g++-16
+      GITACHE_ROOT: /tmp/ava-gitache-tsan
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -349,7 +375,7 @@ jobs:
           sudo apt-get install -y software-properties-common
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update
-          sudo apt-get install -y gcc-16 g++-16 cmake ninja-build libncursesw5-dev pkg-config libboost-dev libdw-dev ccache
+          sudo apt-get install -y gcc-16 g++-16 cmake ninja-build libncursesw5-dev pkg-config libboost-dev libdw-dev universal-ctags ccache
 
       - name: Set up compiler cache
         uses: ./.github/actions/setup-ccache
@@ -358,7 +384,9 @@ jobs:
           save: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
 
       - name: Configure
-        run: cmake --preset tsan -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+        run: |
+          mkdir -p "$GITACHE_ROOT"
+          cmake --preset tsan -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
 
       - name: Guard against C++ module scanner flags
         run: scripts/guard-no-cxx-modules.sh build-tsan

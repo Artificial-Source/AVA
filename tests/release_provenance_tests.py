@@ -136,6 +136,16 @@ def with_fabricated_empty_dynamic_section(contents: bytes) -> bytes:
 
 
 class ReleaseProvenanceTests(unittest.TestCase):
+    def test_adopted_ciede2000_notice_is_distributed(self) -> None:
+        notices = (SOURCE / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        section = notices.split("## CIEDE2000 — MIT\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("src/ava/tui/terminal/CIEDE2000.cxx", section)
+        self.assertIn("https://github.com/gfiumara/CIEDE2000", section)
+        self.assertIn("Copyright (c) 2015 Gregory Fiumara", section)
+        self.assertIn("Covered by the MIT License text below.", section)
+        self.assertIn("nlohmann JSON, and CIEDE2000)", notices)
+        self.assertIn("Permission is hereby granted, free of charge", notices)
+
     def collect(self, *, build_mode: str = "source-build", qualification_mode: bool = True, binary_version: str | None = AVA_VERSION, host_architecture: str | None = "x86_64", architecture: str | None = "x86_64", needed: list[str] | None = None, dependency_reasons: list[str] | None = None) -> dict[str, object]:
         with tempfile.TemporaryDirectory() as directory:
             binary = pathlib.Path(directory) / "ava"

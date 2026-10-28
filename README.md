@@ -40,7 +40,7 @@ Build-only requirements:
 - JSON-capable Universal Ctags for debug/libcwd print-member generation
 - Git and configuration-time access to required dependency sources
 
-The optional Electron desktop client in `apps/desktop/` is independent of CMake and needs Node.js 24 plus pnpm; it drives a local Linux AVA binary over RPC. See `docs/desktop/README.md`. Linux x64 remains AVA's only qualified backend platform.
+The optional Electron desktop client in `apps/desktop/` is independent of CMake and needs Node.js 24 plus pnpm; it drives a local Linux AVA binary over RPC. See the [legacy prototype setup](apps/desktop/README.md) or the separate [greenfield desktop design](docs/desktop/README.md). Linux x64 remains AVA's only qualified backend platform.
 
 The presets are the canonical quick start. Prepare a writable Gitache root first:
 

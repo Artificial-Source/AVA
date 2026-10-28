@@ -123,6 +123,11 @@ function(ava_apply_warnings target)
     target_compile_options(${target} PRIVATE /W4 /WX)
   else()
     target_compile_options(${target} PRIVATE -Wall -Werror -Wextra -Wpedantic -Wundef)
+    target_compile_options(${target} PRIVATE
+      -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough
+      -Wformat=2 -Wsign-compare
+      $<$<CXX_COMPILER_ID:GNU>:-Wduplicated-cond>
+    )
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17)
       # Keep GCC's optimizer-driven maybe-uninitialized diagnostics visible, but
       # do not promote them to errors for GCC 13.x through 16.x. Those releases can report false

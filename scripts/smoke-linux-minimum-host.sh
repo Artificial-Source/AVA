@@ -7,11 +7,19 @@ if [[ $# != 2 || $1 != /* || $2 != /* ]]; then
 fi
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 engine=${AVA_CONTAINER_ENGINE:-docker}
+# Record the resolved image and use its immutable local ID for this run, rather
+# than resolving a mutable tag again between evidence collection and execution.
+"$engine" pull --platform linux/amd64 ubuntu:24.04
+image_id=$("$engine" image inspect --format '{{.Id}}' ubuntu:24.04)
+printf 'minimum-host image ID: %s\n' "$image_id"
+"$engine" image inspect --format 'minimum-host repository digests: {{json .RepoDigests}}' "$image_id"
 "$engine" run --rm --platform linux/amd64 \
   -v "$1:/candidate:ro" -v "$2:/fake-provider:ro" -v "$repo_root:/source:ro" \
-  ubuntu:24.04 bash -euo pipefail -c '
+  "$image_id" bash -euo pipefail -c '
     apt-get update
     apt-get install -y libstdc++6 libncursesw6 libtinfo6 ncurses-base curl cmake python3 qemu-user
+    echo "minimum-host installed package inventory:"
+    dpkg-query -W
     cd /candidate
     sha256sum -c ./*.sha256
     mkdir -m 700 /smoke /smoke/home /smoke/config /smoke/state
