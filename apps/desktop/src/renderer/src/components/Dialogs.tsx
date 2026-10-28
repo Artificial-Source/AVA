@@ -2,15 +2,24 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { useReducedMotion } from 'motion/react'
 import { useRef, useState } from 'react'
 import { createQuestionFormState, selectQuestionOption, serializeQuestionForm, setQuestionCustom } from '../../../shared/question-form.ts'
-import type { PermissionPromptView, QuestionPromptView, QuestionReplyInput } from '../../../shared/types.ts'
+import type {
+  ActionResult,
+  PermissionDecision,
+  PermissionPromptView,
+  QuestionPromptView,
+  QuestionReplyInput,
+  UserFacingError
+} from '../../../shared/types.ts'
+import { ipcFailure } from '../ipc-failure.ts'
+import { ErrorNotice } from './ErrorNotice.tsx'
 
 type DialogsProps = {
   permission: PermissionPromptView | null
   question: QuestionPromptView | null
   canceling: boolean
   onCancel: () => void
-  onPermission: (displayToken: string, decision: 'allow' | 'deny') => Promise<unknown>
-  onQuestion: (displayToken: string, reply: QuestionReplyInput) => Promise<unknown>
+  onPermission: (displayToken: string, decision: PermissionDecision) => Promise<ActionResult>
+  onQuestion: (displayToken: string, reply: QuestionReplyInput) => Promise<ActionResult>
 }
 
 export function Dialogs({ permission, question, canceling, onCancel, onPermission, onQuestion }: DialogsProps) {
@@ -39,6 +48,19 @@ export function Dialogs({ permission, question, canceling, onCancel, onPermissio
                 <Field label="Risk" value={permission.risk} />
                 <Field label="Mode" value={permission.mode} />
               </dl>
+            ) : null}
+            {permission?.diffPreview ? (
+              <section className="mt-4">
+                <h3 className="text-sm text-faint">
+                  Proposed change{permission.diffTruncated ? ' (preview truncated)' : ''}
+                </h3>
+                <pre
+                  tabIndex={0}
+                  className="mt-1 max-h-64 overflow-auto border border-line bg-canvas p-2 font-mono text-xs leading-relaxed text-ink"
+                >
+                  {permission.diffPreview}
+                </pre>
+              </section>
             ) : null}
             {permission ? (
               <PermissionActions key={permission.displayToken} permission={permission} canceling={canceling} onCancel={onCancel} onReply={onPermission} />
@@ -81,35 +103,56 @@ function CancelRun({ canceling, onCancel }: { canceling: boolean; onCancel: () =
   )
 }
 
-function PermissionActions({ permission, canceling, onCancel, onReply }: {
-  permission: PermissionPromptView
-  canceling: boolean
-  onCancel: () => void
-  onReply: DialogsProps['onPermission']
-}) {
+// One reply in flight per display. A rejected reply that leaves the display open (stale token,
+// locally invalid answer) is shown inside the dialog, since the modal hides the app banner.
+function useReply(canceling: boolean) {
   const [pending, setPending] = useState(false)
+  const [error, setError] = useState<UserFacingError | null>(null)
   const inFlight = useRef(false)
 
-  async function reply(decision: 'allow' | 'deny'): Promise<void> {
+  async function send(reply: () => Promise<ActionResult>): Promise<void> {
     if (inFlight.current || canceling) {
       return
     }
     inFlight.current = true
     setPending(true)
+    setError(null)
     try {
-      await onReply(permission.displayToken, decision)
+      const result = await reply()
+      if (!result.ok) {
+        setError(result.error)
+      }
+    } catch (caught) {
+      setError(ipcFailure(caught))
     } finally {
       inFlight.current = false
       setPending(false)
     }
   }
 
+  return { pending, error, send }
+}
+
+function PermissionActions({ permission, canceling, onCancel, onReply }: {
+  permission: PermissionPromptView
+  canceling: boolean
+  onCancel: () => void
+  onReply: DialogsProps['onPermission']
+}) {
+  const { pending, error, send } = useReply(canceling)
+  const reply = (decision: PermissionDecision) => {
+    void send(() => onReply(permission.displayToken, decision))
+  }
+
   return (
-    <div className="mt-5 flex justify-end gap-2">
-      <CancelRun canceling={canceling} onCancel={onCancel} />
-      <button type="button" disabled={pending || canceling} className="border border-line px-3 py-1.5 text-sm text-ink enabled:hover:bg-sunken disabled:text-faint" onClick={() => { void reply('deny') }}>Deny</button>
-      <button type="button" disabled={pending || canceling} className="border border-accent bg-accent px-3 py-1.5 text-sm text-panel enabled:hover:opacity-90 disabled:opacity-50" onClick={() => { void reply('allow') }}>Allow</button>
-    </div>
+    <>
+      {error ? <ErrorNotice error={error} className="mt-4 px-3 py-2" /> : null}
+      <div className="mt-5 flex justify-end gap-2">
+        <CancelRun canceling={canceling} onCancel={onCancel} />
+        <button type="button" disabled={pending || canceling} className="border border-line px-3 py-1.5 text-sm text-ink enabled:hover:bg-sunken disabled:text-faint" onClick={() => reply('deny')}>Deny</button>
+        <button type="button" disabled={pending || canceling} className="border border-accent bg-accent px-3 py-1.5 text-sm text-panel enabled:hover:opacity-90 disabled:opacity-50" onClick={() => reply('allow')}>Allow</button>
+      </div>
+    </>
   )
 }
 
@@ -120,26 +163,18 @@ function QuestionForm({ question, canceling, onCancel, onSubmit }: {
   onSubmit: DialogsProps['onQuestion']
 }) {
   const [state, setState] = useState(() => createQuestionFormState(question.displayToken))
-  const [pending, setPending] = useState(false)
-  const inFlight = useRef(false)
+  const { pending, error, send } = useReply(canceling)
   const reply = serializeQuestionForm(state, question)
 
-  async function submit(): Promise<void> {
-    if (!reply || inFlight.current || canceling) {
-      return
-    }
-    inFlight.current = true
-    setPending(true)
-    try {
-      await onSubmit(question.displayToken, reply)
-    } finally {
-      inFlight.current = false
-      setPending(false)
-    }
-  }
-
   return (
-    <form onSubmit={(event) => { event.preventDefault(); void submit() }}>
+    <form
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (reply) {
+          void send(() => onSubmit(question.displayToken, reply))
+        }
+      }}
+    >
       <Dialog.Title className="text-base font-medium text-ink">{question.header || 'Question'}</Dialog.Title>
       <Dialog.Description className="mt-2 whitespace-pre-wrap text-sm text-ink">{question.question}</Dialog.Description>
       {question.options.length > 0 ? (
@@ -176,6 +211,7 @@ function QuestionForm({ question, canceling, onCancel, onSubmit }: {
           />
         </div>
       ) : null}
+      {error ? <ErrorNotice error={error} className="mt-4 px-3 py-2" /> : null}
       <div className="mt-5 flex justify-end gap-2">
         <CancelRun canceling={canceling} onCancel={onCancel} />
         <button

@@ -1,6 +1,6 @@
 import type { RpcEvent } from './rpc-session.ts'
 import { asBoolean, asNumber, asObject, asString, readStringField, truncateText } from './text.ts'
-import type { JsonObject, TranscriptItem } from './types.ts'
+import type { AvaState, JsonObject, ModelSummary, ProtocolInfo, SessionSummary, TranscriptItem } from './types.ts'
 
 const TOOL_SUMMARY_CHARS = 160
 
@@ -8,7 +8,6 @@ export type TranscriptState = {
   items: TranscriptItem[]
   draftAssistantId: string | null
   lastAssistantId: string | null
-  runSeen: boolean
   nextId: number
 }
 
@@ -17,7 +16,6 @@ export function createTranscriptState(): TranscriptState {
     items: [],
     draftAssistantId: null,
     lastAssistantId: null,
-    runSeen: false,
     nextId: 1
   }
 }
@@ -31,8 +29,12 @@ function nextItemId(state: TranscriptState, prefix: string, fallback: string): s
   return id
 }
 
+// Reducer entry points copy `items` once per call, so helpers may update that copy in place.
 function replaceItem(state: TranscriptState, id: string, item: TranscriptItem): void {
-  state.items = state.items.map((existing) => (existing.id === id ? item : existing))
+  const index = state.items.findIndex((existing) => existing.id === id)
+  if (index >= 0) {
+    state.items[index] = item
+  }
 }
 
 function lastItem(state: TranscriptState): TranscriptItem | undefined {
@@ -51,11 +53,16 @@ function freezeDraft(state: TranscriptState): void {
   state.draftAssistantId = null
 }
 
+function appendError(state: TranscriptState, text: string, eventId: string): void {
+  freezeDraft(state)
+  state.items.push({ kind: 'error', id: nextItemId(state, 'error', eventId), text })
+}
+
 function upsertDraft(state: TranscriptState, delta: string, eventId: string): void {
   if (!delta) {
     if (!state.draftAssistantId) {
       const id = nextItemId(state, 'assistant', eventId)
-      state.items = [...state.items, { kind: 'assistant', id, text: '', streaming: true }]
+      state.items.push({ kind: 'assistant', id, text: '', streaming: true })
       state.draftAssistantId = id
     }
     return
@@ -68,7 +75,7 @@ function upsertDraft(state: TranscriptState, delta: string, eventId: string): vo
     }
   }
   const id = nextItemId(state, 'assistant', eventId)
-  state.items = [...state.items, { kind: 'assistant', id, text: delta, streaming: true }]
+  state.items.push({ kind: 'assistant', id, text: delta, streaming: true })
   state.draftAssistantId = id
 }
 
@@ -95,17 +102,14 @@ function upsertTool(state: TranscriptState, payload: JsonObject, eventId: string
     })
     return
   }
-  state.items = [
-    ...state.items,
-    {
-      kind: 'tool',
-      id: nextItemId(state, 'tool', eventId || callId),
-      callId: callId || eventId,
-      tool,
-      status,
-      summary
-    }
-  ]
+  state.items.push({
+    kind: 'tool',
+    id: nextItemId(state, 'tool', eventId || callId),
+    callId: callId || eventId,
+    tool,
+    status,
+    summary
+  })
 }
 
 function textsEquivalent(left: string, right: string): boolean {
@@ -133,7 +137,7 @@ function applyAssistantCanonical(state: TranscriptState, text: string, eventId: 
     return
   }
   const id = nextItemId(state, 'assistant', eventId)
-  state.items = [...state.items, { kind: 'assistant', id, text, streaming: false }]
+  state.items.push({ kind: 'assistant', id, text, streaming: false })
   state.lastAssistantId = id
 }
 
@@ -155,7 +159,6 @@ export function resetTranscript(state: TranscriptState): TranscriptState {
     items: [],
     draftAssistantId: null,
     lastAssistantId: null,
-    runSeen: false,
     nextId: state.nextId
   }
 }
@@ -211,8 +214,7 @@ export function loadHistoryMessages(state: TranscriptState, messages: unknown): 
 export function applyRpcEvent(state: TranscriptState, event: RpcEvent): TranscriptState {
   const next: TranscriptState = {
     ...state,
-    items: [...state.items],
-    runSeen: true
+    items: [...state.items]
   }
   const payload = event.payload
   const eventId = event.eventId
@@ -240,16 +242,16 @@ export function applyRpcEvent(state: TranscriptState, event: RpcEvent): Transcri
       freezeDraft(next)
       upsertTool(next, payload, eventId)
       break
-    case 'error': {
-      freezeDraft(next)
-      const text =
+    case 'error':
+      appendError(
+        next,
         readStringField(payload, 'message') ||
-        readStringField(payload, 'text') ||
-        readStringField(payload, 'details') ||
-        'Run failed'
-      next.items.push({ kind: 'error', id: nextItemId(next, 'error', eventId), text })
+          readStringField(payload, 'text') ||
+          readStringField(payload, 'details') ||
+          'Run failed',
+        eventId
+      )
       break
-    }
     case 'canceled': {
       freezeDraft(next)
       const text = readStringField(payload, 'text') || readStringField(payload, 'reason') || 'Canceled'
@@ -265,14 +267,14 @@ export function applyRpcEvent(state: TranscriptState, event: RpcEvent): Transcri
   return next
 }
 
-export function parseStateResult(result: JsonObject): {
-  workspaceDir: string
-  currentDir: string
-  sessionId: string
-  provider: string
-  model: string
-  mode: string
-} {
+// A host-side run failure (e.g. the prompt request itself was rejected), shown like a runtime error event.
+export function applyRunError(state: TranscriptState, text: string): TranscriptState {
+  const next: TranscriptState = { ...state, items: [...state.items] }
+  appendError(next, text, '')
+  return next
+}
+
+export function parseStateResult(result: JsonObject): AvaState {
   return {
     workspaceDir: readStringField(result, 'workspace_dir'),
     currentDir: readStringField(result, 'current_dir'),
@@ -283,12 +285,7 @@ export function parseStateResult(result: JsonObject): {
   }
 }
 
-export function parseSessionsResult(result: JsonObject): {
-  sessionId: string
-  title: string
-  lastUpdated: string
-  entryCount: number
-}[] {
+export function parseSessionsResult(result: JsonObject): SessionSummary[] {
   const sessions = result.sessions
   if (!Array.isArray(sessions)) {
     return []
@@ -313,13 +310,7 @@ export function parseSessionsResult(result: JsonObject): {
   })
 }
 
-export function parseModelsResult(result: JsonObject): {
-  provider: string
-  model: string
-  displayName: string
-  selectable: boolean
-  selected: boolean
-}[] {
+export function parseModelsResult(result: JsonObject): ModelSummary[] {
   const models = result.models
   if (!Array.isArray(models)) {
     return []
@@ -346,11 +337,7 @@ export function parseModelsResult(result: JsonObject): {
   })
 }
 
-export function parseProtocolResult(result: JsonObject): {
-  protocolVersion: number
-  eventSchemaVersion: number
-  sessionEntryVersion: number
-} {
+export function parseProtocolResult(result: JsonObject): ProtocolInfo {
   return {
     protocolVersion: asNumber(result.protocol_version) ?? 1,
     eventSchemaVersion: asNumber(result.event_schema_version) ?? 1,

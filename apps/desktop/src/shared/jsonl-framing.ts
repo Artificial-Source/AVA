@@ -12,13 +12,6 @@ export class FramingError extends Error {
   }
 }
 
-function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
-  const next = new Uint8Array(left.length + right.length)
-  next.set(left)
-  next.set(right, left.length)
-  return next
-}
-
 function decodeRecord(bytes: Uint8Array, decoder: TextDecoder): string {
   try {
     return decoder.decode(bytes)
@@ -34,69 +27,79 @@ function stripTrailingCr(bytes: Uint8Array): Uint8Array {
   return bytes
 }
 
+// Splits a byte stream into LF-delimited UTF-8 records. Each byte is scanned once and copied
+// at most twice (once into the partial-record list, once into the joined record), so a large
+// record arriving in many small chunks costs O(record) rather than O(record²).
 export class JsonlFramer {
-  #buffer: Uint8Array = new Uint8Array(0)
   readonly maxBytes: number
   readonly #decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false })
+  // Bytes of the current unterminated record. Invariant: no chunk here contains LF.
+  #partial: Uint8Array[] = []
+  #partialBytes = 0
 
   constructor(maxBytes = DEFAULT_MAX_FRAME_BYTES) {
     this.maxBytes = maxBytes
   }
 
-  get bufferedBytes(): number {
-    return this.#buffer.length
-  }
-
   push(chunk: Uint8Array): string[] {
-    if (chunk.length === 0) {
-      return []
-    }
-    this.#buffer = concatBytes(this.#buffer, chunk)
-    if (this.#buffer.length > this.maxBytes) {
-      const hasLf = this.#buffer.indexOf(LF) >= 0
-      if (!hasLf) {
-        this.#buffer = new Uint8Array(0)
-        throw new FramingError('max_frame', `RPC frame exceeded ${this.maxBytes} bytes without a newline`)
-      }
-    }
-
     const records: string[] = []
-    while (this.#buffer.length > 0) {
-      const delimiter = this.#buffer.indexOf(LF)
+    let start = 0
+    while (start < chunk.length) {
+      const delimiter = chunk.indexOf(LF, start)
       if (delimiter < 0) {
-        if (this.#buffer.length > this.maxBytes) {
-          this.#buffer = new Uint8Array(0)
-          throw new FramingError('max_frame', `RPC frame exceeded ${this.maxBytes} bytes without a newline`)
-        }
+        this.#appendPartial(chunk.subarray(start))
         break
       }
-      const raw = this.#buffer.subarray(0, delimiter)
-      this.#buffer = this.#buffer.subarray(delimiter + 1)
-      if (raw.length > this.maxBytes) {
-        throw new FramingError('max_frame', `RPC frame exceeded ${this.maxBytes} bytes`)
+      const record = this.#takeRecord(chunk.subarray(start, delimiter))
+      start = delimiter + 1
+      if (record !== undefined) {
+        records.push(record)
       }
-      const record = stripTrailingCr(raw)
-      if (record.length === 0) {
-        continue
-      }
-      records.push(decodeRecord(record, this.#decoder))
     }
     return records
   }
 
   finish(): string | undefined {
-    if (this.#buffer.length === 0) {
+    if (this.#partialBytes === 0) {
       return undefined
     }
-    if (this.#buffer.length > this.maxBytes) {
-      this.#buffer = new Uint8Array(0)
-      throw new FramingError('max_frame', `RPC frame exceeded ${this.maxBytes} bytes at EOF`)
+    return this.#takeRecord(new Uint8Array(0))
+  }
+
+  #appendPartial(bytes: Uint8Array): void {
+    if (this.#partialBytes + bytes.length > this.maxBytes) {
+      this.#clearPartial()
+      throw new FramingError('max_frame', `RPC frame exceeded ${this.maxBytes} bytes without a newline`)
     }
-    const record = stripTrailingCr(this.#buffer)
-    this.#buffer = new Uint8Array(0)
-    if (record.length === 0) {
-      return undefined
+    // Copy: the caller owns `bytes` and may reuse its buffer once push() returns.
+    this.#partial.push(new Uint8Array(bytes))
+    this.#partialBytes += bytes.length
+  }
+
+  // Joins the buffered partial record with `tail` (the bytes before LF or EOF) and decodes it.
+  #takeRecord(tail: Uint8Array): string | undefined {
+    const size = this.#partialBytes + tail.length
+    const parts = this.#partial
+    this.#clearPartial()
+    if (size > this.maxBytes) {
+      throw new FramingError('max_frame', `RPC frame exceeded ${this.maxBytes} bytes`)
     }
-    return decodeRecord(record, this.#decoder)
+    let raw = tail
+    if (parts.length > 0) {
+      raw = new Uint8Array(size)
+      let offset = 0
+      for (const part of parts) {
+        raw.set(part, offset)
+        offset += part.length
+      }
+      raw.set(tail, offset)
+    }
+    const record = stripTrailingCr(raw)
+    return record.length === 0 ? undefined : decodeRecord(record, this.#decoder)
+  }
+
+  #clearPartial(): void {
+    this.#partial = []
+    this.#partialBytes = 0
   }
 }

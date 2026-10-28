@@ -1,21 +1,21 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogOptions } from 'electron'
+import { trustedDevRendererUrl } from '../shared/dev-server.ts'
+import { IPC_CHANNELS, IPC_EVENTS, isTrustedSender } from '../shared/ipc-contract.ts'
+import type { ActionResult, HostSnapshot } from '../shared/types.ts'
+import { AvaBackend } from './backend.ts'
+import { applySessionGuards, installApplicationGuards } from './security.ts'
 
 const mainDir = dirname(fileURLToPath(import.meta.url))
-import { IPC_CHANNELS, IPC_EVENTS, isTrustedSender } from '../shared/ipc-contract.ts'
-import { AvaBackend } from './backend.ts'
-import { applySessionGuards, guardWindow, installApplicationGuards } from './security.ts'
-
-const expectedDocument = process.env.ELECTRON_RENDERER_URL ||
-  pathToFileURL(join(mainDir, '../renderer/index.html')).href
+const devUrl = trustedDevRendererUrl(process.env, app.isPackaged)
+const expectedDocument = devUrl ?? pathToFileURL(join(mainDir, '../renderer/index.html')).href
 
 let mainWindow: BrowserWindow | null = null
 let backend: AvaBackend | null = null
-
-function packageRoot(): string {
-  return app.getAppPath()
-}
+let queuedSnapshot: HostSnapshot | null = null
+let backendClosing = false
+let backendClosed = false
 
 function senderView(event: IpcMainInvokeEvent) {
   const frame = event.senderFrame
@@ -42,18 +42,47 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
-      devTools: Boolean(process.env.ELECTRON_RENDERER_URL)
+      devTools: devUrl !== null
     }
   })
-  guardWindow(win, expectedDocument)
+  // A destroyed BrowserWindow throws on property access; forget it as soon as it closes.
+  win.on('closed', () => {
+    if (mainWindow === win) {
+      mainWindow = null
+    }
+  })
   win.setMenuBarVisibility(false)
   void win.loadURL(expectedDocument)
   return win
 }
 
+// Snapshots are whole-state, so a burst of backend events (one stdout chunk can hold many
+// stream deltas) collapses into one IPC message carrying the latest snapshot.
+function sendSnapshot(snapshot: HostSnapshot): void {
+  const flushScheduled = queuedSnapshot !== null
+  queuedSnapshot = snapshot
+  if (flushScheduled) {
+    return
+  }
+  setImmediate(() => {
+    const latest = queuedSnapshot
+    queuedSnapshot = null
+    const win = mainWindow
+    if (latest && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send(IPC_EVENTS.snapshot, latest)
+    }
+  })
+}
+
+async function chooseWorkspace(): Promise<string | null> {
+  const options: OpenDialogOptions = { title: 'Choose AVA workspace', properties: ['openDirectory'] }
+  const picked = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  return picked.canceled ? null : (picked.filePaths[0] ?? null)
+}
+
 function registerIpc(): void {
   for (const channel of Object.values(IPC_CHANNELS)) {
-    ipcMain.handle(channel, async (event, payload: unknown) => {
+    ipcMain.handle(channel, async (event, payload: unknown): Promise<HostSnapshot | ActionResult> => {
       if (!backend || !mainWindow) {
         return {
           ok: false,
@@ -73,20 +102,16 @@ function registerIpc(): void {
 
 app.whenReady().then(async () => {
   installApplicationGuards(expectedDocument)
-  applySessionGuards()
+  applySessionGuards(devUrl !== null)
   registerIpc()
   backend = new AvaBackend({
-    packageRoot: packageRoot(),
+    packageRoot: app.getAppPath(),
     cwd: process.cwd(),
-    env: process.env
+    env: process.env,
+    chooseWorkspace
   })
   mainWindow = createWindow()
-  backend.subscribe((snapshot) => {
-    if (!mainWindow || mainWindow.webContents.isDestroyed()) {
-      return
-    }
-    mainWindow.webContents.send(IPC_EVENTS.snapshot, snapshot)
-  })
+  backend.subscribe(sendSnapshot)
   await backend.start()
 
   app.on('activate', () => {
@@ -100,6 +125,20 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
-  void backend?.stop('application quit')
+// Hold the quit until AVA has seen stdin EOF and exited (or been killed), so the backend
+// never outlives the client.
+app.on('before-quit', (event) => {
+  if (!backend || backendClosed) {
+    return
+  }
+  event.preventDefault()
+  if (backendClosing) {
+    return
+  }
+  backendClosing = true
+  const quit = () => {
+    backendClosed = true
+    app.quit()
+  }
+  void backend.stop('application quit').then(quit, quit)
 })

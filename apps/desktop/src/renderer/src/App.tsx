@@ -1,26 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Composer } from './components/Composer.tsx'
 import { Dialogs } from './components/Dialogs.tsx'
+import { ErrorNotice } from './components/ErrorNotice.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { Transcript } from './components/Transcript.tsx'
-import type { HostSnapshot } from '../../shared/types.ts'
+import { ipcFailure } from './ipc-failure.ts'
+import { emptyHostSnapshot, type ActionResult, type HostSnapshot, type UserFacingError } from '../../shared/types.ts'
 
-const emptySnapshot: HostSnapshot = {
-  connection: 'starting',
-  connectionError: null,
-  lastActionError: null,
-  protocol: null,
-  state: null,
-  binaryPath: '',
-  workspace: '',
-  sessions: [],
-  models: [],
-  items: [],
-  busy: false,
-  canceling: false,
-  pendingPermission: null,
-  pendingQuestion: null
-}
+const initialSnapshot = emptyHostSnapshot('starting', null)
 
 function statusLabel(snapshot: HostSnapshot): string {
   if (snapshot.connection === 'starting') {
@@ -36,7 +23,9 @@ function statusLabel(snapshot: HostSnapshot): string {
 }
 
 export function App() {
-  const [snapshot, setSnapshot] = useState<HostSnapshot>(emptySnapshot)
+  const [snapshot, setSnapshot] = useState<HostSnapshot>(initialSnapshot)
+  // Failures main returns without publishing them in the snapshot (guards, invalid workspace).
+  const [actionError, setActionError] = useState<UserFacingError | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const selectedModel = useMemo(() => {
     const selected = snapshot.models.find((model) => model.selected)
@@ -52,11 +41,23 @@ export function App() {
   useEffect(() => {
     let cancelled = false
     const api = window.avaDesktop
-    void api.getSnapshot().then((value) => {
-      if (!cancelled) {
-        setSnapshot(value)
+    void api.getSnapshot().then(
+      (value) => {
+        if (cancelled) {
+          return
+        }
+        if ('connection' in value) {
+          setSnapshot(value)
+        } else {
+          setActionError(value.error)
+        }
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setActionError(ipcFailure(error))
+        }
       }
-    })
+    )
     const unsubscribe = api.subscribe(setSnapshot)
     return () => {
       cancelled = true
@@ -64,12 +65,26 @@ export function App() {
     }
   }, [])
 
+  function runAction(action: () => Promise<ActionResult>): void {
+    setActionError(null)
+    void action().then(
+      (result) => {
+        if (!result.ok) {
+          setActionError(result.error)
+        }
+      },
+      (error: unknown) => setActionError(ipcFailure(error))
+    )
+  }
+
   const idle = snapshot.connection === 'ready' && !snapshot.busy
   const modelLabel = snapshot.state
     ? `${snapshot.state.provider}/${snapshot.state.model}`
     : 'model unavailable'
   const workspaceLabel = snapshot.state?.workspaceDir || snapshot.workspace || 'no workspace'
-  const error = snapshot.lastActionError ?? (snapshot.connection === 'error' ? snapshot.connectionError : null)
+  // A dead backend is the root cause of any later action failure, so it wins.
+  const error =
+    (snapshot.connection === 'error' ? snapshot.connectionError : null) ?? actionError ?? snapshot.lastActionError
 
   return (
     <div className="flex h-full min-h-0 bg-canvas text-ink">
@@ -77,12 +92,8 @@ export function App() {
         snapshot={snapshot}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
-        onNew={() => {
-          void window.avaDesktop.newSession()
-        }}
-        onOpen={(sessionId) => {
-          void window.avaDesktop.openSession(sessionId)
-        }}
+        onNew={() => runAction(() => window.avaDesktop.newSession())}
+        onOpen={(sessionId) => runAction(() => window.avaDesktop.openSession(sessionId))}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-panel px-3 py-2">
@@ -118,7 +129,7 @@ export function App() {
                 const [provider, ...rest] = event.target.value.split('::')
                 const model = rest.join('::')
                 if (model) {
-                  void window.avaDesktop.setModel(model, provider || undefined)
+                  runAction(() => window.avaDesktop.setModel(model, provider || undefined))
                 }
               }}
             >
@@ -138,9 +149,7 @@ export function App() {
             type="button"
             className="border border-line px-2 py-1 text-sm text-ink enabled:hover:bg-sunken disabled:text-faint"
             disabled={!idle}
-            onClick={() => {
-              void window.avaDesktop.selectWorkspace()
-            }}
+            onClick={() => runAction(() => window.avaDesktop.selectWorkspace())}
           >
             Workspace
           </button>
@@ -148,38 +157,26 @@ export function App() {
             type="button"
             className="border border-line px-2 py-1 text-sm text-ink enabled:hover:bg-sunken disabled:text-faint"
             disabled={snapshot.busy || snapshot.connection === 'starting'}
-            onClick={() => {
-              void window.avaDesktop.restart()
-            }}
+            onClick={() => runAction(() => window.avaDesktop.restart())}
           >
             Restart
           </button>
         </header>
-        {error ? (
-          <div className="border-b border-danger-soft bg-danger-soft px-4 py-2 text-sm text-danger" role="alert">
-            <p className="font-medium">{error.title}</p>
-            <p className="whitespace-pre-wrap text-ink">{error.message}</p>
-            {error.hint ? <p className="mt-1 text-muted">{error.hint}</p> : null}
-          </div>
-        ) : null}
+        {error ? <ErrorNotice error={error} className="border-b border-danger-soft px-4 py-2" /> : null}
         <Transcript snapshot={snapshot} />
         <Composer
           disabled={!idle}
           busy={snapshot.busy}
           canceling={snapshot.canceling}
-          onSend={(message) => {
-            void window.avaDesktop.prompt(message)
-          }}
-          onCancel={() => {
-            void window.avaDesktop.cancel()
-          }}
+          onSend={(message) => runAction(() => window.avaDesktop.prompt(message))}
+          onCancel={() => runAction(() => window.avaDesktop.cancel())}
         />
       </div>
       <Dialogs
         permission={snapshot.pendingPermission}
         question={snapshot.pendingQuestion}
         canceling={snapshot.canceling}
-        onCancel={() => { void window.avaDesktop.cancel() }}
+        onCancel={() => runAction(() => window.avaDesktop.cancel())}
         onPermission={(displayToken, decision) => window.avaDesktop.replyPermission(displayToken, decision)}
         onQuestion={(displayToken, reply) => window.avaDesktop.replyQuestion(displayToken, reply)}
       />

@@ -46,7 +46,7 @@ export function questionReplySemanticError(view: QuestionPromptView, reply: Ques
   }
   const hasSelected = reply.selected !== undefined
   const hasSelectedOptions = reply.selectedOptions !== undefined
-  const submitted = hasSelected ? [reply.selected as string] : (reply.selectedOptions ?? [])
+  const submitted = reply.selected !== undefined ? [reply.selected] : (reply.selectedOptions ?? [])
   if (hasSelected || hasSelectedOptions) {
     if (!view.multiple && submitted.length !== 1) {
       return 'single-select questions require exactly one selected option'

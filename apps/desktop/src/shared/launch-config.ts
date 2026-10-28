@@ -73,7 +73,7 @@ export function resolveLaunchPaths(input: {
     }
   }
 
-  if (input.requireExistingBinary !== false && existsSync(binaryPath) && !isExecutableFile(binaryPath)) {
+  if (input.requireExistingBinary !== false && !isExecutableFile(binaryPath)) {
     return {
       ok: false,
       error: {

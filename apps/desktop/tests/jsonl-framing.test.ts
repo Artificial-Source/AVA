@@ -45,3 +45,30 @@ test('max framing without a newline is fatal', () => {
     (error: unknown) => error instanceof FramingError && error.code === 'max_frame'
   )
 })
+
+test('a terminated record over the frame limit is fatal', () => {
+  const framer = new JsonlFramer(8)
+  assert.deepEqual(framer.push(encoder.encode('abcde')), [])
+  assert.throws(
+    () => framer.push(encoder.encode('fghij\n')),
+    (error: unknown) => error instanceof FramingError && error.code === 'max_frame'
+  )
+})
+
+test('a reused chunk buffer cannot corrupt a buffered partial record', () => {
+  const framer = new JsonlFramer()
+  const chunk = encoder.encode('{"id":')
+  assert.deepEqual(framer.push(chunk), [])
+  chunk.fill(0x20)
+  assert.deepEqual(framer.push(encoder.encode('"1"}\n')), ['{"id":"1"}'])
+})
+
+test('a record delivered one byte at a time, splitting UTF-8 sequences, is reassembled', () => {
+  const framer = new JsonlFramer()
+  const record = '{"text":"héllo €"}'
+  const records: string[] = []
+  for (const byte of encoder.encode(`${record}\n`)) {
+    records.push(...framer.push(Uint8Array.of(byte)))
+  }
+  assert.deepEqual(records, [record])
+})

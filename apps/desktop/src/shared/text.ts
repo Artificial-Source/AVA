@@ -1,4 +1,5 @@
 const CONTROL_OR_META = /[\u0000-\u001f\u007f\s;|&`$<>\\'"*?{}[\]()]/
+const encoder = new TextEncoder()
 
 export function asObject(value: unknown): Record<string, unknown> | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -27,7 +28,7 @@ export function asStringArray(value: unknown): string[] | null {
 }
 
 export function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).length
+  return encoder.encode(value).length
 }
 
 export function isProtocolId(value: unknown, maxBytes = 256): value is string {
@@ -40,18 +41,25 @@ export function isProtocolId(value: unknown, maxBytes = 256): value is string {
   return !CONTROL_OR_META.test(value)
 }
 
+export function isBoundedString(value: unknown, maxBytes: number): value is string {
+  return typeof value === 'string' && utf8ByteLength(value) <= maxBytes
+}
+
 export function isNonEmptyString(value: unknown, maxBytes: number): value is string {
-  if (typeof value !== 'string' || value.length === 0) {
-    return false
-  }
-  return utf8ByteLength(value) <= maxBytes
+  return isBoundedString(value, maxBytes) && value.length > 0
 }
 
 export function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value
   }
-  return `${value.slice(0, Math.max(0, maxChars - 1))}…`
+  let end = Math.max(0, maxChars - 1)
+  const last = value.charCodeAt(end - 1)
+  // Never cut between a UTF-16 high and low surrogate, which would render as U+FFFD.
+  if (last >= 0xd800 && last <= 0xdbff) {
+    end -= 1
+  }
+  return `${value.slice(0, end)}…`
 }
 
 export function readStringField(object: Record<string, unknown>, key: string): string {

@@ -1,8 +1,46 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { HostSnapshot, TranscriptItem } from '../../../shared/types.ts'
 
-function ItemView({ item }: { item: TranscriptItem }) {
+// Summaries longer than this collapse to one line until expanded.
+const TOOL_SUMMARY_PREVIEW_CHARS = 80
+// Within this distance of the bottom, the transcript keeps following new output.
+const FOLLOW_OUTPUT_SLACK_PX = 32
+
+function ToolItemView({ item }: { item: Extract<TranscriptItem, { kind: 'tool' }> }) {
   const [expanded, setExpanded] = useState(false)
+  const heading = (
+    <>
+      <span className="text-ink">{item.tool}</span>
+      <span className="text-faint"> · {item.status}</span>
+    </>
+  )
+  // Only a summary that is actually cut off gets a disclosure control.
+  if (item.summary.length <= TOOL_SUMMARY_PREVIEW_CHARS) {
+    return (
+      <article className="px-4 py-2">
+        <div className="border border-line bg-sunken/60 px-3 py-2 text-sm text-muted">
+          {heading}
+          {item.summary ? <span className="mt-1 block whitespace-pre-wrap">{item.summary}</span> : null}
+        </div>
+      </article>
+    )
+  }
+  return (
+    <article className="px-4 py-2">
+      <button
+        type="button"
+        className="w-full border border-line bg-sunken/60 px-3 py-2 text-left text-sm text-muted hover:bg-sunken"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        {heading}
+        <span className={`mt-1 block ${expanded ? 'whitespace-pre-wrap' : 'truncate'}`}>{item.summary}</span>
+      </button>
+    </article>
+  )
+}
+
+function ItemView({ item }: { item: TranscriptItem }) {
   if (item.kind === 'user') {
     return (
       <article className="px-4 py-3">
@@ -22,25 +60,7 @@ function ItemView({ item }: { item: TranscriptItem }) {
     )
   }
   if (item.kind === 'tool') {
-    const long = item.summary.length > 80
-    return (
-      <article className="px-4 py-2">
-        <button
-          type="button"
-          className="w-full border border-line bg-sunken/60 px-3 py-2 text-left text-sm text-muted"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-        >
-          <span className="text-ink">{item.tool}</span>
-          <span className="text-faint"> · {item.status}</span>
-          {(expanded || !long) && item.summary ? (
-            <span className="mt-1 block whitespace-pre-wrap text-muted">{item.summary}</span>
-          ) : item.summary ? (
-            <span className="mt-1 block truncate text-muted">{item.summary}</span>
-          ) : null}
-        </button>
-      </article>
-    )
+    return <ToolItemView item={item} />
   }
   if (item.kind === 'error') {
     return (
@@ -58,6 +78,16 @@ function ItemView({ item }: { item: TranscriptItem }) {
 }
 
 export function Transcript({ snapshot }: { snapshot: HostSnapshot }) {
+  const scroller = useRef<HTMLDivElement>(null)
+  // Streamed output stays in view unless the reader has scrolled up to read history.
+  const following = useRef(true)
+  useLayoutEffect(() => {
+    const element = scroller.current
+    if (element && following.current) {
+      element.scrollTop = element.scrollHeight
+    }
+  }, [snapshot.items])
+
   if (snapshot.connection === 'starting') {
     return (
       <div className="flex flex-1 flex-col justify-center px-6 text-muted">
@@ -91,7 +121,14 @@ export function Transcript({ snapshot }: { snapshot: HostSnapshot }) {
     )
   }
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-line/80">
+    <div
+      ref={scroller}
+      className="min-h-0 flex-1 overflow-y-auto divide-y divide-line/80"
+      onScroll={(event) => {
+        const element = event.currentTarget
+        following.current = element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_OUTPUT_SLACK_PX
+      }}
+    >
       {snapshot.items.map((item) => (
         <ItemView key={item.id} item={item} />
       ))}
