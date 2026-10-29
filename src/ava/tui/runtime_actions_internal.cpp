@@ -106,9 +106,6 @@ RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimeP
 
 DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_settings()
 {
-  auto const& options = frontend_.options();
-  if (!options.on_maybe_reload_display_settings)
-    return DisplaySettingsReloadPollOutcome::Unchanged;
   auto const now = std::chrono::steady_clock::now();
   if (now < next_display_reload_check_)
     return DisplaySettingsReloadPollOutcome::Unchanged;
@@ -116,7 +113,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
 
   // Preserve the frontend owner's optional result as the explicit applied/unchanged signal.
   // Do not infer applied state by comparing presentation values (overlays can mask them).
-  auto reloaded = options.on_maybe_reload_display_settings(frontend_);
+  auto reloaded = frontend_.on_maybe_reload_display_settings();
   if (!reloaded)
   {
     auto status = reloaded.error().format();
@@ -410,16 +407,9 @@ bool RuntimeActionController::open_scoped_model_selector()
 bool RuntimeActionController::open_session_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  if (!options.session_selector_view)
-  {
-    snapshot.status = "session selector unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return true;
-  }
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = options.session_selector_view(frontend_);
+  snapshot.select_list = frontend_.session_selector_view();
   active_select_list_ = ActiveSelectList::Session;
   snapshot.status = "session selector opened";
   renderer_.transcript_scroll_offset = 0;

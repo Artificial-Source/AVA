@@ -96,7 +96,7 @@ struct PendingSessionArchiveAction
 class RuntimePresentationState final
 {
  public:
-  RuntimePresentationState(TuiFrontEnd* frontend);
+  RuntimePresentationState(TuiFrontEnd* frontend, std::string const& initial_keybind_status);
 
   void refresh_prompt_metadata();
   void apply_catalog_delivery(TuiFrontEnd const& frontend, TuiCatalogDelivery delivery);

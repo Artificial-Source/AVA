@@ -294,15 +294,11 @@ class TuiFrontEnd;
 struct TuiRuntimeOptions
 {
   std::string app_version;
-  ava::core::NoLogString initial_status = "";
   std::vector<TranscriptItem> initial_transcript = {};
   std::vector<SlashCommandItem> slash_commands = {};
   std::optional<std::size_t> slash_catalog_generation = std::nullopt;
   std::vector<FileReferenceItem> file_references = {};
   std::optional<std::size_t> workspace_catalog_generation = std::nullopt;
-  TuiLocalDisplaySettings initial_display_settings;
-  TuiMermaidRenderBridge mermaid_render;
-  TuiKeyBindings key_bindings = default_key_bindings();
   std::function<ProjectTrustSnapshot(TuiFrontEnd const&)> read_project_trust;
   std::function<TuiActiveRunQueues(TuiFrontEnd const&, ava::event::EventEnvelopeSink)> create_active_run_queues;
   std::function<TuiSubmitResult(TuiFrontEnd&, std::string const&, TuiSubmitContext)> on_submit;
@@ -316,19 +312,11 @@ struct TuiRuntimeOptions
   // Loads validated bindings for application by the TUI thread. The callback
   // must not refresh backend catalogs or return backend runtime snapshots.
   std::function<ava::core::Result<TuiKeyBindings>(TuiFrontEnd const&)> on_reload_key_bindings;
-  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>(TuiFrontEnd const&)> on_reload_display_settings;
-  // Optional local result is the explicit applied/unchanged signal from the frontend owner:
-  // nullopt = unchanged, some(result) = applied. unexpected = terminal apply/watch failure.
-  // The TUI action layer maps this to DisplaySettingsReloadPollOutcome and must not compare values.
-  std::function<ava::core::Result<std::optional<TuiLocalDisplaySettingsResult>>(TuiFrontEnd const&)> on_maybe_reload_display_settings;
-  // Persists and applies a recognized display command or settings action on the TUI thread.
-  std::function<ava::core::Result<TuiLocalDisplaySettingsResult>(TuiFrontEnd const&, std::string_view)> on_local_display_settings_action;
   std::function<SelectListView(TuiFrontEnd const&)> model_selector_view;
   // The bool is true for the staged model-selection handoff, allowing an
   // accurate "Esc keep default" footer. No value means no configurable mode.
   std::function<std::optional<SelectListView>(TuiFrontEnd const&, bool)> reasoning_selector_view;
   std::function<SelectListView(TuiFrontEnd const&)> scoped_model_selector_view;
-  std::function<SelectListView(TuiFrontEnd&)> session_selector_view;
   // Path-free, owner-bound live subagent workspace callbacks. Exact ids are
   // accepted only as hidden selector values and callback authority. Cancel and
   // promote return narrow typed TUI outcomes only — never free-form backend text.
@@ -377,9 +365,6 @@ struct TuiRuntimeOptions
   std::function<ava::core::Result<SelectListView>(TuiFrontEnd const&, SelectListView const&, std::string_view, bool)> on_scoped_model_reorder;
   std::function<ava::core::Result<std::string>(TuiFrontEnd const&)> on_scoped_model_save;
   std::function<ava::core::Result<std::string>(TuiFrontEnd&, std::string_view)> on_session_selected;
-  // Runs after the composer loop exits while curses is still active. Application-scoped
-  // workers that can notify this runtime must be canceled and joined here.
-  std::function<void(TuiFrontEnd const&)> on_before_tui_shutdown;
 
   // This struct has a custom print_on.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

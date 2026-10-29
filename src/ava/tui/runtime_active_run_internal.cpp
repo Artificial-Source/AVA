@@ -627,7 +627,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   {
     permission_resolver = prompt_coordinator_.permission_resolver();
     question_resolver = prompt_coordinator_.question_resolver();
-    auto const request_key_bindings = frontend_.options().key_bindings;
+    auto const request_key_bindings = frontend_.key_bindings();
     auto submit_future = ava::core::make_async("tui_submit", [&, request_key_bindings]() {
       auto take_steering_messages = active_queues ? active_queues->take_steering_messages : std::function<ava::core::Result<std::vector<std::string>>()>{};
       auto skip_active_steering = active_queues ? active_queues->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{};

@@ -29,11 +29,9 @@ struct TuiRequestPresentation
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-void append_status_line(std::string& target, std::string line);
 [[nodiscard]] std::vector<CommandHotkey> command_hotkeys_from_key_bindings(ava::tui::TuiKeyBindings const& key_bindings);
 [[nodiscard]] ava::tui::ProjectTrustSnapshot project_trust_snapshot(ProjectTrustState const& state);
 [[nodiscard]] std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent::ToolTimelineEntry> const& entries);
-[[nodiscard]] std::string session_selector_footer_hint(SessionSelectorSort sort, bool named_only, bool show_paths, bool show_archived, bool show_label_time);
 [[nodiscard]] ava::tui::TuiBranchSummarySnapshot tui_branch_summary_snapshot(BranchSummarySnapshot const& snapshot);
 [[nodiscard]] std::string scoped_model_selector_footer_hint();
 [[nodiscard]] ava::core::Result<ava::tui::SelectListView> toggle_scoped_model(runtime::session_ts& unlocked_session, ava::tui::SelectListView const& previous,

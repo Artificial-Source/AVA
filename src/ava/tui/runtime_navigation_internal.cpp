@@ -274,20 +274,20 @@ std::optional<bool> RuntimeNavigationController::handle_sidebar_drawer_input(Inp
 
   if (!sidebar_drawer_focused())
     return std::nullopt;
-  if (event.key == Key::Escape || key_matches_action(frontend_.options().key_bindings, TuiAction::Cancel, event.key))
+  if (event.key == Key::Escape || key_matches_action(frontend_.key_bindings(), TuiAction::Cancel, event.key))
   {
     close_sidebar_drawer();
     return renderer_.request_render();
   }
 
   auto const max_scroll = sidebar_drawer_max_scroll_offset(renderer_.frontend, snapshot_);
-  if (key_matches_action(frontend_.options().key_bindings, TuiAction::PageUp, event.key))
+  if (key_matches_action(frontend_.key_bindings(), TuiAction::PageUp, event.key))
   {
     auto const page = sidebar_drawer_page_size();
     snapshot_.sidebar_drawer_scroll_offset = page >= snapshot_.sidebar_drawer_scroll_offset ? 0 : snapshot_.sidebar_drawer_scroll_offset - page;
     return renderer_.request_render();
   }
-  if (key_matches_action(frontend_.options().key_bindings, TuiAction::PageDown, event.key))
+  if (key_matches_action(frontend_.key_bindings(), TuiAction::PageDown, event.key))
   {
     snapshot_.sidebar_drawer_scroll_offset = std::min(max_scroll, snapshot_.sidebar_drawer_scroll_offset + sidebar_drawer_page_size());
     return renderer_.request_render();

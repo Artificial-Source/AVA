@@ -23,7 +23,7 @@ void refresh_local_palette_hints(ComposerSnapshot& snapshot, TuiKeyBindings cons
   compose_tui_slash_command_items(snapshot.slash_commands, snapshot.custom_themes, key_binding_help_items(bindings));
 }
 
-void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiRuntimeOptions const& options)
+void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiFrontEnd const& frontend)
 {
   if (!snapshot.startup_overview)
     return;
@@ -51,7 +51,7 @@ void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiRuntimeOptions 
   auto const theme = active_tui_theme();
   overview.theme_name = theme.name;
   overview.theme_badge = theme.badge;
-  overview.overview_toggle_keys = keys_display(options.key_bindings, TuiAction::OverviewToggle);
+  overview.overview_toggle_keys = keys_display(frontend.key_bindings(), TuiAction::OverviewToggle);
   auto append_bounded = [&overview](std::string_view segment) {
     auto candidate = overview.compact_line;
     if (!candidate.empty())
@@ -65,26 +65,28 @@ void refresh_local_overview_hints(ComposerSnapshot& snapshot, TuiRuntimeOptions 
   append_bounded(open_hint);
 }
 
-ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend)
+ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend, std::string const& initial_keybind_status)
 {
   TuiRuntimeOptions const& options = frontend->options();
+  TuiLocalDisplaySettings initial_display_settings = frontend->display_settings_snapshot();
   auto const mode = frontend->prompt_metadata().mode_refresh();
   ComposerSnapshot snapshot{.mode = mode.value,
                             .session_id = {},
                             .input = "",
-                            .status = options.initial_status,
+                            .status = initial_keybind_status,
                             .transcript = options.initial_transcript,
                             .slash_commands = options.slash_commands,
                             .file_references = options.file_references,
-                            .custom_themes = options.initial_display_settings.custom_themes,
-                            .show_images = options.initial_display_settings.show_images,
-                            .image_width_cells = options.initial_display_settings.image_width_cells,
-                            .cursor = options.initial_display_settings.cursor};
+                            .custom_themes = initial_display_settings.custom_themes, // presentation
+                            .show_images = initial_display_settings.show_images,
+                            .image_width_cells = initial_display_settings.image_width_cells,
+                            .cursor = initial_display_settings.cursor
+                           };
   seed_tui_tool_index(snapshot);
-  snapshot.mermaid_config_epoch = options.initial_display_settings.mermaid_config_epoch;
-  snapshot.mermaid_enabled = options.initial_display_settings.mermaid_enabled;
-  snapshot.active_run_hint = runtime_views::active_run_hint_for(options.key_bindings);
-  refresh_local_palette_hints(snapshot, options.key_bindings);
+  snapshot.mermaid_config_epoch = initial_display_settings.mermaid_config_epoch;
+  snapshot.mermaid_enabled = initial_display_settings.mermaid_enabled;
+  snapshot.active_run_hint = runtime_views::active_run_hint_for(frontend->key_bindings());
+  refresh_local_palette_hints(snapshot, frontend->key_bindings());
   return snapshot;
 }
 
@@ -147,8 +149,8 @@ bool RuntimeEventQueue::received_any()
 // invert the backend-to-UI lock order. RuntimePresentationState is created only
 // after the concrete frontend has finished construction, making virtual backend
 // reads safe here.
-RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend)
-    : snapshot(initial_snapshot(frontend)),
+RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend, std::string const& initial_keybind_status)
+    : snapshot(initial_snapshot(frontend, initial_keybind_status)),
       frontend_(frontend),
       applied_slash_catalog_generation_(frontend->options().slash_catalog_generation),
       applied_workspace_catalog_generation_(frontend->options().workspace_catalog_generation),
@@ -166,7 +168,6 @@ void RuntimePresentationState::refresh_prompt_metadata()
 
 void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& frontend, TuiCatalogDelivery delivery)
 {
-  auto const& options = frontend.options();
   bool completion_sources_changed = false;
   if (!delivery.slash_catalog_generation || !applied_slash_catalog_generation_ || *delivery.slash_catalog_generation != *applied_slash_catalog_generation_)
   {
@@ -183,7 +184,7 @@ void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& fronten
   }
   if (completion_sources_changed)
   {
-    refresh_local_palette_hints(snapshot, options.key_bindings);
+    refresh_local_palette_hints(snapshot, frontend.key_bindings());
     ++snapshot.file_references_generation;
   }
 }
@@ -213,16 +214,14 @@ void RuntimePresentationState::refresh_after_backend_action(TuiFrontEnd& fronten
 
 void RuntimePresentationState::apply_local_key_bindings(TuiFrontEnd& frontend, TuiKeyBindings bindings)
 {
-  auto& options = frontend.options();
-  options.key_bindings = std::move(bindings);
-  snapshot.active_run_hint = runtime_views::active_run_hint_for(options.key_bindings);
-  refresh_local_palette_hints(snapshot, options.key_bindings);
-  refresh_local_overview_hints(snapshot, options);
+  frontend.key_bindings() = std::move(bindings);
+  snapshot.active_run_hint = runtime_views::active_run_hint_for(frontend.key_bindings());
+  refresh_local_palette_hints(snapshot, frontend.key_bindings());
+  refresh_local_overview_hints(snapshot, frontend);
 }
 
 void RuntimePresentationState::apply_local_display_settings(TuiFrontEnd const& frontend, TuiLocalDisplaySettings settings)
 {
-  auto const& options = frontend.options();
   snapshot.custom_themes = std::move(settings.custom_themes);
   snapshot.show_images = settings.show_images;
   snapshot.image_width_cells = settings.image_width_cells;
@@ -239,14 +238,14 @@ void RuntimePresentationState::apply_local_display_settings(TuiFrontEnd const& f
     for (auto& attachment : snapshot.pending_attachments)
       attachment.preview.reset();
   }
-  refresh_local_palette_hints(snapshot, options.key_bindings);
-  refresh_local_overview_hints(snapshot, options);
+  refresh_local_palette_hints(snapshot, frontend.key_bindings());
+  refresh_local_overview_hints(snapshot, frontend);
 }
 
 void RuntimePresentationState::initialize_startup_overview(TuiFrontEnd const& frontend, StartupOverviewSnapshot overview)
 {
   snapshot.startup_overview = std::move(overview);
-  refresh_local_overview_hints(snapshot, frontend.options());
+  refresh_local_overview_hints(snapshot, frontend);
 }
 
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list)

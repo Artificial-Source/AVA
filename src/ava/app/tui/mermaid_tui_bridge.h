@@ -24,7 +24,8 @@ struct MermaidTuiPresentationConfiguration
 class MermaidTuiBridge final : public std::enable_shared_from_this<MermaidTuiBridge>
 {
  public:
-  [[nodiscard]] static ava::core::Result<std::shared_ptr<MermaidTuiBridge>> create(MermaidDisplaySettings const& settings);
+  // Can throws core::Error.
+  [[nodiscard]] static std::shared_ptr<MermaidTuiBridge> create(MermaidDisplaySettings const& settings);
   MermaidTuiBridge(MermaidTuiBridge const&) = delete;
   MermaidTuiBridge& operator=(MermaidTuiBridge const&) = delete;
   ~MermaidTuiBridge();

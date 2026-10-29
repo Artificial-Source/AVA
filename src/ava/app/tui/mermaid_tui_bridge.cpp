@@ -19,13 +19,13 @@ bool same_effective_settings(MermaidDisplaySettings const& left, MermaidDisplayS
 
 }  // namespace
 
-ava::core::Result<std::shared_ptr<MermaidTuiBridge>> MermaidTuiBridge::create(MermaidDisplaySettings const& settings)
+std::shared_ptr<MermaidTuiBridge> MermaidTuiBridge::create(MermaidDisplaySettings const& settings)
 {
   constexpr auto kInitialEpoch = std::uint64_t{1};
   auto coordinator = MermaidRenderCoordinator::create(coordinator_config(settings, kInitialEpoch));
   if (!coordinator)
-    return std::unexpected(coordinator.error());
-  return std::shared_ptr<MermaidTuiBridge>(new MermaidTuiBridge(std::move(*coordinator), settings, kInitialEpoch));
+    throw std::move(coordinator.error());
+  return std::shared_ptr<MermaidTuiBridge>(new MermaidTuiBridge{std::move(*coordinator), settings, kInitialEpoch});
 }
 
 MermaidTuiBridge::MermaidTuiBridge(std::unique_ptr<MermaidRenderCoordinator> coordinator, MermaidDisplaySettings settings, std::uint64_t epoch)

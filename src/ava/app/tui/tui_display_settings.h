@@ -51,7 +51,7 @@ struct MermaidDisplaySettings
   bool argv_configured = false;
   std::vector<std::pair<std::string, std::string>> unknown_fields;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // Validated display.json document with field-preserving unknown members.
@@ -84,7 +84,7 @@ struct TuiDisplaySettings
   MermaidDisplaySettings mermaid;
   std::filesystem::path path;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // One validated previewable custom theme observed by the application-owned watcher.
@@ -137,7 +137,7 @@ struct TuiDisplaySettingsWatchState
   // including themes that are only previewable and not currently configured.
   std::vector<TuiCustomThemeCatalogEntry> custom_theme_catalog;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 [[nodiscard]] std::filesystem::path tui_display_settings_file(ava::config::XdgPaths const& paths);

@@ -27,10 +27,8 @@ class LocalTuiDisplaySettings final
 {
  public:
   // Construct the TUI-thread owner for unlocked_session and its retained Mermaid helper without reading or applying the display document.
-  //
-  // The session wrapper must outlive this owner; its contained Session may be replaced.
-  // Each configuration operation copies current paths under a short read guard before performing file I/O.
-  [[nodiscard]] static ava::core::Result<LocalTuiDisplaySettings> create(runtime::session_ts const& unlocked_session);
+  // Can throws core::Error.
+  [[nodiscard]] static LocalTuiDisplaySettings create(runtime::session_ts const& unlocked_session);
 
   // Loads, validates, and applies the display document, returning only local
   // presentation values and caller-visible status/output.
@@ -44,11 +42,11 @@ class LocalTuiDisplaySettings final
   // Returns current display values and validated custom-theme choices for initial TUI hydration.
   [[nodiscard]] ava::tui::TuiLocalDisplaySettings presentation() const;
   // Returns the bounded rendering callback owned by the retained helper.
-  [[nodiscard]] ava::tui::TuiMermaidRenderBridge mermaid_bridge();
+  [[nodiscard]] ava::tui::TuiMermaidRenderBridge mermaid_bridge() const;
   // Idempotently stops helper work before terminal teardown.
   void shutdown() noexcept;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   // Retain unlocked_session's stable wrapper and the shared Mermaid service, not a copy of session configuration paths.

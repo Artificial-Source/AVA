@@ -95,7 +95,7 @@ constexpr auto kTerminalBackgroundProbeDeadline = std::chrono::milliseconds(50);
 class RuntimeBeforeShutdownGuard
 {
  public:
-  explicit RuntimeBeforeShutdownGuard(TuiFrontEnd const& frontend) : frontend_(frontend) { }
+  explicit RuntimeBeforeShutdownGuard(TuiFrontEnd& frontend) : frontend_(frontend) { }
   RuntimeBeforeShutdownGuard(RuntimeBeforeShutdownGuard const&) = delete;
   RuntimeBeforeShutdownGuard& operator=(RuntimeBeforeShutdownGuard const&) = delete;
   ~RuntimeBeforeShutdownGuard() { static_cast<void>(invoke()); }
@@ -105,11 +105,9 @@ class RuntimeBeforeShutdownGuard
     if (invoked_)
       return true;
     invoked_ = true;
-    if (!frontend_.options().on_before_tui_shutdown)
-      return true;
     try
     {
-      frontend_.options().on_before_tui_shutdown(frontend_);
+      frontend_.on_before_tui_shutdown();
       return true;
     }
     catch (...)
@@ -121,7 +119,7 @@ class RuntimeBeforeShutdownGuard
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  TuiFrontEnd const& frontend_;
+  TuiFrontEnd& frontend_;
   bool invoked_ = false;
 };
 
@@ -229,13 +227,17 @@ int TuiFrontEnd::run_interactive_composer()
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
-  terminal_context.apply_cursor_settings(options_.initial_display_settings.cursor);
+  terminal_context.apply_cursor_settings(cursor_settings());
   // Probe the direct terminal background once after enter and before first paint.
   // No re-probe on suspend/resume and no late theme flip after presentation starts.
   TerminalBackgroundDetectionGuard terminal_background_detection;
   maybe_probe_terminal_background_appearance(terminal_context);
 
-  RuntimePresentationState presentation_state(this);
+  // Note: initial_status_line is consumed by the constructor of RuntimePresentationState.
+  std::string initial_status_line = load_key_bindings();
+  load_display_settings(initial_status_line);
+  RuntimePresentationState presentation_state(this, initial_status_line);
+
   auto& snapshot = presentation_state.snapshot;
   auto& sidebar = presentation_state.sidebar;
   auto& command_session_grants = presentation_state.command_session_grants;
@@ -271,7 +273,7 @@ int TuiFrontEnd::run_interactive_composer()
   auto& transcript_scroll_offset = renderer.transcript_scroll_offset;
   auto& completion_cache = renderer.completion_cache;
   ActiveSelectList active_select_list = ActiveSelectList::None;
-  RuntimePromptStashController prompt_stash(presentation_state, draft_state, renderer, active_select_list, options_.key_bindings);
+  RuntimePromptStashController prompt_stash(presentation_state, draft_state, renderer, active_select_list, key_bindings_);
   struct BranchSummaryUiState
   {
     bool active = false;
@@ -315,7 +317,7 @@ int TuiFrontEnd::run_interactive_composer()
     // active_tui_theme() consults the presentation overlay; clear it only while constructing rows.
     auto const restage_theme_preview = settings_nav.preview.active();
     settings_nav.preview.clear_theme_overlay();
-    auto view = settings_select_list_view_for_section(this, section, settings_snapshot, options_.key_bindings);
+    auto view = settings_select_list_view_for_section(this, section, settings_snapshot, key_bindings_);
     if (restage_theme_preview)
       settings_nav.preview.apply_theme_overlay();
     view.query = std::move(query);
@@ -525,7 +527,7 @@ int TuiFrontEnd::run_interactive_composer()
     return poll_branch_summary();
   };
 
-  RuntimeMermaidPresentationController mermaid_presentation(options_.mermaid_render);
+  RuntimeMermaidPresentationController mermaid_presentation(/*FIXME options_.mermaid_render*/{});
   auto service_mermaid_presentation = [&]() -> bool {
     auto old_anchor = detail::TranscriptViewportAnchor{};
     auto const preserve_viewport = transcript_scroll_offset > 0;
@@ -824,7 +826,7 @@ int TuiFrontEnd::run_interactive_composer()
     if (branch_summary_ui.active)
     {
       bool success = true;
-      switch (branch_summary_input_intent(branch_summary_ui.phase, input.event, options_.key_bindings))
+      switch (branch_summary_input_intent(branch_summary_ui.phase, input.event, key_bindings_))
       {
         case BranchSummaryInputIntent::Exit:
           success = cancel_branch_summary(true);
@@ -893,7 +895,7 @@ int TuiFrontEnd::run_interactive_composer()
         }
         if (active_select_list == ActiveSelectList::ScopedModels)
         {
-          auto const scoped_action = [&](TuiAction action) { return key_matches_action(options_.key_bindings, action, input.event.key); };
+          auto const scoped_action = [&](TuiAction action) { return key_matches_action(key_bindings_, action, input.event.key); };
           if (scoped_action(TuiAction::ModelsSave))
           {
             return SelectListInputResult{.selected_item_index = snapshot.select_list->selected_item_index,
@@ -931,7 +933,7 @@ int TuiFrontEnd::run_interactive_composer()
                                          .action = SelectListInputAction::ModelsReorderDown};
           }
         }
-        return handle_select_list_input(*snapshot.select_list, input.event, options_.key_bindings);
+        return handle_select_list_input(*snapshot.select_list, input.event, key_bindings_);
       }();
       auto preserve_session_selector_state = [&](SelectListView next_view, std::string status) {
         session_archive_confirmation.reset();
@@ -1059,7 +1061,7 @@ int TuiFrontEnd::run_interactive_composer()
         else if (selected_value == kSettingsOpenKeybindings)
         {
           close_settings();
-          snapshot.select_list = hotkeys_select_list_view(options_.key_bindings);
+          snapshot.select_list = hotkeys_select_list_view(key_bindings_);
           active_select_list = ActiveSelectList::Hotkeys;
           snapshot.status = "keybindings opened";
           transcript_scroll_offset = 0;
@@ -1135,11 +1137,11 @@ int TuiFrontEnd::run_interactive_composer()
           snapshot.status = "settings action unavailable from this row";
           do_beep(terminal_context);
         }
-        else if (settings_nav.in_display() && options_.on_local_display_settings_action)
+        else if (settings_nav.in_display())
         {
           auto const confirm_token = selected_value;
           clear_settings_preview();
-          auto selected = options_.on_local_display_settings_action(*this, confirm_token);
+          auto selected = on_local_display_settings_action(confirm_token);
           if (selected)
           {
             auto status = selected->status;
@@ -1566,7 +1568,7 @@ int TuiFrontEnd::run_interactive_composer()
         }
         else if (resolved_list == ActiveSelectList::Settings && selected_value == kSettingsOpenKeybindings)
         {
-          snapshot.select_list = hotkeys_select_list_view(options_.key_bindings);
+          snapshot.select_list = hotkeys_select_list_view(key_bindings_);
           active_select_list = ActiveSelectList::Hotkeys;
           snapshot.status = "keybindings opened";
           transcript_scroll_offset = 0;
@@ -1708,10 +1710,10 @@ int TuiFrontEnd::run_interactive_composer()
           if (decision.beep)
             do_beep(terminal_context);
         }
-        else if (resolved_list == ActiveSelectList::Settings && settings_nav.in_display() && options_.on_local_display_settings_action)
+        else if (resolved_list == ActiveSelectList::Settings && settings_nav.in_display())
         {
           clear_settings_preview();
-          auto selected = options_.on_local_display_settings_action(*this, selected_value);
+          auto selected = on_local_display_settings_action(selected_value);
           if (selected)
           {
             auto status = selected->status;
@@ -1763,7 +1765,7 @@ int TuiFrontEnd::run_interactive_composer()
       }
       continue;
     }
-    auto is_action = [&](TuiAction action) { return key_matches_action(options_.key_bindings, action, event.key); };
+    auto is_action = [&](TuiAction action) { return key_matches_action(key_bindings_, action, event.key); };
     auto select_slash_command = [&]() {
       selected_slash_command_index = clamp_slash_palette_selection(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index);
       if (auto const disabled_reason = slash_command_selection_disabled_reason(draft.text, draft.cursor, snapshot.slash_commands, selected_slash_command_index))
@@ -2664,11 +2666,11 @@ ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot&
 void TuiRuntimeOptions::print_on(std::ostream& os) const
 {
   LIBCWD_USING_OSTREAM_PRELUDE;
-  os << '{' << "app_version:" << app_version << ", initial_status:" << initial_status << ", initial_transcript:" << initial_transcript
+  os << '{' << "app_version:" << app_version << ", initial_transcript:" << initial_transcript
      << ", slash_commands:{...}"
      << ", slash_catalog_generation:" << slash_catalog_generation << ", file_references:" << file_references
-     << ", workspace_catalog_generation:" << workspace_catalog_generation << ", initial_display_settings:" << initial_display_settings
-     << ", mermaid_render:" << mermaid_render << ", key_bindings:{...}" << '}';
+     << ", workspace_catalog_generation:" << workspace_catalog_generation
+     << '}';
 }
 #endif
 

@@ -27,12 +27,9 @@ LocalTuiDisplaySettings::LocalTuiDisplaySettings(runtime::session_ts const& unlo
 }
 
 //static
-ava::core::Result<LocalTuiDisplaySettings> LocalTuiDisplaySettings::create(runtime::session_ts const& unlocked_session)
+LocalTuiDisplaySettings LocalTuiDisplaySettings::create(runtime::session_ts const& unlocked_session)
 {
-  auto mermaid = MermaidTuiBridge::create({});
-  if (!mermaid)
-    return std::unexpected(std::move(mermaid.error()));
-  return LocalTuiDisplaySettings(unlocked_session, std::move(*mermaid));
+  return {unlocked_session, MermaidTuiBridge::create({})};
 }
 
 ava::tui::TuiLocalDisplaySettings LocalTuiDisplaySettings::presentation() const
@@ -57,7 +54,7 @@ ava::tui::TuiLocalDisplaySettings LocalTuiDisplaySettings::presentation(ava::con
                                            .mermaid_enabled = mermaid.enabled};
 }
 
-ava::tui::TuiMermaidRenderBridge LocalTuiDisplaySettings::mermaid_bridge()
+ava::tui::TuiMermaidRenderBridge LocalTuiDisplaySettings::mermaid_bridge() const
 {
   return mermaid_->tui_bridge();
 }

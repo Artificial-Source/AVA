@@ -25,15 +25,6 @@
 
 namespace ava::app::interactive_internal {
 
-void append_status_line(std::string& target, std::string line)
-{
-  if (line.empty())
-    return;
-  if (!target.empty())
-    target += '\n';
-  target += std::move(line);
-}
-
 std::vector<ava::app::CommandHotkey> command_hotkeys_from_key_bindings(ava::tui::TuiKeyBindings const& key_bindings)
 {
   std::vector<ava::app::CommandHotkey> hotkeys;
@@ -176,16 +167,6 @@ std::vector<ava::tui::ToolTimelineItem> tui_tool_timeline(std::vector<ava::agent
       items[existing->second] = std::move(item);
   }
   return items;
-}
-
-std::string session_selector_footer_hint(ava::app::SessionSelectorSort sort, bool named_only, bool show_paths, bool show_archived, bool show_label_time)
-{
-  static_cast<void>(sort);
-  static_cast<void>(named_only);
-  static_cast<void>(show_paths);
-  static_cast<void>(show_archived);
-  static_cast<void>(show_label_time);
-  return "↑↓ navigate · Enter open · type filter · Esc close · Ctrl+D archive";
 }
 
 ava::tui::TuiBranchSummarySnapshot tui_branch_summary_snapshot(BranchSummarySnapshot const& snapshot)

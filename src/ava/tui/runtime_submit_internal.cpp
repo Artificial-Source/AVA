@@ -285,12 +285,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         push_history(input_history, submitted);
         if (*parsed_reload_target == ReloadTarget::DisplaySettings)
         {
-          if (!options.on_reload_display_settings)
-          {
-            open_command_error(snapshot, submitted, "display reload unavailable");
-            ava::core::Application::instance().terminal_context().beep();
-          }
-          else if (auto reloaded = options.on_reload_display_settings(frontend_))
+          if (auto reloaded = frontend_.on_reload_display_settings())
           {
             auto status = reloaded->status.empty() ? std::string("display theme reloaded") : reloaded->status;
             presentation_state_.apply_local_display_settings(frontend_, std::move(reloaded->settings));
@@ -324,10 +319,10 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
     }
-    if (runtime_commands::local_display_settings_command(submitted) && options.on_local_display_settings_action)
+    if (runtime_commands::local_display_settings_command(submitted))
     {
       push_history(input_history, submitted);
-      auto applied = options.on_local_display_settings_action(frontend_, submitted);
+      auto applied = frontend_.on_local_display_settings_action(submitted);
       if (!applied)
       {
         open_command_error(snapshot, submitted, applied.error().format());
@@ -345,7 +340,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (submitted == "/hotkeys" || submitted == "/keybindings")
     {
       push_history(input_history, submitted);
-      snapshot.select_list = hotkeys_select_list_view(options.key_bindings);
+      snapshot.select_list = hotkeys_select_list_view(frontend_.key_bindings());
       active_select_list_ = ActiveSelectList::Hotkeys;
       snapshot.status = "keybindings opened";
       transcript_scroll_offset = 0;
@@ -383,7 +378,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         snapshot.project_trust.reset();
       auto settings_snapshot = snapshot;
       settings_snapshot.sidebar = sidebar;
-      snapshot.select_list = settings_select_list_view(settings_snapshot, options.key_bindings);
+      snapshot.select_list = settings_select_list_view(settings_snapshot, frontend_.key_bindings());
       active_select_list_ = ActiveSelectList::Settings;
       snapshot.status = "settings opened";
       transcript_scroll_offset = 0;
