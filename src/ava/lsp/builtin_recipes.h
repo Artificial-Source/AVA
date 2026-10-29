@@ -58,6 +58,22 @@ struct BuiltinServerRecipe
 [[nodiscard]] std::filesystem::path select_builtin_server_root(std::string_view server_id, std::filesystem::path const& document_path,
                                                                std::filesystem::path const& workspace_root,
                                                                std::shared_ptr<ava::core::AnchorSet const> anchor_set);
-[[nodiscard]] std::string_view to_string(BuiltinServerStatus status) noexcept;
+// Defined inline: generated debug printers in AVA::debug call this, and AVA::debug links
+// after AVA::lsp, so an out-of-line definition can be missing from static link order.
+[[nodiscard]] constexpr std::string_view to_string(BuiltinServerStatus status) noexcept
+{
+  switch (status)
+  {
+    case BuiltinServerStatus::Disabled:
+      return "disabled";
+    case BuiltinServerStatus::Available:
+      return "available";
+    case BuiltinServerStatus::NotFound:
+      return "not-found";
+    case BuiltinServerStatus::Unsafe:
+      return "unsafe";
+  }
+  return "unsafe";
+}
 
 }  // namespace ava::lsp
