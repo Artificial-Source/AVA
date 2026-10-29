@@ -300,10 +300,7 @@ struct TuiRuntimeOptions
   std::vector<FileReferenceItem> file_references = {};
   std::optional<std::size_t> workspace_catalog_generation = std::nullopt;
 
-  // This struct has a custom print_on.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
-  void print_on(std::ostream& os) const;
+  AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
 // Shallow nested settings hierarchy used by /settings.
