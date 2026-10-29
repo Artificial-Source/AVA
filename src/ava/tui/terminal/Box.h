@@ -46,7 +46,7 @@ class Box
   // The inverse of index_to_pos.
   static consteval int pos_to_index(int pos)
   {
-    for (int i = 0; i < index_to_pos.size(); ++i)
+    for (int i = 0; i < static_cast<int>(index_to_pos.size()); ++i)
       if (index_to_pos[i] == pos)
         return i;
     throw "pos must be one of the eight Box border positions";
