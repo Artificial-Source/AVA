@@ -132,19 +132,19 @@ void test_prompt_stash_runtime_controller()
   static_cast<void>(ava::tui::terminal::Context::resizeterm(20, 80));
 
   ava::tui::TuiRuntimeOptions options;
-  options.key_bindings = ava::tui::default_key_bindings();
+  auto const key_bindings = ava::tui::default_key_bindings();
   options.initial_transcript = {ava::tui::TranscriptItem{.label = "ava", .text = "backend transcript stays unchanged"}};
   int backend_submit_calls = 0;
-  options.on_submit = [&](ava::tui::TuiFrontEnd const&, std::string const&, ava::tui::TuiSubmitContext) {
+  tui_test_support::TuiFrontEndFixture frontend(options);
+  frontend.hooks().on_submit = [&](std::string const&, ava::tui::TuiSubmitContext) {
     ++backend_submit_calls;
     return ava::tui::TuiSubmitResult{};
   };
-  tui_test_support::TuiFrontEndFixture frontend(options);
-  ava::tui::RuntimePresentationState presentation(frontend.frontend());
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   auto active_list = ava::tui::ActiveSelectList::None;
-  ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, options.key_bindings);
+  ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_list);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot);

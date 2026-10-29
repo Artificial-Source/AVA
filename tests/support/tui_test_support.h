@@ -4,6 +4,7 @@
 #include "ava/agent/agent_definition_types.h"
 #include "ava/agent/mode.h"
 #include "ava/tui/composer.h"
+#include "ava/tui/runtime.h"
 #include "ava/config/model_config.h"
 #include "ava/session/Stats.h"
 #include "ava/session/session_store.h"
@@ -28,6 +29,24 @@ struct ApplicationCatalogCache;
 } // namespace ava::app
 
 namespace tui_test_support {
+
+struct TuiFrontEndTestHooks
+{
+  std::function<ava::tui::TuiCatalogDelivery()> read_catalog_delivery;
+  std::function<ava::tui::ProjectTrustSnapshot()> read_project_trust;
+  std::function<ava::tui::TuiActiveRunQueues(ava::event::EventEnvelopeSink)> create_active_run_queues;
+  std::function<ava::tui::TuiSubmitResult(std::string const&, ava::tui::TuiSubmitContext)> on_submit;
+  std::function<ava::core::Result<ava::tui::TuiKeyBindings>()> on_reload_key_bindings;
+  std::function<ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult>()> on_reload_display_settings;
+  std::function<ava::tui::TuiLocalDisplaySettings()> display_settings_snapshot;
+  std::function<ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>>()> on_maybe_reload_display_settings;
+  std::function<ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult>(std::string_view)> on_local_display_settings_action;
+  std::function<ava::core::Result<ava::tui::SelectListView>()> list_subagents;
+  std::function<ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>>(std::string_view, std::optional<std::uint64_t>)> inspect_subagent;
+  std::function<ava::tui::SubagentWorkspaceCancelOutcome(std::string_view)> cancel_subagent;
+  std::function<ava::tui::SubagentWorkspacePromoteOutcome(std::string_view)> promote_subagent;
+  std::function<void()> on_before_tui_shutdown;
+};
 
 struct TuiTestModel
 {
@@ -55,11 +74,10 @@ class TuiFrontEndFixture final
   ~TuiFrontEndFixture();
 
   [[nodiscard]] ava::tui::TuiFrontEnd* frontend() noexcept;
-  // Runtime-controller tests use the same owned options object as production composition.
-  [[nodiscard]] ava::tui::TuiRuntimeOptions& runtime_options() noexcept;
+  // Access optional application-boundary overrides used by focused runtime-controller tests.
+  [[nodiscard]] TuiFrontEndTestHooks& hooks() noexcept;
   // Append a committed todowrite snapshot to the fixture's current backend session.
   void seed_committed_todos(std::vector<ava::agent::TodoItem> todos);
-  void refresh_application_catalog_values();
   [[nodiscard]] std::pair<std::string, std::string> selected_model_metadata();
   [[nodiscard]] std::pair<std::string, bool> git_branch_metadata();
   [[nodiscard]] std::pair<std::string, bool> workspace_root_metadata();

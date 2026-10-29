@@ -602,13 +602,7 @@ void test_queue_deduplication_cache_and_bounds()
 void test_tui_bridge_epoch_reload_and_callback_lifetime()
 {
   ava::app::MermaidDisplaySettings disabled;
-  auto created = ava::app::MermaidTuiBridge::create(disabled);
-  if (!created)
-  {
-    expect(false, created.error().format());
-    return;
-  }
-  auto bridge = *created;
+  auto bridge = ava::app::MermaidTuiBridge::create(disabled);
   auto callbacks = bridge->tui_bridge();
   auto initial = bridge->presentation_configuration();
   auto const disabled_result = callbacks.enqueue({.identity = 1, .config_epoch = initial.epoch, .source = "graph TD; A-->B"});
@@ -648,7 +642,6 @@ void test_tui_bridge_epoch_reload_and_callback_lifetime()
   std::weak_ptr<ava::app::MermaidTuiBridge> weak = bridge;
   bridge->shutdown();
   bridge.reset();
-  created->reset();
   auto const after_shutdown = callbacks.enqueue({.identity = 4, .config_epoch = configured.epoch, .source = "after shutdown"});
   expect(!weak.expired() && after_shutdown == ava::tui::TuiMermaidEnqueueResult::Rejected,
          "coordinator shutdown precedes callback-capture teardown and retained callbacks fail closed");

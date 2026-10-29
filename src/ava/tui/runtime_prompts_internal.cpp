@@ -107,7 +107,6 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     ava::permissions::PermissionPrompt const& prompt, std::function<bool()> const& stop_requested, std::function<bool()> const& request_stop)
 {
   using Key = terminal::Key;
-  auto const& options = frontend_.options();
   auto& snapshot = snapshot_;
   auto& command_session_grants = session_grants_;
   auto& ui_mutex = renderer_.ui_mutex;
@@ -121,7 +120,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
   emit_prompt_audit("tui:permission_request", std::move(permission_label), prompt.permission_request_id, prompt.tool_name, prompt.reason);
   // A durable Deny never grants execution authority, so preserve it even
   // when one-shot Critical/unverified commands cannot be remembered as Allows.
-  auto const remember_availability = permission_prompt_remember_availability(prompt, static_cast<bool>(options.remember_permission_rule));
+  auto const remember_availability = permission_prompt_remember_availability(prompt, true);
   auto const allow_remember_available = remember_availability.allow_remember_available;
   auto const deny_remember_available = remember_availability.deny_remember_available;
   bool const allow_session_available = tui_session_grant_eligible(prompt);
@@ -165,7 +164,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
     std::string remembered_rule_id;
     if (remember)
     {
-      if (!options.remember_permission_rule || (allow ? !allow_remember_available : !deny_remember_available))
+      if (allow ? !allow_remember_available : !deny_remember_available)
       {
         emit_prompt_audit("tui:permission_deny", "permission denied: remember unavailable", prompt.permission_request_id, prompt.tool_name, prompt.reason,
                           "remember unavailable");
@@ -183,7 +182,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
         return decision;
       }
       auto remembered =
-          options.remember_permission_rule(frontend_, prompt, allow ? ava::permissions::PermissionAction::Allow : ava::permissions::PermissionAction::Deny);
+          frontend_.remember_permission_rule(prompt, allow ? ava::permissions::PermissionAction::Allow : ava::permissions::PermissionAction::Deny);
       if (!remembered)
       {
         auto reason = "failed to remember permission rule: " + remembered.error().format();

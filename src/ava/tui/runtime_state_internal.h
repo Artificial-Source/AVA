@@ -107,7 +107,7 @@ class RuntimePresentationState final
     std::optional<std::vector<agent::TodoItem>> todos;
     AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
-  // Reads the retained transports through the options callbacks. Like
+  // Reads the retained transports through the frontend's application boundary. Like
   // read_committed_session_id, call this without holding the UI lock.
   static BoundaryReads read_boundary_data(TuiFrontEnd& frontend);
   // Applies previously read transports without reading or replacing popup-only facts.

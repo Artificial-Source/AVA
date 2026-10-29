@@ -65,7 +65,6 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
 RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> forced_submission)
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto& options = frontend_.options();
   auto& sidebar = presentation_state_.sidebar;
   auto& input_history = draft_state_.input_history;
   auto& history_index = draft_state_.history_index;
@@ -86,11 +85,9 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
   {
     immediate_slash_submission = std::move(forced_submission);
   }
-  else if (((exact_command(draft.text, "/models") || exact_command(draft.text, "/model")) && options.model_selector_view) ||
-           (exact_command(draft.text, "/scoped-models") && options.scoped_model_selector_view) ||
-           ((exact_command(draft.text, "/sessions") || exact_command(draft.text, "/tree") || exact_command(draft.text, "/resume")) &&
-            options.session_selector_view) ||
-           exact_command(draft.text, "/jobs") || exact_command(draft.text, "/overview") || exact_command(draft.text, "/stash"))
+  else if ((exact_command(draft.text, "/models") || exact_command(draft.text, "/model") || exact_command(draft.text, "/scoped-models") ||
+            exact_command(draft.text, "/sessions") || exact_command(draft.text, "/tree") || exact_command(draft.text, "/resume") ||
+            exact_command(draft.text, "/jobs") || exact_command(draft.text, "/overview") || exact_command(draft.text, "/stash")))
   {
     immediate_slash_submission = expanded_composer_draft_text(draft);
   }
@@ -229,7 +226,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if ((exact_command(submitted, "/models") || exact_command(submitted, "/model")) && options.model_selector_view)
+    if (exact_command(submitted, "/models") || exact_command(submitted, "/model"))
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_model_selector())
@@ -238,7 +235,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if (exact_command(submitted, "/scoped-models") && options.scoped_model_selector_view)
+    if (exact_command(submitted, "/scoped-models"))
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_scoped_model_selector())
@@ -247,7 +244,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if ((exact_command(submitted, "/sessions") || exact_command(submitted, "/tree") || exact_command(submitted, "/resume")) && options.session_selector_view)
+    if (exact_command(submitted, "/sessions") || exact_command(submitted, "/tree") || exact_command(submitted, "/resume"))
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_session_selector())
@@ -256,7 +253,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
-    if (auto fork_from_query = fork_from_command_argument(submitted); fork_from_query && options.on_open_fork_user_turn_selector)
+    if (auto fork_from_query = fork_from_command_argument(submitted))
     {
       push_history(input_history, submitted);
       if (!action_controller_.open_fork_user_turn_selector(*fork_from_query))
@@ -297,12 +294,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
             ava::core::Application::instance().terminal_context().beep();
           }
         }
-        else if (!options.on_reload_key_bindings)
-        {
-          open_command_error(snapshot, submitted, "reload unavailable");
-          ava::core::Application::instance().terminal_context().beep();
-        }
-        else if (auto reloaded = options.on_reload_key_bindings(frontend_))
+        else if (auto reloaded = frontend_.on_reload_key_bindings())
         {
           presentation_state_.apply_local_key_bindings(frontend_, std::move(*reloaded));
           settle_local_command_status(snapshot, "keybindings reloaded");
@@ -372,10 +364,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         snapshot.startup_overview.reset();
       // Workspace trust is popup-only. Refresh it once at initialization so a
       // close/reopen observes backend changes without ordinary snapshot transport.
-      if (options.read_project_trust)
-        snapshot.project_trust = options.read_project_trust(frontend_);
-      else
-        snapshot.project_trust.reset();
+      snapshot.project_trust = frontend_.read_project_trust();
       auto settings_snapshot = snapshot;
       settings_snapshot.sidebar = sidebar;
       snapshot.select_list = settings_select_list_view(settings_snapshot, frontend_.key_bindings());
@@ -410,17 +399,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
         }
         return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
       }
-      if (!options.on_attach_image)
-      {
-        open_command_error(snapshot, submitted, "image attachment import unavailable");
-        ava::core::Application::instance().terminal_context().beep();
-        if (!renderer_.render())
-        {
-          return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
-        }
-        return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
-      }
-      auto imported = options.on_attach_image(frontend_, *attach_target);
+      auto imported = frontend_.on_attach_image(*attach_target);
       if (!imported)
       {
         open_command_error(snapshot, submitted, imported.error().format());
@@ -491,7 +470,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       auto const target = parse_copy_target(*copy_target);
       // Exact target name "user" opens the public user-turn picker. No alias is
       // accepted; remaining text becomes the selector's initial filter query.
-      if (target.name == "user" && options.on_open_copy_user_turn_selector)
+      if (target.name == "user")
       {
         if (!action_controller_.open_copy_user_turn_selector(target.query))
         {

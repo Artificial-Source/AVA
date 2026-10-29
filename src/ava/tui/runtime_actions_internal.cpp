@@ -70,15 +70,13 @@ std::optional<std::size_t> kitty_image_id_from_sha(std::string_view sha)
   return value == 0 ? std::size_t{1} : value;
 }
 
-std::optional<PendingAttachmentItem::Preview> attachment_preview(
-    TuiFrontEnd const& frontend, ava::session::ImageAttachmentRef const& attachment, TerminalImageCapabilities const& capabilities, bool show_images,
-    std::function<ava::core::Result<ava::session::LoadedImageAttachment>(TuiFrontEnd const&, ava::session::ImageAttachmentRef const&)> const&
-        load_image_attachment)
+std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd const& frontend, ava::session::ImageAttachmentRef const& attachment,
+                                                                 TerminalImageCapabilities const& capabilities, bool show_images)
 {
   // Disabled image visibility must not load attachment bytes or build graphics payloads.
-  if (!show_images || capabilities.images == TerminalImageProtocol::None || !load_image_attachment)
+  if (!show_images || capabilities.images == TerminalImageProtocol::None)
     return std::nullopt;
-  auto loaded = load_image_attachment(frontend, attachment);
+  auto loaded = frontend.on_load_image_attachment(attachment);
   if (!loaded)
     return std::nullopt;
   auto dimensions = image_dimensions_from_bytes(loaded->bytes, attachment.mime_type).value_or(ImageDimensions{.width_px = 800, .height_px = 600});
@@ -162,13 +160,6 @@ bool RuntimeActionController::open_external_editor()
 {
   auto& terminal_context = core::Application::instance().terminal_context();
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  if (!options.on_external_editor)
-  {
-    snapshot.status = "external editor unavailable";
-    static_cast<void>(terminal_context.beep());
-    return renderer_.render();
-  }
   draft_state_.pending_escape_clear = false;
   draft_state_.jump_mode = ComposerJumpMode::None;
   draft_state_.history_index.reset();
@@ -189,7 +180,7 @@ bool RuntimeActionController::open_external_editor()
   // Balance AVA-owned protocols after leaving curses/alt-screen so the shell
   // and $VISUAL/$EDITOR inherit a clean Kitty stack, paste, and mouse state.
   terminal_context.leave_terminal_for_handoff();
-  auto edited = options.on_external_editor(frontend_, draft_state_.draft.text);
+  auto edited = frontend_.on_external_editor(draft_state_.draft.text);
   refresh_geometry_from_kernel();
   terminal_context.restore_terminal_after_handoff();
 
@@ -259,7 +250,7 @@ bool RuntimeActionController::queue_pending_image_attachment(ava::session::Image
   auto detail = attachment_detail(imported, image_capabilities);
   if (!snapshot.show_images)
     detail += " (hidden)";
-  auto const preview = attachment_preview(frontend_, imported, image_capabilities, snapshot.show_images, frontend_.options().on_load_image_attachment);
+  auto const preview = attachment_preview(frontend_, imported, image_capabilities, snapshot.show_images);
   presentation_state_.pending_image_attachments.push_back(imported);
   snapshot.pending_attachments.push_back(PendingAttachmentItem{.label = label, .detail = detail, .preview = preview});
   settle_local_command_status(snapshot, std::move(status));
@@ -278,18 +269,11 @@ bool RuntimeActionController::paste_clipboard_image()
   draft_state_.path_completion_force_active = false;
   draft_state_.draft_scroll_offset = 0;
   draft_state_.clear_selection();
-  auto const& options = frontend_.options();
-  if (!options.on_paste_clipboard_image)
-  {
-    snapshot.status = "clipboard image paste unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return renderer_.render();
-  }
   snapshot.status = "reading clipboard image";
   if (!renderer_.render())
     return false;
 
-  auto imported = options.on_paste_clipboard_image(frontend_);
+  auto imported = frontend_.on_paste_clipboard_image();
   if (!imported)
   {
     snapshot.status = imported.error().format();
@@ -319,13 +303,7 @@ void RuntimeActionController::cycle_reasoning()
 {
   auto& snapshot = presentation_state_.snapshot;
   clear_reasoning_feedback_for_user_input(snapshot);
-  auto const& options = frontend_.options();
-  if (!options.on_cycle_reasoning)
-  {
-    snapshot.status = "reasoning cycling unavailable";
-    return;
-  }
-  auto result = options.on_cycle_reasoning(frontend_);
+  auto result = frontend_.on_cycle_reasoning();
   if (!result)
   {
     snapshot.status = result.error().format();
@@ -345,16 +323,9 @@ void RuntimeActionController::toggle_thinking_visibility()
 bool RuntimeActionController::open_model_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  if (!options.model_selector_view)
-  {
-    snapshot.status = "model selector unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return true;
-  }
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = options.model_selector_view(frontend_);
+  snapshot.select_list = frontend_.model_selector_view();
   active_select_list_ = ActiveSelectList::Model;
   snapshot.status = "model selector opened";
   renderer_.transcript_scroll_offset = 0;
@@ -364,9 +335,7 @@ bool RuntimeActionController::open_model_selector()
 bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_selection)
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  auto view = options.reasoning_selector_view && options.on_reasoning_selected ? options.reasoning_selector_view(frontend_, chained_from_model_selection)
-                                                                               : std::nullopt;
+  auto view = frontend_.reasoning_selector_view(chained_from_model_selection);
   if (!view)
   {
     if (!chained_from_model_selection)
@@ -388,16 +357,9 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
 bool RuntimeActionController::open_scoped_model_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  if (!options.scoped_model_selector_view)
-  {
-    snapshot.status = "scoped model selector unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return true;
-  }
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = options.scoped_model_selector_view(frontend_);
+  snapshot.select_list = frontend_.scoped_model_selector_view();
   active_select_list_ = ActiveSelectList::ScopedModels;
   snapshot.status = "scoped model selector opened";
   renderer_.transcript_scroll_offset = 0;
@@ -445,14 +407,7 @@ bool RuntimeActionController::toggle_startup_overview()
 bool RuntimeActionController::open_fork_user_turn_selector(std::string_view initial_query)
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  if (!options.on_open_fork_user_turn_selector)
-  {
-    snapshot.status = "fork-from selector unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return true;
-  }
-  auto opened = options.on_open_fork_user_turn_selector(frontend_, initial_query);
+  auto opened = frontend_.on_open_fork_user_turn_selector(initial_query);
   if (!opened)
   {
     snapshot.status = opened.error().format();
@@ -471,14 +426,7 @@ bool RuntimeActionController::open_fork_user_turn_selector(std::string_view init
 bool RuntimeActionController::open_copy_user_turn_selector(std::string_view initial_query)
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  if (!options.on_open_copy_user_turn_selector)
-  {
-    snapshot.status = "copy user-turn selector unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return true;
-  }
-  auto opened = options.on_open_copy_user_turn_selector(frontend_, initial_query);
+  auto opened = frontend_.on_open_copy_user_turn_selector(initial_query);
   if (!opened)
   {
     snapshot.status = opened.error().format();
@@ -497,14 +445,7 @@ bool RuntimeActionController::open_copy_user_turn_selector(std::string_view init
 void RuntimeActionController::cycle_model(bool forward)
 {
   auto& snapshot = presentation_state_.snapshot;
-  auto const& options = frontend_.options();
-  if (!options.on_cycle_model)
-  {
-    snapshot.status = "model cycling unavailable";
-    static_cast<void>(core::Application::instance().terminal_context().beep());
-    return;
-  }
-  auto result = options.on_cycle_model(frontend_, forward);
+  auto result = frontend_.on_cycle_model(forward);
   if (!result)
   {
     snapshot.status = result.error().format();

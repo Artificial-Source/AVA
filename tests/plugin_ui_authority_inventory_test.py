@@ -27,7 +27,8 @@ CLAIM_ALLOWLIST = MODULE_FILES | {Path("app/command_plugins.cpp")}
 FIELD_ALLOWLIST = MODULE_FILES | {
     Path("app/commands.h"),
     Path("app/command_plugins.cpp"),
-    Path("app/tui/interactive_tui.cpp"),
+    Path("app/tui/TuiFrontEnd.cpp"),
+    Path("app/tui/TuiFrontEnd.h"),
     Path("app/interactive.cpp"),
     Path("app/interactive_internal.h"),
 }
@@ -95,10 +96,10 @@ def main() -> int:
 
     factory = matches(files, root, FACTORY)
     production_factory_calls = [(path, line) for path, line in factory if path not in MODULE_FILES]
-    expected_mint = Path("app/tui/interactive_tui.cpp")
+    expected_mint = Path("app/tui/TuiFrontEnd.cpp")
     if len(production_factory_calls) != 1 or production_factory_calls[0][0] != expected_mint:
         details = ", ".join(f"{path}:{line}" for path, line in production_factory_calls) or "none"
-        raise AssertionError(f"Phase B must have exactly one production TUI factory call in app/tui/interactive_tui.cpp: {details}")
+        raise AssertionError(f"Phase B must have exactly one production TUI factory call in app/tui/TuiFrontEnd.cpp: {details}")
 
     require_allowlist("plugin UI claim", matches(files, root, CLAIM), CLAIM_ALLOWLIST)
     require_allowlist("plugin UI handler", matches(files, root, HANDLER), HANDLER_ALLOWLIST)
@@ -112,10 +113,10 @@ def main() -> int:
     if re.search(r"\b(get|serialize|to_json|json)\w*\s*\([^;]*PluginUiInvocationCapability", capability_header, re.IGNORECASE):
         raise AssertionError("opaque plugin UI capability must not expose an internals getter or serialization API")
 
-    interactive = (root / "app" / "tui" / "interactive_tui.cpp").read_text(encoding="utf-8")
-    if interactive.count("std::move(plugin_ui_capability)") != 1:
+    frontend = (root / "app" / "tui" / "TuiFrontEnd.cpp").read_text(encoding="utf-8")
+    if frontend.count("std::move(plugin_ui_capability)") != 1:
         raise AssertionError("the TUI capability must attach to exactly the first canonical handle_interactive_submission call")
-    if not re.search(r"follow_up\.message[\s\S]{0,700}?context\.on_subagent_launch,\s*nullptr\)", interactive):
+    if not re.search(r"follow_up\.message[\s\S]{0,700}?context\.on_subagent_launch,\s*nullptr\)", frontend):
         raise AssertionError("every queued TUI follow-up must call handle_interactive_submission with explicit null UI authority")
 
     tui_files = source_files(root / "tui")

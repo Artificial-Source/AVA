@@ -4,7 +4,17 @@ endif()
 
 file(READ "${AVA_CLIPBOARD_IMAGE_SOURCE}" clipboard_source)
 file(READ "${AVA_CLIPBOARD_IMAGE_HEADER}" clipboard_header)
-file(READ "${AVA_INTERACTIVE_TUI_SOURCE}" tui_source)
+get_filename_component(tui_source_name "${AVA_INTERACTIVE_TUI_SOURCE}" NAME)
+if(tui_source_name STREQUAL "interactive_tui.cpp")
+  get_filename_component(tui_source_directory "${AVA_INTERACTIVE_TUI_SOURCE}" DIRECTORY)
+  set(tui_authority_source_path "${tui_source_directory}/TuiFrontEnd.cpp")
+else()
+  set(tui_authority_source_path "${AVA_INTERACTIVE_TUI_SOURCE}")
+endif()
+if(NOT EXISTS "${tui_authority_source_path}")
+  message(FATAL_ERROR "clipboard image static contract cannot find TUI authority owner: ${tui_authority_source_path}")
+endif()
+file(READ "${tui_authority_source_path}" tui_source)
 
 function(_clipboard_static_violation OUT SOURCE)
   string(REGEX REPLACE "/\\*([^*]|\\*+[^*/])*\\*+/" "" scan_source "${SOURCE}")
@@ -100,12 +110,25 @@ foreach(required_header IN ITEMS
 endforeach()
 
 foreach(required_tui IN ITEMS
-    "auto const [store, session_process_scope] = [&unlocked_session]"
-    "SCOPED_CRITICAL_AREA_R(session_r, unlocked_session)"
-    "return std::pair{session_r->store, session_r->session_process_scope()}"
-    "import_clipboard_image_attachment(store, session_process_scope)")
+    "TuiFrontEnd::on_paste_clipboard_image() const"
+    "std::optional<std::pair<session::SessionStore, std::optional<process::ProcessScopeV1>>> authority"
+    "SCOPED_CRITICAL_AREA_R(session_r, unlocked_session_)"
+    "authority.emplace(session_r->store, session_r->session_process_scope())"
+    "import_clipboard_image_attachment(authority->first, authority->second)")
   string(FIND "${tui_source}" "${required_tui}" found)
   if(found EQUAL -1)
-    message(FATAL_ERROR "interactive TUI does not snapshot and pass the current session scope: ${required_tui}")
+    message(FATAL_ERROR "TUI frontend does not snapshot and pass the current session scope: ${required_tui}")
   endif()
 endforeach()
+
+string(CONCAT tui_authority_snapshot
+    "  std::optional<std::pair<session::SessionStore, std::optional<process::ProcessScopeV1>>> authority;\n"
+    "  {\n"
+    "    SCOPED_CRITICAL_AREA_R(session_r, unlocked_session_);\n"
+    "    authority.emplace(session_r->store, session_r->session_process_scope());\n"
+    "  }\n"
+    "  return import_clipboard_image_attachment(authority->first, authority->second);")
+string(FIND "${tui_source}" "${tui_authority_snapshot}" snapshot_found)
+if(snapshot_found EQUAL -1)
+  message(FATAL_ERROR "TUI frontend must copy clipboard store/process authority inside one session read guard before import")
+endif()

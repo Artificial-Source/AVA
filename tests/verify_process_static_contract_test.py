@@ -53,7 +53,10 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--header", type=Path, required=True)
     parser.add_argument("--tui", type=Path)
-    ProcessContractTests.args = parser.parse_args()
+    args = parser.parse_args()
+    if args.family == "clipboard_image" and args.tui is not None and args.tui.name == "interactive_tui.cpp":
+        args.tui = args.tui.with_name("TuiFrontEnd.cpp")
+    ProcessContractTests.args = args
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(ProcessContractTests)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
 

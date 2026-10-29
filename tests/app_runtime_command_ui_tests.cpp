@@ -286,30 +286,25 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
     }
     expect(ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Dark, "querying configured theme leaves the frontend's last applied theme unchanged");
 
-    auto local_display_created = ava::app::LocalTuiDisplaySettings::create(unlocked_session);
-    expect(local_display_created.has_value(), "local TUI display owner is created without Session authority");
-    if (local_display_created)
-    {
-      auto local_display = std::move(*local_display_created);
-      auto initial_local = local_display.reload();
-      expect(initial_local && initial_local->settings.show_images, "local TUI display owner loads and applies the persisted presentation on its caller thread");
-      auto const same_effective_document = "{\n  \"theme\": \"light\",\n  \"show_images\": true\n}\n";
-      write_app_test_file(paths.ava_config_dir / "display.json", same_effective_document);
-      auto same_value_reload = local_display.maybe_reload();
-      expect(same_value_reload && same_value_reload->has_value() && (**same_value_reload).settings.show_images,
-             "display watch reports Applied for a changed document even when effective values remain equal");
-      write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\":");
-      auto invalid_reload = local_display.maybe_reload();
-      expect(!invalid_reload && local_display.presentation().show_images && ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Light,
-             "failed display reload preserves the local owner's last-known-good presentation and theme");
-      write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\": \"dark\",\n  \"show_images\": false\n}\n");
-      auto corrected_reload = local_display.maybe_reload();
-      expect(corrected_reload && corrected_reload->has_value() && !(**corrected_reload).settings.show_images &&
-                 ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Dark,
-             "display owner retains its prior watch on error and applies the corrected document on the next poll");
-      local_display.shutdown();
-      ava::tui::set_tui_config_theme(std::nullopt);
-    }
+    auto local_display = ava::app::LocalTuiDisplaySettings::create(unlocked_session);
+    auto initial_local = local_display.reload();
+    expect(initial_local && initial_local->settings.show_images, "local TUI display owner loads and applies the persisted presentation on its caller thread");
+    auto const same_effective_document = "{\n  \"theme\": \"light\",\n  \"show_images\": true\n}\n";
+    write_app_test_file(paths.ava_config_dir / "display.json", same_effective_document);
+    auto same_value_reload = local_display.maybe_reload();
+    expect(same_value_reload && same_value_reload->has_value() && (**same_value_reload).settings.show_images,
+           "display watch reports Applied for a changed document even when effective values remain equal");
+    write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\":");
+    auto invalid_reload = local_display.maybe_reload();
+    expect(!invalid_reload && local_display.presentation().show_images && ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Light,
+           "failed display reload preserves the local owner's last-known-good presentation and theme");
+    write_app_test_file(paths.ava_config_dir / "display.json", "{\n  \"theme\": \"dark\",\n  \"show_images\": false\n}\n");
+    auto corrected_reload = local_display.maybe_reload();
+    expect(corrected_reload && corrected_reload->has_value() && !(**corrected_reload).settings.show_images &&
+               ava::tui::active_tui_theme().kind == ava::tui::TuiThemeKind::Dark,
+           "display owner retains its prior watch on error and applies the corrected document on the next poll");
+    local_display.shutdown();
+    ava::tui::set_tui_config_theme(std::nullopt);
 
     // Keep one local display owner across replacement of its live Session with different XDG roots.
     // All later discovery, reads, and writes must use the replacement's paths, not those captured at startup.
@@ -333,31 +328,27 @@ void app_command_dispatcher_ui_part(ava::app::runtime::session_ts& unlocked_sess
       if (first_session && second_session)
       {
         auto display_owner = ava::app::LocalTuiDisplaySettings::create(*first_session);
-        expect(display_owner.has_value(), "display path regression creates a local owner bound to the stable Session wrapper");
-        if (display_owner)
+        auto initial = display_owner.reload();
+        auto replaced = ava::app::runtime::Session::replace_with(*first_session, *second_session);
+        expect(initial && initial->settings.show_images && replaced, "display owner survives replacement after loading the original settings");
+        if (replaced)
         {
-          auto initial = display_owner->reload();
-          auto replaced = ava::app::runtime::Session::replace_with(*first_session, *second_session);
-          expect(initial && initial->settings.show_images && replaced, "display owner survives replacement after loading the original settings");
-          if (replaced)
-          {
-            auto polled = display_owner->maybe_reload();
-            auto choices = display_owner->presentation();
-            expect(polled && polled->has_value() && !(**polled).settings.show_images &&
-                       std::ranges::any_of(choices.custom_themes, [](auto const& theme) { return theme.name == "replacement-theme"; }),
-                   "display polling and theme discovery use the replacement Session's paths");
-            auto saved = display_owner->apply_action("/image-width 73");
-            auto original = ava::app::load_tui_display_settings(first_paths);
-            auto replacement = ava::app::load_tui_display_settings(second_paths);
-            expect(
-                saved && original && replacement && original->image_width_cells == ava::app::kDefaultTuiImageWidthCells && replacement->image_width_cells == 73,
-                "local display actions write only to the replacement Session's configuration directory");
-            write_app_test_file(second_paths.ava_config_dir / "display.json", "{\"show_images\":true}\n");
-            auto reloaded = display_owner->reload();
-            expect(reloaded && reloaded->settings.show_images, "explicit display reload also reads current Session paths after replacement");
-          }
-          display_owner->shutdown();
+          auto polled = display_owner.maybe_reload();
+          auto choices = display_owner.presentation();
+          expect(polled && polled->has_value() && !(**polled).settings.show_images &&
+                     std::ranges::any_of(choices.custom_themes, [](auto const& theme) { return theme.name == "replacement-theme"; }),
+                 "display polling and theme discovery use the replacement Session's paths");
+          auto saved = display_owner.apply_action("/image-width 73");
+          auto original = ava::app::load_tui_display_settings(first_paths);
+          auto replacement = ava::app::load_tui_display_settings(second_paths);
+          expect(
+              saved && original && replacement && original->image_width_cells == ava::app::kDefaultTuiImageWidthCells && replacement->image_width_cells == 73,
+              "local display actions write only to the replacement Session's configuration directory");
+          write_app_test_file(second_paths.ava_config_dir / "display.json", "{\"show_images\":true}\n");
+          auto reloaded = display_owner.reload();
+          expect(reloaded && reloaded->settings.show_images, "explicit display reload also reads current Session paths after replacement");
         }
+        display_owner.shutdown();
       }
       ava::tui::set_tui_config_theme(std::nullopt);
     }

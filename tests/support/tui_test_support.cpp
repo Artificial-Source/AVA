@@ -68,6 +68,84 @@ void select_frontend_test_model(ava::app::runtime::session_ts& session, TuiTestM
 
 } // namespace
 
+class TestTuiFrontEnd final : public ava::app::TuiFrontEnd
+{
+ public:
+  TestTuiFrontEnd(ava::app::runtime::session_ts& session, ava::app::ApplicationCatalogCache&& cache, ava::tui::TuiRuntimeOptions&& options,
+                  TuiFrontEndTestHooks& hooks)
+      : ava::app::TuiFrontEnd(session, std::move(cache), 0, std::move(options)), hooks_(hooks)
+  {
+  }
+
+  ava::tui::ProjectTrustSnapshot read_project_trust() const override
+  {
+    return hooks_.read_project_trust ? hooks_.read_project_trust() : ava::app::TuiFrontEnd::read_project_trust();
+  }
+  ava::tui::TuiCatalogDelivery read_catalog_delivery() override
+  {
+    return hooks_.read_catalog_delivery ? hooks_.read_catalog_delivery() : ava::app::TuiFrontEnd::read_catalog_delivery();
+  }
+  ava::tui::TuiActiveRunQueues create_active_run_queues(ava::event::EventEnvelopeSink sink) const override
+  {
+    return hooks_.create_active_run_queues ? hooks_.create_active_run_queues(std::move(sink))
+                                           : ava::app::TuiFrontEnd::create_active_run_queues(std::move(sink));
+  }
+  ava::tui::TuiSubmitResult on_submit(std::string const& submitted, ava::tui::TuiSubmitContext context) override
+  {
+    return hooks_.on_submit ? hooks_.on_submit(submitted, std::move(context)) : ava::app::TuiFrontEnd::on_submit(submitted, std::move(context));
+  }
+  ava::core::Result<ava::tui::TuiKeyBindings> on_reload_key_bindings() const override
+  {
+    return hooks_.on_reload_key_bindings ? hooks_.on_reload_key_bindings() : ava::app::TuiFrontEnd::on_reload_key_bindings();
+  }
+  ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult> on_reload_display_settings() override
+  {
+    return hooks_.on_reload_display_settings ? hooks_.on_reload_display_settings() : ava::app::TuiFrontEnd::on_reload_display_settings();
+  }
+  ava::tui::TuiLocalDisplaySettings display_settings_snapshot() const override
+  {
+    return hooks_.display_settings_snapshot ? hooks_.display_settings_snapshot() : ava::app::TuiFrontEnd::display_settings_snapshot();
+  }
+  ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> on_maybe_reload_display_settings() override
+  {
+    return hooks_.on_maybe_reload_display_settings ? hooks_.on_maybe_reload_display_settings() : ava::app::TuiFrontEnd::on_maybe_reload_display_settings();
+  }
+  ava::core::Result<ava::tui::TuiLocalDisplaySettingsResult> on_local_display_settings_action(std::string_view action) override
+  {
+    return hooks_.on_local_display_settings_action ? hooks_.on_local_display_settings_action(action)
+                                                   : ava::app::TuiFrontEnd::on_local_display_settings_action(action);
+  }
+  ava::core::Result<ava::tui::SelectListView> list_subagents() const override
+  {
+    return hooks_.list_subagents ? hooks_.list_subagents() : ava::app::TuiFrontEnd::list_subagents();
+  }
+  ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>> inspect_subagent(std::string_view job_id,
+                                                                                                std::optional<std::uint64_t> generation) const override
+  {
+    return hooks_.inspect_subagent ? hooks_.inspect_subagent(job_id, generation) : ava::app::TuiFrontEnd::inspect_subagent(job_id, generation);
+  }
+  ava::tui::SubagentWorkspaceCancelOutcome cancel_subagent(std::string_view job_id) const override
+  {
+    return hooks_.cancel_subagent ? hooks_.cancel_subagent(job_id) : ava::app::TuiFrontEnd::cancel_subagent(job_id);
+  }
+  ava::tui::SubagentWorkspacePromoteOutcome promote_subagent(std::string_view job_id) const override
+  {
+    return hooks_.promote_subagent ? hooks_.promote_subagent(job_id) : ava::app::TuiFrontEnd::promote_subagent(job_id);
+  }
+  void on_before_tui_shutdown() override
+  {
+    if (hooks_.on_before_tui_shutdown)
+      hooks_.on_before_tui_shutdown();
+    else
+      ava::app::TuiFrontEnd::on_before_tui_shutdown();
+  }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
+ private:
+  TuiFrontEndTestHooks& hooks_;
+};
+
 // Own the frontend and its registered session data at stable addresses until the rendering fixture is destroyed.
 // Most projection tests use empty runtime options; runtime-state tests can provide the options that the frontend owns.
 // The temporary configuration root outlives both objects and no provider requests are made.
@@ -80,7 +158,7 @@ struct TuiFrontEndFixture::Impl
   Impl(ava::tui::TuiRuntimeOptions options, TuiTestModel model, ava::app::ApplicationCatalogCache catalog_cache)
       : root(ScopedTestDirectory::create_unique(temp_root(), "tui-frontend")),
         session(open_frontend_test_session(root.path())),
-        frontend(session, std::move(catalog_cache), 0, std::move(options))
+        frontend(session, std::move(catalog_cache), std::move(options), hooks)
   {
     select_frontend_test_model(session, model);
     frontend.register_frontend_data(session);
@@ -88,7 +166,8 @@ struct TuiFrontEndFixture::Impl
 
   ScopedTestDirectory root;
   ava::app::runtime::session_ts session;
-  ava::app::TuiFrontEnd frontend;
+  TuiFrontEndTestHooks hooks;
+  TestTuiFrontEnd frontend;
 };
 
 TuiFrontEndFixture::TuiFrontEndFixture(TuiTestModel model) : impl_(std::make_unique<Impl>(std::move(model)))
@@ -111,10 +190,9 @@ ava::tui::TuiFrontEnd* TuiFrontEndFixture::frontend() noexcept
   return &impl_->frontend;
 }
 
-ava::tui::TuiRuntimeOptions& TuiFrontEndFixture::runtime_options() noexcept
+TuiFrontEndTestHooks& TuiFrontEndFixture::hooks() noexcept
 {
-  // The fixture exclusively owns the frontend and exposes its options only so controller tests mirror production composition.
-  return const_cast<ava::tui::TuiRuntimeOptions&>(impl_->frontend.options());
+  return impl_->hooks;
 }
 
 void TuiFrontEndFixture::seed_committed_todos(std::vector<ava::agent::TodoItem> todos)
@@ -143,11 +221,6 @@ void TuiFrontEndFixture::seed_committed_todos(std::vector<ava::agent::TodoItem> 
                                                                                              .data_json = data_json});
   if (!appended)
     throw std::runtime_error("could not seed committed TUI todos: " + appended.error().format());
-}
-
-void TuiFrontEndFixture::refresh_application_catalog_values()
-{
-  impl_->frontend.application_catalog().refresh_values(impl_->session);
 }
 
 std::pair<std::string, std::string> TuiFrontEndFixture::selected_model_metadata()

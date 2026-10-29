@@ -569,9 +569,9 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     current_event_context.correlation_id = std::move(request_id);
   };
   std::string submit_request_id;
-  if (supports_active_queue && frontend_.options().create_active_run_queues)
+  if (supports_active_queue)
   {
-    active_queues = frontend_.options().create_active_run_queues(frontend_, control_sink);
+    active_queues = frontend_.create_active_run_queues(control_sink);
     if (!active_queues->active_request_id.empty())
     {
       submit_request_id = active_queues->active_request_id;
@@ -623,7 +623,6 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
   }
   auto result = TuiSubmitResult{};
   bool session_changed = false;
-  if (frontend_.options().on_submit)
   {
     permission_resolver = prompt_coordinator_.permission_resolver();
     question_resolver = prompt_coordinator_.question_resolver();
@@ -633,20 +632,19 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       auto skip_active_steering = active_queues ? active_queues->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{};
       auto take_next_follow_up = active_queues ? active_queues->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{};
       auto mark_follow_up_started = active_queues ? active_queues->mark_follow_up_started : std::function<ava::core::VoidResult(TuiQueuedFollowUp const&)>{};
-      return frontend_.options().on_submit(frontend_, submitted,
-                                           TuiSubmitContext{.request_id = submit_request_id,
-                                                            .permission_resolver = permission_resolver,
-                                                            .question_resolver = question_resolver,
-                                                            .event_sink = event_sink,
-                                                            .cancel_requested = cancel_requested,
-                                                            .take_steering_messages = take_steering_messages,
-                                                            .skip_active_steering = skip_active_steering,
-                                                            .take_next_follow_up = take_next_follow_up,
-                                                            .mark_follow_up_started = mark_follow_up_started,
-                                                            .on_subagent_launch = event_queue.subagent_launch_sink(),
-                                                            .plugin_ui = plugin_ui_endpoint,
-                                                            .image_attachments = submit_image_attachments,
-                                                            .key_bindings = request_key_bindings});
+      return frontend_.on_submit(submitted, TuiSubmitContext{.request_id = submit_request_id,
+                                                             .permission_resolver = permission_resolver,
+                                                             .question_resolver = question_resolver,
+                                                             .event_sink = event_sink,
+                                                             .cancel_requested = cancel_requested,
+                                                             .take_steering_messages = take_steering_messages,
+                                                             .skip_active_steering = skip_active_steering,
+                                                             .take_next_follow_up = take_next_follow_up,
+                                                             .mark_follow_up_started = mark_follow_up_started,
+                                                             .on_subagent_launch = event_queue.subagent_launch_sink(),
+                                                             .plugin_ui = plugin_ui_endpoint,
+                                                             .image_attachments = submit_image_attachments,
+                                                             .key_bindings = request_key_bindings});
     });
     bool render_failed = false;
     auto fail_active_run = [&]() {

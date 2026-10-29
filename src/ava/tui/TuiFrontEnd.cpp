@@ -5,12 +5,14 @@
 
 namespace ava::tui {
 
+// Enter the private composer implementation after the application has registered frontend data.
 int TuiFrontEnd::run()
 {
   // FIXME: Delegate to the existing runtime until its UI state and orchestration have been moved into this frontend.
   return run_interactive_composer();
 }
 
+// Load startup bindings into TUI-owned state and return only formatted failure status.
 std::string TuiFrontEnd::load_key_bindings()
 {
   std::string keybind_status;

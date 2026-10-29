@@ -109,16 +109,10 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
   selector_ = unavailable_selector();
   refresh_unavailable_ = false;
   last_list_refresh_succeeded_ = true;
-  if (frontend_.options().list_subagents)
+  auto listed = frontend_.list_subagents();
+  if (listed)
   {
-    auto listed = frontend_.options().list_subagents(frontend_);
-    if (listed)
-      selector_ = std::move(*listed);
-    else
-    {
-      refresh_unavailable_ = true;
-      last_list_refresh_succeeded_ = false;
-    }
+    selector_ = std::move(*listed);
   }
   else
   {
@@ -162,15 +156,7 @@ void RuntimeSubagentWorkspaceController::close_to_selector()
 
 bool RuntimeSubagentWorkspaceController::refresh_selector()
 {
-  if (!frontend_.options().list_subagents)
-  {
-    last_list_refresh_succeeded_ = false;
-    bool const changed = !refresh_unavailable_ || selector_.subtitle != "Refresh unavailable";
-    refresh_unavailable_ = true;
-    selector_.subtitle = "Refresh unavailable";
-    return changed;
-  }
-  auto listed = frontend_.options().list_subagents(frontend_);
+  auto listed = frontend_.list_subagents();
   if (!listed)
   {
     last_list_refresh_succeeded_ = false;
@@ -240,9 +226,9 @@ bool RuntimeSubagentWorkspaceController::refresh_selector()
 
 bool RuntimeSubagentWorkspaceController::refresh_inspection()
 {
-  if (mode_ != Mode::Workspace || job_id_.empty() || !frontend_.options().inspect_subagent)
+  if (mode_ != Mode::Workspace || job_id_.empty())
     return false;
-  auto inspected = frontend_.options().inspect_subagent(frontend_, job_id_, known_generation_);
+  auto inspected = frontend_.inspect_subagent(job_id_, known_generation_);
   if (!inspected || !*inspected)
   {
     bool const changed = !refresh_unavailable_ || (workspace_.messages.empty() && !workspace_.unavailable);
@@ -426,8 +412,7 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
   }
   else if (character_text == "C")
   {
-    auto const outcome =
-        frontend_.options().cancel_subagent ? frontend_.options().cancel_subagent(frontend_, job_id_) : SubagentWorkspaceCancelOutcome::CancelUnavailable;
+    auto const outcome = frontend_.cancel_subagent(job_id_);
     switch (outcome)
     {
       case SubagentWorkspaceCancelOutcome::CancellationRequested:
@@ -446,8 +431,7 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
   }
   else if (character_text == "P")
   {
-    auto const outcome =
-        frontend_.options().promote_subagent ? frontend_.options().promote_subagent(frontend_, job_id_) : SubagentWorkspacePromoteOutcome::PromotionUnavailable;
+    auto const outcome = frontend_.promote_subagent(job_id_);
     switch (outcome)
     {
       case SubagentWorkspacePromoteOutcome::CurrentlyBackground:

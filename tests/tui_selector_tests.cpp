@@ -1833,15 +1833,15 @@ void run_tui_selector_tests()
   std::string canceled_id;
   std::string promoted_id;
   ava::tui::TuiRuntimeOptions controller_options;
-  controller_options.list_subagents = [&](ava::tui::TuiFrontEnd const&) -> ava::core::Result<ava::tui::SelectListView> {
+  tui_test_support::TuiFrontEndFixture controller_frontend(controller_options);
+  controller_frontend.hooks().list_subagents = [&]() -> ava::core::Result<ava::tui::SelectListView> {
     ++list_calls;
     if (list_refresh_failure)
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "private backend detail"));
     return controller_selector();
   };
-  controller_options.inspect_subagent =
-      [&](ava::tui::TuiFrontEnd const&, std::string_view id,
-          std::optional<std::uint64_t> known) -> ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>> {
+  controller_frontend.hooks().inspect_subagent =
+      [&](std::string_view id, std::optional<std::uint64_t> known) -> ava::core::Result<std::shared_ptr<ava::agent::SubagentInspectorFrame const>> {
     ++inspect_calls;
     inspected_generations.push_back(known);
     auto frame = std::make_shared<ava::agent::SubagentInspectorFrame>();
@@ -1874,11 +1874,11 @@ void run_tui_selector_tests()
   };
   auto cancel_outcome = ava::tui::SubagentWorkspaceCancelOutcome::CancellationRequested;
   auto promote_outcome = ava::tui::SubagentWorkspacePromoteOutcome::PromotionUnavailable;
-  controller_options.cancel_subagent = [&](ava::tui::TuiFrontEnd const&, std::string_view id) {
+  controller_frontend.hooks().cancel_subagent = [&](std::string_view id) {
     canceled_id = std::string(id);
     return cancel_outcome;
   };
-  controller_options.promote_subagent = [&](ava::tui::TuiFrontEnd const&, std::string_view id) {
+  controller_frontend.hooks().promote_subagent = [&](std::string_view id) {
     promoted_id = std::string(id);
     return promote_outcome;
   };
@@ -1889,7 +1889,6 @@ void run_tui_selector_tests()
   controller_snapshot.transcript_generation = 42;
   controller_snapshot.width = 40;
   controller_snapshot.height = 8;
-  tui_test_support::TuiFrontEndFixture controller_frontend(controller_options);
   ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_snapshot);
   using WorkspaceClock = ava::tui::RuntimeSubagentWorkspaceController::Clock;
   auto const time_zero = WorkspaceClock::time_point{};
