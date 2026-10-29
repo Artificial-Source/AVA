@@ -228,15 +228,15 @@ int TuiFrontEnd::run_interactive_composer()
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
+  // Load effective presentation before applying the cursor or probing the theme.
+  // Otherwise startup uses defaults until a later settings change or repaint.
+  std::string initial_status_line = load_key_bindings();
+  load_display_settings(initial_status_line);
   terminal_context.apply_cursor_settings(cursor_settings());
   // Probe the direct terminal background once after enter and before first paint.
   // No re-probe on suspend/resume and no late theme flip after presentation starts.
   TerminalBackgroundDetectionGuard terminal_background_detection;
   maybe_probe_terminal_background_appearance(terminal_context);
-
-  // Note: initial_status_line is consumed by the constructor of RuntimePresentationState.
-  std::string initial_status_line = load_key_bindings();
-  load_display_settings(initial_status_line);
   RuntimePresentationState presentation_state(this, initial_status_line);
 
   auto& snapshot = presentation_state.snapshot;
