@@ -3,6 +3,7 @@
 #include "ava/diagnostics/runtime_diagnostics.h"
 #include "ava/diagnostics/safe_failure.h"
 #include "ava/core/AnchorOpen.h"
+#include "ava/core/hex.h"
 #include "ava/core/saturating.h"
 
 #include <array>
@@ -71,15 +72,7 @@ std::string random_token()
       byte = static_cast<unsigned char>(value & 0xffU);
     }
   }
-  constexpr char hex[] = "0123456789abcdef";
-  std::string result;
-  result.reserve(bytes.size() * 2);
-  for (auto const byte : bytes)
-  {
-    result.push_back(hex[byte >> 4U]);
-    result.push_back(hex[byte & 0x0fU]);
-  }
-  return result;
+  return ava::core::hex_encode(bytes);
 }
 
 bool decimal_value(std::string_view value) noexcept
@@ -183,6 +176,8 @@ class PrivateTraceObserver final : public ava::observability::RunObserver
       delta_count_ = ava::core::saturating_add(delta_count_, std::uint64_t{1});
       for (auto const& field : event.fields)
       {
+        if (field.provenance != ava::observability::FieldProvenance::PublicMetadata)
+          continue;
         if (field.key != "text_bytes")
           continue;
         std::uint64_t bytes = 0;
@@ -314,6 +309,8 @@ class PrivateTraceObserver final : public ava::observability::RunObserver
     safe.fields.reserve(source.fields.size());
     for (auto const& field : source.fields)
     {
+      if (field.provenance != ava::observability::FieldProvenance::PublicMetadata)
+        continue;
       if (safe_numeric_field(field.key) && decimal_value(field.value))
         safe.fields.push_back({.key = field.key, .value = field.value});
       else if (safe_boolean_field(field.key) && boolean_value(field.value))

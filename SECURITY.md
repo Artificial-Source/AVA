@@ -2,7 +2,12 @@
 
 ## Supported versions
 
-Security fixes are evaluated against the current development baseline on the `develop` branch. AVA has no published release support schedule in this repository.
+The runtime version is `0.32.0`. This is not a stable release. No release is
+scheduled yet, and AVA has no supported released version. Security fixes are
+evaluated against the current `develop` baseline. Owners will name supported
+lines when a release is published. See the
+[supported-version policy](docs/operations/publication.md#8-supported-versions).
+This is not a response-time or maintenance-duration promise.
 
 ## Reporting a vulnerability
 

@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/app_runtime_support.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
 #include "ava/process/supervisor.h"
@@ -13,12 +14,14 @@
 #include "ava/permissions/permission.h"
 #include "ava/core/json.h"
 
+#include <cerrno>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <sys/syscall.h>
 
 #ifndef AVA_FAKE_MCP_SERVER_PATH
 #define AVA_FAKE_MCP_SERVER_PATH ""
@@ -187,6 +190,51 @@ void test_interactive_mcp_prompt_submission_resolves_once()
          "interactive cancellation during listing is surfaced rather than unknown");
 }
 
+void test_external_editor_reads_bounded_regular_files()
+{
+  auto const root = create_empty_root("external-editor-bounded-read");
+  ScopedEnvVar temporary_directory("TMPDIR", root.string());
+  {
+    ScopedEnvVar editor("VISUAL", "/bin/true");
+    std::string const exact_limit(1024 * 1024, 'x');
+    auto exact = ava::app::interactive_internal::edit_text_with_external_editor(exact_limit);
+    expect(exact && *exact && **exact == exact_limit, "external editor accepts an exact-limit regular draft");
+    auto oversized = ava::app::interactive_internal::edit_text_with_external_editor(exact_limit + "x");
+    expect(!oversized && oversized.error().message() == "external editor draft is too large", "external editor enforces its draft byte limit during reading");
+  }
+  {
+    auto const target = root / "unrelated-document";
+    write_test_file(target, "must not be imported through a replaced draft");
+    ScopedEnvVar target_path("AVA_EDITOR_TARGET", target.string());
+    ScopedEnvVar editor("VISUAL", "/bin/sh -c 'rm -- \"$1\"; ln -s -- \"$AVA_EDITOR_TARGET\" \"$1\"' editor");
+    auto symlink = ava::app::interactive_internal::edit_text_with_external_editor("original");
+    expect(!symlink, "external editor rejects a draft replaced with a symlink");
+    expect(app_read_binary_file(target) == "must not be imported through a replaced draft",
+           "external editor cleanup leaves a rejected symlink target untouched");
+  }
+  {
+    ScopedEnvVar editor("VISUAL", "/bin/sh -c 'printf edited > \"$1.next\"; mv -- \"$1.next\" \"$1\"' editor");
+    auto replaced = ava::app::interactive_internal::edit_text_with_external_editor("original");
+    expect(replaced && *replaced && **replaced == "edited", "external editor permits an atomic regular-file save");
+  }
+}
+
+void test_project_trust_read_failure_remains_io_error()
+{
+  auto const root = create_empty_root("project-trust-read-error");
+  auto const paths = app_test_paths(root);
+  auto const workspace = root / "workspace";
+  std::filesystem::create_directories(workspace);
+  auto stored = ava::app::set_project_trust_decision(paths, workspace, true);
+  if (!require(stored.has_value(), "project trust read-error fixture stores a trusted decision"))
+    return;
+  auto child = run_in_child_with_syscall_errno(SYS_read, std::nullopt, EIO, [&] {
+    auto const state = ava::app::load_project_trust_state(paths, workspace);
+    return state.decision == ava::app::ProjectTrustDecision::Unknown && state.diagnostic.find("failed to read project trust file") != std::string::npos ? 0 : 1;
+  });
+  expect_child_success(child, "project trust read errors fail closed and retain the I/O diagnostic");
+}
+
 }  // namespace
 
 void run_app_interactive_tests()
@@ -195,4 +243,6 @@ void run_app_interactive_tests()
   test_display_settings_command_classification_includes_cursor();
   test_interactive_unknown_and_builtin_slash_behavior();
   test_interactive_mcp_prompt_submission_resolves_once();
+  test_external_editor_reads_bounded_regular_files();
+  test_project_trust_read_failure_remains_io_error();
 }

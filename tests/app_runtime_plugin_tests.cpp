@@ -291,7 +291,10 @@ void test_app_runtime_enabled_plugin_resources_autoload()
   tool_context.include_project_plugins = true;
   tool_context.include_project_skills = true;
   tool_context.permission_resolver = allow;
-  ava::agent::ToolDispatcher dispatcher(tool_context);
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(tool_context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto tool_skill =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_plugin_skill", .name = "skill", .arguments_json = "{\"name\":\"plugin-triage\"}"});
   expect(tool_skill && tool_skill->success && tool_skill->result_text.find("Enabled plugin skill body autoload marker") != std::string::npos,
@@ -563,7 +566,10 @@ void test_plugin_install_rejects_source_directory_substitution()
   if (link_error)
     return;
   auto installed = ava::plugin::install_global_plugin(std::move(*inspected), global_root);
-  expect(!installed && std::filesystem::is_empty(global_root), "installation does not follow a source-directory symlink substituted after inspection");
+  std::error_code destination_error;
+  bool const destination_exists = std::filesystem::exists(global_root, destination_error);
+  expect(!installed && !destination_error && !destination_exists,
+         "installation rejects a substituted source-directory symlink before creating the destination root");
 }
 
 void test_plugin_install_directory_depth_limit()

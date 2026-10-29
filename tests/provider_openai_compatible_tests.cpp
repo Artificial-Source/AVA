@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/provider_openai_test_suite.h"
+#include "tests/support/provider_parser_budget_tests.h"
 #include "tests/support/test_harness.h"
 #include "ava/http/transport.h"
 #include "ava/provider/openai_compatible_provider.h"
@@ -271,6 +272,27 @@ void test_openai_compatible_provider_contract()
 
 void test_openai_compatible_parsing()
 {
+  ava::provider::OpenAICompatibleProvider const budget_provider({});
+  ava::tests::test_provider_parser_budgets(
+      budget_provider, [](std::string const& text) { return R"({"choices":[{"message":{"content":")" + text + R"("}}]})"; },
+      [](std::string const& text) { return R"(data: {"choices":[{"delta":{"content":")" + text + R"("}}]})"; },
+      {R"({"choices":)" + ava::tests::provider_budget_array("{}") + "}",
+       R"({"choices":[{"message":{"tool_calls":)" + ava::tests::provider_budget_array(R"({"function":{"name":"read_file","arguments":"{}"}})") +
+           R"(},"delta":{"tool_calls":)" + ava::tests::provider_budget_array(R"({"function":{"name":"read_file","arguments":"{}"}})") + "}}]}"},
+      R"(data: {"choices":[]})");
+  ava::tests::test_provider_tool_fragment_budget(
+      budget_provider, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"budget_call\",\"function\":{\"name\":\"read_file\"}}]}}]}\n\n",
+      [](std::string const& text) { return R"(data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":")" + text + R"("}}]}}]})"; },
+      "data: [DONE]\n\n");
+  for (auto const index : {"-1", "2147483648", "4294967296", "9223372036854775807"})
+  {
+    auto const invalid_index =
+        ava::provider::parse_openai_compatible_sse(std::string(R"(data: {"choices":[{"delta":{"tool_calls":[{"index":)") + index +
+                                                   R"(,"id":"invalid","function":{"name":"read_file","arguments":"{}"}}]}}]})" + "\n\ndata: [DONE]\n\n");
+    expect(invalid_index && invalid_index->size() == 1 && invalid_index->front().type == ava::provider::StreamEventType::Error,
+           "OpenAI-compatible SSE rejects invalid tool indices before narrowing or publishing tool calls");
+  }
+
   auto stream = ava::provider::parse_openai_compatible_sse(
       "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\"}}]}\n\n"
       "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n"

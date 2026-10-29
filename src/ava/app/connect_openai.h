@@ -1,4 +1,5 @@
 #pragma once
+#include "ava/debug/print_members_on.h"
 #include "ava/http/transport.h"
 #include "ava/process/scope.h"
 #include "ava/config/openai_oauth.h"

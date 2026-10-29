@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   IPC_CHANNELS,
+  MAX_QUESTION_SELECTED_OPTIONS,
+  MAX_QUESTION_VALUE_BYTES,
   isAllowedIpcChannel,
   isTrustedSender,
   isExpectedDocument,
@@ -70,4 +72,19 @@ test('prompt replies require an opaque display token, never RPC correlation', ()
       assert.equal(validateChannelPayload(channel, { ...body, displayToken: 'opaque-display', [field]: 'backend-id' }).ok, false)
     }
   }
+})
+
+test('question replies are bounded by the RPC v1 request text limits', () => {
+  const reply = (fields: Record<string, unknown>) =>
+    validateChannelPayload(IPC_CHANNELS.replyQuestion, { displayToken: 'opaque-display', ...fields }).ok
+  const atLimit = 'x'.repeat(MAX_QUESTION_VALUE_BYTES)
+  const overLimit = `${atLimit}x`
+  assert.equal(reply({ answer: atLimit }), true)
+  assert.equal(reply({ answer: overLimit }), false)
+  assert.equal(reply({ selected: overLimit }), false)
+  assert.equal(reply({ answer: 'é'.repeat(MAX_QUESTION_VALUE_BYTES / 2 + 1) }), false, 'the limit counts UTF-8 bytes')
+  const options = Array.from({ length: MAX_QUESTION_SELECTED_OPTIONS }, (_, index) => `option-${index}`)
+  assert.equal(reply({ selectedOptions: options }), true)
+  assert.equal(reply({ selectedOptions: [...options, 'one-too-many'] }), false)
+  assert.equal(reply({ selectedOptions: [overLimit] }), false)
 })

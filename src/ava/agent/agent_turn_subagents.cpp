@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/http/transport.h"
+#include "ava/agent/agent_config.h"
 #include "ava/agent/agent_turn_executor_internal.h"
 #include "ava/agent/job_control.h"
 #include "ava/agent/subagent_inspector_source.h"
@@ -52,21 +53,9 @@ ToolVisibilityOptions subagent_tool_visibility(ToolVisibilityOptions parent, Age
   if (tool_preset != AgentToolPreset::ReadOnly)
     return parent;
 
-  std::vector<std::string> const read_only_tools{"read_file", "list_directory", "glob", "grep"};
-  if (parent.included_tools.empty())
-  {
-    parent.included_tools = read_only_tools;
-    return parent;
-  }
-
-  std::vector<std::string> narrowed;
-  for (auto const& tool : parent.included_tools)
-  {
-    if (contains_tool_name(read_only_tools, tool))
-      narrowed.push_back(tool);
-  }
-  parent.included_tools = std::move(narrowed);
-  return parent;
+  // Share the primary-agent intersection semantics, including aliases and
+  // fail-closed empty allowlists; an empty include list otherwise means all tools.
+  return narrow_tool_visibility_to_read_only(std::move(parent));
 }
 
 // Start empty: session identity, delivery provenance, and parent callbacks are
@@ -342,6 +331,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
       AgentLoopOptions child_options;
       SessionAppendSink child_append;
       std::string prompt;
+      // Parent foreground waiting and the worker publish/read one synchronized
+      // result while the movable run state carries the independently owned lease.
       std::shared_ptr<CoordinatedTaskResultState> result_state;
       std::unique_ptr<ava::provider::Provider> provider_instance;
       std::unique_ptr<ava::http::Transport> transport_instance;
@@ -349,6 +340,8 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
     };
     auto steering_queue = SubagentSteeringQueue::create();
     child_options.take_steering_messages = [queue = steering_queue] { return queue->take(); };
+    // std::function workers are copyable and may outlive this invocation after
+    // background launch/promotion; retain the child lease/provider/transport together.
     auto run_state = std::make_shared<CoordinatedTaskRunState>(CoordinatedTaskRunState{.child_store = std::move(child_store),
                                                                                        .child_lease = std::move(child_lease),
                                                                                        .child_options = std::move(child_options),
@@ -474,6 +467,9 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
     }
 
     auto const parent_session_id = store_.options_session_id_copy();
+    // Foreground task execution observes the same admitted cancellation route
+    // as its parent ToolContext, not just the provider compatibility callback.
+    auto const& cancel_requested = options_.tool_execution.cancel_requested ? options_.tool_execution.cancel_requested : options_.cancel_requested;
     for (;;)
     {
       auto waited = options_.subagent_coordinator->wait(parent_session_id, job_id, kJobWaitCancellationSlice, SubagentWaitMode::TerminalOrPromotion);
@@ -523,7 +519,7 @@ ava::core::Result<TaskSubagentResult> AgentTurnExecutor::run_task_subagent(TaskS
                                   .tool_calls = run_state->result_state->terminal_result->tool_calls,
                                   .tool_iterations = run_state->result_state->terminal_result->tool_iterations};
       }
-      if (options_.cancel_requested && options_.cancel_requested())
+      if (cancel_requested && cancel_requested())
         static_cast<void>(options_.subagent_coordinator->cancel(store_.options_r()->session_id, job_id));
     }
   }

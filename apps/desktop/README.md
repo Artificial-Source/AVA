@@ -24,7 +24,7 @@ pnpm dev
 pnpm preview
 ```
 
-`pnpm dev` starts Vite HMR and Electron. `pnpm preview` runs the production build.
+`pnpm dev` starts Vite HMR and Electron. The dev server is pinned to `http://127.0.0.1:5173` with `strictPort`, so `pnpm dev` fails if that port is already taken. `pnpm preview` runs the production build.
 
 ## Ubuntu sandbox prerequisite
 
@@ -55,7 +55,7 @@ Do not point this at your real home directory.
 
 ## Current scope
 
-Implemented (GUI validation blocked as noted above): workspace/backend/model status, session list, new/open while idle, model select while idle, composer with streamed text, collapsed tool summaries, explicit cancel, one-shot Allow/Deny permissions, structured questions, native workspace picker, safe restart while idle.
+Implemented (GUI validation blocked as noted above): workspace/backend/model status, session list, new/open while idle, model select while idle, composer with streamed text, collapsed tool summaries, explicit cancel, one-shot Allow/Deny permissions with the backend's read-only diff preview, structured questions, native workspace picker, safe restart while idle.
 
 Not in this client: auth UI, persistent permission grants/rules, arbitrary bash, uploads, plugin/MCP controls, full Markdown/diff editing, remote servers, installers, or packaged distribution.
 
@@ -64,3 +64,7 @@ Missing binary, spawn, auth, and provider errors are shown as errors. They are n
 ## Security
 
 Renderer: `sandbox`, `contextIsolation`, `nodeIntegration: false`, `webSecurity`. Main validates IPC sender (webContents, main frame, exact expected app document URL (fragments allowed)) and payloads. Permission/question replies echo a main-generated display token and bind host-tracked resolver IDs from backend events; the renderer cannot supply RPC correlation. Duplicate or stale display decisions are rejected. Stderr is drained and not content-logged.
+
+Content-Security-Policy lives in `src/shared/content-security-policy.ts`. Main sends it as a response header (this covers the `pnpm dev` server, whose URL main trusts only when electron-vite dev mode started an unpackaged app, and only at the pinned origin in `src/shared/dev-server.ts`); because Electron cannot attach headers to `file://` documents, the production build also embeds it as a `<meta>` tag in `index.html`. Navigation, redirects, new windows, `<webview>`, and permission requests are denied.
+
+Backend lifecycle: AVA must answer the RPC handshake within 30 s or the client reports an error. Starts and restarts (including workspace changes) run one at a time: while one is in progress, Restart is disabled and further requests are rejected, so only one AVA is ever live. On restart or quit, main closes AVA's stdin (AVA cancels active work and exits), then sends `SIGTERM` and finally `SIGKILL` if the process is still alive after 1.5 s each; quit waits for every AVA it started to exit, so AVA never outlives the client.

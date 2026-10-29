@@ -16,11 +16,11 @@ on:
         required: false
         type: boolean
         default: false
-      full_terminal:
-        description: Run the release-candidate full credential-free terminal gate
+      release_candidate:
+        description: Build, qualify and retain the exact Linux x64 release candidate
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -39,10 +39,6 @@ jobs:
       CC: gcc-16
       CXX: g++-16
       GITACHE_ROOT: /tmp/ava-gitache-${{ matrix.build_type }}
-      # The full credential-free terminal gate runs for release-candidate
-      # workflow_dispatch runs and version tag pushes; routine runs execute
-      # only the small required terminal selection below.
-      AVA_FULL_TERMINAL: ${{ (github.event_name == 'workflow_dispatch' && inputs.full_terminal) || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -105,7 +101,7 @@ jobs:
             --require ava_tests.process_supervisor_posix --require ava_release.provenance
 
       - name: Run required real-terminal checks
-        if: matrix.build_type == 'Release' && env.AVA_FULL_TERMINAL != 'true'
+        if: matrix.build_type == 'Release'
         env:
           AVA_TUI_TMUX_SMOKE: "1"
           AVA_TUI_TERMINAL_LIFECYCLE_SMOKE: "1"
@@ -115,7 +111,7 @@ jobs:
             -R '^(ava_tui[.]terminal_lifecycle_smoke|ava_tui[.]tmux_smoke_(main_editor_input|main_permission_flow|active_run))$'
 
       - name: Verify required terminal results
-        if: always() && matrix.build_type == 'Release' && env.AVA_FULL_TERMINAL != 'true'
+        if: always() && matrix.build_type == 'Release'
         run: |
           python3 scripts/summarize-test-results.py "${{ runner.temp }}/ava-junit-terminal.xml" \
             --require-count 4 --require-no-skips \
@@ -124,76 +120,168 @@ jobs:
             --require ava_tui.tmux_smoke_main_permission_flow \
             --require ava_tui.tmux_smoke_active_run
 
-      - name: Run full tmux terminal gate
-        if: matrix.build_type == 'Release' && env.AVA_FULL_TERMINAL == 'true'
+  desktop:
+    name: Desktop typecheck and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up exact Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.13.1
+      - name: Install pinned pnpm and locked dependencies
+        run: |
+          npm install --global pnpm@10.29.1 --ignore-scripts --no-audit --no-fund
+          pnpm install --frozen-lockfile --ignore-scripts
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test (no live backend or GUI)
+        run: pnpm test
+
+  release-candidate:
+    name: Qualify retained Linux x64 candidate
+    if: github.event_name == 'workflow_dispatch' && inputs.release_candidate || startsWith(github.ref, 'refs/tags/v')
+    needs: [sanitizer, tsan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CC: gcc-13
+      CXX: g++-13
+      GITACHE_ROOT: /tmp/ava-gitache-candidate
+      PYTHONDONTWRITEBYTECODE: "1"
+    outputs:
+      manifest_sha256: ${{ steps.identity.outputs.manifest_sha256 }}
+      revision: ${{ steps.identity.outputs.revision }}
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Install minimum-host toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13 cmake ninja-build libncursesw5-dev pkg-config libboost-dev binutils tmux curl
+      - name: Configure final Release build
+        run: cmake --preset release-candidate -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DAVA_TUI_TEST_BASE="${{ runner.temp }}"
+      - name: Build final bytes once
+        run: scripts/build.sh --build-dir build-candidate --jobs 6
+      - name: Seal executable identities before tests
+        run: |
+          mkdir -p "${{ runner.temp }}/candidate-evidence"
+          python3 scripts/release-candidate.py seal --build-dir build-candidate
+          cp build-candidate/release-build.json "${{ runner.temp }}/candidate-evidence/"
+      - name: Full deterministic CTest on final build
+        run: |
+          scripts/run-tests.sh --build-dir build-candidate --jobs 6 \
+            --output-junit "${{ runner.temp }}/candidate-evidence/deterministic.xml"
+          python3 scripts/summarize-test-results.py "${{ runner.temp }}/candidate-evidence/deterministic.xml" \
+            --require ava_release.provenance --require ava_release.install_component \
+            --require ava_release.package_linux --require ava_release.candidate_contract \
+            --require ava_release.artifact_inspection
+      - name: All 23 tmux gates on final build
         env:
           AVA_TUI_TMUX_SMOKE: "1"
         run: |
-          scripts/run-tests.sh --build-dir build --jobs 4 --no-tests=error \
-            --output-junit "${{ runner.temp }}/ava-junit-terminal-tmux.xml" \
-            -R '^ava_tui[.]tmux_smoke_'
-
-      - name: Run full direct-PTY terminal gate
-        if: matrix.build_type == 'Release' && env.AVA_FULL_TERMINAL == 'true'
+          scripts/run-tests.sh --build-dir build-candidate --jobs 6 --no-tests=error \
+            --output-junit "${{ runner.temp }}/candidate-evidence/tmux.xml" -R '^ava_tui\.tmux_smoke_'
+          python3 scripts/summarize-test-results.py "${{ runner.temp }}/candidate-evidence/tmux.xml" \
+            --require-count 23 --require-no-skips
+      - name: All four direct PTY gates on final build
         env:
           AVA_TUI_TERMINAL_LIFECYCLE_SMOKE: "1"
           AVA_TUI_KITTY_IMAGE_SMOKE: "1"
           AVA_TUI_ITERM2_IMAGE_SMOKE: "1"
           AVA_TUI_OSC8_SMOKE: "1"
         run: |
-          scripts/run-tests.sh --build-dir build --jobs 2 --no-tests=error \
-            --output-junit "${{ runner.temp }}/ava-junit-terminal-pty.xml" \
-            -R '^ava_tui[.](terminal_lifecycle_smoke|kitty_image_smoke|iterm2_image_smoke|osc8_smoke)$'
-
-      - name: Verify full terminal gate results
-        if: always() && matrix.build_type == 'Release' && env.AVA_FULL_TERMINAL == 'true'
+          scripts/run-tests.sh --build-dir build-candidate --jobs 4 --no-tests=error \
+            --output-junit "${{ runner.temp }}/candidate-evidence/pty.xml" \
+            -R '^ava_tui\.(terminal_lifecycle_smoke|kitty_image_smoke|iterm2_image_smoke|osc8_smoke)$'
+          python3 scripts/summarize-test-results.py "${{ runner.temp }}/candidate-evidence/pty.xml" \
+            --require-count 4 --require-no-skips
+      - name: Package tested bytes without rebuilding
         run: |
-          python3 scripts/summarize-test-results.py \
-            "${{ runner.temp }}/ava-junit-terminal-tmux.xml" \
-            "${{ runner.temp }}/ava-junit-terminal-pty.xml" \
-            --require-count 27 --require-no-skips \
-            --require ava_tui.terminal_lifecycle_smoke \
-            --require ava_tui.kitty_image_smoke \
-            --require ava_tui.iterm2_image_smoke \
-            --require ava_tui.osc8_smoke \
-            --require ava_tui.tmux_smoke_suspend_resume \
-            --require ava_tui.tmux_smoke_keybind_conflict \
-            --require ava_tui.tmux_smoke_theme_env \
-            --require ava_tui.tmux_smoke_theme_persisted \
-            --require ava_tui.tmux_smoke_nested_settings_preview \
-            --require ava_tui.tmux_smoke_startup_overview \
-            --require ava_tui.tmux_smoke_active_run \
-            --require ava_tui.tmux_smoke_restore_followup \
-            --require ava_tui.tmux_smoke_streaming_scroll \
-            --require ava_tui.tmux_smoke_mermaid \
-            --require ava_tui.tmux_smoke_transcript_search \
-            --require ava_tui.tmux_smoke_transcript_selection \
-            --require ava_tui.tmux_smoke_subagent_workspace \
-            --require ava_tui.tmux_smoke_branch_summary \
-            --require ava_tui.tmux_smoke_main_startup_trust_keybinds \
-            --require ava_tui.tmux_smoke_main_models_selectors \
-            --require ava_tui.tmux_smoke_main_editor_input \
-            --require ava_tui.tmux_smoke_main_slash_completions \
-            --require ava_tui.tmux_smoke_main_permission_flow \
-            --require ava_tui.tmux_smoke_main_question_flow \
-            --require ava_tui.tmux_smoke_main_session_mgmt \
-            --require ava_tui.tmux_smoke_main_paste_scrollback_attach \
-            --require ava_tui.tmux_smoke_plugin_ui
-
-      - name: Build strict release package
-        if: matrix.build_type == 'Release'
+          mkdir -m 0700 "${{ runner.temp }}/candidate"
+          scripts/package-linux.sh --build-dir "$PWD/build-candidate" --require-release-qualified \
+            --output-dir "${{ runner.temp }}/candidate"
+          python3 scripts/release-candidate.py record --build-dir build-candidate --directory "${{ runner.temp }}/candidate"
+          python3 scripts/inspect-linux-artifact.py "${{ runner.temp }}"/candidate/*.tar.gz \
+            --output "${{ runner.temp }}/candidate-evidence/inspection.json"
+      - name: Minimum host and CPU smoke on extracted archive
         run: |
-          output_dir=$(mktemp -d "${{ runner.temp }}/ava-release-output.XXXXXXXX")
-          chmod 0700 "$output_dir"
-          trap 'rm -rf "$output_dir"' EXIT
-          status=$(git status --porcelain --untracked-files=all)
-          if [[ -n $status ]]; then
-            printf 'error: source checkout is not clean before strict packaging:\n%s\n' "$status" >&2
-            exit 1
-          fi
-          # Strict packaging stays uncached: the fresh private configure
-          # keeps its default module scanning and qualification inputs.
-          CCACHE_DISABLE=1 scripts/package-linux.sh --require-release-qualified --output-dir "$output_dir"
+          scripts/smoke-linux-minimum-host.sh "${{ runner.temp }}/candidate" "$PWD/build-candidate/tests/ava_fake_provider_server" \
+            2>&1 | tee "${{ runner.temp }}/candidate-evidence/minimum-host.log"
+      - name: Record promotable digests and same-commit evidence
+        id: identity
+        run: |
+          manifest_sha256=$(sha256sum "${{ runner.temp }}/candidate/candidate.json" | cut -d ' ' -f 1)
+          revision=$(git rev-parse HEAD)
+          echo "manifest_sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Retained Linux x64 candidate"
+            echo "Commit: $revision; run: $GITHUB_RUN_ID; sanitizer: ${{ needs.sanitizer.result }}; focused TSan: ${{ needs.tsan.result }}"
+            echo "Both sanitizer jobs checked out this same workflow commit; neither produces release bytes."
+            echo "Retention: 90 days; candidate.json SHA-256: $manifest_sha256"
+            cat "${{ runner.temp }}/candidate/candidate.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain unchanged candidate archive and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-x64-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Retain candidate reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-x64-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/candidate-evidence/
+            build-candidate/Testing/Temporary/
+            ${{ runner.temp }}/tui-tmux-smoke/*/evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-promotion:
+    name: Re-download and verify retained bytes (no publication)
+    needs: release-candidate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Re-download retained candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: linux-x64-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promoted
+      - name: Re-verify independent recorded digests without building
+        env:
+          MANIFEST_SHA256: ${{ needs.release-candidate.outputs.manifest_sha256 }}
+          REVISION: ${{ needs.release-candidate.outputs.revision }}
+        run: |
+          python3 scripts/release-candidate.py verify --directory "${{ runner.temp }}/promoted" \
+            --manifest-sha256 "$MANIFEST_SHA256" --revision "$REVISION"
+          python3 scripts/inspect-linux-artifact.py "${{ runner.temp }}"/promoted/*.tar.gz
+          tar -xzf "${{ runner.temp }}"/promoted/*.tar.gz -C "${{ runner.temp }}/promoted"
+          "${{ runner.temp }}"/promoted/ava-*/bin/ava --version
+          "${{ runner.temp }}"/promoted/ava-*/bin/ava --help
+          {
+            echo "## Promotion verification (no build, tag or publication)"
+            echo "Commit: $REVISION; manifest SHA-256 before and after: $MANIFEST_SHA256"
+            cat "${{ runner.temp }}/promoted/candidate.json"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   arm64-release:
     name: Build and test (AArch64 Release)

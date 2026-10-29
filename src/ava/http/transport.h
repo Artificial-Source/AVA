@@ -1,5 +1,4 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/observability/trace_context.h"
 #include "ava/core/NoLogString.h"
@@ -10,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,7 +33,10 @@ struct HttpRequest
   bool include_response_headers = false;
   std::vector<std::string> resolve_hosts;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct HttpResponse
@@ -42,7 +45,10 @@ struct HttpResponse
   std::map<ava::core::NoLogString, ava::core::NoLogString> headers;
   ava::core::NoLogString body;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct TransportObservation

@@ -4,6 +4,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_branch.h"
 #include "ava/session/validation.h"
+#include "ava/core/ascii.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
@@ -11,7 +12,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
-#include <fstream>
 #include <optional>
 #include <utility>
 
@@ -42,14 +42,6 @@ bool has_control_byte_except_summary_whitespace(std::string_view value)
   });
 }
 
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7F;
-  });
-}
-
 std::optional<bool> bool_field(std::string_view object, std::string_view key)
 {
   auto const start = ava::core::json::field_value_start(object, key);
@@ -61,91 +53,6 @@ std::optional<bool> bool_field(std::string_view object, std::string_view key)
   if (value.starts_with("false") && (value.size() == 5 || value[5] == ',' || value[5] == '}' || std::isspace(static_cast<unsigned char>(value[5])) != 0))
     return false;
   return std::nullopt;
-}
-
-ava::core::VoidResult write_branch_attachment(SessionStore const& created, ImageAttachmentRef const& metadata, std::string_view bytes)
-{
-  auto destination = resolve_attachment_storage_path(created, metadata.storage_path);
-  if (!destination)
-    return std::unexpected(std::move(destination.error()));
-
-  std::error_code mkdir_error;
-  std::filesystem::create_directories(destination->parent_path(), mkdir_error);
-  if (mkdir_error)
-  {
-    auto error = branch_error(ava::core::ErrorCategory::Io, "failed to create branch attachment directory");
-    error.with_context("path", destination->parent_path().string());
-    error.with_context("cause", mkdir_error.message());
-    return std::unexpected(std::move(error));
-  }
-  for (auto const& directory : {attachment_storage_root(created), destination->parent_path()})
-  {
-    std::error_code permissions_error;
-    std::filesystem::permissions(directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, permissions_error);
-    if (permissions_error)
-    {
-      auto error = branch_error(ava::core::ErrorCategory::Io, "failed to set branch attachment directory permissions");
-      error.with_context("path", directory.string());
-      error.with_context("cause", permissions_error.message());
-      return std::unexpected(std::move(error));
-    }
-  }
-
-  std::error_code status_error;
-  auto const status = std::filesystem::symlink_status(*destination, status_error);
-  if (!status_error && std::filesystem::exists(status))
-  {
-    if (std::filesystem::is_symlink(status))
-    {
-      auto error = branch_error(ava::core::ErrorCategory::PermissionDenied, "branch attachment path must not be a symlink");
-      error.with_context("path", destination->string());
-      return std::unexpected(std::move(error));
-    }
-    if (!std::filesystem::is_regular_file(status))
-    {
-      auto error = branch_error(ava::core::ErrorCategory::InvalidArgument, "branch attachment path is not a regular file");
-      error.with_context("path", destination->string());
-      return std::unexpected(std::move(error));
-    }
-  }
-  else if (status_error && status_error != std::errc::no_such_file_or_directory)
-  {
-    auto error = branch_error(ava::core::ErrorCategory::Io, "failed to inspect branch attachment path");
-    error.with_context("path", destination->string());
-    error.with_context("cause", status_error.message());
-    return std::unexpected(std::move(error));
-  }
-
-  std::ofstream file(*destination, std::ios::binary | std::ios::trunc);
-  if (!file)
-  {
-    auto error = branch_error(ava::core::ErrorCategory::Io, "failed to open branch attachment");
-    error.with_context("path", destination->string());
-    return std::unexpected(std::move(error));
-  }
-  file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  file.flush();
-  if (!file)
-  {
-    auto error = branch_error(ava::core::ErrorCategory::Io, "failed to write branch attachment");
-    error.with_context("path", destination->string());
-    return std::unexpected(std::move(error));
-  }
-  std::error_code file_permissions_error;
-  std::filesystem::permissions(*destination, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, std::filesystem::perm_options::replace,
-                               file_permissions_error);
-  if (file_permissions_error)
-  {
-    auto error = branch_error(ava::core::ErrorCategory::Io, "failed to set branch attachment file permissions");
-    error.with_context("path", destination->string());
-    error.with_context("cause", file_permissions_error.message());
-    return std::unexpected(std::move(error));
-  }
-
-  auto verified = load_image_attachment(created, metadata);
-  if (!verified)
-    return std::unexpected(std::move(verified.error()));
-  return {};
 }
 
 ava::core::VoidResult copy_branch_image_attachments(SessionStore const& source, SessionStore const& created, std::vector<SessionEntry> const& entries,
@@ -167,10 +74,7 @@ ava::core::VoidResult copy_branch_image_attachments(SessionStore const& source, 
                                          .storage_path = ava::core::json::string_field(attachment, "storage_path").value_or(""),
                                          .sha256 = ava::core::json::string_field(attachment, "sha256").value_or(""),
                                          .byte_size = byte_size > 0 ? static_cast<std::size_t>(byte_size) : 0};
-      auto loaded = load_image_attachment(source, metadata);
-      if (!loaded)
-        return std::unexpected(std::move(loaded.error()));
-      if (auto copied = write_branch_attachment(created, metadata, loaded->bytes); !copied)
+      if (auto copied = copy_image_attachment(source, created, metadata); !copied)
       {
         return std::unexpected(std::move(copied.error()));
       }
@@ -181,7 +85,7 @@ ava::core::VoidResult copy_branch_image_attachments(SessionStore const& source, 
 
 ava::core::VoidResult validate_required_text(std::string_view value, std::string_view field, std::size_t max_bytes, bool allow_summary_whitespace)
 {
-  bool const has_invalid_control = allow_summary_whitespace ? has_control_byte_except_summary_whitespace(value) : has_control_byte(value);
+  bool const has_invalid_control = allow_summary_whitespace ? has_control_byte_except_summary_whitespace(value) : ava::core::has_c0_or_del(value);
   if (value.empty() || value.size() > max_bytes || has_invalid_control)
   {
     auto error = branch_error(ava::core::ErrorCategory::InvalidArgument, "branch summary field is invalid");

@@ -1,5 +1,5 @@
 #pragma once
-
+#include "ava/debug/print_members_on.h"
 #include "ava/event/RuntimeEvent.h"
 #include "ava/app/command_catalog.h"
 #include "ava/app/runtime/Session.h"
@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,7 +44,10 @@ struct InteractiveResult
   std::vector<ava::core::NoLogString> output;
   std::vector<ava::agent::ToolTimelineEntry> tool_timeline;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 [[nodiscard]] ava::core::Result<std::optional<std::string>> edit_text_with_external_editor(std::string_view initial_text);

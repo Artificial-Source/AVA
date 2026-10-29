@@ -41,6 +41,10 @@ type Pending = {
 
 const encoder = new TextEncoder()
 
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(errorMessage(error))
+}
+
 function parseError(value: unknown): RpcErrorShape {
   const object = asObject(value) ?? {}
   return {
@@ -95,10 +99,6 @@ export class RpcSession {
     return this.#pending.size
   }
 
-  get failed(): Error | null {
-    return this.#failed
-  }
-
   request(type: string, payload: JsonObject = {}, idPrefix = 'req'): Promise<JsonObject> {
     if (this.#failed) {
       return Promise.reject(this.#failed)
@@ -123,7 +123,7 @@ export class RpcSession {
         this.#write(line)
       } catch (error) {
         this.#pending.delete(id)
-        this.fail(error instanceof Error ? error : new Error(errorMessage(error)))
+        this.fail(toError(error))
         reject(this.#failed ?? error)
       }
     })
@@ -138,7 +138,7 @@ export class RpcSession {
         this.#handleRecord(record)
       }
     } catch (error) {
-      this.fail(error instanceof Error ? error : new Error(errorMessage(error)))
+      this.fail(toError(error))
     }
   }
 
@@ -152,7 +152,7 @@ export class RpcSession {
         this.#handleRecord(last)
       }
     } catch (error) {
-      this.fail(error instanceof Error ? error : new Error(errorMessage(error)))
+      this.fail(toError(error))
       return
     }
     this.fail(new Error('AVA RPC stdout closed'))

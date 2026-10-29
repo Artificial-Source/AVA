@@ -1,5 +1,6 @@
 #pragma once
 #include "ava/http/transport.h"
+#include "ava/provider/parser_budget.h"
 #include "ava/provider/provider.h"
 #include "ava/core/NoLogString.h"
 
@@ -38,12 +39,11 @@ class OpenAICompatibleStreamParser final : public StreamParser
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> append(std::string_view chunk) override;
   [[nodiscard]] ava::core::Result<std::vector<StreamEvent>> finish() override;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+  // Framing buffers contain untrusted provider output.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  ava::core::NoLogString pending_line_;
-  ava::core::NoLogString data_;
-  std::size_t scan_offset_ = 0;
+  ProviderSseBuffer sse_;
   std::string reasoning_format_;
   std::string fallback_tool_call_prefix_;
   bool reasoning_open_ = false;

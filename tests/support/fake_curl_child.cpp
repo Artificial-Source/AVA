@@ -312,6 +312,16 @@ int main(int argc, char** argv)
     static_cast<void>(write_all(STDOUT_FILENO, "body\nAVA_HTTP_STATUS:20x"));
     return 0;
   }
+  if (url.find("/long-status-trailer") != std::string::npos)
+  {
+    static_cast<void>(write_all(STDOUT_FILENO, "body\nAVA_HTTP_STATUS:999999999999999999999999999999"));
+    return 0;
+  }
+  if (url.find("/empty-status-trailer") != std::string::npos)
+  {
+    static_cast<void>(write_all(STDOUT_FILENO, "body\nAVA_HTTP_STATUS:"));
+    return 0;
+  }
   if (url.find("/stream-mismatched-trailer") != std::string::npos)
   {
     write_response_head(STDERR_FILENO, 200, "OK");

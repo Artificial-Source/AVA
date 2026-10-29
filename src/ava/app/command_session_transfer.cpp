@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/app/command_format.h"
 #include "ava/app/command_session_support_internal.h"
 #include "ava/app/command_sessions.h"
@@ -9,11 +10,14 @@
 #include "ava/session/export.h"
 #include "ava/session/record.h"
 #include "ava/session/validation.h"
+#include "ava/core/UniqueFd.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
+#include "ava/core/string_utils.h"
+#include "ava/core/text_case.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -32,36 +36,8 @@
 
 namespace ava::app {
 using session_command_support::load_runtime_entries;
-using session_command_support::lower_ascii;
 
 namespace {
-
-std::function<void()> after_session_import_open_for_test;
-
-class ScopedImportFd
-{
- public:
-  explicit ScopedImportFd(int fd) noexcept : fd_(fd) { }
-  ScopedImportFd(ScopedImportFd const&) = delete;
-  ScopedImportFd& operator=(ScopedImportFd const&) = delete;
-  ~ScopedImportFd()
-  {
-    if (fd_ >= 0)
-      static_cast<void>(::close(fd_));
-  }
-
-  [[nodiscard]] int get() const noexcept { return fd_; }
-  [[nodiscard]] int close_checked() noexcept
-  {
-    if (fd_ < 0)
-      return 0;
-    int const fd = std::exchange(fd_, -1);
-    return ::close(fd) == 0 ? 0 : errno;
-  }
-
- private:
-  int fd_ = -1;
-};
 
 enum class ExportFormat
 {
@@ -74,6 +50,8 @@ struct ExportCommandArguments
 {
   ExportFormat format = ExportFormat::Markdown;
   std::string path;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct JsonlAttachmentSummary
@@ -81,6 +59,8 @@ struct JsonlAttachmentSummary
   std::size_t count = 0;
   std::string first_entry_id;
   std::string first_storage_path;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 std::string export_format_text(ExportFormat format)
@@ -97,38 +77,31 @@ std::string export_format_text(ExportFormat format)
   return "markdown";
 }
 
-std::string_view trim_ascii_view(std::string_view text)
-{
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0) text.remove_prefix(1);
-  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0) text.remove_suffix(1);
-  return text;
-}
-
 std::string_view first_token(std::string_view text)
 {
-  text = trim_ascii_view(text);
+  text = ava::core::trim_view(text);
   auto const end = text.find_first_of(" \t\r\n");
   return text.substr(0, end == std::string_view::npos ? text.size() : end);
 }
 
 std::string_view after_first_token(std::string_view text)
 {
-  text = trim_ascii_view(text);
+  text = ava::core::trim_view(text);
   auto const end = text.find_first_of(" \t\r\n");
   if (end == std::string_view::npos)
     return {};
-  return trim_ascii_view(text.substr(end + 1));
+  return ava::core::trim_view(text.substr(end + 1));
 }
 
 bool path_looks_html(std::string_view path)
 {
-  auto const lowered = lower_ascii(path);
+  auto const lowered = ava::core::locale_lower_copy(path);
   return lowered.ends_with(".html") || lowered.ends_with(".htm");
 }
 
 bool path_looks_jsonl(std::string_view path)
 {
-  auto const lowered = lower_ascii(path);
+  auto const lowered = ava::core::locale_lower_copy(path);
   return lowered.ends_with(".jsonl");
 }
 
@@ -205,12 +178,12 @@ ava::core::Error unsupported_pi_session_import_error(std::filesystem::path const
 
 ava::core::Result<ExportCommandArguments> parse_export_command_arguments(std::string_view argument)
 {
-  argument = trim_ascii_view(argument);
+  argument = ava::core::trim_view(argument);
   ExportCommandArguments parsed;
   if (argument.empty())
     return parsed;
 
-  auto const token = lower_ascii(first_token(argument));
+  auto const token = ava::core::locale_lower_copy(first_token(argument));
   if (token == "markdown" || token == "md")
   {
     parsed.format = ExportFormat::Markdown;
@@ -231,7 +204,7 @@ ava::core::Result<ExportCommandArguments> parse_export_command_arguments(std::st
   }
   if (token == "--format")
   {
-    auto const format_token = lower_ascii(first_token(after_first_token(argument)));
+    auto const format_token = ava::core::locale_lower_copy(first_token(after_first_token(argument)));
     if (format_token == "markdown" || format_token == "md")
     {
       parsed.format = ExportFormat::Markdown;
@@ -281,9 +254,12 @@ void attach_created_session_cleanup_context(ava::session::SessionStore const& st
   }
 }
 
-ava::core::Result<std::vector<ava::session::SessionEntry>> load_import_session_entries(std::filesystem::path const& path)
+}  // namespace
+
+ava::core::Result<std::vector<ava::session::SessionEntry>> load_import_session_entries(std::filesystem::path const& path,
+                                                                                       std::function<void()> const& after_open_for_test)
 {
-  ScopedImportFd file(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
+  ava::core::UniqueFd file(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
   if (file.get() < 0)
   {
     int const error_number = errno;
@@ -318,12 +294,11 @@ ava::core::Result<std::vector<ava::session::SessionEntry>> load_import_session_e
     return std::unexpected(std::move(error));
   }
 
-  if (after_session_import_open_for_test)
+  if (after_open_for_test)
   {
     try
     {
-      auto hook = after_session_import_open_for_test;
-      hook();
+      after_open_for_test();
     }
     catch (...)
     {
@@ -337,11 +312,8 @@ ava::core::Result<std::vector<ava::session::SessionEntry>> load_import_session_e
   std::size_t offset = 0;
   while (offset < bytes.size())
   {
-    ssize_t count = 0;
-    do
-    {
-      count = ::pread(file.get(), bytes.data() + offset, bytes.size() - offset, static_cast<off_t>(offset));
-    } while (count < 0 && errno == EINTR);
+    auto const count =
+        ava::core::restart_on_eintr([&] { return ::pread(file.get(), bytes.data() + offset, bytes.size() - offset, static_cast<off_t>(offset)); });
     if (count <= 0)
     {
       auto error = ava::core::Error(ava::core::ErrorCategory::Io, "failed while reading opened session import file");
@@ -350,6 +322,8 @@ ava::core::Result<std::vector<ava::session::SessionEntry>> load_import_session_e
     }
     offset += static_cast<std::size_t>(count);
   }
+  // Linux releases the fd even on EINTR; UniqueFd treats that as complete and
+  // never retries close, which could otherwise close a concurrently reused fd.
   int const close_error = file.close_checked();
   if (close_error != 0)
   {
@@ -432,13 +406,6 @@ ava::core::Result<std::vector<ava::session::SessionEntry>> load_import_session_e
   if (auto attachments = validate_jsonl_import_attachments(entries, path); !attachments)
     return std::unexpected(std::move(attachments.error()));
   return entries;
-}
-
-}  // namespace
-
-void set_after_session_import_open_for_test(std::function<void()> hook)
-{
-  after_session_import_open_for_test = std::move(hook);
 }
 
 ava::core::Result<CommandResult> run_import_command(runtime::session_ts& unlocked_session, std::string_view argument)

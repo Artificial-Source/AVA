@@ -140,7 +140,10 @@ ava::core::VoidResult AgentTurnExecutor::initialize_tools()
   {
     try
     {
-      dispatcher_storage_.emplace(tool_context, dispatch_services, options_.tool_visibility);
+      auto dispatcher = ToolDispatcher::create_strict(tool_context, dispatch_services, options_.tool_visibility);
+      if (!dispatcher)
+        return std::unexpected(std::move(dispatcher.error()));
+      dispatcher_storage_.emplace(std::move(*dispatcher));
     }
     catch (...)
     {
@@ -151,7 +154,10 @@ ava::core::VoidResult AgentTurnExecutor::initialize_tools()
       auto observation = std::move(tool_context.observation);
       tool_context.trace_context = {};
       observation->account_external_failure();
-      dispatcher_storage_.emplace(tool_context, dispatch_services, options_.tool_visibility);
+      auto dispatcher = ToolDispatcher::create_strict(tool_context, dispatch_services, options_.tool_visibility);
+      if (!dispatcher)
+        return std::unexpected(std::move(dispatcher.error()));
+      dispatcher_storage_.emplace(std::move(*dispatcher));
     }
   }
   return {};

@@ -15,7 +15,7 @@ For the community entry point and project policies, see the root [`CONTRIBUTING.
 - JSON-capable Universal Ctags when debug/libcwd print-member generation is enabled.
 - `clang-format` version 22 or newer.
 - `clang-tidy` when touching core logic or safety-sensitive paths.
-- Optional `sccache` or `ccache` for faster repeated compilation.
+- Optional `ccache` or `sccache` for faster repeated compilation.
 - Internet access to `github.com` is required during configuration when pinned sources are not already present.
 
 ## Cloning the repository
@@ -75,7 +75,21 @@ Use the repository build/test wrappers after either direct configuration. Do not
 
 The repository build and test runners detect the available logical cores and pass an explicit positive parallel level to CMake/CTest. Use `--jobs N`, `CMAKE_BUILD_PARALLEL_LEVEL=N`, or `CTEST_PARALLEL_LEVEL=N` to cap it; build options such as `--target` and CTest options such as `-R` are forwarded. The runners share one build-tree lock because concurrent builds/tests and several fixed integration-test roots are unsafe. Sanitizer examples use two jobs to limit memory pressure.
 
-Parallel jobs speed clean builds; a compiler cache speeds repeated builds. To enable an installed cache, configure once with `cmake --preset dev -DCMAKE_CXX_COMPILER_LAUNCHER=sccache` (or replace `sccache` with `ccache`). Use the same option with the sanitizer preset if desired; compiler flags keep those cache entries separate.
+Parallel jobs speed clean builds; a compiler cache speeds repeated builds. To enable an installed cache, configure once with `cmake --preset dev -DCMAKE_CXX_COMPILER_LAUNCHER=ccache` (or `sccache`). Compiler flags keep sanitizer and ordinary cache entries separate. The pinned AICxx configuration also selects `ccache` when `CCACHE_DIR` is set; in that mode an installed `ccache` is required and takes precedence over a different launcher. Leave `CCACHE_DIR` unset when selecting `sccache`.
+
+For repeated developer builds with ccache:
+
+```sh
+export CCACHE_DIR="${CCACHE_DIR:-$HOME/.cache/ava/ccache}"
+mkdir -p "$CCACHE_DIR"
+cmake --preset dev -G Ninja
+ccache -z
+scripts/build.sh --build-dir build --jobs 6
+ccache -s
+scripts/run-tests.sh --build-dir build --jobs 6
+```
+
+Keep ccache's strict defaults: do not enable sloppiness or disable compiler/header checks. `ccache -s` distinguishes cold compiles from direct/preprocessed hits; a cold object cache still compiles every translation unit. Reusing compiler objects does not reduce configure, no-op, or test execution time and does not change assertions, instrumentation, test selection, or timeouts. To measure an uncached baseline in the same configured tree, run the build with `CCACHE_DISABLE=1`. To remove the launcher entirely, unset `CCACHE_DIR` and reconfigure with `-DCMAKE_CXX_COMPILER_LAUNCHER=`.
 
 Tests currently build into `tests/ava_tests`, registered as focused `ava_tests.<suite>` CTests from sources under `tests/`. LSP coverage uses the `ava_fake_lsp_server` support executable.
 
@@ -90,7 +104,7 @@ Tests currently build into `tests/ava_tests`, registered as focused `ava_tests.<
 | AArch64 | Not qualified for the first publication | No native exact-candidate evidence in the frozen audit |
 | Multi-config generators | Not release-qualified | Configuration/output/package selection is not proven configuration-safe |
 
-Only Linux x64 is targeted for the first official publication, and dirty working trees are always unqualified. The audited x64 artifact requires BMI2, `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.13`, `libncursesw.so.6`, `libtinfo.so.6`, and `curl`; publication still requires minimum-host smoke of the exact retained bytes. See [build configuration](../operations/build-configuration.md) and the [release-readiness ledger](../product/release-readiness.md).
+Only Linux x64 is targeted for the first official publication, and dirty working trees are always unqualified. Candidate builds target **x86-64-v2 (no BMI2/AVX)** with Ubuntu 24.04/glibc 2.39 as the minimum host, libstdc++ exposing `GLIBCXX_3.4.32`/`CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), terminfo, and `curl` 8.5+. Inspection caps binary symbol requirements at `GLIBC_2.38`, `GLIBCXX_3.4.32`, and `CXXABI_1.3.13`; publication still requires minimum-host smoke of the exact retained bytes. See [build configuration](../operations/build-configuration.md) and the [release-readiness ledger](../product/release-readiness.md).
 
 ## Configuration
 

@@ -8,6 +8,7 @@
 #include "ava/http/transport.h"
 #include "ava/app/command_jobs.h"
 #include "ava/agent/agent_loop.h"
+#include "ava/mcp/config.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/session_store.h"
 #include "ava/session/validation.h"
@@ -1495,4 +1496,76 @@ void test_agent_loop_custom_subagent_definition_controls_prompt_and_tools()
                transport.requests()[1].body.find("\"name\":\"task\"") == std::string::npos,
            "read-only custom subagents hide mutation, shell, and recursive task tools");
   }
+}
+
+void test_agent_loop_read_only_child_never_widens_parent_allowlist()
+{
+  for (bool const exact : {false, true})
+  {
+    for (bool const read_alias : {false, true})
+    {
+      agent_loop_test::AgentLoopFixture fixture(read_alias ? "child-read-alias" : "child-empty-tool-intersection");
+      auto options = fixture.options();
+      options.tool_visibility.included_tools = {"task", read_alias ? "read" : "write_file"};
+      if (exact)
+      {
+        options.tool_resources.exact_builtin_tool_names = std::vector<std::string>{"task", "read_file", "write_file"};
+        options.tool_resources.session_mcp_config = std::make_shared<ava::mcp::McpConfig const>();
+      }
+      ava::agent::AgentLoop loop(std::move(options));
+      ava::tests::FakeTransport transport({
+          sse_response(tool_call_sse("parent_task", "task", R"({"description":"read only","prompt":"Inspect only.","subagent_type":"explore"})") +
+                       "data: [DONE]\n\n"),
+          sse_response(tool_call_sse("child_write", "write_file", R"({"path":"forbidden.txt","content":"must not be written"})") + "data: [DONE]\n\n"),
+          sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"child done\"}\n\ndata: [DONE]\n\n"),
+          sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent done\"}\n\ndata: [DONE]\n\n"),
+      });
+      auto result = loop.run_turn("delegate", fixture.store, fixture.provider, transport);
+      if (!ava::tests::require(result && result->final_text == "parent done" && transport.requests().size() == 4,
+                               "read-only child completes its rejected mutation round"))
+        continue;
+      auto const& child_request = transport.requests()[1].body;
+      expect(child_request.find("\"name\":\"write_file\"") == std::string::npos && child_request.find("\"name\":\"bash\"") == std::string::npos &&
+                 (child_request.find("\"name\":\"read_file\"") != std::string::npos) == read_alias &&
+                 !std::filesystem::exists(fixture.workspace / "forbidden.txt"),
+             "read-only child preserves aliases, fails closed on an empty intersection, and cannot dispatch an unadvertised write");
+    }
+  }
+}
+
+void test_agent_loop_foreground_child_preserves_execution_cancellation()
+{
+  agent_loop_test::AgentLoopFixture fixture("foreground-execution-cancel");
+  auto created = ava::agent::SubagentCoordinator::create();
+  if (!ava::tests::require(created.has_value(), "foreground cancellation fixture creates a coordinator"))
+    return;
+  auto coordinator = *created;
+  auto state = std::make_shared<agent_loop_test::BlockingSequenceTransport::State>();
+  std::atomic_bool tool_canceled = false;
+  auto options = fixture.options();
+  options.subagent_coordinator = coordinator;
+  options.cancel_requested = [] { return false; };
+  options.tool_execution.cancel_requested = [&] { return tool_canceled.load(); };
+  options.background_provider_factory = []() -> ava::core::Result<std::unique_ptr<ava::provider::Provider>> {
+    return std::make_unique<ava::provider::OpenAIProvider>("https://api.example.test");
+  };
+  options.background_transport_factory = [state]() -> ava::core::Result<std::unique_ptr<ava::http::Transport>> {
+    return std::make_unique<agent_loop_test::BlockingSequenceTransport>(
+        state,
+        std::vector<ava::http::HttpResponse>{sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"released child\"}\n\ndata: [DONE]\n\n")});
+  };
+  ava::agent::AgentLoop loop(std::move(options));
+  ava::tests::FakeTransport transport({
+      sse_response(tool_call_sse("parent_task", "task", R"({"description":"cancel child","prompt":"Wait.","subagent_type":"general"})") + "data: [DONE]\n\n"),
+      sse_response("data: {\"type\":\"response.output_text.delta\",\"delta\":\"parent done\"}\n\ndata: [DONE]\n\n"),
+  });
+  auto running = std::async(std::launch::async, [&] { return loop.run_turn("delegate", fixture.store, fixture.provider, transport); });
+  expect(state->wait_for_requests(1, std::chrono::seconds(5)), "foreground child reaches its blocking provider request");
+  tool_canceled = true;
+  bool const observed = state->wait_for_cancel(std::chrono::seconds(5));
+  state->release_success();
+  auto result = running.get();
+  auto const jobs = coordinator->list(fixture.store.options_session_id_copy());
+  expect(observed && result && jobs.size() == 1 && jobs.front().job.execution == ava::agent::SubagentExecutionState::Canceled,
+         "foreground waiting forwards the tool-execution cancellation route even when the provider callback remains uncanceled");
 }

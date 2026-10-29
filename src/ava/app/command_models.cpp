@@ -291,7 +291,6 @@ std::string format_providers_text(runtime::session_ts const& unlocked_session, a
   auto const paths = session_r->paths();
   auto const catalog = catalog_for(session_r);
   CRITICAL_AREA_END_R(session);
-  auto const provider_registry = ava::provider::builtin_provider_registry();
   std::string output = "Providers:\n";
   if (!query.empty())
     output += "filter " + sanitize_inline_text(std::string(query)) + "\n";

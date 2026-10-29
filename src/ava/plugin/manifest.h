@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
@@ -107,6 +108,8 @@ struct DiscoveredPlugin
   AVA_DEBUG_PRINT_MEMBERS_ON
 };
 
+// Accepts bounded strict JSON with unique keys and NUL-free process arguments.
+// If present, contributes must be an object; omission declares no contributions.
 [[nodiscard]] ava::core::Result<PluginManifest> parse_plugin_manifest(std::string_view json, std::filesystem::path manifest_path = {});
 [[nodiscard]] ava::core::Result<PluginManifest> load_plugin_manifest(std::filesystem::path const& manifest_path);
 [[nodiscard]] bool plugin_has_capability(PluginManifest const& manifest, std::string_view capability);

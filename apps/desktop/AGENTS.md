@@ -11,8 +11,8 @@ Optional, independent Electron + React client. Carlo owns the TUI. Do not change
 
 ## Layout
 
-- `src/shared/`: pure JSONL, RPC, IPC validation, resolvers, transcript reducer. Testable without Electron.
-- `src/main/`: window, CSP, spawn, trusted launch env (`AVA_DESKTOP_BINARY`, `AVA_DESKTOP_WORKSPACE`).
+- `src/shared/`: pure JSONL, RPC, IPC validation, resolvers, transcript reducer, CSP strings. Testable without Electron.
+- `src/main/`: window, CSP enforcement, spawn, trusted launch env (`AVA_DESKTOP_BINARY`, `AVA_DESKTOP_WORKSPACE`).
 - `src/preload/`: bundled CommonJS `contextBridge` only.
 - `src/renderer/`: calm React UI.
 

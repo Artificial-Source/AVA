@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.27...4.3.4)
 
 project(ava
-  VERSION 1.0.0
+  VERSION 0.32.0
   LANGUAGES CXX
-  DESCRIPTION "OpenAI-first C++23 terminal coding agent with an ncursesw TUI"
+  DESCRIPTION "Local-first coding agent written in C++23 that works with any LLM"
 )
 
 include(GNUInstallDirs)
@@ -123,6 +123,11 @@ function(ava_apply_warnings target)
     target_compile_options(${target} PRIVATE /W4 /WX)
   else()
     target_compile_options(${target} PRIVATE -Wall -Werror -Wextra -Wpedantic -Wundef)
+    target_compile_options(${target} PRIVATE
+      -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough
+      -Wformat=2 -Wsign-compare
+      $<$<CXX_COMPILER_ID:GNU>:-Wduplicated-cond>
+    )
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 17)
       # Keep GCC's optimizer-driven maybe-uninitialized diagnostics visible, but
       # do not promote them to errors for GCC 13.x through 16.x. Those releases can report false
@@ -177,6 +182,29 @@ if(AVA_ENABLE_TSAN AND NOT MSVC)
   add_link_options(-fsanitize=thread)
 endif()
 
+# Official Linux x64 host artifacts use one explicit ISA, never the build CPU.
+# AVA does not consume ai-utils/deposit_extract.h (its scalar branch currently
+# has unguarded BMI2 helpers). Disable the optional probe, without changing pins.
+option(AVA_RELEASE_ARTIFACT "Enforce the Linux x64 release artifact configuration" OFF)
+if(AVA_RELEASE_ARTIFACT)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+     NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" OR
+     NOT CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_CONFIGURATION_TYPES OR CMAKE_CROSSCOMPILING)
+    message(FATAL_ERROR "AVA_RELEASE_ARTIFACT requires single-config native Linux x64 Release")
+  endif()
+  if(AVA_ENABLE_GITACHE OR OptionEnableLibcwd OR OptionEnableAvaSanitizers OR AVA_ENABLE_TSAN)
+    message(FATAL_ERROR "Release artifacts require gitache, libcwd and sanitizers OFF")
+  endif()
+  # Nehalem tuning also avoids GCC's BMI-compatible REP-BSF/TZCNT aliases,
+  # allowing instruction inspection to reject every BMI mnemonic outright.
+  add_compile_options(-march=x86-64-v2 -mtune=nehalem -mno-bmi2)
+  set(CW_BMI2_SUPPORT 0 CACHE INTERNAL "BMI2 is outside the artifact CPU floor" FORCE)
+  execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE AVA_RELEASE_SOURCE_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE
+    COMMAND_ERROR_IS_FATAL ANY)
+  file(WRITE "${CMAKE_BINARY_DIR}/release-source-revision" "${AVA_RELEASE_SOURCE_REVISION}\n")
+endif()
+
 # ai-utils probes x86 BMI2 by compiling and running GCC x86 builtins. Those
 # builtins do not exist on non-x86 targets, where a failed probe must mean
 # "unsupported" rather than aborting configuration.
@@ -188,6 +216,16 @@ unset(_ava_system_processor)
 
 # Declare aicxx submodules.
 include(AICxxSubmodules)
+
+if(AVA_RELEASE_ARTIFACT)
+  # cwds enables its RDTSCP microbenchmark whenever assembly compiles, not
+  # when the target ISA guarantees it. AVA never uses that optional API.
+  # Keep unused benchmark code out of the artifact without changing the pin.
+  get_target_property(_ava_cwds_sources cwds_ObjLib SOURCES)
+  list(FILTER _ava_cwds_sources EXCLUDE REGEX "(^|/)benchmark\\.(cxx|h)$")
+  set_property(TARGET cwds_ObjLib PROPERTY SOURCES "${_ava_cwds_sources}")
+  unset(_ava_cwds_sources)
+endif()
 
 # libcwd publishes libdw/libelf as interface dependencies rather than recording
 # them as NEEDED entries. Linux toolchains that default to --as-needed can then

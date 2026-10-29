@@ -133,6 +133,7 @@ class CapturingSequenceTransport final : public ava::http::Transport
  public:
   CapturingSequenceTransport(std::shared_ptr<CapturingSequenceState> state, std::vector<ava::http::HttpResponse> responses);
 
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override;
 
  private:

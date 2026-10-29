@@ -72,6 +72,15 @@ void test_acp_service_gating_reinitialize_and_negotiation()
   expect(!again && again.error().code == -32600, "ACP initialize remains single-shot");
   auto unknown = service.handle_request(Request{.id = std::int64_t(3), .method = "unknown", .params_json = std::string("{}")}, {});
   expect(!unknown && unknown.error().code == -32601, "ACP initialized service returns method-not-found for unadvertised operations");
+  for (auto const& raw : {
+           std::string(R"({"_meta":1,"_meta":2})"),
+           std::string(kMaxRecordBytes, ' ') + "{}",
+           std::string(R"({"_meta":)") + std::string(kMaxNestingDepth, '[') + "0" + std::string(kMaxNestingDepth, ']') + "}",
+       })
+  {
+    auto rejected = service.handle_request(Request{.id = std::int64_t(4), .method = "session/list", .params_json = raw}, {});
+    expect(!rejected && rejected.error().code == -32602, "direct service params decoding enforces ACP bytes, depth and duplicate keys");
+  }
 }
 
 void test_acp_service_mutating_request_terminal_commits()
@@ -1003,6 +1012,77 @@ void test_acp_session_list_pagination_and_snapshot_bounds()
                          {{"oldest evicted", !byte_evicted && byte_evicted.error().code == -32602},
                           {"second snapshot retained at exact aggregate budget", byte_retained.has_value()},
                           {"newest retained", byte_newest.has_value()}});
+
+  auto append_listing_record = [&](std::filesystem::path const& bucket, std::string timestamp, std::string data) {
+    auto store = ava::session::SessionStore::create(bucket, paths.sessions_dir);
+    if (!store)
+      return false;
+    return append_session_entry_for_test(*store, ava::session::SessionEntry{.id = ava::core::make_id("entry"),
+                                                                            .parent_id = "",
+                                                                            .type = ava::session::EntryType::SessionStart,
+                                                                            .timestamp = std::move(timestamp),
+                                                                            .data_json = std::move(data)})
+        .has_value();
+  };
+  auto const oversized_cwd = "/" + std::string(kMaxSessionListResultBytes, 'x');
+  if (!ava::tests::require(append_listing_record(workspace, "2000-01-01T00:00:00Z", "{\"original_cwd\":\"" + oversized_cwd + "\"}"),
+                           "oversized continuation fixture persists a bounded session record"))
+    return;
+  auto check_failed_continuation = [&]() {
+    auto initial = service.handle_request(Request{.id = std::int64_t(300), .method = "session/list", .params_json = "{}"}, {});
+    auto token = initial ? ava::core::json::string_field(*initial, "nextCursor") : std::nullopt;
+    if (!ava::tests::require(token.has_value(), "oversized continuation starts with a valid first page"))
+      return std::string{};
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+      auto rejected = read_cursor(service, *token);
+      expect(!rejected && rejected.error().message.find("page exceeds bounded result size") != std::string::npos,
+             "failed continuation serialization budget neither advances nor erases its cursor");
+    }
+    return *token;
+  };
+  static_cast<void>(check_failed_continuation());  // Failure on a final page must not erase it.
+  for (std::size_t index = 0; index < kSessionListPageSize; ++index)
+    if (!ava::tests::require(append_listing_record(workspace, "1900-01-01T00:00:00Z", "{}"), "middle-page fixture appends an older session"))
+      return;
+  auto protected_cursor = check_failed_continuation();  // Failure with more pages must not advance it.
+  if (!ava::tests::require(append_listing_record(workspace, "2030-01-01T00:00:00Z", "{\"original_cwd\":\"" + oversized_cwd + "\"}"),
+                           "first-page failure fixture is persisted"))
+    return;
+  for (std::size_t index = 0; index <= kMaxSessionListSnapshots; ++index)
+  {
+    auto rejected = service.handle_request(Request{.id = std::int64_t(301), .method = "session/list", .params_json = "{}"}, {});
+    expect(!rejected && rejected.error().message.find("page exceeds bounded result size") != std::string::npos,
+           "an oversized first page is rejected before publishing a cursor");
+  }
+  auto still_retained = read_cursor(service, protected_cursor);
+  expect(!still_retained && still_retained.error().message.find("page exceeds bounded result size") != std::string::npos,
+         "rejected first pages do not evict already published snapshots");
+
+  auto const invalid_utf8_root = root / (std::string("invalid-utf8-") + static_cast<char>(0xff));
+  std::filesystem::create_directories(invalid_utf8_root);
+  for (std::size_t index = 0; index < kSessionListPageSize; ++index)
+    if (!ava::tests::require(
+            append_listing_record(invalid_utf8_root, "2026-01-01T00:00:00Z", "{\"original_cwd\":\"" + ava::core::json::escape(workspace.string()) + "\"}"),
+            "UTF-8 continuation fixture persists a safe first page"))
+      return;
+  if (!ava::tests::require(append_listing_record(invalid_utf8_root, "2000-01-01T00:00:00Z", "{}"), "UTF-8 continuation uses legacy cwd fallback"))
+    return;
+  AcpSessionOptions invalid_options;
+  invalid_options.launch_root = invalid_utf8_root;
+  invalid_options.paths = paths;
+  AcpSessionRegistry invalid_registry(std::move(invalid_options));
+  auto initial_utf8 = invalid_registry.list_json(std::nullopt, std::nullopt);
+  auto utf8_cursor = initial_utf8 ? ava::core::json::string_field(*initial_utf8, "nextCursor") : std::nullopt;
+  if (ava::tests::require(utf8_cursor.has_value(), "UTF-8 failure fixture publishes the safe first page"))
+  {
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+      auto rejected = invalid_registry.list_json(std::nullopt, utf8_cursor);
+      expect(!rejected && rejected.error().message().find("invalid UTF-8") != std::string::npos,
+             "strict serialization exceptions are contained and leave the final-page cursor reusable");
+    }
+  }
 
   service.shutdown();
 }

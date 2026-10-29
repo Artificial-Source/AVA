@@ -3,10 +3,10 @@
 #include "ava/provider/anthropic_provider.h"
 #include "ava/provider/anthropic_request.h"
 #include "ava/provider/provider_utils.h"
+#include "ava/core/environment_value.h"
 #include "ava/core/json.h"
 
 #include <cstddef>
-#include <cstdlib>
 #include <map>
 #include <optional>
 #include <string_view>
@@ -29,8 +29,8 @@ struct PendingToolUse
 
 std::string configured_base_url()
 {
-  if (char const* value = std::getenv("ANTHROPIC_BASE_URL"); value && value[0] != '\0')
-    return value;
+  if (auto value = ava::core::nonempty_environment_value("ANTHROPIC_BASE_URL"))
+    return std::move(*value);
   return std::string(kDefaultAnthropicBaseUrl);
 }
 
@@ -546,12 +546,6 @@ ava::core::Result<ava::http::HttpRequest> build_anthropic_http_request(Anthropic
                                 .follow_redirects = false,
                                 .include_response_headers = false,
                                 .resolve_hosts = {}};
-}
-
-ava::core::Result<ava::http::HttpRequest> build_anthropic_http_request(std::string const& base_url, ProviderRequest const& request,
-                                                                       std::string_view access_token)
-{
-  return build_anthropic_http_request(AnthropicProviderOptions{.base_url = base_url}, request, access_token);
 }
 
 }  // namespace ava::provider

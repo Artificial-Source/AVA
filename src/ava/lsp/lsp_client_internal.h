@@ -25,11 +25,12 @@ ssize_t write_retry(int fd, char const* data, std::size_t size);
 bool path_is_within(std::filesystem::path const& candidate, std::filesystem::path const& root);
 std::string file_uri(std::filesystem::path const& path, std::filesystem::path const& workspace_root);
 std::string json_string(std::string_view value);
-ava::core::Result<std::vector<Diagnostic>> parse_diagnostics_response(std::string_view response, ServerConfig const& config, std::filesystem::path const& path);
-ava::core::Result<bool> parse_pull_diagnostics_capability(std::string_view response, ServerConfig const& config);
-ava::core::Result<std::vector<Symbol>> parse_document_symbols_response(std::string_view response, ServerConfig const& config,
-                                                                       std::filesystem::path const& path);
-ava::core::Result<std::vector<Symbol>> parse_workspace_symbols_response(std::string_view response, ServerConfig const& config);
-ava::core::Result<std::vector<Location>> parse_definition_response(std::string_view response, ServerConfig const& config);
+[[nodiscard]] ava::core::Result<std::vector<Diagnostic>> parse_diagnostics_response(std::string_view response, ServerConfig const& config,
+                                                                                    std::filesystem::path const& path);
+[[nodiscard]] ava::core::Result<bool> parse_pull_diagnostics_capability(std::string_view response, ServerConfig const& config);
+[[nodiscard]] ava::core::Result<std::vector<Symbol>> parse_document_symbols_response(std::string_view response, ServerConfig const& config,
+                                                                                     std::filesystem::path const& path);
+[[nodiscard]] ava::core::Result<std::vector<Symbol>> parse_workspace_symbols_response(std::string_view response, ServerConfig const& config);
+[[nodiscard]] ava::core::Result<std::vector<Location>> parse_definition_response(std::string_view response, ServerConfig const& config);
 
 }  // namespace ava::lsp::lsp_client_internal

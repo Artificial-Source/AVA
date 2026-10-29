@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "ava/app/acp/protocol.h"
 #include "ava/app/acp/session_update.h"
+#include "ava/core/ascii.h"
+#include "ava/core/strict_json.h"
 
 #include <algorithm>
 #include <cctype>
@@ -28,17 +30,9 @@ bool path_is_within(std::filesystem::path const& root, std::filesystem::path con
   return true;
 }
 
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7f;
-  });
-}
-
 std::optional<std::filesystem::path> safe_absolute_location(std::filesystem::path const& root, std::string_view value)
 {
-  if (value.empty() || value.size() > 4096 || has_control_byte(value))
+  if (value.empty() || value.size() > 4096 || ava::core::has_c0_or_del(value))
     return std::nullopt;
   auto path = std::filesystem::path(value);
   if (path.is_relative())
@@ -113,7 +107,8 @@ std::vector<AcpToolCallLocation> event_locations(ava::event::ToolPayload const& 
     add(path);
   }
 
-  if (locations.empty() && !event.args_json.empty())
+  if (locations.empty() && !event.args_json.empty() && event.args_json.size() <= kMaxRecordBytes &&
+      ava::core::validate_strict_json(event.args_json, kMaxNestingDepth) == ava::core::StrictJsonStatus::Valid)
   {
     auto arguments = Json::parse(event.args_json, nullptr, false, true);
     if (arguments.is_object())
@@ -214,7 +209,7 @@ ava::core::Result<std::optional<SessionUpdate>> RuntimeSessionUpdateMapper::map(
         }
         else if constexpr (std::same_as<Event, ava::event::ToolStartEvent>)
         {
-          if (payload.call_id.empty() || payload.call_id.size() > kMaxStringBytes || has_control_byte(payload.call_id))
+          if (payload.call_id.empty() || payload.call_id.size() > kMaxStringBytes || ava::core::has_c0_or_del(payload.call_id))
             return std::optional<SessionUpdate>{};
           auto locations = event_locations(payload, options_.workspace_root);
           return std::optional<SessionUpdate>(
@@ -228,7 +223,7 @@ ava::core::Result<std::optional<SessionUpdate>> RuntimeSessionUpdateMapper::map(
         }
         else if constexpr (std::same_as<Event, ava::event::ToolProgressEvent>)
         {
-          if (payload.call_id.empty() || payload.call_id.size() > kMaxStringBytes || has_control_byte(payload.call_id))
+          if (payload.call_id.empty() || payload.call_id.size() > kMaxStringBytes || ava::core::has_c0_or_del(payload.call_id))
             return std::optional<SessionUpdate>{};
           return std::optional<SessionUpdate>(AcpToolCallUpdate{.initial = false,
                                                                 .tool_call_id = payload.call_id,
@@ -240,7 +235,7 @@ ava::core::Result<std::optional<SessionUpdate>> RuntimeSessionUpdateMapper::map(
         }
         else if constexpr (std::same_as<Event, ava::event::ToolResultEvent>)
         {
-          if (payload.call_id.empty() || payload.call_id.size() > kMaxStringBytes || has_control_byte(payload.call_id))
+          if (payload.call_id.empty() || payload.call_id.size() > kMaxStringBytes || ava::core::has_c0_or_del(payload.call_id))
             return std::optional<SessionUpdate>{};
           auto locations = event_locations(payload, options_.workspace_root);
           auto const success = payload.status == "success";

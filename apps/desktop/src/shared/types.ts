@@ -52,6 +52,7 @@ export type PermissionPromptView = {
   reason: string
   risk: string
   diffPreview: string
+  diffTruncated: boolean
 }
 
 export type QuestionPromptView = {
@@ -79,6 +80,11 @@ export type UserFacingError = {
   hint: string
 }
 
+export type ActionFailure = { ok: false; error: UserFacingError }
+
+// Result of every desktop IPC action except getSnapshot.
+export type ActionResult = { ok: true } | ActionFailure
+
 export type HostSnapshot = {
   connection: ConnectionStatus
   connectionError: UserFacingError | null
@@ -94,6 +100,30 @@ export type HostSnapshot = {
   canceling: boolean
   pendingPermission: PermissionPromptView | null
   pendingQuestion: QuestionPromptView | null
+}
+
+export function emptyHostSnapshot(
+  connection: ConnectionStatus,
+  connectionError: UserFacingError | null,
+  binaryPath = '',
+  workspace = ''
+): HostSnapshot {
+  return {
+    connection,
+    connectionError,
+    lastActionError: null,
+    protocol: null,
+    state: null,
+    binaryPath,
+    workspace,
+    sessions: [],
+    models: [],
+    items: [],
+    busy: false,
+    canceling: false,
+    pendingPermission: null,
+    pendingQuestion: null
+  }
 }
 
 export type QuestionReplyInput = {

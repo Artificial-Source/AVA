@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/diagnostics/safe_failure.h"
 #include "ava/plugin/discovery.h"
 #include "ava/core/NoLogString.h"

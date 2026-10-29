@@ -32,9 +32,6 @@ constexpr std::size_t kMaxStrictJsonDepth = 8;
                                           std::string_view operation = {});
 [[nodiscard]] std::string errno_message();
 
-[[nodiscard]] bool has_control_byte(std::string_view value) noexcept;
-[[nodiscard]] bool is_hex_digit(char ch) noexcept;
-[[nodiscard]] int hex_value(char ch) noexcept;
 [[nodiscard]] bool has_encoded_separator_or_dot_ambiguity(std::string_view value) noexcept;
 [[nodiscard]] bool is_valid_provider_id(std::string_view id) noexcept;
 [[nodiscard]] bool is_valid_shell_env_name(std::string_view name) noexcept;

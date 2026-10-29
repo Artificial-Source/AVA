@@ -377,7 +377,7 @@ void SubagentSteeringQueue::close()
   queued_bytes_ = 0;
 }
 
-SubagentInteractionGate::SubagentInteractionGate(SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver,
+SubagentInteractionGate::SubagentInteractionGate(ConstructionKey, SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver,
                                                  QuestionResolver question_resolver)
     : mode_(mode),
       permission_resolver_(mode == SubagentJobMode::Foreground ? std::move(permission_resolver) : nullptr),
@@ -388,7 +388,7 @@ SubagentInteractionGate::SubagentInteractionGate(SubagentJobMode mode, ava::perm
 std::shared_ptr<SubagentInteractionGate> SubagentInteractionGate::create(SubagentJobMode mode, ava::permissions::PermissionResolver permission_resolver,
                                                                          QuestionResolver question_resolver)
 {
-  return std::shared_ptr<SubagentInteractionGate>(new SubagentInteractionGate(mode, std::move(permission_resolver), std::move(question_resolver)));
+  return std::make_shared<SubagentInteractionGate>(ConstructionKey{}, mode, std::move(permission_resolver), std::move(question_resolver));
 }
 
 ava::permissions::PermissionResolver SubagentInteractionGate::permission_resolver()
@@ -534,7 +534,8 @@ struct SubagentCoordinator::JobState
   std::size_t sequence = 0;
 };
 
-SubagentCoordinator::SubagentCoordinator(SubagentCoordinatorOptions options) : options_(std::move(options)), registry_(options_.registry_options)
+SubagentCoordinator::SubagentCoordinator(ConstructionKey, SubagentCoordinatorOptions options)
+    : options_(std::move(options)), registry_(options_.registry_options)
 {
 }
 
@@ -546,7 +547,7 @@ ava::core::Result<std::shared_ptr<SubagentCoordinator>> SubagentCoordinator::cre
     return std::unexpected(
         ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "subagent coordinator running and retained-job limits must be positive and bounded"));
   }
-  return std::shared_ptr<SubagentCoordinator>(new SubagentCoordinator(std::move(options)));
+  return std::make_shared<SubagentCoordinator>(ConstructionKey{}, std::move(options));
 }
 
 SubagentCoordinator::~SubagentCoordinator()

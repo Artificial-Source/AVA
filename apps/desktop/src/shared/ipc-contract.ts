@@ -1,4 +1,4 @@
-import { asObject, asString, asStringArray, isNonEmptyString, isProtocolId } from './text.ts'
+import { asObject, asStringArray, isBoundedString, isNonEmptyString, utf8ByteLength } from './text.ts'
 import type { PermissionDecision, QuestionReplyInput } from './types.ts'
 
 export const IPC_CHANNELS = {
@@ -21,11 +21,17 @@ export const IPC_EVENTS = {
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]
 
 const CHANNEL_SET = new Set<string>(Object.values(IPC_CHANNELS))
-const EVENT_SET = new Set<string>(Object.values(IPC_EVENTS))
 
 export const MAX_PROMPT_BYTES = 1_048_576
 export const MAX_MODEL_BYTES = 256
 export const MAX_SESSION_ID_BYTES = 256
+export const MAX_DISPLAY_TOKEN_BYTES = 256
+// RPC v1 question_reply limits (docs/rpc-protocol.md, "Request text limits"). Rejecting an
+// oversized reply here keeps the display open; the backend would reject it and fail the run.
+export const MAX_QUESTION_VALUE_BYTES = 8192
+export const MAX_QUESTION_SELECTED_OPTIONS = 64
+
+const CORRELATION_FIELDS = ['request_id', 'correlation_id', 'requestId', 'correlationId']
 
 export type SenderView = {
   senderId: number
@@ -40,12 +46,26 @@ export type IpcValidationError = {
   reason: string
 }
 
+type NoPayloadChannel =
+  | typeof IPC_CHANNELS.getSnapshot
+  | typeof IPC_CHANNELS.selectWorkspace
+  | typeof IPC_CHANNELS.restart
+  | typeof IPC_CHANNELS.newSession
+  | typeof IPC_CHANNELS.cancel
+
+// A renderer request after validation; the channel discriminates the typed payload.
+export type IpcRequest =
+  | { channel: NoPayloadChannel }
+  | { channel: typeof IPC_CHANNELS.openSession; sessionId: string }
+  | { channel: typeof IPC_CHANNELS.setModel; model: string; provider?: string }
+  | { channel: typeof IPC_CHANNELS.prompt; message: string }
+  | { channel: typeof IPC_CHANNELS.replyPermission; displayToken: string; decision: PermissionDecision }
+  | { channel: typeof IPC_CHANNELS.replyQuestion; displayToken: string; reply: QuestionReplyInput }
+
+type Validated<T> = IpcValidationError | ({ ok: true } & T)
+
 export function isAllowedIpcChannel(channel: string): channel is IpcChannel {
   return CHANNEL_SET.has(channel)
-}
-
-export function isAllowedIpcEvent(channel: string): boolean {
-  return EVENT_SET.has(channel)
 }
 
 // Fragments identify locations within the trusted document, not new documents.
@@ -69,7 +89,11 @@ export function isTrustedSender(sender: SenderView, expectedDocument: string): b
     sender.isMainFrame && isExpectedDocument(sender.url, expectedDocument)
 }
 
-function emptyPayload(payload: unknown): boolean {
+function invalid(reason: string): IpcValidationError {
+  return { ok: false, reason }
+}
+
+function isEmptyPayload(payload: unknown): boolean {
   if (payload === undefined || payload === null) {
     return true
   }
@@ -77,125 +101,119 @@ function emptyPayload(payload: unknown): boolean {
   return object !== null && Object.keys(object).length === 0
 }
 
-export function validateNoPayload(payload: unknown): IpcValidationError | { ok: true } {
-  if (!emptyPayload(payload)) {
-    return { ok: false, reason: 'this command does not take a payload' }
-  }
-  return { ok: true }
+function suppliesCorrelation(object: Record<string, unknown>): boolean {
+  return CORRELATION_FIELDS.some((field) => field in object)
 }
 
-export function validateOpenSession(payload: unknown): IpcValidationError | { ok: true; sessionId: string } {
+function validateOpenSession(payload: unknown): Validated<{ sessionId: string }> {
   const object = asObject(payload)
   if (!object) {
-    return { ok: false, reason: 'openSession requires an object payload' }
+    return invalid('openSession requires an object payload')
   }
   const sessionId = object.sessionId
-  if (!isProtocolId(sessionId, MAX_SESSION_ID_BYTES) && !isNonEmptyString(sessionId, MAX_SESSION_ID_BYTES)) {
-    return { ok: false, reason: 'sessionId must be a non-empty string' }
+  if (!isNonEmptyString(sessionId, MAX_SESSION_ID_BYTES)) {
+    return invalid('sessionId must be a non-empty string')
   }
   return { ok: true, sessionId }
 }
 
-export function validateSetModel(
-  payload: unknown
-): IpcValidationError | { ok: true; model: string; provider?: string } {
+function validateSetModel(payload: unknown): Validated<{ model: string; provider?: string }> {
   const object = asObject(payload)
   if (!object) {
-    return { ok: false, reason: 'setModel requires an object payload' }
+    return invalid('setModel requires an object payload')
   }
   const model = object.model
   if (!isNonEmptyString(model, MAX_MODEL_BYTES)) {
-    return { ok: false, reason: 'model must be a non-empty string' }
+    return invalid('model must be a non-empty string')
   }
   if (object.provider === undefined) {
     return { ok: true, model }
   }
   const provider = object.provider
   if (!isNonEmptyString(provider, MAX_MODEL_BYTES)) {
-    return { ok: false, reason: 'provider must be a non-empty string when provided' }
+    return invalid('provider must be a non-empty string when provided')
   }
   return { ok: true, model, provider }
 }
 
-export function validatePrompt(payload: unknown): IpcValidationError | { ok: true; message: string } {
+function validatePrompt(payload: unknown): Validated<{ message: string }> {
   const object = asObject(payload)
   if (!object) {
-    return { ok: false, reason: 'prompt requires an object payload' }
+    return invalid('prompt requires an object payload')
   }
   const message = object.message
   if (!isNonEmptyString(message, MAX_PROMPT_BYTES)) {
-    return { ok: false, reason: 'message must be a non-empty string' }
+    return invalid('message must be a non-empty string')
   }
   return { ok: true, message }
 }
 
-export function validatePermissionReply(
-  payload: unknown
-): IpcValidationError | { ok: true; displayToken: string; decision: PermissionDecision } {
+function validatePermissionReply(payload: unknown): Validated<{ displayToken: string; decision: PermissionDecision }> {
   const object = asObject(payload)
   if (!object) {
-    return { ok: false, reason: 'permission reply requires an object payload' }
+    return invalid('permission reply requires an object payload')
   }
-  if ('request_id' in object || 'correlation_id' in object || 'requestId' in object || 'correlationId' in object) {
-    return { ok: false, reason: 'renderer may not supply permission correlation' }
+  if (suppliesCorrelation(object)) {
+    return invalid('renderer may not supply permission correlation')
   }
-  if (!isNonEmptyString(object.displayToken, 256)) {
-    return { ok: false, reason: 'displayToken must identify the displayed prompt' }
+  const displayToken = object.displayToken
+  if (!isNonEmptyString(displayToken, MAX_DISPLAY_TOKEN_BYTES)) {
+    return invalid('displayToken must identify the displayed prompt')
   }
   const decision = object.decision
   if (decision !== 'allow' && decision !== 'deny') {
-    return { ok: false, reason: 'decision must be allow or deny' }
+    return invalid('decision must be allow or deny')
   }
-  return { ok: true, displayToken: object.displayToken, decision }
+  return { ok: true, displayToken, decision }
 }
 
-export function validateQuestionReply(
-  payload: unknown
-): IpcValidationError | { ok: true; displayToken: string; reply: QuestionReplyInput } {
+function validateQuestionReply(payload: unknown): Validated<{ displayToken: string; reply: QuestionReplyInput }> {
   const object = asObject(payload)
   if (!object) {
-    return { ok: false, reason: 'question reply requires an object payload' }
+    return invalid('question reply requires an object payload')
   }
-  if ('request_id' in object || 'correlation_id' in object || 'requestId' in object || 'correlationId' in object) {
-    return { ok: false, reason: 'renderer may not supply question correlation' }
+  if (suppliesCorrelation(object)) {
+    return invalid('renderer may not supply question correlation')
   }
-  if (!isNonEmptyString(object.displayToken, 256)) {
-    return { ok: false, reason: 'displayToken must identify the displayed prompt' }
+  const displayToken = object.displayToken
+  if (!isNonEmptyString(displayToken, MAX_DISPLAY_TOKEN_BYTES)) {
+    return invalid('displayToken must identify the displayed prompt')
   }
   const reply: QuestionReplyInput = {}
   if (object.answer !== undefined) {
-    const answer = asString(object.answer)
-    if (answer === null) {
-      return { ok: false, reason: 'answer must be a string' }
+    if (!isBoundedString(object.answer, MAX_QUESTION_VALUE_BYTES)) {
+      return invalid(`answer must be a string of at most ${MAX_QUESTION_VALUE_BYTES} bytes`)
     }
-    reply.answer = answer
+    reply.answer = object.answer
   }
   if (object.selected !== undefined) {
-    const selected = asString(object.selected)
-    if (selected === null) {
-      return { ok: false, reason: 'selected must be a string' }
+    if (!isBoundedString(object.selected, MAX_QUESTION_VALUE_BYTES)) {
+      return invalid(`selected must be a string of at most ${MAX_QUESTION_VALUE_BYTES} bytes`)
     }
-    reply.selected = selected
+    reply.selected = object.selected
   }
   if (object.selectedOptions !== undefined) {
     const selectedOptions = asStringArray(object.selectedOptions)
-    if (selectedOptions === null) {
-      return { ok: false, reason: 'selectedOptions must be an array of strings' }
+    if (
+      selectedOptions === null ||
+      selectedOptions.length > MAX_QUESTION_SELECTED_OPTIONS ||
+      selectedOptions.some((value) => utf8ByteLength(value) > MAX_QUESTION_VALUE_BYTES)
+    ) {
+      return invalid(
+        `selectedOptions must be at most ${MAX_QUESTION_SELECTED_OPTIONS} strings of at most ${MAX_QUESTION_VALUE_BYTES} bytes each`
+      )
     }
     reply.selectedOptions = selectedOptions
   }
   if (reply.answer === undefined && reply.selected === undefined && reply.selectedOptions === undefined) {
-    return { ok: false, reason: 'question reply needs an answer, selected value, or selectedOptions' }
+    return invalid('question reply needs an answer, selected value, or selectedOptions')
   }
-  return { ok: true, displayToken: object.displayToken, reply }
+  return { ok: true, displayToken, reply }
 }
 
-export function validateChannelPayload(
-  channel: string,
-  payload: unknown
-): IpcValidationError | { ok: true; value?: unknown } {
+export function validateChannelPayload(channel: string, payload: unknown): Validated<IpcRequest> {
   if (!isAllowedIpcChannel(channel)) {
-    return { ok: false, reason: 'channel is not allowlisted' }
+    return invalid('channel is not allowlisted')
   }
   switch (channel) {
     case IPC_CHANNELS.getSnapshot:
@@ -203,18 +221,26 @@ export function validateChannelPayload(
     case IPC_CHANNELS.restart:
     case IPC_CHANNELS.newSession:
     case IPC_CHANNELS.cancel:
-      return validateNoPayload(payload)
-    case IPC_CHANNELS.openSession:
-      return validateOpenSession(payload)
-    case IPC_CHANNELS.setModel:
-      return validateSetModel(payload)
-    case IPC_CHANNELS.prompt:
-      return validatePrompt(payload)
-    case IPC_CHANNELS.replyPermission:
-      return validatePermissionReply(payload)
-    case IPC_CHANNELS.replyQuestion:
-      return validateQuestionReply(payload)
-    default:
-      return { ok: false, reason: 'channel is not allowlisted' }
+      return isEmptyPayload(payload) ? { ok: true, channel } : invalid('this command does not take a payload')
+    case IPC_CHANNELS.openSession: {
+      const checked = validateOpenSession(payload)
+      return checked.ok ? { ...checked, channel } : checked
+    }
+    case IPC_CHANNELS.setModel: {
+      const checked = validateSetModel(payload)
+      return checked.ok ? { ...checked, channel } : checked
+    }
+    case IPC_CHANNELS.prompt: {
+      const checked = validatePrompt(payload)
+      return checked.ok ? { ...checked, channel } : checked
+    }
+    case IPC_CHANNELS.replyPermission: {
+      const checked = validatePermissionReply(payload)
+      return checked.ok ? { ...checked, channel } : checked
+    }
+    case IPC_CHANNELS.replyQuestion: {
+      const checked = validateQuestionReply(payload)
+      return checked.ok ? { ...checked, channel } : checked
+    }
   }
 }

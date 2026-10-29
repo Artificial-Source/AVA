@@ -1,5 +1,4 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/tools/tool_context.h"
 #include "ava/tools/tool_types.h"
@@ -9,6 +8,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <ostream>
 #include <string>
 #include <string_view>
 
@@ -30,7 +30,10 @@ struct McpBrokeredTool
   ava::core::NoLogString resource_uri;
   std::function<ava::tools::ToolDispatchResult(ava::tools::ToolContext const&, ava::tools::ProviderToolCall const&)> executor;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 using McpBrokeredToolVisitor = std::function<ava::core::VoidResult(McpBrokeredTool const&)>;

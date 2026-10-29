@@ -60,6 +60,12 @@ void run_agent_loop_tests()
   test_background_job_registry_join_finished_is_idempotent_across_threads();
   test_background_job_registry_prunes_retained_finished_jobs();
   test_background_job_registry_destructor_stops_running_jobs();
+  test_background_job_registry_stop_callbacks_can_reenter_cancel();
+  test_background_job_registry_shutdown_racing_start_preflight();
+  test_background_job_registry_preflight_exception_does_not_publish();
+  test_agent_loop_read_only_child_never_widens_parent_allowlist();
+  test_agent_loop_foreground_child_preserves_execution_cancellation();
+  test_agent_loop_parallel_tools_preserve_execution_cancellation();
   test_agent_loop_permission_resolver_threads_to_tools();
   test_agent_loop_bash_permission_resolver_allows_command();
   test_agent_loop_bash_permission_resolver_denies_and_redacts_command();

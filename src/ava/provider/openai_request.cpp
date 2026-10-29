@@ -499,12 +499,6 @@ ava::core::Result<ava::http::HttpRequest> build_openai_responses_request(Provide
   };
 }
 
-ava::core::Result<ava::http::HttpRequest> build_openai_responses_request(ProviderRequest const& request, std::string_view access_token,
-                                                                         std::string_view base_url, bool include_max_output_tokens)
-{
-  return build_openai_responses_request(request, access_token, OpenAIProviderOptions{.base_url = std::string(base_url)}, include_max_output_tokens);
-}
-
 ava::core::VoidResult apply_openai_auth_options(ava::http::HttpRequest& request, ProviderAuthContext const& auth)
 {
   if (auth.credential_type != "oauth")
@@ -522,7 +516,7 @@ ava::core::VoidResult apply_openai_auth_options(ava::http::HttpRequest& request,
 
 ava::core::Result<ava::http::HttpRequest> OpenAIProvider::build_request(ProviderRequest const& request, std::string_view access_token) const
 {
-  bool const include_max = options_.force_include_max_output_tokens || true;
+  bool const include_max = true;
   return detail::build_openai_responses_request(request, access_token, options_, include_max);
 }
 

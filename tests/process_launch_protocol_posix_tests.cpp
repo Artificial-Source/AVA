@@ -5,6 +5,9 @@
 #include "ava/process/supervisor.h"
 #include "ava/process/supervisor_test_support.h"
 #include "ava/core/AnchorSet.h"
+#if defined(__linux__)
+#include "tests/support/syscall_errno_injection.h"
+#endif
 
 #include <array>
 #include <cerrno>
@@ -198,6 +201,21 @@ void test_absolute_deadline_timeout()
   auto const timed_out = await_launch_exec_confirmation(channel.read_descriptor(), std::chrono::steady_clock::now(), false);
   expect(channel.valid() && timed_out.disposition == LaunchProtocolDispositionV1::LaunchFailed && timed_out.problem == LaunchProtocolProblemV1::TimedOut,
          "the launch protocol classifies an exhausted absolute deadline as a timeout");
+}
+
+void test_early_poll_timeout_preserves_launch_deadline()
+{
+#if defined(__linux__) && defined(SYS_poll)
+  auto const status = ava::tests::run_in_child_with_syscall_errno(SYS_poll, std::nullopt, 0, [] {
+    TestPipe channel;
+    if (!channel.valid())
+      return 1;
+    auto const deadline = std::chrono::steady_clock::now() + 15ms;
+    auto const result = ava::process::detail::await_launch_exec_confirmation(channel.read_descriptor(), deadline, false);
+    return result.problem == ava::process::detail::LaunchProtocolProblemV1::TimedOut && std::chrono::steady_clock::now() >= deadline ? 0 : 2;
+  });
+  static_cast<void>(ava::tests::expect_child_success(status, "an early poll timeout cannot shorten the absolute launch deadline"));
+#endif
 }
 
 void test_parent_cancellation_is_observed_in_bounded_slices()
@@ -576,6 +594,7 @@ void run_process_launch_protocol_posix_tests()
 #else
   test_fixed_protocol_success_and_failures();
   test_absolute_deadline_timeout();
+  test_early_poll_timeout_preserves_launch_deadline();
   test_parent_cancellation_is_observed_in_bounded_slices();
   test_deadline_precedes_parent_cancellation();
   test_deadline_crossing_during_parent_cancellation_callback();

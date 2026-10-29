@@ -23,18 +23,19 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/ava-ccache-objects
-        key: ${{ inputs.key-prefix }}-${{ github.sha }}
+        # Terminate the whole profile: Release- must not restore Release-SDK.
+        key: ${{ inputs.key-prefix }}/${{ github.sha }}
         restore-keys: |
-          ${{ inputs.key-prefix }}-
+          ${{ inputs.key-prefix }}/
 
     - name: Restore compiler cache (read-only)
       if: inputs.save != 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/ava-ccache-objects
-        key: ${{ inputs.key-prefix }}-${{ github.sha }}
+        key: ${{ inputs.key-prefix }}/${{ github.sha }}
         restore-keys: |
-          ${{ inputs.key-prefix }}-
+          ${{ inputs.key-prefix }}/
 
     - name: Export strict ccache environment
       shell: bash

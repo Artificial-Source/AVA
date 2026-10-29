@@ -1,6 +1,6 @@
 #pragma once
-
 #include "ava/command/command.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/core/NoLogString.h"
 #include "ava/core/mode.h"
 #include "ava/core/result.h"
@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -85,7 +86,10 @@ struct CommandPermissionMetadata
   std::string environment_digest;
   bool executor_identity_verified = true;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 enum class Operation
@@ -161,10 +165,7 @@ struct PermissionResolutionDecision
   // OPT_OUT keeps user_guidance and free-form text out of generated printing; this
   // hand-written print_on is only for Debug nesting under generated parents and
   // emits a bounded opaque representation (no reason/user_guidance/rule text).
-  void print_on(std::ostream& os) const
-  {
-    os << "{resolution:" << static_cast<int>(resolution) << ",authoritative:" << authoritative << '}';
-  }
+  void print_on(std::ostream& os) const { os << "{resolution:" << static_cast<int>(resolution) << ",authoritative:" << authoritative << '}'; }
 #endif
 
   // user_guidance must never appear in debug/log representations.

@@ -1,6 +1,8 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/session_store.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 #include "ava/core/openai_wire.h"
 
@@ -170,17 +172,9 @@ bool object_has_only_keys(std::string_view object, std::array<std::string_view, 
   return false;
 }
 
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20U || byte == 0x7FU;
-  });
-}
-
 bool valid_identifier(std::string_view value, std::size_t max_bytes)
 {
-  return !value.empty() && value.size() <= max_bytes && !has_control_byte(value);
+  return !value.empty() && value.size() <= max_bytes && !ava::core::has_c0_or_del(value);
 }
 
 bool has_field(std::string_view object, std::string_view key)
@@ -250,7 +244,7 @@ bool valid_optional_string(std::string_view object, std::string_view key, std::s
   if (!has_field(object, key))
     return true;
   auto const value = ava::core::json::string_field(object, key);
-  return value && value->size() <= max_bytes && (allow_empty || !value->empty()) && (!reject_controls || !has_control_byte(*value));
+  return value && value->size() <= max_bytes && (allow_empty || !value->empty()) && (!reject_controls || !ava::core::has_c0_or_del(*value));
 }
 
 bool nonnegative_signed_integer_field(std::string_view object, std::string_view key)
@@ -561,6 +555,7 @@ struct PendingAssistantOutputGroup
 {
   std::size_t start_index = 0;
   std::vector<CommittedAssistantOutputItem> items;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 bool group_has_dense_sequence(PendingAssistantOutputGroup const& group)

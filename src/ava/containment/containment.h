@@ -1,14 +1,19 @@
 #pragma once
 
 #include "ava/command/command.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/core/NoLogString.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
+#include <sys/stat.h>
 
 namespace ava::containment {
 
@@ -19,16 +24,14 @@ enum class ContainmentAvailability
   Unavailable,
 };
 
-// One descriptor-resolved logical path and the Landlock access mask permitted
-// beneath it. Writable paths are opened through the shared AnchorSet in the
-// child; no canonical spelling is used as authority.
+// One descriptor-resolved logical path and its permitted Landlock access mask.
+// The parent reopens and validates approved authority immediately before fork.
 struct ContainmentFilesystemRule
 {
   std::filesystem::path logical_path;
   std::uint64_t access_mask = 0;
-  // Descriptor identity captured in the parent. The child opens the logical
-  // spelling once, verifies this identity, and adds that same descriptor to
-  // Landlock so a pathname replacement cannot redirect a rule.
+  // Preparation reopens the logical spelling, verifies this identity and pins
+  // that exact descriptor in the ruleset; pathname replacements cannot redirect it.
   std::uint64_t device = 0;
   std::uint64_t inode = 0;
   std::uint64_t mode = 0;
@@ -57,9 +60,9 @@ struct ContainmentFilesystemScope
 };
 
 // A development containment plan prepared from a sealed command preparation.
-// The plan is prepared in the parent (probing kernel features, validating
-// roots, building rule lists) and applied in the child (installing Landlock
-// rules and a seccomp network filter before exec).
+// Planning and application preparation run in the parent: probe features,
+// validate roots, pin rule descriptors and build the Landlock ruleset. The
+// child only rechecks retained metadata and installs Landlock/seccomp before exec.
 //
 // The plan never claims containment it cannot verify. If kernel features are
 // unavailable or roots cannot be validated, availability is Unavailable and
@@ -77,7 +80,7 @@ struct DevelopmentContainmentPlan
   bool network_filter_planned = false;
   ContainmentFilesystemScope filesystem_scope;
 
-  // Child-side application data. These are not exposed in metadata/audit.
+  // Parent-side application preparation data, never exposed in metadata/audit.
   std::uint64_t handled_access_fs = 0;
   std::vector<ContainmentFilesystemRule> filesystem_rules;
   std::shared_ptr<ava::core::AnchorSet const> anchor_set;
@@ -105,20 +108,55 @@ struct DevelopmentContainmentPlan
 // plan unavailable; containment never adds target roots implicitly.
 [[nodiscard]] DevelopmentContainmentPlan prepare_development_containment(ava::command::CommandPreparation const& preparation, bool network_enabled);
 
-// Apply the containment plan in the child process after stdio/cwd setup and
-// before exec. Installs Landlock and a seccomp filter in both network modes
-// after no_new_privs. Only IP/NETLINK_ROUTE sockets are permitted when networking
-// is allowed; private UNIX stream/seqpacket pairs work in either mode.
-// Returns an error if installation fails; the caller must clean up the verified
-// group and not exec.
-//
-// This function is called only in the child after fork.
-[[nodiscard]] ava::core::VoidResult apply_containment_in_child(DevelopmentContainmentPlan const& plan);
+// Parent-owned rule descriptors remain pinned until child installation. The
+// child rechecks metadata without reopening paths or entering AnchorSet locks.
+struct PreparedContainmentRule
+{
+  ava::core::UniqueFd descriptor;
+  struct stat identity{};
 
-// Close inherited non-stdio file descriptors in the child before applying
-// seccomp. Skips the containment handshake descriptors and, when present, the
-// approved executable descriptor that must survive until descriptor exec.
-void close_inherited_fds_except(int keep_fd_a, int keep_fd_b, int keep_fd_c = -1) noexcept;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+struct PreparedContainment
+{
+  ava::core::UniqueFd ruleset;
+  std::vector<PreparedContainmentRule> rules;
+  bool network_allowed = false;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+enum class ContainmentFailureStage : std::uint32_t
+{
+  None,
+  DescriptorIdentity,
+  NoNewPrivileges,
+  Landlock,
+  Seccomp,
+};
+
+// Fixed-size child/parent wire frame. No strings, allocation, or destructors.
+struct ContainmentChildStatus
+{
+  ContainmentFailureStage stage = ContainmentFailureStage::None;
+  std::int32_t error_number = 0;
+
+  [[nodiscard]] explicit operator bool() const noexcept { return error_number == 0; }
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+};
+
+static_assert(std::is_trivially_copyable_v<ContainmentChildStatus>);
+static_assert(sizeof(ContainmentChildStatus) == 8);
+static_assert(offsetof(ContainmentChildStatus, error_number) == 4);
+
+[[nodiscard]] ava::core::Result<PreparedContainment> prepare_containment_application(DevelopmentContainmentPlan const& plan);
+// Only syscalls and fixed-storage operations are permitted after fork. Consumes
+// the child's prepared fds; the parent's independent copies remain RAII-owned.
+[[nodiscard]] ContainmentChildStatus apply_containment_in_child(PreparedContainment& prepared) noexcept;
+// Parent-only diagnostic construction from the fixed child frame.
+[[nodiscard]] ava::core::Error containment_child_error(ContainmentChildStatus status);
 
 [[nodiscard]] bool containment_is_available(DevelopmentContainmentPlan const& plan) noexcept;
 

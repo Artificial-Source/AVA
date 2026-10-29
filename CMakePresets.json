@@ -47,6 +47,19 @@
         "EnableAvaBuildTests": "ON",
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "release-candidate",
+      "displayName": "Linux x64 retained release candidate",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build-candidate",
+      "cacheVariables": {
+        "AVA_RELEASE_ARTIFACT": "ON",
+        "AVA_ENABLE_GITACHE": "OFF",
+        "EnableLibcwd": "OFF",
+        "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
+        "CMAKE_DISABLE_FIND_PACKAGE_nlohmann_json": "ON"
+      }
     }
   ],
   "buildPresets": [

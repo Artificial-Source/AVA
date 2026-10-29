@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <iomanip>
 #include <sstream>
 
@@ -686,12 +687,24 @@ std::optional<long long> integer_field(std::string_view object, std::string_view
   std::size_t end = *start;
   if (end < object.size() && object[end] == '-')
     ++end;
-  while (end < object.size() && std::isdigit(static_cast<unsigned char>(object[end])) != 0) ++end;
+  auto const digits_start = end;
+  while (end < object.size() && object[end] >= '0' && object[end] <= '9')
+    ++end;
+  if (end == digits_start || (object[digits_start] == '0' && end - digits_start > 1))
+    return std::nullopt;
+  if (end < object.size() && object[end] != ',' && object[end] != '}' && object[end] != ']' && !is_json_whitespace(object[end]))
+    return std::nullopt;
   if (end == *start)
     return std::nullopt;
   try
   {
-    return std::stoll(std::string(object.substr(*start, end - *start)));
+    long long value = 0;
+    auto const* begin = object.data() + *start;
+    auto const* finish = object.data() + end;
+    auto const [ptr, error] = std::from_chars(begin, finish, value);
+    if (error != std::errc{} || ptr != finish)
+      return std::nullopt;
+    return value;
   }
   catch (...)
   {

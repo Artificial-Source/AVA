@@ -3,11 +3,11 @@
 #include "ava/provider/gemini_provider.h"
 #include "ava/provider/provider_utils.h"
 #include "ava/core/NoLogString.h"
+#include "ava/core/environment_value.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 
 #include <cctype>
-#include <cstdlib>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -23,14 +23,15 @@ using detail::GeminiParseState;
 
 std::string configured_base_url()
 {
-  if (char const* value = std::getenv("GEMINI_BASE_URL"); value != nullptr && value[0] != '\0')
-    return value;
+  if (auto value = ava::core::nonempty_environment_value("GEMINI_BASE_URL"))
+    return std::move(*value);
   return std::string(kDefaultGeminiBaseUrl);
 }
 
 std::string trim_trailing_slashes(std::string value)
 {
-  while (value.size() > 1 && value.back() == '/') value.pop_back();
+  while (value.size() > 1 && value.back() == '/')
+    value.pop_back();
   return value;
 }
 
@@ -734,18 +735,21 @@ void append_response_events(std::vector<StreamEvent>& events, GeminiParseState& 
     append_error_event(events, "Gemini response parser limit exceeded");
     return;
   }
+  std::size_t remaining_parts = kMaxProviderParserArrayItems;
   for (std::size_t candidate_index = 0; candidates && candidate_index < candidates->size(); ++candidate_index)
   {
     auto const& candidate = candidates->at(candidate_index);
     if (auto const content = ava::core::json::object_field(candidate, "content"))
     {
-      auto const parts = ava::core::json::strict_objects_in_array_field(*content, "parts", kMaxProviderParserArrayItems);
+      auto const parts = ava::core::json::strict_objects_in_array_field(*content, "parts", remaining_parts);
       if (ava::core::json::field_value_start(*content, "parts") && !parts)
       {
         state.error_seen = true;
         append_error_event(events, "Gemini response parser limit exceeded");
         return;
       }
+      if (parts)
+        remaining_parts -= parts->size();
       for (std::size_t part_index = 0; parts && part_index < parts->size(); ++part_index)
       {
         append_part_events(events, parts->at(part_index), state);
@@ -778,30 +782,6 @@ void append_event_for_data(std::vector<StreamEvent>& events, GeminiParseState& s
     return;
   }
   append_response_events(events, state, data);
-}
-
-void append_events_for_sse_line(std::vector<StreamEvent>& events, GeminiParseState& state, bool& saw_data, bool& done_seen, std::string& data, std::string line)
-{
-  if (!line.empty() && line.back() == '\r')
-    line.pop_back();
-  if (line.empty())
-  {
-    if (!data.empty())
-    {
-      append_event_for_data(events, state, saw_data, done_seen, data);
-      data.clear();
-    }
-    return;
-  }
-  if (line.starts_with("data:"))
-  {
-    if (!data.empty())
-      data.push_back('\n');
-    auto value = std::string_view(line).substr(5);
-    if (!value.empty() && value.front() == ' ')
-      value.remove_prefix(1);
-    data.append(value);
-  }
 }
 
 ava::core::Result<std::vector<StreamEvent>> gemini_http_error(ava::http::HttpResponse const& response)
@@ -868,45 +848,19 @@ GeminiStreamParser::GeminiStreamParser() : state_{.fallback_tool_call_prefix = a
 
 ava::core::Result<std::vector<StreamEvent>> GeminiStreamParser::append(std::string_view chunk)
 {
-  std::vector<StreamEvent> events;
-  pending_line_.append(chunk);
-  std::size_t line_start = 0;
-  std::size_t search_from = scan_offset_;
   state_.parsed_content = false;
-  while (true)
-  {
-    auto const newline = pending_line_.find('\n', search_from);
-    if (newline == std::string::npos)
-      break;
-    append_events_for_sse_line(events, state_, saw_data_, done_seen_, data_, pending_line_.substr(line_start, newline - line_start));
-    line_start = newline + 1;
-    search_from = line_start;
-  }
-  if (line_start > 0)
-    pending_line_.erase(0, line_start);
-  scan_offset_ = pending_line_.size();
-  return events;
+  return sse_.append(chunk, "Gemini", [this](auto& events, std::string_view data) { append_event_for_data(events, state_, saw_data_, done_seen_, data); });
 }
 
 ava::core::Result<std::vector<StreamEvent>> GeminiStreamParser::finish()
 {
-  std::vector<StreamEvent> events;
   state_.parsed_content = false;
-  if (!pending_line_.empty())
-  {
-    append_events_for_sse_line(events, state_, saw_data_, done_seen_, data_, std::move(pending_line_));
-    pending_line_.clear();
-  }
-  scan_offset_ = 0;
-  if (!data_.empty())
-  {
-    append_event_for_data(events, state_, saw_data_, done_seen_, data_);
-    data_.clear();
-  }
-  if (saw_data_ && !done_seen_ && !state_.error_seen)
-  {
-    append_done_event(events, state_);
-  }
+  auto events = sse_.finish(
+      "Gemini", [this](auto& output, std::string_view data) { append_event_for_data(output, state_, saw_data_, done_seen_, data); },
+      [this](auto& output) {
+        if (saw_data_ && !done_seen_ && !state_.error_seen)
+          append_done_event(output, state_);
+      });
   state_.reset_response();
   saw_data_ = false;
   done_seen_ = false;
@@ -937,6 +891,8 @@ ava::core::Result<std::vector<StreamEvent>> parse_gemini_response(ava::http::Htt
 {
   if (response.status_code < 200 || response.status_code >= 300)
     return gemini_http_error(response);
+  if (response.body.size() > kMaxProviderSseBufferedBytes)
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "Gemini response parser limit exceeded"));
   std::vector<StreamEvent> events;
   GeminiParseState state{.fallback_tool_call_prefix = ava::core::make_id("gemini_call")};
   if (!is_json_object_shape(response.body))
@@ -952,7 +908,7 @@ ava::core::Result<std::vector<StreamEvent>> parse_gemini_response(ava::http::Htt
     return std::unexpected(std::move(error));
   }
   append_done_event(events, state);
-  return events;
+  return bounded_provider_events(std::move(events), "Gemini");
 }
 
 std::optional<TokenUsage> parse_gemini_usage(std::string_view body)

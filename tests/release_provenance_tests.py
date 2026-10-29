@@ -22,6 +22,9 @@ if SPEC is None or SPEC.loader is None:
 PROVENANCE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = PROVENANCE
 SPEC.loader.exec_module(PROVENANCE)
+AVA_VERSION = PROVENANCE.project_version(SOURCE)
+if AVA_VERSION is None:
+    raise RuntimeError("cannot read AVA version from CMakeLists.txt")
 
 
 def clean_dependencies() -> list[dict[str, object]]:
@@ -133,7 +136,17 @@ def with_fabricated_empty_dynamic_section(contents: bytes) -> bytes:
 
 
 class ReleaseProvenanceTests(unittest.TestCase):
-    def collect(self, *, build_mode: str = "source-build", qualification_mode: bool = True, binary_version: str | None = "1.0.0", host_architecture: str | None = "x86_64", architecture: str | None = "x86_64", needed: list[str] | None = None, dependency_reasons: list[str] | None = None) -> dict[str, object]:
+    def test_adopted_ciede2000_notice_is_distributed(self) -> None:
+        notices = (SOURCE / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        section = notices.split("## CIEDE2000 — MIT\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("src/ava/tui/terminal/CIEDE2000.cxx", section)
+        self.assertIn("https://github.com/gfiumara/CIEDE2000", section)
+        self.assertIn("Copyright (c) 2015 Gregory Fiumara", section)
+        self.assertIn("Covered by the MIT License text below.", section)
+        self.assertIn("nlohmann JSON, and CIEDE2000)", notices)
+        self.assertIn("Permission is hereby granted, free of charge", notices)
+
+    def collect(self, *, build_mode: str = "source-build", qualification_mode: bool = True, binary_version: str | None = AVA_VERSION, host_architecture: str | None = "x86_64", architecture: str | None = "x86_64", needed: list[str] | None = None, dependency_reasons: list[str] | None = None) -> dict[str, object]:
         with tempfile.TemporaryDirectory() as directory:
             binary = pathlib.Path(directory) / "ava"
             binary.write_bytes(b"deterministic provenance fixture\n")
@@ -154,7 +167,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
         second = self.collect()
         self.assertEqual(first, second)
         self.assertEqual(first["schema_version"], 3)
-        self.assertEqual(first["ava_version"], "1.0.0")
+        self.assertEqual(first["ava_version"], AVA_VERSION)
         self.assertEqual(first["host_architecture"], "x86_64")
         self.assertIs(first["host_architecture_matches_binary"], True)
         self.assertTrue(first["release_qualified"])
@@ -170,7 +183,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
             ), mock.patch.object(PROVENANCE, "dependency_records", return_value=(clean_dependencies(), [])):
                 source_dirty = PROVENANCE.collect_provenance(
                     SOURCE, binary, "source-build", host_architecture="x86_64",
-                    qualification_mode=True, binary_version="1.0.0", architecture="x86_64",
+                    qualification_mode=True, binary_version=AVA_VERSION, architecture="x86_64",
                     needed=sorted(PROVENANCE.HOST_DYNAMIC_ALLOWLIST),
                 )
         self.assertFalse(dirty["release_qualified"])
@@ -326,7 +339,7 @@ class ReleaseProvenanceTests(unittest.TestCase):
             ):
                 provenance = PROVENANCE.collect_provenance(
                     SOURCE, binary, "source-build", host_architecture="x86_64",
-                    qualification_mode=True, binary_version="1.0.0"
+                    qualification_mode=True, binary_version=AVA_VERSION
                 )
         self.assertEqual(provenance["elf_dt_needed"], ["libc.so.6", "libsurprise.so.1"])
         self.assertEqual(provenance["unexpected_dynamic_dependencies"], ["libsurprise.so.1"])

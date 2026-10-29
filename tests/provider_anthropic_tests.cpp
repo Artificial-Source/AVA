@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/fake_transport.h"
+#include "tests/support/provider_parser_budget_tests.h"
 #include "tests/support/session_test_support.h"
 #include "tests/support/test_env.h"
 #include "tests/support/test_harness.h"
@@ -799,6 +800,39 @@ void test_anthropic_native_content_parts_request()
 
 void test_anthropic_parsing()
 {
+  ava::provider::AnthropicProvider const budget_provider;
+  ava::tests::test_provider_parser_budgets(
+      budget_provider, [](std::string const& text) { return R"({"content":[{"type":"text","text":")" + text + R"("}]})"; },
+      [](std::string const& text) { return R"(data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":")" + text + R"("}})"; },
+      {R"({"type":"message_start","message":{"content":)" + ava::tests::provider_budget_array(R"({"type":"text","text":"x"})") + R"(},"content":)" +
+       ava::tests::provider_budget_array(R"({"type":"text","text":"x"})") + "}"},
+      R"(data: {"type":"ping"})");
+  ava::tests::test_provider_tool_fragment_budget(
+      budget_provider,
+      "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"budget_call\",\"name\":\"read_file\"}}\n\n",
+      [](std::string const& text) {
+        return R"(data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":")" + text + R"("}})";
+      },
+      "data: {\"type\":\"content_block_stop\",\"index\":0}\n\ndata: {\"type\":\"message_stop\"}\n\n");
+  for (bool const redacted : {false, true})
+  {
+    ava::provider::AnthropicStreamParser opaque_parser;
+    bool prefix_accepted = true;
+    for (int index = 0; index < 4; ++index)
+    {
+      auto const events = opaque_parser.append("data: {\"type\":\"content_block_start\",\"index\":" + std::to_string(index) + ",\"content_block\":" +
+                                               (redacted ? R"({"type":"redacted_thinking","data":")" : R"({"type":"thinking","signature":")") +
+                                               std::string(64U * 1024U, 'x') + "\"}}\n\n");
+      prefix_accepted = prefix_accepted && events && events->size() == 1 && events->front().type == ava::provider::StreamEventType::ReasoningStart;
+    }
+    auto const overflow = opaque_parser.append(std::string("data: {\"type\":\"content_block_start\",\"index\":4,\"content_block\":") +
+                                               (redacted ? R"({"type":"redacted_thinking","data":")" : R"({"type":"thinking","signature":")") + "x\"}}\n\n");
+    auto const ignored = opaque_parser.append("data: {\"type\":\"message_stop\"}\n\n");
+    auto const final = opaque_parser.finish();
+    expect(prefix_accepted && overflow && overflow->size() == 1 && overflow->front().type == ava::provider::StreamEventType::Error &&
+               overflow->front().error_message == "Anthropic response parser limit exceeded" && ignored && ignored->empty() && final && final->empty(),
+           "Anthropic charges opaque reasoning across open blocks before retaining un-emitted signatures or redacted bytes");
+  }
   std::string const sse =
       "event: message_start\n"
       "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,"
@@ -840,7 +874,7 @@ void test_anthropic_parsing()
            "Anthropic SSE tool input deltas parse");
     expect((*events)[4].type == ava::provider::StreamEventType::ToolCallEnd && (*events)[4].tool_call_id == "toolu_1", "Anthropic SSE tool stop parses");
     expect((*events)[5].type == ava::provider::StreamEventType::Done && (*events)[5].usage && (*events)[5].usage->input_tokens == 12 &&
-               (*events)[5].usage->output_tokens == 7 && (*events)[5].usage->cache_read_tokens == 2 &&
+               (*events)[5].usage->output_tokens == 7 && (*events)[5].usage->cache_read_tokens == 2 && (*events)[5].usage->total_tokens == 19 &&
                (*events)[5].finish_reason == ava::provider::ProviderFinishReason::ToolCalls,
            "Anthropic SSE usage and stop reason accumulate from message_delta");
   }
@@ -929,6 +963,17 @@ void test_anthropic_parsing()
   auto malformed = ava::provider::parse_anthropic_sse("data: not-json\n\n");
   expect(malformed && malformed->size() == 1 && (*malformed)[0].type == ava::provider::StreamEventType::Error,
          "Anthropic malformed SSE data produces a provider error event");
+  for (auto const terminal : {R"({"type":"message_stop"})", R"({"type":"error"})", "not-json"})
+  {
+    ava::provider::AnthropicStreamParser terminal_parser;
+    auto const first = terminal_parser.append(std::string("data: ") + terminal + "\n\n");
+    auto const trailing = terminal_parser.append(
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"after terminal\"}}\n\n"
+        "data: {\"type\":\"message_stop\"}\n\n");
+    auto const final = terminal_parser.finish();
+    expect(first && first->size() == 1 && trailing && trailing->empty() && final && final->empty(),
+           "Anthropic SSE ignores every record after completion or the first parser error");
+  }
   auto private_error = ava::provider::parse_anthropic_sse(
       "data: {\"type\":\"error\",\"error\":{\"message\":\"event: error\\ndata: ANTHROPIC_SSE_MESSAGE_CANARY\","
       "\"signature\":\"ANTHROPIC_SSE_SIGNATURE_CANARY\",\"native\":{\"reasoning\":\"ANTHROPIC_SSE_REASONING_CANARY\"}},"

@@ -39,6 +39,7 @@ class RpcLineReader
 class StreamRpcLineReader final : public RpcLineReader
 {
  public:
+  // Converts stream and streambuf I/O exceptions into terminal outcomes and Result errors.
   explicit StreamRpcLineReader(std::istream& input, RpcInputWake wake = {});
 
   [[nodiscard]] ava::core::Result<bool> read_line(std::string& line, RpcInputTerminalCallback const& on_terminal = {}) override;

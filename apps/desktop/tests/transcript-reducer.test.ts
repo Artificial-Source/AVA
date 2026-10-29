@@ -4,6 +4,7 @@ import type { RpcEvent } from '../src/shared/rpc-session.ts'
 import {
   applyPromptFinalText,
   applyRpcEvent,
+  applyRunError,
   createTranscriptState,
   loadHistoryMessages
 } from '../src/shared/transcript-reducer.ts'
@@ -69,6 +70,23 @@ test('error and cancel events do not replace earlier turns', () => {
   assert.equal(state.items.some((item) => item.kind === 'error'), true)
   state = applyRpcEvent(state, event('canceled', { text: 'stopped by user' }, 'c'))
   assert.equal(state.items.at(-1)?.kind, 'notice')
+})
+
+test('a host-side run error freezes the draft and leaves the previous state untouched', () => {
+  const streaming = applyRpcEvent(createTranscriptState(), event('message_update', { text: 'partial' }, 'd'))
+  const failed = applyRunError(streaming, 'prompt rejected')
+  assert.deepEqual(failed.items.map((item) => item.kind), ['assistant', 'error'])
+  assert.equal(failed.items[0]?.kind === 'assistant' && failed.items[0].streaming, false)
+  assert.equal(failed.draftAssistantId, null)
+  assert.equal(streaming.items.length, 1, 'reducers never mutate their input state')
+  assert.equal(streaming.items[0]?.kind === 'assistant' && streaming.items[0].streaming, true)
+})
+
+test('tool summaries are truncated without splitting a surrogate pair', () => {
+  const text = `${'a'.repeat(158)}😀${'b'.repeat(10)}`
+  const state = applyRpcEvent(createTranscriptState(), event('tool_start', { call_id: 'c', tool: 'read', text }, 't'))
+  const tool = state.items[0]
+  assert.equal(tool?.kind === 'tool' ? tool.summary : '', `${'a'.repeat(158)}…`)
 })
 
 test('session history loads user and assistant entries without paths', () => {

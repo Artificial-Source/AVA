@@ -1,12 +1,15 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/app/acp/envelope_intent.h"
 #include "ava/app/acp/transport.h"
+#include "ava/core/UniqueFd.h"
 
 #include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <utility>
 #include <fcntl.h>
 #include <poll.h>
@@ -18,15 +21,6 @@ namespace {
 ava::core::Error io_error(std::string message)
 {
   return ava::core::Error(ava::core::ErrorCategory::Io, std::move(message));
-}
-
-bool configure_wake_fd(int fd)
-{
-  auto const descriptor_flags = fcntl(fd, F_GETFD);
-  if (descriptor_flags == -1 || fcntl(fd, F_SETFD, descriptor_flags | FD_CLOEXEC) == -1)
-    return false;
-  auto const status_flags = fcntl(fd, F_GETFL);
-  return status_flags != -1 && fcntl(fd, F_SETFL, status_flags | O_NONBLOCK) != -1;
 }
 
 void close_fd(int& fd) noexcept
@@ -191,6 +185,8 @@ class FdRecordTransport final : public RecordTransport
     wake(write_wake_write_);
   }
 
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
  private:
   static void wake(int fd) noexcept
   {
@@ -222,23 +218,27 @@ ava::core::Result<std::unique_ptr<RecordTransport>> make_fd_record_transport(int
   if (input_fd < 0 || output_fd < 0)
     return std::unexpected(io_error("ACP transport requires valid descriptors"));
   int read_wake[2] = {-1, -1};
+  if (pipe2(read_wake, O_CLOEXEC | O_NONBLOCK) == -1)
+    return std::unexpected(io_error("failed to create ACP read wake pipe"));
+  ava::core::UniqueFd read_wake_read(read_wake[0]);
+  ava::core::UniqueFd read_wake_write(read_wake[1]);
   int write_wake[2] = {-1, -1};
-  auto fail = [&](std::string message) -> ava::core::Result<std::unique_ptr<RecordTransport>> {
-    close_fd(read_wake[0]);
-    close_fd(read_wake[1]);
-    close_fd(write_wake[0]);
-    close_fd(write_wake[1]);
-    return std::unexpected(io_error(std::move(message)));
-  };
-  if (pipe(read_wake) == -1 || pipe(write_wake) == -1)
-    return fail("failed to create ACP wake pipes");
-  if (!configure_wake_fd(read_wake[0]) || !configure_wake_fd(read_wake[1]) || !configure_wake_fd(write_wake[0]) || !configure_wake_fd(write_wake[1]))
-    return fail("failed to configure ACP wake pipes");
+  if (pipe2(write_wake, O_CLOEXEC | O_NONBLOCK) == -1)
+    return std::unexpected(io_error("failed to create ACP write wake pipe"));
+  ava::core::UniqueFd write_wake_read(write_wake[0]);
+  ava::core::UniqueFd write_wake_write(write_wake[1]);
   auto const output_flags = fcntl(output_fd, F_GETFL);
-  if (output_flags == -1 || fcntl(output_fd, F_SETFL, output_flags | O_NONBLOCK) == -1)
-    return fail("failed to configure bounded ACP output");
-  std::unique_ptr<RecordTransport> transport =
-      std::make_unique<FdRecordTransport>(input_fd, output_fd, read_wake[0], read_wake[1], write_wake[0], write_wake[1], output_flags);
+  if (output_flags == -1)
+    return std::unexpected(io_error("failed to read ACP output flags"));
+  // Allocate the owner before changing the borrowed output descriptor's flags.
+  std::unique_ptr<RecordTransport> transport = std::make_unique<FdRecordTransport>(input_fd, output_fd, read_wake_read.get(), read_wake_write.get(),
+                                                                                   write_wake_read.get(), write_wake_write.get(), output_flags);
+  static_cast<void>(read_wake_read.release());
+  static_cast<void>(read_wake_write.release());
+  static_cast<void>(write_wake_read.release());
+  static_cast<void>(write_wake_write.release());
+  if (fcntl(output_fd, F_SETFL, output_flags | O_NONBLOCK) == -1)
+    return std::unexpected(io_error("failed to configure bounded ACP output"));
   return transport;
 }
 

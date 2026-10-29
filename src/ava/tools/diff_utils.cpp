@@ -11,6 +11,8 @@ namespace {
 struct LogicalLine
 {
   std::string_view text;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct Alignment
@@ -18,6 +20,8 @@ struct Alignment
   std::size_t old_index = 0;
   std::size_t new_index = 0;
   bool found = false;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 std::vector<LogicalLine> split_lines(std::string_view text)

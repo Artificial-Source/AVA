@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "tests/support/session_test_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/command/private_group.h"
 #include "ava/tools/file_tools.h"
@@ -12,15 +13,19 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 namespace {
@@ -126,6 +131,33 @@ void test_permission_rule_storage_add_list_remove()
   expect(removed && removed->rule_id == added->rule_id, "permission rule removal returns the removed rule");
   auto after_remove = ava::permissions::load_persistent_permission_rules(store);
   expect(after_remove && after_remove->empty(), "permission rule removal persists an empty rules array");
+
+  for (std::string const& invalid : {std::string("\xED\xA0\x80"), std::string("\xED\xBF\xBF")})
+  {
+    ava::permissions::PermissionRuleDraft draft{.scope = ava::permissions::PermissionRuleScope::Workspace,
+                                                .action = ava::permissions::PermissionAction::Deny,
+                                                .operation = ava::permissions::Operation::ReadFile,
+                                                .tool_name = {},
+                                                .target_path = outside,
+                                                .command = {},
+                                                .command_recipe_key = {},
+                                                .recipe_display = {},
+                                                .reason = invalid,
+                                                .actor = "test"};
+    auto rejected_reason = ava::permissions::add_persistent_permission_rule(store, draft);
+    expect(!rejected_reason && rejected_reason.error().category() == ava::core::ErrorCategory::InvalidArgument,
+           "permission rules reject UTF-8 encoded surrogates in reasons before persistence");
+    draft.reason = "valid reason";
+    draft.command = invalid;
+    auto rejected_command = ava::permissions::add_persistent_permission_rule(store, draft);
+    expect(!rejected_command && rejected_command.error().category() == ava::core::ErrorCategory::InvalidArgument,
+           "permission rules reject UTF-8 encoded surrogates in commands before persistence");
+    draft.command.clear();
+    draft.recipe_display = invalid;
+    auto rejected_display = ava::permissions::add_persistent_permission_rule(store, draft);
+    expect(!rejected_display && rejected_display.error().category() == ava::core::ErrorCategory::InvalidArgument,
+           "permission rules reject UTF-8 encoded surrogates in recipe displays before persistence");
+  }
 }
 
 void test_legacy_command_allows_are_removed_one_at_a_time()
@@ -1883,6 +1915,50 @@ void test_permission_rule_file_rejects_malformed_rules()
          "absolute rule paths containing parent components normalize instead of being rejected");
 }
 
+void test_permission_rule_bounded_descriptor_reads()
+{
+  auto const root = create_empty_root("permission-rules-bounded-read");
+  auto const store = test_store(root);
+  std::string document = "{\"schema_version\":2,\"rules\":[]}";
+  document.resize(1024 * 1024, ' ');
+  write_file_with_mode(store.global_rules_file, document, 0600);
+  auto exact = ava::permissions::load_persistent_permission_rules(store);
+  expect(exact && exact->empty(), "permission rules accept a regular document exactly at the byte cap");
+
+  document.push_back(' ');
+  write_file_with_mode(store.global_rules_file, document, 0600);
+  auto oversized = ava::permissions::load_persistent_permission_rules(store);
+  expect(!oversized && oversized.error().message() == "permission rules file is too large",
+         "permission rules retain their size-limit diagnostic after bounded-reader consolidation");
+
+  std::error_code error;
+  std::filesystem::remove(store.global_rules_file, error);
+  if (!ava::tests::require(!error && ::mkfifo(store.global_rules_file.c_str(), 0600) == 0, "permission reader fixture creates a FIFO"))
+    return;
+  auto const fifo = ava::tests::run_in_child_with_syscall_errno(std::span<ava::tests::SyscallErrno const>{}, [&] {
+    auto const loaded = ava::permissions::load_persistent_permission_rules(store);
+    return !loaded && loaded.error().category() == ava::core::ErrorCategory::PermissionDenied ? 0 : 1;
+  });
+  ava::tests::expect_child_success(fifo, "permission rules reject FIFOs without blocking");
+
+  std::filesystem::remove(store.global_rules_file, error);
+  auto const target = root / "linked-rules.json";
+  write_file_with_mode(target, "{\"schema_version\":2,\"rules\":[]}", 0600);
+  std::filesystem::create_symlink(target, store.global_rules_file, error);
+  if (!ava::tests::require(!error, "permission reader fixture creates a symlink"))
+    return;
+  auto const linked = ava::permissions::load_persistent_permission_rules(store);
+  expect(!linked, "permission rules do not follow a final symlink to otherwise-valid rules");
+
+  std::filesystem::remove(store.global_rules_file, error);
+  write_file_with_mode(store.global_rules_file, "{\"schema_version\":2,\"rules\":[]}", 0600);
+  auto const failed_read = ava::tests::run_in_child_with_syscall_errno(SYS_read, std::nullopt, EIO, [&] {
+    auto const loaded = ava::permissions::load_persistent_permission_rules(store);
+    return !loaded && loaded.error().message() == "failed while reading permission rules file" ? 0 : 1;
+  });
+  ava::tests::expect_child_success(failed_read, "permission rules preserve underlying descriptor read errors");
+}
+
 }  // namespace
 
 void run_permission_rules_tests()
@@ -1902,6 +1978,7 @@ void run_permission_rules_tests()
   test_permission_rule_storage_fail_closed();
   test_permission_rule_file_rejects_malformed_rules();
   test_permission_rule_broad_permissions_rejected();
+  test_permission_rule_bounded_descriptor_reads();
   test_deny_path_matching_follows_physical_aliases_without_broadening_allow();
   test_file_and_search_tools_enforce_denies_across_physical_aliases();
   test_exact_workspace_root_deny_matches_list_directory_spellings();

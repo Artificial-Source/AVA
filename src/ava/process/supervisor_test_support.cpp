@@ -269,7 +269,7 @@ std::size_t SupervisorTestAccess::retained_native_child_count(Supervisor const& 
 #else
   auto const state = supervisor.implementation_->state;
   std::lock_guard lock(state->mutex);
-  std::size_t result = 0;
+  std::size_t result = state->child_reaper.pending();
   for (auto const& [identity, record] : state->records)
   {
     static_cast<void>(identity);

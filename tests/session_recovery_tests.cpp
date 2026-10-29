@@ -76,6 +76,57 @@ void test_session_lease_creation_and_link_safety()
              linked_original_lease.error().message().find("exactly one link") != std::string::npos &&
              linked_alias_lease.error().message().find("exactly one link") != std::string::npos,
          "existing session leases reject multiply-linked files through either name");
+
+  for (bool const staged_suffix : {false, true})
+  {
+    ava::session::SessionStore store(ava::session::SessionStoreOptions{
+        .root_dir = sessions, .workspace_dir = workspace, .session_id = staged_suffix ? "linked-staging" : "linked-torn-tail"});
+    std::string bytes = "{\"torn\":";
+    if (staged_suffix)
+    {
+      auto data = ava::session::serialize_assistant_output_item_data_json(ava::session::AssistantOutputItem{
+          .assistant_turn_id = "linked-turn",
+          .sequence = 0,
+          .kind = ava::session::AssistantOutputItemKind::Text,
+          .provider_item_id = "linked-item",
+          .provider_output_index = 0,
+          .payload = ava::session::AssistantOutputText{.text = "retained", .assistant_phase = ava::session::AssistantOutputTextPhase::Commentary}});
+      if (!ava::tests::require(data.has_value(), "linked-recovery fixture serializes staged output"))
+        continue;
+      auto line = ava::session::serialize_session_entry_line({.id = "linked-stage",
+                                                              .parent_id = "",
+                                                              .type = ava::session::EntryType::AssistantOutputItem,
+                                                              .timestamp = "2026-07-14T00:00:00Z",
+                                                              .data_json = std::move(*data)});
+      if (!ava::tests::require(line.has_value(), "linked-recovery fixture serializes its record"))
+        continue;
+      bytes = *line + "\n";
+    }
+    ava::tests::write_session_test_binary_file(store.session_path(), bytes);
+    auto lease = ava::session::SessionLease::acquire(store.session_path());
+    if (!ava::tests::require(lease.has_value(), "linked-recovery fixture acquires its original single-link inode"))
+      continue;
+    auto const alias = std::filesystem::path(store.session_path().string() + ".alias");
+    std::filesystem::create_hard_link(store.session_path(), alias);
+    bool const rejected = staged_suffix ? !store.recover_incomplete_assistant_output_suffix(*lease, ava::session::SessionReadLimits{})
+                                        : !store.recover_torn_tail(*lease, ava::session::SessionReadLimits{});
+    expect(rejected && ava::tests::read_session_test_binary_file(store.session_path()) == bytes && ava::tests::read_session_test_binary_file(alias) == bytes,
+           "session recovery rejects hardlinks added after lease acquisition without changing either name");
+  }
+
+  ava::session::SessionStore original_store(
+      ava::session::SessionStoreOptions{.root_dir = sessions, .workspace_dir = workspace, .session_id = "moved-recovery-source"});
+  ava::session::SessionStore renamed_store(
+      ava::session::SessionStoreOptions{.root_dir = sessions, .workspace_dir = workspace, .session_id = "moved-recovery-target"});
+  ava::tests::write_session_test_binary_file(original_store.session_path(), "{\"torn\":");
+  auto moved_lease = ava::session::SessionLease::acquire(original_store.session_path());
+  if (ava::tests::require(moved_lease.has_value(), "renamed recovery fixture acquires its original lease"))
+  {
+    std::filesystem::rename(original_store.session_path(), renamed_store.session_path());
+    auto rejected = renamed_store.recover_torn_tail(*moved_lease, ava::session::SessionReadLimits{});
+    expect(!rejected && ava::tests::read_session_test_binary_file(renamed_store.session_path()) == "{\"torn\":",
+           "torn-tail recovery requires the lease's exact path even when a renamed inode still matches");
+  }
 }
 
 namespace {

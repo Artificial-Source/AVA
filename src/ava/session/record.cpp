@@ -2,12 +2,12 @@
 #include "ava/session/record.h"
 #include "ava/core/json.h"
 #include "ava/core/strict_json.h"
+#include "ava/core/utc_timestamp.h"
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstddef>
-#include <ctime>
 #include <filesystem>
 #include <iomanip>
 #include <istream>
@@ -711,15 +711,7 @@ std::string now_timestamp()
 {
   auto const now = std::chrono::system_clock::now();
   auto const time = std::chrono::system_clock::to_time_t(now);
-  std::tm tm{};
-#ifdef _WIN32
-  gmtime_s(&tm, &time);
-#else
-  gmtime_r(&time, &tm);
-#endif
-  std::ostringstream out;
-  out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-  return out.str();
+  return ava::core::format_utc_timestamp(time);
 }
 
 }  // namespace ava::session

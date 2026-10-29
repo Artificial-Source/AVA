@@ -190,7 +190,10 @@ void benchmark_file_dispatch(Options const& options, bool canceled)
   ava::tools::ToolContext context{.workspace_dir = workspace};
   if (canceled)
     context.cancel_requested = [] { return true; };
-  ava::agent::ToolDispatcher const dispatcher(context, {}, ava::agent::ToolVisibilityOptions{.included_tools = {"read_file"}});
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(context, {}, ava::agent::ToolVisibilityOptions{.included_tools = {"read_file"}});
+  if (!dispatcher_result)
+    fail(dispatcher_result.error().format());
+  auto const& dispatcher = *dispatcher_result;
   ava::agent::ProviderToolCall const call{.id = "bench", .name = "read_file", .arguments_json = "{\"path\":\"note.txt\"}"};
   auto const started = Clock::now();
   std::size_t expected = 0;

@@ -37,7 +37,9 @@ std::string_view to_string(SubagentLiveMessageRole role) noexcept
   return "user";
 }
 
-SubagentLiveInspectionSource::SubagentLiveInspectionSource(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) { }
+SubagentLiveInspectionSource::SubagentLiveInspectionSource(ConstructionKey, std::unique_ptr<Impl> impl) : impl_(std::move(impl))
+{
+}
 
 SubagentLiveInspectionSource::~SubagentLiveInspectionSource() = default;
 
@@ -48,7 +50,7 @@ ava::core::Result<std::shared_ptr<SubagentLiveInspectionSource>> SubagentLiveIns
   try
   {
     auto impl = std::make_unique<Impl>(std::move(authority));
-    return std::shared_ptr<SubagentLiveInspectionSource>(new SubagentLiveInspectionSource(std::move(impl)));
+    return std::make_shared<SubagentLiveInspectionSource>(ConstructionKey{}, std::move(impl));
   }
   catch (...)
   {

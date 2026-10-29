@@ -4,9 +4,17 @@ These files are historical release-position journals. They record what was plann
 
 ## Current position
 
-- [1.1](1.1.md): next-line planning journal; the compiled runtime still requires a dedicated release-bump slice before this becomes runtime evidence.
-- [1.0](1.0.md): current backend baseline and accepted release-position evidence.
-- [0.90](0.90.md): v1 release-candidate completion ledger that justified the 1.0 runtime bump.
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. No release is scheduled yet.
+
+The May backend version bump to `1.0.0` is historical. The runtime number was
+deliberately restored to `0.32.0` while frontend development continues. The
+backend work and its evidence remain in place.
+
+- [1.1](1.1.md): historical next-line planning journal, not a release schedule.
+- [1.0](1.0.md): historical backend baseline and release-position evidence.
+- [0.90](0.90.md): historical ledger that supported the May backend version bump.
 
 Use the [current product index](../product/README.md) for implemented product status, the [1.1 candidate plan](../plans/capabilities-1.1.md) for proposed backend work, and the [roadmap index](../roadmap/README.md) for sequencing.
 

@@ -466,7 +466,9 @@ ava::core::VoidResult AgentTurnExecutor::run_parallel_tool_epoch_and_commit(Pars
           callbacks.progress_events.push_back(event);
           return {};
         };
-        worker_context.cancel_requested = [base_cancel = options_.cancel_requested, stop_token, &schedule_stop_source] {
+        // Keep the admitted ToolContext route, which may intentionally differ
+        // from the parent/provider cancellation callback.
+        worker_context.cancel_requested = [base_cancel = std::move(worker_context.cancel_requested), stop_token, &schedule_stop_source] {
           if (stop_token.stop_requested())
             return true;
           if (base_cancel && base_cancel())

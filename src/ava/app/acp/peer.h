@@ -5,16 +5,20 @@
 #include "ava/app/acp/transport.h"
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <functional>
 #include <future>
 #include <memory>
 #include <stop_token>
 #include <string>
+#include <string_view>
 
 namespace ava::app::acp {
 
 using RequestResult = std::expected<std::string, JsonRpcError>;
+// Inbound stop callbacks run synchronously without the peer's in-flight mutex held.
 using RequestHandler = std::function<RequestResult(Request const&, std::stop_token)>;
 using NotificationHandler = std::function<void(Notification const&, std::stop_token)>;
 // Reader-thread control notifications must be bounded and must not perform

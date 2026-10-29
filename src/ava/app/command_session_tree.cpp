@@ -340,11 +340,6 @@ ava::core::Result<CommandResult> run_sessions_command(runtime::session_ts& unloc
   auto const index_by_id = tree_index_by_id(tree->sessions);
   bool wrote_any = false;
   append_session_tree_lines(output, tree->sessions, index_by_id, tree->roots, tree->current_path, list_query, 0, include_archived, wrote_any);
-  if (output.empty() && !list_query.empty())
-  {
-    add_output(result, "No sessions matching: " + sanitize_inline_text(list_query));
-    return result;
-  }
   if (!wrote_any && !list_query.empty())
   {
     add_output(result, "No sessions matching: " + sanitize_inline_text(list_query));

@@ -2,9 +2,13 @@
 
 [![CI](https://github.com/Artificial-Source/AVA/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Artificial-Source/AVA/actions/workflows/ci.yml)
 
-AVA is a native C++23, terminal-first, local-first coding agent with explicit backend authority for permissions, tools, providers, processes, and append-only sessions. The active default branch is `develop`.
+AVA is a local-first coding agent written in C++23 that works with any LLM. Its backend keeps explicit authority over permissions, tools, providers, processes, and append-only sessions. The active default branch is `develop`.
 
-The source reports runtime version `1.0.0`, but **AVA 1.0.0 is not a published release**. The dated audit verdict is **READY AFTER LISTED BLOCKERS**; see [product principles](docs/product/principles.md) and the single current [release-readiness ledger](docs/product/release-readiness.md).
+The runtime version is `0.32.0`. **This is not a stable release.** The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. No release is scheduled yet. See the
+[product principles](docs/product/principles.md) and
+[release plan](docs/product/release-readiness.md).
 
 **Choose a path:** [use AVA](docs/core/usage.md), [configure AVA](docs/core/configuration.md), [delegate work](docs/core/subagents.md), [understand model tools](docs/core/tools.md), [troubleshoot](docs/operations/troubleshooting.md), [contribute](CONTRIBUTING.md), or browse the [documentation index](docs/README.md).
 
@@ -36,7 +40,7 @@ Build-only requirements:
 - JSON-capable Universal Ctags for debug/libcwd print-member generation
 - Git and configuration-time access to required dependency sources
 
-The optional Electron desktop client in `apps/desktop/` is independent of CMake and needs Node.js 24 plus pnpm; it drives a local Linux AVA binary over RPC. See `docs/desktop/README.md`. Linux x64 remains AVA's only qualified backend platform.
+The optional Electron desktop client in `apps/desktop/` is independent of CMake and needs Node.js 24 plus pnpm; it drives a local Linux AVA binary over RPC. See the [legacy prototype setup](apps/desktop/README.md) or the separate [greenfield desktop design](docs/desktop/README.md). Linux x64 remains AVA's only qualified backend platform.
 
 The presets are the canonical quick start. Prepare a writable Gitache root first:
 
@@ -74,11 +78,13 @@ scripts/package-linux.sh --output-dir /absolute/path/outside/AVA
 
 The script builds Release `ava` plus the fake-provider smoke helper, stages only CMake component `ava`, extracts the archive fresh, verifies its checksum and CLI behavior, and runs the deterministic model smoke. `--binary /absolute/path/to/ava` accepts an existing binary; add `--fake-provider /absolute/path/to/ava_fake_provider_server` to run the model smoke in that mode. Without a fake helper the script prints an explicit skip.
 
-This is a dynamically linked **host** artifact, not a portable Linux bundle. The 2026-08-23 audited x64 candidate requires BMI2, `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.13`, `libncursesw.so.6`, `libtinfo.so.6`, a usable terminfo database, and `curl` on `PATH`. The first-publication target is Linux x64 only; another architecture may publish only after native exact-candidate evidence.
+The first-publication target is **Linux x64 only**, built for **x86-64-v2 (Nehalem-class or newer; no BMI2/AVX requirement)**. The minimum qualified host is Ubuntu 24.04: glibc 2.39, libstdc++ providing `GLIBCXX_3.4.32` and `CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), a usable terminfo database, and `curl` 8.5+ on `PATH`. Inspection caps binary symbol requirements at `GLIBC_2.38`, `GLIBCXX_3.4.32`, and `CXXABI_1.3.13`. This is a dynamically linked host artifact, not a portable Linux bundle; other distributions and architectures require independent exact-candidate evidence.
 
 Tested on Ubuntu 24.04.4 x64: GCC 13 BetaTest with Unix Makefiles and GCC 13 Release with Ninja. Clang 18 was environment-blocked; MSVC, Windows, macOS, and AArch64 were not qualified. Multi-config builds are not release-qualified. A dirty tree is never a qualified artifact, and these source results do not qualify future release bytes.
 
 `--require-release-qualified` and `PROVENANCE.json` field `release_qualified:true` prove only the implemented static source/gitlink/license/native-architecture/dynamic-dependency/package gates. Complete candidate qualification requires the [release ledger](docs/product/release-readiness.md) and [publication runbook](docs/operations/publication.md).
+
+The opt-in/tagged `release-candidate` CI job uses GCC 13 on Ubuntu 24.04, builds once, seals executable digests, tests those bytes, and packages with `--build-dir` without rebuilding. It retains the archive, checksum and digest manifest for 90 days; `verify-promotion` re-downloads and verifies them without publishing. Routine pushes keep the smaller terminal gate.
 
 ## Run
 
@@ -196,6 +202,6 @@ The [documentation index](docs/README.md) is organized by audience and task.
 ### Contributors and maintainers
 
 - [Product principles](docs/product/principles.md), [release readiness](docs/product/release-readiness.md), [Contributing](CONTRIBUTING.md), [development guide](docs/development/contributing.md), [build configuration](docs/operations/build-configuration.md), [testing](docs/operations/testing.md), [architecture](docs/development/architecture.md), [codebase guide](docs/development/codebase-guide.md), and [documentation policy](docs/development/documentation-policy.md)
-- [Release checklist](docs/operations/release-checklist.md), [publication runbook design](docs/operations/publication.md), [Code of Conduct](CODE_OF_CONDUCT.md), [Security](SECURITY.md), [Governance](GOVERNANCE.md), and [Changelog](CHANGELOG.md)
+- [Release checklist](docs/operations/release-checklist.md), [publication runbook](docs/operations/publication.md), [Code of Conduct](CODE_OF_CONDUCT.md), [Security](SECURITY.md), [Governance](GOVERNANCE.md), and [Changelog](CHANGELOG.md)
 
 Product status and future work live in the [product](docs/product/README.md), [plans](docs/plans/README.md), [roadmap](docs/roadmap/README.md), and [goals](docs/goals/README.md) indexes; historical release-position ledgers live under [versions](docs/versions/README.md). Plans and runtime version numbers are not evidence that a tag, artifact, package, or external release has been published.

@@ -44,7 +44,8 @@ export function permissionViewFromEvent(event: RpcEvent, displayToken: string): 
       toolName: readStringField(event.payload, 'tool_name'),
       reason: readStringField(event.payload, 'reason'),
       risk: readStringField(event.payload, 'risk'),
-      diffPreview: readStringField(event.payload, 'diff_preview')
+      diffPreview: readStringField(event.payload, 'diff_preview'),
+      diffTruncated: asBoolean(event.payload.diff_truncated) === true
     }
   }
 }
@@ -95,10 +96,6 @@ export class ResolverStore {
     return this.#permissions.length
   }
 
-  get questionCount(): number {
-    return this.#questions.length
-  }
-
   bindEvent(event: RpcEvent): void {
     if (event.name === 'permission_requested') {
       const bound = permissionViewFromEvent(event, this.#generateDisplayToken())
@@ -116,21 +113,11 @@ export class ResolverStore {
   }
 
   beginPermission(displayToken: string): BoundPermission | null {
-    const bound = this.#permissions[0]
-    if (!bound || bound.view.displayToken !== displayToken || this.#inFlight.has(bound)) {
-      return null
-    }
-    this.#inFlight.add(bound)
-    return bound
+    return this.#begin(this.#permissions, displayToken)
   }
 
   beginQuestion(displayToken: string): BoundQuestion | null {
-    const bound = this.#questions[0]
-    if (!bound || bound.view.displayToken !== displayToken || this.#inFlight.has(bound)) {
-      return null
-    }
-    this.#inFlight.add(bound)
-    return bound
+    return this.#begin(this.#questions, displayToken)
   }
 
   // Peeking never marks a display in flight, so a locally rejected reply can be retried.
@@ -155,6 +142,16 @@ export class ResolverStore {
 
   retireQuestion(bound: BoundQuestion): boolean {
     return this.#removeMatched(bound, this.#questions)
+  }
+
+  // Only the head of a queue is displayed, so only it can be answered, and only once.
+  #begin<T extends BoundPermission | BoundQuestion>(queue: T[], displayToken: string): T | null {
+    const bound = queue[0]
+    if (!bound || bound.view.displayToken !== displayToken || this.#inFlight.has(bound)) {
+      return null
+    }
+    this.#inFlight.add(bound)
+    return bound
   }
 
   #removeMatched(bound: BoundPermission | BoundQuestion, queue: Array<BoundPermission | BoundQuestion>): boolean {

@@ -29,6 +29,7 @@ struct McpStdioClientOptions
   std::optional<ava::process::ProcessScopeV1> process_scope = std::nullopt;
   std::chrono::milliseconds startup_timeout{3000};
   std::chrono::milliseconds request_timeout{5000};
+  // Maximum bytes in one JSON record, excluding its terminating newline.
   std::size_t max_message_bytes = 64 * 1024;
   std::size_t max_stderr_bytes = 64 * 1024;
 

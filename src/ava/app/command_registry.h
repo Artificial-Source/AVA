@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/app/runtime.h"
 #include "ava/mcp/stdio_client.h"
 #include "ava/permissions/permission.h"
@@ -7,6 +8,7 @@
 #include "ava/core/error.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>

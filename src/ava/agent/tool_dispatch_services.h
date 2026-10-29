@@ -1,5 +1,4 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/agent/agent_config.h"
 #include "ava/agent/question.h"
@@ -12,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -31,7 +31,10 @@ struct TaskSubagentRequest
   ava::core::NoLogString command;
   bool background = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct TaskSubagentResult
@@ -47,7 +50,10 @@ struct TaskSubagentResult
   std::size_t tool_calls = 0;
   std::size_t tool_iterations = 0;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 using TaskSubagentRunner = std::function<ava::core::Result<TaskSubagentResult>(TaskSubagentRequest const&)>;
@@ -62,6 +68,7 @@ struct ToolDispatchServices
   SubagentLaunchObserver subagent_launch = {};
   // Exact coordinator/owner pair for public job controls. Child loops clear
   // both this coordinator and the task runner, then hide both schemas.
+  // Dispatch copies retain the process coordinator while task/job calls are active.
   std::shared_ptr<SubagentCoordinator> subagent_coordinator = nullptr;
   std::vector<AgentDefinition> subagents = {};
 

@@ -1,9 +1,11 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/session/session_store.h"
 #include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>

@@ -8,10 +8,12 @@ from timeout_support import test_timeout
 import os
 from pathlib import Path
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
 import sys
+import time
 
 
 DUMMY_CREDENTIAL = "AVA_LIVE_DOGFOOD_DUMMY_KEY_NOT_A_SECRET"
@@ -311,6 +313,87 @@ for raw_line in sys.stdin:
     )
 
 
+def assert_setup_failure_stops_execution(source, fake_ava, root, launcher):
+    name, script_name, root_variable, _, _ = launcher
+    case = make_private_dir(root / f"{name}-setup-failure")
+    home = make_private_dir(case / "home")
+    temporary = make_private_dir(case / "tmp")
+    parent = make_private_dir(case / "private-parent")
+    marker = case / "executed"
+    tools = make_private_dir(case / "tools")
+    write_executable(tools / "mkfifo", "#!/bin/sh\nexit 1\n")
+    env = clean_environment(home, temporary, fake_ava, marker)
+    env[root_variable] = str(parent)
+    env["PATH"] = f"{tools}:/usr/bin:/bin"
+    result = run_launcher(source / "scripts" / script_name, env, source)
+    assert result.returncode != 0, result.stdout
+    assert "cannot create RPC FIFO" in result.stderr
+    assert not marker.exists()
+    assert not list(parent.iterdir())
+
+
+def assert_signal_reaps_process_group(source, root, launcher):
+    name, script_name, root_variable, _, _ = launcher
+    case = make_private_dir(root / f"{name}-signal")
+    home = make_private_dir(case / "home")
+    temporary = make_private_dir(case / "tmp")
+    parent = make_private_dir(case / "private-parent")
+    marker = case / "processes"
+    fake_ava = case / "stubborn-ava"
+    write_executable(fake_ava, r'''#!/usr/bin/python3
+import os, signal, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+child = os.fork()
+if child:
+    Path(os.environ["FAKE_AVA_EXECUTION_MARKER"]).write_text(f"{os.getpid()} {child}")
+while True:
+    time.sleep(1)
+''')
+    env = clean_environment(home, temporary, fake_ava, marker)
+    env[root_variable] = str(parent)
+    processes = []
+    try:
+        with owned_popen(["/bin/sh", str(source / "scripts" / script_name)],
+                         cwd=source, env=env, text=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            deadline = time.monotonic() + test_timeout(5)
+            while time.monotonic() < deadline:
+                if marker.exists():
+                    processes = [int(value) for value in marker.read_text().split()]
+                    if len(processes) == 2:
+                        break
+                assert process.poll() is None, "launcher exited before fake child started"
+                time.sleep(0.01)
+            assert len(processes) == 2, "fake child never started"
+            requested_signal = signal.SIGTERM if name == "model" else signal.SIGINT
+            process.send_signal(requested_signal)
+            stdout, stderr = process.communicate(timeout=test_timeout(8))
+            assert process.returncode == 128 + requested_signal, (stdout, stderr)
+        assert not list(parent.iterdir()), "evidence removed only after group shutdown"
+        deadline = time.monotonic() + test_timeout(2)
+        remaining = list(processes)
+        while remaining and time.monotonic() < deadline:
+            for pid in list(remaining):
+                try:
+                    state = Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1]
+                except FileNotFoundError:
+                    remaining.remove(pid)
+                    continue
+                # A killed orphan can remain a zombie until the host init reaps it.
+                if state.startswith("Z "):
+                    remaining.remove(pid)
+            if remaining:
+                time.sleep(0.01)
+        assert not remaining, remaining
+    finally:
+        for pid in processes:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
@@ -329,6 +412,8 @@ def main():
         for launcher in LAUNCHERS:
             assert_success_and_parent_survival(source, fake_ava, root, launcher)
             assert_rejections_precede_execution(source, fake_ava, root, launcher)
+            assert_setup_failure_stops_execution(source, fake_ava, root, launcher)
+            assert_signal_reaps_process_group(source, root, launcher)
         assert_parallel_matrix_integration(source, fake_ava, root)
         shutil.rmtree(root / "matrix", ignore_errors=False)
 

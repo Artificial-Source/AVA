@@ -80,3 +80,9 @@ string(FIND "${curl_header}" "explicit CurlCliTransport(ava::process::ProcessSco
 if(deleted_default EQUAL -1 OR scoped_constructor EQUAL -1)
   message(FATAL_ERROR "curl transport constructor is not explicitly process-scoped")
 endif()
+
+# A temporary request body may coexist with other supervised launches.
+# Create its descriptor atomically close-on-exec, rather than setting it later.
+if(NOT curl_source MATCHES "::mkostemp\\([^;\n]*O_CLOEXEC\\)")
+  message(FATAL_ERROR "curl request body descriptor must be created with O_CLOEXEC")
+endif()

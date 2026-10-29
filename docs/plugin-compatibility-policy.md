@@ -1,8 +1,12 @@
 # AVA Plugin And MCP Compatibility Policy
 
-This policy defines the compatibility contract for AVA's local plugin and MCP foundation as it stabilizes for 1.0. It applies to the `ava.plugin.v1` manifest/protocol surface, plugin-contributed tools/commands/static resources/event hooks, and AVA's stdio MCP adapter.
+This policy defines the compatibility contract for AVA's local plugins and
+MCP support. It applies to `ava.plugin.v1`, plugin tools, commands, static
+resources, event hooks, and the stdio MCP adapter.
 
-The current compiled runtime version is still managed separately from this release-position work. Do not infer a runtime version bump from this document.
+The runtime version is `0.32.0`. This is not a stable release. The versioned
+extension contract does not imply a stable product release. The terminal
+frontend is still in active development. No release is scheduled yet.
 
 ## Stable v1 Contract
 
@@ -94,6 +98,6 @@ At minimum, representative golden coverage should include plugin tool schemas, M
 
 ## MCP Boundary And Resource Decision
 
-AVA's current 1.0 MCP boundary is stdio server configuration plus `initialize`, `tools/list`, `tools/call`, bounded-paginated `resources/list`, text-only `resources/read`, `prompts/list`, and `prompts/get`. Launching, connecting, calling tools, and reading resources are permissioned and audited AVA operations.
+AVA's current MCP boundary is stdio server configuration plus `initialize`, `tools/list`, `tools/call`, bounded-paginated `resources/list`, text-only `resources/read`, `prompts/list`, and `prompts/get`. Launching, connecting, calling tools, and reading resources are permissioned and audited AVA operations.
 
 `resources/list` and `resources/read` are exposed only through bounded no-argument model tools with opaque URI-hash tool names, generic provider-facing schema metadata, `mcp.resource.read` permission prompts, JSON-RPC message size limits, cancellation, diagnostics, and tests. Server-controlled resource names, URIs, MIME types, and descriptions are not sent to provider tool schemas before read approval. MCP resources must not be silently injected into prompt context as part of this contract-hardening slice. Blob/binary resource surfacing, resource templates, subscriptions, and remote transports remain future work.

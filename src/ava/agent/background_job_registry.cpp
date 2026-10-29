@@ -63,6 +63,9 @@ namespace {
 struct BackgroundJobRegistry::JobRecord
 {
   BackgroundJobSnapshot snapshot;
+  // Published under the registry mutex, independently of the thread handle.
+  // Stop requests invoke arbitrary callbacks inline and must run unlocked.
+  std::stop_source stop_source{std::nostopstate};
   ava::core::JoinThread thread;
   std::mutex thread_mutex;
   bool joined = false;
@@ -148,8 +151,7 @@ std::string to_string(BackgroundJobState state)
 
 BackgroundJobRegistry::~BackgroundJobRegistry()
 {
-  request_stop_all();
-  join_all();
+  shutdown();
 }
 
 ava::core::Result<BackgroundJobSnapshot> BackgroundJobRegistry::start(BackgroundJobStartOptions options, BackgroundJobWorker worker)
@@ -174,6 +176,30 @@ ava::core::Result<BackgroundJobSnapshot> BackgroundJobRegistry::start(Background
 
   BackgroundJobSnapshot snapshot;
   std::string job_id;
+  // Preflight is external code and may block or reenter the registry. Run it
+  // before publishing a record, then recheck admission under mutex_ below.
+  try
+  {
+    if (options_.thread_start_preflight)
+    {
+      if (auto allowed = options_.thread_start_preflight(); !allowed)
+        return std::unexpected(std::move(allowed.error()));
+    }
+  }
+  catch (std::exception const& error)
+  {
+    auto result_error = ava::core::Error(ava::core::ErrorCategory::Unknown, "failed to prepare background job thread");
+    result_error.with_context("cause", error.what());
+    return std::unexpected(std::move(result_error));
+  }
+  catch (...)
+  {
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "failed to prepare background job thread"));
+  }
+
+  // Shutdown may find the record immediately after publication, but cannot
+  // finish joining it before this start has installed the worker or failed.
+  std::unique_lock thread_lock(record->thread_mutex);
   {
     std::lock_guard lock(mutex_);
     if (!accepting_)
@@ -204,22 +230,8 @@ ava::core::Result<BackgroundJobSnapshot> BackgroundJobRegistry::start(Background
     }
   }
 
-  if (options_.thread_start_preflight)
-  {
-    if (auto allowed = options_.thread_start_preflight(); !allowed)
-    {
-      {
-        std::lock_guard lock(mutex_);
-        jobs_.erase(job_id);
-      }
-      changed_.notify_all();
-      return std::unexpected(std::move(allowed.error()));
-    }
-  }
-
   try
   {
-    std::lock_guard thread_lock(record->thread_mutex);
     record->thread = ava::core::JoinThread::create("background_job", [this, job_id, worker = std::move(worker)](std::stop_token stop_token) mutable {
       BackgroundJobCompletion completion;
       try
@@ -263,16 +275,15 @@ ava::core::Result<BackgroundJobSnapshot> BackgroundJobRegistry::start(Background
   }
 
   bool cancel_requested = false;
+  auto stop_source = record->thread.get_stop_source();
   {
     std::lock_guard lock(mutex_);
+    record->stop_source = stop_source;
     cancel_requested = record->snapshot.cancel_requested;
   }
+  thread_lock.unlock();
   if (cancel_requested)
-  {
-    std::lock_guard thread_lock(record->thread_mutex);
-    if (record->thread.joinable())
-      record->thread.request_stop();
-  }
+    stop_source.request_stop();
   changed_.notify_all();
   if (options_.wait_for_terminal_before_start_returns)
   {
@@ -310,25 +321,20 @@ ava::core::Result<BackgroundJobSnapshot> BackgroundJobRegistry::snapshot(std::st
 
 ava::core::Result<BackgroundJobSnapshot> BackgroundJobRegistry::cancel(std::string_view job_id)
 {
-  std::shared_ptr<JobRecord> record;
+  std::stop_source stop_source{std::nostopstate};
   BackgroundJobSnapshot snapshot;
   {
     std::lock_guard lock(mutex_);
-    record = find_record_locked(job_id);
+    auto record = find_record_locked(job_id);
     if (!record)
       return std::unexpected(job_not_found_error(job_id));
     if (record->snapshot.state == BackgroundJobState::Running)
       record->snapshot.cancel_requested = true;
     snapshot = record->snapshot;
+    stop_source = record->stop_source;
   }
 
-  {
-    std::lock_guard thread_lock(record->thread_mutex);
-    if (record->thread.joinable())
-    {
-      record->thread.request_stop();
-    }
-  }
+  stop_source.request_stop();
   changed_.notify_all();
   return snapshot;
 }
@@ -429,26 +435,20 @@ std::size_t BackgroundJobRegistry::join_finished()
 
 void BackgroundJobRegistry::request_stop_all()
 {
-  std::vector<std::shared_ptr<JobRecord>> records;
+  std::vector<std::stop_source> stop_sources;
   {
     std::lock_guard lock(mutex_);
-    records.reserve(jobs_.size());
+    stop_sources.reserve(jobs_.size());
     for (auto const& [_, record] : jobs_)
     {
       if (record->snapshot.state == BackgroundJobState::Running)
         record->snapshot.cancel_requested = true;
-      records.push_back(record);
+      stop_sources.push_back(record->stop_source);
     }
   }
 
-  for (auto& record : records)
-  {
-    std::lock_guard thread_lock(record->thread_mutex);
-    if (record->thread.joinable())
-    {
-      record->thread.request_stop();
-    }
-  }
+  for (auto& stop_source : stop_sources)
+    stop_source.request_stop();
   changed_.notify_all();
 }
 

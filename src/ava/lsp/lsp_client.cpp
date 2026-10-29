@@ -236,9 +236,14 @@ ava::core::Result<std::vector<Diagnostic>> SubprocessLspClient::diagnostics(std:
     auto const method = ava::core::json::string_field(*notification, "method");
     if (!method)
       return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP notification is malformed", config_));
-    if (auto const id = ava::core::json::integer_field(*notification, "id"))
+    if (ava::core::json::field_value_start(*notification, "id"))
     {
-      if (auto response = respond_to_server_request(*notification, *id, deadline, config_.request_timeout, "request", cancel_requested); !response)
+      auto const numeric_id = ava::core::json::integer_field(*notification, "id");
+      auto const string_id = ava::core::json::string_field(*notification, "id");
+      if (!numeric_id && !string_id)
+        return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP server request id is malformed", config_));
+      auto const id_json = string_id ? json_string(*string_id) : std::to_string(*numeric_id);
+      if (auto response = respond_to_server_request(*notification, id_json, deadline, config_.request_timeout, "request", cancel_requested); !response)
         return std::unexpected(std::move(response.error()));
       continue;
     }

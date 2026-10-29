@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -100,7 +101,7 @@ class TempBodyFile
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to resolve temporary directory"));
 
     std::string path_template = (temp_dir / "ava-request-body-XXXXXX").string();
-    int const descriptor = ::mkstemp(path_template.data());
+    int const descriptor = ::mkostemp(path_template.data(), O_CLOEXEC);
     if (descriptor < 0)
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to create temporary request body file"));
     UniqueFd file(descriptor);
@@ -318,6 +319,8 @@ ava::core::Result<HttpResponse> parse_curl_output(std::string output, bool inclu
   }
 
   auto const status_text = output.substr(marker_position + kStatusMarker.size());
+  if (status_text.size() != 3 || !std::ranges::all_of(status_text, [](char ch) { return ch >= '0' && ch <= '9'; }))
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Provider, "curl response had a malformed HTTP status trailer"));
   int status = 0;
   for (char const ch : status_text)
   {

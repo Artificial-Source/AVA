@@ -4,6 +4,7 @@
 #include "ava/command/private_group.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/ascii.h"
 #include "ava/core/fd_io.h"
 #include "ava/core/open_beneath.h"
 
@@ -614,7 +615,7 @@ ava::core::Result<std::vector<CommandPathEntry>> discover_path(CommandBuildOptio
   }
   if (startup_path && startup_path->size() > options.limits.max_path_bytes)
     return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "startup PATH exceeds the bounded input size"));
-  if (startup_path && has_forbidden_byte(*startup_path))
+  if (startup_path && ava::core::has_c0_or_del(*startup_path))
     return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "startup PATH contains a forbidden control byte"));
 
   std::vector<CommandPathEntry> entries;
@@ -751,7 +752,7 @@ ava::core::Result<std::optional<ShebangParse>> shebang_interpreter_path(Executab
   // everything after the first whitespace-delimited interpreter token up to
   // the newline is that single argument.
   auto const argument = body.substr(end);
-  if (interpreter.empty() || has_forbidden_byte(interpreter) || !std::filesystem::path(interpreter).is_absolute())
+  if (interpreter.empty() || ava::core::has_c0_or_del(interpreter) || !std::filesystem::path(interpreter).is_absolute())
   {
     return std::unexpected(
         command_error(ava::core::ErrorCategory::InvalidArgument, "shebang must name an absolute interpreter path", "path", executable.canonical_path.string()));
@@ -763,7 +764,7 @@ ava::core::Result<std::optional<ShebangParse>> shebang_interpreter_path(Executab
 std::optional<ExecutableMetadata> resolve_env_name(std::string_view name, std::vector<CommandPathEntry> const& path_entries,
                                                    ava::core::AnchorSet const& anchors)
 {
-  if (name.empty() || name.find('/') != std::string_view::npos || has_forbidden_byte(name))
+  if (name.empty() || name.find('/') != std::string_view::npos || ava::core::has_c0_or_del(name))
     return std::nullopt;
   for (auto const& entry : path_entries)
   {
@@ -1103,7 +1104,7 @@ ava::core::Result<ResolvedExecutable> resolve_executable(std::vector<std::string
 std::optional<PathMetadata> seal_recipe_path_argument(std::string_view value, std::filesystem::path const& cwd, std::filesystem::path const& workspace,
                                                       std::shared_ptr<ava::core::AnchorSet const> const& anchor_set)
 {
-  if (value.empty() || has_forbidden_byte(value))
+  if (value.empty() || ava::core::has_c0_or_del(value))
     return std::nullopt;
   std::filesystem::path raw(value);
   auto candidate = raw.is_absolute() ? raw : cwd / raw;

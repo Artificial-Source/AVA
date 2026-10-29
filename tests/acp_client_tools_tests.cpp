@@ -254,6 +254,15 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
        {"delivery policies", policies == std::vector<OutboundCallPolicy>(
                                              {OutboundCallPolicy::Normal, OutboundCallPolicy::AbortConnectionIfDelivered, OutboundCallPolicy::Normal})}});
 
+  std::string const invalid_utf8(1, static_cast<char>(0xff));
+  auto const calls_before_invalid_utf8 = methods.size();
+  auto invalid_content = files->write_text_file(std::filesystem::path("/workspace/note.txt"), invalid_utf8, nullptr);
+  auto invalid_path = files->read_text_file(std::filesystem::path("/workspace/" + invalid_utf8), nullptr);
+  auto invalid_session_files = make_client_exact_file_access(invalid_utf8, gateway);
+  auto invalid_session = invalid_session_files->read_text_file(std::filesystem::path("/workspace/note.txt"), nullptr);
+  expect(!invalid_content && !invalid_path && !invalid_session && methods.size() == calls_before_invalid_utf8,
+         "ACP exact-file serialization rejects invalid UTF-8 without throwing, changing bytes, or sending a client request");
+
   auto delegated_cancel_root_owner = ScopedTestDirectory::create_unique(temp_root(), "acp-delegated-read-cancel-");
   auto const delegated_cancel_root = delegated_cancel_root_owner.path();
   auto const delegated_cancel_workspace = delegated_cancel_root / "workspace";
@@ -276,7 +285,11 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
                                                    .cancel_requested = [&] { return cancellation_observable; },
                                                    .secure_workspace = delegated_cancel_secure ? *delegated_cancel_secure : nullptr,
                                                    .exact_file_access = make_client_exact_file_access("session-delegated-cancel", delegated_cancel_gateway)};
-  ava::agent::ToolDispatcher delegated_cancel_dispatcher(delegated_cancel_context);
+  auto delegated_cancel_dispatcher_result = ava::agent::ToolDispatcher::create_strict(delegated_cancel_context);
+  if (!ava::tests::require(delegated_cancel_dispatcher_result.has_value(),
+                           delegated_cancel_dispatcher_result ? "dispatcher fixture composes" : delegated_cancel_dispatcher_result.error().format()))
+    return;
+  auto& delegated_cancel_dispatcher = *delegated_cancel_dispatcher_result;
   auto delegated_cancel = delegated_cancel_dispatcher.dispatch(
       ava::agent::ProviderToolCall{.id = "call_delegated_cancel", .name = "read_file", .arguments_json = R"({"path":"note.txt"})"});
   expect(delegated_cancel_secure && delegated_cancel && !delegated_cancel->success &&
@@ -400,7 +413,11 @@ void test_acp_client_tool_dtos_lifecycle_and_cancellation()
                                  }),
          "ACP terminal/output truncated-tail fixture preserves retained counts and status while clearing unavailable original totals");
 
-  ava::agent::ToolDispatcher truncated_dispatcher(truncated_context);
+  auto truncated_dispatcher_result = ava::agent::ToolDispatcher::create_strict(truncated_context);
+  if (!ava::tests::require(truncated_dispatcher_result.has_value(),
+                           truncated_dispatcher_result ? "dispatcher fixture composes" : truncated_dispatcher_result.error().format()))
+    return;
+  auto& truncated_dispatcher = *truncated_dispatcher_result;
   auto truncated_dispatch = truncated_dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "call_truncated_terminal", .name = "bash", .arguments_json = R"({"command":"printf retained-tail","timeout_ms":100})"});
   auto const truncated_structured = truncated_dispatch ? ava::agent::serialize_tool_result_payload_json(*truncated_dispatch) : std::string{};
@@ -504,6 +521,20 @@ void test_acp_client_file_dtos_validation_and_windows()
   expect(!malformed && malformed.error().message().find("requires string content") != std::string::npos,
          "ACP client file adapter rejects malformed required response fields while allowing additive members");
 
+  for (auto const& raw : {
+           std::string(R"({"content":"first","content":"second"})"),
+           std::string(kMaxRecordBytes, ' ') + R"({"content":"x"})",
+           std::string(R"({"content":"x","_meta":)") + std::string(kMaxNestingDepth, '[') + "0" + std::string(kMaxNestingDepth, ']') + "}",
+       })
+  {
+    auto bounded_gateway = std::make_shared<ClientRequestGateway>();
+    bounded_gateway->bind([&raw](std::string, std::optional<std::string>, std::chrono::milliseconds,
+                                 OutboundCallPolicy) -> ava::core::Result<PendingCall> { return ready_call("bounded", CallResult(raw)); },
+                          [](JsonRpcId const&, std::string) { return true; });
+    auto bounded_files = make_client_exact_file_access("session-bounded", bounded_gateway);
+    expect(!bounded_files->read_text_file("/workspace/file.txt", nullptr), "direct client-tool response decoding enforces ACP bytes, depth and duplicate keys");
+  }
+
   auto oversized_gateway = std::make_shared<ClientRequestGateway>();
   oversized_gateway->bind(
       [&](std::string, std::optional<std::string>, std::chrono::milliseconds, OutboundCallPolicy) -> ava::core::Result<PendingCall> {
@@ -512,7 +543,7 @@ void test_acp_client_file_dtos_validation_and_windows()
       [](JsonRpcId const&, std::string) { return true; });
   auto oversized_files = make_client_exact_file_access("session-oversized", oversized_gateway);
   auto oversized = oversized_files->read_text_file("/workspace/file.txt", nullptr);
-  expect(!oversized && oversized.error().message().find("string limit") != std::string::npos,
+  expect(!oversized && oversized.error().message().find("bounded valid JSON") != std::string::npos,
          "ACP client file adapter rejects oversized content even when a test gateway bypasses peer record validation");
 
   std::string large_client_file;
@@ -552,7 +583,11 @@ void test_acp_client_file_dtos_validation_and_windows()
                                          .secure_workspace = window_secure ? *window_secure : nullptr,
                                          .exact_file_access = window_files};
   auto bounded_window = ava::tools::read_file(window_context, window_workspace / "large.txt", {.max_bytes = 64 * 1024, .offset_line = 300, .max_lines = 200});
-  ava::agent::ToolDispatcher window_dispatcher(window_context);
+  auto window_dispatcher_result = ava::agent::ToolDispatcher::create_strict(window_context);
+  if (!ava::tests::require(window_dispatcher_result.has_value(),
+                           window_dispatcher_result ? "dispatcher fixture composes" : window_dispatcher_result.error().format()))
+    return;
+  auto& window_dispatcher = *window_dispatcher_result;
   auto dispatched_window = window_dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "call_window", .name = "read_file", .arguments_json = R"({"path":"large.txt","offset":300,"limit":200,"max_bytes":65536})"});
   auto beyond_eof = ava::tools::read_file(window_context, window_workspace / "large.txt", {.max_bytes = 64 * 1024, .offset_line = 5'000, .max_lines = 200});
@@ -629,7 +664,11 @@ void test_acp_client_file_dtos_validation_and_windows()
                                             .secure_workspace = full_read_secure ? *full_read_secure : nullptr,
                                             .exact_file_access = full_read_files};
   auto full_edit = ava::tools::edit_file(full_read_context, full_read_workspace / "remote.txt", "old", "new");
-  ava::agent::ToolDispatcher full_patch_dispatcher(full_read_context);
+  auto full_patch_dispatcher_result = ava::agent::ToolDispatcher::create_strict(full_read_context);
+  if (!ava::tests::require(full_patch_dispatcher_result.has_value(),
+                           full_patch_dispatcher_result ? "dispatcher fixture composes" : full_patch_dispatcher_result.error().format()))
+    return;
+  auto& full_patch_dispatcher = *full_patch_dispatcher_result;
   auto full_patch = full_patch_dispatcher.dispatch(ava::agent::ProviderToolCall{
       .id = "full-patch", .name = "apply_patch", .arguments_json = R"({"edits":[{"path":"remote.txt","old_text":"stale","new_text":"fresh"}]})"});
   expect(full_read_secure && full_edit && full_patch && full_patch->success && full_read_content == "alpha new fresh\n" && full_read_params.size() == 2 &&

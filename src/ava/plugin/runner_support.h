@@ -19,7 +19,5 @@ namespace ava::plugin {
 [[nodiscard]] std::string exit_detail(ava::process::ExitStatusV1 const& status);
 [[nodiscard]] std::vector<std::string> plugin_argv(PluginManifest const& manifest);
 [[nodiscard]] std::filesystem::path child_working_dir(PluginManifest const& manifest, PluginRunnerOptions const& options);
-[[nodiscard]] std::chrono::steady_clock::time_point saturating_add(std::chrono::steady_clock::time_point value,
-                                                                   std::chrono::steady_clock::duration duration) noexcept;
 
 }  // namespace ava::plugin

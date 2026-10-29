@@ -2,6 +2,7 @@
 #include "ava/command/environment.h"
 #include "ava/permissions/permission.h"
 #include "ava/core/NoLogString.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 #include "ava/core/mode.h"
 #include "ava/core/open_beneath.h"
@@ -28,18 +29,9 @@ PermissionResolutionDecision::PermissionResolutionDecision(PermissionResolution 
 {
 }
 
-namespace {
-
-bool guidance_has_forbidden_byte(std::string_view value) noexcept
-{
-  return std::ranges::any_of(value, [](unsigned char ch) { return ch < 0x20 || ch == 0x7F; });
-}
-
-}  // namespace
-
 std::optional<std::string> validated_permission_user_guidance(std::string_view value)
 {
-  if (value.empty() || value.size() > kMaxPermissionUserGuidanceBytes || guidance_has_forbidden_byte(value) || !ava::core::json::is_valid_utf8(value))
+  if (value.empty() || value.size() > kMaxPermissionUserGuidanceBytes || ava::core::has_c0_or_del(value) || !ava::core::json::is_valid_utf8(value))
   {
     return std::nullopt;
   }
@@ -54,11 +46,13 @@ std::string with_provider_user_guidance(std::string content, std::string_view gu
 
   if (ava::core::json::is_valid_object(content))
   {
-    while (!content.empty() && (content.back() == ' ' || content.back() == '\t' || content.back() == '\n' || content.back() == '\r')) content.pop_back();
+    while (!content.empty() && (content.back() == ' ' || content.back() == '\t' || content.back() == '\n' || content.back() == '\r'))
+      content.pop_back();
     if (content.size() >= 2 && content.back() == '}')
     {
       content.pop_back();
-      while (content.size() > 1 && (content.back() == ' ' || content.back() == '\t' || content.back() == '\n' || content.back() == '\r')) content.pop_back();
+      while (content.size() > 1 && (content.back() == ' ' || content.back() == '\t' || content.back() == '\n' || content.back() == '\r'))
+        content.pop_back();
       bool const empty_object = content.size() == 1;  // only remaining '{'
       if (!empty_object)
         content.push_back(',');
@@ -263,7 +257,8 @@ std::vector<std::string> lowercase_argv(std::vector<std::string> const& argv)
 {
   std::vector<std::string> result;
   result.reserve(argv.size());
-  for (auto const& arg : argv) result.push_back(lowercase(arg));
+  for (auto const& arg : argv)
+    result.push_back(lowercase(arg));
   return result;
 }
 
@@ -331,13 +326,15 @@ std::filesystem::path policy_path(std::filesystem::path const& path)
 
 bool is_secret_path(std::filesystem::path const& path)
 {
+  bool previous_is_config = false;
   for (auto const& part : path.lexically_normal())
   {
     auto const component = lowercase(part.string());
-    if (equals_any(component, {".ssh", ".aws", ".gnupg", ".config/gcloud"}))
+    if (equals_any(component, {".ssh", ".aws", ".gnupg"}) || (previous_is_config && component == "gcloud"))
     {
       return true;
     }
+    previous_is_config = component == ".config";
   }
 
   auto const filename = lowercase(path.filename().string());
@@ -663,7 +660,8 @@ std::optional<StableRecipeIdentity> stable_recipe_identity(ava::command::Command
 
   std::vector<RecipeArgument> normalized_argv;
   normalized_argv.reserve(argv.size());
-  for (auto const& value : argv) normalized_argv.push_back(recipe_argument(value, plan.workspace()));
+  for (auto const& value : argv)
+    normalized_argv.push_back(recipe_argument(value, plan.workspace()));
 
   auto append_payload = [&](ava::command::detail::Sha256Builder& hash, bool include_workspace) {
     hash.append_field(kPayloadVersion);

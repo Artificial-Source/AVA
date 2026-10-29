@@ -1,19 +1,15 @@
 #include "sys.h"
+#include "ava/app/acp/codec_json_internal.h"
 #include "ava/app/acp/content.h"
 #include "ava/provider/provider.h"
-#include "ava/provider/provider_utils.h"
+#include "ava/core/ascii.h"
+#include "ava/core/base64.h"
 
-#include <algorithm>
-#include <cctype>
-#include <cstdint>
 #include <string_view>
 #include <utility>
-#include <nlohmann/json.hpp>
 
 namespace ava::app::acp {
 namespace {
-
-using Json = nlohmann::json;
 
 JsonRpcError content_error(std::string message)
 {
@@ -25,70 +21,12 @@ JsonRpcError content_error(std::string message)
                       .suppress_response = false};
 }
 
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7f;
-  });
-}
-
 std::optional<std::string> decode_base64_canonical(std::string_view encoded)
 {
-  if (encoded.empty() || encoded.size() % 4 != 0 || !ava::provider::is_valid_base64(encoded))
+  if (encoded.empty())
     return std::nullopt;
-  if (encoded.size() > ((kMaxAcpPromptImageBytes + 2U) / 3U) * 4U)
-    return std::nullopt;
-
-  auto value = [](char ch) -> std::optional<std::uint8_t> {
-    if (ch >= 'A' && ch <= 'Z')
-      return static_cast<std::uint8_t>(ch - 'A');
-    if (ch >= 'a' && ch <= 'z')
-      return static_cast<std::uint8_t>(ch - 'a' + 26);
-    if (ch >= '0' && ch <= '9')
-      return static_cast<std::uint8_t>(ch - '0' + 52);
-    if (ch == '+')
-      return 62;
-    if (ch == '/')
-      return 63;
-    return std::nullopt;
-  };
-
-  std::string decoded;
-  decoded.reserve(encoded.size() / 4 * 3);
-  for (std::size_t offset = 0; offset < encoded.size(); offset += 4)
-  {
-    bool const final = offset + 4 == encoded.size();
-    auto a = value(encoded[offset]);
-    auto b = value(encoded[offset + 1]);
-    bool const c_padding = encoded[offset + 2] == '=';
-    bool const d_padding = encoded[offset + 3] == '=';
-    auto c = c_padding ? std::optional<std::uint8_t>(0) : value(encoded[offset + 2]);
-    auto d = d_padding ? std::optional<std::uint8_t>(0) : value(encoded[offset + 3]);
-    if (!a || !b || !c || !d)
-      return std::nullopt;
-    if (!final && (c_padding || d_padding))
-      return std::nullopt;
-    if (c_padding && !d_padding)
-      return std::nullopt;
-    if (c_padding && (*b & 0x0fU) != 0)
-      return std::nullopt;
-    if (d_padding && !c_padding && (*c & 0x03U) != 0)
-      return std::nullopt;
-
-    decoded.push_back(static_cast<char>((*a << 2U) | (*b >> 4U)));
-    if (!c_padding)
-    {
-      decoded.push_back(static_cast<char>((*b << 4U) | (*c >> 2U)));
-      if (!d_padding)
-        decoded.push_back(static_cast<char>((*c << 6U) | *d));
-    }
-    if (decoded.size() > kMaxAcpPromptImageBytes)
-      return std::nullopt;
-  }
-  if (decoded.empty() || ava::provider::base64_encode(decoded) != encoded)
-    return std::nullopt;
-  return decoded;
+  return ava::core::base64_decode(encoded, ava::core::Base64Alphabet::Standard, ava::core::Base64Padding::Required, ava::core::Base64TailBits::Canonical,
+                                  kMaxAcpPromptImageBytes);
 }
 
 void append_prompt_line(std::string& text, std::string_view line)
@@ -102,7 +40,10 @@ void append_prompt_line(std::string& text, std::string_view line)
 
 PromptContentDecodeResult decode_prompt_content(std::string_view prompt_json)
 {
-  auto prompt = Json::parse(prompt_json, nullptr, false, true);
+  auto decoded = decode_json_value(prompt_json);
+  if (!decoded)
+    return std::unexpected(std::move(decoded.error()));
+  auto const& prompt = *decoded;
   if (!prompt.is_array() || prompt.empty() || prompt.size() > kMaxAcpPromptBlocks)
     return std::unexpected(content_error("session/prompt requires a non-empty bounded prompt array"));
 
@@ -133,8 +74,8 @@ PromptContentDecodeResult decode_prompt_content(std::string_view prompt_json)
       auto uri = block.find("uri");
       if (name == block.end() || uri == block.end() || !name->is_string() || !uri->is_string() || name->get_ref<std::string const&>().empty() ||
           uri->get_ref<std::string const&>().empty() || name->get_ref<std::string const&>().size() > 4096 ||
-          uri->get_ref<std::string const&>().size() > 16U * 1024U || has_control_byte(name->get_ref<std::string const&>()) ||
-          has_control_byte(uri->get_ref<std::string const&>()))
+          uri->get_ref<std::string const&>().size() > 16U * 1024U || ava::core::has_c0_or_del(name->get_ref<std::string const&>()) ||
+          ava::core::has_c0_or_del(uri->get_ref<std::string const&>()))
       {
         return std::unexpected(content_error("resource_link prompt blocks require bounded safe name and uri strings"));
       }
@@ -152,7 +93,7 @@ PromptContentDecodeResult decode_prompt_content(std::string_view prompt_json)
       auto data = block.find("data");
       auto mime = block.find("mimeType");
       if (data == block.end() || mime == block.end() || !data->is_string() || !mime->is_string() ||
-          !ava::provider::is_supported_image_mime_type(mime->get_ref<std::string const&>()) || has_control_byte(mime->get_ref<std::string const&>()))
+          !ava::provider::is_supported_image_mime_type(mime->get_ref<std::string const&>()) || ava::core::has_c0_or_del(mime->get_ref<std::string const&>()))
         return std::unexpected(content_error("image prompt blocks require an exactly supported MIME type and base64 data"));
       auto decoded = decode_base64_canonical(data->get_ref<std::string const&>());
       if (!decoded)

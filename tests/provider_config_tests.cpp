@@ -283,6 +283,11 @@ void test_url_boundaries()
   accept_url("http://[::1]", "http://[::1]", "http [::1] is accepted");
   accept_url("https://xn--bcher-kva.example", "https://xn--bcher-kva.example", "ASCII punycode hostname is preserved without IDN rewriting");
   accept_url("https://model_gateway.example", "https://model_gateway.example", "underscore hostname labels are accepted for private gateways");
+  accept_url("https://[2001:db8::1]", "https://[2001:db8::1]", "compressed IPv6 address is accepted");
+  accept_url("https://[::ffff:192.0.2.1]", "https://[::ffff:192.0.2.1]", "IPv4-mapped IPv6 address is accepted");
+  for (std::string_view const url : {"https://[12]", "https://[:::1]", "https://[1:2:3]", "https://[1:2:3:4:5:6:7:8:9]", "https://[1:2:3:4:5:6:7:8::]",
+                                     "https://[1:2:3:4:5:6:7:8:]", "https://[1:2:3:4:5:6:7:192.0.2.1]", "https://192.0.2.1.", "https://192.000.2.1"})
+    reject_url(url, "malformed or ambiguous IP literals are rejected");
   reject_url("https://bücher.example", "raw Unicode hostname is rejected rather than implicitly converted");
 
   reject_url("http://example.com", "remote http is rejected");

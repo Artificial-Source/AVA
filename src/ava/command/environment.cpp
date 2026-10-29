@@ -2,101 +2,16 @@
 #include "ava/command/discovery.h"
 #include "ava/command/environment.h"
 #include "ava/command/intent_internal.h"
+#include "ava/core/ascii.h"
+#include "ava/core/sha256.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <iomanip>
-#include <sstream>
 #include <utility>
 
 namespace ava::command::detail {
 namespace {
-
-std::uint32_t rotr(std::uint32_t value, std::uint32_t count)
-{
-  return (value >> count) | (value << (32U - count));
-}
-
-std::array<std::uint8_t, 32> sha256(std::vector<std::uint8_t> const& bytes)
-{
-  // Keep this focused SHA-256 implementation private to sealed-plan
-  // fingerprints and environment bindings; it is not a general crypto API.
-  static constexpr std::array<std::uint32_t, 64> constants{
-      0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U, 0x243185beU,
-      0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U, 0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU,
-      0x5cb0a9dcU, 0x76f988daU, 0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U, 0x27b70a85U,
-      0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U, 0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
-      0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U, 0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU,
-      0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U};
-
-  std::vector<std::uint8_t> data = bytes;
-  auto const bit_length = static_cast<std::uint64_t>(data.size()) * 8ULL;
-  data.push_back(0x80U);
-  while ((data.size() % 64U) != 56U) data.push_back(0U);
-  for (int shift = 56; shift >= 0; shift -= 8) data.push_back(static_cast<std::uint8_t>((bit_length >> shift) & 0xffU));
-
-  std::array<std::uint32_t, 8> hash{0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
-  for (std::size_t chunk = 0; chunk < data.size(); chunk += 64U)
-  {
-    std::array<std::uint32_t, 64> words{};
-    for (std::size_t index = 0; index < 16U; ++index)
-    {
-      auto const offset = chunk + index * 4U;
-      words[index] = (static_cast<std::uint32_t>(data[offset]) << 24U) | (static_cast<std::uint32_t>(data[offset + 1U]) << 16U) |
-                     (static_cast<std::uint32_t>(data[offset + 2U]) << 8U) | static_cast<std::uint32_t>(data[offset + 3U]);
-    }
-    for (std::size_t index = 16U; index < words.size(); ++index)
-    {
-      auto const s0 = rotr(words[index - 15U], 7U) ^ rotr(words[index - 15U], 18U) ^ (words[index - 15U] >> 3U);
-      auto const s1 = rotr(words[index - 2U], 17U) ^ rotr(words[index - 2U], 19U) ^ (words[index - 2U] >> 10U);
-      words[index] = words[index - 16U] + s0 + words[index - 7U] + s1;
-    }
-    auto a = hash[0];
-    auto b = hash[1];
-    auto c = hash[2];
-    auto d = hash[3];
-    auto e = hash[4];
-    auto f = hash[5];
-    auto g = hash[6];
-    auto h = hash[7];
-    for (std::size_t index = 0; index < words.size(); ++index)
-    {
-      auto const s1 = rotr(e, 6U) ^ rotr(e, 11U) ^ rotr(e, 25U);
-      auto const choose = (e & f) ^ ((~e) & g);
-      auto const temporary_one = h + s1 + choose + constants[index] + words[index];
-      auto const s0 = rotr(a, 2U) ^ rotr(a, 13U) ^ rotr(a, 22U);
-      auto const majority = (a & b) ^ (a & c) ^ (b & c);
-      auto const temporary_two = s0 + majority;
-      h = g;
-      g = f;
-      f = e;
-      e = d + temporary_one;
-      d = c;
-      c = b;
-      b = a;
-      a = temporary_one + temporary_two;
-    }
-    hash[0] += a;
-    hash[1] += b;
-    hash[2] += c;
-    hash[3] += d;
-    hash[4] += e;
-    hash[5] += f;
-    hash[6] += g;
-    hash[7] += h;
-  }
-
-  std::array<std::uint8_t, 32> result{};
-  for (std::size_t index = 0; index < hash.size(); ++index)
-  {
-    result[index * 4U] = static_cast<std::uint8_t>((hash[index] >> 24U) & 0xffU);
-    result[index * 4U + 1U] = static_cast<std::uint8_t>((hash[index] >> 16U) & 0xffU);
-    result[index * 4U + 2U] = static_cast<std::uint8_t>((hash[index] >> 8U) & 0xffU);
-    result[index * 4U + 3U] = static_cast<std::uint8_t>(hash[index] & 0xffU);
-  }
-  return result;
-}
 
 ava::core::VoidResult validate_sealed_environment_root(PathMetadata const& root, std::string_view name, CommandLimits const& limits,
                                                        std::shared_ptr<ava::core::AnchorSet const> const& anchor_set)
@@ -195,11 +110,7 @@ void Sha256Builder::append_number(std::uintmax_t value)
 
 std::string Sha256Builder::hex() const
 {
-  auto const digest = sha256(bytes_);
-  std::ostringstream output;
-  output << std::hex << std::setfill('0');
-  for (auto const byte : digest) output << std::setw(2) << static_cast<unsigned int>(byte);
-  return std::move(output).str();
+  return ava::core::hex_encode(ava::core::sha256(bytes_));
 }
 
 ava::core::Result<CommandEnvironment> EnvironmentFactory::make(CommandEnvironmentOptions const& options, std::vector<CommandPathEntry> const& path_entries,
@@ -212,14 +123,14 @@ ava::core::Result<CommandEnvironment> EnvironmentFactory::make(CommandEnvironmen
     return std::unexpected(std::move(valid.error()));
   if (logical_cwd.empty() || !logical_cwd.is_absolute() || logical_cwd.string().size() > limits.max_path_bytes || has_forbidden_path_byte(logical_cwd))
     return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "logical child PWD must be a bounded absolute path"));
-  if (options.profile_id.empty() || options.profile_id.size() > 128 || has_forbidden_byte(options.profile_id) ||
+  if (options.profile_id.empty() || options.profile_id.size() > 128 || ava::core::has_c0_or_del(options.profile_id) ||
       !std::ranges::all_of(options.profile_id, [](unsigned char ch) { return std::isalnum(ch) != 0 || ch == '-' || ch == '_' || ch == '.'; }))
   {
     return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "environment profile id must be a bounded safe identifier"));
   }
   for (auto const* value : {&options.user, &options.logname})
   {
-    if (value->empty() || value->size() > limits.max_argument_bytes || has_forbidden_byte(*value))
+    if (value->empty() || value->size() > limits.max_argument_bytes || ava::core::has_c0_or_del(*value))
       return std::unexpected(command_error(ava::core::ErrorCategory::InvalidArgument, "USER and LOGNAME must be bounded safe values"));
   }
   auto trusted_home_fresh = trusted_home_metadata_is_fresh(trusted_home, anchor_set);

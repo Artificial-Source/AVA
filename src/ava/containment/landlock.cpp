@@ -3,6 +3,7 @@
 #include "ava/containment/containment.h"
 #include "ava/core/AnchorOpen.h"
 #include "ava/core/AnchorSet.h"
+#include "ava/core/UniqueFd.h"
 
 #include <cerrno>
 #include <cstddef>
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 #include <fcntl.h>
@@ -20,17 +22,17 @@
 
 namespace ava::containment {
 
-// Landlock IOCTL_DEV was added in ABI 5 (Linux 6.2). The installed kernel
-// headers may predate it, so define the stable constant when absent.
+// Stable Landlock ABI constants for build hosts with older kernel headers.
+// IOCTL_DEV is available from ABI 5; the scope flags are available from ABI 6.
 #ifndef LANDLOCK_ACCESS_FS_IOCTL_DEV
-#define LANDLOCK_ACCESS_FS_IOCTL_DEV (1ULL << 15)
+constexpr std::uint64_t LANDLOCK_ACCESS_FS_IOCTL_DEV = 1ULL << 15;
 #endif
 
 #ifndef LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET
-#define LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET (1ULL << 0)
+constexpr std::uint64_t LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET = 1ULL << 0;
 #endif
 #ifndef LANDLOCK_SCOPE_SIGNAL
-#define LANDLOCK_SCOPE_SIGNAL (1ULL << 1)
+constexpr std::uint64_t LANDLOCK_SCOPE_SIGNAL = 1ULL << 1;
 #endif
 
 namespace {
@@ -95,16 +97,10 @@ struct LandlockRulesetAttrV6
   return LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE;
 }
 
-// Read-only mask for device files.
-[[nodiscard]] std::uint64_t read_only_mask() noexcept
+ava::core::Error landlock_error(std::string_view message, int error_number = errno)
 {
-  return LANDLOCK_ACCESS_FS_READ_FILE;
-}
-
-ava::core::Error landlock_error(std::string message)
-{
-  auto error = ava::core::Error(ava::core::ErrorCategory::PermissionDenied, std::move(message));
-  error.with_context("cause", std::strerror(errno));
+  auto error = ava::core::Error(ava::core::ErrorCategory::PermissionDenied, std::string(message));
+  error.with_context("cause", std::strerror(error_number));
   return error;
 }
 
@@ -121,13 +117,14 @@ ava::core::Error landlock_error(std::string message)
   return static_cast<int>(::syscall(SYS_landlock_create_ruleset, &attr, size, 0));
 }
 
-[[nodiscard]] ava::core::VoidResult add_path_rule(int ruleset_fd, ava::core::AnchorSet const& anchors, ContainmentFilesystemRule const& rule)
+[[nodiscard]] ava::core::Result<PreparedContainmentRule> add_path_rule(int ruleset_fd, ava::core::AnchorSet const& anchors,
+                                                                       ContainmentFilesystemRule const& rule)
 {
   if (!rule.identity_bound)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "Landlock rule has no sealed descriptor identity"));
   auto parent = ava::core::open_readable(anchors, rule.logical_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
   if (!parent)
-    return std::unexpected(landlock_error("failed to open descriptor-bound Landlock rule parent"));
+    return std::unexpected(std::move(parent.error()));
   struct stat status{};
   if (::fstat(parent->fd(), &status) != 0 || static_cast<std::uint64_t>(status.st_dev) != rule.device ||
       static_cast<std::uint64_t>(status.st_ino) != rule.inode || static_cast<std::uint64_t>(status.st_mode) != rule.mode ||
@@ -144,18 +141,24 @@ ava::core::Error landlock_error(std::string message)
   int const result = static_cast<int>(::syscall(SYS_landlock_add_rule, ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, &path_attr, 0));
   if (result < 0)
     return std::unexpected(landlock_error("failed to add Landlock filesystem rule"));
-  return {};
+  // AnchorOpen deliberately has no release API. Duplicate its exact authority
+  // in the parent so the child can close it without destroying path storage.
+  ava::core::UniqueFd retained(::fcntl(parent->fd(), F_DUPFD_CLOEXEC, STDERR_FILENO + 1));
+  if (!retained)
+    return std::unexpected(landlock_error("failed to retain Landlock rule descriptor"));
+  return PreparedContainmentRule{.descriptor = std::move(retained), .identity = status};
 }
 
 }  // namespace
 
-ava::core::VoidResult apply_landlock_in_child(DevelopmentContainmentPlan const& plan)
+ava::core::Result<PreparedContainment> prepare_containment_application(DevelopmentContainmentPlan const& plan)
 {
-  if (plan.filesystem_rules.empty())
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "containment plan has no filesystem rules"));
+  if (plan.availability != ContainmentAvailability::Available || plan.filesystem_rules.empty())
+    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "containment plan is unavailable or has no filesystem rules"));
 
-  int const ruleset_fd = landlock_create_ruleset_fd(plan.handled_access_fs, plan.landlock_abi_version);
-  if (ruleset_fd < 0)
+  // landlock_create_ruleset returns a close-on-exec descriptor.
+  ava::core::UniqueFd ruleset_fd(landlock_create_ruleset_fd(plan.handled_access_fs, plan.landlock_abi_version));
+  if (!ruleset_fd)
   {
     if (errno == EINVAL)
       return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied,
@@ -163,29 +166,27 @@ ava::core::VoidResult apply_landlock_in_child(DevelopmentContainmentPlan const& 
     return std::unexpected(landlock_error("failed to create Landlock ruleset"));
   }
 
-  // Add each validated rule. If any rule fails, the ruleset is closed and the
-  // child must not exec: fail closed before user code starts.
+  // Prepare every path and ruleset in the parent. No AnchorSet operation or
+  // allocator-backed error construction is reachable from the forked child.
   if (!plan.anchor_set)
   {
-    ::close(ruleset_fd);
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument, "containment plan has no shared AnchorSet"));
   }
+  PreparedContainment prepared;
+  prepared.rules.reserve(plan.filesystem_rules.size());
+  prepared.network_allowed = plan.network_allowed;
   for (auto const& rule : plan.filesystem_rules)
   {
-    auto added = add_path_rule(ruleset_fd, *plan.anchor_set, rule);
+    auto added = add_path_rule(ruleset_fd.get(), *plan.anchor_set, rule);
     if (!added)
     {
-      ::close(ruleset_fd);
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "Landlock rule installation failed; containment is not active"));
+      return std::unexpected(std::move(added.error()));
     }
+    prepared.rules.push_back(std::move(*added));
   }
 
-  int const restrict_result = static_cast<int>(::syscall(SYS_landlock_restrict_self, ruleset_fd, 0));
-  ::close(ruleset_fd);
-  if (restrict_result < 0)
-    return std::unexpected(landlock_error("failed to enforce Landlock ruleset"));
-
-  return {};
+  prepared.ruleset = std::move(ruleset_fd);
+  return prepared;
 }
 
 namespace {
@@ -277,7 +278,7 @@ void add_rule(std::vector<ContainmentFilesystemRule>& rules, std::filesystem::pa
 }  // namespace
 
 // These accessors are used by containment_plan.cpp to build the rule list.
-// They are in an anonymous detail namespace within this translation unit.
+// They have external linkage within the containment detail namespace.
 namespace detail {
 
 std::uint64_t handled_access_fs_mask(std::uint32_t abi_version) noexcept
@@ -298,11 +299,6 @@ std::uint64_t read_execute_root_mask() noexcept
 std::uint64_t read_execute_file_root_mask() noexcept
 {
   return read_execute_file_mask();
-}
-
-std::uint64_t read_only_root_mask() noexcept
-{
-  return read_only_mask();
 }
 
 std::uint64_t device_file_mask() noexcept

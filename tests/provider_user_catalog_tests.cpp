@@ -112,6 +112,7 @@ std::string header_get(ava::http::HttpRequest const& request, std::string_view k
 class NullTransport final : public ava::http::Transport
 {
  public:
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const&) override
   {
     return ava::http::HttpResponse{.status_code = 500, .headers = {}, .body = "{}"};

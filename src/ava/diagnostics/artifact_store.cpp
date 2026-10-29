@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/diagnostics/artifact_store.h"
 #include "ava/core/fd_io.h"
+#include "ava/core/hex.h"
 #include "ava/core/saturating.h"
 #include "ava/core/strict_json.h"
 
@@ -269,15 +270,7 @@ std::string opaque_token()
       bytes[index] = static_cast<unsigned char>(value & 0xffU);
     }
   }
-  constexpr char hex[] = "0123456789abcdef";
-  std::string result;
-  result.reserve(bytes.size() * 2);
-  for (auto const byte : bytes)
-  {
-    result.push_back(hex[byte >> 4U]);
-    result.push_back(hex[byte & 0x0fU]);
-  }
-  return result;
+  return ava::core::hex_encode(bytes);
 }
 
 bool safe_existing_replace_target(int directory_fd, char const* name) noexcept

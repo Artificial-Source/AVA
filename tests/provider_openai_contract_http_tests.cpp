@@ -29,6 +29,7 @@ class StreamingFakeTransport final : public ava::http::Transport
  public:
   explicit StreamingFakeTransport(std::vector<ava::http::HttpResponse> responses) : responses_(responses.begin(), responses.end()) { }
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override { return send_streaming(request, nullptr); }
 
   [[nodiscard]] bool supports_streaming() const noexcept override { return true; }
@@ -65,6 +66,7 @@ class StreamingFakeTransport final : public ava::http::Transport
 class PartialStreamingFailureTransport final : public ava::http::Transport
 {
  public:
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const&) override
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "streaming only"));
@@ -92,6 +94,7 @@ class PartialStreamingFailureTransport final : public ava::http::Transport
 class FailingOnceTransport final : public ava::http::Transport
 {
  public:
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     requests_.push_back(request);
@@ -245,6 +248,26 @@ void exercise_contract_http_retry(ava::provider::OpenAIProvider const&)
   expect(retry_events.size() == 1 && retry_events[0].attempt == 2 && retry_events[0].max_attempts == 2 && retry_events[0].reason == "rate_limited" &&
              retry_events[0].status_code == 429 && !retry_events[0].streaming && !retry_events[0].countdown_tick,
          "retry transport reports backend-owned retry metadata before sleeping");
+  for (bool const streaming : {false, true})
+  {
+    StreamingFakeTransport negative_cap_inner({ava::http::HttpResponse{.status_code = 429, .headers = {{"Retry-After", "1"}}, .body = "rate limited"},
+                                               ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "ok"}});
+    std::vector<ava::http::RetryOptions::Event> negative_cap_events;
+    ava::http::RetryTransport negative_cap_transport(negative_cap_inner,
+                                                     ava::http::RetryOptions{.max_attempts = 2,
+                                                                             .base_delay_ms = 0,
+                                                                             .max_retry_after_ms = -1,
+                                                                             .on_retry =
+                                                                                 [&negative_cap_events](ava::http::RetryOptions::Event const& event) {
+                                                                                   negative_cap_events.push_back(event);
+                                                                                   return ava::core::VoidResult{};
+                                                                                 },
+                                                                             .response_retry_decision = ava::provider::provider_retry_decision});
+    auto const result = streaming ? negative_cap_transport.send_streaming(retry_request, nullptr) : negative_cap_transport.send(retry_request);
+    expect(result && result->status_code == 200 && negative_cap_events.size() == 1 && negative_cap_events.front().delay_ms == 0 &&
+               negative_cap_events.front().remaining_ms == 0,
+           "retry transport clamps negative Retry-After limits before publishing unsigned countdown metadata");
+  }
 
   ava::tests::FakeTransport countdown_inner({ava::http::HttpResponse{.status_code = 503, .headers = {}, .body = "try again"},
                                              ava::http::HttpResponse{.status_code = 200, .headers = {}, .body = "ok"}});

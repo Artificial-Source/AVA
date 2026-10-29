@@ -7,6 +7,7 @@
 #include "ava/event/events.h"
 #include "ava/core/ids.h"
 
+#include <initializer_list>
 #include <utility>
 
 namespace ava::app::rpc {
@@ -59,6 +60,20 @@ PermissionSessionGrant grant_from_request(PendingPermissionRequest const& reques
                                 .command_recipe_display = request.command_recipe_display,
                                 .reason = request.reason,
                                 .risk = request.risk};
+}
+
+bool charge_grant_bytes(PermissionSessionGrant const& grant, std::size_t& remaining)
+{
+  // Include object storage and retained string capacities, not only payload lengths.
+  for (auto const bytes : {sizeof(PermissionSessionGrant), grant.grant_id.capacity(), grant.permission_request_id.capacity(), grant.session_id.capacity(),
+                           grant.tool_name.capacity(), grant.target_path.native().capacity(), grant.command.capacity(), grant.command_recipe_key.capacity(),
+                           grant.command_recipe_display.capacity(), grant.reason.capacity()})
+  {
+    if (bytes > remaining)
+      return false;
+    remaining -= bytes;
+  }
+  return true;
 }
 
 std::string permission_session_grant_json(PermissionSessionGrant const& grant)
@@ -397,7 +412,6 @@ ava::core::VoidResult resolve_permission_reply(PendingResolverState& pending_sta
       error.with_context("request_id", std::string(request_id));
       return std::unexpected(std::move(error));
     }
-    pending_state.permission_requests.erase(found);
     if (create_session_grant && pending->command_allows_reusable_grant)
     {
       auto grant = grant_from_request(*pending);
@@ -407,8 +421,20 @@ ava::core::VoidResult resolve_permission_reply(PendingResolverState& pending_sta
         duplicate = duplicate || grant_matches(existing, *pending);
       }
       if (!duplicate)
+      {
+        std::size_t remaining = kMaxPermissionSessionGrantBytes;
+        bool fits = pending_state.permission_session_grants.size() < kMaxPermissionSessionGrants && charge_grant_bytes(grant, remaining);
+        for (auto const& existing : pending_state.permission_session_grants)
+          fits = fits && charge_grant_bytes(existing, remaining);
+        if (!fits)
+          return std::unexpected(
+              invalid_rpc("RPC session grant capacity exceeded; use permission_grant_revoke or permission_grants_clear, "
+                          "then retry, or reply with one-shot allow/deny"));
+      }
+      if (!duplicate)
         pending_state.permission_session_grants.push_back(std::move(grant));
     }
+    pending_state.permission_requests.erase(found);
     pending->resolved = true;
     pending->resolution = ava::permissions::PermissionResolutionDecision{resolution, reason.value_or("")};
   }

@@ -26,6 +26,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <fcntl.h>
 #include <unistd.h>
 
 using namespace std::chrono_literals;
@@ -58,6 +59,17 @@ void test_acp_prompt_content_capabilities_and_strict_validation()
     auto rejected = decode_prompt_content(prompt);
     expect(!rejected && rejected.error().code == -32602,
            "ACP prompt decoder rejects malformed base64/MIME/discriminators and unsupported rich content with -32602");
+  }
+
+  for (auto const& raw : {
+           std::string(R"([{"type":"text","text":"first","text":"second"}])"),
+           std::string(kMaxRecordBytes, ' ') + R"([{"type":"text","text":"x"}])",
+           std::string(R"([{"type":"text","text":"x","_meta":)") + std::string(kMaxNestingDepth, '[') + "0" + std::string(kMaxNestingDepth, ']') + "}]",
+           std::string(R"([{"type":"text","text":"x","_meta":")") + std::string(kMaxStringBytes + 1, 'x') + R"("}])",
+       })
+  {
+    auto rejected = decode_prompt_content(raw);
+    expect(!rejected && rejected.error().code == -32602, "direct prompt decoding enforces ACP bytes, depth, strings and duplicate-key limits");
   }
 
   auto blocks = [](std::size_t count, std::string const& block) {
@@ -243,6 +255,24 @@ void test_acp_typed_session_update_mapper_ordering_and_limits()
   }
   expect(unicode_batch && unicode_flush && unicode_updates == 2 && reconstructed == unicode_text,
          "ACP stream coalescing preserves a multibyte UTF-8 code point that crosses the byte chunk boundary");
+
+  std::string deep_arguments = R"({"path":"src/a.cpp","extra":)";
+  deep_arguments.append(kMaxNestingDepth + 1, '[');
+  deep_arguments += '0';
+  deep_arguments.append(kMaxNestingDepth + 1, ']');
+  deep_arguments += '}';
+  std::string oversized_arguments = R"({"path":"src/a.cpp","extra":")";
+  oversized_arguments.append(kMaxRecordBytes, 'x');
+  oversized_arguments += R"("})";
+  for (auto const& arguments : {std::string(R"({"path":"src/a.cpp","path":"src/b.cpp"})"), deep_arguments, oversized_arguments})
+  {
+    ToolPayload payload;
+    payload.call_id = "untrusted_args";
+    payload.tool = "read_file";
+    payload.args_json = arguments;
+    auto update = mapper.map_and_encode(RuntimeEvent{{}, ToolStartEvent{.payload = std::move(payload)}});
+    expect(update && *update && !has(update, "\"locations\""), "ACP mapper omits locations from duplicate-key, over-depth, or oversized tool arguments");
+  }
 }
 
 void test_acp_permission_dtos_show_bounded_actions()
@@ -298,6 +328,15 @@ void test_acp_permission_dtos_show_bounded_actions()
   {
     auto rejected = decode_permission_response(malformed);
     expect(!rejected && rejected.error().code == -32602, "ACP permission response parser rejects invalid outcomes and unoffered option ids");
+  }
+  for (auto const& raw : {
+           std::string(R"({"outcome":{"outcome":"selected","optionId":"reject_once","optionId":"allow_once"}})"),
+           std::string(kMaxRecordBytes, ' ') + R"({"outcome":{"outcome":"cancelled"}})",
+           std::string(R"({"outcome":{"outcome":"cancelled"},"_meta":)") + std::string(kMaxNestingDepth, '[') + "0" + std::string(kMaxNestingDepth, ']') + "}",
+       })
+  {
+    auto rejected = decode_permission_response(raw);
+    expect(!rejected && rejected.error().code == -32602, "direct permission response decoding enforces ACP bytes, depth and duplicate keys");
   }
 }
 
@@ -500,9 +539,11 @@ void test_acp_transport_lf_crlf_and_final_record()
   ava::core::UniqueFd output_write(output[1]);
   if (!ava::tests::require(opened, "ACP framing test creates transport pipes"))
     return;
+  auto const original_flags = fcntl(output[1], F_GETFL);
   auto transport = make_fd_record_transport(input[0], output[1]);
   if (!ava::tests::require(transport.has_value(), "ACP framing test creates fd transport"))
     return;
+  expect((fcntl(output[1], F_GETFL) & O_NONBLOCK) != 0, "ACP transport enables nonblocking output while it owns the writer");
   std::string const records = "{}\r\n[]\n{\"final\":true}";
   auto const count = write(input[1], records.data(), records.size());
   input_write.reset();
@@ -520,4 +561,5 @@ void test_acp_transport_lf_crlf_and_final_record()
                           {"final payload", final.record == R"({"final":true})"},
                           {"EOF after final record", eof.status == ReadRecordStatus::EndOfFile}});
   transport->reset();
+  expect(original_flags >= 0 && fcntl(output[1], F_GETFL) == original_flags, "ACP transport restores the borrowed output descriptor flags");
 }

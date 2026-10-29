@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/app_runtime_test_declarations.h"
 #include "tests/support/app_runtime_support.h"
+#include "tests/support/syscall_errno_injection.h"
 #include "tests/support/test_harness.h"
 #include "ava/app/command_sessions.h"
 #include "ava/app/commands.h"
@@ -17,12 +18,14 @@
 #include <cerrno>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #ifndef AVA_FAKE_MCP_SERVER_PATH
 #define AVA_FAKE_MCP_SERVER_PATH ""
 #endif
@@ -177,19 +180,46 @@ void app_command_dispatcher_session_part(ava::app::runtime::session_ts& unlocked
   if (anchored_line)
     write_app_test_file(anchored_import_path, *anchored_line + "\n");
   bool import_name_replaced_after_open = false;
-  ava::app::set_after_session_import_open_for_test([&] {
+  auto anchored_entries = ava::app::load_import_session_entries(anchored_import_path, [&] {
     std::filesystem::rename(anchored_import_path, anchored_displaced_path);
     write_app_test_file(anchored_import_path, "IMPORT_REPLACEMENT_CANARY\n");
     import_name_replaced_after_open = true;
   });
-  auto anchored_import = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/import anchored-import.jsonl"});
-  ava::app::set_after_session_import_open_for_test({});
-  expect(anchored_line && import_name_replaced_after_open && anchored_import && anchored_import->handled && !anchored_import->output.empty() &&
-             anchored_import->output[0].find("session import is ready") != std::string::npos &&
-             anchored_import->output[0].find("entries: 1") != std::string::npos &&
+  expect(anchored_entries && anchored_entries->size() == 1 && anchored_entries->front().id == "entry_anchored_start" && import_name_replaced_after_open &&
              app_read_binary_file(anchored_import_path).find("IMPORT_REPLACEMENT_CANARY") != std::string::npos &&
              app_read_binary_file(anchored_displaced_path) == *anchored_line + "\n",
-         "command dispatcher /import reads only the descriptor opened before a final-component replacement");
+         "session import reads only the descriptor opened before a final-component replacement");
+  std::filesystem::rename(anchored_displaced_path, anchored_import_path);
+  auto anchored_import = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/import anchored-import.jsonl"});
+  expect(anchored_line && import_name_replaced_after_open && anchored_import && anchored_import->handled && !anchored_import->output.empty() &&
+             anchored_import->output[0].find("session import is ready") != std::string::npos &&
+             anchored_import->output[0].find("entries: 1") != std::string::npos,
+         "command dispatcher /import previews the descriptor-validated archive");
+
+  int first_hook_calls = 0;
+  int second_hook_calls = 0;
+  auto first_read = std::async(std::launch::async, [&] { return ava::app::load_import_session_entries(anchored_import_path, [&] { ++first_hook_calls; }); });
+  auto second_read = std::async(std::launch::async, [&] { return ava::app::load_import_session_entries(anchored_import_path, [&] { ++second_hook_calls; }); });
+  auto first_entries = first_read.get();
+  auto second_entries = second_read.get();
+  expect(first_entries && second_entries && first_hook_calls == 1 && second_hook_calls == 1,
+         "concurrent session imports invoke only their own test-owned callbacks");
+  auto throwing_hook = ava::app::load_import_session_entries(anchored_import_path, [] { throw 1; });
+  auto after_throwing_hook = ava::app::load_import_session_entries(anchored_import_path);
+  expect(!throwing_hook && throwing_hook.error().message() == "session import post-open test hook failed" && after_throwing_hook,
+         "a failed import callback cannot leak into a later import invocation");
+
+  for (int const close_errno : {EINTR, EIO})
+  {
+    auto const status = ava::tests::run_in_child_with_syscall_errno(SYS_close, std::nullopt, close_errno, [&] {
+      auto const entries = ava::app::load_import_session_entries(anchored_import_path);
+      if (close_errno == EINTR)
+        return entries && entries->size() == 1 ? 0 : 1;
+      return !entries && entries.error().message() == "failed to close session import file" ? 0 : 1;
+    });
+    ava::tests::expect_child_success(status, close_errno == EINTR ? "session import treats Linux close EINTR as completed without retrying"
+                                                                  : "session import still reports non-EINTR close failures");
+  }
 
   auto const oversized_file_import_path = workspace / "oversized-file-import.jsonl";
   {

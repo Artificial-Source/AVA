@@ -273,6 +273,24 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
              filtered_context->output[0].find("AGENTS.md") != std::string::npos && filtered_context->output[0].find("status=changed") != std::string::npos &&
              filtered_context->output[0].find("prompt=override") == std::string::npos,
          "command dispatcher /context accepts backend context-source query text");
+  {
+    SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
+    session_w->resolve_prompt_state().freshness_sources.push_back(
+        ava::app::runtime::FreshnessSourceMetadata{.kind = ava::app::runtime::FreshnessSourceKind::PromptCommand,
+                                                   .scope = "global",
+                                                   .source_id = "audit-bounded-freshness",
+                                                   .name = {},
+                                                   .path = "/proc/self/status",
+                                                   .byte_count = 0});
+  }
+  auto bounded_freshness = ava::app::run_context_command(unlocked_session, "audit-bounded-freshness");
+  {
+    SCOPED_CRITICAL_AREA_W(session_w, unlocked_session);
+    session_w->resolve_prompt_state().freshness_sources.pop_back();
+  }
+  expect(bounded_freshness && !bounded_freshness->output.empty() && bounded_freshness->output[0].find("status=unreadable") != std::string::npos &&
+             bounded_freshness->output[0].find("too large") != std::string::npos,
+         "context freshness bounds actual reads even when a regular file reports zero size");
   auto reload_prompts = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/reload prompts"});
   expect(reload_prompts && reload_prompts->handled && !reload_prompts->output.empty() &&
              reload_prompts->output[0].find("Reload report:") != std::string::npos && reload_prompts->output[0].find("prompts: loaded") != std::string::npos &&
@@ -659,6 +677,9 @@ void app_command_dispatcher_catalog_part(ava::app::runtime::session_ts& unlocked
              permissions_list->output[0].find("ordinals are not remove authority") != std::string::npos &&
              permissions_list->output[0].find("/permissions explain or /permissions remove") != std::string::npos,
          "command dispatcher /permissions list filters by reason privately and shows human ordinals only");
+  auto permissions_list_spaced = ava::app::run_permissions_command(unlocked_session, ava::app::CommandRequest{.command = "/permissions    list trusted   "});
+  expect(permissions_list_spaced && permissions_list && permissions_list_spaced->output == permissions_list->output,
+         "permission list filtering ignores extra whitespace before the action and after the query");
 
   auto permissions_list_human = ava::app::run_command(unlocked_session, ava::app::CommandRequest{.command = "/permissions list file reads"});
   expect(permissions_list_human && permissions_list_human->handled && !permissions_list_human->output.empty() &&

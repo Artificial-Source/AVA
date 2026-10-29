@@ -152,17 +152,16 @@ bool seccomp_network_filter_supported() noexcept
   return result == 0;
 }
 
-ava::core::VoidResult apply_seccomp_network_filter(bool network_allowed)
+ContainmentChildStatus apply_seccomp_network_filter(bool network_allowed) noexcept
 {
-  if (!seccomp_network_filter_supported())
-    return std::unexpected(
-        ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "seccomp network filter is not supported on this architecture or kernel"));
+  if (kNativeAuditArch == 0)
+    return {ContainmentFailureStage::Seccomp, ENOTSUP};
 
   // no_new_privs must be set before installing a seccomp filter. It is
   // inherited across execve and prevents the child from gaining privileges
   // through setuid binaries.
   if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "failed to set PR_SET_NO_NEW_PRIVS before seccomp"));
+    return {ContainmentFailureStage::NoNewPrivileges, errno};
 
   auto filter = build_network_filter(network_allowed);
 
@@ -174,15 +173,15 @@ ava::core::VoidResult apply_seccomp_network_filter(bool network_allowed)
   {
     // Fall back to prctl if seccomp(2) is unavailable (older kernels).
     if (::prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) != 0)
-      return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "failed to install seccomp network filter"));
+      return {ContainmentFailureStage::Seccomp, errno};
   }
   return {};
 }
 
-ava::core::VoidResult apply_no_new_privs()
+ContainmentChildStatus apply_no_new_privs() noexcept
 {
   if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
-    return std::unexpected(ava::core::Error(ava::core::ErrorCategory::PermissionDenied, "failed to set PR_SET_NO_NEW_PRIVS"));
+    return {ContainmentFailureStage::NoNewPrivileges, errno};
   return {};
 }
 

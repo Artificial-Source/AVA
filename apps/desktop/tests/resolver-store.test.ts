@@ -40,6 +40,23 @@ test('binds resolver ids from events and never auto-approves', () => {
   assert.equal(store.permissionCount, 0)
 })
 
+test('permission views carry the backend diff preview and its truncation flag', () => {
+  const store = new ResolverStore(randomUUID)
+  store.bindEvent(
+    event('permission_requested', {
+      resolver_request_id: 'permission_1',
+      operation: 'edit',
+      diff_preview: '--- a/x\n+++ b/x\n',
+      diff_truncated: true
+    })
+  )
+  assert.equal(store.pendingPermission?.diffPreview, '--- a/x\n+++ b/x\n')
+  assert.equal(store.pendingPermission?.diffTruncated, true)
+  store.clear()
+  store.bindEvent(event('permission_requested', { resolver_request_id: 'permission_2', diff_truncated: 'yes' }))
+  assert.equal(store.pendingPermission?.diffTruncated, false, 'only a boolean true marks a preview truncated')
+})
+
 test('questions bind pending resolvers independently of renderer input', () => {
   const store = new ResolverStore(randomUUID)
   store.bindEvent(

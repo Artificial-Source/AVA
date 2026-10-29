@@ -1,10 +1,10 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/core/NoLogString.h"
 
 #include <cstddef>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -16,7 +16,10 @@ struct ProviderToolCall
   std::string name;
   ava::core::NoLogString arguments_json;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 enum class ToolResultStatus
@@ -57,7 +60,10 @@ struct ToolResultPayload
   ava::core::NoLogString spill_path;
   bool spill_truncated = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct ToolDispatchResult

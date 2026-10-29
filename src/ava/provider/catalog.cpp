@@ -145,7 +145,7 @@ ava::core::VoidResult register_user_definitions(ProviderRegistry& registry, std:
 
 }  // namespace
 
-ProviderCatalog::ProviderCatalog(ProviderRegistry registry, std::vector<ava::config::ProviderProfile> profiles,
+ProviderCatalog::ProviderCatalog(ConstructionKey, ProviderRegistry registry, std::vector<ava::config::ProviderProfile> profiles,
                                  std::vector<ava::config::UserProviderDefinition> user_definitions)
     : registry_(std::move(registry)), profiles_(std::move(profiles)), user_definitions_(std::move(user_definitions))
 {
@@ -182,7 +182,7 @@ ava::core::Result<std::shared_ptr<ProviderCatalog const>> ProviderCatalog::build
   auto profiles = profiles_with_resolved_generics(composed->resolved_generics);
   if (auto registered = register_user_definitions(composed->registry, profiles, *user_definitions); !registered)
     return std::unexpected(std::move(registered.error()));
-  return std::shared_ptr<ProviderCatalog const>(new ProviderCatalog(std::move(composed->registry), std::move(profiles), std::move(*user_definitions)));
+  return std::make_shared<ProviderCatalog const>(ConstructionKey{}, std::move(composed->registry), std::move(profiles), std::move(*user_definitions));
 }
 
 std::shared_ptr<ProviderCatalog const> ProviderCatalog::build_builtins_only()
@@ -192,10 +192,12 @@ std::shared_ptr<ProviderCatalog const> ProviderCatalog::build_builtins_only()
   auto composed = compose_builtin_provider_registry(/*read_generic_base_url_env=*/false);
   if (!composed)
   {
-    return std::shared_ptr<ProviderCatalog const>(new ProviderCatalog(builtin_provider_registry(), ava::config::builtin_provider_profiles(), {}));
+    return std::make_shared<ProviderCatalog const>(ConstructionKey{}, builtin_provider_registry(), ava::config::builtin_provider_profiles(),
+                                                   std::vector<ava::config::UserProviderDefinition>{});
   }
   auto profiles = profiles_with_resolved_generics(composed->resolved_generics);
-  return std::shared_ptr<ProviderCatalog const>(new ProviderCatalog(std::move(composed->registry), std::move(profiles), {}));
+  return std::make_shared<ProviderCatalog const>(ConstructionKey{}, std::move(composed->registry), std::move(profiles),
+                                                 std::vector<ava::config::UserProviderDefinition>{});
 }
 
 bool ProviderCatalog::contains(std::string_view provider_id) const noexcept

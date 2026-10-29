@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/provider/provider.h"
 #include "ava/provider/provider_utils.h"
+#include "ava/core/base64.h"
 #include "ava/core/json.h"
 #include "ava/core/string_utils.h"
 
@@ -20,24 +21,7 @@ bool is_valid_json_object(std::string_view value)
 
 std::string base64_encode(std::string_view bytes)
 {
-  static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string encoded;
-  encoded.reserve(((bytes.size() + 2) / 3) * 4);
-  for (std::size_t index = 0; index < bytes.size(); index += 3)
-  {
-    unsigned int value = static_cast<unsigned char>(bytes[index]) << 16;
-    bool const has_second = index + 1 < bytes.size();
-    bool const has_third = index + 2 < bytes.size();
-    if (has_second)
-      value |= static_cast<unsigned char>(bytes[index + 1]) << 8;
-    if (has_third)
-      value |= static_cast<unsigned char>(bytes[index + 2]);
-    encoded.push_back(kAlphabet[(value >> 18) & 0x3f]);
-    encoded.push_back(kAlphabet[(value >> 12) & 0x3f]);
-    encoded.push_back(has_second ? kAlphabet[(value >> 6) & 0x3f] : '=');
-    encoded.push_back(has_third ? kAlphabet[value & 0x3f] : '=');
-  }
-  return encoded;
+  return ava::core::base64_encode(bytes);
 }
 
 ava::core::VoidResult validate_outbound_image_payloads(ProviderRequest const& request, std::string_view provider_name)

@@ -1,33 +1,103 @@
 import assert from 'node:assert/strict'
 import childProcess, { type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { registerHooks, syncBuiltinESMExports } from 'node:module'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
 import { test, type TestContext } from 'node:test'
+import { AvaBackend, type BackendOptions } from '../src/main/backend.ts'
 import { IPC_CHANNELS } from '../src/shared/ipc-contract.ts'
 import type { JsonObject } from '../src/shared/types.ts'
 
 // Node tests exercise main's prompt lifecycle without starting Electron or a GUI.
-const electronHook = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier === 'electron') {
-      return { url: 'data:text/javascript,export const dialog = {}', shortCircuit: true }
-    }
-    return nextResolve(specifier, context)
+function backendOptions(overrides: Partial<BackendOptions> = {}): BackendOptions {
+  return {
+    packageRoot: process.cwd(),
+    cwd: process.cwd(),
+    env: { AVA_DESKTOP_BINARY: process.execPath, AVA_DESKTOP_WORKSPACE: process.cwd() },
+    chooseWorkspace: async () => null,
+    ...overrides
   }
-})
-const { AvaBackend } = await import('../src/main/backend.ts')
-electronHook.deregister()
+}
 
-async function harness(t: TestContext) {
+function mockSpawn(t: TestContext, spawned: () => unknown, spawnCwds: string[] = []) {
+  t.mock.method(childProcess, 'spawn', (_file: string, _args: string[], options: { cwd: string }) => {
+    spawnCwds.push(options.cwd)
+    return spawned() as ChildProcessWithoutNullStreams
+  })
+  syncBuiltinESMExports()
+}
+
+// Successful RPC results for the handshake and catalog requests.
+function resultFor(request: JsonObject): JsonObject {
+  return request.type === 'get_protocol'
+    ? { protocol_version: 1, event_schema_version: 1, session_entry_version: 4 }
+    : request.type === 'get_state' ? { workspace_dir: process.cwd(), session_id: 's' } : {}
+}
+
+type FakeExitState = { exitCode: number | null; signalCode: NodeJS.Signals | null }
+// The parts of a lifecycle fake the tests drive; spawn receives the full fake process.
+type LifecycleChild = FakeExitState & { releaseExit(): void }
+
+function exited(child: FakeExitState): boolean {
+  return child.exitCode !== null || child.signalCode !== null
+}
+
+// One real-looking AVA process per spawn that answers every request. With `holdEof`, it exits
+// on stdin EOF only once the test calls releaseExit(), so a restart can be caught mid-shutdown.
+function lifecycleChild(pid: number, holdEof: boolean): LifecycleChild {
+  const stdout = new EventEmitter()
+  let releaseExit = () => {}
+  const child = Object.assign(new EventEmitter(), {
+    pid, stdout, stderr: new EventEmitter(), exitCode: null as number | null, signalCode: null as NodeJS.Signals | null
+  })
+  const exit = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (!exited(child)) {
+      child.exitCode = code
+      child.signalCode = signal
+      child.emit('exit', code, signal)
+    }
+  }
+  const stdin = Object.assign(new EventEmitter(), {
+    writable: true,
+    write(bytes: Uint8Array) {
+      const request = JSON.parse(Buffer.from(bytes).toString()) as JsonObject
+      stdout.emit('data', Buffer.from(`${JSON.stringify({ id: request.id, type: 'response', success: true, result: resultFor(request) })}\n`))
+    },
+    end() {
+      this.writable = false
+      if (holdEof) {
+        releaseExit = () => exit(0, null)
+      } else {
+        queueMicrotask(() => exit(0, null))
+      }
+    }
+  })
+  return Object.assign(child, {
+    stdin,
+    kill(signal: NodeJS.Signals = 'SIGTERM') {
+      exit(null, signal)
+      return true
+    },
+    releaseExit: () => releaseExit()
+  })
+}
+
+// `pid` makes the fake look like a real process; `stubborn` ignores stdin EOF and SIGTERM.
+async function harness(
+  t: TestContext,
+  options: { pid?: number; stubborn?: boolean; chooseWorkspace?: () => Promise<string | null> } = {}
+) {
   const writes: JsonObject[] = []
+  const signals: NodeJS.Signals[] = []
+  const spawnCwds: string[] = []
   const stdout = new EventEmitter()
   const child = Object.assign(new EventEmitter(), {
-    stdout, stderr: new EventEmitter(), exitCode: null as number | null, signalCode: null as NodeJS.Signals | null
+    pid: options.pid, stdout, stderr: new EventEmitter(), exitCode: null as number | null, signalCode: null as NodeJS.Signals | null
   })
   function respond(request: JsonObject, success = true, error?: JsonObject) {
-    const result = request.type === 'get_protocol'
-      ? { protocol_version: 1, event_schema_version: 1, session_entry_version: 4 }
-      : request.type === 'get_state' ? { workspace_dir: process.cwd(), session_id: 's' } : {}
+    const result = resultFor(request)
     stdout.emit('data', Buffer.from(`${JSON.stringify({
       id: request.id, type: 'response', success, result,
       error: error ?? { category: 'validation', code: 'invalid_request', message: 'invalid answer', details: '' }
@@ -46,18 +116,30 @@ async function harness(t: TestContext) {
         respond(request)
       }
     },
-    end() { queueMicrotask(() => { child.exitCode = 0; child.emit('exit', 0, null) }) }
+    end() {
+      if (!options.stubborn) {
+        queueMicrotask(() => { child.exitCode = 0; child.emit('exit', 0, null) })
+      }
+    }
   })
-  const fake = Object.assign(child, { stdin, kill() { child.emit('exit', null, 'SIGTERM') } })
-  t.mock.method(childProcess, 'spawn', () => {
+  const fake = Object.assign(child, {
+    stdin,
+    kill(signal: NodeJS.Signals = 'SIGTERM') {
+      signals.push(signal)
+      if (!options.stubborn || signal === 'SIGKILL') {
+        child.signalCode = signal
+        child.emit('exit', null, signal)
+      }
+      return true
+    }
+  })
+  mockSpawn(t, () => {
     child.exitCode = null
     child.signalCode = null
-    return fake as unknown as ChildProcessWithoutNullStreams
-  })
-  syncBuiltinESMExports()
-  const backend = new AvaBackend({ packageRoot: process.cwd(), cwd: process.cwd(), env: {
-    AVA_DESKTOP_BINARY: process.execPath, AVA_DESKTOP_WORKSPACE: process.cwd()
-  } })
+    return fake
+  }, spawnCwds)
+  const launch = backendOptions(options.chooseWorkspace ? { chooseWorkspace: options.chooseWorkspace } : {})
+  const backend = new AvaBackend(launch)
   t.after(async () => {
     await backend.stop()
     t.mock.restoreAll()
@@ -71,7 +153,10 @@ async function harness(t: TestContext) {
       payload: { resolver_request_id: resolver, question: 'Choose', allow_custom: true, ...payload }
     })}\n`))
   }
-  return { backend, writes, respond, event, stdout, child, failWrite: () => { writeFailure = true } }
+  return {
+    backend, writes, respond, event, stdout, child, signals, spawnCwds, env: launch.env,
+    failWrite: () => { writeFailure = true }
+  }
 }
 
 for (const kind of ['permission', 'question'] as const) {
@@ -347,4 +432,143 @@ test('question: backend-parity edge cases stay sendable', async (t) => {
   assert.equal(emptyAnswerRequest.answer, '', 'an empty custom answer is valid when custom answers are allowed')
   h.respond(emptyAnswerRequest)
   assert.deepEqual(await emptyAnswer, { ok: true })
+})
+
+test('cancel after the run settled sends nothing and leaves the next run cancelable', async (t) => {
+  const h = await harness(t)
+  const before = h.writes.length
+  const idleCancel = h.backend.handle(IPC_CHANNELS.cancel, null)
+  const sent = h.writes.slice(before)
+  for (const request of sent) {
+    h.respond(request)
+  }
+  assert.deepEqual(await idleCancel, { ok: true })
+  assert.equal(sent.length, 0, 'an idle cancel never reaches the backend')
+  assert.equal(h.backend.snapshot().canceling, false, 'an idle cancel does not latch canceling')
+
+  const run = h.backend.handle(IPC_CHANNELS.prompt, { message: 'go' })
+  const prompt = h.writes.at(-1)!
+  const cancel = h.backend.handle(IPC_CHANNELS.cancel, null)
+  const cancelRequest = h.writes.at(-1)!
+  assert.equal(cancelRequest.type, 'cancel')
+  assert.equal(h.backend.snapshot().canceling, true)
+  h.respond(cancelRequest)
+  assert.deepEqual(await cancel, { ok: true })
+  h.respond(prompt, false)
+  await run
+  assert.equal(h.backend.snapshot().canceling, false)
+})
+
+test('a completed prompt stays successful when the follow-up catalog refresh fails', async (t) => {
+  const h = await harness(t)
+  const run = h.backend.handle(IPC_CHANNELS.prompt, { message: 'go' })
+  const prompt = h.writes.at(-1)!
+  h.failWrite()
+  h.respond(prompt)
+  assert.deepEqual(await run, { ok: true }, 'the answered run is not reported as failed')
+  assert.equal(h.backend.snapshot().busy, false)
+})
+
+test('an AVA that never answers the handshake reports an error instead of starting forever', async (t) => {
+  const silent = Object.assign(new EventEmitter(), {
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    stdin: Object.assign(new EventEmitter(), { writable: true, write() {}, end() {} }),
+    exitCode: null,
+    signalCode: null,
+    kill: () => true
+  })
+  mockSpawn(t, () => silent)
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const backend = new AvaBackend(backendOptions({ handshakeTimeoutMs: 20 }))
+  await backend.start()
+  assert.equal(backend.snapshot().connection, 'error')
+  assert.match(backend.snapshot().connectionError?.message ?? '', /handshake within 20 ms/)
+})
+
+test('a chosen workspace restarts AVA there without mutating the launch environment', async (t) => {
+  const workspace = mkdtempSync(join(tmpdir(), 'ava-desktop-workspace-'))
+  t.after(() => rmSync(workspace, { recursive: true, force: true }))
+  const h = await harness(t, { chooseWorkspace: async () => workspace })
+  const launchWorkspace = h.env.AVA_DESKTOP_WORKSPACE
+  assert.deepEqual(await h.backend.handle(IPC_CHANNELS.selectWorkspace, null), { ok: true })
+  assert.equal(h.spawnCwds.at(-1), workspace)
+  assert.equal(h.env.AVA_DESKTOP_WORKSPACE, launchWorkspace, 'the chosen workspace is backend state, not an env write')
+  assert.equal(h.backend.snapshot().connection, 'ready')
+})
+
+test('stop escalates to SIGTERM, then SIGKILL, when AVA ignores stdin EOF', async (t) => {
+  const h = await harness(t, { pid: 4242, stubborn: true })
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const settle = () => new Promise((resolve) => setImmediate(resolve))
+  const stopping = h.backend.stop()
+  assert.equal(h.backend.snapshot().connection, 'stopped')
+  assert.deepEqual(h.signals, [], 'EOF gets a grace period first')
+  t.mock.timers.tick(1500)
+  await settle()
+  assert.deepEqual(h.signals, ['SIGTERM'])
+  t.mock.timers.tick(1500)
+  await settle()
+  await stopping
+  assert.deepEqual(h.signals, ['SIGTERM', 'SIGKILL'])
+  t.mock.timers.reset()
+})
+
+// Each spawn gets its own process; only the first one holds its exit on EOF until released.
+async function lifecycleHarness(t: TestContext) {
+  const children: LifecycleChild[] = []
+  mockSpawn(t, () => {
+    const child = lifecycleChild(1000 + children.length, children.length === 0)
+    children.push(child)
+    return child
+  })
+  const backend = new AvaBackend(backendOptions())
+  t.after(async () => {
+    for (const child of children) {
+      child.releaseExit()
+    }
+    await backend.stop()
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  await backend.start()
+  assert.equal(backend.snapshot().connection, 'ready')
+  return { backend, children }
+}
+
+test('overlapping restarts are rejected: one live AVA, and the replaced one exits', async (t) => {
+  const { backend, children } = await lifecycleHarness(t)
+  const first = backend.handle(IPC_CHANNELS.restart, null)
+  assert.equal(backend.snapshot().connection, 'starting', 'Restart stays disabled for the whole transaction')
+  const second = await backend.handle(IPC_CHANNELS.restart, null) as { ok: boolean }
+  assert.equal(second.ok, false, 'a second restart cannot launch a parallel AVA')
+  const workspace = await backend.handle(IPC_CHANNELS.selectWorkspace, null) as { ok: boolean }
+  assert.equal(workspace.ok, false, 'a workspace change cannot launch a parallel AVA either')
+  assert.equal(children.length, 1, 'nothing spawns while the replaced AVA is still exiting')
+  children[0]!.releaseExit()
+  assert.deepEqual(await first, { ok: true })
+  assert.equal(children.length, 2)
+  assert.deepEqual(children.map(exited), [true, false], 'exactly one live AVA; the replaced one exited')
+  assert.equal(backend.snapshot().connection, 'ready')
+  await backend.stop()
+  assert.deepEqual(children.map(exited), [true, true], 'no AVA outlives stop()')
+})
+
+test('quitting mid-restart launches nothing and waits for the replaced AVA to exit', async (t) => {
+  const { backend, children } = await lifecycleHarness(t)
+  const restart = backend.handle(IPC_CHANNELS.restart, null)
+  let stopped = false
+  const stopping = backend.stop('application quit').then(() => {
+    stopped = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(stopped, false, 'quit waits while the replaced AVA is still running')
+  children[0]!.releaseExit()
+  await stopping
+  assert.equal((await restart as { ok: boolean }).ok, false, 'the interrupted restart is not reported as done')
+  assert.equal(children.length, 1, 'no AVA is spawned after quit')
+  assert.equal(exited(children[0]!), true)
 })

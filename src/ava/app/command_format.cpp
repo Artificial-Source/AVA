@@ -2,6 +2,7 @@
 #include "ava/app/command_format.h"
 #include "ava/app/commands.h"
 
+#include <algorithm>
 #include <cctype>
 #include <system_error>
 #include <utility>

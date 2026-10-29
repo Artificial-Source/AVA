@@ -1,113 +1,380 @@
-# AVA Official Publication Runbook and Design
+# AVA Official Publication Runbook
 
-**Status: required for the first official release, but not yet an implemented publish workflow.** This page defines the operator lifecycle that must be reviewed and dry-run before publication. The 2026-08-23 audit did not run a public publish command, create a tag, or create a release. Current blockers are authoritative in the [release-readiness ledger](../product/release-readiness.md).
+**Status: release tooling prepared; no release scheduled.** The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. Local preparation never authorizes publication. The
+preparation tool does not contact GitHub. Only an owner may run the remote
+commands below. See the [release plan](../product/release-readiness.md).
 
 ## Roles and invariants
 
-- One operator prepares the candidate packet; an independent approver verifies scope, exact bytes, release notes, and supported-platform claims.
-- The published tag, release commit, release body, archive/checksum names, and retained CI artifact digests must agree exactly.
-- Build once, test those bytes, retain those bytes, and promote those bytes. Publication never rebuilds.
-- Draft creation and asset staging must be no-clobber. Existing tag, release, archive, checksum, or conflicting version aborts the operation.
-- A published version is immutable. Corrections use a new patch version; withdrawal adds warnings/removes discoverability where the hosting platform permits but never silently replaces bytes.
+- One operator prepares the packet. An independent owner reviews the exact
+  commit, evidence, notes, support claims, and digests. Both record approval.
+- Build once, test those bytes, retain those bytes, and promote those bytes.
+  Never rebuild during download, draft staging, publication, or verification.
+- Publish Linux x64 only. The qualified floor is Ubuntu 24.04, x86-64-v2
+  (Nehalem-class; no BMI2 or AVX), glibc 2.39, libstdc++ with `GLIBCXX_3.4.32`
+  and `CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), terminfo, and curl 8.5+.
+  The [release body template](release-body-template.md) records the loader,
+  libraries, symbol ceilings, and limitations. Do not add another architecture
+  without native exact-candidate qualification and a new owner decision.
+- Existing tags, releases (including drafts), or asset names stop creation.
+  Never use force pushes, asset replacement, or `gh release upload --clobber`.
+- A published version, tag, body, and assets are immutable. Corrections ship as
+  a new patch. An incident notice may be appended to warn users, but must not
+  hide the original identity or replace its assets.
 
-## 1. Select the candidate
+## 1. Select and qualify the exact candidate
 
-1. Confirm the release ledger names the candidate version, commit, supported architecture, and `READY` decision with all blockers closed.
-2. Require a clean exact candidate source tree and matching initialized gitlinks for CI. A developer's dirty tree, even one that passed local tests, is not a candidate identity.
-3. Confirm the top-level CMake version and the retained executable's exact `ava X.Y.Z` output agree.
-4. Confirm the candidate is on the approved release ancestry and no tag or official release already exists for the version.
-5. Record the exact native CI run and retained artifact IDs. For the first publication, the only expected platform is Linux x64 unless the ledger has admitted another natively evidenced architecture.
+Review the [changelog](../../CHANGELOG.md),
+[product principles](../product/principles.md),
+[testing guide](testing.md), [artifact checklist](release-checklist.md), and
+[security policy](../../SECURITY.md). Choose the final integrated source commit
+before running CI. A later documentation commit is not the source identity of
+an earlier packet. If the source changes, qualify a new packet.
 
-## 2. Prepare the changelog and release body
+The following are **owner commands**, not commands run by the local dry-run.
+Set the values from the chosen commit and the producing run's independent
+summary. Do not derive the approved manifest digest from the download itself.
+Run these commands from the matching clean checkout with its pinned gitlinks.
 
-The reviewed release packet must contain:
+```sh
+export REPOSITORY=Artificial-Source/AVA
+export REVISION=FULL_40_CHARACTER_APPROVED_SOURCE_COMMIT
+export CANDIDATE_REF=OWNER_SELECTED_BRANCH_AT_THAT_COMMIT
+export VERSION='<x.y.z>' # Replace with the approved archive/binary version.
+export TAG="v${VERSION}"
 
-- version, tag name, exact commit, date, and supported artifact name;
-- a concise user-focused change summary derived from reviewed commits, not from an unfiltered diff dump;
-- security and data-authority changes, including fixed release blockers where disclosure is safe;
-- supported host/CPU/runtime floor and dynamic dependencies;
-- installation/extraction and checksum-verification instructions;
-- known limitations, expected skips, deferred P2/P3 work, and unsupported platforms;
-- upgrade/session compatibility notes and any required backups;
-- links to the current principles, release ledger, testing guide, artifact checklist, security guidance, and this runbook;
-- an explicit statement that telemetry, automatic updates, package-manager publication, signing, SBOM, and attestations are absent when they remain absent.
+# Owner: make the integrated branch available, then request exact-byte CI.
+git push origin "$CANDIDATE_REF"
+gh workflow run ci.yml --repo "$REPOSITORY" --ref "$CANDIDATE_REF" \
+  -f release_candidate=true
+gh run list --repo "$REPOSITORY" --workflow ci.yml --event workflow_dispatch \
+  --commit "$REVISION" --limit 10
 
-The approver compares the release body against `CHANGELOG.md`, the exact candidate diff, the retained artifact's `PROVENANCE.json`, and the platform evidence. Review must remove private paths, credentials, raw captures, provider payloads, internal evidence roots, and claims based only on static competitor inspection.
-
-## 3. Tag policy
-
-- Official release tags use `vX.Y.Z` and point directly to the approved candidate commit.
-- A tag is created only after the release packet and retained-byte evidence are approved.
-- Annotated tag text identifies the version and release, without embedding private logs or credentials.
-- Existing tags are never moved or force-replaced. Any remote/local pre-existence or commit mismatch aborts.
-- The tag and draft release remain non-public until asset validation and final approval complete.
-
-This design deliberately does not provide a live tag/push command. The eventual implemented workflow must expose a reviewable draft step and a separately authorized publication step.
-
-## 4. Exact retained CI artifacts
-
-For each supported architecture, retain exactly:
-
-```text
-ava-X.Y.Z-linux-ARCH.tar.gz
-ava-X.Y.Z-linux-ARCH.tar.gz.sha256
+# Copy the actual run ID and attempt from that listing/run page.
+export RUN=APPROVED_RUN_ID
+export ATTEMPT=APPROVED_RUN_ATTEMPT
+gh run watch "$RUN" --repo "$REPOSITORY" --exit-status
+gh run view "$RUN" --repo "$REPOSITORY" \
+  --json databaseId,headSha,attempt,conclusion,jobs,url
+gh api "repos/$REPOSITORY/actions/runs/$RUN/artifacts" \
+  --jq '.artifacts[] | {id,name,expired,expires_at,digest}'
 ```
 
-The release CI record must establish that the executable inside this archive is the one that passed the complete candidate gate: full deterministic CTest, canonical sanitizer evidence, focused TSan, all 23 tmux and four PTY gates, install/provenance/package checks, checksum/extraction, version/help/doctor, and fake-provider smoke. Retention duration must cover approval, publication, post-publication verification, and the project's incident window.
+Check `headSha == REVISION` and the approved attempt. Require successful
+`sanitizer`, `tsan`, `release-candidate`, and `verify-promotion` jobs from that
+same workflow commit and attempt, plus all other required CI jobs. Review the
+full deterministic report, exactly 23 tmux and four PTY successes with zero
+skips, install/provenance/package checks, inspection, and minimum-host smoke.
+A historical run does not qualify new bytes.
 
-Before staging, download the retained pair into a new mode-0700 operator directory outside the checkout, verify the CI-recorded digests, verify the adjacent checksum, inspect the exact member allowlist, and extract into a new private directory. Never accept a locally rebuilt substitute.
+Both retained artifacts last **90 days**:
 
-## 5. Draft, approve, and publish without clobber
+- `linux-x64-candidate-RUN-ATTEMPT`: archive, adjacent checksum, `candidate.json`.
+- `linux-x64-evidence-RUN-ATTEMPT`: JUnit reports, build identity, terminal
+  evidence, ISA/library inspection, and minimum-host logs.
 
-1. Create a non-public draft associated with the approved tag/commit through the future reviewed workflow or hosting UI.
-2. Stage only the exact retained archive/checksum pair. Reject duplicate names, symlinks, unexpected files, partial uploads, or any destination that already exists.
-3. Render and review the release body in the hosting UI. Confirm supported-platform wording and known limits remain visible.
-4. Have the independent approver re-check tag/commit identity, asset names/sizes/digests, checksum contents, and release body.
-5. Record approval identity/time and the final remote object identifiers.
-6. Publish through the separately authorized approval action. Do not rebuild, rename, edit bytes, or replace an existing asset during this step.
+The run summary separately records `candidate.json` SHA-256, source commit,
+archive/checksum/executable digests, and same-run sanitizer/TSan conclusions.
+Record artifact IDs and expiry dates before approval. Expired or missing
+artifacts require a new complete qualification run; promotion does not rebuild.
+A tag push may trigger another candidate run. It must not replace the already
+approved run or its bytes.
 
-The repository currently has secure local no-replace publication primitives, but no official remote publication workflow. Those local primitives do not prove this lifecycle.
+## 2. Download and prepare the release packet
 
-## 6. Checksums and authenticity status
+Use a new mode-0700 directory outside the checkout. Preserve both artifacts
+and the producing run summary privately through approval and the incident
+window. Do not put credentials, private paths, raw provider payloads, or
+unredacted logs in release notes.
 
-SHA-256 checksum files are required and published adjacent to each archive. They protect transfer verification only; an unsigned checksum from the same location is not an independent authenticity proof.
+```sh
+export MANIFEST_SHA256=SHA256_FROM_APPROVED_PRODUCING_RUN_SUMMARY
+export PACKET_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/ava-publication.XXXXXXXX")
+chmod 0700 "$PACKET_ROOT"
+mkdir -m 0700 "$PACKET_ROOT/candidate" "$PACKET_ROOT/evidence"
+gh run download "$RUN" --repo "$REPOSITORY" \
+  --name "linux-x64-candidate-$RUN-$ATTEMPT" --dir "$PACKET_ROOT/candidate"
+gh run download "$RUN" --repo "$REPOSITORY" \
+  --name "linux-x64-evidence-$RUN-$ATTEMPT" --dir "$PACKET_ROOT/evidence"
+python3 scripts/release-candidate.py verify --directory "$PACKET_ROOT/candidate" \
+  --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256"
+python3 scripts/inspect-linux-artifact.py \
+  "$PACKET_ROOT/candidate/ava-${VERSION}-linux-x64.tar.gz" \
+  --output "$PACKET_ROOT/inspection.json"
+python3 scripts/release-candidate.py draft --dry-run \
+  --directory "$PACKET_ROOT/candidate" --revision "$REVISION" \
+  --manifest-sha256 "$MANIFEST_SHA256" --repository "$REPOSITORY" \
+  --body docs/operations/release-body-template.md --output "$PACKET_ROOT/plan"
+sha256sum "$PACKET_ROOT/plan/release-body.md" "$PACKET_ROOT/plan/draft-commands.sh"
+```
 
-Artifact attestations, a standard SPDX/CycloneDX SBOM, and detached signing are **not implemented for this first-publication audit**. They remain optional post-release hardening unless a downstream policy promotes them through the release ledger. If later enabled, their generated statements must bind the same retained digest and have documented offline/hosted verification; existing release bytes remain unchanged.
+`draft --dry-run` validates the private input directory, exact file set,
+manifest/digests, checksum, safe member inventory, commit, packaged provenance,
+version, release-body placeholders, and absence of the local tag. It extracts
+and runs `bin/ava --version` with fresh HOME/XDG roots and no inherited
+credentials. It creates a new private plan directory with exclusive writes,
+renders the template with that version, and prints the owner commands. It
+never runs `gh`, pushes a tag, creates a release, or builds anything. Reusing
+an output directory fails without changing the existing plan.
 
-## 7. Post-publication verification
+An offline dry-run cannot prove that a remote name is free or that GitHub
+retained the packet. The generated commands check remote tag absence and all
+release/draft names immediately before staging. Authentication or API failures
+stop the commands; they are not treated as absence. A tag or draft found there
+requires investigation, not an overwrite or automatic resume.
 
-Use a clean machine or fresh isolated user environment that meets the published minimum floor:
+The release body and changelog must agree on features, fixed safety issues,
+support floor, provider live-test limits, process-local jobs, saved-file LSP,
+local stdio MCP, attachment backups, and unsupported platforms. No telemetry,
+automatic updates, package-manager publication, detached signing, SBOM, or
+attestation is provided. Unsigned checksums detect transfer changes; they do
+not independently authenticate the publisher.
 
-1. Query the public tag/release and confirm tag-to-commit equality.
-2. Download assets from the public release, not from CI or an operator directory.
-3. Compare downloaded SHA-256 values with both the checksum file and pre-publication retained digests.
-4. Inspect the member allowlist and documentation count, then extract to a new directory.
-5. Run `bin/ava --version`, `bin/ava --help`, and passive `bin/ava doctor` under scrubbed private HOME/XDG roots.
-6. Run the deterministic fake-provider packaged smoke without live credentials.
-7. Open every release-body/documentation link and confirm the supported floor and limitations are visible.
-8. Record PASS/FAIL and evidence identifiers. Any mismatch starts the rollback/withdrawal decision; never repair a published asset in place.
+Review the rendered Markdown before approval. If its contents need changing,
+edit the canonical template, select the final source commit, rerun qualification
+if that commit changes, and produce a fresh plan. Do not silently edit a body
+after its digest has been approved.
 
-## 8. Correction, rollback, and withdrawal
+## 3. Record approval
+
+Store this record in an owner-controlled release log, not in the candidate
+packet or public notes. Fill every field. Missing names, digests, evidence,
+or decisions block the next step. An agent cannot approve for an owner.
+
+```text
+Version / tag: <x.y.z> / v<x.y.z>
+Repository: Artificial-Source/AVA
+Source commit (full SHA):
+Candidate workflow URL / run ID / attempt:
+Candidate artifact ID / expiry:
+Evidence artifact ID / expiry:
+Same-run required jobs and conclusions:
+Deterministic / tmux 23-of-23 / PTY 4-of-4 report IDs:
+Minimum-host / CPU-profile / ISA inspection evidence:
+Executable SHA-256:
+Archive name / size / SHA-256:
+Checksum name / size / SHA-256:
+candidate.json SHA-256 (from producing run summary):
+Rendered release-body SHA-256:
+Generated draft-commands.sh SHA-256:
+Changelog reviewed at source commit:
+Supported floor and known limits accepted:
+Clean-install / fake-provider evidence:
+Patch-correction drill result / withdrawal drill result:
+Operator name / UTC time / approve exact commit and digests:
+Independent owner name / UTC time / approve exact commit and digests:
+Draft release ID / URL (fill after staging):
+Remote tag object SHA / peeled commit (fill after staging):
+Downloaded draft assets and body match / evidence (fill after staging):
+Final publish approval: owner name / UTC time / exact draft ID and digests:
+Public release ID / URL / published time (fill after publish):
+Post-publication evidence / PASS or incident decision:
+```
+
+Before staging, walk the correction and withdrawal cases in section 7. Record
+who made each decision and what commands they would use. A local technical
+rehearsal is not independent owner approval or a remote withdrawal drill.
+
+## 4. Create the draft without clobbering
+
+Only after the first two approvals, inspect and run the generated owner script:
+
+```sh
+bash "$PACKET_ROOT/plan/draft-commands.sh"
+```
+
+It re-verifies the retained bytes and body digest, checks that the remote tag
+and any release/draft with this version are absent, creates an annotated local
+tag at the approved commit, pushes it without force, and runs this command
+with the exact retained paths (not a new build):
+
+```sh
+gh release create "$TAG" --repo "$REPOSITORY" --draft --verify-tag \
+  --title "AVA $VERSION" --notes-file "$PACKET_ROOT/plan/release-body.md" \
+  "$PACKET_ROOT/candidate/ava-${VERSION}-linux-x64.tar.gz" \
+  "$PACKET_ROOT/candidate/ava-${VERSION}-linux-x64.tar.gz.sha256"
+```
+
+**Pushing a tag makes the tag public even while the release is a draft.** The
+first approvals must authorize that fact. Do not claim the draft hides a tag.
+The script stops on an existing local tag, remote tag, release, or failed
+upload. If a network failure leaves a tag or partial draft, preserve the
+state and evidence; do not rerun, delete, or upload over it automatically.
+The owner must inspect it and choose the pre-publication branch in section 7.
+
+Inspect the draft body and confirm its links and limitations are visible.
+Run section 6 against the authenticated draft download before publication,
+then record the release ID, annotated tag object, peeled commit, asset
+IDs/sizes/digests, and body digest. The independent owner gives a separate
+final approval for that exact remote draft. No edit or upload is allowed
+between final approval and publish.
+
+## 5. Publish separately
+
+The final owner confirms the ledger has no unmet code, CI, platform, or
+approval gate, and authorizes these exact commands:
+
+```sh
+gh release view "$TAG" --repo "$REPOSITORY" \
+  --json databaseId,isDraft,tagName,targetCommitish,body,assets,url
+# Confirm this is the approved draft ID and approved asset/body identities.
+gh release edit "$TAG" --repo "$REPOSITORY" --draft=false --latest
+```
+
+This publishes the existing draft. Do not create another release, rebuild,
+rename assets, replace bytes, or move the tag. Record the public release URL,
+ID, and timestamp, then immediately repeat the following checks using a new
+download directory. Update the ledger to published only after these pass.
+
+## 6. Verify the draft, then verify the public release
+
+Run from a clean machine or fresh isolated user environment meeting the
+published floor. For the public pass, use unauthenticated downloads where
+possible; do not substitute the CI artifact or an operator's retained copy.
+For the draft pass, authenticate as the reviewing owner.
+
+```sh
+export CHECK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/ava-release-check.XXXXXXXX")
+chmod 0700 "$CHECK_ROOT"
+git ls-remote --tags "https://github.com/$REPOSITORY.git" \
+  "refs/tags/$TAG" "refs/tags/$TAG^{}" > "$CHECK_ROOT/remote-tag.txt"
+python3 - "$CHECK_ROOT/remote-tag.txt" "$REVISION" "$TAG" <<'PY'
+import pathlib, sys
+refs = dict(line.split()[::-1] for line in pathlib.Path(sys.argv[1]).read_text().splitlines())
+ref = 'refs/tags/' + sys.argv[3]
+assert refs.get(ref + '^{}', refs.get(ref)) == sys.argv[2], 'remote tag/commit mismatch'
+print('remote tag matches approved commit')
+PY
+gh release view "$TAG" --repo "$REPOSITORY" \
+  --json databaseId,isDraft,tagName,targetCommitish,body,assets,url \
+  > "$CHECK_ROOT/remote-release.json"
+# Check the approved release ID, exact tag, exactly two assets, and isDraft
+# (true before final approval, false after publication). targetCommitish
+# alone does not prove the tag's peeled commit.
+gh release download "$TAG" --repo "$REPOSITORY" --dir "$CHECK_ROOT" \
+  --pattern "ava-${VERSION}-linux-x64.tar.gz" \
+  --pattern "ava-${VERSION}-linux-x64.tar.gz.sha256"
+cp "$PACKET_ROOT/candidate/candidate.json" "$CHECK_ROOT/candidate.json"
+python3 scripts/release-candidate.py verify --directory "$CHECK_ROOT" \
+  --revision "$REVISION" --manifest-sha256 "$MANIFEST_SHA256"
+(cd "$CHECK_ROOT" && sha256sum --check --strict "ava-${VERSION}-linux-x64.tar.gz.sha256")
+python3 scripts/inspect-linux-artifact.py "$CHECK_ROOT/ava-${VERSION}-linux-x64.tar.gz"
+python3 - "$CHECK_ROOT/remote-release.json" "$PACKET_ROOT/plan/release-body.md" "$VERSION" <<'PY'
+import json, pathlib, sys
+remote = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert remote['body'].replace('\r\n', '\n').rstrip() == pathlib.Path(sys.argv[2]).read_text().rstrip(), 'release body mismatch'
+archive = f'ava-{sys.argv[3]}-linux-x64.tar.gz'
+assert sorted(asset['name'] for asset in remote['assets']) == [
+    archive, archive + '.sha256'], 'unexpected assets'
+print('release body and asset names match')
+PY
+mkdir -m 0700 "$CHECK_ROOT/extracted" "$CHECK_ROOT/home" \
+  "$CHECK_ROOT/config" "$CHECK_ROOT/state"
+tar -xzf "$CHECK_ROOT/ava-${VERSION}-linux-x64.tar.gz" -C "$CHECK_ROOT/extracted"
+export CHECK_BINARY="$CHECK_ROOT/extracted/ava-${VERSION}-linux-x64/bin/ava"
+test "$(env -i PATH=/usr/bin:/bin HOME="$CHECK_ROOT/home" \
+  XDG_CONFIG_HOME="$CHECK_ROOT/config" XDG_STATE_HOME="$CHECK_ROOT/state" \
+  "$CHECK_BINARY" --version)" = "ava ${VERSION}"
+env -i PATH=/usr/bin:/bin HOME="$CHECK_ROOT/home" \
+  XDG_CONFIG_HOME="$CHECK_ROOT/config" XDG_STATE_HOME="$CHECK_ROOT/state" \
+  "$CHECK_BINARY" --help
+env -i PATH=/usr/bin:/bin HOME="$CHECK_ROOT/home" \
+  XDG_CONFIG_HOME="$CHECK_ROOT/config" XDG_STATE_HOME="$CHECK_ROOT/state" \
+  "$CHECK_BINARY" doctor
+```
+
+The verifier compares both downloaded file digests with the independently
+approved manifest and confirms the packaged executable, commit, member list,
+and provenance. `candidate.json` is copied only as the verification record;
+it is not an uploaded release asset. Save the remote asset IDs and sizes from
+`remote-release.json` and compare them with the approval record.
+
+Also run the deterministic packaged fake-provider smoke from the
+[artifact checklist](release-checklist.md#build-and-verify-the-linux-host-artifact), using a retained
+qualified helper if available. Do not rebuild AVA for this check. The retained
+CI evidence already records that smoke for the exact archive; if the helper
+is unavailable locally, record that fact and have the owner accept that CI
+proof explicitly rather than claiming another local run. Open every release
+link and do a fresh install on the minimum host. Record optional doctor
+warnings separately from failures. Any tag, body, digest, or smoke mismatch
+starts the incident decision below; never fix an asset in place.
+
+## 7. Correction, rollback, and withdrawal
 
 ### Before publication
 
-A failed check cancels the draft. Delete only the unpublished draft/staged uploads through the hosting platform, preserve the evidence, fix the candidate, choose a new exact commit, and rerun complete qualification. Reusing the same version is allowed only while no public tag/release exists and policy owners confirm that no public observer could have consumed it.
+- **Nothing is public and a local check fails:** stop. Preserve evidence,
+  fix the source or notes, choose the final commit, and rerun qualification.
+- **An unpublished draft exists but no public tag was pushed:** the owner may
+  delete only that draft and its uploads after recording its ID and digests:
+  `gh release delete "$TAG" --repo "$REPOSITORY" --yes`. Do not use
+  `--cleanup-tag`. Reuse of the version needs explicit owner approval and
+  proof that no public observer could have consumed it.
+- **A tag was pushed, or exposure is uncertain:** treat that version as used.
+  Do not move or delete the public tag. Cancel the draft, record the failure,
+  and use the next patch version for corrected code or notes.
 
 ### After publication
 
-- **Documentation or code correction:** prepare a new patch version and repeat the full lifecycle. Do not move the old tag or replace assets.
-- **Bad release with safe prior version:** mark the affected release prominently as withdrawn/unsafe, remove it from “latest” or package discovery where possible, direct users to the prior safe version, and publish a fixed patch after qualification.
-- **Security issue:** follow private security response, coordinate disclosure timing, state affected/safe versions, revoke compromised credentials or signing material if applicable, and preserve forensic evidence privately.
-- **Artifact mismatch or suspected compromise:** stop promotion immediately, make the release non-latest, warn against download/use, preserve remote identifiers/digests, and investigate before publishing any replacement patch.
+1. **Only code or documentation needs correction, with no urgent risk?** Keep
+   the old version intact. Prepare the next unused patch version and repeat
+   this entire lifecycle with new notes, approvals, and exact bytes.
+2. **The release is unsafe and a safe prior release exists?** Append a dated
+   withdrawal warning that names affected/safe versions. Remove the unsafe
+   release from latest, point latest to the safe release, and tell users how
+   to install its unchanged archive. There is no in-place downgrade command.
+3. **First release of a line, with no safe prior release?** Mark it withdrawn
+   and non-latest. Warn users to stop using it. State that no supported safe
+   binary is available until a qualified patch ships. Do not recommend an
+   arbitrary development build as a supported fallback.
+4. **Digest mismatch, suspected compromise, or security issue?** Stop all
+   promotion. Preserve IDs, digests, logs, and the original bytes privately.
+   Follow the [private security process](../../SECURITY.md). Revoke affected
+   credentials if needed, agree disclosure timing, and qualify a new patch.
 
-Withdrawal does not erase history or mutate bytes. The release page should retain enough notice for users holding the old digest to understand its status.
+Owner incident commands, after writing and approving a notice that preserves
+the original body and appends the date, reason, affected digest, and safe path:
 
-## 9. Supported versions
+```sh
+gh release edit "$TAG" --repo "$REPOSITORY" --latest=false \
+  --notes-file /absolute/owner-approved-withdrawal-notice.md
+# Only when a known-safe published release exists:
+gh release edit "$SAFE_TAG" --repo "$REPOSITORY" --latest
+```
 
-Before the first publication, AVA has no officially supported released version. After publication, the project supports only the latest published `1.0.x` patch unless a later policy explicitly names another line. Security and support pages must identify affected and fixed versions precisely; an unreleased runtime number or development branch is not a supported release.
+Keep the withdrawn page, tag, and assets so users holding the old digest can
+identify it. Removing public bytes is exceptional (for example, exposed
+secrets) and needs a separate owner/security decision plus a public notice;
+it never authorizes replacing those bytes under the same name/version.
 
-End-of-support, if introduced, requires a dated announcement, replacement path, and updates to release/security/support documentation. It cannot be inferred from a new runtime bump alone.
+Rehearse both cases before publication: a harmless note/code correction must
+choose a new patch; an unsafe first release must become non-latest with no
+invented safe predecessor. Record the participants, decisions, and proposed
+commands in the approval log. No remote incident command is run by a local
+dry-run.
 
-## Dry-run closure record
+## 8. Supported versions
 
-`AVA-REL-012` closes only after operators exercise this lifecycle without making a public release: select an exact retained candidate, prepare the complete release packet, verify no-clobber draft staging in an isolated test/draft surface, record independent approval, rehearse downloaded-asset verification, and walk one patch-correction plus one withdrawal scenario. The official publication then requires a separate explicit authorization.
+AVA has no officially supported released version. The runtime version is
+`0.32.0`, which is not a stable release. No release is scheduled yet.
+Owners will name supported lines when a release is published.
+Support is best-effort, not a response-time or maintenance-duration promise.
+Security reports must name affected and fixed versions.
+
+A new major/minor line does not silently end support. Owners must publish a
+dated policy naming the supported lines, replacement path, and any end date,
+then update the [security](../../SECURITY.md) and [support](../../SUPPORT.md)
+pages. Withdrawal with no safe patch means there is temporarily no supported
+safe binary.
+
+## Local rehearsal and remaining owner actions
+
+A local packet can exercise the preparation tool without remote access. The
+REL-012 ledger records its commit, digests, commands, and results. This is not
+proof of GitHub retention, draft creation, independent approval, public
+installation, or remote withdrawal. Owners must still run candidate CI,
+review and approve the packet, create and verify the draft, give final publish
+approval, publish, and record the public verification. REL-012 stays pending
+until those remote and human gates are complete.

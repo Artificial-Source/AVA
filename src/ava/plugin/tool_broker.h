@@ -1,5 +1,4 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/tools/tool_context.h"
 #include "ava/tools/tool_types.h"
@@ -8,6 +7,7 @@
 #include "ava/core/result.h"
 
 #include <functional>
+#include <ostream>
 #include <string>
 #include <string_view>
 
@@ -29,7 +29,10 @@ struct PluginBrokeredTool
   // Computed with /plugins diagnostics, before descriptor composition.
   bool model_name_collision = false;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 using PluginBrokeredToolVisitor = std::function<ava::core::VoidResult(PluginBrokeredTool const&)>;

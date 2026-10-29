@@ -4,6 +4,7 @@
 #include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -36,6 +37,11 @@ struct LoadedImageAttachment {
 [[nodiscard]] std::filesystem::path attachment_storage_root(SessionStore const& store);
 [[nodiscard]] ava::core::Result<std::filesystem::path> resolve_attachment_storage_path(SessionStore const& store,
                                                                                         std::string_view storage_path);
+// Successful import/copy persists data before no-replace name publication and
+// syncs the destination directory/created ancestors before returning metadata.
+// O_TMPFILE is preferred; unsupported filesystems use an exclusive same-directory
+// temporary name with RAII cleanup. Neither path replaces an existing name.
+// Failures before publication leave no final name; published content permits retry.
 [[nodiscard]] ava::core::Result<ImageAttachmentRef> import_image_attachment(SessionStore const& store,
                                                                             std::filesystem::path const& source_path);
 [[nodiscard]] ava::core::Result<ImageAttachmentRef> import_image_attachment_bytes(
@@ -44,5 +50,9 @@ struct LoadedImageAttachment {
     std::optional<std::string_view> expected_mime_type = std::nullopt);
 [[nodiscard]] ava::core::Result<LoadedImageAttachment> load_image_attachment(SessionStore const& store,
                                                                              ImageAttachmentRef const& attachment);
+
+// Copies verified bytes through held no-follow source/destination descriptors.
+// Existing destination content is verified read-only rather than overwritten.
+[[nodiscard]] ava::core::VoidResult copy_image_attachment(SessionStore const& source, SessionStore const& destination, ImageAttachmentRef const& attachment);
 
 }  // namespace ava::session

@@ -76,16 +76,7 @@ std::filesystem::path legacy_ava_credentials_path()
 
 std::filesystem::path legacy_compatible_auth_path()
 {
-  std::string compatible_dir;
-  compatible_dir.push_back(static_cast<char>(111));
-  compatible_dir.push_back(static_cast<char>(112));
-  compatible_dir.push_back(static_cast<char>(101));
-  compatible_dir.push_back(static_cast<char>(110));
-  compatible_dir.push_back(static_cast<char>(99));
-  compatible_dir.push_back(static_cast<char>(111));
-  compatible_dir.push_back(static_cast<char>(100));
-  compatible_dir.push_back(static_cast<char>(101));
-  return xdg_paths().data_home / compatible_dir / "auth.json";
+  return xdg_paths().data_home / "opencode" / "auth.json";
 }
 
 }  // namespace ava::config

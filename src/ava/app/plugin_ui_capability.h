@@ -37,7 +37,20 @@ class PluginUiInvocationGuard;
 
 class PluginUiInvocationCapability final
 {
+  class Impl;
+  class ConstructionKey
+  {
+    friend ava::core::Result<std::shared_ptr<PluginUiInvocationCapability>> make_tui_plugin_ui_invocation_capability(
+        std::string canonical_command, std::string invocation_id, std::chrono::steady_clock::time_point deadline, std::weak_ptr<void const> runtime_token,
+        PluginUiPresenter presenter, PluginUiPresenterClose close_presenter);
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
+  PluginUiInvocationCapability(ConstructionKey, std::unique_ptr<Impl> impl);
   ~PluginUiInvocationCapability();
 
   PluginUiInvocationCapability(PluginUiInvocationCapability const&) = delete;
@@ -48,10 +61,6 @@ class PluginUiInvocationCapability final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  class Impl;
-
-  explicit PluginUiInvocationCapability(std::unique_ptr<Impl> impl);
-
   std::unique_ptr<Impl> impl_;
 
   friend ava::core::Result<std::shared_ptr<PluginUiInvocationCapability>> make_tui_plugin_ui_invocation_capability(

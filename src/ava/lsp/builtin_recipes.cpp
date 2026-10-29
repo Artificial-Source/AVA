@@ -261,20 +261,4 @@ std::filesystem::path select_builtin_server_root(std::string_view server_id, std
   return workspace;
 }
 
-std::string_view to_string(BuiltinServerStatus status) noexcept
-{
-  switch (status)
-  {
-    case BuiltinServerStatus::Disabled:
-      return "disabled";
-    case BuiltinServerStatus::Available:
-      return "available";
-    case BuiltinServerStatus::NotFound:
-      return "not-found";
-    case BuiltinServerStatus::Unsafe:
-      return "unsafe";
-  }
-  return "unsafe";
-}
-
 }  // namespace ava::lsp

@@ -6,6 +6,7 @@
 #include "ava/core/NoLogString.h"
 #include "ava/core/json.h"
 #include "ava/core/strict_json.h"
+#include "ava/core/text_escape.h"
 
 #include <optional>
 #include <string>
@@ -25,37 +26,6 @@ constexpr std::size_t kMaxTaskCommandBytes = 1024;
 constexpr std::size_t kMaxTaskToolIterations = 1000;
 
 using Json = nlohmann::json;
-
-std::string xml_escape(std::string_view value)
-{
-  std::string escaped;
-  escaped.reserve(value.size());
-  for (char const ch : value)
-  {
-    switch (ch)
-    {
-      case '&':
-        escaped += "&amp;";
-        break;
-      case '<':
-        escaped += "&lt;";
-        break;
-      case '>':
-        escaped += "&gt;";
-        break;
-      case '"':
-        escaped += "&quot;";
-        break;
-      case '\'':
-        escaped += "&apos;";
-        break;
-      default:
-        escaped.push_back(ch);
-        break;
-    }
-  }
-  return escaped;
-}
 
 ava::core::VoidResult reject_oversized_task_arg(std::string_view value, std::string_view field, std::size_t max_bytes, std::string_view tool_name)
 {
@@ -255,9 +225,10 @@ ToolDispatchResult task_result(ava::tools::ToolContext const& context, ToolDispa
 
   auto const state = run->state.empty() ? std::string("completed") : run->state;
   auto const summary = state == "running" ? std::string("Background subagent task started: ") : std::string("Subagent task completed: ");
-  auto const job_attr = run->job_id.empty() ? std::string{} : std::string(" job_id=\"") + xml_escape(run->job_id) + "\"";
-  auto const content = std::string("<task id=\"") + xml_escape(run->task_id) + "\"" + job_attr + " state=\"" + xml_escape(state) + "\">" + "<summary>" +
-                       summary + xml_escape(request->description) + "</summary>" + "<task_result>" + xml_escape(run->final_text) + "</task_result></task>";
+  auto const job_attr = run->job_id.empty() ? std::string{} : std::string(" job_id=\"") + ava::core::xml_escape(run->job_id) + "\"";
+  auto const content = std::string("<task id=\"") + ava::core::xml_escape(run->task_id) + "\"" + job_attr + " state=\"" + ava::core::xml_escape(state) + "\">" +
+                       "<summary>" + summary + ava::core::xml_escape(request->description) + "</summary>" + "<task_result>" +
+                       ava::core::xml_escape(run->final_text) + "</task_result></task>";
   std::string text = "{\"tool\":\"task\",\"ok\":true,\"task_id\":\"" + ava::core::json::escape(run->task_id) + "\",\"subagent_type\":\"" +
                      ava::core::json::escape(run->subagent_type) + "\",\"description\":\"" + ava::core::json::escape(request->description) +
                      "\",\"session_path\":\"" + ava::core::json::escape(run->session_path.generic_string()) + "\",\"state\":\"" +

@@ -80,6 +80,7 @@ class SequencedCurlTransport final : public ava::http::Transport
       throw std::runtime_error(installed.error().format());
   }
 
+  using ava::http::Transport::send;
   [[nodiscard]] ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override { return transport_.send(request); }
 
   [[nodiscard]] bool supports_streaming() const noexcept override { return true; }
@@ -408,6 +409,17 @@ void test_streaming_response_framing()
     auto response = fixture.transport.send_streaming(request_for(path), [](std::string_view) -> ava::core::VoidResult { return {}; });
     expect(!response && response.error().message().find("status") != std::string::npos,
            "streaming curl fails closed on missing, malformed, and mismatched status trailers");
+  }
+}
+
+void test_buffered_response_rejects_malformed_status()
+{
+  for (auto const path : {"/stream-malformed-trailer", "/long-status-trailer", "/empty-status-trailer"})
+  {
+    CurlFixture fixture;
+    auto const response = fixture.transport.send(request_for(path));
+    expect(!response && response.error().message().find("status") != std::string::npos,
+           "buffered curl rejects malformed status trailers before integer accumulation");
   }
 }
 
@@ -791,6 +803,7 @@ void run_curl_transport_process_tests()
   test_streaming_error_bodies_and_retry_exhaustion();
   test_streaming_sink_failure_stops_retry_and_cleans_up();
   test_streaming_response_framing();
+  test_buffered_response_rejects_malformed_status();
   test_streaming_incremental_gate_limits_and_cancellation();
   test_prelaunch_checkpoints_and_empty_body();
   test_stop_reasons_and_limits();

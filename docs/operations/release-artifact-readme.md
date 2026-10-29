@@ -6,7 +6,7 @@ This README is the **offline documentation spine** for the artifact. All 32 pack
 
 ## Runtime requirements
 
-The audited Linux x64 candidate requires an x86-64 CPU with BMI2, glibc providing `GLIBC_2.38`, libstdc++ providing `GLIBCXX_3.4.32`, C++ ABI `CXXABI_1.3.13`, `libncursesw.so.6`, `libtinfo.so.6`, a usable terminfo database, and `curl` on `PATH`. The first-publication target is Linux x64 only; only architectures with native exact-candidate evidence may publish. Python and CMake are packaging-only requirements and are not needed to run AVA.
+The first-publication target is **Linux x64 only, x86-64-v2 (Nehalem-class or newer)**; BMI2 and AVX are not required. The minimum qualified host is Ubuntu 24.04 with glibc 2.39, libstdc++ providing `GLIBCXX_3.4.32` and `CXXABI_1.3.13`, `libncursesw.so.6`/`libtinfo.so.6` (ncurses 6.4+), a usable terminfo database, and `curl` 8.5+ on `PATH`. Binary inspection caps symbol requirements at `GLIBC_2.38`, `GLIBCXX_3.4.32`, and `CXXABI_1.3.13`; the loader is `/lib64/ld-linux-x86-64.so.2`, with host `libc.so.6`, `libm.so.6`, and `libgcc_s.so.1` also required. Other architectures/distributions need independent native exact-candidate evidence. Python and CMake are packaging-only requirements, not AVA runtime dependencies.
 
 The 2026-08-23 source matrix passed on Ubuntu 24.04.4 x64 with GCC 13.3 under BetaTest/Unix Makefiles and Release/Ninja. Clang 18 was environment-blocked; MSVC, Windows, macOS, AArch64, and multi-config release qualification were not established.
 

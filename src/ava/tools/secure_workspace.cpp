@@ -527,7 +527,7 @@ ava::core::Result<std::vector<SecureWorkspaceDirectoryEntry>> SecureWorkspace::l
   auto opened = open_directory(candidate);
   if (!opened)
     return std::unexpected(std::move(opened.error()));
-  int duplicate = ::dup(opened->fd());
+  int duplicate = ::fcntl(opened->fd(), F_DUPFD_CLOEXEC, 0);
   if (duplicate < 0)
     return std::unexpected(lookup_error(root_, opened->path(), errno, "directory duplication"));
   auto directory = ava::core::open_directory_stream(ava::core::UniqueFd(duplicate));

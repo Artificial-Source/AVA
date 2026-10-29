@@ -6,6 +6,7 @@
 #include "ava/process/environment_test_support.h"
 #include "ava/process/supervisor.h"
 #include "ava/process/supervisor_test_support.h"
+#include "ava/app/browser_open.h"
 #include "ava/core/AnchorSet.h"
 
 #include <algorithm>
@@ -1014,6 +1015,56 @@ void test_mixed_shared_budget_shutdown()
                           {"elapsed below half the serial grace (8000ms)", elapsed < 8s}});
 }
 
+void test_browser_exec_confirmation_and_descriptor_closure()
+{
+  auto directory = ScopedTestDirectory::create_unique(std::filesystem::temp_directory_path(), "ava-browser-child-");
+  auto const launcher = directory.path() / "browser";
+  auto const marker = directory.path() / "result";
+  ScopedEnvVar disabled("AVA_DISABLE_BROWSER_OPEN", std::nullopt);
+  ScopedEnvVar path("PATH", directory.path().string());
+  ScopedEnvVar browser("BROWSER", launcher.string());
+  {
+    std::ofstream script(launcher);
+    script << "#!/no/such/ava-browser-interpreter\n";
+  }
+  if (!ava::tests::require(::chmod(launcher.c_str(), 0700) == 0, "browser exec fixture is executable"))
+    return;
+  expect(!ava::app::open_url_in_browser("https://example.invalid/exec-failure"),
+         "browser open reports the grandchild exec failure rather than intermediate-fork success");
+
+  ava::core::UniqueFd source(::open("/dev/null", O_RDONLY));
+  ava::core::UniqueFd inherited(source ? ::fcntl(source.get(), F_DUPFD, 200) : -1);
+  if (!ava::tests::require(static_cast<bool>(inherited), "browser fixture holds a high non-CLOEXEC descriptor"))
+    return;
+  {
+    std::ofstream script(launcher);
+    script << "#!/bin/sh\n"
+              "if [ -e /proc/self/fd/"
+           << inherited.get()
+           << " ]; then\n"
+              "  printf leaked > '"
+           << marker.string()
+           << "'\n"
+              "else\n"
+              "  printf '%s' \"$1\" > '"
+           << marker.string()
+           << "'\n"
+              "fi\n";
+  }
+  expect(ava::app::open_url_in_browser("https://example.invalid/fd-closed"), "browser launch confirms successful exec");
+  auto const deadline = ava::tests::now_plus_seconds(5);
+  std::string observed;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    std::ifstream result(marker);
+    std::getline(result, observed);
+    if (!observed.empty())
+      break;
+    std::this_thread::sleep_for(1ms);
+  }
+  expect(observed == "https://example.invalid/fd-closed", "browser receives prepared argv without ambient nonstandard descriptors");
+}
+
 }  // namespace
 #endif
 
@@ -1022,6 +1073,7 @@ void run_process_supervisor_posix_tests()
 #if defined(_WIN32)
   ava::tests::request_skip("process supervisor POSIX lifecycle backend is compile-time unsupported");
 #else
+  test_browser_exec_confirmation_and_descriptor_closure();
   test_committed_stop_observation();
   test_exec_gate_normal_nonzero_and_exec_failure();
   test_matching_common_logical_cwd_executes();

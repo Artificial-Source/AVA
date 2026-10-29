@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/process/deadline.h"
 #include "ava/process/environment.h"
 #include "ava/plugin/runner.h"
 #include "ava/plugin/runner_support.h"
@@ -29,10 +30,10 @@ ava::core::Error cleanup_error(std::string message)
 
 Clock::time_point plugin_lifetime_deadline(PluginRunnerOptions const& options) noexcept
 {
-  auto deadline = saturating_add(Clock::now(), options.startup_timeout);
-  deadline = saturating_add(deadline, options.request_timeout);
-  deadline = saturating_add(deadline, kPluginUiCommandDeadlineMax);
-  return saturating_add(deadline, kPluginCleanupBudget);
+  auto deadline = ava::process::saturating_deadline_add(Clock::now(), options.startup_timeout);
+  deadline = ava::process::saturating_deadline_add(deadline, options.request_timeout);
+  deadline = ava::process::saturating_deadline_add(deadline, kPluginUiCommandDeadlineMax);
+  return ava::process::saturating_deadline_add(deadline, kPluginCleanupBudget);
 }
 
 ava::core::Result<std::filesystem::path> absolute_working_directory(PluginManifest const& manifest, PluginRunnerOptions const& options)
@@ -65,7 +66,8 @@ PluginProcess::PluginProcess(PluginManifest manifest, PluginRunnerOptions option
                              Clock::time_point startup_deadline)
     : manifest_(std::move(manifest)),
       options_(std::move(options)),
-      startup_deadline_(startup_deadline == Clock::time_point{} ? saturating_add(Clock::now(), options_.startup_timeout) : startup_deadline),
+      startup_deadline_(startup_deadline == Clock::time_point{} ? ava::process::saturating_deadline_add(Clock::now(), options_.startup_timeout)
+                                                                : startup_deadline),
       operation_scope_(std::move(operation_scope))
 {
   options_.process_scope.reset();
@@ -87,8 +89,9 @@ PluginProcess::~PluginProcess() noexcept
         cleanup_deadline_.reset();
         observation_deadline_.reset();
       }
-      auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kPluginCleanupBudget));
-      auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kPluginSettlementObservationBudget));
+      auto const cleanup_deadline = cleanup_deadline_.value_or(ava::process::saturating_deadline_add(Clock::now(), kPluginCleanupBudget));
+      auto const observation_deadline =
+          observation_deadline_.value_or(ava::process::saturating_deadline_add(cleanup_deadline, kPluginSettlementObservationBudget));
       static_cast<void>(settle_until(ava::process::TerminationReasonV1::OwnerShutdown, cleanup_deadline, observation_deadline));
     }
   }
@@ -145,7 +148,7 @@ ava::core::Result<std::unique_ptr<PluginProcess>> PluginProcess::start(PluginMan
   }
   options.process_scope.reset();
 
-  auto const startup_deadline = saturating_add(Clock::now(), options.startup_timeout);
+  auto const startup_deadline = ava::process::saturating_deadline_add(Clock::now(), options.startup_timeout);
   auto process = std::make_unique<PluginProcess>(std::move(manifest), std::move(options), std::move(*operation_scope), startup_deadline);
   if (auto launched = process->launch(cancel_requested); !launched)
     return std::unexpected(std::move(launched.error()));
@@ -288,7 +291,7 @@ ava::core::VoidResult PluginProcess::settle_until(ava::process::TerminationReaso
     // Supervisor cleanup authority for one destructor retry beyond that bound
     // so a surfaced wait error cannot immediately strand a runnable child at
     // the Supervisor's hard cleanup horizon.
-    auto const supervisor_cleanup_deadline = saturating_add(observation_deadline, kPluginCleanupBudget);
+    auto const supervisor_cleanup_deadline = ava::process::saturating_deadline_add(observation_deadline, kPluginCleanupBudget);
     auto stopped = operation_scope_.supervisor().request_stop(process_handle_, reason, supervisor_cleanup_deadline);
     if (!stopped)
     {
@@ -301,7 +304,7 @@ ava::core::VoidResult PluginProcess::settle_until(ava::process::TerminationReaso
 
   while (!settlement_ && Clock::now() < observation_deadline)
   {
-    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, saturating_add(Clock::now(), 10ms))));
+    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
     if (auto observed = observe_settlement())
       settlement_ = *observed;
   }
@@ -312,7 +315,7 @@ ava::core::VoidResult PluginProcess::settle_until(ava::process::TerminationReaso
       settlement_ = *observed;
   }
   while (settlement_ && (standard_output_.valid() || standard_error_.valid()) && Clock::now() < observation_deadline)
-    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, saturating_add(Clock::now(), 10ms))));
+    static_cast<void>(drain_for_cleanup(std::min(observation_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
   static_cast<void>(drain_for_cleanup(Clock::now()));
   close_endpoints();
 
@@ -328,8 +331,8 @@ ava::core::VoidResult PluginProcess::settle_failure(ava::process::TerminationRea
 {
   if (settlement_ || settlement_error_)
     return settled_cleanup_result();
-  auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kPluginCleanupBudget));
-  auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kPluginSettlementObservationBudget));
+  auto const cleanup_deadline = cleanup_deadline_.value_or(ava::process::saturating_deadline_add(Clock::now(), kPluginCleanupBudget));
+  auto const observation_deadline = observation_deadline_.value_or(ava::process::saturating_deadline_add(cleanup_deadline, kPluginSettlementObservationBudget));
   return settle_until(reason, cleanup_deadline, observation_deadline);
 }
 
@@ -349,10 +352,10 @@ ava::core::VoidResult PluginProcess::shutdown(std::chrono::milliseconds grace)
     return settled_cleanup_result();
 
   standard_input_.close();
-  auto const natural_deadline = saturating_add(Clock::now(), grace);
+  auto const natural_deadline = ava::process::saturating_deadline_add(Clock::now(), grace);
   while (!settlement_ && Clock::now() < natural_deadline)
   {
-    static_cast<void>(drain_for_cleanup(std::min(natural_deadline, saturating_add(Clock::now(), 10ms))));
+    static_cast<void>(drain_for_cleanup(std::min(natural_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
     if (auto observed = observe_settlement())
       settlement_ = *observed;
   }
@@ -360,16 +363,16 @@ ava::core::VoidResult PluginProcess::shutdown(std::chrono::milliseconds grace)
     settlement_ = *observed;
   if (settlement_)
   {
-    auto const drain_deadline = saturating_add(Clock::now(), kPluginSettlementObservationBudget);
+    auto const drain_deadline = ava::process::saturating_deadline_add(Clock::now(), kPluginSettlementObservationBudget);
     while ((standard_output_.valid() || standard_error_.valid()) && Clock::now() < drain_deadline)
-      static_cast<void>(drain_for_cleanup(std::min(drain_deadline, saturating_add(Clock::now(), 10ms))));
+      static_cast<void>(drain_for_cleanup(std::min(drain_deadline, ava::process::saturating_deadline_add(Clock::now(), 10ms))));
     static_cast<void>(drain_for_cleanup(Clock::now()));
     close_endpoints();
     return settled_cleanup_result();
   }
 
-  auto const cleanup_deadline = cleanup_deadline_.value_or(saturating_add(Clock::now(), kPluginCleanupBudget));
-  auto const observation_deadline = observation_deadline_.value_or(saturating_add(cleanup_deadline, kPluginSettlementObservationBudget));
+  auto const cleanup_deadline = cleanup_deadline_.value_or(ava::process::saturating_deadline_add(Clock::now(), kPluginCleanupBudget));
+  auto const observation_deadline = observation_deadline_.value_or(ava::process::saturating_deadline_add(cleanup_deadline, kPluginSettlementObservationBudget));
   return settle_until(ava::process::TerminationReasonV1::OwnerShutdown, cleanup_deadline, observation_deadline);
 }
 

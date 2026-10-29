@@ -54,6 +54,7 @@ class TitleProviderTransport final : public ava::http::Transport
  public:
   explicit TitleProviderTransport(std::shared_ptr<TitleTransportState> state) : state_(std::move(state)) { }
 
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     std::lock_guard lock(state_->mutex);
@@ -1044,6 +1045,63 @@ void test_shutdown_cancels_owned_generation()
   }
 }
 
+void test_shutdown_rejects_title_scheduling()
+{
+  auto const root = create_empty_root("session-title-shutdown-admission");
+  auto state = std::make_shared<GeneratorState>();
+  auto coordinator = make_coordinator(state);
+  if (!coordinator)
+    return;
+  coordinator->shutdown();
+  auto session = open_title_session(root, coordinator);
+  if (!ava::tests::require(session.has_value(), "closed coordinator session opens"))
+    return;
+  auto commit = seed_committed_ordinary_turn(*session, "Do not generate titles after shutdown");
+  if (!ava::tests::require(commit.has_value(), "closed coordinator turn commits"))
+    return;
+  coordinator->schedule(*session, "Do not generate titles after shutdown", *commit, {});
+  auto locked = ava::app::runtime::session_ts::rat(*session);
+  auto metadata = ava::session::load_session_metadata(locked->store, locked->lease());
+  expect(metadata && metadata->generated_title.empty() && coordinator->catalog_generation() == 0 && state->calls == 0,
+         "shutdown rejects both synchronous fallback persistence and asynchronous title generation");
+}
+
+void test_shutdown_stop_callback_can_read_catalog()
+{
+  auto const root = create_empty_root("session-title-stop-callback");
+  auto state = std::make_shared<GeneratorState>();
+  state->release = false;
+  auto weak_coordinator = std::make_shared<std::weak_ptr<ava::app::SessionTitleCoordinator>>();
+  std::atomic_bool callback_completed = false;
+  auto created = ava::app::SessionTitleCoordinator::create(
+      {.config = {},
+       .generator = [state, weak_coordinator, &callback_completed](ava::app::SessionTitleGenerationRequest& request, std::stop_token token,
+                                                                   std::chrono::steady_clock::time_point deadline) {
+         std::stop_callback callback(token, [weak_coordinator, &callback_completed] {
+           if (auto coordinator = weak_coordinator->lock())
+           {
+             static_cast<void>(coordinator->catalog_changes_since(0));
+             callback_completed.store(true);
+           }
+         });
+         return state->generate(request, token, deadline);
+       }});
+  if (!ava::tests::require(created.has_value(), "stop callback title coordinator starts"))
+    return;
+  auto coordinator = *created;
+  *weak_coordinator = coordinator;
+  auto session = open_title_session(root, coordinator);
+  if (!ava::tests::require(session.has_value(), "stop callback title session opens"))
+    return;
+  auto commit = seed_committed_ordinary_turn(*session, "Stop callbacks may inspect title notifications");
+  if (!ava::tests::require(commit.has_value(), "stop callback title turn commits"))
+    return;
+  coordinator->schedule(*session, "Stop callbacks may inspect title notifications", *commit, {});
+  expect(state->wait_started(), "title generator installs its stop callback before shutdown");
+  coordinator->shutdown();
+  expect(callback_completed.load(), "shutdown invokes stop callbacks without holding the title coordinator mutex");
+}
+
 }  // namespace
 
 void run_session_title_coordinator_tests()
@@ -1065,5 +1123,7 @@ void run_session_title_coordinator_tests()
   test_runtime_trigger_is_after_completion_and_excludes_synthetic_turns();
   test_existing_manual_child_generated_and_sessionless_exclusions();
   test_shutdown_cancels_owned_generation();
+  test_shutdown_stop_callback_can_read_catalog();
+  test_shutdown_rejects_title_scheduling();
   test_expired_generation_preserves_durable_fallback();
 }

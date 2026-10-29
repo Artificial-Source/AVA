@@ -2,6 +2,7 @@
 #include "ava/process/launch_protocol_posix.h"
 #include "ava/process/supervisor_internal.h"
 #include "ava/core/Signals.h"
+#include "ava/core/close_descriptors.h"
 
 #include <algorithm>
 #include <array>
@@ -213,8 +214,9 @@ void AdoptionGate::abandon() noexcept
 #if !defined(_WIN32)
   if (gate.child_branch)
   {
-    implementation_.reset();
-    return;
+    // Destruction of parent-owned strings, shared state, or locks is forbidden
+    // on an abandoned child branch. A child must exec or terminate directly.
+    _exit(127);
   }
   if (!gate.registered && (gate.leader > 1 || gate.sentinel > 1))
   {
@@ -223,7 +225,8 @@ void AdoptionGate::abandon() noexcept
     gate.containment_control.write_end.reset();
     if (gate.sentinel_control)
       gate.sentinel_control->write_end.reset();
-    bool const cleaned = detail::exact_provisional_cleanup(gate.leader, gate.sentinel, cleanup_deadline);
+    bool const cleaned =
+        detail::exact_provisional_cleanup(gate.state->child_reaper, std::move(gate.deferred_cleanup), gate.leader, gate.sentinel, cleanup_deadline);
     detail::finish_unregistered(gate.state, gate.record, TerminationReasonV1::LaunchFailed, cleaned ? CleanupStateV1::Complete : CleanupStateV1::Incomplete);
     gate.record = 0;
     implementation_.reset();
@@ -302,6 +305,13 @@ ava::core::Result<AdoptionForkBranchV1> AdoptionGate::fork_leader()
     return std::unexpected(std::move(refreshed.error()));
   }
 
+  if (!gate.state->child_reaper.start())
+  {
+    detail::finish_unregistered(gate.state, gate.record, TerminationReasonV1::LaunchFailed);
+    gate.record = 0;
+    return std::unexpected(detail::process_error(ava::core::ErrorCategory::Io, "failed to prepare native-child cleanup ownership"));
+  }
+
   detail::PreForkDecision final_check;
   {
     std::lock_guard lock(gate.state->mutex);
@@ -362,6 +372,26 @@ ava::core::Result<AdoptionForkBranchV1> AdoptionGate::fork_leader()
     if (::fchdir(cwd_descriptor) != 0)
       child_fail(status_descriptor, detail::LaunchFailureStageV1::WorkingDirectory, errno == 0 ? EIO : errno);
     detail::ExecutionCapabilityAccess::child_close_after_fchdir(gate.anchored_cwd);
+    // Replace the parent-reserved slot with this child's fd-table directory.
+    // The temporary open may reuse an atfork-closed caller fd, so close it
+    // before returning control to the caller's child branch.
+    int directory;
+    do
+      directory = ::open("/proc/self/fd", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    while (directory < 0 && errno == EINTR);
+    if (directory >= 0)
+    {
+      int relocated;
+      do
+        relocated = ::dup3(directory, gate.descriptor_directory.get(), O_CLOEXEC);
+      while (relocated < 0 && errno == EINTR);
+      if (relocated < 0)
+        child_fail(status_descriptor, detail::LaunchFailureStageV1::DescriptorValidation, errno);
+      if (::close(directory) != 0 && errno != EINTR)
+        child_fail(status_descriptor, detail::LaunchFailureStageV1::DescriptorValidation, errno);
+    }
+    else
+      gate.descriptor_directory.reset();
     gate.cwd_applied = true;
     gate.child_api_ready = true;
     return AdoptionForkBranchV1::Child;
@@ -428,7 +458,8 @@ ava::core::VoidResult AdoptionGate::fork_sentinel()
     int const status_descriptor = gate.sentinel_status->write_end.get();
     int const control_descriptor = gate.sentinel_control->read_end.get();
     std::array<int, 2> const preserved{status_descriptor, control_descriptor};
-    detail::close_nonstandard_descriptors_except(preserved, gate.maximum_descriptor);
+    if (int const close_error = ava::core::close_nonstandard_fds_except(preserved); close_error != 0)
+      child_fail(status_descriptor, detail::LaunchFailureStageV1::DescriptorValidation, close_error);
     static_cast<void>(::close(STDIN_FILENO));
     static_cast<void>(::close(STDOUT_FILENO));
     static_cast<void>(::close(STDERR_FILENO));
@@ -528,15 +559,16 @@ void AdoptionGate::child_bash_containment_applied() noexcept
       hidden = hidden || descriptor == gate.sentinel_status->read_end.get() || descriptor == gate.sentinel_status->write_end.get();
     if (gate.sentinel_control)
       hidden = hidden || descriptor == gate.sentinel_control->read_end.get() || descriptor == gate.sentinel_control->write_end.get();
+    hidden = hidden || descriptor == gate.descriptor_directory.get();
     return hidden;
   };
-  if (hidden_descriptor(executable_descriptor) || executable_descriptor >= gate.maximum_descriptor)
+  if (hidden_descriptor(executable_descriptor))
     descriptor_failure();
 
   for (std::size_t index = 0; index < retained_script_descriptors.size(); ++index)
   {
     int const descriptor = retained_script_descriptors[index];
-    if (!descriptor_open(descriptor) || descriptor >= gate.maximum_descriptor || descriptor == executable_descriptor || hidden_descriptor(descriptor))
+    if (!descriptor_open(descriptor) || descriptor == executable_descriptor || hidden_descriptor(descriptor))
       descriptor_failure();
     for (std::size_t previous = 0; previous < index; ++previous)
     {
@@ -554,7 +586,10 @@ void AdoptionGate::child_bash_containment_applied() noexcept
   preserved[preserved_count++] = executable_descriptor;
   for (int descriptor : retained_script_descriptors)
     preserved[preserved_count++] = descriptor;
-  detail::close_nonstandard_descriptors_except(std::span<int const>(preserved.data(), preserved_count), gate.maximum_descriptor);
+  if (int const close_error =
+          ava::core::close_nonstandard_fds_except(std::span<int const>(preserved.data(), preserved_count), gate.descriptor_directory.release());
+      close_error != 0)
+    child_fail(status_descriptor, detail::LaunchFailureStageV1::DescriptorValidation, close_error);
   for (int descriptor : retained_script_descriptors)
   {
     if (!set_descriptor_cloexec(descriptor, false))
@@ -710,7 +745,15 @@ ava::core::Result<AdoptionGate> Supervisor::begin_secure_adoption(Reservation&& 
   gate->containment_control = std::move(*containment_control);
   gate->sentinel_status = std::move(sentinel_status);
   gate->sentinel_control = std::move(sentinel_control);
-  gate->maximum_descriptor = detail::descriptor_limit();
+  // A duplicate read end reserves only an fd slot, not a status writer that
+  // would prevent the parent from observing CLOEXEC EOF after child exec.
+  gate->descriptor_directory.reset(::fcntl(gate->launch_status.read_end.get(), F_DUPFD_CLOEXEC, STDERR_FILENO + 1));
+  if (!gate->descriptor_directory)
+  {
+    auto error = detail::io_error("failed to reserve the child descriptor-enumeration slot", errno);
+    detail::finish_unregistered(state, identity, TerminationReasonV1::LaunchFailed);
+    return std::unexpected(std::move(error));
+  }
 
   if (!detail::ExecutionCapabilityAccess::logical_matches(gate->anchored_cwd, gate->cwd))
   {
@@ -800,6 +843,7 @@ ava::core::Result<ProcessHandle> Supervisor::adopt(AdoptionGate&& gate)
     record.startup_handshake_complete = false;
     record.leader = ticket.leader;
     record.sentinel = ticket.sentinel;
+    record.deferred_cleanup = std::move(ticket.deferred_cleanup);
     record.cleanup = CleanupStateV1::Pending;
     record.state = record.reason ? ProcessStateV1::StopRequested : ProcessStateV1::Launching;
     detail::register_record_members_locked(*state, record, Clock::now());

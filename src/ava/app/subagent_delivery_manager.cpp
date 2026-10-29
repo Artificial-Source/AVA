@@ -286,7 +286,8 @@ struct SubagentDeliveryManager::WorkspaceMaintenanceReservation::Impl
   bool manager_state_committed = false;
 };
 
-SubagentDeliveryManager::SubagentDeliveryManager(SubagentDeliveryManagerOptions options) : options_(std::move(options)), coordinator_(options_.coordinator)
+SubagentDeliveryManager::SubagentDeliveryManager(ConstructionKey, SubagentDeliveryManagerOptions options)
+    : options_(std::move(options)), coordinator_(options_.coordinator)
 {
   if (!options_.provider_bundle_factory)
     options_.provider_bundle_factory = create_runtime_provider_run_bundle;
@@ -301,7 +302,7 @@ ava::core::Result<std::shared_ptr<SubagentDeliveryManager>> SubagentDeliveryMana
       options.admission_retry_interval.count() <= 0)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::InvalidArgument,
                                             "subagent delivery manager limits must be positive with between two and 64 delivery attempts"));
-  auto manager = std::shared_ptr<SubagentDeliveryManager>(new SubagentDeliveryManager(std::move(options)));
+  auto manager = std::make_shared<SubagentDeliveryManager>(ConstructionKey{}, std::move(options));
   manager->start();
   return manager;
 }

@@ -1,21 +1,30 @@
-# AVA Release Readiness
+# AVA Release Plan — No Release Scheduled
 
-This is the single current cut line for AVA's first official release. It records the frozen decision and actionable ledger; dated audit detail is preserved in the [2026-08-23 audit history](../history/2026-08-23-release-readiness-audit.md). Runtime version `1.0.0` is **not** a published release, and this audit creates no tag, release, or official artifact.
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. No release is scheduled yet.
+
+This page keeps the release tooling work and its evidence in one place.
+The earlier audit is preserved in the
+[2026-08-23 history](../history/2026-08-23-release-readiness-audit.md).
+That audit does not set the current release schedule.
 
 > **Integration status:** the audit scope and the isolated `AVA-REL-001`, `AVA-REL-002`, `AVA-REL-003`, and `AVA-REL-014` fixes are integrated on `develop`. The sanitizer policy is applied centrally to `ava_terminal`; no terminal frontend source was changed for that integration. GitHub Actions run `32795413575` passed every required job at commit `546fa0aa7a9faece8adb9937796464b01a5d86f9`. This is still not an exact retained release candidate.
 
 ## Candidate decision
 
-| Field | Frozen value |
+| Field | Current value |
 | --- | --- |
-| Candidate version | `1.0.0` |
-| Baseline commit | `c43794e91bb8d4f706ad4c916387f5487fca14ee` |
-| Audit integration state | Safety, documentation, package-policy, and CI fixes are integrated through `546fa0aa7a9faece8adb9937796464b01a5d86f9`; exact retained candidate bytes are still required |
-| Freeze date | 2026-08-23 |
-| Verdict | **READY AFTER LISTED BLOCKERS** |
-| Open release blockers | `AVA-REL-011`, then `AVA-REL-013`, then `AVA-REL-012` as ordered below |
-| First-publication target | Linux x86-64 only; no other architecture may publish without native exact-candidate evidence |
-| Publication state | No official release or tag exists; none is created by this audit |
+| Runtime version | `0.32.0`; not a stable release |
+| Release schedule | No release is scheduled yet |
+| Stable 1.0 prerequisite | Unmet: the terminal frontend is still in active development; completion is required first |
+| Baseline commit for the earlier audit | `c43794e91bb8d4f706ad4c916387f5487fca14ee` |
+| Audit integration state | Safety, documentation, package-policy, and CI fixes are integrated through `546fa0aa7a9faece8adb9937796464b01a5d86f9`; this evidence is kept for future release work |
+| Earlier audit freeze date | 2026-08-23 |
+| Verdict | **NO RELEASE PLANNED YET** |
+| Later release gates | After frontend completion: `AVA-REL-011`, then `AVA-REL-013`, then `AVA-REL-012` |
+| Proposed first-publication target | Linux x86-64 only; other architectures need native exact-candidate evidence |
+| Publication state | No official release or tag exists |
 
 The comparison audit used fetched pins Pi.dev `460191cfcf27d60ff81fc0178812f4ff09e8df06` (`0.84.2`), OpenCode `03bba464d46f3eddf74195919b1344aa937f7b11` (`1.18.21`), and Grok Build `07b2f7144fd5c5c9d3dd1966937a87852d2dbdb8` (core `1.0.8`, npm wrapper `0.1.220-alpha.4`). The repository's separately preserved comparison checkouts remain at Pi.dev `936aff00918de1187f085f123c2812d8f2d67745`, OpenCode `38e10eb1408feb700021b8e8766fb0ab41bf84e2`, and Grok Build `8a14c91d88875a831a38b3a066b1683116bcb31c`; they were not moved to perform the audit.
 
@@ -33,6 +42,10 @@ The comparison audit used fetched pins Pi.dev `460191cfcf27d60ff81fc0178812f4ff0
 
 ## Frozen scope and admission rule
 
+The freeze below records the earlier audit scope. It is not a current release
+commitment. Frontend completion remains an unmet prerequisite for stable 1.0.
+The tooling gates below will apply when release work is scheduled.
+
 The frozen P0 scope is `AVA-REL-001` and `AVA-REL-002`; both are fixed on `develop`. The frozen P1 scope contains integrated `AVA-REL-003` and `AVA-REL-014`, plus open `AVA-REL-011`, `AVA-REL-012`, and `AVA-REL-013`. Documentation closure `AVA-REL-015` is a completed P2 audit deliverable, not a release blocker. `AVA-REL-010` is not a separate blocker: its exact-candidate terminal gate is merged into `AVA-REL-011`. All former release candidates `AVA-REL-004` through `AVA-REL-009` remain downgraded to P2 after independent scope review.
 
 After this freeze, a new P0/P1 requires all of: a reproducible impact on the narrow Linux x86-64 first release, exact AVA source/runtime evidence, measurable acceptance, and independent technical and scope approval. Competitor parity, breadth, cleanup value, or an untested concern is insufficient. Existing downgrades stay downgraded unless new evidence satisfies the same rule.
@@ -42,8 +55,9 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 | Milestone | Status | Exit condition |
 | --- | --- | --- |
 | M0 — Documentation audit closure | Completed and validated in this consolidation | `AVA-REL-015` current docs, history, navigation, package inventory, and checks agree |
-| M1 — Exact-byte and support qualification | Open | `AVA-REL-011` and `AVA-REL-013` close for the same retained Linux x64 candidate bytes |
-| M2 — Publication | Blocked by M1 | `AVA-REL-012` closes through reviewed, no-clobber official publication and post-publication verification |
+| Prerequisite — Terminal frontend | Unmet; active development | Complete the terminal frontend before a stable 1.0 release is considered |
+| M1 — Exact-byte and support qualification | Not scheduled; follows frontend completion | `AVA-REL-011` and `AVA-REL-013` close for the same retained Linux x64 candidate bytes |
+| M2 — Publication | Not scheduled; follows frontend completion and M1 | `AVA-REL-012` closes through reviewed, no-clobber official publication and post-publication verification |
 | M3 — Post-1.0 work | Deferred | P2/P3 items receive separate approved goals; none blocks M1 or M2 |
 
 ## P0, completed P1, and audit-deliverable ledger
@@ -98,18 +112,25 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 - **Subsystem:** documentation, build guidance, package inventory, and release operations.
 - **Exact evidence:** this ledger and [principles](principles.md) are canonical; the dated audit is under history; publication has a current runbook; the completed TUI plan moved to history and left the runtime artifact; current build/platform/package statements and closed goals were reconciled. Direct source links verified 128 files; structure verified 108/108 reachable documents; four focused documentation CTests passed 4/4; Release provenance/install/package CTests passed 3/3; the live-dogfood CTest and direct harness passed; Python/JSON/shell syntax, assertion comments, exact 32-document inventory, old-path/stale-command searches, C++ formatting, Release build, focused TUI CTest, and final `git diff --check` passed.
 - **Impact:** contradictory current docs could direct unsafe builds, advertise unsupported artifacts, revive closed parity work, or ship history as runtime guidance.
-- **Measurable acceptance:** every current page links to one principles/cut authority; runtime `1.0.0` is not called published; package payload is exactly 32 documents (30 Markdown, 2 JSON) and artifact index matches; all required gates pass.
+- **Measurable acceptance:** current pages use the same product principles and release plan. They state the runtime version and release status accurately. The package contains exactly 32 documents (30 Markdown, 2 JSON), its index matches, and the required gates pass.
 - **Verification:** exact gates named above.
 - **Dependencies/size/milestone:** fixed code/test work remains authoritative; M; M0.
 - **Intentional difference:** history and comparison evidence remain preserved but cannot become current product authority.
 
 ## Open P1 blockers
 
+The dated packet records below are historical evidence. Their version numbers
+and digests describe the bytes tested at the time. They do not qualify the
+current `0.32.0` runtime or set a release schedule.
+
 ### AVA-REL-011 — Qualify and retain the exact release bytes
 
-- **Tier/status/owner:** P1; open blocker; shared.
+- **Tier/status/owner:** P1; implementation and local qualification complete; retained GitHub candidate run still required; shared.
 - **Subsystem:** CI, native terminal qualification, artifact retention, and package promotion.
-- **Exact evidence:** exact-baseline GitHub run `32653859737` failed before job creation because `runner.temp` was invalid in job-level workflow environment expressions. That parser defect and subsequent GCC 16, AArch64 BMI2, sanitizer, and architecture-specific loader-policy failures were fixed. Run `32795413575` then passed Debug, Release, sanitizer, focused TSan, ACP SDK interoperability, and native AArch64 build/test/static-package jobs. Local strict x64 packaging and 23 tmux plus four PTY gates also passed, but CI still rebuilds for packaging, does not run the 27 terminal gates on the exact packaged binary, and retains no promotable archive/checksum pair. See `$AUDIT_ROOT/logs/{dev-gcc,release-gcc-ninja,strict-package,tmux,pty}/`.
+- **Exact evidence:** `release-candidate` builds GCC 13 Linux x64 Release once, seals executable/helper hashes, requires full CTest plus exact zero-skip 23 tmux/four PTY waves, reuses the sealed build for strict packaging and extracted smokes, and retains unchanged archive/checksum/manifest plus evidence for 90 days. `verify-promotion` re-downloads and verifies independently recorded digests without rebuilding; sanitizer/TSan are same-run dependencies. Manual dispatch (`release_candidate=true`, default enabled) and `v*` tags run the costly candidate wave; ordinary pushes keep the smaller terminal gate. No release/tag was created.
+- **Local verification (2026-10-24):** packet source `b84ca470625fbb2992bb844a54482cffd74b1809`; GCC 13 Release build passed at six jobs. Full CTest: 198 passed, zero failed, 30 declared opt-in skips (the 27 terminal cases plus live provider, real clangd and ACP SDK); the separately enabled terminal waves passed 23/23 tmux and 4/4 PTY with zero skips. Focused `^ava_release\.` passed 6/6, including 18 candidate/ISA contract cases. `package-linux.sh --build-dir ... --require-release-qualified`, extracted version/help/doctor/fake-provider smoke, archive inspection and copied-packet promotion verification all passed without rebuilding. Reports are `build-candidate/release-{deterministic-final,focused,tmux,pty}.xml`, `archive-inspection.json`, and `minimum-host.log`. Workflow YAML parsed with PyYAML; actionlint was unavailable.
+- **Local retained-byte identity:** binary SHA-256 `cc60dde7289c03991479f9978c25af25177c0f930b871b75d1f3501d2158b1f5`; archive `ava-1.0.0-linux-x64.tar.gz` SHA-256 `7d102ec85c95bff5d6c767db3af74ee3cbf5f301be7b1d3885c76775a2bd9805`; adjacent checksum-file SHA-256 `34d058621fd4e9a17fe4fea8f3cf8f5b4bba4999e963b9bf8aa3169e6aac124a`; `candidate.json` SHA-256 `333e4111c9d58c6b26e6e4ba4b8d1db7e89971a3a82ec7acdf628bda0a63a3de`. Values matched after copying to a fresh promotion directory, whose extracted executable reported `ava 1.0.0`. This is local transfer evidence, not a GitHub download/retention claim.
+- **Remaining remote proof:** dispatch `.github/workflows/ci.yml` on the integrated candidate commit with `release_candidate=true`; retain the run/artifact IDs and successful `sanitizer`, `tsan`, `release-candidate`, and `verify-promotion` conclusions, summaries and both 90-day artifacts. Historical run `32795413575` does not qualify these new bytes; subsequent ledger-only evidence commits do not replace this packet's source identity.
 - **Impact:** rebuilding after tests can publish bytes that CI never tested, while non-retained logs/artifacts cannot be independently promoted or verified.
 - **Measurable acceptance:** a successful exact-candidate native Linux x64 CI run builds the final binary once; that binary receives full deterministic CTest, canonical sanitizer evidence, focused TSan, all exact candidate 23 tmux and four PTY gates with zero skips, install/provenance/package checks, checksum and extracted CLI/fake-provider smoke; the unchanged archive/checksum pair is retained with explicit retention and recorded digests; promotion re-verifies those digests and never rebuilds. No architecture without equivalent native evidence is emitted or advertised.
 - **Verification:** retained workflow/run IDs, job conclusions, test reports, terminal evidence, package manifest, archive/checksum digests before and after promotion, and extracted `bin/ava --version` from the retained archive.
@@ -118,22 +139,72 @@ After this freeze, a new P0/P1 requires all of: a reproducible impact on the nar
 
 ### AVA-REL-013 — Truthful supported artifact floor
 
-- **Tier/status/owner:** P1; open blocker; shared.
+- **Tier/status/owner:** P1; conservative floor and local minimum-host/CPU-profile qualification complete; retained GitHub exact-byte proof still required; shared.
 - **Subsystem:** build support, runtime portability, architecture, and documentation.
-- **Exact evidence:** Ubuntu 24.04.4 x86-64 with GCC 13.3 passed BetaTest/Unix Makefiles and Release/Ninja full runs. GitHub run `32795413575` added successful GCC 16 Debug/Release and native AArch64 Release build/test/static-package evidence; AArch64 remains outside the first-publication target because it has no exact retained-byte terminal/minimum-host qualification. Clang 18 was BLOCKED by scanner/default GCC 16 and Clang/libstdc++ C++23 `std::expected` incompatibilities. MSVC, macOS, and Windows were not qualified. The audited x64 binary contains BMI2 instructions and requires symbol floors `GLIBC_2.38`, `GLIBCXX_3.4.32`, and `CXXABI_1.3.13`, plus `libncursesw.so.6`, `libtinfo.so.6`, and `curl`; CMake timeout properties require CMake 3.27. Multi-config is not release-qualified.
+- **Exact evidence:** candidate configuration selects Linux x64 `-march=x86-64-v2 -mtune=nehalem -mno-bmi2`, disables `CW_BMI2_SUPPORT`, and keeps pinned dependencies unchanged. The ai-utils scalar header has unguarded BMI2 helper specializations (a non-BMI2 include probe fails), but AVA does not consume that header. Nehalem tuning avoids GCC's baseline-compatible TZCNT aliases; the release configuration also excludes unused cwds benchmark code after inspection caught its RDTSCP instruction. The resulting ELF and the exact `AVA-REL-011` archive passed instruction/encoding, loader, dependency and symbol inspection: maximum `GLIBC_2.38`, `GLIBCXX_3.4.32`, `CXXABI_1.3.13`; loader `/lib64/ld-linux-x86-64.so.2`; only `libc.so.6`, `libgcc_s.so.1`, `libm.so.6`, `libncursesw.so.6`, `libstdc++.so.6`, and `libtinfo.so.6`.
+- **Minimum-host evidence (2026-10-24):** `scripts/smoke-linux-minimum-host.sh` passed checksum/extraction, native and QEMU Nehalem `--version`/`--help`/`doctor`, and Nehalem fake-provider smoke on the same archive. Ubuntu 24.04 image digest: `sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac`; userspace glibc 2.39, libstdc++ 14.2, ncurses 6.4, curl 8.5, QEMU 8.2. Both doctor runs reported eight passes, three expected missing-optional configuration/auth warnings, zero failures. This is container userspace plus emulated CPU-profile evidence, not physical Nehalem hardware or an independently booted minimum kernel.
+- **Support/documentation evidence:** current docs and release-body template agree on Linux x64 only, x86-64-v2, Ubuntu 24.04/glibc 2.39, libstdc++ providing `GLIBCXX_3.4.32`/`CXXABI_1.3.13`, ncursesw/tinfo ABI 6 (6.4+), terminfo and curl 8.5+. First-party CMake minimum is 3.27; pinned dependencies retain their own upstream minima. Source-link and structure gates passed (162 source files; 144/144 documents). Clang remains best-effort; Windows/macOS/MSVC/AArch64 and multi-config artifacts remain unqualified. The pending `release-candidate`/`verify-promotion` GitHub run must repeat inspection and minimum-host smoke on its retained bytes before this blocker closes.
 - **Impact:** users can receive an artifact that will not start on an older CPU/runtime or infer support from source branches that were never natively tested.
 - **Measurable acceptance:** first-publication docs and release body name Linux x64 only; exact retained bytes are inspected for ISA, symbol versions, and dynamic dependencies; extracted smoke passes on the chosen minimum supported host/CPU profile; CMake minimum is 3.27 everywhere; tested/best-effort/unsupported matrices agree; every future architecture has independent native exact-candidate evidence before publication.
 - **Verification:** `file`, `readelf`, `objdump`, `ldd`/loader inspection without broadening dependency claims; native minimum-host extraction, checksum, `--version`, `--help`, `doctor`, and fake-provider smoke; documentation gates.
 - **Dependencies/size/milestone:** `AVA-REL-011` exact bytes; M; M1.
 - **Intentional difference:** support is evidence-driven, not inferred from portable-looking CMake conditionals or another project's matrix.
 
-### AVA-REL-012 — Official publication lifecycle and reviewed 1.0 notes
+### AVA-REL-012 — Official publication lifecycle and release notes
 
-- **Tier/status/owner:** P1; open blocker; shared.
+- **Tier/status/owner:** P1; **release tooling prepared; no release scheduled**; shared.
 - **Subsystem:** release operations, changelog/release notes, publication, rollback, and withdrawal.
-- **Exact evidence:** no `v1.0.0` tag or official release exists; `CHANGELOG.md` has no reviewed 1.0 release section; current automation ends at local no-clobber package publication. The required but unimplemented design is [publication.md](../operations/publication.md).
+- **Exact evidence:** `CHANGELOG.md` keeps the readable notes under `Unreleased`.
+  The [release body template](../operations/release-body-template.md) uses the
+  archive version, approved commit, and digest placeholders. It records the
+  REL-013 platform floor. The [publication runbook](../operations/publication.md)
+  covers owner commands, approvals, draft creation without overwrites, remote
+  checks, corrections, withdrawal, and support policy.
+  `scripts/release-candidate.py draft --dry-run` verifies the local packet,
+  renders the notes, and checks the extracted binary's version. It prints
+  remote commands but does not run them. Its tests cover refusal of an
+  existing release in a large paginated listing. No release is scheduled.
+- **Local rehearsal (2026-10-24):** packet source
+  `1c2fe2ee9a29e6639ce14b46edf819ff3ae9a89d`; GCC 13.3 Release configured with
+  `cmake --preset release-candidate -G Ninja -DCMAKE_CXX_SCAN_FOR_MODULES=OFF`.
+  `scripts/build.sh --build-dir build-candidate --jobs 6 --target ava ava_fake_provider_server`
+  passed. The sealed build then passed nine focused CTests: the four source
+  Markdown/structure gates, provenance, install component, candidate contract,
+  publication dry-run, and artifact inspection. The dry-run CTest includes nine
+  credential-free cases. Full deterministic, terminal, sanitizer/TSan, and
+  minimum-host waves were not repeated for this REL-012 rehearsal; the owner
+  must obtain those gates from the final retained GitHub run.
+- **Local packet result:** `package-linux.sh --build-dir ... --require-release-qualified`
+  passed without rebuilding, including static provenance, ISA/library inspection,
+  packaged links, checksum, extracted version/help/doctor and fake-provider smoke.
+  `release-candidate.py record`, then `draft --dry-run` with the recorded commit
+  and manifest digest, passed. It rendered the canonical body, checked extracted
+  `ava 1.0.0`, and printed owner commands without any remote call. Generated
+  `plan/draft-commands.sh` also passed `bash -n`. Evidence is `focused-final.xml`,
+  `candidate/candidate.json`, and the rendered `plan/` under the private local
+  rehearsal root. These are local preparation bytes, not official CI artifacts.
+- **Local packet SHA-256 values:**
+  - Executable: `bebb04a48ad2a090bb936f205b705348f76dedb34d927b664682c2db56235b0c`.
+  - Archive: `3a71cd98ed8c156980b4a9681ebad4445515a4c85aea0659109ec332e9bafb6c`.
+  - Adjacent checksum file: `0efdd67600de119fa5b6969205e322f2ba6cdfceeaf958afd0667a3ab9741f11`.
+  - `candidate.json`: `a9337a0d68b32151896d80609a979cc6d0cd28bedb28965e0a81d72c0a6064e3`.
+  - Rendered body: `c313f6c9eaa54b0628f17d7edfb1550487b24a7817f8ab70216abb944c593dd2`.
+  - Owner command file: `862d68827d58b90d1e3c635df063532720333ecb17068002ef73d144762235e8`.
+- **Remaining owner gates:** select the final integrated commit and complete its
+  retained release-candidate GitHub run; review the changelog, body, floor, limits,
+  and exact digests; record operator and independent owner approval plus the
+  correction/withdrawal drill; create the no-clobber draft from the downloaded
+  retained assets; verify its tag, body, asset digests, and clean install; give
+  separate final approval; publish and repeat public download/smoke checks.
+  This evidence-only ledger update does not change the rehearsal packet's
+  source identity or authorize promotion of local bytes.
 - **Impact:** an ad hoc first release can publish the wrong commit or bytes, overwrite assets, omit limitations, or leave no correction/withdrawal procedure.
-- **Measurable acceptance:** owners review the exact version/commit, 1.0 changelog and release body, supported floor, known limits, checksums, approval record, immutable correction policy, post-publication checks, rollback/withdrawal decision tree, and supported-version policy; a no-clobber draft dry-run uses the retained `AVA-REL-011` assets; final tag/commit equality and remote assets are verified. This audit itself creates no tag or release.
+- **Measurable acceptance:** after frontend completion and a release decision,
+  owners review the exact version, commit, changelog, body, platform floor,
+  limitations, checksums, and approvals. They review correction, withdrawal,
+  support, and post-publication procedures. A dry-run prepares a draft from
+  retained `AVA-REL-011` assets without overwrites. Remote checks confirm the
+  tag, commit, and asset identities. This ledger creates no tag or release.
 - **Verification:** reviewed release packet, dry-run record, approvals, remote tag/commit/API checks, downloaded asset hashes, extracted smoke, clean-install smoke, and withdrawal/patch drill evidence.
 - **Dependencies/size/milestone:** `AVA-REL-011` and `AVA-REL-013`; L; M2.
 - **Intentional difference:** corrections use a new patch release; published version/tag/assets are never silently replaced.
@@ -154,9 +225,9 @@ Every P2 row is non-blocking for the frozen cut. Procedures are acceptance plus 
 
 | ID | Status; owner | Subsystem | Exact evidence | Impact | Measurable acceptance and verification | Dependencies | Size | Milestone | Intentional-difference note |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `AVA-REL-004` | Deferred P2; Andrés | Session attachments/branches | `attachments.cpp` and `session_branch.cpp` validate names then reopen with streams; tests cover pre-existing symlinks, not replacement seams | Same-UID replacement can redirect attachment reads/truncation | Use held descriptor-relative no-follow opens for import, replay, destination and branch copy; replacement seams preserve outside canaries; run attachment/branch/import/export suites, full CTest, sanitizer | None | M | M3 | Preserve AVA descriptor authority; no reference storage rewrite |
+| `AVA-REL-004` | Implemented and locally verified P2; Andrés | Session attachments/branches | `attachments.cpp` holds parent descriptors and uses core `open_beneath` for no-follow component opens, exclusive creates, descriptor permissions and read-only duplicate verification; `session_branch.cpp` shares `copy_image_attachment`. `tests/session_attachment_tests.cpp` adds 16 deterministic file/directory replacement seams for import, replay and fork/clone source/destination copies, tracing reads to prove matching-hash outside canaries are never read and preserving canary bytes/modes. Isolated `ship/attachment-no-follow` dev and sanitizer focused runs each passed 11 tests with one opt-in skip; full dev CTest passed 198 with 31 declared skips (229 registered), full ASan/UBSan CTest passed 200 with 31 declared skips (231 registered), zero failures; changed-line clang-format and `git diff --check` passed | Same-UID replacement can redirect attachment reads/truncation | Use held descriptor-relative no-follow opens for import, replay, destination and branch copy; replacement seams preserve outside canaries; run attachment/branch/import/export suites, full CTest, sanitizer | None | M | M3 | Preserve AVA descriptor authority; no reference storage rewrite |
 | `AVA-REL-005` | Deferred P2; Andrés | Ordinary session reads | TUI/print/RPC null limits select `legacy_unbounded_session_read_limits()`; ACP already has finite limits | Large valid/corrupt sessions can exhaust memory or latency | Set finite byte/line/entry defaults before materialization/provider use; bounded remediation and explicit finite compatibility override; verify startup/session/RPC/print/agent suites and full CTest | Session compatibility decision | M | M3 | No requirement to adopt competitor pagination/database architecture |
-| `AVA-REL-006` | Deferred P2; Andrés | Provider parsers | OpenAI Responses enforces shared parser budgets; Anthropic/Gemini/compatible paths lack equivalent cumulative checks; transport still caps 8 MiB | Family-specific expansion can violate the advertised 256 KiB parser seam | Enforce record/event/array/fragment budgets terminally in every family; oversized/fragmented tests in all provider suites, full CTest and sanitizer | None | M | M3 | Contract parity across AVA providers, not provider-count parity |
+| `AVA-REL-006` | Integrated on branch `ship/provider-parser-budgets`; Andrés | Provider parsers | `src/ava/provider/parser_budget.h` shares Responses-derived record/event/fragment enforcement across all four families; nested array allowances are cumulative within a record. Matching provider suites cover oversized/split/multiline records, cumulative text/tool/opaque fragments, arrays, and terminal rejection; `agent_loop_resilience` proves zero tool persistence, permissions, preflights, timeline events, or side effects for buffered and streamed failures. Focused 4/4 passed; dev full CTest: 198 passed, 0 failed, 31 declared skips (229 registered); canonical ASan/UBSan full CTest: 200 passed, 0 failed, 31 declared skips (231 registered). Logs: worktree `build/Testing/Temporary/LastTest.log` and `build-sanitize/Testing/Temporary/LastTest.log`; changed C++ formatting passed | Family-specific expansion now fails closed at the shared 256 KiB parser seam, before tool dispatch | Enforce record/event/array/fragment budgets terminally in every family; oversized/fragmented tests in all provider suites, full CTest and sanitizer | None | M | M3 | Contract parity across AVA providers, not provider-count parity |
 | `AVA-REL-007` | Implementation addressed; release verification pending; Andrés | HTTP streaming retries | `src/ava/http/curl_transport.cpp` gates sink publication on a known 2xx head while retaining error bodies; `src/ava/http/transport.cpp` retries eligible statuses only before accepted bytes. `tests/curl_transport_process_tests.cpp` covers nonempty 429/503 then success, quota/auth classification, exhaustion, backoff cancellation, and sink-failure non-retry | Failed-attempt error bodies no longer suppress safe status retries or reach the consumer; accepted partial 2xx content remains non-retryable | Implementation and regression coverage are present; retain exact-candidate evidence from `ava_tests.curl_transport_process`, HTTP/provider/fake-E2E/full tests before closing release verification. This documentation correction does not record a new test run | Exact-candidate verification | M | M3 | Keep AVA retry settlement semantics rather than copying a router |
 | `AVA-REL-008` | Deferred P2; Andrés | XDG/trust/auth/session roots | Bounded audit found caller-controlled XDG overlap, not a default repository-controlled escalation | Misconfiguration can place authority state inside a workspace | Descriptor-check physical disjointness before authority load; ancestor/descendant/symlink tests fail closed with canaries; config/trust/runtime/full tests | Root migration UX | M | M3 | Project trust still never replaces operation permission |
 | `AVA-REL-009` | Deferred P2; Carlo | Backend session grants | Reusable grant semantics live in `tui/session_grants.*`; TUI consumes that state; RPC has separate state; no bypass reproduced | Frontends can diverge and TUI becomes policy owner | Move eligibility/key/cap/lifecycle to backend permissions; TUI/RPC use one narrow resolver; run permission/RPC/TUI PTY/full tests | None | M | M3 | Preserve stronger AVA permission model; do not adopt ambient grants |

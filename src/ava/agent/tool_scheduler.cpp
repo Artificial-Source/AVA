@@ -103,12 +103,16 @@ struct ParallelEpochState
   std::atomic_size_t completed = 0;
   std::atomic_size_t stop_after = std::numeric_limits<std::size_t>::max();
   std::atomic_bool cancel_requested = false;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct ActiveEpochWorker
 {
   std::size_t epoch_offset = 0;
   ava::core::JoinThread thread;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 void request_epoch_cancellation(ParallelEpochState& state)
@@ -139,14 +143,14 @@ void request_stop_for_all_active_workers(std::vector<ActiveEpochWorker>& active)
   for (auto& worker : active) worker.thread.request_stop();
 }
 
-ava::core::Result<ToolDispatchResult> execute_parallel_worker(ToolParallelScheduleExecutor const& executor, ToolScheduleSlot const& slot,
-                                                              std::stop_token stop_token)
+// Sequential and parallel dispatch share one exception boundary so toggling
+// scheduling cannot change a tool failure into an exception escaping Result.
+template <typename Execute>
+ava::core::Result<ToolDispatchResult> execute_guarded_worker(ToolScheduleSlot const& slot, Execute&& execute)
 {
-  if (stop_token.stop_requested())
-    return std::unexpected(scheduler_canceled_error("worker_start"));
   try
   {
-    return executor(slot, stop_token);
+    return std::forward<Execute>(execute)();
   }
   catch (std::exception const& error)
   {
@@ -156,6 +160,14 @@ ava::core::Result<ToolDispatchResult> execute_parallel_worker(ToolParallelSchedu
   {
     return std::unexpected(worker_exception_error(slot, "unknown exception"));
   }
+}
+
+ava::core::Result<ToolDispatchResult> execute_parallel_worker(ToolParallelScheduleExecutor const& executor, ToolScheduleSlot const& slot,
+                                                              std::stop_token stop_token)
+{
+  if (stop_token.stop_requested())
+    return std::unexpected(scheduler_canceled_error("worker_start"));
+  return execute_guarded_worker(slot, [&] { return executor(slot, stop_token); });
 }
 
 std::optional<ava::core::Error> launch_epoch_worker(std::span<ToolScheduleSlot const> epoch, ToolParallelScheduleExecutor const& executor,
@@ -363,7 +375,7 @@ ava::core::Result<std::vector<ToolScheduleOutcome>> run_sequential_tool_schedule
   outcomes.reserve(schedule.size());
   for (auto const& slot : schedule)
   {
-    auto executed = executor(slot);
+    auto executed = execute_guarded_worker(slot, [&] { return executor(slot); });
     if (!executed)
       return std::unexpected(std::move(executed.error()));
     auto result = std::move(*executed);

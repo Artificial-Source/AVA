@@ -29,6 +29,7 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -113,6 +114,7 @@ void test_assistant_output_append_target_state_and_batches()
                              : ava::core::Result<ava::session::SessionLease>(std::unexpected(destination.error()));
     if (ava::tests::require(destination.has_value() && lease.has_value(), "validated-copy fixture creates its leased destination"))
     {
+      auto stale_target = ava::session::SessionAppendTarget::create_persistent(*destination, *lease, ava::session::SessionReadLimits{});
       std::vector<ava::session::SessionEntry> copied{ordinary("copy-user"), item("copy-output", "copy-turn", 0, "copy-provider-item", 0),
                                                      commit("copy-commit", "copy-turn", 1)};
       auto copied_once = destination->append_validated_copy(*lease, copied);
@@ -120,6 +122,13 @@ void test_assistant_output_append_target_state_and_batches()
       auto entries = destination->load(*lease);
       expect(copied_once && !copied_twice && entries && entries->size() == copied.size() && ava::session::classify_assistant_output(*entries).turns.size() == 1,
              "validated copy preflights a complete v4 history and permits it only once into an empty creating destination");
+      if (ava::tests::require(stale_target.has_value(), "validated-copy fixture creates a pre-copy append target"))
+      {
+        auto duplicate_turn = (*stale_target)->append_batch({commit("copy-duplicate-commit", "copy-turn", 0)});
+        auto after_duplicate = destination->load(*lease);
+        expect(!duplicate_turn && after_duplicate && after_duplicate->size() == copied.size(),
+               "validated history copies invalidate pre-existing append caches before duplicate-turn preflight");
+      }
     }
   }
 
@@ -311,6 +320,38 @@ void test_assistant_output_append_target_state_and_batches()
       expect(appended && after_batch && after_batch->size() == ava::session::kMaxSessionAppendBatchEntries && ordinary_after_batch && final_entries &&
                  final_entries->size() == ava::session::kMaxSessionAppendBatchEntries + 1,
              "one maximum-size v4 assistant transaction preflights and commits with linear state growth before reopening ordinary appends");
+    }
+  }
+
+  {
+    auto store = ava::session::SessionStore::create(workspace, sessions);
+    auto lease = store ? ava::session::SessionLease::create_and_acquire(store->session_path())
+                       : ava::core::Result<ava::session::SessionLease>(std::unexpected(store.error()));
+    if (ava::tests::require(store.has_value() && lease.has_value(), "throwing-write fixture creates a leased store"))
+    {
+      bool throw_after_write = true;
+      int observed_fd = -1;
+      store->set_append_write_for_test([&](int fd, std::string_view bytes) -> ssize_t {
+        observed_fd = fd;
+        if (!throw_after_write)
+          return ::write(fd, bytes.data(), bytes.size());
+        expect(::write(fd, bytes.data(), 1) == 1, "throwing-write fixture persists a partial record");
+        throw std::runtime_error("injected write failure");
+      });
+      auto target = ava::session::SessionAppendTarget::create_persistent(*store, *lease, ava::session::SessionReadLimits{});
+      if (ava::tests::require(target.has_value(), "throwing-write fixture creates its append target"))
+      {
+        auto failed = (*target)->append(ordinary("throwing-write"));
+        errno = 0;
+        bool const descriptor_closed = observed_fd >= 0 && ::fcntl(observed_fd, F_GETFD) == -1 && errno == EBADF;
+        auto blocked = (*target)->append(ordinary("throwing-write-blocked"));
+        throw_after_write = false;
+        auto recovered = (*target)->recover();
+        auto reopened = recovered ? (*target)->append(ordinary("throwing-write-reopened")) : ava::core::VoidResult(std::unexpected(recovered.error()));
+        expect(!failed && error_context_value(failed.error(), "append_commit_state") == "partial_or_unknown" && descriptor_closed && !blocked && recovered &&
+                   reopened,
+               "throwing append hooks close their descriptor and require recovery before further writes");
+      }
     }
   }
 
@@ -729,6 +770,36 @@ void test_incomplete_assistant_output_suffix_recovery()
     expect(!recovered && ava::tests::read_session_test_binary_file(parked).find("unsafe-stage-") != std::string::npos,
            "assistant-output suffix recovery rejects " + replacement_kind + " replacement without mutating the leased inode");
   }
+  for (bool const persistent : {false, true})
+  {
+    auto store =
+        persistent ? ava::session::SessionStore::create(workspace, sessions) : ava::session::SessionStore::create_ephemeral(workspace / "direct-recovery");
+    if (!ava::tests::require(store.has_value(), "direct-recovery fixture creates its store"))
+      continue;
+    std::optional<ava::session::SessionLease> lease;
+    if (persistent)
+    {
+      auto acquired = ava::session::SessionLease::create_and_acquire(store->session_path());
+      if (!ava::tests::require(acquired.has_value(), "direct-recovery fixture acquires its lease"))
+        continue;
+      lease.emplace(std::move(*acquired));
+    }
+    auto target = lease ? ava::session::SessionAppendTarget::create_persistent(*store, *lease, ava::session::SessionReadLimits{})
+                        : ava::session::SessionAppendTarget::create_ephemeral(*store);
+    if (!ava::tests::require(target.has_value(), "direct-recovery fixture creates its append target"))
+      continue;
+    auto appended = (*target)->append(staged("direct-recovery-stage", "direct-recovery-turn", 0));
+    if (!ava::tests::require(appended.has_value(), "direct-recovery fixture stages an output item"))
+      continue;
+    auto recovered = lease ? store->recover_incomplete_assistant_output_suffix(*lease, ava::session::SessionReadLimits{})
+                           : store->recover_incomplete_assistant_output_suffix(ava::session::SessionReadLimits{});
+    auto stale_commit = (*target)->append(commit("direct-recovery-stale-commit", "direct-recovery-turn", 1));
+    auto next = (*target)->append(ordinary("direct-recovery-next"));
+    auto entries = lease ? store->load(*lease) : store->load();
+    expect(recovered && recovered->has_value() && !stale_commit && next && entries && entries->size() == 1 && entries->front().id == "direct-recovery-next",
+           "direct store suffix recovery invalidates existing persistent and ephemeral append caches");
+  }
+
   {
     auto ephemeral = ava::session::SessionStore::create_ephemeral(workspace / "ephemeral");
     if (ephemeral)

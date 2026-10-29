@@ -1,5 +1,4 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/session/session_store.h"
 #include "ava/core/NoLogString.h"
@@ -7,6 +6,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,7 +36,10 @@ struct TodoItem
   ava::core::NoLogString content;
   TodoStatus status = TodoStatus::Pending;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct TodoCounts
@@ -55,7 +58,10 @@ struct TodoSnapshot
   std::vector<TodoItem> todos = {};
   TodoCounts counts = {};
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 [[nodiscard]] TodoCounts count_todos(std::vector<TodoItem> const& todos) noexcept;

@@ -61,7 +61,7 @@ export function Composer({ disabled, busy, canceling, onSend, onCancel }: Compos
         <button
           type="button"
           className="border border-line px-3 py-1.5 text-sm text-ink enabled:hover:bg-sunken disabled:text-faint"
-          disabled={!busy}
+          disabled={!busy || canceling}
           onClick={onCancel}
         >
           {canceling ? 'Canceling…' : 'Cancel'}

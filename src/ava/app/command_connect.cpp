@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/http/curl_transport.h"
 #include "ava/app/browser_open.h"
 #include "ava/app/command_connect.h"
@@ -9,6 +10,7 @@
 #include "ava/config/openai_oauth.h"
 #include "ava/config/provider_profiles.h"
 #include "ava/provider/catalog.h"
+#include "ava/core/text_case.h"
 #include "ava/core/thread.h"
 
 #include <algorithm>
@@ -33,6 +35,8 @@ struct ConnectMethodSelection
 {
   ConnectMethod method = ConnectMethod::ApiKey;
   bool back = false;
+
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 bool is_valid_connect_provider_id(std::string_view provider_id)
@@ -90,18 +94,9 @@ std::string connect_method_label(ConnectMethod method)
   return "credential";
 }
 
-std::string lower_ascii(std::string_view text)
-{
-  std::string lowered;
-  lowered.reserve(text.size());
-  for (char const ch : text)
-    lowered.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-  return lowered;
-}
-
 std::optional<ConnectMethod> parse_connect_method(std::string_view value, std::string_view provider_id)
 {
-  auto const lowered = lower_ascii(value);
+  auto const lowered = ava::core::locale_lower_copy(value);
   if (provider_id == "openai")
   {
     if (lowered == "browser" || lowered == "browser-oauth" || lowered == "browser_oauth" || lowered == "chatgpt" || lowered == "oauth")

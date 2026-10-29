@@ -39,7 +39,7 @@ Use the [extensions index](extensions/README.md) for local plugins, MCP servers,
 
 ## Operations
 
-The [operations index](operations/README.md) covers builds, tests, Docker, terminals, diagnostics, troubleshooting, local release artifacts, and the required but not-yet-implemented [official publication runbook](operations/publication.md). Start with the symptom-first [troubleshooting guide](operations/troubleshooting.md) when AVA or its build fails.
+The [operations index](operations/README.md) covers builds, tests, Docker, terminals, diagnostics, troubleshooting, local release artifacts, and the owner-run [official publication runbook](operations/publication.md). The runbook is prepared; approval and the exact-candidate GitHub run are still required. Start with the symptom-first [troubleshooting guide](operations/troubleshooting.md) when AVA or its build fails.
 
 ## Security
 
@@ -55,7 +55,12 @@ The [engineering index](engineering/README.md) contains active, evidence-backed 
 
 ## Product and current status
 
-The [product index](product/README.md) contains canonical [product principles](product/principles.md), the single current [release-readiness cut](product/release-readiness.md), feature/capability baselines, and evidence mapping. Runtime version `1.0.0` is not a published release; complete candidate qualification and publication require the release ledger, [release checklist](operations/release-checklist.md), and publication runbook.
+The [product index](product/README.md) links the [product principles](product/principles.md),
+[release plan](product/release-readiness.md), capability baselines, and evidence.
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. No release is scheduled yet. The
+[release checklist](operations/release-checklist.md) and publication runbook
+remain available for future releases.
 
 ## Plans
 

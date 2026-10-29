@@ -133,6 +133,8 @@ void test_private_trace_sanitization_limits_and_counters()
                     {.key = "url", .value = std::string(url_canary)},
                     {.key = "secret", .value = std::string(secret_canary), .provenance = ava::observability::FieldProvenance::Secret},
                     {.key = "status_code", .value = "200-not-safe"}};
+    event.fields.push_back({.key = "output_bytes", .value = "987654321012345678", .provenance = ava::observability::FieldProvenance::Secret});
+    event.fields.push_back({.key = "ephemeral", .value = "true", .provenance = ava::observability::FieldProvenance::Content});
   });
   observation->emit(ava::observability::TraceEventType::TransportRequestResult, first, [&](auto& event) {
     event.call_id = std::string(tool_canary);
@@ -157,6 +159,8 @@ void test_private_trace_sanitization_limits_and_counters()
   expect(records.size() >= 3 && trace.find("\"request_bytes\":\"42\"") != std::string::npos && trace.find("\"streaming\":\"true\"") != std::string::npos &&
              trace.find("200-not-safe") == std::string::npos,
          "production trace retains only allowlisted proven numeric and boolean metadata");
+  expect(trace.find("987654321012345678") == std::string::npos && trace.find("\"ephemeral\"") == std::string::npos,
+         "production trace never reclassifies secret or content fields as public metadata");
   if (records.size() >= 3)
   {
     auto const first_run = ava::core::json::string_field(records[0], "run_id");
@@ -530,6 +534,7 @@ void test_long_delta_stream_preserves_boundaries_and_close_flush()
       event.phase = TracePhase::Provider;
       event.outcome = outcome;
       event.fields = {{.key = "text_bytes", .value = "3"}};
+      event.fields.push_back({.key = "text_bytes", .value = "987654321", .provenance = FieldProvenance::Secret});
     });
   };
   for (unsigned i = 0; i < 25'000; ++i)

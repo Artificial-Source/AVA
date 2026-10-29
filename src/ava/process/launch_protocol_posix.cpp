@@ -137,9 +137,9 @@ FrameReadResult read_frame(int descriptor, ProcessDeadline deadline, std::functi
     {
       if (auto stopped = observe_wait_stop(deadline, cancel_requested))
         return *stopped;
-      if (observation_deadline < deadline)
-        continue;
-      return FrameReadResult{.kind = FrameReadKind::TimedOut, .frame = {}, .error_number = 0};
+      // poll's millisecond timeout may be rounded down or capped at INT_MAX.
+      // Only the absolute clock observation above can exhaust this deadline.
+      continue;
     }
     if (result < 0)
       return FrameReadResult{.kind = FrameReadKind::Failed, .frame = {}, .error_number = poll_error};
@@ -203,7 +203,7 @@ LaunchFrameV1 make_frame(LaunchFrameKindV1 kind, LaunchFailureStageV1 stage, int
 
 bool child_write_frame(int descriptor, LaunchFrameV1 const& frame) noexcept
 {
-  return descriptor > STDERR_FILENO && child_write_all(descriptor, &frame, sizeof(frame));
+  return descriptor > STDERR_FILENO && write_all_to_descriptor(descriptor, &frame, sizeof(frame));
 }
 
 #endif

@@ -15,6 +15,8 @@
 #include <string_view>
 #include <utility>
 #if !defined(_WIN32)
+#include "ava/core/UniqueFd.h"
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -84,36 +86,6 @@ ava::core::Error capability_error(ava::core::ErrorCategory category, std::string
 
 #if !defined(_WIN32)
 
-class LocalFd final
-{
- public:
-  explicit LocalFd(int descriptor = -1) noexcept : descriptor_(descriptor) { }
-  LocalFd(LocalFd const&) = delete;
-  LocalFd& operator=(LocalFd const&) = delete;
-  LocalFd(LocalFd&& other) noexcept : descriptor_(other.release()) { }
-  LocalFd& operator=(LocalFd&& other) noexcept
-  {
-    if (this != &other)
-      reset(other.release());
-    return *this;
-  }
-  ~LocalFd() { reset(); }
-
-  [[nodiscard]] int get() const noexcept { return descriptor_; }
-  [[nodiscard]] int release() noexcept { return std::exchange(descriptor_, -1); }
-  void reset(int descriptor = -1) noexcept
-  {
-    if (descriptor_ >= 0)
-      static_cast<void>(::close(descriptor_));
-    descriptor_ = descriptor;
-  }
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  int descriptor_ = -1;
-};
-
 std::int64_t changed_seconds(struct stat const& status) noexcept
 {
 #if defined(__APPLE__)
@@ -156,17 +128,17 @@ bool same_object(ExpectedFileIdentityV1 const& left, ExpectedFileIdentityV1 cons
   return left.dev == right.dev && left.inode == right.inode;
 }
 
-ava::core::Result<LocalFd> duplicate_above_standard(int descriptor, std::string_view stage)
+ava::core::Result<ava::core::UniqueFd> duplicate_above_standard(int descriptor, std::string_view stage)
 {
   int const copy = ::fcntl(descriptor, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
   if (copy < 0)
     return std::unexpected(capability_error(ava::core::ErrorCategory::Io, stage, errno));
-  return LocalFd(copy);
+  return ava::core::UniqueFd(copy);
 }
 
 struct RouteAuthority
 {
-  LocalFd base;
+  ava::core::UniqueFd base;
   std::string relative;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
@@ -186,7 +158,7 @@ ava::core::Result<RouteAuthority> retain_route_authority(ava::core::AnchorSet co
   if (anchored.error().category() != ava::core::ErrorCategory::PermissionDenied)
     return std::unexpected(capability_error(anchored.error().category(), "capability route selection failed"));
 
-  LocalFd root(::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NONBLOCK));
+  ava::core::UniqueFd root(::open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NONBLOCK));
   if (root.get() < 0)
     return std::unexpected(capability_error(ava::core::ErrorCategory::Io, "capability route retention failed", errno));
   auto base = duplicate_above_standard(root.get(), "capability route retention failed");

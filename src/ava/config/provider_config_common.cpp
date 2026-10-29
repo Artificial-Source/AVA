@@ -1,5 +1,7 @@
 #include "sys.h"
 #include "ava/config/provider_config_internal.h"
+#include "ava/core/ascii.h"
+#include "ava/core/hex.h"
 #include "ava/core/json.h"
 
 #include <cctype>
@@ -31,35 +33,6 @@ std::string errno_message()
   return std::generic_category().message(errno);
 }
 
-bool has_control_byte(std::string_view value) noexcept
-{
-  for (char const ch : value)
-  {
-    auto const byte = static_cast<unsigned char>(ch);
-    if (byte < 0x20 || byte == 0x7f)
-      return true;
-  }
-  return false;
-}
-
-bool is_hex_digit(char ch) noexcept
-{
-  auto const byte = static_cast<unsigned char>(ch);
-  return std::isxdigit(byte) != 0;
-}
-
-int hex_value(char ch) noexcept
-{
-  auto const byte = static_cast<unsigned char>(ch);
-  if (byte >= '0' && byte <= '9')
-    return byte - '0';
-  if (byte >= 'a' && byte <= 'f')
-    return byte - 'a' + 10;
-  if (byte >= 'A' && byte <= 'F')
-    return byte - 'A' + 10;
-  return -1;
-}
-
 // Reject percent-encodings that can smuggle separators or dot-segments after decode.
 bool has_encoded_separator_or_dot_ambiguity(std::string_view value) noexcept
 {
@@ -67,10 +40,10 @@ bool has_encoded_separator_or_dot_ambiguity(std::string_view value) noexcept
   {
     if (value[i] != '%')
       continue;
-    if (i + 2 >= value.size() || !is_hex_digit(value[i + 1]) || !is_hex_digit(value[i + 2]))
+    if (i + 2 >= value.size())
       return true;
-    int const hi = hex_value(value[i + 1]);
-    int const lo = hex_value(value[i + 2]);
+    int const hi = ava::core::hex_digit_value(value[i + 1]);
+    int const lo = ava::core::hex_digit_value(value[i + 2]);
     if (hi < 0 || lo < 0)
       return true;
     auto const decoded = static_cast<unsigned char>((hi << 4) | lo);
@@ -117,7 +90,7 @@ bool is_valid_shell_env_name(std::string_view name) noexcept
 
 bool is_valid_display_name(std::string_view name) noexcept
 {
-  return !name.empty() && name.size() <= kMaxDisplayNameBytes && !has_control_byte(name) && ava::core::json::is_valid_utf8(name);
+  return !name.empty() && name.size() <= kMaxDisplayNameBytes && !ava::core::has_c0_or_del(name) && ava::core::json::is_valid_utf8(name);
 }
 
 }  // namespace ava::config::provider_config_detail

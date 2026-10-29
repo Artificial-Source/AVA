@@ -59,6 +59,16 @@ Copyright (c) 2025 ZXShady
 
 Copyright (c) 2013-2026 Niels Lohmann
 
+## CIEDE2000 — MIT
+
+**Usage boundary:** adopted code in `src/ava/tui/terminal/CIEDE2000.cxx`,
+compiled into AVA for color-difference calculations. Originally part of
+[Gregory Fiumara's CIEDE2000](https://github.com/gfiumara/CIEDE2000).
+
+Copyright (c) 2015 Gregory Fiumara
+
+Covered by the MIT License text below.
+
 ## Boost headers — BSL-1.0
 
 **Usage boundary:** Boost headers used by AVA source; no Boost runtime library
@@ -88,7 +98,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ## MIT License text (cwds, cmake-aicxx, AVA-used Carlo-owned ai-utils paths,
-memory, threadsafe, enchantum, and nlohmann JSON)
+memory, threadsafe, enchantum, nlohmann JSON, and CIEDE2000)
 
 MIT License
 

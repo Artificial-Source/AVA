@@ -1,11 +1,12 @@
 #include "sys.h"
 #include "ava/plugin/enablement.h"
 #include "ava/config/xdg_paths.h"
+#include "ava/core/UniqueFd.h"
+#include "ava/core/fd_io.h"
 #include "ava/core/json.h"
 #include "ava/core/path.h"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -168,47 +169,25 @@ std::vector<std::pair<std::string, std::string>> object_entries_with_object_valu
 
 ava::core::Result<std::optional<std::string>> read_file_text(std::filesystem::path const& path)
 {
-  int const fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
-  if (fd < 0)
+  ava::core::UniqueFd const fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK));
+  if (fd.get() < 0)
   {
     if (errno == ENOENT)
       return std::optional<std::string>{};
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to read plugin enablement file").with_context("path", path.string()));
   }
-  struct ScopedFd final
-  {
-    int value;
-    ~ScopedFd() { ::close(value); }
-  } const scoped_fd{fd};
 
   struct stat status{};
-  if (::fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0 || static_cast<std::uintmax_t>(status.st_size) > kPluginEnablementMaxBytes)
+  if (::fstat(fd.get(), &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0 ||
+      static_cast<std::uintmax_t>(status.st_size) > kPluginEnablementMaxBytes)
   {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to read plugin enablement file").with_context("path", path.string()));
   }
 
-  std::string text;
-  text.reserve(static_cast<std::size_t>(status.st_size));
-  std::array<char, 8192> buffer{};
-  while (true)
-  {
-    auto const bytes = ::read(fd, buffer.data(), buffer.size());
-    if (bytes > 0)
-    {
-      auto const count = static_cast<std::size_t>(bytes);
-      if (count > kPluginEnablementMaxBytes - text.size())
-      {
-        return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to read plugin enablement file").with_context("path", path.string()));
-      }
-      text.append(buffer.data(), count);
-      continue;
-    }
-    if (bytes == 0)
-      return std::optional<std::string>(std::move(text));
-    if (errno == EINTR)
-      continue;
+  auto text = ava::core::read_descriptor_bounded(fd.get(), kPluginEnablementMaxBytes);
+  if (!text)
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Io, "failed to read plugin enablement file").with_context("path", path.string()));
-  }
+  return std::optional<std::string>(std::move(*text));
 }
 
 ava::core::VoidResult write_file_atomic(std::filesystem::path const& path, std::string_view content)

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -125,6 +126,32 @@ void test_session_store_round_trip()
   expect((*loaded)[0].type == ava::session::EntryType::SessionStart, "entry type round trips");
   expect((*loaded)[0].version == ava::session::kCurrentSessionEntryVersion, "session entry version round trips from current JSONL records");
 
+  auto const read_failure = ava::tests::run_in_child_with_syscall_errno(SYS_pread64, std::nullopt, EIO, [&] {
+    auto failed = store->load();
+    return !failed && failed.error().category() == ava::core::ErrorCategory::Io ? 0 : 1;
+  });
+  static_cast<void>(ava::tests::expect_child_success(read_failure, "compatibility loads propagate descriptor snapshot read failures"));
+
+  // Catalog keys come from filesystem timestamps, not the record timestamp or
+  // directory iteration order; equal timestamps have a deterministic ID tie.
+  auto const catalog_root = root / "catalog-order";
+  auto const catalog_time = std::filesystem::file_time_type::clock::now();
+  for (auto const* id : {"a-newest", "z-older", "b-newest"})
+  {
+    ava::session::SessionStore catalog_store({.root_dir = catalog_root, .workspace_dir = root, .session_id = id});
+    auto created = append_session_entry_for_test(
+        catalog_store,
+        {.id = "catalog-entry", .parent_id = "", .type = ava::session::EntryType::SessionStart, .timestamp = "2026-04-27T00:00:00Z", .data_json = "{}"});
+    expect(created.has_value(), "catalog ordering fixture appends");
+    std::error_code time_error;
+    std::filesystem::last_write_time(catalog_store.session_path(), std::string_view(id) == "z-older" ? catalog_time - std::chrono::seconds(1) : catalog_time,
+                                     time_error);
+    expect(!time_error, "catalog ordering fixture sets timestamps");
+  }
+  auto catalog_order = ava::session::SessionStore::list_sessions(root, catalog_root);
+  expect(catalog_order && catalog_order->size() == 3 && (*catalog_order)[0].session_id == "b-newest" && (*catalog_order)[1].session_id == "a-newest" &&
+             (*catalog_order)[2].session_id == "z-older",
+         "catalog snapshots sort newest timestamps first with descending session IDs for ties");
   auto text_store = ava::session::SessionStore::create(std::filesystem::current_path(), root);
   expect(text_store.has_value(), "text session store creates");
   if (!text_store)
@@ -185,6 +212,22 @@ void test_session_store_round_trip()
     file << std::string(1024 * 1024, '{') << '\n';
   }
   expect(!oversized_load_store.load(), "session load rejects oversized JSONL lines without parsing them");
+
+  auto const non_directory_root = root / "not-a-directory";
+  ava::tests::write_session_test_binary_file(non_directory_root, "not a directory");
+  ava::session::SessionStore inaccessible_store(
+      ava::session::SessionStoreOptions{.root_dir = non_directory_root, .workspace_dir = root, .session_id = "unreadable"});
+  auto inaccessible = inaccessible_store.load();
+  expect(!inaccessible && inaccessible.error().category() == ava::core::ErrorCategory::Io,
+         "session load reports path inspection failures instead of inventing an empty history");
+
+  auto const invalid_catalog_root = root / "invalid-catalog";
+  ava::session::SessionStore invalid_catalog_store(
+      ava::session::SessionStoreOptions{.root_dir = invalid_catalog_root, .workspace_dir = root, .session_id = "catalog"});
+  ava::tests::write_session_test_binary_file(invalid_catalog_store.session_path().parent_path(), "not a directory");
+  auto invalid_catalog = ava::session::SessionStore::list_sessions(root, invalid_catalog_root);
+  expect(!invalid_catalog && invalid_catalog.error().category() == ava::core::ErrorCategory::Io,
+         "session listing propagates directory iterator construction failures");
 
   std::vector<std::string> const bad_session_ids = {
       "", ".", "..", "/", "\\", "../escape", "with/slash", "with\\slash", std::string("bad\0id", 6), std::string("bad\x1Fid", 6)};
@@ -404,6 +447,19 @@ void test_ephemeral_session_store_stays_in_memory()
 
     auto loaded = store->load();
     expect(loaded && loaded->size() == 1 && (*loaded)[0].id == "entry_ephemeral", "ephemeral session store reloads entries from memory");
+    if (loaded && loaded->size() == 1)
+    {
+      auto serialized = ava::session::serialize_session_entry_line(loaded->front());
+      if (ava::tests::require(serialized.has_value(), "ephemeral bounded-read fixture serializes its record"))
+      {
+        auto const line_bytes = serialized->size();
+        auto exact = store->load_bounded({.max_file_bytes = line_bytes + 1, .max_line_bytes = line_bytes, .max_entries = 1});
+        auto short_line = store->load_bounded({.max_file_bytes = line_bytes + 1, .max_line_bytes = line_bytes - 1, .max_entries = 1});
+        auto short_file = store->load_bounded({.max_file_bytes = line_bytes, .max_line_bytes = line_bytes, .max_entries = 1});
+        expect(exact && exact->size() == 1 && !short_line && !short_file,
+               "ephemeral bounded reads enforce serialized line and file budgets including JSONL framing");
+      }
+    }
 
     auto imported = ava::session::import_image_attachment_bytes(*store, ava::tests::session_test_tiny_png_bytes(), std::string_view("image/png"));
     expect(imported.has_value(), "ephemeral session store supports temp-only attachment storage");
@@ -629,6 +685,18 @@ void test_session_lease_creation_sync_failures()
 void test_session_creation_privacy_under_hostile_umasks()
 {
   auto const root = create_empty_root("session-hostile-umask");
+  auto const unrelated_directory = root / "unrelated";
+  auto const symlink_directory = root / "symlink-directory";
+  std::filesystem::create_directory(unrelated_directory);
+  std::filesystem::permissions(unrelated_directory,
+                               std::filesystem::perms::owner_all | std::filesystem::perms::group_read | std::filesystem::perms::group_exec);
+  std::filesystem::create_directory_symlink(unrelated_directory, symlink_directory);
+  auto rejected_symlink = ava::session::SessionLease::create_and_acquire(symlink_directory / "rejected.jsonl");
+  struct stat unrelated_status{};
+  expect(!rejected_symlink && ::stat(unrelated_directory.c_str(), &unrelated_status) == 0 && (unrelated_status.st_mode & 0777) == 0750 &&
+             !std::filesystem::exists(unrelated_directory / "rejected.jsonl"),
+         "rejected symlink session directories never change the target directory permissions");
+
   for (mode_t const mask : {mode_t{0000}, mode_t{0077}})
   {
     auto const sessions = root / std::to_string(mask) / "sessions";

@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/session/record.h"
 #include "ava/session/subagent_job_history.h"
+#include "ava/core/ascii.h"
 #include "ava/core/ids.h"
 #include "ava/core/json.h"
 
@@ -11,14 +12,6 @@
 
 namespace ava::session {
 namespace {
-
-bool has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7F;
-  });
-}
 
 bool has_forbidden_summary_control(std::string_view value)
 {
@@ -40,7 +33,7 @@ bool valid_history_id(std::string_view value)
 
 bool valid_timestamp(std::string_view value)
 {
-  return !value.empty() && value.size() <= kMaxSubagentJobHistoryTimestampBytes && !has_control_byte(value) && ava::core::json::is_valid_utf8(value);
+  return !value.empty() && value.size() <= kMaxSubagentJobHistoryTimestampBytes && !ava::core::has_c0_or_del(value) && ava::core::json::is_valid_utf8(value);
 }
 
 bool valid_optional_bounded_text(std::optional<std::string> const& value, std::size_t max_bytes, bool allow_summary_whitespace)
@@ -49,7 +42,7 @@ bool valid_optional_bounded_text(std::optional<std::string> const& value, std::s
     return true;
   if (value->size() > max_bytes || !ava::core::json::is_valid_utf8(*value))
     return false;
-  return allow_summary_whitespace ? !has_forbidden_summary_control(*value) : !has_control_byte(*value);
+  return allow_summary_whitespace ? !has_forbidden_summary_control(*value) : !ava::core::has_c0_or_del(*value);
 }
 
 std::optional<SubagentJobHistoryPhase> parse_phase(std::string_view value)

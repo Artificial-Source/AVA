@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/plugin/static_resources.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/error.h"
 #include "ava/core/open_beneath.h"
 #include "ava/core/path.h"
@@ -14,37 +15,6 @@
 
 namespace ava::plugin {
 namespace {
-
-class UniqueFd
-{
- public:
-  explicit UniqueFd(int fd = -1) : fd_(fd) { }
-  UniqueFd(UniqueFd const&) = delete;
-  UniqueFd& operator=(UniqueFd const&) = delete;
-  UniqueFd(UniqueFd&& other) noexcept : fd_(std::exchange(other.fd_, -1)) { }
-  UniqueFd& operator=(UniqueFd&& other) noexcept
-  {
-    if (this != &other)
-    {
-      if (fd_ >= 0)
-        ::close(fd_);
-      fd_ = std::exchange(other.fd_, -1);
-    }
-    return *this;
-  }
-  ~UniqueFd()
-  {
-    if (fd_ >= 0)
-      ::close(fd_);
-  }
-
-  [[nodiscard]] int get() const noexcept { return fd_; }
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
-
- private:
-  int fd_;
-};
 
 ava::core::Error resource_error(ava::core::ErrorCategory category, std::string message, PluginManifest const& manifest,
                                 PluginResourceContribution const& resource, std::filesystem::path const& path, int error_number = 0)
@@ -85,13 +55,13 @@ ava::core::Result<LoadedPluginStaticResource> load_plugin_static_resource(Plugin
   if (!relative)
     return std::unexpected(std::move(relative.error()));
 
-  UniqueFd plugin_directory(::open(manifest.directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+  ava::core::UniqueFd plugin_directory(::open(manifest.directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   if (plugin_directory.get() < 0)
   {
     return std::unexpected(resource_error(ava::core::ErrorCategory::Io, "failed to open plugin directory", manifest, resource, manifest.directory, errno));
   }
 
-  UniqueFd resource_fd(ava::core::open_beneath(plugin_directory.get(), *relative, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
+  ava::core::UniqueFd resource_fd(ava::core::open_beneath(plugin_directory.get(), *relative, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC));
   if (resource_fd.get() < 0)
   {
     int const error_number = errno;

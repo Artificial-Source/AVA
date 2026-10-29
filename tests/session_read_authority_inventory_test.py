@@ -81,6 +81,18 @@ def main() -> int:
     require_text(source, "src/ava/session/transcript.cpp", "auto entries = store.load_bounded(", failures)
     require_text(source, "src/ava/session/session_store_read.cpp", "inspect_bounded_for_listing", failures)
 
+    # Snapshot sort keys before comparison: filesystem changes/removal must
+    # never change the relation while std::sort is using it.
+    catalog_source = (source / "src/ava/session/session_store_catalog.cpp").read_text(encoding="utf-8")
+    for sort_call in catalog_source.split("std::ranges::sort(")[1:]:
+        comparator = sort_call.split("});", 1)[0]
+        if "std::filesystem::" in comparator or "last_write_time(" in comparator:
+            failures.append("session catalog comparator still queries mutable filesystem state")
+
+    read_source = (source / "src/ava/session/session_store_read.cpp").read_text(encoding="utf-8")
+    if "std::ifstream" in read_source:
+        failures.append("session compatibility loader still reopens a pathname stream")
+
     if failures:
         print("\n\n".join(failures), file=sys.stderr)
         return 1

@@ -14,7 +14,6 @@ struct CompatibilityParse
 };
 
 [[nodiscard]] ava::core::Error command_error(ava::core::ErrorCategory category, std::string message, std::string_view field = {}, std::string_view value = {});
-[[nodiscard]] bool has_forbidden_byte(std::string_view value);
 [[nodiscard]] bool has_forbidden_path_byte(std::filesystem::path const& path);
 [[nodiscard]] ava::core::VoidResult validate_limits(CommandLimits const& limits);
 [[nodiscard]] ava::core::Result<CompatibilityParse> parse_compatibility_command(std::string_view command, CommandLimits const& limits);

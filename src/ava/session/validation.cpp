@@ -1,10 +1,12 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/session/assistant_output.h"
 #include "ava/session/record.h"
 #include "ava/session/session_metadata.h"
 #include "ava/session/subagent_job_history.h"
 #include "ava/session/validation.h"
 #include "ava/session/validation_fields.h"
+#include "ava/core/ascii.h"
 #include "ava/core/json.h"
 #include "ava/core/openai_wire.h"
 
@@ -28,18 +30,21 @@ struct ToolCallState
   // relying only on a provider logical call ID.
   std::string assistant_output_entry_id;
   bool result_seen = false;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct PendingPermissionPrompt
 {
   std::string entry_id;
   std::size_t entry_index = 0;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 struct ActiveModelState
 {
   std::string provider_id;
   std::string model_id;
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 constexpr std::size_t kMaxSessionNameBytes = 256;
@@ -468,14 +473,6 @@ void skip_json_ws(std::string_view text, std::size_t& index)
     ++index;
 }
 
-bool string_has_control_byte(std::string_view value)
-{
-  return std::ranges::any_of(value, [](char ch) {
-    auto const byte = static_cast<unsigned char>(ch);
-    return byte < 0x20 || byte == 0x7F;
-  });
-}
-
 bool hex_string(std::string_view value)
 {
   return std::ranges::all_of(value, [](char ch) { return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'); });
@@ -665,7 +662,7 @@ bool object_has_only_allowed_image_attachment_keys(std::string_view object)
 
 bool valid_attachment_storage_path(std::string_view path)
 {
-  if (path.empty() || path.size() > kMaxImageStoragePathBytes || string_has_control_byte(path))
+  if (path.empty() || path.size() > kMaxImageStoragePathBytes || ava::core::has_c0_or_del(path))
     return false;
   if (!path.starts_with("attachments/"))
     return false;
@@ -760,7 +757,7 @@ bool valid_image_attachment_object(std::string_view attachment)
   auto const storage_path = ava::core::json::string_field(attachment, "storage_path");
   auto const sha256 = ava::core::json::string_field(attachment, "sha256");
   auto const byte_size = strict_positive_integer_field(attachment, "byte_size");
-  if (!type || *type != "image" || !id || id->empty() || id->size() > kMaxImageAttachmentIdBytes || string_has_control_byte(*id) || !mime_type ||
+  if (!type || *type != "image" || !id || id->empty() || id->size() > kMaxImageAttachmentIdBytes || ava::core::has_c0_or_del(*id) || !mime_type ||
       !is_supported_image_attachment_mime_type(*mime_type) || !storage_path || !valid_attachment_storage_path(*storage_path) || !sha256 ||
       sha256->size() != 64 || !hex_string(*sha256) || !byte_size)
     return false;
@@ -850,7 +847,7 @@ bool valid_optional_short_string(std::string_view object, std::string_view key, 
   if (!start)
     return true;
   auto const value = ava::core::json::string_field(object, key);
-  return value && (allow_empty || !value->empty()) && value->size() <= max_bytes && !string_has_control_byte(*value);
+  return value && (allow_empty || !value->empty()) && value->size() <= max_bytes && !ava::core::has_c0_or_del(*value);
 }
 
 bool valid_optional_session_id(std::string_view object, std::string_view key)
@@ -900,7 +897,7 @@ bool required_bounded_string(std::string_view object, std::string_view key, std:
   if (!start)
     return false;
   auto const value = ava::core::json::string_field(object, key);
-  return value && !value->empty() && value->size() <= max_bytes && !string_has_control_byte(*value);
+  return value && !value->empty() && value->size() <= max_bytes && !ava::core::has_c0_or_del(*value);
 }
 
 bool required_session_id(std::string_view object, std::string_view key)
@@ -993,7 +990,7 @@ bool valid_optional_string_array(std::string_view object, std::string_view key, 
   std::unordered_set<std::string> seen;
   for (auto const& value : values)
   {
-    if (value.empty() || value.size() > max_item_bytes || string_has_control_byte(value))
+    if (value.empty() || value.size() > max_item_bytes || ava::core::has_c0_or_del(value))
       return false;
     if (!seen.insert(value).second)
       return false;

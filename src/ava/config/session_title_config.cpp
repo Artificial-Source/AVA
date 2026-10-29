@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "ava/config/session_title_config.h"
 #include "ava/core/AnchorOpen.h"
+#include "ava/core/ascii.h"
 #include "ava/core/strict_json.h"
 
 #include <array>
@@ -13,9 +14,9 @@
 #include <system_error>
 #include <utility>
 #include <fcntl.h>
+#include <nlohmann/json.hpp>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <nlohmann/json.hpp>
 
 namespace ava::config {
 namespace {
@@ -30,17 +31,6 @@ ava::core::Error config_error(std::string message, std::string_view field = {})
   if (!field.empty())
     error.with_context("field", std::string(field));
   return error;
-}
-
-bool has_control_byte(std::string_view value)
-{
-  for (char ch : value)
-  {
-    auto const byte = static_cast<unsigned char>(ch);
-    if (byte < 0x20 || byte == 0x7f)
-      return true;
-  }
-  return false;
 }
 
 ava::core::Result<std::string> read_config(std::filesystem::path const& path, ava::core::AnchorSet const& anchors)
@@ -91,7 +81,7 @@ ava::core::VoidResult validate_target(std::optional<std::string> const& value, s
 {
   if (!value)
     return {};
-  if (value->empty() || value->size() > kMaxTargetIdBytes || has_control_byte(*value))
+  if (value->empty() || value->size() > kMaxTargetIdBytes || ava::core::has_c0_or_del(*value))
     return std::unexpected(config_error("session title target is invalid", field));
   return {};
 }

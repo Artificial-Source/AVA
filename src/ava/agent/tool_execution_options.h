@@ -29,6 +29,8 @@ struct ToolExecutionOptions
   // Runtime-owned AVA config/state/session directories that command sealing
   // must keep disjoint from the model command workspace.
   std::vector<std::filesystem::path> ava_authority_roots = {};
+  // Immutable capability adapters are retained by parent runs and independently
+  // scheduled children; neither can invalidate the other's I/O authority.
   std::shared_ptr<ava::tools::ExactFileAccess const> exact_file_access = nullptr;
   std::shared_ptr<ava::tools::CommandExecutor const> command_executor = nullptr;
   // The admitted run cancellation route copied into each model ToolContext.

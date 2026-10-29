@@ -21,7 +21,5 @@ namespace ava::mcp {
 [[nodiscard]] std::string exit_detail(ava::process::ExitStatusV1 const& status);
 [[nodiscard]] std::vector<std::string> mcp_argv(McpServerConfig const& server);
 [[nodiscard]] std::string mcp_executable(McpServerConfig const& server, std::filesystem::path const& working_directory);
-[[nodiscard]] std::chrono::steady_clock::time_point saturating_add(std::chrono::steady_clock::time_point value,
-                                                                   std::chrono::steady_clock::duration duration) noexcept;
 
 }  // namespace ava::mcp

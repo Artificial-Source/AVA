@@ -1,5 +1,4 @@
 #pragma once
-
 #include "ava/debug/print_members_on.h"
 #include "ava/http/transport.h"
 #include "ava/observability/run_observer.h"
@@ -18,6 +17,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -55,7 +55,10 @@ struct PermissionAuditEvent
   bool command_arguments_redacted = false;
   std::optional<ava::permissions::CommandPermissionMetadata> command_metadata = std::nullopt;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 using PermissionAuditSink = std::function<ava::core::VoidResult(PermissionAuditEvent const&)>;
@@ -67,7 +70,10 @@ struct ToolProgressEvent
   std::string tool_name;
   std::string status = "running";
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 using ToolProgressSink = std::function<ava::core::VoidResult(ToolProgressEvent const&)>;
@@ -178,7 +184,10 @@ struct ToolContext
   std::shared_ptr<ava::observability::RunObservation> observation = nullptr;
   ava::observability::TraceContext trace_context = {};
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 }  // namespace ava::tools

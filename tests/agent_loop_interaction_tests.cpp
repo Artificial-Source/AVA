@@ -38,6 +38,7 @@ class OverflowOnceProvider final : public ava::provider::Provider
  public:
   explicit OverflowOnceProvider(std::string base_url) : delegate_(std::move(base_url)) { }
 
+  using ava::provider::Provider::build_request;
   [[nodiscard]] ava::core::Result<ava::http::HttpRequest> build_request(ava::provider::ProviderRequest const& request,
                                                                         std::string_view access_token) const override
   {

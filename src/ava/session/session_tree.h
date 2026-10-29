@@ -1,11 +1,13 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/session/session_metadata.h"
 #include "ava/session/session_store.h"
 #include "ava/core/result.h"
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ava::session {

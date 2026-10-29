@@ -10,6 +10,7 @@
 #include "ava/core/result.h"
 
 #include <condition_variable>
+#include <cstddef>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -20,6 +21,11 @@
 #include <vector>
 
 namespace ava::app::rpc {
+
+// Per-connection reusable authority is bounded; rejection leaves the request
+// pending so clients may revoke/clear grants or choose a one-shot decision.
+inline constexpr std::size_t kMaxPermissionSessionGrants = 256;
+inline constexpr std::size_t kMaxPermissionSessionGrantBytes = 1024U * 1024U;
 
 struct PendingPermissionRequest
 {

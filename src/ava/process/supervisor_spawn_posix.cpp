@@ -2,6 +2,7 @@
 #include "ava/process/launch_protocol_posix.h"
 #include "ava/process/supervisor_internal.h"
 #include "ava/core/Signals.h"
+#include "ava/core/close_descriptors.h"
 
 #include <algorithm>
 #include <array>
@@ -76,28 +77,25 @@ ava::core::Result<Pipe> make_cloexec_pipe()
 #else
   if (::pipe(raw.data()) != 0)
     return std::unexpected(io_error("failed to create a process pipe", errno));
+#endif
+  Pipe result{.read_end = ava::core::UniqueFd(raw[0]), .write_end = ava::core::UniqueFd(raw[1])};
+#if !defined(__linux__)
   if (::fcntl(raw[0], F_SETFD, FD_CLOEXEC) != 0 || ::fcntl(raw[1], F_SETFD, FD_CLOEXEC) != 0)
   {
     int const saved_errno = errno;
-    static_cast<void>(::close(raw[0]));
-    static_cast<void>(::close(raw[1]));
     return std::unexpected(io_error("failed to make a process pipe close-on-exec", saved_errno));
   }
 #endif
 
-  auto read_end = move_above_standard_descriptors(raw[0]);
+  auto read_end = move_above_standard_descriptors(result.read_end.release());
   if (!read_end)
-  {
-    static_cast<void>(::close(raw[1]));
     return std::unexpected(std::move(read_end.error()));
-  }
-  auto write_end = move_above_standard_descriptors(raw[1]);
+  result.read_end.reset(*read_end);
+  auto write_end = move_above_standard_descriptors(result.write_end.release());
   if (!write_end)
-  {
-    static_cast<void>(::close(*read_end));
     return std::unexpected(std::move(write_end.error()));
-  }
-  return Pipe{.read_end = ava::core::UniqueFd(*read_end), .write_end = ava::core::UniqueFd(*write_end)};
+  result.write_end.reset(*write_end);
+  return result;
 }
 
 ava::core::VoidResult set_nonblocking(int descriptor)
@@ -120,9 +118,7 @@ ava::core::Result<bool> wait_descriptor(int descriptor, short events, ProcessDea
         return std::unexpected(invalid_error("process pipe endpoint is closed"));
       return (item.revents & (events | POLLERR | POLLHUP)) != 0;
     }
-    if (result == 0)
-      return false;
-    if (errno != EINTR)
+    if (result < 0 && errno != EINTR)
       return std::unexpected(io_error("failed while waiting for a process pipe endpoint", errno));
     if (Clock::now() >= deadline)
       return false;
@@ -172,37 +168,46 @@ int waitid_retry(pid_t process, siginfo_t* information, int options) noexcept
   }
 }
 
-bool exact_provisional_cleanup(pid_t leader, pid_t sentinel, ProcessDeadline deadline) noexcept
+bool exact_provisional_cleanup(NativeChildReaper& reaper, std::unique_ptr<NativeChildCleanup> cleanup, pid_t leader, pid_t sentinel,
+                               ProcessDeadline deadline) noexcept
 {
-  std::array<pid_t, 2> children{leader, sentinel};
+  cleanup->children = {leader, sentinel};
   bool complete = true;
-  for (pid_t child : children)
-  {
-    if (child > 1 && ::kill(child, SIGKILL) != 0 && errno != ESRCH)
-      complete = false;
-  }
-  for (pid_t child : children)
+  for (auto& child : cleanup->children)
   {
     if (child <= 1)
       continue;
-    bool reaped = false;
-    int status = 0;
-    while (Clock::now() < deadline)
+    siginfo_t information{};
+    if (waitid_retry(child, &information, WEXITED | WNOHANG | WNOWAIT) != 0 && errno == ECHILD)
     {
+      child = -1;
+      continue;
+    }
+    if (::kill(child, SIGKILL) != 0 && errno != ESRCH)
+      complete = false;
+  }
+  for (auto& child : cleanup->children)
+  {
+    if (child <= 1)
+      continue;
+    while (true)
+    {
+      int status = 0;
       auto const waited = waitpid_retry(child, &status, WNOHANG);
-      if (waited == child)
+      if (waited == child || (waited < 0 && errno == ECHILD))
       {
-        reaped = true;
+        child = -1;
         break;
       }
-      if (waited < 0)
+      if (waited < 0 || Clock::now() >= deadline)
+      {
+        complete = false;
         break;
+      }
       std::this_thread::sleep_for(1ms);
     }
-    if (!reaped)
-      reaped = waitpid_retry(child, &status, WNOHANG) == child;
-    complete = complete && reaped;
   }
+  reaper.retain(std::move(cleanup));
   return complete;
 }
 
@@ -215,89 +220,6 @@ ssize_t child_read_retry(int descriptor, void* data, std::size_t size) noexcept
       continue;
     return result;
   }
-}
-
-bool child_write_all(int descriptor, void const* data, std::size_t size) noexcept
-{
-  auto const* next = static_cast<unsigned char const*>(data);
-  std::size_t offset = 0;
-  while (offset < size)
-  {
-    auto const result = ::write(descriptor, next + offset, size - offset);
-    if (result > 0)
-    {
-      offset += static_cast<std::size_t>(result);
-      continue;
-    }
-    if (result < 0 && errno == EINTR)
-      continue;
-    return false;
-  }
-  return true;
-}
-
-void close_nonstandard_descriptors(int preserved, int maximum) noexcept
-{
-  std::array<int, 1> const preserved_descriptors{preserved};
-  close_nonstandard_descriptors_except(preserved_descriptors, maximum);
-}
-
-void close_nonstandard_descriptors_except(std::span<int const> preserved, int maximum) noexcept
-{
-  constexpr std::size_t kMaximumPreservedDescriptors = kMaxRetainedScriptDescriptorsV1 + 2;
-  std::array<int, kMaximumPreservedDescriptors> ordered{};
-  std::size_t count = 0;
-  for (int descriptor : preserved)
-  {
-    if (descriptor <= STDERR_FILENO || count == ordered.size())
-      continue;
-    bool duplicate = false;
-    for (std::size_t index = 0; index < count; ++index)
-      duplicate = duplicate || ordered[index] == descriptor;
-    if (duplicate)
-      continue;
-    std::size_t position = count;
-    while (position > 0 && ordered[position - 1] > descriptor)
-    {
-      ordered[position] = ordered[position - 1];
-      --position;
-    }
-    ordered[position] = descriptor;
-    ++count;
-  }
-
-#if defined(__linux__) && defined(SYS_close_range)
-  bool ranges_closed = true;
-  unsigned int first = static_cast<unsigned int>(STDERR_FILENO + 1);
-  for (std::size_t index = 0; index < count; ++index)
-  {
-    auto const kept = static_cast<unsigned int>(ordered[index]);
-    if (first < kept && ::syscall(SYS_close_range, first, kept - 1, 0U) != 0)
-      ranges_closed = false;
-    if (kept < std::numeric_limits<unsigned int>::max())
-      first = kept + 1;
-  }
-  if (::syscall(SYS_close_range, first, std::numeric_limits<unsigned int>::max(), 0U) != 0)
-    ranges_closed = false;
-  if (ranges_closed)
-    return;
-#endif
-  for (int descriptor = STDERR_FILENO + 1; descriptor < maximum; ++descriptor)
-  {
-    bool keep = false;
-    for (std::size_t index = 0; index < count; ++index)
-      keep = keep || ordered[index] == descriptor;
-    if (!keep)
-      static_cast<void>(::close(descriptor));
-  }
-}
-
-int descriptor_limit() noexcept
-{
-  rlimit limit{};
-  if (::getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY)
-    return static_cast<int>(std::min<rlim_t>(limit.rlim_cur, static_cast<rlim_t>(INT_MAX)));
-  return 4096;
 }
 
 #endif
@@ -352,7 +274,7 @@ struct PreparedSpawn
   PreparedStream standard_error;
   Pipe gate;
   Pipe launch_status;
-  int maximum_descriptor = 4096;
+  std::unique_ptr<detail::NativeChildCleanup> deferred_cleanup = std::make_unique<detail::NativeChildCleanup>();
   bool fail_working_directory_for_test = false;
 
   void build_pointers()
@@ -562,7 +484,6 @@ ava::core::Result<PreparedSpawn> prepare_spawn(SpawnSpecV1& specification)
   result.standard_error = std::move(*standard_error);
   result.gate = std::move(*gate);
   result.launch_status = std::move(*launch_status);
-  result.maximum_descriptor = detail::descriptor_limit();
   result.build_pointers();
   return result;
 }
@@ -627,15 +548,9 @@ void child_duplicate_stream(PreparedStream const& stream, int target, int launch
     child_fail(status_descriptor, detail::LaunchFailureStageV1::WorkingDirectory, errno);
 
   int const executable_descriptor = prepared.preopened_executable ? detail::ExecutionCapabilityAccess::target_descriptor(*prepared.preopened_executable) : -1;
-  if (executable_descriptor >= 0)
-  {
-    std::array<int, 2> const preserved{status_descriptor, executable_descriptor};
-    detail::close_nonstandard_descriptors_except(preserved, prepared.maximum_descriptor);
-  }
-  else
-  {
-    detail::close_nonstandard_descriptors(status_descriptor, prepared.maximum_descriptor);
-  }
+  std::array<int, 2> const preserved{status_descriptor, executable_descriptor};
+  if (int const close_error = ava::core::close_nonstandard_fds_except(preserved); close_error != 0)
+    child_fail(status_descriptor, detail::LaunchFailureStageV1::DescriptorValidation, close_error);
   if (!detail::child_write_exec_attempt(status_descriptor))
     _exit(127);
   if (executable_descriptor >= 0)
@@ -775,6 +690,12 @@ ava::core::Result<SpawnResultV1> Supervisor::spawn(Reservation&& reservation, Sp
     return std::unexpected(detail::canceled_launch_error("process launch", reason));
   }
 
+  if (!state->child_reaper.start())
+  {
+    detail::finish_unregistered(state, identity, TerminationReasonV1::LaunchFailed);
+    return std::unexpected(detail::process_error(ava::core::ErrorCategory::Io, "failed to prepare native-child cleanup ownership"));
+  }
+
   detail::PreForkDecision final_check;
   {
     std::lock_guard lock(state->mutex);
@@ -830,7 +751,7 @@ ava::core::Result<SpawnResultV1> Supervisor::spawn(Reservation&& reservation, Sp
   {
     auto const cleanup_deadline = detail::provisional_cleanup_deadline(state, identity, TerminationReasonV1::LaunchFailed, Clock::now() + 500ms);
     prepared->gate.write_end.reset();
-    bool const cleaned = detail::exact_provisional_cleanup(child, -1, cleanup_deadline);
+    bool const cleaned = detail::exact_provisional_cleanup(state->child_reaper, std::move(prepared->deferred_cleanup), child, -1, cleanup_deadline);
     detail::finish_unregistered(state, identity, TerminationReasonV1::LaunchFailed, cleaned ? CleanupStateV1::Complete : CleanupStateV1::Incomplete);
     return std::unexpected(detail::io_error("failed to verify a private process group before exec", group_set ? get_group_error : set_group_error));
   }
@@ -839,7 +760,7 @@ ava::core::Result<SpawnResultV1> Supervisor::spawn(Reservation&& reservation, Sp
   {
     auto const cleanup_deadline = detail::provisional_cleanup_deadline(state, identity, TerminationReasonV1::LaunchFailed, Clock::now() + 500ms);
     prepared->gate.write_end.reset();
-    bool const cleaned = detail::exact_provisional_cleanup(child, -1, cleanup_deadline);
+    bool const cleaned = detail::exact_provisional_cleanup(state->child_reaper, std::move(prepared->deferred_cleanup), child, -1, cleanup_deadline);
     detail::finish_unregistered(state, identity, TerminationReasonV1::LaunchFailed, cleaned ? CleanupStateV1::Complete : CleanupStateV1::Incomplete);
     return std::unexpected(std::move(monitor.error()));
   }
@@ -862,6 +783,7 @@ ava::core::Result<SpawnResultV1> Supervisor::spawn(Reservation&& reservation, Sp
       record.registered = true;
       record.group_verified = true;
       record.leader = child;
+      record.deferred_cleanup = std::move(prepared->deferred_cleanup);
       record.cleanup = CleanupStateV1::Pending;
       record.state = record.reason ? ProcessStateV1::StopRequested : ProcessStateV1::Launching;
       detail::register_record_members_locked(*state, record, Clock::now());
@@ -871,7 +793,7 @@ ava::core::Result<SpawnResultV1> Supervisor::spawn(Reservation&& reservation, Sp
   {
     prepared->gate.write_end.reset();
     auto const cleanup_deadline = detail::provisional_cleanup_deadline(state, identity, TerminationReasonV1::LaunchFailed, Clock::now() + 500ms);
-    static_cast<void>(detail::exact_provisional_cleanup(child, -1, cleanup_deadline));
+    static_cast<void>(detail::exact_provisional_cleanup(state->child_reaper, std::move(prepared->deferred_cleanup), child, -1, cleanup_deadline));
     return std::unexpected(detail::process_error(ava::core::ErrorCategory::Io, "process reservation ended during launch"));
   }
   detail::notify_monitor_state(state);

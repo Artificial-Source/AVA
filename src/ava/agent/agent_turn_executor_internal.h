@@ -1,4 +1,5 @@
 #pragma once
+#include "ava/debug/print_members_on.h"
 #include "ava/http/transport.h"
 #include "ava/agent/agent_loop.h"
 #include "ava/agent/agent_loop_session.h"
@@ -11,6 +12,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -51,7 +53,10 @@ struct ActiveTurnUserMessage
   ava::core::NoLogString text;
   std::vector<ava::session::ImageAttachmentRef> image_attachments;
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 class AgentTurnSession final

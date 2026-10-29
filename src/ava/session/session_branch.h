@@ -1,5 +1,5 @@
 #pragma once
-
+#include "ava/debug/print_members_on.h"
 #include "ava/session/session_metadata.h"
 #include "ava/session/session_store.h"
 #include "ava/core/NoLogString.h"
@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -72,7 +73,10 @@ struct BranchSummaryCoverage
 
   [[nodiscard]] bool eligible() const noexcept { return reason == BranchSummaryEligibilityReason::Eligible; }
 
-  AVA_DEBUG_PRINT_MEMBERS_ON
+#ifdef CWDEBUG
+  void print_on(std::ostream& os) const { os << "<redacted>"; }
+#endif
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 enum class BranchSummaryDisposition

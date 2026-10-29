@@ -1651,6 +1651,7 @@ class ProviderTransport final : public ava::http::Transport
  public:
   explicit ProviderTransport(std::shared_ptr<ProviderTransportState> state) : state_(std::move(state)) { }
 
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const& request) override
   {
     std::lock_guard lock(state_->mutex);
@@ -1666,6 +1667,7 @@ class ProviderTransport final : public ava::http::Transport
 class ThrowingProviderTransport final : public ava::http::Transport
 {
  public:
+  using ava::http::Transport::send;
   ava::core::Result<ava::http::HttpResponse> send(ava::http::HttpRequest const&) override { throw std::runtime_error("transport secret must not escape"); }
 };
 

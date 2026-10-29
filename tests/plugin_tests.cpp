@@ -15,6 +15,7 @@
 #include "ava/plugin/diagnostics.h"
 #include "ava/plugin/discovery.h"
 #include "ava/plugin/enablement.h"
+#include "ava/plugin/install.h"
 #include "ava/plugin/manifest.h"
 #include "ava/plugin/runner.h"
 #include "ava/plugin/runner_protocol.h"
@@ -445,6 +446,24 @@ void test_plugin_manifest_parsing()
   auto deep = ava::plugin::parse_plugin_manifest(deeply_nested_manifest, {});
   expect(!deep && deep.error().message().find("maximum JSON depth") != std::string::npos,
          "plugin manifest rejects excessive JSON nesting before recursive validation");
+
+  auto duplicate_id = valid_manifest_json();
+  duplicate_id.insert(1, "\"id\":\"com.example.other\",");
+  expect(!ava::plugin::parse_plugin_manifest(duplicate_id), "plugin manifest rejects duplicate authority-bearing fields");
+
+  for (std::string const contributions : {"null", "[]"})
+  {
+    auto const invalid =
+        "{\"schema_version\":1,\"id\":\"com.example.bad\",\"name\":\"Bad\",\"version\":\"1\","
+        "\"api_version\":\"ava.plugin.v1\",\"entrypoint\":{\"command\":\"node\"},\"contributes\":" +
+        contributions + "}";
+    expect(!ava::plugin::parse_plugin_manifest(invalid), "plugin manifest rejects mistyped contributions rather than silently dropping entries");
+  }
+  auto nul_command = ava::plugin::parse_plugin_manifest(
+      R"({"schema_version":1,"id":"com.example.bad","name":"Bad","version":"1","api_version":"ava.plugin.v1","entrypoint":{"command":"node\u0000other"}})");
+  auto nul_argument = ava::plugin::parse_plugin_manifest(
+      R"({"schema_version":1,"id":"com.example.bad","name":"Bad","version":"1","api_version":"ava.plugin.v1","entrypoint":{"command":"node","args":["one\u0000two"]}})");
+  expect(!nul_command && !nul_argument, "plugin manifest rejects NUL bytes that cannot be represented in process argv");
 }
 
 void test_static_plugin_resource_loader_is_descriptor_anchored()
@@ -777,6 +796,62 @@ void test_plugin_discovery()
   auto non_regular_manifest = ava::plugin::load_plugin_manifest(directory_manifest);
   expect(!non_regular_manifest && non_regular_manifest.error().message().find("regular file") != std::string::npos,
          "plugin manifest load rejects non-regular files");
+
+  auto const removal_root = root / "removal";
+  auto const installed_directory = removal_root / "com.example.removal";
+  auto const nested_directory = installed_directory / "nested";
+  write_text(nested_directory / "keep.txt", "keep");
+  ava::plugin::PluginStatus removal_status;
+  removal_status.plugin.scope = ava::plugin::PluginScope::Global;
+  removal_status.plugin.manifest.id = "com.example.removal";
+  removal_status.plugin.manifest.directory = nested_directory;
+  auto nested_removal = ava::plugin::remove_global_plugin(removal_status, removal_root);
+  expect(!nested_removal && std::filesystem::exists(nested_directory / "keep.txt"),
+         "plugin removal rejects nested paths that cannot be installed plugin roots");
+
+  auto const outside_file = root / "outside-removal.txt";
+  write_text(outside_file, "outside");
+  std::filesystem::create_symlink(outside_file, installed_directory / "linked-file");
+  removal_status.plugin.manifest.directory = installed_directory;
+  removal_status.enabled = true;
+  expect(!ava::plugin::remove_global_plugin(removal_status, removal_root), "plugin removal still rejects enabled plugins");
+  removal_status.enabled = false;
+  auto removed = ava::plugin::remove_global_plugin(removal_status, removal_root);
+  expect(removed && !std::filesystem::exists(installed_directory) && read_text(outside_file) == "outside",
+         "descriptor-relative plugin removal deletes the selected tree without following its symlink entries");
+
+  auto const install_source = root / "overlapping-source";
+  auto const overlapping_root = install_source / "global-plugins";
+  write_text(install_source / "plugin.json", valid_manifest_json("com.example.overlap"));
+  auto inspected = ava::plugin::inspect_plugin_install_source(install_source);
+  if (ava::tests::require(inspected.has_value(), "overlapping install source is inspected"))
+  {
+    auto installed = ava::plugin::install_global_plugin(std::move(*inspected), overlapping_root);
+    expect(!installed && !std::filesystem::exists(overlapping_root),
+           "invalid overlapping install roots are rejected before creating or chmodding the destination");
+  }
+
+  auto const identity_source = root / "identity-source";
+  auto const identity_destination = root / "identity-installed";
+  write_text(identity_source / "plugin.json", valid_manifest_json("com.example.identity"));
+  write_text(identity_source / "payload.txt", "inspected");
+  auto identity = ava::plugin::inspect_plugin_install_source(identity_source);
+  if (ava::tests::require(identity.has_value(), "identity-bound install source is inspected"))
+  {
+    std::filesystem::rename(identity_source, root / "original-identity-source");
+    write_text(identity_source / "plugin.json", valid_manifest_json("com.example.identity"));
+    write_text(identity_source / "payload.txt", "replacement");
+    auto replaced = ava::plugin::install_global_plugin(std::move(*identity), identity_destination);
+    expect(!replaced && replaced.error().format().find("identity") != std::string::npos && !std::filesystem::exists(identity_destination),
+           "install rejects a replaced source directory with the same manifest ID before destination writes");
+  }
+  auto unchanged = ava::plugin::inspect_plugin_install_source(identity_source);
+  if (ava::tests::require(unchanged.has_value(), "replacement can be explicitly inspected"))
+  {
+    auto installed = ava::plugin::install_global_plugin(std::move(*unchanged), identity_destination);
+    expect(installed && read_text(identity_destination / "com.example.identity" / "payload.txt") == "replacement",
+           "fresh inspection authorizes installation of that exact directory identity");
+  }
 }
 
 void test_plugin_enablement()
@@ -1867,7 +1942,11 @@ void test_plugin_tool_dispatcher()
   }
   {
     ava::agent::ToolVisibilityOptions const no_builtin_visibility{.mode = ava::agent::ToolVisibilityMode::NoBuiltinTools};
-    auto const no_builtin_schemas = ava::agent::ToolDispatcher::tool_schemas_json(context, no_builtin_visibility);
+    auto const no_builtin_schemas_result = ava::agent::ToolDispatcher::compose_tool_schemas_json(context, no_builtin_visibility);
+    if (!ava::tests::require(no_builtin_schemas_result.has_value(),
+                             no_builtin_schemas_result ? "schema fixture composes" : no_builtin_schemas_result.error().format()))
+      return;
+    auto const& no_builtin_schemas = *no_builtin_schemas_result;
     auto const visible_plugin_schema = std::find_if(no_builtin_schemas.begin(), no_builtin_schemas.end(), [&](std::string const& schema) {
       return schema.find("\"name\":\"" + model_tool_name + "\"") != std::string::npos;
     });
@@ -1877,7 +1956,10 @@ void test_plugin_tool_dispatcher()
            "no-builtin tool visibility keeps enabled plugin tools while hiding built-ins");
   }
 
-  ava::agent::ToolDispatcher dispatcher(context);
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto dispatched =
       dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_plugin", .name = model_tool_name, .arguments_json = "{\"text\":\"write tests\"}"});
   expect(dispatched && dispatched->success && dispatched->result_text.find("Added via dispatcher") != std::string::npos,
@@ -1928,7 +2010,11 @@ void test_plugin_tool_dispatcher()
     denied_prompts.push_back(prompt);
     return ava::permissions::PermissionResolution::Deny;
   };
-  ava::agent::ToolDispatcher denied_dispatcher(denied_context);
+  auto denied_dispatcher_result = ava::agent::ToolDispatcher::create_strict(denied_context);
+  if (!ava::tests::require(denied_dispatcher_result.has_value(),
+                           denied_dispatcher_result ? "dispatcher fixture composes" : denied_dispatcher_result.error().format()))
+    return;
+  auto& denied_dispatcher = *denied_dispatcher_result;
   auto denied = denied_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_denied", .name = model_tool_name, .arguments_json = "{}"});
   expect(denied && !denied->success && denied->result_text.find("plugin process launch requires permission") == std::string::npos &&
              denied->result_text.find("permission_denied") != std::string::npos && denied_prompts.size() == 1,
@@ -1952,7 +2038,11 @@ void test_plugin_tool_dispatcher()
   typed_cancel_context.permission_audit_sink = [](ava::tools::PermissionAuditEvent const&) -> ava::core::VoidResult {
     return std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "renamed plugin interruption", ava::core::ErrorCode::Canceled));
   };
-  ava::agent::ToolDispatcher typed_cancel_dispatcher(typed_cancel_context);
+  auto typed_cancel_dispatcher_result = ava::agent::ToolDispatcher::create_strict(typed_cancel_context);
+  if (!ava::tests::require(typed_cancel_dispatcher_result.has_value(),
+                           typed_cancel_dispatcher_result ? "dispatcher fixture composes" : typed_cancel_dispatcher_result.error().format()))
+    return;
+  auto& typed_cancel_dispatcher = *typed_cancel_dispatcher_result;
   auto typed_cancel =
       typed_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_typed_cancel", .name = model_tool_name, .arguments_json = "{}"});
   expect(typed_cancel && !typed_cancel->success && typed_cancel->payload.status == ava::agent::ToolResultStatus::Canceled,
@@ -1964,7 +2054,11 @@ void test_plugin_tool_dispatcher()
     error.with_context("canceled", "true");
     return std::unexpected(std::move(error));
   };
-  ava::agent::ToolDispatcher legacy_cancel_dispatcher(legacy_cancel_context);
+  auto legacy_cancel_dispatcher_result = ava::agent::ToolDispatcher::create_strict(legacy_cancel_context);
+  if (!ava::tests::require(legacy_cancel_dispatcher_result.has_value(),
+                           legacy_cancel_dispatcher_result ? "dispatcher fixture composes" : legacy_cancel_dispatcher_result.error().format()))
+    return;
+  auto& legacy_cancel_dispatcher = *legacy_cancel_dispatcher_result;
   auto legacy_cancel =
       legacy_cancel_dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_legacy_cancel", .name = model_tool_name, .arguments_json = "{}"});
   expect(legacy_cancel && !legacy_cancel->success && legacy_cancel->payload.status == ava::agent::ToolResultStatus::Error,
@@ -2011,7 +2105,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, dispatched ? "manifest without proxy capability receives a handled proxy denial"
@@ -2037,7 +2134,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, dispatched ? "read proxy dispatch succeeds" : "read proxy dispatch failed: " + dispatched.error().format());
@@ -2067,7 +2167,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
     context.exact_file_access = std::make_shared<PluginWindowExactFileAccess>();
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy_window", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     auto const response = read_text(response_file);
@@ -2101,7 +2204,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, dispatched ? "search proxy dispatch succeeds" : "search proxy dispatch failed: " + dispatched.error().format());
@@ -2126,7 +2232,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success,
@@ -2154,7 +2263,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, dispatched ? "session.status argument rejection returns to plugin"
@@ -2184,7 +2296,10 @@ void test_plugin_core_service_proxy_read_search_slice()
       }
       return ava::permissions::PermissionResolution::Allow;
     };
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success,
@@ -2215,7 +2330,10 @@ void test_plugin_core_service_proxy_read_search_slice()
         cancel_requested = true;
       return ava::permissions::PermissionResolution::Allow;
     };
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && !dispatched->success && dispatched->payload.status == ava::agent::ToolResultStatus::Canceled &&
@@ -2232,7 +2350,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, "unknown proxy operation is returned to plugin as a safe error");
@@ -2255,7 +2376,10 @@ void test_plugin_core_service_proxy_read_search_slice()
       std::vector<ava::tools::PermissionAuditEvent> audits;
       bool cancel_requested = false;
       auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-      ava::agent::ToolDispatcher dispatcher(context);
+      auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+      if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+        return;
+      auto& dispatcher = *dispatcher_result;
       auto dispatched = dispatcher.dispatch(
           ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
       expect(dispatched && dispatched->success, "relative symlink proxy request is returned as structured error");
@@ -2274,7 +2398,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, "unsupported search root is returned as structured proxy error");
@@ -2292,7 +2419,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, "fractional proxy bound is returned as structured proxy error");
@@ -2312,7 +2442,10 @@ void test_plugin_core_service_proxy_read_search_slice()
     std::vector<ava::tools::PermissionAuditEvent> audits;
     bool cancel_requested = false;
     auto context = plugin_proxy_test_context(workspace, project_plugins, state_file, prompts, audits, cancel_requested);
-    ava::agent::ToolDispatcher dispatcher(context);
+    auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+    if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+      return;
+    auto& dispatcher = *dispatcher_result;
     auto dispatched = dispatcher.dispatch(
         ava::agent::ProviderToolCall{.id = "call_proxy", .name = ava::plugin::plugin_model_tool_name(plugin_id, "proxy_tool"), .arguments_json = "{}"});
     expect(dispatched && dispatched->success, "regex proxy search is returned as structured proxy error");
@@ -2355,7 +2488,10 @@ void test_plugin_tool_dispatcher_rejects_invalid_result()
   context.process_scope = plugin_test_process_scope();
 
   auto const model_tool_name = ava::plugin::plugin_model_tool_name("com.example.invalid", "todo_add");
-  ava::agent::ToolDispatcher dispatcher(context);
+  auto dispatcher_result = ava::agent::ToolDispatcher::create_strict(context);
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto& dispatcher = *dispatcher_result;
   auto dispatched = dispatcher.dispatch(ava::agent::ProviderToolCall{.id = "call_bad", .name = model_tool_name, .arguments_json = "{}"});
   expect(dispatched && !dispatched->success && dispatched->result_text.find("malformed") == std::string::npos &&
              dispatched->result_text.find("external_failure") != std::string::npos,

@@ -1,10 +1,12 @@
 #include "sys.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/app/acp/codec.h"
 #include "ava/app/acp/peer.h"
 #include "ava/core/ids.h"
 #include "ava/core/thread.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -15,21 +17,13 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace ava::app::acp {
 namespace {
-
-std::string id_key(JsonRpcId const& id)
-{
-  if (std::holds_alternative<NullJsonRpcId>(id))
-    return "n:";
-  if (auto const* number = std::get_if<std::int64_t>(&id))
-    return "i:" + std::to_string(*number);
-  return "s:" + std::get<std::string>(id);
-}
 
 JsonRpcError canceled_error(std::string message)
 {
@@ -55,6 +49,7 @@ class ProcessShutdownEscalation final : public ShutdownEscalation
 {
  public:
   [[noreturn]] void escalate() noexcept override { std::_Exit(kShutdownEscalationExitCode); }
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 }  // namespace
@@ -714,20 +709,24 @@ class JsonRpcPeer::State
       if (!encoded || !enqueue_record(OutboundRecord{.record = encoded ? std::move(*encoded) : std::string{}, .inbound_terminal = ticket}))
         record_async_failure(peer_error("ACP output saturated while completing a request"));
     };
+    bool rejected = false;
     {
       std::lock_guard lock(task_mutex_);
-      if (task_closing_ || tasks_.size() >= kMaxWorkerQueue)
+      rejected = task_closing_ || tasks_.size() >= kMaxWorkerQueue;
+      if (!rejected)
+        tasks_.push_back(std::move(task));
+    }
+    if (rejected)
+    {
       {
-        {
-          std::lock_guard inflight_lock(inflight_mutex_);
-          auto const iterator = inflight_.find(key);
-          if (iterator != inflight_.end() && iterator->second.ticket == ticket)
-            inflight_.erase(iterator);
-        }
-        enqueue_request_error(response_id, -32603, "ACP worker queue limit reached");
-        return;
+        std::lock_guard inflight_lock(inflight_mutex_);
+        auto const iterator = inflight_.find(key);
+        if (iterator != inflight_.end() && iterator->second.ticket == ticket)
+          inflight_.erase(iterator);
       }
-      tasks_.push_back(std::move(task));
+      // Enqueue failure shuts down the peer and reacquires task_mutex_.
+      enqueue_request_error(response_id, -32603, "ACP worker queue limit reached");
+      return;
     }
     task_cv_.notify_one();
   }
@@ -746,14 +745,20 @@ class JsonRpcPeer::State
       auto id = decode_cancel_request_params(notification);
       if (!id)
         return;
-      std::lock_guard lock(inflight_mutex_);
-      auto const iterator = inflight_.find(id_key(*id));
-      if (iterator != inflight_.end() && iterator->second.state == InboundState::Running)
+      std::optional<std::stop_source> source;
       {
-        iterator->second.state = InboundState::CancellationWon;
-        iterator->second.source.request_stop();
-        canceled_inbound_requests_.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard lock(inflight_mutex_);
+        auto const iterator = inflight_.find(id_key(*id));
+        if (iterator != inflight_.end() && iterator->second.state == InboundState::Running)
+        {
+          iterator->second.state = InboundState::CancellationWon;
+          source = iterator->second.source;
+          canceled_inbound_requests_.fetch_add(1, std::memory_order_relaxed);
+        }
       }
+      // request_stop invokes registered callbacks synchronously; they may reenter the peer.
+      if (source)
+        source->request_stop();
       return;
     }
     if (notification.method == "session/cancel")
@@ -1069,16 +1074,23 @@ class JsonRpcPeer::State
 
   void request_inflight_stop() noexcept
   {
-    std::lock_guard lock(inflight_mutex_);
-    for (auto& [key, inflight] : inflight_)
+    std::array<std::optional<std::stop_source>, kMaxInflightRequests> sources;
+    std::size_t count = 0;
     {
-      static_cast<void>(key);
-      if (inflight.state == InboundState::Running)
+      std::lock_guard lock(inflight_mutex_);
+      for (auto& [key, inflight] : inflight_)
       {
-        inflight.state = InboundState::CancellationWon;
-        inflight.source.request_stop();
+        static_cast<void>(key);
+        if (inflight.state == InboundState::Running)
+        {
+          inflight.state = InboundState::CancellationWon;
+          sources[count++] = inflight.source;
+        }
       }
     }
+    // Preserve cancellation arbitration under the mutex, but invoke user callbacks without it.
+    for (std::size_t index = 0; index < count; ++index)
+      sources[index]->request_stop();
   }
 
   void release_inflight() noexcept

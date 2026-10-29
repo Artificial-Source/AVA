@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -27,6 +28,8 @@
 #include <vector>
 #if !defined(_WIN32)
 #include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #ifndef AVA_FAKE_PROCESS_CHILD_PATH
@@ -492,6 +495,10 @@ void test_cleanup_horizon_exhaustion_is_incomplete()
 {
   ava::process::Supervisor supervisor;
   auto application = application_owner();
+  pid_t const unrelated = ::fork();
+  if (unrelated == 0)
+    _exit(37);
+  ava::tests::ScopedChild unrelated_owner(unrelated);
   auto const deadline = ava::tests::now_plus_seconds(350ms);
   auto child = spawn_fixture(supervisor, operation_owner(application), "ignore-term", deadline, 5s, false, true);
   std::string ready_text;
@@ -506,6 +513,16 @@ void test_cleanup_horizon_exhaustion_is_incomplete()
   expect(child && ready && status && status->reason == ava::process::TerminationReasonV1::DeadlineExpired &&
              status->cleanup == ava::process::CleanupStateV1::Incomplete && exact && completed >= deadline + 1800ms,
          "exhausting the reservation-time cleanup horizon reports one honest Incomplete settlement rather than claiming cleanup succeeded");
+  // Public shutdown can stop the monitor immediately; native ownership must
+  // survive that bounded settlement until the exact children are truly reaped.
+  static_cast<void>(supervisor.shutdown(Clock::now()));
+  auto const reap_deadline = ava::tests::now_plus_seconds(5);
+  while (SupervisorTestAccess::retained_native_child_count(supervisor) != 0 && Clock::now() < reap_deadline)
+    std::this_thread::sleep_for(1ms);
+  auto const unrelated_status = unrelated_owner.wait_until(ava::tests::now_plus_seconds(2));
+  expect(SupervisorTestAccess::retained_native_child_count(supervisor) == 0 && unrelated_status && WIFEXITED(*unrelated_status) &&
+             WEXITSTATUS(*unrelated_status) == 37,
+         "incomplete settlement retains eventual reaping after monitor shutdown without stealing unrelated children");
 }
 
 void test_expiry_during_launch_framing()

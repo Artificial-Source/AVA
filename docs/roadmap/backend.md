@@ -64,7 +64,9 @@ The local reference material lives under `docs/reference-code/`. The most releva
 
 ## 1.0 Backend Baseline State
 
-AVA's backend is a version `1.0.0` local coding-agent backend baseline, not a toy prototype. The implemented foundation includes:
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. No release is scheduled yet.
+The backend capability baseline includes:
 
 - CLI/runtime orchestration in `src/ava/app/`, including TUI, print, and JSONL RPC entry points.
 - OpenAI auth, model config, prompt config, provider profiles, curl transport, and an application-scoped custom-provider catalog loaded from global `providers.json` at startup (`src/ava/provider/catalog.cpp`).
@@ -76,7 +78,12 @@ AVA's backend is a version `1.0.0` local coding-agent backend baseline, not a to
 - Project/global `AGENTS.md`, prompt command, skill, and subagent loading in `src/ava/context/`, `src/ava/agent/`, and the unified command registry.
 - Out-of-process plugin and stdio MCP foundations with bounded protocols, enablement, diagnostics, permission/audit identity, and sample/fake-server coverage.
 
-The remaining gap is post-1.0 breadth and product depth: richer permission-rule UX/diagnostics, session tree workflow polish over the implemented backend/RPC fork/clone/tree/caller-supplied summary contracts, unified settings/reload, unsaved-buffer LSP sync and separately approved recipes beyond `clangd`, attachment UX beyond the implemented RPC local-path/inline-base64 image input, plugin core-service proxy expansion, advanced MCP, plugin marketplace flows, HTTP/server daemon mode, broader live-provider smoke automation, default-on or interactive/ACP parallel execution and broader tool eligibility beyond the shipped print/RPC read/search opt-in, and multi-agent orchestration beyond the native `task` subagent/background-job slice.
+Further backend work includes richer permission-rule diagnostics and session
+tree workflows, settings reload, unsaved-buffer LSP support, and recipes
+beyond `clangd`. Other areas include attachment workflows, plugin services,
+advanced MCP, a plugin marketplace, a server mode, and live-provider tests.
+Broader parallel tool execution and multi-agent task graphs remain separate
+work beyond the existing print/RPC read/search and task/background-job support.
 
 Current mutation-safety limitation: per-path locks coordinate only callers sharing a `MutationQueue`. `ToolDispatcher` creates its own queue when none is supplied, and parent/child agent dispatchers do not receive a common workspace queue (`src/ava/agent/tool_dispatcher.cpp`, `agent_turn_executor.cpp`, and `agent_turn_subagents.cpp`). Cross-dispatcher workspace serialization remains open; historical Phase 4 closure below is not a runtime/session-wide guarantee.
 
@@ -84,7 +91,13 @@ Current mutation-safety limitation: per-path locks coordinate only callers shari
 
 Explorer agents checked each roadmap phase against the current AVA code and external reference lessons on 2026-04-30. A Phase 1 closure audit on the same date verified the normal build, sanitizer build, whitespace check, and headless CLI basics.
 
-The 0.33 backend maturity ledger later grew large enough that the version docs moved through the 0.60 platform catch-up, 0.65 provider-hardening line, bundled 0.70 reasoning/model closeout, 0.75 extension foundation, 0.80 extension API stabilization, 0.90 release-candidate evidence, and 1.0 release bump. Treat older "immediate next" wording as historical unless it is restated below; the runtime reports `1.0.0`.
+The backend journals moved through the 0.60 platform work, 0.65 provider work,
+0.70 reasoning and model work, 0.75 extension foundation, 0.80 extension API
+work, and 0.90 evidence. The May bump to `1.0.0` recorded a backend milestone.
+The runtime number was deliberately restored to `0.32.0` while the terminal
+frontend remains in active development. A stable 1.0 release will follow once
+it is complete. Treat older "immediate next" wording as historical unless it
+is restated below.
 
 - Phase 0 documentation reconciliation is closed for the known under-reported backend features: current docs now surface print/RPC mode, `AGENTS.md` loading, manual compaction entries, export, OAuth refresh, permission audit persistence, and atomic writes, while older version plans with superseded deferrals are marked historical.
 - Phase 1 is implemented and verified for the current backend baseline. Keep edge-case coverage aligned as later event/protocol boundaries expand.
@@ -488,7 +501,10 @@ Versioned path from the 0.60 platform catch-up into the 1.0 backend MVP baseline
 - 0.75: source-backed extension foundation alpha: plugin manifests, explicit enablement, JSONL handshake, extension-scoped permissions/audit, plugin commands and prompt/skill resources, and MCP tools/prompts through bounded registry paths.
 - 0.80: extension API stabilization. Authoring docs, the sample plugin, real-sample headless RPC smoke coverage, compatibility policy, minimal golden tests, focused plugin/MCP failure containment coverage, audit rechecks, the then-current MCP resource deferral decision, and OpenAI 5.5 manual headless validation were implemented; read-style MCP resources later landed behind `mcp.resource.read`, and the remaining stabilization at that point was final diagnostics polish or review-driven failure-matrix closure discovered by 0.90.
 - 0.90: v1 release-candidate completion. Freezes v1 compatibility, re-audits docs/capabilities, records release verification and live smokes, resolves or explicitly defers every required partial, and provides the release-bump evidence. OpenAI live evidence is current and Kimi-for-coding has passing live prompt evidence; Anthropic remains auth-blocked, while Moonshot/OpenRouter-compatible prompt evidence remains credential-blocked.
-- 1.0: backend MVP runtime baseline at `1.0.0` after the required cut-line capabilities below were completed and verified.
+- 1.0: historical backend MVP milestone. The May bump set the runtime to
+  `1.0.0` after the backend capabilities below were verified. The number was
+  deliberately restored to `0.32.0` while terminal frontend development
+  continues. It was not a stable product release.
 
 Required for 1.0:
 

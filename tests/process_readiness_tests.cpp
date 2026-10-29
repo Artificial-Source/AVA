@@ -4,6 +4,9 @@
 #include "ava/process/environment.h"
 #include "ava/process/supervisor.h"
 #include "ava/process/supervisor_test_support.h"
+#if defined(__linux__)
+#include "tests/support/syscall_errno_injection.h"
+#endif
 
 #include <array>
 #include <atomic>
@@ -199,6 +202,34 @@ std::optional<std::size_t> descriptor_count()
   return error ? std::nullopt : std::optional(count);
 #else
   return std::nullopt;
+#endif
+}
+
+void test_early_poll_timeout_preserves_activity_deadline()
+{
+#if defined(__linux__) && defined(SYS_poll)
+  // Launch framing uses one descriptor. Inject zero only for the two-descriptor
+  // activity wait so the real child can start and remain behind its input gate.
+  auto const status = ava::tests::run_in_child_with_syscall_errno(SYS_poll, ava::tests::SyscallArgumentFilter{.index = 1, .value = 2}, 0, [] {
+    ava::process::Supervisor supervisor;
+    SupervisorFallback fallback(supervisor);
+    auto child = spawn_fake(supervisor, application_owner(), "ready-gate", ava::process::StreamModeV1::Capture);
+    if (!child || !child->standard_input || !child->standard_output)
+      return 1;
+    std::string ready;
+    if (!read_until(*child->standard_output, ready, "READY\n", ava::tests::now_plus_seconds(2s)))
+      return 2;
+    auto watch = child->standard_output->watch(PipeInterestV1::Readable, 1);
+    if (!watch)
+      return 3;
+    std::array<PipeWatchV1, 1> watches{*watch};
+    auto const deadline = std::chrono::steady_clock::now() + 15ms;
+    auto const activity = supervisor.wait_for_activity(child->handle, watches, deadline);
+    bool const honored = std::chrono::steady_clock::now() >= deadline;
+    child->standard_input->close();
+    return activity && activity->deadline_expired && !activity->process_finished && activity->ready.empty() && honored ? 0 : 4;
+  });
+  static_cast<void>(ava::tests::expect_child_success(status, "an early poll timeout cannot shorten the absolute process activity deadline"));
 #endif
 }
 
@@ -702,6 +733,7 @@ void run_process_readiness_tests()
   test_hup_is_separate_and_drainable();
   test_completion_wakeup_and_final_before_wait();
   test_absolute_deadline_survives_eintr();
+  test_early_poll_timeout_preserves_activity_deadline();
   test_invalid_watches_are_rejected();
   test_completion_creation_races_repeat();
   test_completion_descriptor_hygiene_and_bounds();

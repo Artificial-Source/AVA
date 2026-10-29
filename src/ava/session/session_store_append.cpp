@@ -3,6 +3,7 @@
 #include "ava/session/record.h"
 #include "ava/session/session_store_internal.h"
 #include "ava/session/validation.h"
+#include "ava/core/UniqueFd.h"
 #include "ava/core/fd_io.h"
 #include "ava/core/path.h"
 
@@ -227,8 +228,12 @@ ava::core::VoidResult SessionStore::append_validated_copy(SessionLease const& le
     return std::unexpected(std::move(error));
   }
 
+  auto& append_epoch = detail::append_epoch_for_path(canonical_path);
   for (auto const& entry : entries)
   {
+    // Copy-forward bypasses SessionAppendTarget, so invalidate its cached state
+    // before a write that may commit fully, partially, or fail after committing.
+    append_epoch.fetch_add(1, std::memory_order_acq_rel);
     auto appended = append_impl(&lease, entry, true);
     if (!appended)
       return appended;
@@ -323,22 +328,14 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
   if (!append_serialization_held)
     append_lock.emplace(append_mutex);
 
-  int parent_fd = ::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (parent_fd < 0)
+  ava::core::UniqueFd parent_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+  if (!parent_fd)
     return std::unexpected(
         with_append_commit_state(path_io_error("failed to anchor session append directory", parent_path, errno), AppendCommitState::NotStarted, path));
-  int append_fd = -1;
-  auto close_fd = [](int& fd) {
-    if (fd < 0)
-      return 0;
-    int const result = ::close(fd);
-    int const error = result == 0 ? 0 : errno;
-    fd = -1;
-    return error;
-  };
+  ava::core::UniqueFd append_fd;
   auto close_both = [&] {
-    int const append_close_error = close_fd(append_fd);
-    int const parent_close_error = close_fd(parent_fd);
+    int const append_close_error = append_fd.close_checked();
+    int const parent_close_error = parent_fd.close_checked();
     return std::pair(append_close_error, parent_close_error);
   };
   auto fail_before_write = [&](ava::core::Error error) -> ava::core::VoidResult {
@@ -359,13 +356,13 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
   };
 
   struct stat anchored_parent_status{};
-  if (fstat(parent_fd, &anchored_parent_status) != 0 || !S_ISDIR(anchored_parent_status.st_mode))
+  if (fstat(parent_fd.get(), &anchored_parent_status) != 0 || !S_ISDIR(anchored_parent_status.st_mode))
   {
     int const error_number = errno;
     return fail_before_write(path_io_error("session append parent is not a directory", parent_path, error_number));
   }
-  append_fd = ::openat(parent_fd, session_name.c_str(), O_RDWR | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-  if (append_fd < 0)
+  append_fd.reset(::openat(parent_fd.get(), session_name.c_str(), O_RDWR | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC));
+  if (!append_fd)
   {
     auto const category = errno == ELOOP ? ava::core::ErrorCategory::PermissionDenied : ava::core::ErrorCategory::Io;
     auto error = ava::core::Error(category, errno == ELOOP ? "session append target must not be a symlink" : "failed to open session append target");
@@ -383,9 +380,9 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
     AppendIdentity identity;
     if (fstat(lease->fd_, &identity.lease_status) != 0)
       return std::unexpected(path_io_error("failed to inspect session lease " + std::string(timing), path, errno));
-    if (fstat(append_fd, &identity.append_status) != 0)
+    if (fstat(append_fd.get(), &identity.append_status) != 0)
       return std::unexpected(path_io_error("failed to inspect session append descriptor " + std::string(timing), path, errno));
-    if (fstatat(parent_fd, session_name.c_str(), &identity.named_status, AT_SYMLINK_NOFOLLOW) != 0)
+    if (fstatat(parent_fd.get(), session_name.c_str(), &identity.named_status, AT_SYMLINK_NOFOLLOW) != 0)
       return std::unexpected(path_io_error("failed to inspect session append name " + std::string(timing), path, errno));
     if (!same_file_identity(identity.lease_status, identity.append_status) || !same_file_identity(identity.lease_status, identity.named_status) ||
         identity.lease_status.st_nlink != 1 || identity.append_status.st_nlink != 1 || identity.named_status.st_nlink != 1)
@@ -398,7 +395,7 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
       return std::unexpected(std::move(error));
     }
     struct stat current_parent_status{};
-    if (fstat(parent_fd, &current_parent_status) != 0)
+    if (fstat(parent_fd.get(), &current_parent_status) != 0)
       return std::unexpected(path_io_error("failed to inspect anchored session directory " + std::string(timing), parent_path, errno));
     if (!same_directory_identity(anchored_parent_status, current_parent_status))
     {
@@ -406,12 +403,12 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
       error.with_context("timing", std::string(timing)).with_context("path", parent_path.string());
       return std::unexpected(std::move(error));
     }
-    int publication_fd = ::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (publication_fd < 0)
+    ava::core::UniqueFd publication_fd(::open(parent_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+    if (!publication_fd)
       return std::unexpected(path_io_error("failed to re-open session directory publication " + std::string(timing), parent_path, errno));
     struct stat publication_status{};
-    int publication_status_error = fstat(publication_fd, &publication_status) == 0 ? 0 : errno;
-    int publication_close_error = ::close(publication_fd) == 0 ? 0 : errno;
+    int const publication_status_error = fstat(publication_fd.get(), &publication_status) == 0 ? 0 : errno;
+    int const publication_close_error = publication_fd.close_checked();
     if (publication_status_error != 0)
       return std::unexpected(
           path_io_error("failed to inspect re-opened session directory publication " + std::string(timing), parent_path, publication_status_error));
@@ -436,7 +433,7 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
     ssize_t count = 0;
     do
     {
-      count = ::pread(append_fd, &last_byte, 1, initial_identity->append_status.st_size - 1);
+      count = ::pread(append_fd.get(), &last_byte, 1, initial_identity->append_status.st_size - 1);
     } while (count < 0 && errno == EINTR);
     if (count != 1)
       return fail_before_write(path_io_error("failed to read session framing before append", path, count < 0 ? errno : EIO));
@@ -451,7 +448,7 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
   auto before_mode = validate_identity("immediately before session mode update");
   if (!before_mode)
     return fail_before_write(std::move(before_mode.error()));
-  if (fchmod(append_fd, 0600) != 0)
+  if (fchmod(append_fd.get(), 0600) != 0)
     return fail_before_write(path_io_error("failed to preserve session file permissions", path, errno));
   if (before_append_identity_check_for_test_)
   {
@@ -476,9 +473,26 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
   {
     ssize_t count = 0;
     if (append_write_for_test_)
-      count = append_write_for_test_(append_fd, std::string_view(payload).substr(written));
+    {
+      try
+      {
+        count = append_write_for_test_(append_fd.get(), std::string_view(payload).substr(written));
+      }
+      catch (...)
+      {
+        // The hook may have written bytes before throwing. Its progress is
+        // unknown, so never classify this as a safe-to-retry unstarted append.
+        auto error = ava::core::Error(ava::core::ErrorCategory::Unknown, "session append write test hook failed");
+        auto const [append_close_error, parent_close_error] = close_both();
+        if (append_close_error != 0)
+          error.with_context("append_close_cause", std::strerror(append_close_error));
+        if (parent_close_error != 0)
+          error.with_context("parent_close_cause", std::strerror(parent_close_error));
+        return std::unexpected(with_append_commit_state(std::move(error), AppendCommitState::PartialOrUnknown, path));
+      }
+    }
     else
-      count = ::write(append_fd, payload.data() + written, payload.size() - written);
+      count = ::write(append_fd.get(), payload.data() + written, payload.size() - written);
     if (count < 0)
     {
       if (errno == EINTR)
@@ -508,7 +522,7 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
 
   // A complete write is not a durable commit until its data reaches storage.
   // Batch appends share this barrier before publishing each record's epoch.
-  if (int const sync_error = ava::core::fdatasync_with_restart(append_fd); sync_error != 0)
+  if (int const sync_error = ava::core::fdatasync_with_restart(append_fd.get()); sync_error != 0)
   {
     auto error = path_io_error("failed to sync the complete session entry through the append descriptor", path, sync_error);
     error.with_context("bytes_written", std::to_string(written)).with_context("payload_bytes", std::to_string(payload.size()));
@@ -534,8 +548,8 @@ ava::core::VoidResult SessionStore::append_impl(SessionLease const* lease, Sessi
   auto after_write = validate_identity("after the entry write");
   if (!after_write)
     return fail_after_write(std::move(after_write.error()));
-  int const append_close_error = close_fd(append_fd);
-  int const parent_close_error = close_fd(parent_fd);
+  int const append_close_error = append_fd.close_checked();
+  int const parent_close_error = parent_fd.close_checked();
   if (append_close_error != 0)
     return std::unexpected(with_append_commit_state(path_io_error("session entry was written but the append descriptor close failed", path, append_close_error),
                                                     AppendCommitState::CommittedToLeasedInode, path));

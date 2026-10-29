@@ -225,7 +225,7 @@ ava::core::Result<std::string> read_http_request_with_deadline(int fd, std::chro
       return std::unexpected(std::move(error));
     }
 
-    auto const count = ::read(fd, buffer.data(), buffer.size());
+    auto const count = ::read(fd, buffer.data(), std::min(buffer.size(), std::size_t{16384} - request.size()));
     if (count < 0)
     {
       if (errno == EINTR)
@@ -238,6 +238,8 @@ ava::core::Result<std::string> read_http_request_with_deadline(int fd, std::chro
       break;
     request.append(buffer.data(), static_cast<std::size_t>(count));
   }
+  if (request.find("\r\n\r\n") == std::string::npos)
+    return std::unexpected(connect_error(ava::core::ErrorCategory::InvalidArgument, "OAuth callback headers are incomplete or too large"));
   return request;
 }
 

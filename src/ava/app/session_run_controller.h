@@ -8,6 +8,7 @@
 #include "ava/core/result.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>

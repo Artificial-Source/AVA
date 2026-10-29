@@ -43,6 +43,13 @@ input {
   outline-offset: 2px;
 }
 
+/* Dialog overlay entrance (Dialogs.tsx `animate-[fade_120ms_ease-out]`). */
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

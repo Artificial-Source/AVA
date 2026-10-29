@@ -217,12 +217,9 @@ ava::core::Result<std::string> read_all_text_local_only(ToolContext const& conte
   {
     return std::unexpected(std::move(canceled.error()));
   }
-  auto workspace = file_tools_internal::secure_workspace_for(context, path);
-  if (!workspace)
-    return std::unexpected(std::move(workspace.error()));
-  if (*workspace != nullptr)
+  if (context.secure_workspace || context.require_descriptor_secure_workspace)
   {
-    auto opened = (*workspace)->open_regular_file(path);
+    auto opened = file_tools_internal::open_secure_read_file(context, path);
     if (!opened)
       return std::unexpected(std::move(opened.error()));
     if (opened->size() > kMaxSafeReadBytes)
@@ -396,6 +393,8 @@ ava::core::Result<TextOutput> read_head_text(ToolContext const& context, std::fi
     }
     if (count == 0)
       break;
+    if (count > kMaxSafeReadBytes - output.total_bytes)
+      return std::unexpected(file_too_large_error("read_file", path, kMaxSafeReadBytes));
     output.total_bytes += count;
     for (std::size_t index = 0; index < count; ++index)
     {

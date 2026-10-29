@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/core/AnchorSet.h"
 #include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
@@ -12,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <sys/types.h>
@@ -116,6 +118,8 @@ class DiagnosticsProvider
   AVA_DEBUG_PURE_VIRTUAL_PRINT_MEMBERS
 };
 
+// Responses use bounded Content-Length framing and strict JSON validation.
+// Malformed framing stops the child; server request IDs retain their JSON type.
 class SubprocessLspClient final : public DiagnosticsProvider
 {
  public:
@@ -144,9 +148,9 @@ class SubprocessLspClient final : public DiagnosticsProvider
   [[nodiscard]] ava::core::VoidResult initialize(CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::VoidResult send_notification(std::string_view method, std::string_view params_json, std::chrono::steady_clock::time_point deadline,
                                                         std::chrono::milliseconds timeout, std::string_view phase, CancelCallback cancel_requested = nullptr);
-  [[nodiscard]] ava::core::VoidResult respond_to_server_request(std::string_view message, std::int64_t id, std::chrono::steady_clock::time_point deadline,
-                                                                std::chrono::milliseconds timeout, std::string_view phase,
-                                                                CancelCallback cancel_requested = nullptr);
+  [[nodiscard]] ava::core::VoidResult respond_to_server_request(std::string_view message, std::string_view id_json,
+                                                                std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
+                                                                std::string_view phase, CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::VoidResult synchronize_document(std::filesystem::path const& path, std::chrono::steady_clock::time_point deadline,
                                                            CancelCallback cancel_requested = nullptr);
   [[nodiscard]] ava::core::VoidResult dispatch_notification(std::string_view message);

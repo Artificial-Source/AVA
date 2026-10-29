@@ -26,11 +26,25 @@ namespace ava::provider {
 // mid-session.
 class ProviderCatalog
 {
+  class ConstructionKey
+  {
+    friend class ProviderCatalog;
+    ConstructionKey() = default;
+
+   public:
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+
  public:
   ProviderCatalog(ProviderCatalog const&) = delete;
   ProviderCatalog& operator=(ProviderCatalog const&) = delete;
   ProviderCatalog(ProviderCatalog&&) = delete;
   ProviderCatalog& operator=(ProviderCatalog&&) = delete;
+
+  // The private key keeps construction inside the validated factories while
+  // allowing make_shared to own both the catalog and its control block.
+  ProviderCatalog(ConstructionKey, ProviderRegistry registry, std::vector<ava::config::ProviderProfile> profiles,
+                  std::vector<ava::config::UserProviderDefinition> user_definitions);
 
   // Compose built-in profiles/factories and load/validate providers.json.
   // Missing providers.json succeeds. Present unsafe/invalid file fails closed.
@@ -74,9 +88,6 @@ class ProviderCatalog
   AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
-  ProviderCatalog(ProviderRegistry registry, std::vector<ava::config::ProviderProfile> profiles,
-                  std::vector<ava::config::UserProviderDefinition> user_definitions);
-
   ProviderRegistry registry_;
   std::vector<ava::config::ProviderProfile> profiles_;
   std::vector<ava::config::UserProviderDefinition> user_definitions_;

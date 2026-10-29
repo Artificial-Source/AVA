@@ -232,6 +232,30 @@ void test_run_sequential_tool_schedule_short_circuits_on_executor_error()
   expect(execution_order == std::vector<std::size_t>{0, 1}, "sequential scheduler does not run slots after an executor error");
 }
 
+void test_run_sequential_tool_schedule_converts_executor_exception()
+{
+  std::vector schedule{schedule_slot(0, "call_throw", "read_file"), schedule_slot(1, "call_after", "read_file")};
+  for (bool const standard_exception : {true, false})
+  {
+    std::size_t calls = 0;
+    auto outcomes = ava::agent::run_sequential_tool_schedule(schedule, [&](auto const&) -> ava::core::Result<ava::agent::ToolDispatchResult> {
+      ++calls;
+      if (standard_exception)
+        throw std::runtime_error("sequential executor failed");
+      throw 7;
+    });
+    expect(!outcomes && outcomes.error().category() == ava::core::ErrorCategory::Tool && calls == 1,
+           "sequential scheduler contains executor exceptions and stops before later slots");
+    if (!outcomes)
+    {
+      auto const detail = outcomes.error().format();
+      expect(detail.find("call_throw") != std::string::npos && detail.find("read_file") != std::string::npos &&
+                 detail.find(standard_exception ? "sequential executor failed" : "unknown exception") != std::string::npos,
+             "sequential scheduler preserves call, tool and exception context");
+    }
+  }
+}
+
 void test_run_sequential_tool_schedule_rejects_null_executor()
 {
   std::vector schedule{schedule_slot(0, "call_0", "read_file")};
@@ -985,7 +1009,10 @@ void test_run_parallel_tool_schedule_dispatches_real_read_search_tools()
   auto schedule = ava::agent::build_sequential_tool_schedule(calls, ava::agent::builtin_tool_metadata());
   for (auto& slot : schedule) slot.parallel_readiness = ToolScheduleParallelReadiness::PreflightProvenNonInteractive;
 
-  ava::agent::ToolDispatcher const dispatcher(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::core::Mode::Build});
+  auto const dispatcher_result = ava::agent::ToolDispatcher::create_strict(ava::tools::ToolContext{.workspace_dir = workspace, .mode = ava::core::Mode::Build});
+  if (!ava::tests::require(dispatcher_result.has_value(), dispatcher_result ? "dispatcher fixture composes" : dispatcher_result.error().format()))
+    return;
+  auto const& dispatcher = *dispatcher_result;
   auto outcomes = ava::agent::run_parallel_tool_schedule(
       schedule,
       [&](ava::agent::ToolScheduleSlot const& slot, std::stop_token stop_token) -> ava::core::Result<ava::agent::ToolDispatchResult> {
@@ -1022,6 +1049,7 @@ void run_tool_scheduler_tests()
   test_run_sequential_tool_schedule_executes_in_order();
   test_run_sequential_tool_schedule_short_circuits_on_executor_error();
   test_run_sequential_tool_schedule_rejects_null_executor();
+  test_run_sequential_tool_schedule_converts_executor_exception();
   test_run_parallel_tool_schedule_splits_epochs_at_barriers();
   test_run_parallel_tool_schedule_returns_provider_order_after_reverse_completion();
   test_run_parallel_tool_schedule_respects_worker_cap();

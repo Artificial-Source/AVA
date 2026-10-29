@@ -8,6 +8,7 @@
 #include "ava/tools/mutation_queue.h"
 #include "ava/permissions/permission.h"
 
+#include <exception>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -21,20 +22,46 @@ constexpr std::size_t kMaxProviderToolCallIdBytes = 256;
 
 using namespace ava::agent::tool_dispatch;
 
+ToolDispatchResult execute_registered_tool(RegisteredTool const& tool, ava::tools::ToolContext const& context, ToolDispatchServices const& services,
+                                           ProviderToolCall const& call)
+{
+  try
+  {
+    return tool.executor(context, services, call);
+  }
+  catch (std::exception const& exception)
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::Tool, "tool executor threw an exception");
+    error.with_context("tool", call.name).with_context("call_id", call.id).with_context("cause", exception.what());
+    return tool_error_result(call, error);
+  }
+  catch (...)
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::Tool, "tool executor threw an exception");
+    error.with_context("tool", call.name).with_context("call_id", call.id).with_context("cause", "unknown exception");
+    return tool_error_result(call, error);
+  }
+}
+
 }  // namespace
 
 ToolDispatcher::ToolDispatcher(ava::tools::ToolContext context, ToolDispatchServices services, ToolVisibilityOptions visibility)
 {
+  // Context copies share the same queue to serialize mutations across dispatches.
   if (!context.mutation_queue)
     context.mutation_queue = std::make_shared<ava::tools::MutationQueue>();
   context_ = std::move(context);
   services_ = std::move(services);
-  registry_ = compose_tool_registry_or_empty(context_, visibility);
+  // Compatibility for ownership-protected callers; all other construction is fallible.
+  auto registry = compose_tool_registry(context_, visibility);
+  if (registry)
+    registry_ = std::move(*registry);
 }
 
 ToolDispatcher::ToolDispatcher(ava::tools::ToolContext context, ToolDispatchServices services, ToolRegistry registry)
     : context_(std::move(context)), services_(std::move(services)), registry_(std::move(registry))
 {
+  // Context copies share the same queue to serialize mutations across dispatches.
   if (!context_.mutation_queue)
     context_.mutation_queue = std::make_shared<ava::tools::MutationQueue>();
 }
@@ -133,7 +160,7 @@ ava::core::Result<ToolDispatchResult> ToolDispatcher::dispatch_with_context(ava:
     context.execution_started = std::make_shared<std::atomic_bool>(false);
   if (context.lsp_diagnostics_provider)
     context.lsp_diagnostics_provider->set_permission_request_ids(context.permission_request_ids);
-  auto result = tool->executor(context, services, normalized);
+  auto result = execute_registered_tool(*tool, context, services, normalized);
   if (context.permission_request_ids && !context.permission_request_ids->empty())
   {
     result.payload.permission_request_ids = *context.permission_request_ids;
@@ -167,9 +194,26 @@ std::span<ToolMetadata const> ToolDispatcher::tool_metadata()
   return builtin_tool_metadata();
 }
 
-std::vector<ToolMetadata> ToolDispatcher::tool_metadata(ava::tools::ToolContext const& context, ToolVisibilityOptions const& visibility)
+ava::core::Result<std::vector<RegisteredToolMetadata>> ToolDispatcher::tool_metadata(ava::tools::ToolContext const& context,
+                                                                                     ToolVisibilityOptions const& visibility)
 {
-  return compose_tool_registry_or_empty(context, visibility).metadata();
+  auto registry = compose_tool_registry(context, visibility);
+  if (!registry)
+    return std::unexpected(std::move(registry.error()));
+  std::vector<RegisteredToolMetadata> metadata;
+  metadata.reserve(registry->entries().size());
+  for (auto const& tool : registry->entries())
+    metadata.push_back(tool.metadata);
+  return metadata;
+}
+
+ava::core::Result<std::vector<std::string>> ToolDispatcher::compose_tool_schemas_json(ava::tools::ToolContext const& context,
+                                                                                      ToolVisibilityOptions const& visibility)
+{
+  auto registry = compose_tool_registry(context, visibility);
+  if (!registry)
+    return std::unexpected(std::move(registry.error()));
+  return registry->tool_schemas_json(context);
 }
 
 std::vector<std::string> ToolDispatcher::tool_schemas_json()
@@ -179,7 +223,9 @@ std::vector<std::string> ToolDispatcher::tool_schemas_json()
 
 std::vector<std::string> ToolDispatcher::tool_schemas_json(ava::tools::ToolContext const& context, ToolVisibilityOptions const& visibility)
 {
-  return compose_tool_registry_or_empty(context, visibility).tool_schemas_json(context);
+  // Compatibility for ownership-protected callers; all other schema composition is fallible.
+  auto schemas = compose_tool_schemas_json(context, visibility);
+  return schemas ? std::move(*schemas) : std::vector<std::string>{};
 }
 
 }  // namespace ava::agent

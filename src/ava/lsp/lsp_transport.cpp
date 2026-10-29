@@ -2,13 +2,15 @@
 #include "ava/lsp/lsp_client.h"
 #include "ava/lsp/lsp_client_internal.h"
 #include "ava/core/json.h"
+#include "ava/core/strict_json.h"
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,6 +27,7 @@ namespace {
 constexpr std::size_t kMaxLspHeaderBytes = 64 * 1024;
 constexpr std::size_t kMaxLspMessageBytes = 4 * 1024 * 1024;
 constexpr std::size_t kMaxConfigurationItems = 64;
+constexpr std::size_t kMaxLspJsonDepth = 128;
 
 std::size_t remaining_ms(std::chrono::steady_clock::time_point deadline)
 {
@@ -37,34 +40,39 @@ std::size_t remaining_ms(std::chrono::steady_clock::time_point deadline)
 ava::core::Result<std::size_t> parse_content_length(std::string_view header, ServerConfig const& config)
 {
   constexpr std::string_view key = "Content-Length:";
-  auto const position = header.find(key);
-  if (position == std::string_view::npos)
+  std::optional<std::size_t> length;
+  while (!header.empty())
   {
-    return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP response is missing Content-Length", config));
-  }
-  std::size_t index = position + key.size();
-  while (index < header.size() && (header[index] == ' ' || header[index] == '\t')) ++index;
-  std::size_t end = index;
-  while (end < header.size() && std::isdigit(static_cast<unsigned char>(header[end])) != 0) ++end;
-  if (end == index)
-  {
-    return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP response has invalid Content-Length", config));
-  }
-  try
-  {
-    auto const parsed = static_cast<std::size_t>(std::stoull(std::string(header.substr(index, end - index))));
-    if (parsed > kMaxLspMessageBytes)
+    auto const line_end = header.find("\r\n");
+    auto const line = header.substr(0, line_end);
+    if (line.starts_with(key))
     {
-      auto error = lsp_error(ava::core::ErrorCategory::Tool, "LSP response Content-Length exceeds message cap", config);
-      error.with_context("max_bytes", std::to_string(kMaxLspMessageBytes));
-      return std::unexpected(std::move(error));
+      if (length)
+        return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP response has duplicate Content-Length", config));
+      auto value = line.substr(key.size());
+      while (!value.empty() && (value.front() == ' ' || value.front() == '\t'))
+        value.remove_prefix(1);
+      while (!value.empty() && (value.back() == ' ' || value.back() == '\t'))
+        value.remove_suffix(1);
+      std::size_t parsed = 0;
+      auto const converted = std::from_chars(value.data(), value.data() + value.size(), parsed);
+      if (converted.ec != std::errc{} || converted.ptr != value.data() + value.size())
+        return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP response has invalid Content-Length", config));
+      if (parsed > kMaxLspMessageBytes)
+      {
+        auto error = lsp_error(ava::core::ErrorCategory::Tool, "LSP response Content-Length exceeds message cap", config);
+        error.with_context("max_bytes", std::to_string(kMaxLspMessageBytes));
+        return std::unexpected(std::move(error));
+      }
+      length = parsed;
     }
-    return parsed;
+    if (line_end == std::string_view::npos)
+      break;
+    header.remove_prefix(line_end + 2);
   }
-  catch (...)
-  {
-    return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP response Content-Length is too large", config));
-  }
+  if (!length)
+    return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP response is missing Content-Length", config));
+  return *length;
 }
 
 }  // namespace
@@ -77,14 +85,16 @@ ava::core::VoidResult SubprocessLspClient::send_notification(std::string_view me
   return write_message(body, deadline, timeout, phase, method, cancel_requested);
 }
 
-ava::core::VoidResult SubprocessLspClient::respond_to_server_request(std::string_view message, std::int64_t id, std::chrono::steady_clock::time_point deadline,
-                                                                     std::chrono::milliseconds timeout, std::string_view phase, CancelCallback cancel_requested)
+ava::core::VoidResult SubprocessLspClient::respond_to_server_request(std::string_view message, std::string_view id_json,
+                                                                     std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
+                                                                     std::string_view phase, CancelCallback cancel_requested)
 {
   auto const method = ava::core::json::string_field(message, "method");
   if (!method)
     return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP server request is malformed", config_));
 
-  std::string body;
+  std::string body = "{\"jsonrpc\":\"2.0\",\"id\":";
+  body += id_json;
   if (*method == "workspace/configuration")
   {
     auto const params = ava::core::json::object_field(message, "params");
@@ -99,11 +109,11 @@ ava::core::VoidResult SubprocessLspClient::respond_to_server_request(std::string
       result += "null";
     }
     result += ']';
-    body = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) + ",\"result\":" + result + "}";
+    body += ",\"result\":" + result + "}";
   }
   else
   {
-    body = "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) + ",\"error\":{\"code\":-32601,\"message\":\"unsupported LSP server request\"}}";
+    body += ",\"error\":{\"code\":-32601,\"message\":\"unsupported LSP server request\"}}";
   }
   return write_message(body, deadline, timeout, phase, "server/request", cancel_requested);
 }
@@ -112,6 +122,8 @@ ava::core::Result<std::string> SubprocessLspClient::request_response(std::string
                                                                      std::chrono::steady_clock::time_point deadline, std::chrono::milliseconds timeout,
                                                                      std::string_view phase, CancelCallback cancel_requested)
 {
+  if (next_id_ == std::numeric_limits<int>::max())
+    return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP request id space exhausted", config_));
   int const id = next_id_++;
   std::string const body =
       "{\"jsonrpc\":\"2.0\",\"id\":" + std::to_string(id) + ",\"method\":" + json_string(method) + ",\"params\":" + std::string(params_json) + "}";
@@ -146,9 +158,13 @@ ava::core::Result<std::string> SubprocessLspClient::request_response(std::string
     if (auto const incoming_method = ava::core::json::string_field(*message, "method"))
     {
       static_cast<void>(incoming_method);
-      if (response_id)
+      if (ava::core::json::field_value_start(*message, "id"))
       {
-        if (auto response = respond_to_server_request(*message, *response_id, deadline, timeout, phase, cancel_requested); !response)
+        auto const string_id = ava::core::json::string_field(*message, "id");
+        if (!response_id && !string_id)
+          return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP server request id is malformed", config_));
+        auto const id_json = string_id ? json_string(*string_id) : std::to_string(*response_id);
+        if (auto response = respond_to_server_request(*message, id_json, deadline, timeout, phase, cancel_requested); !response)
           return std::unexpected(std::move(response.error()));
       }
       else if (auto dispatched = dispatch_notification(*message); !dispatched)
@@ -280,6 +296,13 @@ ava::core::Result<std::string> SubprocessLspClient::read_message(std::chrono::st
     auto const header_end = read_buffer_.find("\r\n\r\n");
     if (header_end != std::string::npos)
     {
+      if (header_end > kMaxLspHeaderBytes)
+      {
+        auto error = lsp_error(ava::core::ErrorCategory::Tool, "LSP response header exceeds size cap", config_);
+        error.with_context("max_bytes", std::to_string(kMaxLspHeaderBytes));
+        terminate_child();
+        return std::unexpected(std::move(error));
+      }
       auto length = parse_content_length(std::string_view(read_buffer_).substr(0, header_end), config_);
       if (!length)
       {
@@ -288,6 +311,7 @@ ava::core::Result<std::string> SubprocessLspClient::read_message(std::chrono::st
           terminate_child();
           return std::unexpected(canceled_error("LSP request canceled", config_));
         }
+        terminate_child();
         return std::unexpected(std::move(length.error()));
       }
       auto const body_start = header_end + 4;
@@ -295,6 +319,12 @@ ava::core::Result<std::string> SubprocessLspClient::read_message(std::chrono::st
       {
         auto body = read_buffer_.substr(body_start, *length);
         read_buffer_.erase(0, body_start + *length);
+        if (ava::core::validate_strict_json(body, kMaxLspJsonDepth) != ava::core::StrictJsonStatus::Valid ||
+            !ava::core::json::is_valid_object_with_max_depth(body, kMaxLspJsonDepth))
+        {
+          terminate_child();
+          return std::unexpected(lsp_error(ava::core::ErrorCategory::Tool, "LSP response is not a valid bounded JSON object", config_));
+        }
         return body;
       }
     }
@@ -307,6 +337,7 @@ ava::core::Result<std::string> SubprocessLspClient::read_message(std::chrono::st
       }
       auto error = lsp_error(ava::core::ErrorCategory::Tool, "LSP response header exceeds size cap", config_);
       error.with_context("max_bytes", std::to_string(kMaxLspHeaderBytes));
+      terminate_child();
       return std::unexpected(std::move(error));
     }
     if (read_buffer_.size() > kMaxLspMessageBytes + kMaxLspHeaderBytes)
@@ -318,6 +349,7 @@ ava::core::Result<std::string> SubprocessLspClient::read_message(std::chrono::st
       }
       auto error = lsp_error(ava::core::ErrorCategory::Tool, "LSP response exceeds message cap", config_);
       error.with_context("max_bytes", std::to_string(kMaxLspMessageBytes));
+      terminate_child();
       return std::unexpected(std::move(error));
     }
 

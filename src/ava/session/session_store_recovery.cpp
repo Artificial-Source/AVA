@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -52,6 +53,8 @@ using ava::core::normalized_absolute_path;
 
 bool unchanged_file_snapshot(struct stat const& current, struct stat const& initial)
 {
+  if (current.st_nlink != 1 || initial.st_nlink != 1)
+    return false;
   return same_file_identity(current, initial) && current.st_size == initial.st_size && current.st_mtim.tv_sec == initial.st_mtim.tv_sec &&
          current.st_mtim.tv_nsec == initial.st_mtim.tv_nsec && current.st_ctim.tv_sec == initial.st_ctim.tv_sec &&
          current.st_ctim.tv_nsec == initial.st_ctim.tv_nsec;
@@ -347,6 +350,12 @@ ava::core::Result<std::optional<std::filesystem::path>> SessionStore::recover_to
     return std::unexpected(std::move(canceled.error()));
 
   auto const path = session_path();
+  if (normalized_absolute_path(path) != lease.canonical_path_)
+  {
+    auto error = ava::core::Error(ava::core::ErrorCategory::Session, "torn tail recovery lease does not match the store's exact path");
+    error.with_context("path", path.string()).with_context("lease_path", lease.canonical_path_.string());
+    return std::unexpected(std::move(error));
+  }
   auto const parent_path = path.parent_path();
   auto const session_name = path.filename().string();
   auto& append_mutex = append_mutex_for_path(path);
@@ -392,12 +401,13 @@ ava::core::Result<std::optional<std::filesystem::path>> SessionStore::recover_to
     close_both_best_effort();
     return std::unexpected(std::move(error));
   }
-  if (!same_file_identity(lease_status, repair_status))
+  if (!same_file_identity(lease_status, repair_status) || lease_status.st_nlink != 1 || repair_status.st_nlink != 1)
   {
     close_both_best_effort();
     auto error = ava::core::Error(ava::core::ErrorCategory::Session,
                                   "session lease does not match the store because its descriptor does not identify the recovery target");
     error.with_context("path", path.string()).with_context("lease_path", lease.canonical_path_.string());
+    error.with_context("lease_links", std::to_string(lease_status.st_nlink)).with_context("recovery_links", std::to_string(repair_status.st_nlink));
     return std::unexpected(std::move(error));
   }
   if (repair_status.st_size < 0)
@@ -799,6 +809,8 @@ ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> SessionStore::re
     removed_bytes += serialized->size() + 1;
   }
   auto const removed_entries = entries.size() - *suffix_start;
+  // Direct store recovery must invalidate targets that still cache this suffix.
+  ephemeral_state_->append_epoch.fetch_add(1, std::memory_order_acq_rel);
   ephemeral_state_->entries.erase(ephemeral_state_->entries.begin() + static_cast<std::ptrdiff_t>(*suffix_start), ephemeral_state_->entries.end());
   return std::optional<AssistantOutputSuffixRecovery>(
       AssistantOutputSuffixRecovery{.quarantine_path = std::nullopt, .removed_entry_count = removed_entries, .removed_byte_count = removed_bytes});
@@ -881,11 +893,12 @@ ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> SessionStore::re
     close_both_best_effort();
     return std::unexpected(std::move(error));
   }
-  if (!same_file_identity(lease_status, repair_status))
+  if (!same_file_identity(lease_status, repair_status) || lease_status.st_nlink != 1 || repair_status.st_nlink != 1)
   {
     close_both_best_effort();
     auto error = ava::core::Error(ava::core::ErrorCategory::Session, "session lease does not identify the named assistant-output recovery target");
     error.with_context("path", path.string()).with_context("lease_path", lease.canonical_path_.string());
+    error.with_context("lease_links", std::to_string(lease_status.st_nlink)).with_context("recovery_links", std::to_string(repair_status.st_nlink));
     return std::unexpected(std::move(error));
   }
   if (repair_status.st_size < 0 || static_cast<std::uintmax_t>(repair_status.st_size) > limits.max_file_bytes)
@@ -1107,6 +1120,9 @@ ava::core::Result<std::optional<AssistantOutputSuffixRecovery>> SessionStore::re
     close_both_best_effort();
     return std::unexpected(std::move(error));
   }
+  // Invalidate before truncation, including failures reported after the inode
+  // changes. The per-path lock keeps append targets from observing half a repair.
+  detail::append_epoch_for_path(path).fetch_add(1, std::memory_order_acq_rel);
   if (ftruncate(repair_fd.get(), suffix_start_offset) != 0)
   {
     auto error = path_io_error("failed to truncate quarantined incomplete assistant-output suffix", path, errno);

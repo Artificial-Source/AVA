@@ -17,4 +17,10 @@ For reproducible defects or documentation problems, open a public issue using th
 
 Community support is best-effort. Do not include credentials, tokens, private session data, proprietary source, or exploit details in public reports. Route suspected vulnerabilities according to [`SECURITY.md`](SECURITY.md).
 
+The runtime version is `0.32.0`. This is not a stable release. No release is
+scheduled yet, and AVA has no supported released version. Owners will name
+supported lines when a release is published. The
+[publication policy](docs/operations/publication.md#8-supported-versions)
+defines corrections, withdrawal, and support announcements.
+
 For contributions and development setup, see [`CONTRIBUTING.md`](CONTRIBUTING.md).

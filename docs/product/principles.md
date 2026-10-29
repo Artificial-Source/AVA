@@ -26,15 +26,18 @@ Tests are deterministic and credential-free by default. Focused unit and whole-p
 
 ## First official release scope
 
-The first official release is intentionally narrow:
+The proposed first official release scope is narrow. No release is scheduled:
 
 - native C++23 `ava` terminal executable;
-- Linux x86-64 only, unless another architecture gains native exact-candidate evidence before the freeze closes;
+- Linux x86-64 only, unless another architecture gains native exact-candidate evidence before a future release;
 - TUI, print, proprietary JSONL RPC v1, and the documented ACP profile;
 - supported provider adapters, safe built-in tools, append-only sessions, bounded local plugins, local stdio MCP, and installed/configured LSP integration already described in current docs;
 - one exact retained archive/checksum pair whose bytes passed the complete candidate gate.
 
-Runtime version `1.0.0` is a candidate version in this repository, not proof of a published release. Current cut status and blockers live in the [release-readiness ledger](release-readiness.md).
+The runtime version is `0.32.0`. This is not a stable release. The terminal
+frontend is still in active development. A stable 1.0 release will follow once
+it is complete. No release is scheduled yet. The
+[release plan](release-readiness.md) records the prerequisites and prior evidence.
 
 ## Supported-platform truth
 
