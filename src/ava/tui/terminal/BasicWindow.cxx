@@ -808,6 +808,7 @@ struct BasicWindow::Handle
     return ::curs_set(visibility);
   }
 
+  [[gnu::format(printf, 2, 0)]]
   int printw(char const* fmt, va_list args)
   {
     // https://invisible-island.net/ncurses/man/curs_printw.3x.html
@@ -816,6 +817,7 @@ struct BasicWindow::Handle
     return ::vw_printw(handle_, fmt, args);
   }
 
+  [[gnu::format(printf, 3, 0)]]
   int printw(Position pos, char const* fmt, va_list args)
   {
     // https://invisible-island.net/ncurses/man/curs_printw.3x.html

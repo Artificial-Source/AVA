@@ -359,8 +359,11 @@ class BasicWindow
 
   // https://invisible-island.net/ncurses/man/curs_printw.3x.html
 
+  [[gnu::format(printf, 2, 3)]]
   void printw(char const* fmt, ...);                                    // wprintw
+  [[gnu::format(printf, 2, 0)]]
   void vprintw(char const* fmt, va_list varglist);                      // vw_printw
+  [[gnu::format(printf, 3, 4)]]
   void printw(Position pos, char const* fmt, ...);                      // mvwprintw
 
   // https://invisible-island.net/ncurses/man/curs_pad.3x.html
