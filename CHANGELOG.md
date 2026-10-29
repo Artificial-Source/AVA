@@ -189,9 +189,8 @@ it is complete. No release is scheduled yet.
 - Desktop transcripts follow new output unless the reader has scrolled up.
   Tool summaries preserve Unicode and offer expansion only when truncated.
   Streaming avoids repeated partial-record copies and coalesces snapshot delivery.
-- TSan CI installs its debug-build prerequisites. Third-party notices include
-  the adopted color-difference implementation's attribution, and the desktop
-  setup link points to the runnable prototype.
+- Third-party notices include the adopted color-difference implementation's
+  attribution, and the desktop setup link points to the runnable prototype.
 - Live model and coding smoke launchers fail early on setup errors and terminate
   their process groups on cancellation, including surviving descendants, before
   cleaning up private evidence.
