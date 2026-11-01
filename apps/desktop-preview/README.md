@@ -1094,10 +1094,14 @@ They are **HISTORY, not revision 5 acceptance evidence**; no artifacts are overw
 
 The highlighter remains a local on-demand chunk with a cached JavaScript regex
 engine, one TypeScript grammar, and one first-party neutral theme. No CDN, Wasm,
-or theme bundle is used. All 18 direct dependencies and their lock remain
-unchanged, including **Shiki 4.4.3** and **Vitest 5.0.2**. The existing installation
+or theme bundle is used. At that revision, all 18 direct dependencies and their
+lock were unchanged, including **Shiki 4.4.3** and **Vitest 5.0.2**. The installation
 was reused; the npm **seven-day release-age guard** and sandbox settings were not
 modified.
+
+The security dependency refresh now uses **Vite 7.3.7**, **Vitest 5.0.3**
+(including **@vitest/mocker 5.0.3**), and transitive **undici 7.30.1**. Shiki
+remains **4.4.3**, and the seven-day release-age guard is unchanged.
 
 Live child inspection is **not RPC-ready**. It needs a future backend/protocol
 decision; these renderer fixtures do not expose internal inspector frames, read

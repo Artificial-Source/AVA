@@ -17,9 +17,9 @@ EXPECTED = {
         "integrity": "sha512-jwYUdOQR7tc+Zfch53VL4JJyUNK/46q03uUTYb+PjECsmnNl94XFXOfYLJ8RBpMNidXd1rpOAVgb0vqD98xImA==",
     },
     "zod": {
-        "version": "4.4.3",
+        "version": "4.6.6",
         "license": "MIT",
-        "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+        "integrity": "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==",
     },
     "acpx": {
         "version": "0.12.0",
@@ -77,7 +77,7 @@ def main():
 
     assert sdk_package["private"] is True and sdk_package["type"] == "module"
     assert "scripts" not in sdk_package
-    sdk_dependencies = {"@agentclientprotocol/sdk": "1.2.1", "zod": "4.4.3"}
+    sdk_dependencies = {"@agentclientprotocol/sdk": "1.2.1", "zod": "4.6.6"}
     assert sdk_package["dependencies"] == sdk_dependencies
     validate_lock(sdk_lock, sdk_dependencies)
 
@@ -98,7 +98,7 @@ def main():
     assert locked_acpx["license"] == EXPECTED["acpx"]["license"]
     assert locked_acpx["integrity"] == EXPECTED["acpx"]["integrity"]
     assert package_entry(acpx_lock, "@agentclientprotocol/sdk")["version"] == "1.2.1"
-    assert package_entry(acpx_lock, "zod")["version"] == "4.4.3"
+    assert package_entry(acpx_lock, "zod")["version"] == "4.6.7"
 
     support = load_json(source / "docs/acp-support.json")
     interop = support["interoperability"]

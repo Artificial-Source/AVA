@@ -134,7 +134,7 @@ CodeCompanion's ACP documentation says terminal operations are not implemented a
 The Node packages are test-only, installed in separate test trees, absent from production artifacts, and unnecessary for normal AVA use. Installation is a reviewed setup step; test execution performs no package download. Use committed lockfiles, never `npx`, and disable lifecycle scripts:
 
 ```sh
-# Official SDK 1.2.1 plus its exact zod 4.4.3 peer dependency.
+# Official SDK 1.2.1 plus its exact zod 4.6.6 peer dependency.
 cd tests/acp-sdk
 npm ci --ignore-scripts --no-audit --no-fund
 cd ../..
