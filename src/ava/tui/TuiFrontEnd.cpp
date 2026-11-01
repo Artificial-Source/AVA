@@ -135,7 +135,11 @@ int TuiFrontEnd::run()
 {
   DoutEntering(dc::notice, "TuiFrontEnd::run()");
 
+  // Initialize the thread_id.
+  tui_thread_id_ = std::this_thread::get_id();
+
   RuntimeBeforeShutdownGuard before_shutdown(*this);
+
   if (!terminal_is_tty())
   {
     std::cerr << "interactive TUI requires stdin and stdout to be terminals\n";

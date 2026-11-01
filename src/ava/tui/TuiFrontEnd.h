@@ -4,6 +4,7 @@
 #include "keybindings.h"                // TuiKeyBindings
 #include "runtime.h"                    // TuiRuntimeOptions, TuiCatalogDelivery, TuiLocalDisplaySettingsResult
 #include "ava/frontend/FrontEnd.h"
+#include "utils/threading/aithreadid.h"
 
 #include <filesystem>
 
@@ -16,6 +17,12 @@ class TuiFrontEnd : public frontend::FrontEnd
  protected:
   TuiKeyBindings key_bindings_;
   TuiRuntimeOptions options_;
+#ifdef CWDEBUG
+ private:
+  std::thread::id tui_thread_id_;       // For use with is_single_threaded.
+#endif
+
+ protected:
   // Construct startup presentation state for one derived application frontend.
   TuiFrontEnd(TuiRuntimeOptions&& options) : key_bindings_(default_key_bindings()), options_(std::move(options)) { }
 
@@ -90,6 +97,16 @@ class TuiFrontEnd : public frontend::FrontEnd
   std::string load_key_bindings();
   // Run the internal composer loop; only run() exposes this operation to callers.
   [[nodiscard]] int run_interactive_composer();
+
+#ifdef CWDEBUG
+ private:
+  void assert_single_threaded() const
+  {
+    // This function is called from a function that should ONLY be called by the TUI thread.
+    // If this fails here then some other thread is calling code that it shouldn't.
+    ASSERT(aithreadid::is_single_threaded(const_cast<std::thread::id&>(tui_thread_id_)));
+  }
+#endif
 
  public:
   // Return a value snapshot of current application-owned display settings.
