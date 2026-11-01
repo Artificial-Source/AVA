@@ -37,9 +37,10 @@ void apply_invocation_signal_policy(InvocationMode mode)
   {
     case InvocationSignalPolicy::SharedBits:
       signals.activate_handlers({SIGHUP, SIGINT, SIGTERM});
+      signals.default_handlers({SIGTSTP});
       return;
     case InvocationSignalPolicy::Default:
-      signals.default_handlers({SIGHUP, SIGINT, SIGTERM});
+      signals.default_handlers({SIGHUP, SIGINT, SIGTERM, SIGTSTP});
       return;
     case InvocationSignalPolicy::Deferred:
       return;

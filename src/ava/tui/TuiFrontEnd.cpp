@@ -144,6 +144,9 @@ int TuiFrontEnd::run()
 
   core::Application& application = core::Application::instance();
   core::Signals& signals_manager = application.signals_manager();
+  // Restore the default disposition so ncurses can install its SIGTSTP handler.
+  // This also unblocks SIGTSTP on this thread; other threads keep it blocked.
+  signals_manager.default_handlers({SIGTSTP});
   application.initialize_terminal_context();
   terminal::Context& terminal_context = application.terminal_context();
 

@@ -28,9 +28,9 @@ class Signals final
   static_assert(std::atomic<mask_type>::is_always_lock_free, "signal handlers require a lock-free pending-bit atomic");
   static constexpr mask_type to_mask(int signum) { return mask_type{1} << (signum - 1); }
 
-  static constexpr std::initializer_list<int> used_signums = {SIGHUP, SIGINT, SIGPIPE, SIGTERM};
+  static constexpr std::initializer_list<int> used_signums = {SIGHUP, SIGINT, SIGPIPE, SIGTERM, SIGTSTP};
 #ifdef CWDEBUG
-  static constexpr std::initializer_list<int> used_signums_gdb = {SIGHUP, SIGPIPE, SIGTERM};
+  static constexpr std::initializer_list<int> used_signums_gdb = {SIGHUP, SIGPIPE, SIGTERM, SIGTSTP};
 #endif
 
  private:
