@@ -600,7 +600,9 @@ class OwnedProcessTests(unittest.TestCase):
             child = (
                 "import os,pathlib,signal,sys,time; "
                 "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
-                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)"
+                # Publish the PID atomically: readers poll for existence, so the marker must never be visible empty.
+                "marker=pathlib.Path(sys.argv[1]); staged=marker.with_name(marker.name+'.tmp'); "
+                "staged.write_text(str(os.getpid())); os.replace(staged,marker); time.sleep(60)"
             )
             leader = (
                 "import pathlib,subprocess,sys,time; "
