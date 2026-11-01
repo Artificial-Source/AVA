@@ -37,6 +37,9 @@ struct MemoryTransportState
   bool eof = false;
   bool canceled = false;
   bool read_waiting = false;
+  // read_record entries, counted under mutex. With no undelivered input, a
+  // count above the records already consumed means the reader is parked again.
+  std::size_t read_calls = 0;
   // Reader-side acknowledgement, distinct from cancel() having been requested.
   // Observe under mutex/cv; set immediately before read_record returns Canceled.
   bool read_canceled = false;

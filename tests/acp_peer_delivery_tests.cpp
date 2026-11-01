@@ -527,20 +527,30 @@ void test_acp_peer_write_failure_wakes_reader_and_shutdown_race()
   using namespace ava::app::acp;
   auto state = std::make_shared<MemoryTransportState>();
   state->fail_writes = true;
+  state->block_writes = true;
   JsonRpcPeer peer(std::make_unique<MemoryTransport>(state), [](Request const&, std::stop_token) -> RequestResult { return std::string("{}"); });
   ava::core::VoidResult run_result;
   ava::core::JoinThread thread = ava::core::JoinThread::create("thread", [&] { run_result = peer.run(); });
   wait_reader(state);
   feed(state, R"({"jsonrpc":"2.0","id":1,"method":"x","params":{}})");
+  // Release the failing response write only after the reader consumed the request and parked in
+  // read_record again. A reader still returning to its loop check can observe the peer abort
+  // there and exit without needing the transport wake this case verifies.
+  bool reader_parked = false;
   bool reader_woken = false;
   {
     std::unique_lock lock(state->mutex);
+    reader_parked = state->cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return state->read_calls >= 2; });
+    state->block_writes = false;
+    state->cv.notify_all();
     reader_woken = state->cv.wait_until(lock, ava::tests::now_plus_seconds(2), [&] { return state->read_canceled; });
   }
   peer.shutdown();
   thread.join();
   ava::tests::expect_all("ACP write failure wakes the reader with transport cancellation and propagates the failure",
-                         {{"reader observes cancellation before rescue", reader_woken}, {"write failure propagated", !run_result}});
+                         {{"reader parked before the write failed", reader_parked},
+                          {"reader observes cancellation before rescue", reader_woken},
+                          {"write failure propagated", !run_result}});
 
   auto blocked_state = std::make_shared<MemoryTransportState>();
   std::promise<void> entered;

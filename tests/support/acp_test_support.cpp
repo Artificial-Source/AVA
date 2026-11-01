@@ -41,6 +41,7 @@ ava::app::acp::ReadRecord MemoryTransport::read_record()
 {
   std::unique_lock lock(state_->mutex);
   state_->read_waiting = true;
+  ++state_->read_calls;
   state_->cv.notify_all();
   state_->cv.wait(lock, [&] { return state_->canceled || state_->eof || !state_->input.empty(); });
   if (state_->canceled)
