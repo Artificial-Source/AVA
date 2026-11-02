@@ -54,6 +54,9 @@ Attributes convert_to_Attributes(attr_t attributes)
   return result;
 }
 
+// Build a native wide character from complex_char, terminating full-capacity clusters for setcchar.
+// This conversion uses caller-owned data rather than ncurses screen state, so it needs no TUI-thread affinity.
+// The process locale must remain stable while setcchar queries character widths.
 cchar_t convert_to_cchar(ComplexChar const& complex_char)
 {
   cchar_t result;
@@ -73,6 +76,8 @@ cchar_t convert_to_cchar(ComplexChar const& complex_char)
   return result;
 }
 
+// Decode a valid native cchar into a public value without retaining native storage.
+// getcchar reads only the supplied character and writes local output buffers; no TUI-thread affinity is required.
 ComplexChar convert_to_ComplexChar(cchar_t const& cchar)
 {
   using GraphemeCluster = ava::tui::terminal::GraphemeCluster;

@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "ava/app/signal_policy.h"
+#include "ava/tui/terminal/MouseEvent.h"
 #include "ava/core/Application.h"
 #include "ava/core/thread.h"
 
@@ -39,6 +40,35 @@ class TestApplication final : public ava::core::Application
  public:
   TestApplication() : ava::core::Application(CWDEBUG_ONLY(false)) { }
   [[nodiscard]] std::string_view application_name() const noexcept override { return "test application"; }
+};
+
+// Own initialized streams for newterm scenarios without requiring a live terminal.
+class TerminalStreams
+{
+ public:
+  TerminalStreams() : input_(std::tmpfile()), output_(std::tmpfile())
+  {
+    check(input_ != nullptr && output_ != nullptr, "terminal lifecycle fixture opens temporary input and output streams");
+  }
+
+  TerminalStreams(TerminalStreams const&) = delete;
+  TerminalStreams& operator=(TerminalStreams const&) = delete;
+
+  ~TerminalStreams()
+  {
+    if (input_ != nullptr)
+      static_cast<void>(std::fclose(input_));
+    if (output_ != nullptr)
+      static_cast<void>(std::fclose(output_));
+  }
+
+  [[nodiscard]] bool valid() const { return input_ != nullptr && output_ != nullptr; }
+  FILE* input() const { return input_; }
+  FILE* output() const { return output_; }
+
+ private:
+  FILE* input_;
+  FILE* output_;
 };
 
 // Provide a recognizable unrelated disposition without performing non-async-signal-safe work.
@@ -260,6 +290,54 @@ void scenario_joined_worker()
   check(!worker.joinable(), "the production worker is joined before Application destruction");
 }
 
+#ifdef CWDEBUG
+enum class WrongThreadTerminalOperation
+{
+  application_accessor,
+  retained_window,
+  retained_context,
+  static_context,
+  mouse_event,
+};
+
+// Initialize terminal state on main, then exercise one terminal API from a worker.
+void scenario_wrong_thread_terminal_operation(WrongThreadTerminalOperation operation)
+{
+  static_cast<void>(::setenv("TERM", "xterm-256color", 1));
+  TerminalStreams streams;
+  if (!streams.valid())
+    return;
+
+  TestApplication application;
+  application.initialize_terminal_context(streams.output(), streams.input());
+  auto* retained_context = &application.terminal_context();
+  auto* retained_window = &retained_context->stdscr();
+  auto worker = ava::core::JoinThread::create("wrong_thread_terminal_operation", [&] {
+    switch (operation)
+    {
+      case WrongThreadTerminalOperation::application_accessor:
+        static_cast<void>(application.terminal_context());
+        break;
+      case WrongThreadTerminalOperation::retained_window:
+        static_cast<void>(retained_window->getyx());
+        break;
+      case WrongThreadTerminalOperation::retained_context:
+        static_cast<void>(retained_context->rows());
+        break;
+      case WrongThreadTerminalOperation::static_context:
+        static_cast<void>(ava::tui::terminal::Context::have_direct_color());
+        break;
+      case WrongThreadTerminalOperation::mouse_event:
+        static_cast<void>(ava::tui::terminal::get_mouse_event());
+        break;
+    }
+  });
+
+  // If the expected assertion did not terminate this helper, join before Application destruction on main.
+  worker.join();
+}
+#endif
+
 #if CW_DEBUG && defined(__linux__)
 // Verify destroying Application while a synchronized worker remains live triggers the single-thread invariant.
 void scenario_live_worker_destruction()
@@ -286,7 +364,8 @@ void scenario_live_worker_destruction()
 bool is_expected_death_scenario(std::string_view scenario)
 {
   return scenario == "instance-before-initialize" || scenario == "instance-after-destruction" || scenario == "duplicate-live-instance" ||
-         scenario == "live-worker-destruction";
+         scenario == "live-worker-destruction" || scenario == "terminal-accessor-wrong-thread" || scenario == "retained-window-wrong-thread" ||
+         scenario == "retained-context-wrong-thread" || scenario == "static-context-wrong-thread" || scenario == "mouse-event-wrong-thread";
 }
 
 // Dispatch exactly one lifecycle scenario so every Application starts in a fresh process.
@@ -308,6 +387,18 @@ bool run_scenario(std::string_view scenario)
     scenario_signal_teardown();
   else if (scenario == "joined-worker")
     scenario_joined_worker();
+#ifdef CWDEBUG
+  else if (scenario == "terminal-accessor-wrong-thread")
+    scenario_wrong_thread_terminal_operation(WrongThreadTerminalOperation::application_accessor);
+  else if (scenario == "retained-window-wrong-thread")
+    scenario_wrong_thread_terminal_operation(WrongThreadTerminalOperation::retained_window);
+  else if (scenario == "retained-context-wrong-thread")
+    scenario_wrong_thread_terminal_operation(WrongThreadTerminalOperation::retained_context);
+  else if (scenario == "static-context-wrong-thread")
+    scenario_wrong_thread_terminal_operation(WrongThreadTerminalOperation::static_context);
+  else if (scenario == "mouse-event-wrong-thread")
+    scenario_wrong_thread_terminal_operation(WrongThreadTerminalOperation::mouse_event);
+#endif
 #if CW_DEBUG && defined(__linux__)
   else if (scenario == "live-worker-destruction")
     scenario_live_worker_destruction();

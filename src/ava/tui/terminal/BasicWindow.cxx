@@ -14,10 +14,6 @@
 
 namespace ava::tui::terminal {
 
-#ifdef CWDEBUG
-bool is_tui_thread();
-#endif
-
 struct BasicWindow::Handle
 {
  private:
@@ -89,18 +85,28 @@ struct BasicWindow::Handle
 
  public:
   // Construct an Handle representing stdscr.
-  Handle() : handle_(::stdscr) { default_window_initialization(); }
+  Handle()
+  {
+    // Construct terminal windows on the TUI thread; move construction there before accessing stdscr.
+    ASSERT(is_tui_thread());
+    handle_ = ::stdscr;
+    default_window_initialization();
+  }
 
   // Wrap an ncurses WINDOW handle returned by a window-creation function.
   // The pointer must be non-null and is owned by this Handle, except for stdscr which is owned by ncurses itself.
   explicit Handle(WINDOW* handle) : handle_(handle)
   {
+    // Construct terminal window handles on the TUI thread; move window creation and wrapping there.
+    ASSERT(is_tui_thread());
     // The caller passed a null WINDOW handle; construct Impl only from a successful ncurses window-creation call (or stdscr).
     ASSERT(handle_);
   }
 
   static WINDOW* newpad(Dimension size)
   {
+    // Only the TUI thread is allowed to call this method.
+    ASSERT(is_tui_thread());
     // https://invisible-island.net/ncurses/man/curs_pad.3x.html
     //
     // newpad creates and returns a pointer to a new pad data structure with the given number of lines and columns.
@@ -110,6 +116,8 @@ struct BasicWindow::Handle
 
   Handle(Dimension size, Position pos)
   {
+    // Construct terminal windows on the TUI thread; move BasicWindow construction there.
+    ASSERT(is_tui_thread());
     // https://invisible-island.net/ncurses/man/curs_window.3x.html
     //
     // Calling newwin creates and returns a pointer to a new window with the given number of lines and columns. The
@@ -124,6 +132,8 @@ struct BasicWindow::Handle
 
   ~Handle()
   {
+    // Destroy terminal windows on the TUI thread; arrange for their owning BasicWindow to die there.
+    ASSERT(is_tui_thread());
     if (handle_ == ::stdscr)
       return;
     // https://invisible-island.net/ncurses/man/curs_window.3x.html
@@ -610,6 +620,8 @@ struct BasicWindow::Handle
 
   static int unget_wch(wchar_t key)
   {
+    // Only the TUI thread is allowed to call this method.
+    ASSERT(is_tui_thread());
     // https://invisible-island.net/ncurses/man/curs_get_wch.3x.html
     //
     // unget_wch pushes a wide character back onto the input queue so it is returned by a subsequent input call.
@@ -806,6 +818,8 @@ struct BasicWindow::Handle
 
   static int curs_set(int visibility)
   {
+    // Only the TUI thread is allowed to call this method.
+    ASSERT(is_tui_thread());
     // https://invisible-island.net/ncurses/man/curs_kernel.3x.html
     //
     // curs_set changes the terminal cursor visibility and returns the previous visibility setting when supported.
@@ -878,6 +892,8 @@ struct BasicWindow::Handle
 
   static char const* key_name(wint_t key)
   {
+    // Only the TUI thread is allowed to call this method.
+    ASSERT(is_tui_thread());
     // https://invisible-island.net/ncurses/man/curs_util.3x.html
     //
     // key_name returns a printable name for a wide character or function-key code.
@@ -2003,5 +2019,10 @@ void BasicWindow::addspaces(columns_t n, Rendition const& rendition)
     break;
   }
 }
+
+#ifdef CWDEBUG
+BasicWindow::HandlePointer::HandlePointer(std::unique_ptr<BasicWindow::Handle>&& ptr) : ptr_(std::move(ptr)) { }
+BasicWindow::HandlePointer& BasicWindow::HandlePointer::operator=(BasicWindow::HandlePointer&& handle) { ptr_ = std::move(handle.ptr_); return *this; }
+#endif
 
 } // namespace ava::tui::terminal

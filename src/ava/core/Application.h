@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ava/core/Signals.h"
 #include "ava/tui/terminal/Context.h"
+#include "ava/core/Signals.h"
 #include "memory/MemoryPagePool.h"
 #include "memory/VectorAllocator.h"
 
@@ -68,12 +68,16 @@ class Application
   {
     // Call initialize_terminal_context(), before accessing Application::terminal_context();
     ASSERT(terminal_context_.is_initialized());
+    // Access the terminal Context only from the registered TUI thread.
+    ASSERT(tui::terminal::is_tui_thread());
     return terminal_context_;
   }
   tui::terminal::Context const& terminal_context() const
   {
     // Call initialize_terminal_context(), before accessing Application::terminal_context();
     ASSERT(terminal_context_.is_initialized());
+    // Access the terminal Context only from the registered TUI thread.
+    ASSERT(tui::terminal::is_tui_thread());
     return terminal_context_;
   }
 

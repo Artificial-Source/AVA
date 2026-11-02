@@ -28,6 +28,8 @@ MouseInputMode::~MouseInputMode() noexcept
 // Enable ncurses decoding before asking the terminal to begin reporting mouse and bracketed-paste events.
 void MouseInputMode::start(Context& context)
 {
+  // Start terminal input modes on the TUI thread that owns context.
+  ASSERT(is_tui_thread());
   if (context_)
   {
     // Call stop() before reusing a MouseInputMode with another start() invocation.
@@ -52,6 +54,8 @@ void MouseInputMode::stop() noexcept
   if (!context)
     return;
 
+  // Stop active terminal input modes on the TUI thread before destroying their owner.
+  ASSERT(is_tui_thread());
   static_cast<void>(context->write_raw_sequence(kBracketedPasteDisableSequence));
   static_cast<void>(::mousemask(0, nullptr));
   static_cast<void>(context->write_raw_sequence(kMouseDisableSequence));

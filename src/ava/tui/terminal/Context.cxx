@@ -54,6 +54,9 @@ void Context::initialize(FILE* outfd, FILE* infd)
   s_tui_thread_id = std::this_thread::get_id();
 #endif
 
+  // Initialize and use ncurses only on the thread just registered as the TUI thread.
+  ASSERT(is_tui_thread());
+
   setlocale(LC_ALL, "");
 
   // From https://invisible-island.net/ncurses/man/curs_util.3x.html
@@ -135,6 +138,11 @@ Context::~Context()
 {
   if (initialized_)
   {
+#ifdef CWDEBUG
+    // When we get here, the TUI thread has already been joined, so now *this* is the (only) thread that access ncurses.
+    s_tui_thread_id = std::this_thread::get_id();
+#endif
+
     // Stop keyboard protocols before ncurses restores the terminal.
     keyboard_protocols_.stop();
     // Disable terminal input protocols before ncurses restores the terminal.
@@ -161,6 +169,8 @@ Context::~Context()
 // Leave ncurses before disabling AVA-owned protocols so the handed-off process receives shell presentation with clean input modes.
 void Context::leave_terminal_for_handoff()
 {
+  // Hand terminal presentation off only from the registered TUI thread; marshal handoff requests there before calling this method.
+  ASSERT(is_tui_thread());
   static_cast<void>(::endwin());
   keyboard_protocols_.stop();
   mouse_input_.stop();
@@ -170,6 +180,8 @@ void Context::leave_terminal_for_handoff()
 // Resume through doupdate so ncurses repaints its retained virtual screen before AVA-owned protocols become active again.
 void Context::restore_terminal_after_handoff()
 {
+  // Restore terminal presentation only from the registered TUI thread; marshal restoration there before calling this method.
+  ASSERT(is_tui_thread());
   static_cast<void>(::clearok(::curscr, TRUE));
   static_cast<void>(::doupdate());
   mouse_input_.start(*this);
@@ -179,27 +191,37 @@ void Context::restore_terminal_after_handoff()
 
 uint32_t Context::rows() const
 {
+  // Read the active ncurses screen dimensions only on the registered TUI thread; marshal geometry reads there.
+  ASSERT(is_tui_thread());
   return LINES;
 }
 
 uint32_t Context::cols() const
 {
+  // Read the active ncurses screen dimensions only on the registered TUI thread; marshal geometry reads there.
+  ASSERT(is_tui_thread());
   return COLS;
 }
 
 int Context::colors() const
 {
+  // Read the active ncurses color count only on the registered TUI thread; marshal capability reads there.
+  ASSERT(is_tui_thread());
   return COLORS;
 }
 
 //static
 bool Context::have_direct_color()
 {
+  // Read the active ncurses color count only on the registered TUI thread; marshal capability reads there.
+  ASSERT(is_tui_thread());
   return COLORS == 0x1000000;
 }
 
 int Context::get_wch() const
 {
+  // Read native terminal input only on the registered TUI thread; marshal input handling there.
+  ASSERT(is_tui_thread());
   wint_t wch = 0;
   [[maybe_unused]] int res = ::get_wch(&wch);
   // Call blocking get_wch only while stdscr has no timeout and terminal input remains available; use try_get_wch for fallible reads.
@@ -209,6 +231,8 @@ int Context::get_wch() const
 
 int Context::try_get_wch()
 {
+  // Read native terminal input only on the registered TUI thread; marshal input handling there.
+  ASSERT(is_tui_thread());
   wint_t wch = 0;
 
   // First try if there is still any input buffered on keyboard_protocols_.
@@ -228,6 +252,8 @@ int Context::try_get_wch()
 // back to their nearest current entry.
 int Context::terminal_color_index(Color color)
 {
+  // Resolve colors against active ncurses globals only on the registered TUI thread; marshal color creation there.
+  ASSERT(is_tui_thread());
   bool const direct_color = COLORS == 0x1000000;
   if (color.is_default())
     return -1;
@@ -304,6 +330,8 @@ ColorPair Context::create_color_pair(ColorIndex foreground, ColorIndex backgroun
 // Register a pair after reserving any mutable indexed-palette entries that it exposes.
 ColorPair Context::priv_create_color_pair(int foreground_index, int background_index)
 {
+  // Register native color pairs only on the registered TUI thread; marshal color creation there.
+  ASSERT(is_tui_thread());
   // Replace default-color sentinels with a dark-theme fallback if ncurses could not enable terminal defaults.
   if (!default_colors_enabled_)
   {
@@ -336,6 +364,8 @@ ColorPair Context::priv_create_color_pair(int foreground_index, int background_i
 // Read the terminal color indexes currently registered for a ColorPair.
 std::optional<ColorPairContent> Context::color_pair_content(ColorPair color_pair) const
 {
+  // Read native color-pair state only on the registered TUI thread; marshal color inspection there.
+  ASSERT(is_tui_thread());
   int foreground_index = 0;
   int background_index = 0;
   if (::extended_pair_content(static_cast<int>(color_pair.index()), &foreground_index, &background_index) == ERR)
@@ -346,6 +376,8 @@ std::optional<ColorPairContent> Context::color_pair_content(ColorPair color_pair
 // Read ncurses' scaled RGB components for one terminal color index.
 std::optional<ColorContent> Context::color_content(int color_index) const
 {
+  // Read native palette state only on the registered TUI thread; marshal color inspection there.
+  ASSERT(is_tui_thread());
   ColorContent result{};
   if (::extended_color_content(color_index, &result.red, &result.green, &result.blue) == ERR)
     return std::nullopt;
@@ -355,6 +387,8 @@ std::optional<ColorContent> Context::color_content(int color_index) const
 //static
 void Context::doupdate()
 {
+  // Update the native terminal only on the registered TUI thread; marshal repaint requests there.
+  ASSERT(is_tui_thread());
   ::doupdate();
 }
 
@@ -362,6 +396,8 @@ void Context::doupdate()
 //static
 bool Context::has_mouse()
 {
+  // Query native mouse state only on the registered TUI thread; marshal capability reads there.
+  ASSERT(is_tui_thread());
 #ifdef NCURSES_MOUSE_VERSION
   return ::has_mouse() != FALSE;
 #else
@@ -373,6 +409,8 @@ bool Context::has_mouse()
 //static
 bool Context::flushinp()
 {
+  // Flush native terminal input only on the registered TUI thread; marshal input control there.
+  ASSERT(is_tui_thread());
   return ::flushinp() == OK;
 }
 
@@ -380,6 +418,8 @@ bool Context::flushinp()
 //static
 std::optional<std::string_view> Context::terminfo_string(char const* capability)
 {
+  // Query the active terminfo database only on the registered TUI thread; marshal capability reads there.
+  ASSERT(is_tui_thread());
   if (capability == nullptr)
     return std::nullopt;
   char const* value = ::tigetstr(capability);
@@ -392,6 +432,8 @@ std::optional<std::string_view> Context::terminfo_string(char const* capability)
 //static
 bool Context::resizeterm(int rows, int cols)
 {
+  // Resize native terminal state only on the registered TUI thread; marshal resize handling there.
+  ASSERT(is_tui_thread());
   if (rows <= 0 || cols <= 0)
     return false;
   return ::resizeterm(rows, cols) == OK;
@@ -401,6 +443,8 @@ bool Context::resizeterm(int rows, int cols)
 //static
 bool Context::is_term_resized(int rows, int cols)
 {
+  // Query native terminal geometry only on the registered TUI thread; marshal resize handling there.
+  ASSERT(is_tui_thread());
   if (rows <= 0 || cols <= 0 || ::stdscr == nullptr)
     return false;
   return ::is_term_resized(rows, cols) != FALSE;
@@ -408,21 +452,29 @@ bool Context::is_term_resized(int rows, int cols)
 
 int Context::beep()
 {
+  // Invoke native terminal alerts only on the registered TUI thread; marshal alerts there.
+  ASSERT(is_tui_thread());
   return ::beep();
 }
 
 int Context::flash()
 {
+  // Invoke native terminal alerts only on the registered TUI thread; marshal alerts there.
+  ASSERT(is_tui_thread());
   return ::flash();
 }
 
 int Context::get_escdelay() const
 {
+  // Read native terminal timing state only on the registered TUI thread; marshal timing reads there.
+  ASSERT(is_tui_thread());
   return ::get_escdelay();
 }
 
 std::string_view Context::keyname(int c) const
 {
+  // Query the active ncurses key table only on the registered TUI thread; marshal key decoding there.
+  ASSERT(is_tui_thread());
   char const* result = ::keyname(c);
   return result ? result : "UNKNOWN KEY";
 }
@@ -511,11 +563,15 @@ std::string Context::read_raw_input_for(std::chrono::milliseconds timeout) const
 
 bool Context::has_colors() const
 {
+  // Query active ncurses color capabilities only on the registered TUI thread; marshal capability reads there.
+  ASSERT(is_tui_thread());
   return ::has_colors();
 }
 
 bool Context::can_change_colors() const
 {
+  // Inspect the live terminal palette only on the registered TUI thread; marshal capability reads there.
+  ASSERT(is_tui_thread());
   // Do not call this function if we don't have a color palette; for example when a direct-color terminal is being used (COLORS == 0x1000000).
   ASSERT(color_palette_);
   return color_palette_->last_mutable_palette_index() > 0;
@@ -523,6 +579,8 @@ bool Context::can_change_colors() const
 
 int Context::read_wch(wint_t* wch_out)
 {
+  // Read native terminal input only on the registered TUI thread; marshal input handling there.
+  ASSERT(is_tui_thread());
   // Canonical Context replay has first authority over bytes consumed by bounded startup negotiation. It returns logical wide characters
   // with ncurses' ordinary OK status; only after that queue is empty may wget_wch read the terminal and report OK, KEY_CODE_YES, or ERR.
   if (AI_UNLIKELY(keyboard_protocols_.try_get_wch(wch_out)))

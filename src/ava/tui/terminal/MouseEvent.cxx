@@ -4,16 +4,24 @@
 
 #include <array>
 #include <optional>
+#include "debug.h"
 
 // This header must be included last.
 #include "private_convert.h"
 
 namespace ava::tui::terminal {
 
+#ifdef CWDEBUG
+bool is_tui_thread();
+#endif
+
 // Read the native queue once and translate named ncurses masks rather than relying on their bit layout.
 // A native report is consumed even when validation fails; no partially decoded event escapes to callers.
 std::optional<MouseEvent> get_mouse_event()
 {
+  // Consume the native mouse queue on the TUI thread; forward decoded events to other threads instead.
+  ASSERT(is_tui_thread());
+
 #ifdef NCURSES_MOUSE_VERSION
   MEVENT native{};
   if (::getmouse(&native) == ERR)

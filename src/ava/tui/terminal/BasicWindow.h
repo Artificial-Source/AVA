@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include "debug.h"
 
 // To print all implemented ncurses functions (from the comments):
 //
@@ -21,6 +22,10 @@
 // grep '^extern.*WINDOW *\*.*implemented' /usr/include/curses.h | grep -v SCREEN | sed -re 's/^extern NCURSES_EXPORT\([^)]*\) ([^ (]*).*/\1/' | sort -u
 //
 namespace ava::tui::terminal {
+
+#ifdef CWDEBUG
+bool is_tui_thread();
+#endif
 
 // Forward declarations.
 class Context;
@@ -44,7 +49,41 @@ class BasicWindow
 {
  private:
   struct Handle;
+
+#ifdef CWDEBUG
+  struct HandlePointer
+  {
+    std::unique_ptr<Handle> ptr_;
+
+    HandlePointer() = default;
+    HandlePointer(HandlePointer&& handle) = default;
+    HandlePointer(std::unique_ptr<Handle>&& ptr);
+    ~HandlePointer() = default;
+
+    HandlePointer& operator=(HandlePointer&& handle);
+
+    auto get() const { return ptr_.get(); }
+    Handle* operator->()
+    {
+      // Only call this function from the TUI thread.
+      ASSERT(is_tui_thread());
+      return ptr_.get();
+    }
+    Handle const* operator->() const
+    {
+      // Only call this function from the TUI thread.
+      ASSERT(is_tui_thread());
+      return ptr_.get();
+    }
+    operator bool() { return static_cast<bool>(ptr_); }
+
+    // Not of interest to debug output.
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  };
+  HandlePointer impl_;
+#else
   std::unique_ptr<Handle> impl_;
+#endif
 
  private:
   // These are called before ncurses is initialized by the constructor of Context.

@@ -152,6 +152,10 @@ enum class Key
   WideCharacter
 };
 
+#ifdef CWDEBUG
+bool is_tui_thread();
+#endif
+
 // Context
 //
 // Represents the terminal. It's lifetime is equivalent with the
@@ -290,11 +294,21 @@ class Context final
 
   // Cursor control.
 
-  void apply_cursor_settings(CursorSettings const& settings) { cursor_state_.apply(this, settings); }
+  void apply_cursor_settings(CursorSettings const& settings)
+  {
+    // Apply terminal cursor settings only on the registered TUI thread; marshal cursor changes there before calling this method.
+    ASSERT(is_tui_thread());
+    cursor_state_.apply(this, settings);
+  }
   // Emit the retained cursor settings even when they have not changed, unless AVA has only observed the untouched default.
   //
   // Use this after terminal operations such as curs_set that can alter cursor shape or blinking behind CursorState's back.
-  void reapply_cursor_settings() { cursor_state_.reapply(this); }
+  void reapply_cursor_settings()
+  {
+    // Reapply terminal cursor settings only on the registered TUI thread; marshal cursor changes there before calling this method.
+    ASSERT(is_tui_thread());
+    cursor_state_.reapply(this);
+  }
   CursorSettings const& cursor_settings() const { return cursor_state_.cursor_settings_; }
 
   // Set physical cursor visibility and restore any explicitly applied cursor shape when making it visible.
@@ -302,6 +316,8 @@ class Context final
   // ncurses may alter shape or blinking as a side effect of changing visibility, so callers must use this instead of BasicWindow::curs_set.
   void set_cursor_visible(bool visible)
   {
+    // Change native cursor visibility only on the registered TUI thread; marshal cursor changes there before calling this method.
+    ASSERT(is_tui_thread());
     BasicWindow::curs_set(visible ? 1 : 0);
     if (visible)
       cursor_state_.reapply(this);

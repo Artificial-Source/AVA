@@ -298,6 +298,11 @@ void test_application_lifecycle_contracts()
   expect_lifecycle_scenario("instance-before-initialize", LifecycleScenarioResult::abort, "instance access before initialize");
   expect_lifecycle_scenario("instance-after-destruction", LifecycleScenarioResult::abort, "instance access after destruction");
   expect_lifecycle_scenario("duplicate-live-instance", LifecycleScenarioResult::abort, "duplicate live Application construction");
+  expect_lifecycle_scenario("terminal-accessor-wrong-thread", LifecycleScenarioResult::abort, "Application terminal Context accessor on the wrong thread");
+  expect_lifecycle_scenario("retained-window-wrong-thread", LifecycleScenarioResult::abort, "retained BasicWindow operation on the wrong thread");
+  expect_lifecycle_scenario("retained-context-wrong-thread", LifecycleScenarioResult::abort, "retained Context native operation on the wrong thread");
+  expect_lifecycle_scenario("static-context-wrong-thread", LifecycleScenarioResult::abort, "static Context native operation on the wrong thread");
+  expect_lifecycle_scenario("mouse-event-wrong-thread", LifecycleScenarioResult::abort, "free mouse event operation on the wrong thread");
 #endif
   expect_lifecycle_scenario("signal-construction", LifecycleScenarioResult::success, "signal construction, pending delivery, and atomic claim");
   expect_lifecycle_scenario("signal-immediate-output", LifecycleScenarioResult::success, "immediate output preserves permanent SIGPIPE suppression");
