@@ -148,7 +148,7 @@ int TuiFrontEnd::run()
 
 #ifdef CWDEBUG
   // Uncomment this to open a new terminal with gdb when the TUI thread is started.
-  application.attach_gdb();
+  //application.attach_gdb();
 #endif
 
   // Restore the default disposition so ncurses can install its SIGTSTP handler.
