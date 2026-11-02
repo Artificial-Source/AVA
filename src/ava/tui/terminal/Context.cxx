@@ -14,6 +14,9 @@
 #include <limits>
 #include <poll.h>
 #include <unistd.h>
+#ifdef CWDEBUG
+#include <thread>
+#endif
 
 // This header must be included last.
 #include "private_convert.h"
@@ -29,12 +32,27 @@ Context::Context(utils::Badge<core::Application>) : default_rendition_(ColorPair
 {
 }
 
+#ifdef CWDEBUG
+// This is a global variable so it can be easily accessed from anywhere.
+std::thread::id s_tui_thread_id;
+
+bool is_tui_thread()
+{
+  return s_tui_thread_id == std::this_thread::get_id();
+}
+#endif
+
 void Context::initialize(FILE* outfd, FILE* infd)
 {
   DoutEntering(dc::notice, "Context::initialize(" << outfd << ", " << infd << ")");
 
   // Only initialize the terminal::Context once.
   ASSERT(!initialized_);
+
+#ifdef CWDEBUG
+  // Initialize s_tui_thread_id.
+  s_tui_thread_id = std::this_thread::get_id();
+#endif
 
   setlocale(LC_ALL, "");
 

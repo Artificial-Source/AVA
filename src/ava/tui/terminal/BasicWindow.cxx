@@ -14,6 +14,10 @@
 
 namespace ava::tui::terminal {
 
+#ifdef CWDEBUG
+bool is_tui_thread();
+#endif
+
 struct BasicWindow::Handle
 {
  private:
@@ -1175,6 +1179,7 @@ BasicWindow::~BasicWindow() = default;
 BasicWindow::BasicWindow(BasicWindow&&) noexcept = default;
 BasicWindow& BasicWindow::operator=(BasicWindow&&) noexcept = default;
 
+//static
 BasicWindow BasicWindow::newpad(Dimension size)
 {
   WINDOW* res = Handle::newpad(size);

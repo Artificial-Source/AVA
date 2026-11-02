@@ -10,6 +10,12 @@
 
 namespace ava::tui {
 
+#ifdef CWDEBUG
+namespace terminal {
+extern std::thread::id s_tui_thread_id;
+} // namespace terminal
+#endif
+
 struct TuiRuntimeOptions;
 
 class TuiFrontEnd : public frontend::FrontEnd
@@ -17,10 +23,6 @@ class TuiFrontEnd : public frontend::FrontEnd
  protected:
   TuiKeyBindings key_bindings_;
   TuiRuntimeOptions options_;
-#ifdef CWDEBUG
- private:
-  std::thread::id tui_thread_id_;       // For use with is_single_threaded.
-#endif
 
  protected:
   // Construct startup presentation state for one derived application frontend.
@@ -104,7 +106,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   {
     // This function is called from a function that should ONLY be called by the TUI thread.
     // If this fails here then some other thread is calling code that it shouldn't.
-    ASSERT(aithreadid::is_single_threaded(const_cast<std::thread::id&>(tui_thread_id_)));
+    ASSERT(aithreadid::is_single_threaded(terminal::s_tui_thread_id));
   }
 #endif
 
