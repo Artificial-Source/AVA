@@ -1539,11 +1539,11 @@ Exact direct pins in `package.json` and `package-lock.json`:
 | `remark-gfm` | 4.0.1 | Runtime GFM / MIT |
 | `shiki` | **4.4.3** | Runtime highlighting / MIT |
 | `typescript` | 7.0.2 | Development compiler / Apache-2.0 |
-| `vite` | 7.3.6 | Development/build / MIT |
+| `vite` | 7.3.7 | Development/build / MIT |
 | `@vitejs/plugin-react` | 5.2.0 | Development/build / MIT |
 | `@types/node` | 24.13.1 | Development types / MIT |
 | `@types/react` / `@types/react-dom` | 19.3.0 / 19.3.0 | Development types / MIT |
-| `vitest` | **5.0.2** | Development tests / MIT core; bundled notices also include BSD-3-Clause and ISC |
+| `vitest` | **5.0.3** | Development tests / MIT core; bundled notices also include BSD-3-Clause and ISC |
 | `@testing-library/react` | 16.3.3 | Development DOM tests / MIT |
 | `@testing-library/user-event` | 14.6.7 | Development interaction tests / MIT |
 | `@testing-library/jest-dom` | 7.0.1 | Development assertions / MIT |
@@ -1554,7 +1554,7 @@ Primary registry records use `https://registry.npmjs.org/<package>/<pin>`;
 `dist.tarball`, `engines`, and `peerDependencies` identify the exact artifacts and
 constraints. The original researcher verified those fields and direct runtime
 LICENSE files. The revision 1 coding pass additionally inspected the installed six
-runtime license files and both corrected-pin tarballs. Vitest 5.0.2 supports Node 24 and
+runtime license files and both corrected-pin tarballs. Vitest 5.0.3 supports Node 24 and
 Vite 7; Shiki 4.4.3 requires Node ≥20. jsdom **30.1.2 is not selected**, because
 its Node 24.15 floor excludes the validated Node 24.13.1 environment.
 
@@ -1693,6 +1693,10 @@ registry dates also put Vitest 5.0.3 inside that window. The parent authorized o
 **Shiki 4.4.3 / Vitest 5.0.2** after engine/peer/license checks. Installation then
 succeeded with the age guard still **7**. No force, age, engine, permission, or
 security bypass was used. These corrected pins remain unchanged through revision 3.
+
+The subsequent security dependency refresh pins Vite **7.3.7** and Vitest
+**5.0.3** (`@vitest/mocker` **5.0.3**) and locks jsdom's compatible `undici`
+dependency at **7.30.1**, without an override or release-age setting change.
 
 ### Historical browser review and captures
 

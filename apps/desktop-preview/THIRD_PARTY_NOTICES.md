@@ -32,12 +32,12 @@ packages retain their upstream files.
 ## Direct development dependencies
 
 TypeScript **7.0.2** declares **Apache-2.0**. The remaining selected development
-packages declare **MIT**: Vite 7.3.6, plugin-react 5.2.0, Node types 24.13.1, React
+packages declare **MIT**: Vite 7.3.7, plugin-react 5.2.0, Node types 24.13.1, React
 and React DOM types 19.3.0, Testing Library React 16.3.3 / user-event 14.6.7 /
 jest-dom 7.0.1 / DOM 10.4.2, and jsdom 29.1.1. This is registry **metadata**
 evidence, not a tarball-license inspection of every development dependency.
 
-Vitest **5.0.2**'s tarball LICENSE was separately inspected: its core is MIT
+Vitest **5.0.3**'s installed LICENSE was separately inspected: its core is MIT
 (VoidZero Inc. and Vitest contributors), and its bundled third-party notices also
 include **BSD-3-Clause and ISC**, not just MIT. Vitest is a development dependency,
 not part of the built browser UI. This finite inspection is not a transitive audit.
@@ -48,6 +48,10 @@ corrections to **4.4.3** and **5.0.2** after metadata/license/engine/peer checks
 The subsequent install succeeded, produced `package-lock.json`, and left the
 release-age guard unchanged at **7**. No install scripts, audit upload, force,
 engine override, or security bypass was used.
+
+The security dependency refresh now pins Vite **7.3.7** and Vitest **5.0.3**
+(including `@vitest/mocker` **5.0.3**) and locks jsdom's compatible `undici`
+dependency to **7.30.1** without an override. The release-age guard remains **7**.
 
 The selected jsdom version accommodates Node 24.13.1; jsdom 30.1.2 does not.
 Testing Library DOM is explicitly pinned because it is a required peer. CSS

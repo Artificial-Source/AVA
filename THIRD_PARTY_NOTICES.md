@@ -133,9 +133,9 @@ Exact direct pins used by `apps/desktop/package.json`:
 | react, react-dom | 19.3.0 | MIT | github.com/facebook/react |
 | @radix-ui/react-dialog | 1.1.23 | MIT | github.com/radix-ui/primitives |
 | motion | 13.4.6 | MIT | github.com/motiondivision/motion |
-| electron | 44.5.0 | MIT | github.com/electron/electron |
+| electron | 44.10.1 | MIT | github.com/electron/electron |
 | electron-vite | 5.0.0 | MIT | github.com/alex8088/electron-vite |
-| vite | 7.3.6 | MIT | github.com/vitejs/vite |
+| vite | 7.3.7 | MIT | github.com/vitejs/vite |
 | @vitejs/plugin-react | 5.2.0 | MIT | github.com/vitejs/vite-plugin-react |
 | tailwindcss, @tailwindcss/vite | 4.3.3 | MIT | github.com/tailwindlabs/tailwindcss |
 | @types/node, @types/react, @types/react-dom | 24.13.1 / 19.3.0 | MIT | github.com/DefinitelyTyped/DefinitelyTyped |

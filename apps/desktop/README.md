@@ -28,7 +28,7 @@ pnpm preview
 
 ## Ubuntu sandbox prerequisite
 
-On Ubuntu hosts with `kernel.apparmor_restrict_unprivileged_userns=1`, Electron can fail before app code if its standard sandbox helper is user-owned with mode `0755`. For the **pinned, trusted Electron 44.5.0 installation only**, an administrator must explicitly approve and configure `node_modules/.pnpm/electron@44.5.0/node_modules/electron/dist/chrome-sandbox` with owner **`root:root`** and mode **`4755`** (setuid). This is not automated; the prerequisite must be redone after reinstalling Electron.
+On Ubuntu hosts with `kernel.apparmor_restrict_unprivileged_userns=1`, Electron can fail before app code if its standard sandbox helper is user-owned with mode `0755`. For the **pinned, trusted Electron 44.10.1 installation only**, an administrator must explicitly approve and configure `node_modules/.pnpm/electron@44.10.1/node_modules/electron/dist/chrome-sandbox` with owner **`root:root`** and mode **`4755`** (setuid). This is not automated; the prerequisite must be redone after reinstalling Electron.
 
 Do not bypass the Chromium sandbox or globally disable AppArmor. GUI validation on the current Ubuntu host remains blocked pending administrator approval and configuration; passing Node tests and builds does not establish GUI success.
 
