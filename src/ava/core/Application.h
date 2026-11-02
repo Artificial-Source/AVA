@@ -55,6 +55,10 @@ class Application
 
   [[nodiscard]] virtual std::string_view application_name() const noexcept = 0;
 
+#ifdef CWDEBUG
+  void attach_gdb();
+#endif
+
   // Accessors
 
   Signals& signals_manager() { return signals_manager_; }

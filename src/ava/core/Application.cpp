@@ -84,4 +84,14 @@ Application::~Application() noexcept
 #endif
 }
 
+#ifdef CWDEBUG
+void Application::attach_gdb()
+{
+  // Attach gdb after re-enabling SIGINT!
+  signals_manager_.default_handlers({SIGINT});
+  libcwd::attach_gdb();
+  NAMESPACE_DEBUG::set_being_traced();
+}
+#endif
+
 }  // namespace ava::core

@@ -148,6 +148,12 @@ int TuiFrontEnd::run()
 
   core::Application& application = core::Application::instance();
   core::Signals& signals_manager = application.signals_manager();
+
+#ifdef CWDEBUG
+  // Uncomment this to open a new terminal with gdb when the TUI thread is started.
+  //application.attach_gdb();
+#endif
+
   // Restore the default disposition so ncurses can install its SIGTSTP handler.
   // This also unblocks SIGTSTP on this thread; other threads keep it blocked.
   signals_manager.default_handlers({SIGTSTP});
@@ -155,7 +161,13 @@ int TuiFrontEnd::run()
   terminal::Context& terminal_context = application.terminal_context();
 
   // Activate signal handlers for the TUI.
-  signals_manager.activate_handlers({SIGINT, SIGTERM});
+#ifdef CWDEBUG
+  // If we're running inside gdb, do not install a handler for SIGINT.
+  if (NAMESPACE_DEBUG::being_traced())
+    signals_manager.activate_handlers({SIGTERM});
+  else
+#endif
+  signals_manager.activate_handlers({SIGINT, SIGTERM});         // Signals for which we want to call Signals::signal_handler.
   signals_manager.default_handlers({SIGHUP});
 
   ComposerTerminalGraphicsGuard graphics_cleanup(terminal_context);
