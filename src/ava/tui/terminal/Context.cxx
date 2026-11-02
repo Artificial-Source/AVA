@@ -14,7 +14,7 @@
 #include <limits>
 #include <poll.h>
 #include <unistd.h>
-#ifdef CWDEBUG
+#if CW_DEBUG
 #include <thread>
 #endif
 
@@ -32,7 +32,7 @@ Context::Context(utils::Badge<core::Application>) : default_rendition_(ColorPair
 {
 }
 
-#ifdef CWDEBUG
+#if CW_DEBUG
 // This is a global variable so it can be easily accessed from anywhere.
 std::thread::id s_tui_thread_id;
 
@@ -49,7 +49,7 @@ void Context::initialize(FILE* outfd, FILE* infd)
   // Only initialize the terminal::Context once.
   ASSERT(!initialized_);
 
-#ifdef CWDEBUG
+#if CW_DEBUG
   // Initialize s_tui_thread_id.
   s_tui_thread_id = std::this_thread::get_id();
 #endif
@@ -138,7 +138,7 @@ Context::~Context()
 {
   if (initialized_)
   {
-#ifdef CWDEBUG
+#if CW_DEBUG
     // When we get here, the TUI thread has already been joined, so now *this* is the (only) thread that access ncurses.
     s_tui_thread_id = std::this_thread::get_id();
 #endif

@@ -10,12 +10,6 @@
 
 namespace ava::tui {
 
-#ifdef CWDEBUG
-namespace terminal {
-extern std::thread::id s_tui_thread_id;
-} // namespace terminal
-#endif
-
 struct TuiRuntimeOptions;
 
 class TuiFrontEnd : public frontend::FrontEnd
@@ -99,16 +93,6 @@ class TuiFrontEnd : public frontend::FrontEnd
   std::string load_key_bindings();
   // Run the internal composer loop; only run() exposes this operation to callers.
   [[nodiscard]] int run_interactive_composer();
-
-#ifdef CWDEBUG
- private:
-  void assert_single_threaded() const
-  {
-    // This function is called from a function that should ONLY be called by the TUI thread.
-    // If this fails here then some other thread is calling code that it shouldn't.
-    ASSERT(aithreadid::is_single_threaded(terminal::s_tui_thread_id));
-  }
-#endif
 
  public:
   // Return a value snapshot of current application-owned display settings.

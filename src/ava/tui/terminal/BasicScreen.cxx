@@ -8,7 +8,7 @@
 
 namespace ava::tui::terminal {
 
-#ifdef CWDEBUG
+#if CW_DEBUG
 bool is_tui_thread();
 #endif
 

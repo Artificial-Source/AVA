@@ -152,7 +152,7 @@ enum class Key
   WideCharacter
 };
 
-#ifdef CWDEBUG
+#if CW_DEBUG
 bool is_tui_thread();
 #endif
 
