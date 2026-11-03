@@ -344,6 +344,10 @@ bool ActiveRun::plugin_host_modal_conflict() const
 
 bool ActiveRun::poll_plugin_ui()
 {
+  // Host prompts own input until their callbacks retire. Keep plugin requests
+  // queued (and any visible modal intact) so they can resume after the prompt.
+  if (prompt_coordinator_.has_active())
+    return true;
   auto const geometry_changed = refresh_plugin_surface_fit();
   auto const polled = plugin_ui_.poll(plugin_host_modal_conflict());
   if (polled.deadline_expired && !cancel(ActiveRunCancel::Stop))

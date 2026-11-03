@@ -591,6 +591,118 @@ bool test_active_run_session_transition_discards_prior_session_events()
   return passed && retained_input_discarded;
 }
 
+// Polling plugin UI during host prompts used to cancel queued and already-visible plugin dialogs.
+bool test_active_run_preserves_plugin_modal_during_host_prompt()
+{
+  bool passed = true;
+  for (bool permission : {false, true})
+    for (bool already_visible : {false, true})
+    {
+      EventLoopFixture event_loop;
+      static_cast<void>(ava::core::Application::instance().terminal_context());
+      static_cast<void>(ava::tui::terminal::Context::resizeterm(24, 120));
+      tui_test_support::TuiFrontEndFixture frontend;
+      std::promise<void> finish_run;
+      auto run_release = finish_run.get_future();
+      std::string invocation_id;
+      std::promise<std::optional<ava::tui::TuiPluginUiEndpoint>> endpoint_promise;
+      auto endpoint_future = endpoint_promise.get_future();
+      frontend.hooks().on_submit = [&](std::string const&, ava::tui::TuiSubmitContext context) {
+        invocation_id = context.request_id;
+        endpoint_promise.set_value(context.plugin_ui);
+        run_release.wait();
+        return ava::tui::TuiSubmitResult{};
+      };
+      ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+      ava::tui::PendingAttachments attachments(presentation.screen());
+      ava::tui::TuiSessionGrantRegistry grants;
+      ava::tui::Composer draft_state;
+      ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
+      ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
+      ava::tui::SelectorHost active_select_list(presentation.screen());
+      ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
+      ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
+                                                 ava::core::Application::instance().terminal_context());
+      ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.screen(), grants, renderer, event_loop.loop());
+      ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings(),
+                                                          attachments);
+      ava::tui::RuntimePluginUiCoordinator plugin_ui(presentation.screen());
+      ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector,
+                                                          attachments);
+      ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active_select_list);
+      ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
+                                                                attachments, grants);
+      ava::tui::RuntimeMermaidPresentationController mermaid(presentation.screen(), renderer, transcript_search, {});
+      ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
+                                     navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid, attachments);
+
+      if (!active_run.start("/plugin run demo choose {}"))
+        return false;
+      auto endpoint = endpoint_future.get();
+      if (!endpoint)
+      {
+        finish_run.set_value();
+        static_cast<void>(active_run.shutdown());
+        return false;
+      }
+      std::promise<void> enqueued;
+      auto enqueue_ready = enqueued.get_future();
+      plugin_ui.set_after_enqueue_for_test([&] { enqueued.set_value(); });
+      ava::tui::TuiPluginUiRequest request;
+      request.binding = {.plugin_id = "demo", .command = "choose", .invocation_id = invocation_id};
+      request.request_id = "preserved-modal";
+      request.kind = ava::tui::TuiPluginUiKind::Select;
+      request.title = "Plugin choice";
+      request.options = {{.id = "chosen", .label = "Choose me", .description = {}}};
+      auto plugin_worker = ava::core::make_async(
+          "plugin_prompt", [endpoint = *endpoint, request] { return endpoint.present(request, endpoint.deadline, [] { return false; }); });
+      bool const published = enqueue_ready.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+      if (published && already_visible)
+        static_cast<void>(active_run.consume());
+      bool const initial_projection = presentation.screen().plugin_ui_modal.has_value() == already_visible;
+
+      auto prompt_worker = ava::core::make_async("host_prompt", [&] {
+        if (permission)
+        {
+          ava::permissions::PermissionPrompt prompt;
+          prompt.operation = ava::permissions::Operation::RunCommand;
+          prompt.mode = ava::core::Mode::Build;
+          prompt.command = "echo permission";
+          prompt.tool_name = "bash";
+          return prompt_coordinator.permission_resolver()(prompt).has_value();
+        }
+        ava::agent::QuestionPrompt prompt{.header = "Host question", .question = "Choose", .options = {{.value = "done", .label = "Done"}}};
+        return prompt_coordinator.question_resolver()(prompt).has_value();
+      });
+      auto const deadline = ava::tests::now_plus_seconds(2);
+      while (!prompt_coordinator.has_pending_requests() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+      static_cast<void>(active_run.consume());
+      bool const active = prompt_coordinator.has_active();
+      static_cast<void>(active_run.consume());
+      bool const preserved = presentation.screen().plugin_ui_modal.has_value() == already_visible &&
+                             plugin_worker.wait_for(std::chrono::milliseconds::zero()) == std::future_status::timeout;
+    // Resolve through the coordinator so the run remains alive for the deferred plugin dialog.
+      ava::tui::runtime_input::RuntimeInput enter;
+      enter.event.key = ava::tui::terminal::Key::Enter;
+      static_cast<void>(prompt_coordinator.handle_input(enter));
+      bool const host_retired = !prompt_coordinator.has_active();
+      static_cast<void>(active_run.consume());
+      bool const displayed_afterward = presentation.screen().plugin_ui_modal && presentation.screen().plugin_ui_modal->request_id == "preserved-modal";
+      static_cast<void>(plugin_ui.handle_input(enter.event));
+    // Always unblock and join workers before assertions, including failing paths.
+      prompt_coordinator.shutdown();
+      plugin_ui.cancel_active();
+      auto const reply = plugin_worker.get();
+      static_cast<void>(prompt_worker.get());
+      finish_run.set_value();
+      static_cast<void>(active_run.shutdown());
+      passed = published && initial_projection && active && preserved && host_retired && displayed_afterward &&
+               reply.action == ava::tui::TuiPluginUiReplyKind::Select && reply.option_id == "chosen" && passed;
+    }
+  return passed;
+}
+
 bool test_atomic_search_input_prompt_precedence()
 {
   EventLoopFixture event_loop;
@@ -1734,6 +1846,7 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
   else if (test_case == "session_transition")
   {
+    expect(test_active_run_preserves_plugin_modal_during_host_prompt(), "host prompts defer queued and visible plugin dialogs without canceling them");
     expect(test_active_run_session_transition_discards_prior_session_events(),
            "an active-run authoritative session transition discards old submitted/event/tool/queue/finish/sidebar/todo state, resets event receipt suppression "
            "and history, and presents only the new-session receipt and hydrated state");
