@@ -1,13 +1,15 @@
 #include "sys.h"
 #include "SelectorHost.h"
 
+#include <algorithm>
+#include <iterator>
 #include "debug.h"
 
 namespace ava::tui {
 
 SelectorHost::SelectorHost(ComposerSnapshot& snapshot) : snapshot_(snapshot)
 {
-  publish();
+  snapshot_.select_list.reset();
 }
 
 ActiveSelectList SelectorHost::kind() const noexcept
@@ -17,20 +19,20 @@ ActiveSelectList SelectorHost::kind() const noexcept
 
 std::optional<SelectListView> const& SelectorHost::view() const noexcept
 {
-  return view_;
+  return snapshot_.select_list;
 }
 
 SelectListItemView const* SelectorHost::selected_item(std::size_t index) const noexcept
 {
-  return view_ && index < view_->items.size() ? &view_->items[index] : nullptr;
+  return snapshot_.select_list && index < snapshot_.select_list->items.size() ? &snapshot_.select_list->items[index] : nullptr;
 }
 
 std::vector<std::string> SelectorHost::visible_values(std::string const& query) const
 {
   std::vector<std::string> values;
-  if (!view_)
+  if (!snapshot_.select_list)
     return values;
-  auto filtered = *view_;
+  auto filtered = *snapshot_.select_list;
   filtered.query = query;
   for (auto const index : filter_select_list_items(filtered))
   {
@@ -45,16 +47,14 @@ void SelectorHost::open(ActiveSelectList kind, SelectListView view)
   // A visible selector needs a concrete kind; use close() to remove it.
   ASSERT(kind != ActiveSelectList::None);
   kind_ = kind;
-  view_ = std::move(view);
-  publish();
+  snapshot_.select_list = std::move(view);
 }
 
 void SelectorHost::replace(SelectListView view)
 {
   // Open a selector with its kind before replacing its view.
   ASSERT(kind_ != ActiveSelectList::None);
-  view_ = std::move(view);
-  publish();
+  snapshot_.select_list = std::move(view);
 }
 
 void SelectorHost::replace_preserving_selection(SelectListView view, std::size_t selected_index, std::string query)
@@ -78,33 +78,34 @@ void SelectorHost::replace_preserving_selection(SelectListView view, std::size_t
 void SelectorHost::close()
 {
   kind_ = ActiveSelectList::None;
-  view_.reset();
-  publish();
+  snapshot_.select_list.reset();
 }
 
 void SelectorHost::update_selection(std::size_t index, std::string query)
 {
   // Selection input must target an open selector; open() supplies its initial state.
-  ASSERT(view_);
-  view_->selected_item_index = index;
-  view_->query = std::move(query);
-  publish();
+  ASSERT(snapshot_.select_list);
+  snapshot_.select_list->selected_item_index = index;
+  snapshot_.select_list->query = std::move(query);
 }
 
 void SelectorHost::set_subtitle(std::string subtitle)
 {
-  if (!view_)
+  if (!snapshot_.select_list)
     return;
-  view_->subtitle = std::move(subtitle);
-  publish();
+  snapshot_.select_list->subtitle = std::move(subtitle);
 }
 
-void SelectorHost::publish()
+void SelectorHost::replace_rows(std::size_t first_changed, std::vector<SelectListItemView> rows, std::size_t selected, std::string query, std::string subtitle)
 {
-  if (view_)
-    snapshot_.select_list = *view_;
-  else
-    snapshot_.select_list.reset();
+  // Open the selector before replacing rows; its title and layout must already exist.
+  ASSERT(snapshot_.select_list);
+  auto& view = *snapshot_.select_list;
+  view.items.resize(std::min(first_changed, view.items.size()));
+  view.items.insert(view.items.end(), std::make_move_iterator(rows.begin()), std::make_move_iterator(rows.end()));
+  view.selected_item_index = selected;
+  view.query = std::move(query);
+  view.subtitle = std::move(subtitle);
 }
 
 } // namespace ava::tui

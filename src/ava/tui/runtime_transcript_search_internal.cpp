@@ -746,24 +746,39 @@ bool TranscriptSearchController::open(std::string query)
 void TranscriptSearchController::rebuild(std::optional<std::size_t> selected_item_index, std::size_t fallback_selection, std::size_t first_changed_match_row)
 {
   auto const& matches = projection_cache_.matches();
-  auto view = is_open() && selectors_.view() ? *selectors_.view() : SelectListView{};
   if (!is_open() || !selectors_.view())
   {
-    view = SelectListView{
-        .title = "Transcript search",
-        .subtitle = {},
-        .items = {},
-        .selected_item_index = 0,
-        .query = query_,
-        .placeholder = "Literal query (empty lists all)",
-        .empty_text = "No transcript matches",
-        .footer_hint = "Enter jump · Esc restore",
-        .freeze_underlying_transcript_layout = true,
-    };
+    selectors_.open(ActiveSelectList::TranscriptSearch, SelectListView{.title = "Transcript search",
+                                                                       .subtitle = {},
+                                                                       .items = {},
+                                                                       .selected_item_index = 0,
+                                                                       .query = query_,
+                                                                       .placeholder = "Literal query (empty lists all)",
+                                                                       .empty_text = "No transcript matches",
+                                                                       .footer_hint = "Enter jump · Esc restore",
+                                                                       .freeze_underlying_transcript_layout = true});
     first_changed_match_row = 0;
   }
-  detail::update_transcript_search_select_list_rows(view, matches, query_, first_changed_match_row, modal_row_build_count_);
-  view.selected_item_index = 0;
+  // Keep the unchanged prefix in its one owned view. Only changed search rows
+  // are built and moved into the host; arrow keys never copy the row vector.
+  first_changed_match_row = std::min({first_changed_match_row, matches.size(), selectors_.view()->items.size()});
+  std::vector<SelectListItemView> rows;
+  rows.reserve(matches.size() - first_changed_match_row);
+  for (std::size_t index = first_changed_match_row; index < matches.size(); ++index)
+  {
+    auto const& match = matches[index];
+    rows.push_back(SelectListItemView{.value = query_,
+                                      .label = match.identity,
+                                      .description = {},
+                                      .group = {},
+                                      .detail = match.detail,
+                                      .badge = {},
+                                      .current = false,
+                                      .enabled = true,
+                                      .disabled_reason = {}});
+    ++modal_row_build_count_;
+  }
+  std::size_t selection = 0;
   if (!matches.empty())
   {
     auto selected = matches.end();
@@ -774,13 +789,14 @@ void TranscriptSearchController::rebuild(std::optional<std::size_t> selected_ite
         selected = matches.end();
     }
     if (selected != matches.end())
-      view.selected_item_index = static_cast<std::size_t>(selected - matches.begin());
+      selection = static_cast<std::size_t>(selected - matches.begin());
     else if (fallback_selection == std::numeric_limits<std::size_t>::max())
-      view.selected_item_index = matches.size() - 1;
+      selection = matches.size() - 1;
     else
-      view.selected_item_index = std::min(fallback_selection, matches.size() - 1);
+      selection = std::min(fallback_selection, matches.size() - 1);
   }
-  selectors_.open(ActiveSelectList::TranscriptSearch, std::move(view));
+  selectors_.replace_rows(first_changed_match_row, std::move(rows), selection, query_,
+                          std::to_string(matches.size()) + (matches.size() == 1 ? " item" : " items"));
 }
 
 void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_t item_index_shift, std::size_t changed_from_item_index)

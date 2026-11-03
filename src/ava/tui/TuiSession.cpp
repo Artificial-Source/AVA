@@ -410,7 +410,15 @@ TuiInputOutcome TuiSession::handle_selector_input(runtime_input::RuntimeInput co
     }
     else if (input_result.action == SelectListInputAction::Archive || input_result.action == SelectListInputAction::ArchiveNoninvasive)
     {
-      session_selector_.archive(input_result);
+      // Settings owns its temporary display preview. Retire it before the
+      // whole dialog closes, including Ctrl+D from a nested settings page.
+      if (selectors_.kind() == ActiveSelectList::Settings)
+      {
+        settings_.close();
+        presentation_state_.screen().status = "view canceled";
+      }
+      else
+        session_selector_.archive(input_result);
     }
     else if (input_result.action == SelectListInputAction::Resolve && selectors_.kind() == ActiveSelectList::Session)
     {
@@ -1124,8 +1132,7 @@ void TuiSession::service_control(TuiEventLoop::Clock::time_point)
 {
   if (active_run_controller_.active())
   {
-    if (!active_run_controller_.service_control())
-      apply_input_outcome(TuiInputOutcome::Failure);
+    apply_input_outcome(active_run_controller_.service_control());
   }
   else
     apply_input_outcome(handle_signals());
@@ -1193,7 +1200,7 @@ bool TuiSession::service_input_batch()
     // A published completion and its finite frozen receipt backlog settle before
     // more input is decoded. Those bytes remain in ncurses/startup buffering.
     if (!terminal_closing_ && active_run_controller_.active() && !active_run_controller_.accepts_input())
-      return true;
+      return active_run_controller_.has_pending_updates();
     auto polled = runtime_input::poll_curses_input();
     if (polled.kind == runtime_input::InputPollKind::Empty)
     {
@@ -1207,7 +1214,12 @@ bool TuiSession::service_input_batch()
       continue;
     auto const& input = polled.input;
     if (active_run_controller_.active())
-      service_control(TuiEventLoop::Clock::now());
+    {
+      auto const control = active_run_controller_.service_control();
+      apply_input_outcome(control);
+      if (control != TuiInputOutcome::Pass)
+        continue; // A claimed signal consumes the retained key, as in idle dispatch.
+    }
     else
     {
       // Preserve idle dispatch precedence when a signal arrives during decode:

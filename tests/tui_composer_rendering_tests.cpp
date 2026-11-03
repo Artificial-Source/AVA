@@ -92,7 +92,7 @@ std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui:
   auto const deadline = ava::tests::now_plus_seconds(2);
   while (std::chrono::steady_clock::now() < deadline)
   {
-    if (!active_run.service_control())
+    if (active_run.service_control() == ava::tui::TuiInputOutcome::Failure)
       break;
     loop.service_due();
     if (active_run.consume() == ava::tui::RuntimeEventDrainResult::RenderFailed)
@@ -618,10 +618,12 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       std::promise<void> finish_run;
       auto run_release = finish_run.get_future();
       std::string invocation_id;
+      ava::event::RuntimeEventSink run_events;
       std::promise<std::optional<ava::tui::TuiPluginUiEndpoint>> endpoint_promise;
       auto endpoint_future = endpoint_promise.get_future();
       frontend.hooks().on_submit = [&](std::string const&, ava::tui::TuiSubmitContext context) {
         invocation_id = context.request_id;
+        run_events = context.event_sink;
         endpoint_promise.set_value(context.plugin_ui);
         run_release.wait();
         return ava::tui::TuiSubmitResult{};
@@ -692,7 +694,16 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
         std::this_thread::yield();
       static_cast<void>(active_run.consume());
       bool const active = prompt_coordinator.has_active();
+      // A prompt freezes both animation and event projection until it retires.
+      auto const frame_before = presentation.screen().spinner_frame;
+      auto const transcript_before = presentation.screen().transcript.size();
+      ava::event::MessagePayload message;
+      message.text = "DEFERRED BY HOST PROMPT";
+      static_cast<void>(run_events(ava::event::RuntimeEvent{{}, ava::event::AssistantMessageEvent{.payload = std::move(message)}}));
+      event_loop.loop().service_due(std::chrono::steady_clock::now() + std::chrono::seconds(1));
       static_cast<void>(active_run.consume());
+      bool const frozen = presentation.screen().spinner_frame == frame_before && presentation.screen().transcript.size() == transcript_before &&
+                          !active_run.has_pending_updates();
       bool const preserved = presentation.screen().plugin_ui_modal.has_value() == already_visible &&
                              plugin_worker.wait_for(std::chrono::milliseconds::zero()) == std::future_status::timeout;
     // Resolve through the coordinator so the run remains alive for the deferred plugin dialog.
@@ -710,7 +721,7 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       static_cast<void>(prompt_worker.get());
       finish_run.set_value();
       static_cast<void>(active_run.shutdown());
-      passed = published && initial_projection && active && preserved && host_retired && displayed_afterward &&
+      passed = published && initial_projection && active && frozen && preserved && host_retired && displayed_afterward &&
                reply.action == ava::tui::TuiPluginUiReplyKind::Select && reply.option_id == "chosen" && passed;
     }
   return passed;
@@ -1491,6 +1502,33 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
   return initial && applied_once && backend_refresh && local_refresh && known_empty;
 }
 
+// Closing all of Settings must retire display preview, while selection keeps one row allocation.
+bool test_settings_close_restores_preview_and_selector_storage()
+{
+  tui_test_support::TuiFrontEndFixture frontend;
+  ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+  presentation.screen().show_images = true;
+  ava::tui::SelectorHost selectors(presentation.screen());
+  ava::tui::SettingsDialog settings(*frontend.frontend(), presentation, selectors, ava::core::Application::instance().terminal_context());
+  settings.open();
+  auto row_for = [&](std::string_view value) {
+    auto const& rows = selectors.view()->items;
+    auto const found = std::ranges::find(rows, value, &ava::tui::SelectListItemView::value);
+    return static_cast<std::size_t>(std::distance(rows.begin(), found));
+  };
+  ava::tui::SelectListInputResult open_display;
+  open_display.action = ava::tui::SelectListInputAction::Resolve;
+  open_display.selected_item_index = row_for(ava::tui::runtime_views::kSettingsSectionDisplay);
+  static_cast<void>(settings.resolve(open_display));
+  auto const* row_storage = selectors.view()->items.data();
+  settings.highlight(row_for(ava::tui::runtime_views::kSettingsImagesOff), {});
+  bool const previewed = !presentation.screen().show_images;
+  bool const one_view = &*selectors.view() == &*presentation.screen().select_list && selectors.view()->items.data() == row_storage;
+  // The Archive route must call close(), which exits the entire nested dialog.
+  settings.close();
+  return previewed && one_view && presentation.screen().show_images && !settings.is_open() && !selectors.view();
+}
+
 bool test_display_settings_reload_poll_outcome_and_preview_staging()
 {
   EventLoopFixture event_loop;
@@ -1992,6 +2030,7 @@ void run_tui_composer_rendering_terminal_test_case(std::string_view test_case)
   }
   else if (test_case == "display_reload_poll")
   {
+    expect(test_settings_close_restores_preview_and_selector_storage(), "whole Settings closure restores preview without copying selector rows");
     expect(test_composer_draw_preserves_context_color_pair_allocations(),
            "composer draw allocates its 4x6 semantic rendition table through Context after existing pairs, preserves a preallocated pair, and stores the "
            "custom text/default-background pair in the rendered cell");

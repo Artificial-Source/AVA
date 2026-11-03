@@ -2,6 +2,7 @@
 
 #include "ActiveRunOutcome.h"
 #include "Spinner.h"
+#include "TuiInputDispatcher.h"
 #include "TuiWakeup.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime_state_internal.h"
@@ -75,7 +76,9 @@ class ActiveRun final
   [[nodiscard]] bool start(std::string submitted);
   // Called once in the session control stage, before timers/application updates.
   // Inactive operations leave signals for the idle/session policy.
-  [[nodiscard]] bool service_control();
+  // Handled consumes any input decoded before a claimed signal. Failure means
+  // the control action could not render; Pass leaves retained input available.
+  [[nodiscard]] TuiInputOutcome service_control();
   [[nodiscard]] RuntimeEventDrainResult consume(std::size_t max_events = 256);
   [[nodiscard]] bool handle_input(runtime_input::RuntimeInput const& input);
   [[nodiscard]] std::optional<ActiveRunOutcome> complete();

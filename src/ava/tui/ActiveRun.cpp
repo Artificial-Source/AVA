@@ -292,8 +292,7 @@ bool ActiveRun::cancel(ActiveRunCancel reason)
   if (!active())
     return true;
   // Resolve a ready question automatically before publishing control cancellation.
-  static_cast<void>(
-      prompt_coordinator_.cancel_active(reason == ActiveRunCancel::TerminalSignal ? PromptCancelReason::TerminalSignal : PromptCancelReason::RunStop));
+  static_cast<void>(prompt_coordinator_.cancel_active(reason == ActiveRunCancel::Stop ? PromptCancelReason::RunStop : PromptCancelReason::TerminalSignal));
   if (reason == ActiveRunCancel::Stop)
     return request_stop();
   request_close_after_submit();
@@ -304,6 +303,9 @@ bool ActiveRun::cancel(ActiveRunCancel reason)
 
 void ActiveRun::before_prompt()
 {
+  // A host prompt freezes the underlying turn, including spinner phase. Restart
+  // from the displayed frame after the claim retires, preserving baseline cadence.
+  spinner_.stop();
   transcript_search_.close_before_prompt();
   close_startup_overview_presentation(presentation_state_.screen(), action_controller_.selectors());
 }
@@ -367,10 +369,10 @@ void ActiveRun::publish_spinner_frame(std::size_t frame)
     terminal_write_failed_ = true;
 }
 
-bool ActiveRun::service_control()
+TuiInputOutcome ActiveRun::service_control()
 {
   if (!active() || !Signals::received(terminal_signals))
-    return true;
+    return TuiInputOutcome::Pass;
   // An active question's automatic answer keeps precedence over signal denial.
   static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::TerminalSignal));
   bool const exit_requested = Signals::try_obtain(SIGTERM);
@@ -387,14 +389,14 @@ bool ActiveRun::service_control()
   // └─────────────────────┴────────────────┴────────────────────────────────────────────────────────────────────┘
 
   if (exit_requested || (claimed_sigint && draft_state_.draft().text.empty()))
-    return cancel(ActiveRunCancel::TerminalSignal);
+    return cancel(ActiveRunCancel::TerminalSignal) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
   if (claimed_sigint)     // If this is true than draft.text.empty() must be false.
   {
     static_cast<void>(action_controller_.clear_draft_for_interrupt());
     presentation_state_.screen().selected_slash_command_index = draft_state_.completion_index();
-    return render();
+    return render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
   }
-  return true;
+  return TuiInputOutcome::Pass;
 }
 
 RuntimeEventDrainResult ActiveRun::consume(std::size_t max_events)
@@ -406,6 +408,12 @@ RuntimeEventDrainResult ActiveRun::consume(std::size_t max_events)
     terminal_write_failed_ = true;
     return RuntimeEventDrainResult::RenderFailed;
   }
+  // Do not project provider events beneath a host prompt. Its worker may borrow
+  // the current view; queued events resume after the prompt has retired.
+  if (prompt_coordinator_.has_active())
+    return RuntimeEventDrainResult::NoEvents;
+  if (phase_ == Phase::Running && !spinner_.active())
+    spinner_.start(presentation_state_.screen().spinner_frame);
   auto const drained = drain_events(max_events);
   if (drained == RuntimeEventDrainResult::RenderFailed)
     terminal_write_failed_ = true;
@@ -460,12 +468,12 @@ bool ActiveRun::handle_input(runtime_input::RuntimeInput const& input)
 
 bool ActiveRun::accepts_input() const
 {
-  return phase_ == Phase::Running && inbox_ && !inbox_->terminal_ready();
+  return phase_ == Phase::Running && !close_after_submit_ && inbox_ && !inbox_->terminal_ready();
 }
 
 bool ActiveRun::has_pending_updates()
 {
-  return active() && (inbox_->has_pending() || (!prompt_coordinator_.has_active() && prompt_coordinator_.has_pending_requests()) ||
+  return active() && ((!prompt_coordinator_.has_active() && (inbox_->has_pending() || prompt_coordinator_.has_pending_requests())) ||
                       (phase_ == Phase::Finalizing && !final_projection_serviced_));
 }
 
