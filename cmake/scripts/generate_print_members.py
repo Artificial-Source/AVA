@@ -101,7 +101,9 @@ def emit_body(rel, members):
     else:
         for idx, m in enumerate(members):
             sep = "" if idx == 0 else ", "
-            lines.append('     << __write__("' + sep + label(m) + ':") << ' + m + "\n")
+            # Preserve declared reference types; streaming the expression alone loses
+            # that distinction and can traverse a borrowed content owner.
+            lines.append('     << __write__("' + sep + label(m) + ':") << ::ava_utils::print_member<decltype(' + m + ')>(' + m + ")\n")
         lines.append("     ;\n")
     lines.append("}\n\n")
     return "".join(lines)

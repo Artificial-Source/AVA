@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -65,7 +67,8 @@ class RuntimeNavigationController final
   void jump_to_transcript_item(std::size_t item_index, std::string status);
   void scroll_to_message_boundary(bool previous);
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // Generated printing uses addresses for borrowed owners; it never traverses their content.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   void project_completion_input();

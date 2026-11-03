@@ -1,6 +1,7 @@
 #pragma once
 
-#include <boost/intrusive_ptr.hpp>
+#include "NAMESPACE_DEBUG.h"
+
 #include <concepts>
 #include <condition_variable>
 #include <cstring>
@@ -12,7 +13,7 @@
 #include <span>
 #include <type_traits>
 #include <variant>
-#include "NAMESPACE_DEBUG.h"
+#include <boost/intrusive_ptr.hpp>
 
 // Do NOT include "debug.h" here.
 
@@ -33,8 +34,14 @@ NAMESPACE_DEBUG_START
 
 // Allow using `os << __write__("member:")` in the generated `print_members`
 // member functions to avoid getting quotes around those string literals.
-struct AvaRawDebugString { char const* ptr; };
-[[gnu::always_inline]] inline AvaRawDebugString __write__(char const* ptr) { return {ptr}; }
+struct AvaRawDebugString
+{
+  char const* ptr;
+};
+[[gnu::always_inline]] inline AvaRawDebugString __write__(char const* ptr)
+{
+  return {ptr};
+}
 [[gnu::always_inline]] inline std::ostream& operator<<(std::ostream& os, AvaRawDebugString raw_str)
 {
   os.write(raw_str.ptr, std::strlen(raw_str.ptr));
@@ -52,13 +59,17 @@ namespace debug::ostream_operators {
 //
 namespace detail {
 
-template<typename T>
-struct is_std_function : std::false_type { };
+template <typename T>
+struct is_std_function : std::false_type
+{
+};
 
-template<typename Signature>
-struct is_std_function<std::function<Signature>> : std::true_type { };
+template <typename Signature>
+struct is_std_function<std::function<Signature>> : std::true_type
+{
+};
 
-template<typename T>
+template <typename T>
 using pointee_t = std::remove_cv_t<std::remove_pointer_t<T>>;
 
 } // namespace detail
@@ -66,32 +77,25 @@ using pointee_t = std::remove_cv_t<std::remove_pointer_t<T>>;
 //=============================================================================
 // Concepts.
 //
-template<typename T>
+template <typename T>
 concept ConceptAnyStdFunction = detail::is_std_function<std::remove_cvref_t<T>>::value;
 
-template<typename T>
-concept ConceptCharacterPointer =
-    std::is_pointer_v<T> &&
-    (std::same_as<detail::pointee_t<T>, char>          ||
-     std::same_as<detail::pointee_t<T>, signed char>   ||
-     std::same_as<detail::pointee_t<T>, unsigned char> ||
-     std::same_as<detail::pointee_t<T>, wchar_t>       ||
-     std::same_as<detail::pointee_t<T>, char8_t>       ||
-     std::same_as<detail::pointee_t<T>, char16_t>      ||
-     std::same_as<detail::pointee_t<T>, char32_t>);
+template <typename T>
+concept ConceptCharacterPointer = std::is_pointer_v<T> && (std::same_as<detail::pointee_t<T>, char> || std::same_as<detail::pointee_t<T>, signed char> ||
+                                                           std::same_as<detail::pointee_t<T>, unsigned char> || std::same_as<detail::pointee_t<T>, wchar_t> ||
+                                                           std::same_as<detail::pointee_t<T>, char8_t> || std::same_as<detail::pointee_t<T>, char16_t> ||
+                                                           std::same_as<detail::pointee_t<T>, char32_t>);
 
-template<typename T>
-concept ConceptHasToString = requires(T t)
-{
+template <typename T>
+concept ConceptHasToString = requires(T t) {
   { to_string(t) } -> std::convertible_to<std::string>;
 };
 
-template<typename T>
+template <typename T>
 concept ConceptIsEnum = std::is_enum_v<T>;
 
-template<typename T>
-concept ConceptNonArrayNonCharRawPointer =
-  std::is_pointer_v<T> && !std::is_array_v<detail::pointee_t<T>> && !ConceptCharacterPointer<T>;
+template <typename T>
+concept ConceptNonArrayNonCharRawPointer = std::is_pointer_v<T> && !std::is_array_v<detail::pointee_t<T>> && !ConceptCharacterPointer<T>;
 
 //=============================================================================
 // Forward declarations
@@ -102,34 +106,34 @@ inline std::ostream& operator<<(std::ostream& os, std::same_as<std::condition_va
 inline std::ostream& operator<<(std::ostream& os, std::same_as<std::istream> auto const& in);
 inline std::ostream& operator<<(std::ostream& os, std::same_as<std::ostream> auto const& out);
 
-template<typename T>
+template <typename T>
 inline std::ostream& operator<<(std::ostream& os, std::reference_wrapper<T> const& ref);
 
-template<typename... Args>
+template <typename... Args>
 inline std::ostream& operator<<(std::ostream& os, std::variant<Args...> const& var);
 
 //-----------------
 // Pointer types
-template<ConceptNonArrayNonCharRawPointer T>
+template <ConceptNonArrayNonCharRawPointer T>
 inline std::ostream& operator<<(std::ostream& os, T const& ptr);
 
 // Print unique pointer `ptr` to `os` using the debug pointer representation.
 //
 // Null pointers render as "nullptr". Custom deleters are supported.
-template<typename T, typename Deleter>
+template <typename T, typename Deleter>
 inline std::ostream& operator<<(std::ostream& os, std::unique_ptr<T, Deleter> const& ptr);
 
 // boost::intrusive_ptr defines its own operator<< as
 // template<class E, class T, class Y> std::basic_ostream<E, T> & operator<< (std::basic_ostream<E, T> & os, intrusive_ptr<Y> const & p)
 // In order to override that we use a constrained template to win over the unconstrained one:
-template<class E, class T, class Y>
-requires (sizeof(E) <= sizeof(char32_t)) // Expected to be always true, but it counts as a constrain.
+template <class E, class T, class Y>
+  requires(sizeof(E) <= sizeof(char32_t)) // Expected to be always true, but it counts as a constrain.
 inline std::basic_ostream<E, T>& operator<<(std::basic_ostream<E, T>& os, boost::intrusive_ptr<Y> const& p);
 
-template<typename T>
+template <typename T>
 inline std::ostream& operator<<(std::ostream& os, std::shared_ptr<T> const& ptr);
 
-template<ConceptAnyStdFunction T>
+template <ConceptAnyStdFunction T>
 inline std::ostream& operator<<(std::ostream& os, T const& fn);
 
 namespace print_members {
@@ -138,18 +142,18 @@ inline std::ostream& operator<<(std::ostream& os, char const* str);
 //-----------------
 
 // Non-inline, defined below.
-template<ConceptIsEnum T>
+template <ConceptIsEnum T>
 std::ostream& operator<<(std::ostream& os, T const& e);
 
 // Non-inline, defined below.
-template<typename T>
+template <typename T>
 std::ostream& operator<<(std::ostream& os, std::optional<T> const& opt);
 
 // Non-inline, defined below.
 // std::span does not satisfy cwds' ConceptNonCharContainer (value_type is
 // remove_cv_t<element_type>, so iterator dereference is not value_type&),
 // so provide an explicit debug printer matching container brace formatting.
-template<typename T, std::size_t Extent>
+template <typename T, std::size_t Extent>
 std::ostream& operator<<(std::ostream& os, std::span<T, Extent> const& sp);
 
 // Non-inline, defined in maxlen.cpp.
@@ -203,54 +207,62 @@ std::ostream& operator<<(std::ostream& os, std::same_as<std::ostream> auto const
   return os << ::ava_utils::print_reference(out);
 }
 
-template<typename T>
+template <typename T>
 std::ostream& operator<<(std::ostream& os, std::reference_wrapper<T> const& ref)
 {
   return os << ::ava_utils::print_reference(ref);
 }
 
-template<typename T, typename POLICY_MUTEX>
+template <typename T, typename POLICY_MUTEX>
 std::ostream& operator<<(std::ostream& os, threadsafe::Unlocked<T, POLICY_MUTEX> const& unlocked)
 {
   return os << "threadsafe::Unlocked<" << NAMESPACE_DEBUG::type_name_of<T>() << ">@" << (void const*)&unlocked;
 }
 
-template<typename... Args>
+template <typename... Args>
 std::ostream& operator<<(std::ostream& os, std::variant<Args...> const& UNUSED_ARG(var))
 {
   os.write("$variant$", 9);
   return os;
 }
 
-template<ConceptNonArrayNonCharRawPointer T>
+template <ConceptNonArrayNonCharRawPointer T>
 std::ostream& operator<<(std::ostream& os, T const& ptr)
 {
   ::utils::operator<<(os, ::utils::print_pointer(ptr));
   return os;
 }
 
-template<typename T, typename Deleter>
+template <typename T, typename Deleter>
 std::ostream& operator<<(std::ostream& os, std::unique_ptr<T, Deleter> const& ptr)
 {
   ::utils::operator<<(os, ::utils::print_pointer(ptr.get()));
   return os;
 }
 
-template<class E, class T, class Y>
-requires (sizeof(E) <= sizeof(char32_t))
+template <class E, class T, class Y>
+  requires(sizeof(E) <= sizeof(char32_t))
 std::basic_ostream<E, T>& operator<<(std::basic_ostream<E, T>& os, boost::intrusive_ptr<Y> const& p)
 {
   ::utils::operator<< <Y>(os, ::utils::print_pointer(p));
   return os;
 }
 
-template<typename T>
+template <typename T>
 std::ostream& operator<<(std::ostream& os, std::shared_ptr<T> const& ptr)
 {
   return os << ::utils::print_pointer(ptr);
 }
 
-template<ConceptAnyStdFunction T>
+// Any thread may report a weak capability's lifetime without acquiring a share
+// or traversing its referent. This observation is advisory and may become stale.
+template <typename T>
+std::ostream& operator<<(std::ostream& os, std::weak_ptr<T> const& ptr)
+{
+  return os << (ptr.expired() ? "$weak_ptr:expired$" : "$weak_ptr:live$");
+}
+
+template <ConceptAnyStdFunction T>
 std::ostream& operator<<(std::ostream& os, T const& UNUSED_ARG(fn))
 {
   os.write("$std::function$", 15);
@@ -272,7 +284,7 @@ std::ostream& operator<<(std::ostream& os, char const* str)
 // Implementation of operator<<'s that are not marked as inline.
 //
 
-template<ConceptIsEnum T>
+template <ConceptIsEnum T>
 std::ostream& operator<<(std::ostream& os, T const& e)
 {
   if constexpr (ConceptHasToString<T>)
@@ -288,7 +300,7 @@ std::ostream& operator<<(std::ostream& os, T const& e)
   return os;
 }
 
-template<typename T>
+template <typename T>
 std::ostream& operator<<(std::ostream& os, std::optional<T> const& opt)
 {
   if (opt.has_value())
@@ -304,7 +316,7 @@ std::ostream& operator<<(std::ostream& os, std::optional<T> const& opt)
   return os;
 }
 
-template<typename T, std::size_t Extent>
+template <typename T, std::size_t Extent>
 std::ostream& operator<<(std::ostream& os, std::span<T, Extent> const& sp)
 {
   os << '{';

@@ -2,11 +2,58 @@
 
 #include "print_members_on.h"
 #include "utils/iomanip.h"
+
+#include <memory>
+#include <type_traits>
 #include <libcwd/type_info.h>
 
 namespace ava_utils {
 
-template<typename T>
+// Call-scoped debug adapter for a declared reference member. It prints only
+// type/address, even for const references whose referent has a content printer.
+// The referent must outlive the expression; no ownership or synchronization is added.
+template <typename T>
+class MemberReference final
+{
+ public:
+  // Any logging thread may form this adapter while the borrowed object is alive.
+  explicit MemberReference(T const& value) : value_(value) { }
+  // Never dereference the borrowed object. Naming its pointer type also supports
+  // forward-declared classes without requiring their definitions in a header.
+  void print_on(std::ostream& os) const
+  {
+    os << NAMESPACE_DEBUG::type_name_of<T*>();
+    os << '@' << static_cast<void const*>(std::addressof(value_));
+  }
+  // This adapter has its own address-only printer; recursive generation is unwanted.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+ private:
+  // Borrowed only until the enclosing stream expression finishes; never inspected.
+  T const& value_;
+};
+
+// Keep insertion discoverable through this adapter's namespace, including when
+// the referent is a standard-library type with no AVA stream overloads.
+template <typename T>
+std::ostream& operator<<(std::ostream& os, MemberReference<T> const& reference)
+{
+  reference.print_on(os);
+  return os;
+}
+
+// Generated printers pass the member's declared type via unparenthesized
+// decltype(member). Values keep existing printers; references use address only.
+// This does not make concurrent reads of ordinary value members safe.
+template <typename Declared, typename T>
+decltype(auto) print_member(T const& value)
+{
+  if constexpr (std::is_reference_v<Declared>)
+    return MemberReference<T>(value);
+  else
+    return (value);
+}
+
+template <typename T>
 class NoDereference : public utils::iomanip::Sticky
 {
  private:
@@ -19,10 +66,10 @@ class NoDereference : public utils::iomanip::Sticky
 };
 
 //static
-template<typename T>
+template <typename T>
 utils::iomanip::Index NoDereference<T>::s_index;
 
-template<typename T>
+template <typename T>
 struct PrintConstReference
 {
   T const& m_ref;
@@ -30,18 +77,18 @@ struct PrintConstReference
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-template<typename T>
+template <typename T>
 struct PrintReference : public PrintConstReference<T>
 {
 };
 
-template<typename T>
+template <typename T>
 PrintConstReference<T> print_reference(T const& ref)
 {
-  return { ref };
+  return {ref};
 }
 
-template<typename T>
+template <typename T>
 std::ostream& operator<<(std::ostream& os, PrintConstReference<T> ref)
 {
 #if CWDEBUG_LOCATION
@@ -54,13 +101,13 @@ std::ostream& operator<<(std::ostream& os, PrintConstReference<T> ref)
   return os;
 }
 
-template<typename T>
+template <typename T>
 PrintReference<T> print_reference(T& ref)
 {
-  return { ref };
+  return {ref};
 }
 
-template<typename T>
+template <typename T>
 inline std::ostream& operator<<(std::ostream& os, PrintReference<T> ref)
 {
   return os << NoDereference<T>(1L) << static_cast<PrintConstReference<T>>(ref) << NoDereference<T>(0L);

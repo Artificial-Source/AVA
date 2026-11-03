@@ -7,20 +7,21 @@
 // clang-format on
 
 #include <array>
-#include <boost/smart_ptr/intrusive_ref_counter.hpp>
-#include <boost/intrusive_ptr.hpp>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <boost/intrusive_ptr.hpp>
+#include <boost/smart_ptr/intrusive_ref_counter.hpp>
 #include "debug.h"
 
 // A type in namespace ava::session that owns a print_on method, used to exercise
 // printing of an owning pointer (boost::intrusive_ptr) and an optional of one.
 namespace ava::session {
-struct Foo : boost::intrusive_ref_counter<Foo, boost::thread_unsafe_counter> {
+struct Foo : boost::intrusive_ref_counter<Foo, boost::thread_unsafe_counter>
+{
   void print_on(std::ostream& os) const { os << "{Foo}"; }
 };
 } // namespace ava::session
@@ -36,15 +37,23 @@ static_assert(!DebugStreamInsertable<ava::app::runtime::RunOptions>,
 // An enum with an ADL-findable to_string; after LIBCWD_USING_OSTREAM_PRELUDE it
 // should render as that string.
 namespace test_adl {
-enum class Color { Red, Green, Blue };
+enum class Color
+{
+  Red,
+  Green,
+  Blue
+};
 std::string to_string(Color color)
 {
   switch (color)
   {
     // Use uppercase to distinguish this function from utils::to_string.
-    case Color::Red: return "RED";
-    case Color::Green: return "GREEN";
-    case Color::Blue: return "BLUE";
+    case Color::Red:
+      return "RED";
+    case Color::Green:
+      return "GREEN";
+    case Color::Blue:
+      return "BLUE";
   }
   return "Unknown";
 }
@@ -52,7 +61,12 @@ std::string to_string(Color color)
 
 // An enum WITHOUT a to_string. This is the case the prelude still needs to grow
 // support for (scoped enums cannot fall back to their underlying integer).
-enum class Plain { Alpha, Beta, Gamma };
+enum class Plain
+{
+  Alpha,
+  Beta,
+  Gamma
+};
 
 // Helper that builds the debug rendering of every supported value kind in a
 // single stringstream, using LIBCWD_USING_OSTREAM_PRELUDE exactly the way a
@@ -80,26 +94,14 @@ std::string render_debug_values()
   std::shared_ptr<ava::session::Foo> shared_foo_ptr_empty;
 
   {
-    AVA_USING_OSTREAM_PRELUDE(ss)
-       << __write__("string_literal:") << "literal"
-       << __write__("\nstd::string:") << string_value
-       << __write__("\nbool:") << bool_value
-       << __write__("\nint:") << int_value
-       << __write__("\nenum_to_string:") << color_value
-       << __write__("\nenum_plain:") << plain_value
-       << __write__("\nmutex:") << mutex_value
-       << __write__("\noptional_string:") << optional_string_value
-       << __write__("\noptional_string_empty:") << optional_string_empty
-       << __write__("\nFoo:") << foo
-       << __write__("\nintrusive_ptr:") << foo_ptr
-       << __write__("\noptional_intrusive_ptr:") << optional_foo
-       << __write__("\noptional_intrusive_ptr_empty:") << optional_foo_empty
-       << __write__("\nvector_with_bool:") << vector_bool
-       << __write__("\nvector_with_strings:") << vector_strings
-       << __write__("\noptional_bool:") << optional_bool
-       << __write__("\nshared_foo_ptr:") << shared_foo_ptr
-       << __write__("\nshared_foo_ptr_empty:") << shared_foo_ptr_empty
-       << '\n';
+    AVA_USING_OSTREAM_PRELUDE(ss) << __write__("string_literal:") << "literal" << __write__("\nstd::string:") << string_value << __write__("\nbool:")
+                                  << bool_value << __write__("\nint:") << int_value << __write__("\nenum_to_string:") << color_value
+                                  << __write__("\nenum_plain:") << plain_value << __write__("\nmutex:") << mutex_value << __write__("\noptional_string:")
+                                  << optional_string_value << __write__("\noptional_string_empty:") << optional_string_empty << __write__("\nFoo:") << foo
+                                  << __write__("\nintrusive_ptr:") << foo_ptr << __write__("\noptional_intrusive_ptr:") << optional_foo
+                                  << __write__("\noptional_intrusive_ptr_empty:") << optional_foo_empty << __write__("\nvector_with_bool:") << vector_bool
+                                  << __write__("\nvector_with_strings:") << vector_strings << __write__("\noptional_bool:") << optional_bool
+                                  << __write__("\nshared_foo_ptr:") << shared_foo_ptr << __write__("\nshared_foo_ptr_empty:") << shared_foo_ptr_empty << '\n';
   }
 
   std::cout << "Result: " << ss.str();
@@ -111,9 +113,7 @@ void test_string_literal_renders_raw()
   std::stringstream ss;
   {
     ss << "<prefix>";
-    AVA_USING_OSTREAM_PRELUDE(ss)
-       << __write__("literal:")
-       << "literal";
+    AVA_USING_OSTREAM_PRELUDE(ss) << __write__("literal:") << "literal";
   }
   expect(ss.str() == "<prefix>literal:\"literal\"", "prefix renders raw, string literal is quoted");
 }
@@ -176,7 +176,8 @@ void test_maxlen_exactly_20_removed_truncates()
     AVA_USING_OSTREAM_PRELUDE(ss) << maxlen(ml) << s102;
   }
   int part_len = (ml - 18) / 2;
-  std::string const expected = "\"" + std::string(part_len, 'a') + "\"...(" + std::to_string(102 - 2 * part_len) + " chars)...\"" + std::string(part_len, 'a') + "\"";
+  std::string const expected =
+      "\"" + std::string(part_len, 'a') + "\"...(" + std::to_string(102 - 2 * part_len) + " chars)...\"" + std::string(part_len, 'a') + "\"";
   expect(ss.str() == expected, "string that removes exactly 20 chars is truncated");
 }
 
@@ -210,8 +211,8 @@ void test_maxlen_is_scoped_to_expression()
     AVA_USING_OSTREAM_PRELUDE(ss) << s50;
   }
   int const part_len = (ml - 18) / 2;
-  std::string const truncated = "\"" + std::string(part_len, 'a') + "\"...(" +
-    std::to_string(config::ava_debug_maxlen_c - 2 * part_len) + " chars)...\"" + std::string(part_len, 'a') + "\"";
+  std::string const truncated = "\"" + std::string(part_len, 'a') + "\"...(" + std::to_string(config::ava_debug_maxlen_c - 2 * part_len) + " chars)...\"" +
+                                std::string(part_len, 'a') + "\"";
   std::string const full = "\"" + s50 + "\"";
   expect(ss.str() == truncated + full, "maxlen is scoped to its expression (Unsticky restores stream state)");
 }
@@ -322,7 +323,7 @@ void test_optional_intrusive_ptr_renders()
 void test_vector_bool_renders_boolalpha_list()
 {
   std::stringstream ss;
-  std::vector<bool> const vector_bool = { true, false };
+  std::vector<bool> const vector_bool = {true, false};
   {
     AVA_USING_OSTREAM_PRELUDE(ss) << vector_bool;
   }
@@ -332,7 +333,7 @@ void test_vector_bool_renders_boolalpha_list()
 void test_vector_string_renders_quoted_list()
 {
   std::stringstream ss;
-  std::vector<std::string> const vector_string = { "one", "two" };
+  std::vector<std::string> const vector_string = {"one", "two"};
   {
     AVA_USING_OSTREAM_PRELUDE(ss) << vector_string;
   }
@@ -414,6 +415,44 @@ void test_unique_ptr_uses_print_pointer()
   expect(ss_vector.str().find("{&{Foo}@0x") == 0, "vector<unique_ptr<Foo>> uses the debug pointer inserter for its elements");
 }
 
+// Generated reference printing must not expose either mutable or const borrowed content.
+void test_generated_reference_members_do_not_print_content()
+{
+  std::string value = "borrowed private content";
+  std::string& mutable_reference = value;
+  std::string const& const_reference = value;
+  std::stringstream borrowed;
+  {
+    AVA_USING_OSTREAM_PRELUDE(borrowed) << ::ava_utils::print_member<decltype(mutable_reference)>(mutable_reference)
+                                        << ::ava_utils::print_member<decltype(const_reference)>(const_reference);
+  }
+  expect(borrowed.str().find(value) == std::string::npos && borrowed.str().find('@') != std::string::npos,
+         "generated mutable and const references report addresses without borrowed content");
+  std::stringstream owned;
+  {
+    AVA_USING_OSTREAM_PRELUDE(owned) << ::ava_utils::print_member<decltype(value)>(value);
+  }
+  expect(owned.str().find(value) != std::string::npos, "generated owned values retain their existing printer");
+}
+
+// Weak printing must neither traverse content nor retain the target after its owner releases it.
+void test_weak_ptr_prints_only_lifetime()
+{
+  auto owner = std::make_shared<std::string>("private weak target");
+  std::weak_ptr<std::string> weak = owner;
+  std::stringstream live;
+  {
+    AVA_USING_OSTREAM_PRELUDE(live) << weak;
+  }
+  expect(live.str() == "$weak_ptr:live$" && owner.use_count() == 1, "weak debug printing reports only live metadata");
+  owner.reset();
+  std::stringstream expired;
+  {
+    AVA_USING_OSTREAM_PRELUDE(expired) << weak;
+  }
+  expect(expired.str() == "$weak_ptr:expired$", "weak debug printing does not keep its target alive");
+}
+
 void test_full_render_smoke()
 {
   // Exercises every requested type in one stream; mainly a compile-and-run smoke.
@@ -423,6 +462,7 @@ void test_full_render_smoke()
 
 } // namespace
 
+// Exercise owned-value formatting and privacy of borrowed references and weak capabilities.
 void run_debug_tests()
 {
   test_string_literal_renders_raw();
@@ -447,5 +487,7 @@ void run_debug_tests()
   test_optional_bool_renders_with_boolalpha();
   test_shared_ptr_uses_print_pointer();
   test_unique_ptr_uses_print_pointer();
+  test_generated_reference_members_do_not_print_content();
+  test_weak_ptr_prints_only_lifetime();
   test_full_render_smoke();
 }

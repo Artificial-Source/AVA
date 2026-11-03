@@ -34,9 +34,8 @@ class SessionTransitionCoordinator final
   // Calls frontend boundary reads: invoke only without holding the UI lock.
   [[nodiscard]] bool apply_and_refresh(TuiFrontEnd& frontend, std::string committed_session_id);
 
-  // Borrowed presentation/draft owners contain arbitrary messages, attachments
-  // and permission aggregates; generated printing must not expose their contents.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // Generated reference printing reports type/address without traversing owners.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   RuntimePresentationState& presentation_;

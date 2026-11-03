@@ -27,8 +27,8 @@ class CommandOutput final
   // Host prompts retain precedence. Pass may mean output was closed by typing.
   [[nodiscard]] CommandOutputDisposition handle_input(InputEvent const& event);
 
-  // The borrowed projection contains command output and deliberately opts out.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // Generated printing uses addresses for borrowed owners; it never traverses their content.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   // Session-owned storage. Only named output/status publications change it here.

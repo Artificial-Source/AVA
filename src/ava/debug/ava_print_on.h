@@ -60,7 +60,7 @@ using utils::has_print_on::operator<<;
 
 namespace frontend {
 using utils::has_print_on::operator<<;
-} // namespace runtime
+} // namespace frontend
 
 namespace lsp {
 using utils::has_print_on::operator<<;
@@ -105,6 +105,10 @@ using utils::has_print_on::operator<<;
 namespace runtime_views {
 using utils::has_print_on::operator<<;
 } // namespace runtime_views
+namespace runtime_input {
+// InputPollResult owns a RuntimeInput value; generated printing needs ADL here.
+using utils::has_print_on::operator<<;
+} // namespace runtime_input
 namespace terminal {
 using utils::has_print_on::operator<<;
 } // namespace terminal

@@ -10,7 +10,7 @@ import tempfile
 
 
 def main(argv):
-    """Run the generator against static and instance member tags."""
+    """Protect static-member exclusion and declared-type dispatch for borrowed members."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--generator", required=True)
     args = parser.parse_args(argv)
@@ -76,7 +76,7 @@ def main(argv):
     if "shared_default" in generated:
         sys.stderr.write("static member shared_default was emitted:\n" + generated)
         return 1
-    if '__write__("value:") << value_' not in generated:
+    if '__write__("value:") << ::ava_utils::print_member<decltype(value_)>(value_)' not in generated:
         sys.stderr.write("instance member value_ was not emitted:\n" + generated)
         return 1
     return 0

@@ -17,9 +17,8 @@ class TuiWakeup final
   TuiWakeup() = default;
   void notify() const noexcept;
 
-  // The weak control block is an opaque concurrent lifetime resource, without a
-  // generated streaming contract. Do not lock/inspect it for debug printing.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // Printing reports only weak lifetime metadata; it never locks or prints the waiter.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   friend class TuiEventLoop;

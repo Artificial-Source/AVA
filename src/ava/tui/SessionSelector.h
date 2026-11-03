@@ -30,9 +30,8 @@ class SessionSelector final
   [[nodiscard]] core::Result<std::string> resolve(SelectListInputResult const& input);
   [[nodiscard]] std::optional<core::Result<std::string>> navigate_branch(SelectListInputResult const& input);
 
-  // Borrows arbitrary transcript/session-catalog projections and renderer state;
-  // these aggregates deliberately have no generated content printer.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // References print as type/address; the archive identity uses NoLogString.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   void preserve_selection(SelectListInputResult const& input, SelectListView view, std::string status);

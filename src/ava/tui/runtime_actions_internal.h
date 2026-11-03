@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TuiTimer.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/core/NoLogString.h"
@@ -59,7 +60,8 @@ class RuntimeActionController final
   [[nodiscard]] bool open_copy_user_turn_selector(std::string_view initial_query = {});
   void cycle_model(bool forward);
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // Generated printing uses addresses for borrowed owners; it never traverses their content.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   void mark_display_reload_due(TuiTimer::Clock::time_point now);

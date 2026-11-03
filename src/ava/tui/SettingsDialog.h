@@ -57,9 +57,8 @@ class SettingsDialog final
   void rebase_after_display_reload();
   [[nodiscard]] bool is_open() const noexcept;
 
-  // Retains the full presentation projection and selector, including arbitrary
-  // transcript/prompt content; neither aggregate is safe for generated printing.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // References print as type/address; navigation query text uses NoLogString.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   void retire();

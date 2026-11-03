@@ -51,9 +51,8 @@ class SelectorInputController final
   // ReconcileSessionError must reconcile identity before publishing its text.
   [[nodiscard]] SelectorInputOutcome handle(SelectListInputResult const& input);
 
-  // Borrows full catalog/presentation/renderer aggregates containing arbitrary
-  // transcript and stashed-prompt text; generated printing must not expose them.
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  // Borrowed owners print as type/address; their content is never traversed.
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   bool handle_scoped_models(SelectListInputResult const& input);

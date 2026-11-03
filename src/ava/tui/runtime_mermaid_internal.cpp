@@ -21,6 +21,7 @@ struct AcceptedIdentity
   std::size_t block_index = 0;
   std::uint64_t block_identity = 0;
 
+  // Anonymous-namespace types cannot have generated out-of-line member printers.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 

@@ -45,8 +45,8 @@ class TuiSession final
   // Called only on normal loop exit; never retained. The outer guard handles early exits.
   [[nodiscard]] int run(std::function<bool()> const& before_shutdown);
 
-  // Owns arbitrary draft/message bodies and presentation authority aggregates.
-  // Those contents must not become generated debug output.
+  // Owned Composer, ActiveRun and presentation members deliberately opt out of
+  // printing because they retain user content; this aggregate cannot print them.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
+
 #include <optional>
 #include <string>
 #include "debug.h"
@@ -49,6 +51,9 @@ class RuntimeSubmitController final
 
   [[nodiscard]] RuntimeSubmitOutcome submit(std::optional<std::string> forced_submission = std::nullopt);
 
+  // Generated printing uses addresses for borrowed owners; it never traverses their content.
+  AVA_DEBUG_PRINT_MEMBERS_ON
+
  private:
   TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
@@ -63,8 +68,6 @@ class RuntimeSubmitController final
   SelectorHost& selectors_;
   SettingsDialog& settings_dialog_;
   SessionSelector& session_selector_;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 }  // namespace ava::tui
