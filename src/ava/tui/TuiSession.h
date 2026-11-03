@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BranchSummaryOperation.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
 #include "SessionTransitionCoordinator.h"
@@ -41,14 +42,7 @@ class TuiSession final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  void restore_branch_summary_selector(SelectListView view);
-  void present_branch_summary_status(std::string status);
-  bool settle_branch_summary(TuiBranchSummarySnapshot const& operation);
-  bool apply_branch_summary_snapshot(TuiBranchSummarySnapshot const& operation);
-  bool poll_branch_summary();
-  bool begin_branch_summary(SelectListView const& session_view, std::size_t selected_index, std::string selected_value);
-  bool cancel_branch_summary(bool exit_requested);
-  bool confirm_branch_summary();
+  bool stop_for_branch_summary(BranchSummaryOutcome outcome);
   bool service_mermaid_presentation();
   bool maybe_reload_display_settings();
   bool toggle_startup_overview();
@@ -76,17 +70,9 @@ class TuiSession final
   SelectorHost selectors_;
   SettingsDialog settings_;
   SessionSelector session_selector_;
+  BranchSummaryOperation branch_summary_;
   RuntimePromptStashController prompt_stash_;
 
-  // Temporary branch-summary ownership, extracted in 04/04.
-  bool branch_summary_active_ = false;
-  bool branch_summary_exit_requested_ = false;
-  std::uint64_t branch_summary_generation_ = 0;
-  TuiBranchSummaryPhase branch_summary_phase_ = TuiBranchSummaryPhase::Idle;
-  SelectListView branch_summary_prior_session_view_;
-  std::size_t branch_summary_prior_selected_index_ = 0;
-  std::string branch_summary_selected_source_value_;
-  bool branch_summary_exit_ready_ = false;
   TranscriptSearchController transcript_search_;
   RuntimePromptCoordinator prompt_coordinator_;
   RuntimeMermaidPresentationController mermaid_presentation_;

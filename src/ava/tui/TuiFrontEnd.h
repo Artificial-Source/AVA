@@ -18,6 +18,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   friend class TuiSession;
   friend class SettingsDialog;
   friend class SessionSelector;
+  friend class BranchSummaryOperation;
 
  protected:
   TuiKeyBindings key_bindings_;

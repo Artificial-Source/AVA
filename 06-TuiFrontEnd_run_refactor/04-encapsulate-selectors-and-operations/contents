@@ -1,0 +1,5 @@
+01-selector-host — Active selector kind/view ownership.
+02-settings-dialog — Settings navigation and preview lifetime.
+03-session-selector-and-transition — Session selection and composition-level committed transitions.
+04-branch-summary-operation — Branch operation lifecycle and explicit completion outcomes.
+06/03/migration-ledger.md — Integrated interfaces and per-child evidence.

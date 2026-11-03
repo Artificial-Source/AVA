@@ -55,6 +55,7 @@ add_library(ava_tui
   "SettingsDialog.cpp"
   "SessionSelector.cpp"
   "SessionTransitionCoordinator.cpp"
+  "BranchSummaryOperation.cpp"
 )
 
 target_link_libraries(ava_tui

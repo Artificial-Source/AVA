@@ -41,6 +41,7 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       selectors_(presentation_state_.snapshot),
       settings_(frontend, presentation_state_, selectors_, terminal_context),
       session_selector_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
+      branch_summary_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings()),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
       prompt_coordinator_(frontend, presentation_state_.snapshot, presentation_state_.command_session_grants, renderer_, &selectors_),
@@ -63,151 +64,11 @@ TuiSession::~TuiSession()
   plugin_ui_.shutdown(presentation_state_.snapshot);
 }
 
-void TuiSession::restore_branch_summary_selector(SelectListView view)
+bool TuiSession::stop_for_branch_summary(BranchSummaryOutcome outcome)
 {
-  selectors_.open(ActiveSelectList::Session,
-                  runtime_views::restore_branch_summary_session_view(std::move(view), branch_summary_prior_session_view_, branch_summary_selected_source_value_,
-                                                                     branch_summary_prior_selected_index_));
-}
-
-void TuiSession::present_branch_summary_status(std::string status)
-{
-  presentation_state_.snapshot.status = status;
-  selectors_.set_subtitle(std::move(status));
-}
-
-bool TuiSession::settle_branch_summary(TuiBranchSummarySnapshot const& operation)
-{
-  auto restored = branch_summary_prior_session_view_;
-  bool refresh_failed = false;
-  if (operation.refresh_required)
-  {
-    try
-    {
-      auto refreshed = frontend_.on_branch_summary_refresh_catalog();
-      if (refreshed)
-        restored = std::move(*refreshed);
-      else
-        refresh_failed = true;
-    }
-    catch (...)
-    {
-      refresh_failed = true;
-    }
-  }
-  auto const exit_requested = branch_summary_exit_requested_;
-  restore_branch_summary_selector(std::move(restored));
-  present_branch_summary_status(refresh_failed ? std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Refresh))
-                                               : runtime_views::branch_summary_terminal_status(operation));
-  branch_summary_active_ = false;
-  branch_summary_phase_ = operation.phase;
-  if (exit_requested)
-  {
-    selectors_.close();
-    branch_summary_exit_ready_ = true;
-    return true;
-  }
-  return renderer_.request_render();
-}
-
-bool TuiSession::apply_branch_summary_snapshot(TuiBranchSummarySnapshot const& operation)
-{
-  if (!branch_summary_active_ || operation.generation != branch_summary_generation_)
-    return true;
-  branch_summary_phase_ = operation.phase;
-  if (runtime_views::branch_summary_terminal(operation))
-    return settle_branch_summary(operation);
-  selectors_.open(ActiveSelectList::BranchSummary, runtime_views::branch_summary_operation_view(operation));
-  return renderer_.request_render();
-}
-
-bool TuiSession::poll_branch_summary()
-{
-  if (!branch_summary_active_)
-    return true;
-  try
-  {
-    return apply_branch_summary_snapshot(frontend_.branch_summary_snapshot());
-  }
-  catch (...)
-  {
-    TuiBranchSummarySnapshot failed;
-    failed.generation = branch_summary_generation_;
-    failed.phase = TuiBranchSummaryPhase::Failed;
-    failed.failure_code = TuiBranchSummaryFailureCode::Internal;
-    auto settled = settle_branch_summary(failed);
-    present_branch_summary_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Snapshot)));
-    return settled;
-  }
-}
-
-bool TuiSession::begin_branch_summary(SelectListView const& session_view, std::size_t selected_index, std::string selected_value)
-{
-  ava::core::Result<TuiBranchSummarySnapshot> prepared =
-      std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "parent summary prepare callback failed"));
-  try
-  {
-    prepared = frontend_.on_branch_summary_prepare(selected_value);
-  }
-  catch (...)
-  {
-  }
-  if (!prepared)
-  {
-    present_branch_summary_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Prepare)));
-    return renderer_.request_render();
-  }
-  branch_summary_active_ = true;
-  branch_summary_exit_requested_ = false;
-  branch_summary_generation_ = prepared->generation;
-  branch_summary_phase_ = prepared->phase;
-  branch_summary_prior_session_view_ = session_view;
-  branch_summary_prior_selected_index_ = selected_index;
-  branch_summary_selected_source_value_ = std::move(selected_value);
-  return apply_branch_summary_snapshot(*prepared);
-}
-
-bool TuiSession::cancel_branch_summary(bool exit_requested)
-{
-  if (!branch_summary_active_)
-    return true;
-  branch_summary_exit_requested_ = branch_summary_exit_requested_ || exit_requested;
-  ava::core::Result<bool> canceled = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "cancel callback unavailable"));
-  try
-  {
-    canceled = frontend_.on_branch_summary_cancel(branch_summary_generation_);
-  }
-  catch (...)
-  {
-  }
-  if (!canceled || !*canceled)
-  {
-    present_branch_summary_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Cancel)));
-    return renderer_.request_render();
-  }
-  presentation_state_.snapshot.status = "canceling parent summary";
-  return poll_branch_summary();
-}
-
-bool TuiSession::confirm_branch_summary()
-{
-  if (!branch_summary_active_ || branch_summary_phase_ != TuiBranchSummaryPhase::AwaitingConfirmation)
-    return true;
-  ava::core::Result<bool> confirmed = std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "confirm callback unavailable"));
-  try
-  {
-    confirmed = frontend_.on_branch_summary_confirm(branch_summary_generation_);
-  }
-  catch (...)
-  {
-  }
-  if (!confirmed || !*confirmed)
-  {
-    present_branch_summary_status(std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Confirm)));
-    return renderer_.request_render();
-  }
-  presentation_state_.snapshot.status = "parent summary generation started";
-  return poll_branch_summary();
+  if (outcome == BranchSummaryOutcome::RenderFailed)
+    terminal_write_failed_ = true;
+  return outcome == BranchSummaryOutcome::RenderFailed || outcome == BranchSummaryOutcome::ExitReady;
 }
 
 bool TuiSession::service_mermaid_presentation()
@@ -468,12 +329,7 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       terminal_write_failed_ = true;
       break;
     }
-    if (!poll_branch_summary())
-    {
-      terminal_write_failed_ = true;
-      break;
-    }
-    if (branch_summary_exit_ready_)
+    if (stop_for_branch_summary(branch_summary_.poll()))
       break;
     if (!renderer_.flush_pending_render_if_due())
     {
@@ -526,17 +382,15 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       // ├─────────────────────┼─────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
       // │SIGINT               │No active branch summary, nonempty draft │Clear draft and continue                                             │
       // └─────────────────────┴─────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────┘
-      if (branch_summary_active_)
+      if (branch_summary_.active())
       {
         if (AI_LIKELY(exit_requested || Signals::try_obtain(SIGINT)))
         {
           // We have an active branch summary and successfully claimed either terminal signal.
           // Request cancellation; additionally request eventual exit for SIGTERM.
-          if (!cancel_branch_summary(exit_requested))
-          {
-            terminal_write_failed_ = true;
+          auto const mode = exit_requested ? BranchSummaryCancelMode::ExitAfterSettlement : BranchSummaryCancelMode::ContinueSession;
+          if (stop_for_branch_summary(branch_summary_.cancel(mode)))
             break;
-          }
           continue;
         }
         // We failed to claim either terminal signal; fall-through.
@@ -630,30 +484,10 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       }
       continue;
     }
-    if (branch_summary_active_)
+    if (branch_summary_.active())
     {
-      bool success = true;
-      switch (runtime_views::branch_summary_input_intent(branch_summary_phase_, input.event, frontend_.key_bindings()))
-      {
-        using runtime_views::BranchSummaryInputIntent;
-        case BranchSummaryInputIntent::Exit:
-          success = cancel_branch_summary(true);
-          break;
-        case BranchSummaryInputIntent::Cancel:
-          success = cancel_branch_summary(false);
-          break;
-        case BranchSummaryInputIntent::Confirm:
-          success = confirm_branch_summary();
-          break;
-        case BranchSummaryInputIntent::Block:
-          terminal_context_.beep();
-          break;
-      }
-      if (!success)
-      {
-        terminal_write_failed_ = true;
+      if (stop_for_branch_summary(branch_summary_.handle_input(input.event)))
         break;
-      }
       continue;
     }
     clear_reasoning_feedback_for_user_input(presentation_state_.snapshot);
@@ -859,11 +693,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
           prior_view.query = input_result.query;
           prior_view.selected_item_index = input_result.selected_item_index;
           auto const selected_value = prior_view.items[input_result.selected_item_index].value;
-          if (!begin_branch_summary(prior_view, input_result.selected_item_index, selected_value))
-          {
-            terminal_write_failed_ = true;
+          if (stop_for_branch_summary(branch_summary_.start(std::move(prior_view), input_result.selected_item_index, selected_value)))
             break;
-          }
         }
       }
       else if (selectors_.kind() == ActiveSelectList::Session &&
