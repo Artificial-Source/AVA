@@ -85,7 +85,8 @@ The ineffective disable flag is gone.
 
 Every implementation group was built, formatted, checked, pushed and reviewed
 by an independent agent. The latest test group passed independent review.
-The documentation group records its final review with the validation update.
+The documentation group also passed independent review. The validation update
+below reports the executed final comparison.
 
 | Finding | Status | Commit | Result |
 | --- | --- | --- | --- |
@@ -213,9 +214,61 @@ skip because debug/libcwd builds are not distributable). Logs live under
 `/workspace/ava-tools/review-*.log`; these workspace logs are evidence, not portable
 repository dependencies.
 
-The final full suite and opt-in tmux comparison are pending at this checkpoint.
-The validation update below will record actual outcomes, including skips and
-baseline failures, without treating compilation as behavior proof.
+### Final comparison in this cloud environment
+
+The final code at `7e5d9b43` and baseline `ec4143e` were each tested once with the
+full suite, then once with the opt-in tmux suite. Later commits only record these
+results. Both development builds pass. The exact failure/skip sets, added tests,
+configuration and evidence paths are saved in [review-validation.json](review-validation.json).
+
+| Run | Passed | Failed | Skipped | Total |
+| --- | ---: | ---: | ---: | ---: |
+| Reviewed branch, full suite | 165 | 46 | 31 | 242 |
+| Local ec4143e, full suite | 154 | 46 | 31 | 231 |
+| Reviewed branch, tmux enabled | 0 | 23 | 0 | 23 |
+| Local ec4143e, tmux enabled | 0 | 23 | 0 | 23 |
+
+Full-suite failure and skip sets match exactly. All 11 added CTests pass: the
+loop/request suites plus nine isolated Session cases. There are no new failing
+CTest names in this comparison. That is evidence against an added failure, not
+proof that an existing failure cannot mask a regression.
+
+The full runners exited 8. Of their failed entries, 31 report missing procfs
+child-enumeration files; the isolated-environment check explicitly reports
+missing `librhash.so.1`. Other failures include helper startup, readiness and
+assertion failures. Matching the baseline does not prove a single cause for all
+46 failures, so they remain failures in this report.
+
+Both tmux runs fail before a usable UI. Suspend/resume captures explicitly show
+missing `libdw.so.1`; the remaining cases report early pane exit. No socket-path
+length error occurred. CTest recorded 23 failures on each build, and each runner
+then exited 2 because an unreaped zombie client kept its worker process group
+visible. Both stale locks were removed only after the runner PIDs were absent,
+the remaining group members were zombies, and no live test/build workers
+remained. No runner policy or test was changed.
+
+The reviewer's seven environment failures and 23 passing tmux scenarios were
+not reproduced in this cloud environment. These local tmux results cannot
+validate terminal behavior; a runtime-compatible environment is still needed
+for that evidence. No environment failures were repaired as part of this review.
+
+Commands, after activation and UTF-8 locale setup, were:
+
+```sh
+# In /workspace/AVA:
+scripts/run-tests.sh --output-junit /workspace/ava-tools/review-final-full.xml
+AVA_TUI_TMUX_SMOKE=1 scripts/run-tests.sh --jobs 4 -R '^ava_tui\.tmux_smoke_' \
+  --output-junit /workspace/ava-tools/review-final-tmux.xml
+
+# In /workspace/ava-base:
+scripts/run-tests.sh --output-junit /workspace/ava-tools/review-baseline-full.xml
+AVA_TUI_TMUX_SMOKE=1 scripts/run-tests.sh --jobs 4 -R '^ava_tui\.tmux_smoke_' \
+  --output-junit /workspace/ava-tools/review-baseline-tmux.xml
+```
+
+Current/baseline full runs took
+71.96/67.33 seconds; tmux took 8.14/8.18 seconds. No full-suite or tmux rerun was
+used to replace these outcomes.
 
 ## Historical validation before this review
 

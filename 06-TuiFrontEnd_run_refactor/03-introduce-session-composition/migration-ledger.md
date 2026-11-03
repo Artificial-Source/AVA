@@ -31,6 +31,17 @@ Build and focused checks passed for every review group; each group was pushed
 and independently reviewed. The handoff distinguishes current final-suite
 results from earlier environment observations. Compilation is not behavior proof.
 
+### Final validation after the review
+
+The BetaTest/debug build passes. The reviewed branch's full run has 165 passes,
+46 failures and 31 skips; local ec4143e has 154 passes, the same 46 failures and
+the same 31 skips. All 11 added CTests pass. Each enabled tmux run fails all 23
+scenarios before a usable UI; both suspend/resume captures report missing
+libdw.so.1. No new failing test names appear, but terminal smoke behavior remains
+unverified here. See the current handoff and its JSON evidence manifest for
+commands, causes that were actually established, runner cleanup and the reference
+machine comparison. The full suite and tmux suite ran once per revision.
+
 ## Historical implementation checkpoints through ab5189c
 
 Everything below records what was implemented or claimed at that checkpoint.
