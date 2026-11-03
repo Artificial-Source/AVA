@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
 #include "ava/tui/mermaid_projection.h"
@@ -59,7 +60,8 @@ std::string bound_utf8_detail(std::string text)
     return text;
   constexpr std::string_view suffix = "...";
   auto end = kMaxTranscriptSearchDetailBytes - suffix.size();
-  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0U) == 0x80U) --end;
+  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xC0U) == 0x80U)
+    --end;
   text.resize(end);
   text += suffix;
   return text;
@@ -94,7 +96,8 @@ std::string match_identity(TranscriptItem const& item)
   if (identity.size() > 80)
   {
     auto end = std::size_t{77};
-    while (end > 0 && (static_cast<unsigned char>(identity[end]) & 0xC0U) == 0x80U) --end;
+    while (end > 0 && (static_cast<unsigned char>(identity[end]) & 0xC0U) == 0x80U)
+      --end;
     identity.resize(end);
     identity += "...";
   }
@@ -127,7 +130,8 @@ class FoldedLiteralMatcher final
       return;
     for (std::size_t index = 1, matched = 0; index < query_.size(); ++index)
     {
-      while (matched > 0 && fold_ascii(query_[index]) != fold_ascii(query_[matched])) matched = prefix_lengths_[matched - 1];
+      while (matched > 0 && fold_ascii(query_[index]) != fold_ascii(query_[matched]))
+        matched = prefix_lengths_[matched - 1];
       if (fold_ascii(query_[index]) == fold_ascii(query_[matched]))
         ++matched;
       prefix_lengths_[index] = matched;
@@ -142,7 +146,8 @@ class FoldedLiteralMatcher final
       return std::nullopt;
     for (std::size_t index = 0, matched = 0; index < candidate.size(); ++index)
     {
-      while (matched > 0 && fold_ascii(candidate[index]) != fold_ascii(query_[matched])) matched = prefix_lengths_[matched - 1];
+      while (matched > 0 && fold_ascii(candidate[index]) != fold_ascii(query_[matched]))
+        matched = prefix_lengths_[matched - 1];
       if (fold_ascii(candidate[index]) == fold_ascii(query_[matched]))
         ++matched;
       if (matched == query_.size())
@@ -234,7 +239,8 @@ std::string relevant_detail(TranscriptSearchProjection const& projection, std::s
     return projection.default_detail;
   constexpr auto kContextBytes = std::size_t{72};
   auto start = match_offset > kContextBytes ? match_offset - kContextBytes : std::size_t{0};
-  while (start > 0 && (static_cast<unsigned char>(projection.searchable_text[start]) & 0xC0U) == 0x80U) --start;
+  while (start > 0 && (static_cast<unsigned char>(projection.searchable_text[start]) & 0xC0U) == 0x80U)
+    --start;
   auto detail = projection.searchable_text.substr(start);
   if (start > 0)
     detail = "... " + detail;
@@ -676,14 +682,14 @@ class ScopedTranscriptSearchModalProjection final
 }  // namespace
 
 TranscriptSearchController::TranscriptSearchController(RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
-                                                       RuntimeNavigationController& navigation, ActiveSelectList& active_select_list)
-    : presentation_state_(presentation_state), renderer_(renderer), navigation_(navigation), active_select_list_(active_select_list)
+                                                       RuntimeNavigationController& navigation, SelectorHost& selectors)
+    : presentation_state_(presentation_state), renderer_(renderer), navigation_(navigation), selectors_(selectors)
 {
 }
 
 bool TranscriptSearchController::is_open() const noexcept
 {
-  return active_select_list_ == ActiveSelectList::TranscriptSearch;
+  return selectors_.kind() == ActiveSelectList::TranscriptSearch;
 }
 
 void TranscriptSearchController::refresh_authoritative_layout()
@@ -734,7 +740,6 @@ bool TranscriptSearchController::open(std::string query)
   saved_viewport_anchor_ = detail::capture_transcript_viewport_anchor(renderer_.transcript_layout_cache.layout, max_scroll, saved_scroll_offset_);
   accumulated_item_index_shift_ = 0;
   query_ = std::move(query);
-  active_select_list_ = ActiveSelectList::TranscriptSearch;
   static_cast<void>(projection_cache_.update_query(query_));
   auto const update = projection_cache_.rebuild_all(snapshot, renderer_.transcript_layout_cache.layout);
   rebuild(std::nullopt, std::numeric_limits<std::size_t>::max(), update.first_changed_match_row);
@@ -744,11 +749,11 @@ bool TranscriptSearchController::open(std::string query)
 
 void TranscriptSearchController::rebuild(std::optional<std::size_t> selected_item_index, std::size_t fallback_selection, std::size_t first_changed_match_row)
 {
-  auto& snapshot = presentation_state_.snapshot;
   auto const& matches = projection_cache_.matches();
-  if (!snapshot.select_list)
+  auto view = is_open() && selectors_.view() ? *selectors_.view() : SelectListView{};
+  if (!is_open() || !selectors_.view())
   {
-    snapshot.select_list = SelectListView{
+    view = SelectListView{
         .title = "Transcript search",
         .subtitle = {},
         .items = {},
@@ -761,7 +766,6 @@ void TranscriptSearchController::rebuild(std::optional<std::size_t> selected_ite
     };
     first_changed_match_row = 0;
   }
-  auto& view = *snapshot.select_list;
   detail::update_transcript_search_select_list_rows(view, matches, query_, first_changed_match_row, modal_row_build_count_);
   view.selected_item_index = 0;
   if (!matches.empty())
@@ -780,6 +784,7 @@ void TranscriptSearchController::rebuild(std::optional<std::size_t> selected_ite
     else
       view.selected_item_index = std::min(fallback_selection, matches.size() - 1);
   }
+  selectors_.open(ActiveSelectList::TranscriptSearch, std::move(view));
 }
 
 void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_t item_index_shift, std::size_t changed_from_item_index)
@@ -788,9 +793,9 @@ void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_
     return;
   std::optional<std::size_t> selected_item_index;
   auto fallback_selection = std::size_t{0};
-  if (presentation_state_.snapshot.select_list)
+  if (selectors_.view())
   {
-    fallback_selection = presentation_state_.snapshot.select_list->selected_item_index;
+    fallback_selection = selectors_.view()->selected_item_index;
     auto const& matches = projection_cache_.matches();
     if (fallback_selection < matches.size())
       selected_item_index = detail::shift_transcript_search_item_index(matches[fallback_selection].item_index, item_index_shift);
@@ -826,9 +831,9 @@ void TranscriptSearchController::refresh_after_resize()
     return;
   std::optional<std::size_t> selected_item_index;
   auto fallback_selection = std::size_t{0};
-  if (presentation_state_.snapshot.select_list)
+  if (selectors_.view())
   {
-    fallback_selection = presentation_state_.snapshot.select_list->selected_item_index;
+    fallback_selection = selectors_.view()->selected_item_index;
     auto const& matches = projection_cache_.matches();
     if (fallback_selection < matches.size())
       selected_item_index = matches[fallback_selection].item_index;
@@ -842,8 +847,7 @@ void TranscriptSearchController::refresh_after_resize()
 void TranscriptSearchController::restore_saved_viewport(std::string status)
 {
   auto& snapshot = presentation_state_.snapshot;
-  snapshot.select_list.reset();
-  active_select_list_ = ActiveSelectList::None;
+  selectors_.close();
   refresh_authoritative_layout();
   auto const max_scroll = detail::composer_max_transcript_scroll_offset_cached(snapshot, snapshot.width, snapshot.height, renderer_.completion_cache,
                                                                                snapshot.file_references_generation, renderer_.transcript_layout_cache,
@@ -878,9 +882,9 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
   if (!is_open())
     return std::nullopt;
   auto& snapshot = presentation_state_.snapshot;
-  if (!snapshot.select_list)
+  if (!selectors_.view())
   {
-    active_select_list_ = ActiveSelectList::None;
+    selectors_.close();
     projection_cache_.clear();
     query_.clear();
     return renderer_.request_render();
@@ -897,7 +901,7 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
   }
   else
   {
-    input_result = handle_select_list_input(*snapshot.select_list, event);
+    input_result = handle_select_list_input(*selectors_.view(), event);
   }
 
   if (input_result.action == SelectListInputAction::Cancel)
@@ -911,8 +915,7 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
     if (input_result.selected_item_index < matches.size())
     {
       auto const item_index = matches[input_result.selected_item_index].item_index;
-      snapshot.select_list.reset();
-      active_select_list_ = ActiveSelectList::None;
+      selectors_.close();
       projection_cache_.clear();
       query_.clear();
       navigation_.jump_to_transcript_item(item_index, "transcript match");
@@ -928,9 +931,9 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
       if (input_result.selected_item_index < matches.size())
         selected_item_index = matches[input_result.selected_item_index].item_index;
     }
-    else if (snapshot.select_list->selected_item_index < projection_cache_.matches().size())
+    else if (selectors_.view()->selected_item_index < projection_cache_.matches().size())
     {
-      selected_item_index = projection_cache_.matches()[snapshot.select_list->selected_item_index].item_index;
+      selected_item_index = projection_cache_.matches()[selectors_.view()->selected_item_index].item_index;
     }
     auto first_changed_match_row = projection_cache_.matches().size();
     if (detail::transcript_search_query_valid(input_result.query))
@@ -958,8 +961,7 @@ void TranscriptSearchController::reset_for_session_transition()
 {
   if (is_open())
   {
-    presentation_state_.snapshot.select_list.reset();
-    active_select_list_ = ActiveSelectList::None;
+    selectors_.close();
   }
   query_.clear();
   projection_cache_.clear();

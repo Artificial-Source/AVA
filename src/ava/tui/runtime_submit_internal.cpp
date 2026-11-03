@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -47,7 +48,7 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
                                                  RuntimeRenderer& renderer, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                  RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
                                                  TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                 ActiveSelectList& active_select_list)
+                                                 SelectorHost& selectors)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
@@ -58,7 +59,7 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
       prompt_stash_(prompt_stash),
       transcript_search_(transcript_search),
       subagent_workspace_(subagent_workspace),
-      active_select_list_(active_select_list)
+      selectors_(selectors)
 {
 }
 
@@ -332,8 +333,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (submitted == "/hotkeys" || submitted == "/keybindings")
     {
       push_history(input_history, submitted);
-      snapshot.select_list = hotkeys_select_list_view(frontend_.key_bindings());
-      active_select_list_ = ActiveSelectList::Hotkeys;
+      selectors_.open(ActiveSelectList::Hotkeys, hotkeys_select_list_view(frontend_.key_bindings()));
       snapshot.status = "keybindings opened";
       transcript_scroll_offset = 0;
       if (!renderer_.request_render())
@@ -360,15 +360,14 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (submitted == "/settings")
     {
       push_history(input_history, submitted);
-      if (active_select_list_ == ActiveSelectList::Overview)
+      if (selectors_.kind() == ActiveSelectList::Overview)
         snapshot.startup_overview.reset();
       // Workspace trust is popup-only. Refresh it once at initialization so a
       // close/reopen observes backend changes without ordinary snapshot transport.
       snapshot.project_trust = frontend_.read_project_trust();
       auto settings_snapshot = snapshot;
       settings_snapshot.sidebar = sidebar;
-      snapshot.select_list = settings_select_list_view(settings_snapshot, frontend_.key_bindings());
-      active_select_list_ = ActiveSelectList::Settings;
+      selectors_.open(ActiveSelectList::Settings, settings_select_list_view(settings_snapshot, frontend_.key_bindings()));
       snapshot.status = "settings opened";
       transcript_scroll_offset = 0;
       if (!renderer_.request_render())

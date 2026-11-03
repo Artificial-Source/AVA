@@ -12,7 +12,7 @@
 
 namespace ava::tui {
 
-enum class ActiveSelectList;
+class SelectorHost;
 struct ComposerSnapshot;
 struct InputEvent;
 class RuntimeNavigationController;
@@ -130,7 +130,7 @@ class TranscriptSearchController final
 {
  public:
   TranscriptSearchController(RuntimePresentationState& presentation_state, RuntimeRenderer& renderer, RuntimeNavigationController& navigation,
-                             ActiveSelectList& active_select_list);
+                             SelectorHost& selectors);
   TranscriptSearchController(TranscriptSearchController const&) = delete;
   TranscriptSearchController& operator=(TranscriptSearchController const&) = delete;
 
@@ -154,7 +154,7 @@ class TranscriptSearchController final
   RuntimePresentationState& presentation_state_;
   RuntimeRenderer& renderer_;
   RuntimeNavigationController& navigation_;
-  ActiveSelectList& active_select_list_;
+  SelectorHost& selectors_;
   ava::core::NoLogString query_;
   detail::TranscriptSearchProjectionCache projection_cache_;
   detail::TranscriptViewportAnchor saved_viewport_anchor_ = {};

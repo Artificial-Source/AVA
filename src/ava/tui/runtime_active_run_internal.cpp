@@ -658,7 +658,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
       if (!prompt_coordinator_.service_pending_request(cancel_requested, request_stop, [&]() {
             transcript_search_.close_before_prompt();
             // Permission/question authority must explicitly close overview so it cannot hide and reappear.
-            close_startup_overview_presentation(presentation_state_.snapshot, action_controller_.active_select_list());
+            close_startup_overview_presentation(presentation_state_.snapshot, action_controller_.selectors());
           }))
         return detail::PendingPromptServiceResult::None;
       if (drain_events(state) == RuntimeEventDrainResult::RenderFailed)
@@ -704,7 +704,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
             [&]() { return handle_transcript_search_input(input).value_or(false); }, cancel_requested, request_stop,
             [&]() {
               transcript_search_.close_before_prompt();
-              close_startup_overview_presentation(presentation_state_.snapshot, action_controller_.active_select_list());
+              close_startup_overview_presentation(presentation_state_.snapshot, action_controller_.selectors());
             });
         if (result == SearchInputPromptDispatchResult::PromptServiced)
         {
@@ -874,7 +874,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     {
       std::lock_guard<std::recursive_mutex> lock(ui_mutex);
       session_changed = apply_committed_session_transition(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_,
-                                                           action_controller_.active_select_list(), std::move(committed_session_id));
+                                                           action_controller_.selectors(), std::move(committed_session_id));
       if (!result.quit)
         presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
     }

@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_completions.h"
 #include "ava/tui/command_output.h"
@@ -80,8 +81,7 @@ ComposerSnapshot initial_snapshot(TuiFrontEnd* frontend, std::string const& init
                             .custom_themes = initial_display_settings.custom_themes, // presentation
                             .show_images = initial_display_settings.show_images,
                             .image_width_cells = initial_display_settings.image_width_cells,
-                            .cursor = initial_display_settings.cursor
-                           };
+                            .cursor = initial_display_settings.cursor};
   seed_tui_tool_index(snapshot);
   snapshot.mermaid_config_epoch = initial_display_settings.mermaid_config_epoch;
   snapshot.mermaid_enabled = initial_display_settings.mermaid_enabled;
@@ -248,36 +248,35 @@ void RuntimePresentationState::initialize_startup_overview(TuiFrontEnd const& fr
   refresh_local_overview_hints(snapshot, frontend);
 }
 
-void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list)
+void close_startup_overview_presentation(ComposerSnapshot& snapshot, SelectorHost& selectors)
 {
-  if (active_select_list != ActiveSelectList::Overview)
+  if (selectors.kind() != ActiveSelectList::Overview)
     return;
-  snapshot.select_list.reset();
+  selectors.close();
   snapshot.startup_overview.reset();
-  active_select_list = ActiveSelectList::None;
 }
 
-void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list)
+void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, SelectorHost& selectors)
 {
-  if (active_select_list != ActiveSelectList::Overview)
+  if (selectors.kind() != ActiveSelectList::Overview)
     return;
   if (!snapshot.startup_overview)
   {
-    close_startup_overview_presentation(snapshot, active_select_list);
+    close_startup_overview_presentation(snapshot, selectors);
     return;
   }
   // Rebuild from the popup-local DTO while preserving safe local filter/selection identity.
-  auto query = snapshot.select_list ? snapshot.select_list->query : std::string{};
-  auto selected = snapshot.select_list ? snapshot.select_list->selected_item_index : std::size_t{0};
+  auto query = selectors.view() ? selectors.view()->query : std::string{};
+  auto selected = selectors.view() ? selectors.view()->selected_item_index : std::size_t{0};
   auto view = overview_select_list_view(*snapshot.startup_overview);
   view.query = std::move(query);
   view.selected_item_index = clamp_select_list_selection(view, selected);
-  snapshot.select_list = std::move(view);
+  selectors.replace(std::move(view));
 }
 
 bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                                         TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                        ActiveSelectList& active_select_list, std::string committed_session_id)
+                                        SelectorHost& selectors, std::string committed_session_id)
 {
   auto& snapshot = presentation_state.snapshot;
   auto& sidebar = presentation_state.sidebar;
@@ -315,11 +314,8 @@ bool apply_committed_session_transition(RuntimePresentationState& presentation_s
     snapshot.reasoning_feedback.reset();
     snapshot.local_command_feedback.reset();
     // Expanded overview is process-local presentation; close on session switch.
-    close_startup_overview_presentation(snapshot, active_select_list);
-    if (snapshot.select_list)
-      snapshot.select_list.reset();
-    if (active_select_list != ActiveSelectList::None)
-      active_select_list = ActiveSelectList::None;
+    close_startup_overview_presentation(snapshot, selectors);
+    selectors.close();
 
     sidebar.activity.clear();
     sidebar.modified_files.clear();
@@ -333,11 +329,11 @@ bool apply_committed_session_transition(RuntimePresentationState& presentation_s
 
 bool apply_committed_session_transition_and_refresh(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
                                                     RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
-                                                    RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
+                                                    RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors,
                                                     std::string committed_session_id)
 {
-  auto const session_changed = apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                  active_select_list, std::move(committed_session_id));
+  auto const session_changed = apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace, selectors,
+                                                                  std::move(committed_session_id));
   presentation_state.refresh_after_backend_action(frontend);
   return session_changed;
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SelectorHost.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
 #include "runtime_active_run_internal.h"
@@ -56,8 +57,6 @@ class TuiSession final
   bool toggle_startup_overview();
   RuntimeSubmitDisposition handle_submit(std::optional<std::string> forced_submission = std::nullopt);
   void preserve_session_selector_state(SelectListInputResult const& input_result, SelectListView next_view, std::string status);
-  SelectListItemView const* selected_select_list_item(SelectListInputResult const& input_result);
-  std::vector<std::string> visible_select_list_values(SelectListInputResult const& input_result);
   void settle_opened_session(std::string status);
   bool synchronize_committed_session();
   void select_slash_command();
@@ -78,7 +77,7 @@ class TuiSession final
   RuntimeDraftState draft_state_;
   RuntimeRenderer renderer_;
   RuntimeNavigationController navigation_;
-  ActiveSelectList active_select_list_ = ActiveSelectList::None;
+  SelectorHost selectors_;
   RuntimePromptStashController prompt_stash_;
 
   // Temporary branch-summary ownership, extracted in 04/04.

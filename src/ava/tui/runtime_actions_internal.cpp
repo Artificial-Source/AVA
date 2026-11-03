@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -89,13 +90,13 @@ std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd con
 }  // namespace
 
 RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
-                                                 RuntimeRenderer& renderer, ActiveSelectList& active_select_list,
+                                                 RuntimeRenderer& renderer, SelectorHost& selectors,
                                                  std::optional<PendingSessionArchiveAction>& session_archive_confirmation)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
       renderer_(renderer),
-      active_select_list_(active_select_list),
+      selectors_(selectors),
       session_archive_confirmation_(session_archive_confirmation),
       // First poll is eligible immediately; later polls stay rate-limited.
       next_display_reload_check_(std::chrono::steady_clock::time_point{})
@@ -135,7 +136,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   {
     std::lock_guard<std::recursive_mutex> lock(renderer_.ui_mutex);
     presentation_state_.apply_local_display_settings(frontend_, std::move(result.settings));
-    synchronize_startup_overview_presentation(presentation_state_.snapshot, active_select_list_);
+    synchronize_startup_overview_presentation(presentation_state_.snapshot, selectors_);
     settle_local_command_status(presentation_state_.snapshot, std::move(status));
   }
   return DisplaySettingsReloadPollOutcome::Applied;
@@ -325,8 +326,7 @@ bool RuntimeActionController::open_model_selector()
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = frontend_.model_selector_view();
-  active_select_list_ = ActiveSelectList::Model;
+  selectors_.open(ActiveSelectList::Model, frontend_.model_selector_view());
   snapshot.status = "model selector opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();
@@ -347,8 +347,7 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
   }
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = std::move(*view);
-  active_select_list_ = ActiveSelectList::Reasoning;
+  selectors_.open(ActiveSelectList::Reasoning, std::move(*view));
   snapshot.status = "thinking mode selector opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();
@@ -359,8 +358,7 @@ bool RuntimeActionController::open_scoped_model_selector()
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = frontend_.scoped_model_selector_view();
-  active_select_list_ = ActiveSelectList::ScopedModels;
+  selectors_.open(ActiveSelectList::ScopedModels, frontend_.scoped_model_selector_view());
   snapshot.status = "scoped model selector opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();
@@ -371,8 +369,7 @@ bool RuntimeActionController::open_session_selector()
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = frontend_.session_selector_view();
-  active_select_list_ = ActiveSelectList::Session;
+  selectors_.open(ActiveSelectList::Session, frontend_.session_selector_view());
   snapshot.status = "session selector opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();
@@ -383,11 +380,10 @@ bool RuntimeActionController::toggle_startup_overview()
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  if (active_select_list_ == ActiveSelectList::Overview && snapshot.select_list)
+  if (selectors_.kind() == ActiveSelectList::Overview && selectors_.view())
   {
-    snapshot.select_list.reset();
+    selectors_.close();
     snapshot.startup_overview.reset();
-    active_select_list_ = ActiveSelectList::None;
     snapshot.status = "overview closed";
     return renderer_.request_render();
   }
@@ -397,8 +393,7 @@ bool RuntimeActionController::toggle_startup_overview()
   // Replace any other modal with the read-only overview; Enter/Esc close without mutation.
   snapshot.sidebar_drawer_visible = false;
   snapshot.sidebar_drawer_scroll_offset = 0;
-  snapshot.select_list = overview_select_list_view(*snapshot.startup_overview);
-  active_select_list_ = ActiveSelectList::Overview;
+  selectors_.open(ActiveSelectList::Overview, overview_select_list_view(*snapshot.startup_overview));
   snapshot.status = "overview opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();
@@ -416,8 +411,7 @@ bool RuntimeActionController::open_fork_user_turn_selector(std::string_view init
   }
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = std::move(*opened);
-  active_select_list_ = ActiveSelectList::ForkUserTurn;
+  selectors_.open(ActiveSelectList::ForkUserTurn, std::move(*opened));
   snapshot.status = "fork-from selector opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();
@@ -435,8 +429,7 @@ bool RuntimeActionController::open_copy_user_turn_selector(std::string_view init
   }
   draft_state_.pending_escape_clear = false;
   session_archive_confirmation_.reset();
-  snapshot.select_list = std::move(*opened);
-  active_select_list_ = ActiveSelectList::CopyUserTurn;
+  selectors_.open(ActiveSelectList::CopyUserTurn, std::move(*opened));
   snapshot.status = "copy user-turn selector opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();

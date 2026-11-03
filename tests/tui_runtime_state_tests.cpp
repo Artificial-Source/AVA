@@ -4,6 +4,7 @@
 #include "ava/event/EventEnvelope.h"
 #include "ava/event/EventEnvelopeContext.h"
 #include "ava/event/RuntimeEvent.h"
+#include "ava/tui/SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/event_state.h"
@@ -1654,28 +1655,29 @@ void test_tui_active_nonblocking_command_lane()
 void test_tui_selector_authority_dispatch_paints_before_callback()
 {
   ava::tui::ComposerSnapshot snapshot;
+  ava::tui::SelectorHost selectors(snapshot);
   snapshot.mode = "build";
   //  snapshot.provider = "openai";
   //  snapshot.model = "gpt-5.5";
   snapshot.session_id = "session_current";
   snapshot.input = "draft survives";
   snapshot.status = "selecting";
-  snapshot.select_list = ava::tui::SelectListView{.title = "Select model",
-                                                  .subtitle = {},
-                                                  .items = {ava::tui::SelectListItemView{.value = "openai/gpt-5.5",
-                                                                                         .label = "GPT-5.5",
-                                                                                         .description = {},
-                                                                                         .group = "Models",
-                                                                                         .detail = {},
-                                                                                         .badge = {},
-                                                                                         .current = false,
-                                                                                         .enabled = true,
-                                                                                         .disabled_reason = {}}},
-                                                  .selected_item_index = 0,
-                                                  .query = {},
-                                                  .placeholder = "Search",
-                                                  .empty_text = "No matches",
-                                                  .footer_hint = "Esc cancel"};
+  selectors.open(ava::tui::ActiveSelectList::Model, ava::tui::SelectListView{.title = "Select model",
+                                                                             .subtitle = {},
+                                                                             .items = {ava::tui::SelectListItemView{.value = "openai/gpt-5.5",
+                                                                                                                    .label = "GPT-5.5",
+                                                                                                                    .description = {},
+                                                                                                                    .group = "Models",
+                                                                                                                    .detail = {},
+                                                                                                                    .badge = {},
+                                                                                                                    .current = false,
+                                                                                                                    .enabled = true,
+                                                                                                                    .disabled_reason = {}}},
+                                                                             .selected_item_index = 0,
+                                                                             .query = {},
+                                                                             .placeholder = "Search",
+                                                                             .empty_text = "No matches",
+                                                                             .footer_hint = "Esc cancel"});
   snapshot.input_cursor = 5;
   auto const original_input = snapshot.input;
   auto const original_cursor = snapshot.input_cursor;
@@ -1689,7 +1691,7 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
 
   std::thread dispatch([&]() {
     auto result = ava::tui::dispatch_tui_selector_authority(
-        snapshot, "switching model…",
+        snapshot, selectors, "switching model…",
         [&]() {
           events.push_back("render");
           return true;
@@ -1716,10 +1718,11 @@ void test_tui_selector_authority_dispatch_paints_before_callback()
   expect(dispatch_succeeded && snapshot.input == original_input && snapshot.input_cursor == original_cursor,
          "successful selector authority dispatch preserves the underlying draft and cursor until authoritative state applies");
 
-  snapshot.select_list = ava::tui::SelectListView{};
-  snapshot.select_list->title = "Select session";
+  auto session_view = ava::tui::SelectListView{};
+  session_view.title = "Select session";
+  selectors.open(ava::tui::ActiveSelectList::Session, std::move(session_view));
   auto failed = ava::tui::dispatch_tui_selector_authority(
-      snapshot, "opening session…", []() { return true; },
+      snapshot, selectors, "opening session…", []() { return true; },
       []() -> ava::core::Result<std::string> { return std::unexpected(ava::core::Error(ava::core::ErrorCategory::NotFound, "session unavailable")); });
   expect(!failed && !snapshot.select_list && snapshot.status.find("session unavailable") != std::string::npos && snapshot.input == original_input &&
              snapshot.input_cursor == original_cursor,

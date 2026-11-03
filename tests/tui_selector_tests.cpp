@@ -6,6 +6,7 @@
 #include "ava/app/tui/command_palette_views.h"
 #include "ava/app/tui/reasoning_selector.h"
 #include "ava/app/tui/subagent_workspace.h"
+#include "ava/tui/SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
@@ -1889,7 +1890,8 @@ void run_tui_selector_tests()
   controller_snapshot.transcript_generation = 42;
   controller_snapshot.width = 40;
   controller_snapshot.height = 8;
-  ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_snapshot);
+  ava::tui::SelectorHost selectors(controller_snapshot);
+  ava::tui::RuntimeSubagentWorkspaceController workspace_controller(*controller_frontend.frontend(), controller_snapshot, selectors);
   using WorkspaceClock = ava::tui::RuntimeSubagentWorkspaceController::Clock;
   auto const time_zero = WorkspaceClock::time_point{};
   expect(workspace_controller.open_selector(time_zero) && workspace_controller.selector_active() && list_calls == 1,

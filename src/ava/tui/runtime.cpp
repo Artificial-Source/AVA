@@ -1,6 +1,8 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "composer.h"
 #include "ava/core/result.h"
+
 #include <string>
 
 namespace ava::tui {
@@ -17,10 +19,11 @@ void clear_reasoning_feedback_for_user_input(ComposerSnapshot& snapshot)
   snapshot.local_command_feedback.reset();
 }
 
-ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, std::string pending_status, std::function<bool()> const& render,
+ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, SelectorHost& selectors, std::string pending_status,
+                                                               std::function<bool()> const& render,
                                                                std::function<ava::core::Result<std::string>()> const& callback)
 {
-  snapshot.select_list.reset();
+  selectors.close();
   snapshot.status = std::move(pending_status);
   if (!render())
   {

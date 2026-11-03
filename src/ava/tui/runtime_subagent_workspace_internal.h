@@ -10,6 +10,8 @@
 
 namespace ava::tui {
 
+class SelectorHost;
+
 struct RuntimeSubagentWorkspaceInputResult
 {
   bool handled = false;
@@ -25,7 +27,7 @@ class RuntimeSubagentWorkspaceController final
   using Clock = std::chrono::steady_clock;
   static constexpr auto kPollInterval = std::chrono::milliseconds(150);
 
-  RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot);
+  RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SelectorHost& selectors);
   RuntimeSubagentWorkspaceController(RuntimeSubagentWorkspaceController const&) = delete;
   RuntimeSubagentWorkspaceController& operator=(RuntimeSubagentWorkspaceController const&) = delete;
 
@@ -63,7 +65,11 @@ class RuntimeSubagentWorkspaceController final
 
   TuiFrontEnd const& frontend_;
   ComposerSnapshot& snapshot_;
+  // The session-owned host outlives this controller.
+  SelectorHost& selectors_;
   Mode mode_ = Mode::Closed;
+  // Rebuild/checkpoint data for returning from workspace mode. While the selector
+  // is visible, the host alone owns its current query and selection.
   SelectListView selector_;
   SubagentWorkspaceView workspace_;
   std::string job_id_;

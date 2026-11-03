@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/prompt_stash_internal.h"
@@ -165,12 +166,8 @@ SelectListView PromptStash::select_list_view() const
 }
 
 RuntimePromptStashController::RuntimePromptStashController(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
-                                                           RuntimeRenderer& renderer, ActiveSelectList& active_select_list, TuiKeyBindings const& key_bindings)
-    : presentation_state_(presentation_state),
-      draft_state_(draft_state),
-      renderer_(renderer),
-      active_select_list_(active_select_list),
-      key_bindings_(key_bindings)
+                                                           RuntimeRenderer& renderer, SelectorHost& selectors, TuiKeyBindings const& key_bindings)
+    : presentation_state_(presentation_state), draft_state_(draft_state), renderer_(renderer), selectors_(selectors), key_bindings_(key_bindings)
 {
 }
 
@@ -225,8 +222,7 @@ bool RuntimePromptStashController::trigger()
 bool RuntimePromptStashController::open_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
-  snapshot.select_list = stash_.select_list_view();
-  active_select_list_ = ActiveSelectList::PromptStash;
+  selectors_.open(ActiveSelectList::PromptStash, stash_.select_list_view());
   snapshot.status = stash_.empty() ? "prompt stash is empty" : "prompt stash opened";
   return renderer_.request_render();
 }
@@ -238,8 +234,7 @@ bool RuntimePromptStashController::restore(std::uint64_t id)
   {
     case PromptStashRestoreResult::Restored:
       reset_draft_presentation();
-      snapshot.select_list.reset();
-      active_select_list_ = ActiveSelectList::None;
+      selectors_.close();
       snapshot.status = "stashed prompt restored";
       return renderer_.request_render();
     case PromptStashRestoreResult::NonemptyDraft:
@@ -277,10 +272,9 @@ bool RuntimePromptStashController::clear()
   auto& snapshot = presentation_state_.snapshot;
   auto const count = stash_.size();
   stash_.clear();
-  if (active_select_list_ == ActiveSelectList::PromptStash)
+  if (selectors_.kind() == ActiveSelectList::PromptStash)
   {
-    snapshot.select_list.reset();
-    active_select_list_ = ActiveSelectList::None;
+    selectors_.close();
   }
   snapshot.status = count == 0 ? "prompt stash already empty" : "prompt stash cleared";
   return renderer_.request_render();
@@ -289,7 +283,7 @@ bool RuntimePromptStashController::clear()
 std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEvent const& event)
 {
   auto& snapshot = presentation_state_.snapshot;
-  if (active_select_list_ != ActiveSelectList::PromptStash || !snapshot.select_list)
+  if (selectors_.kind() != ActiveSelectList::PromptStash || !selectors_.view())
     return std::nullopt;
 
   using Key = terminal::Key;
@@ -297,37 +291,35 @@ std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEve
   if (event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick)
   {
     if (auto const clicked = select_list_selection_for_screen_position(snapshot, event.mouse_row, event.mouse_column))
-      result = SelectListInputResult{.selected_item_index = *clicked, .query = snapshot.select_list->query, .action = SelectListInputAction::Resolve};
+      result = SelectListInputResult{.selected_item_index = *clicked, .query = selectors_.view()->query, .action = SelectListInputAction::Resolve};
     else
-      result = handle_select_list_input(*snapshot.select_list, event, key_bindings_);
+      result = handle_select_list_input(*selectors_.view(), event, key_bindings_);
   }
   else
   {
-    result = handle_select_list_input(*snapshot.select_list, event, key_bindings_);
+    result = handle_select_list_input(*selectors_.view(), event, key_bindings_);
   }
 
   if (result.action == SelectListInputAction::Redraw)
   {
-    snapshot.select_list->selected_item_index = result.selected_item_index;
-    snapshot.select_list->query = std::move(result.query);
+    selectors_.update_selection(result.selected_item_index, std::move(result.query));
     return renderer_.request_render();
   }
   if (result.action == SelectListInputAction::Cancel)
   {
-    snapshot.select_list.reset();
-    active_select_list_ = ActiveSelectList::None;
+    selectors_.close();
     snapshot.status = "view canceled";
     return renderer_.request_render();
   }
   if (result.action != SelectListInputAction::Resolve)
     return true;
-  if (result.selected_item_index >= snapshot.select_list->items.size())
+  if (result.selected_item_index >= selectors_.view()->items.size())
   {
     snapshot.status = "prompt stash is empty";
     ava::core::Application::instance().terminal_context().beep();
     return renderer_.request_render();
   }
-  auto const id = stash_id_from_value(snapshot.select_list->items[result.selected_item_index].value);
+  auto const id = stash_id_from_value(selectors_.view()->items[result.selected_item_index].value);
   if (!id)
   {
     snapshot.status = "stashed prompt selection is invalid";

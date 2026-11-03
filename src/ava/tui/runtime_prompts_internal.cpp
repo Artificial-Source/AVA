@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "ava/event/events.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
@@ -46,23 +47,22 @@ PendingQuestionRequest::PendingQuestionRequest(ava::agent::QuestionPrompt prompt
 }
 
 RuntimePromptCoordinator::RuntimePromptCoordinator(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, TuiSessionGrantRegistry& session_grants,
-                                                   RuntimeRenderer& renderer, ActiveSelectList* active_select_list)
-    : frontend_(frontend), snapshot_(snapshot), session_grants_(session_grants), renderer_(renderer), active_select_list_(active_select_list)
+                                                   RuntimeRenderer& renderer, SelectorHost* selectors)
+    : frontend_(frontend), snapshot_(snapshot), session_grants_(session_grants), renderer_(renderer), selectors_(selectors)
 {
 }
 
 namespace {
 
-void close_competing_select_list_for_prompt(ComposerSnapshot& snapshot, ActiveSelectList* active_select_list)
+void close_competing_select_list_for_prompt(SelectorHost* selectors)
 {
-  if (!active_select_list)
+  if (!selectors)
     return;
   // Process-local overview and prompt-stash selectors may be open during an
   // active run. Prompt authority closes either without mutating its owned state.
-  if (*active_select_list != ActiveSelectList::Overview && *active_select_list != ActiveSelectList::PromptStash)
+  if (selectors->kind() != ActiveSelectList::Overview && selectors->kind() != ActiveSelectList::PromptStash)
     return;
-  snapshot.select_list.reset();
-  *active_select_list = ActiveSelectList::None;
+  selectors->close();
 }
 
 }  // namespace
@@ -140,7 +140,7 @@ ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptC
   {
     std::lock_guard<std::recursive_mutex> lock(ui_mutex);
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
-    close_competing_select_list_for_prompt(snapshot, active_select_list_);
+    close_competing_select_list_for_prompt(selectors_);
     snapshot.permission_prompt = permission_prompt_view(prompt);
     snapshot.permission_prompt->selected_choice = PermissionPromptChoice::Deny;
     snapshot.permission_prompt->allow_session_available = allow_session_available;
@@ -423,7 +423,7 @@ ava::core::Result<ava::agent::QuestionAnswer> RuntimePromptCoordinator::resolve_
   {
     std::lock_guard<std::recursive_mutex> lock(ui_mutex);
     // Competing prompt authority closes process-local selectors so they cannot hide under the prompt and reappear.
-    close_competing_select_list_for_prompt(snapshot, active_select_list_);
+    close_competing_select_list_for_prompt(selectors_);
     snapshot.question_prompt = question_prompt_view(prompt);
     snapshot.status =
         prompt.multiple ? "question required: Space toggles, Enter sends, Esc cancels" : "question required: Enter sends, numbers choose, Esc cancels";

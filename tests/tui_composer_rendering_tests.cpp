@@ -4,6 +4,7 @@
 #include "support/tui_test_support.h"
 #include "ava/app/command_palette.h"
 #include "ava/app/terminal_text.h"
+#include "ava/tui/SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/composer_internal.h"
@@ -134,7 +135,7 @@ bool test_transcript_search_controller_tail_refresh_avoids_full_layout()
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
-  auto active_select_list = ava::tui::ActiveSelectList::None;
+  ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController controller(presentation, renderer, navigation, active_select_list);
 
   auto const opened = controller.open("retained item");
@@ -240,9 +241,9 @@ bool test_changed_session_snapshot_resets_presentation()
   draft_state.draft_scroll_offset = 2;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
-  auto active_select_list = ava::tui::ActiveSelectList::None;
+  ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
 
   auto const search_opened = transcript_search.open("OLD-TRANSCRIPT-MARKER");
   renderer.transcript_scroll_offset = 3;
@@ -279,7 +280,7 @@ bool test_changed_session_snapshot_resets_presentation()
       presentation.pending_image_attachments.empty() && presentation.snapshot.pending_attachments.empty() && !presentation.snapshot.sidebar_drawer_visible &&
       presentation.snapshot.sidebar_drawer_scroll_offset == 0 && renderer.transcript_scroll_offset == 0 && renderer.detached_new_output_count == 0 &&
       !renderer.detached_sidebar_snapshot && !renderer.has_deferred_detached_transcript_update() && !renderer.transcript_layout_cache.valid &&
-      !transcript_search.is_open() && active_select_list == ava::tui::ActiveSelectList::None;
+      !transcript_search.is_open() && active_select_list.kind() == ava::tui::ActiveSelectList::None;
 
   presentation.snapshot.transcript = {{.label = "ava", .text = "new receipt only"}};
   ++presentation.snapshot.transcript_generation;
@@ -419,7 +420,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   draft_state.input_history = {"OLD HISTORY PROMPT"};
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
-  auto active_select_list = ava::tui::ActiveSelectList::None;
+  ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
   ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer);
@@ -427,7 +428,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::RuntimePluginUiCoordinator plugin_ui;
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
                                                       session_archive_confirmation);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
   ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
                                                   navigation, action_controller, transcript_search, subagent_workspace);
 
@@ -1115,7 +1116,7 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  auto active_select_list = ava::tui::ActiveSelectList::None;
+  ava::tui::SelectorHost active_select_list(presentation.snapshot);
   std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
                                                       session_archive_confirmation);
@@ -1212,21 +1213,20 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   presentation.refresh_after_backend_action(*frontend.frontend());
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  auto active_select_list = ava::tui::ActiveSelectList::None;
+  ava::tui::SelectorHost active_select_list(presentation.snapshot);
   std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
                                                       session_archive_confirmation);
 
   bool const no_read_during_snapshot_apply = !presentation.snapshot.startup_overview;
   bool const opened = action_controller.toggle_startup_overview();
-  presentation.snapshot.select_list->query = "theme";
-  presentation.snapshot.select_list->selected_item_index = 0;
+  active_select_list.update_selection(0, "theme");
   // A local display reload must recompose the open DTO without pulling changed backend facts.
   frontend.set_model({.provider_id = "openai", .model_id = "gpt-fresh", .display_name = "gpt-fresh"});
 
   auto const outcome = action_controller.maybe_reload_display_settings();
   bool const rebuilt = opened && outcome == ava::tui::DisplaySettingsReloadPollOutcome::Applied && applied_callback_count == 1 &&
-                       active_select_list == ava::tui::ActiveSelectList::Overview && presentation.snapshot.startup_overview &&
+                       active_select_list.kind() == ava::tui::ActiveSelectList::Overview && presentation.snapshot.startup_overview &&
                        presentation.snapshot.startup_overview->model == "gpt-5.5" && presentation.snapshot.startup_overview->theme_name == "sunrise" &&
                        presentation.snapshot.select_list && presentation.snapshot.select_list->query == "theme" &&
                        std::ranges::any_of(presentation.snapshot.select_list->items,
@@ -1390,7 +1390,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
-  auto active_select_list = ava::tui::ActiveSelectList::None;
+  ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
   ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer);
@@ -1398,7 +1398,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::RuntimePluginUiCoordinator plugin_ui;
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
                                                       session_archive_confirmation);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
   ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
                                                   navigation, action_controller, transcript_search, subagent_workspace);
   ava::tui::RuntimeSubmitController submit_controller(*frontend.frontend(), presentation, draft_state, renderer, navigation, action_controller, active_run,
@@ -1423,8 +1423,7 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   bool const fresh_settings_trust = continued(reopened_settings) && project_trust_reads == 2 && presentation.snapshot.project_trust &&
                                     presentation.snapshot.project_trust->decision == "denied" &&
                                     reopened_workspace.subtitle.find("denied") != std::string::npos;
-  presentation.snapshot.select_list.reset();
-  active_select_list = ava::tui::ActiveSelectList::None;
+  active_select_list.close();
   bool const settings_popup_ok = settings_not_read_by_snapshot && first_settings_trust && fresh_settings_trust;
 
   presentation.initialize_startup_overview(*frontend.frontend(), frontend.frontend()->read_startup_overview());
@@ -4260,13 +4259,12 @@ void run_tui_composer_rendering_tests_part_4()
       //      options.model = "m1";
       ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
       presentation.snapshot.startup_overview = overview;
-      presentation.snapshot.select_list = ava::tui::overview_select_list_view(overview);
-      presentation.snapshot.select_list->query = "mode";
-      presentation.snapshot.select_list->selected_item_index = 0;
-      auto active = ava::tui::ActiveSelectList::Overview;
+      ava::tui::SelectorHost active(presentation.snapshot);
+      active.open(ava::tui::ActiveSelectList::Overview, ava::tui::overview_select_list_view(overview));
+      active.update_selection(0, "mode");
 
       presentation.refresh_after_backend_action(*frontend.frontend());
-      expect(active == ava::tui::ActiveSelectList::Overview && presentation.snapshot.select_list && presentation.snapshot.select_list->query == "mode" &&
+      expect(active.kind() == ava::tui::ActiveSelectList::Overview && presentation.snapshot.select_list && presentation.snapshot.select_list->query == "mode" &&
                  presentation.snapshot.startup_overview && presentation.snapshot.startup_overview->model == "gpt-test" &&
                  std::ranges::any_of(presentation.snapshot.select_list->items,
                                      [](auto const& item) { return item.label == "Model" && item.detail == "gpt-test"; }),
@@ -4274,21 +4272,20 @@ void run_tui_composer_rendering_tests_part_4()
 
       // Competing authority / explicit close.
       ava::tui::close_startup_overview_presentation(presentation.snapshot, active);
-      expect(active == ava::tui::ActiveSelectList::None && !presentation.snapshot.select_list,
+      expect(active.kind() == ava::tui::ActiveSelectList::None && !presentation.snapshot.select_list,
              "prompt/competing authority closes ActiveSelectList::Overview and clears the select-list");
 
       // Re-open then session transition must close overview.
       presentation.snapshot.startup_overview = overview;
-      presentation.snapshot.select_list = ava::tui::overview_select_list_view(overview);
-      active = ava::tui::ActiveSelectList::Overview;
+      active.open(ava::tui::ActiveSelectList::Overview, ava::tui::overview_select_list_view(overview));
       ava::tui::RuntimeDraftState draft_state;
       ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
       ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active);
-      ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot);
+      ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active);
       auto const session_changed = ava::tui::apply_committed_session_transition_and_refresh(
           *frontend.frontend(), presentation, draft_state, renderer, transcript_search, subagent_workspace, active, "session_overview_other");
-      expect(session_changed && active == ava::tui::ActiveSelectList::None && !presentation.snapshot.select_list,
+      expect(session_changed && active.kind() == ava::tui::ActiveSelectList::None && !presentation.snapshot.select_list,
              "session transition closes an open startup overview through the shared presentation path");
     }
   }

@@ -54,3 +54,47 @@ No empty implementation stubs, no disabled behavior, and no fabricated passing c
 - Formatting: repository clang-format configuration, using clang-format22 (clang-format19 cannot parse SpaceInEmptyBraces). `git --no-pager diff --check` is run before commit. No CTest run.
 
 - Final full build: exit0; all44 scheduled steps completed, including ava_tests linkage (`/workspace/ava-tools/goal03-build-final.log`). Compilation is verified; no runtime/TUI/test behavior is claimed.
+
+## 06/04/01 — Encapsulated selector host
+
+Inputs read: 06/handoff.md, 06/01/inventory.md, 06/02/architecture.md, this ledger and the parent04/child01 descriptions. This entry supersedes goal03's separately owned selector kind and writable snapshot selector references. Parent04 remains not-achieved until all four feature children are complete.
+
+`src/ava/tui/SelectorHost.h` and `.cpp` own the private active kind and optional view, including current filter and selection. `open(kind, view)` installs the pair together; `replace(view)` retains the active kind; `close()` clears both. `update_selection(index, query)` and `set_subtitle(text)` publish narrow changes. `replace_preserving_selection(view, index, query)` preserves the prior row's value identity when available and applies the existing selection clamp. `kind()`, `view()` and `selected_item(index)` expose immutable reads; item pointers expire on mutation. `visible_values(query)` preserves the previous exclusion of disabled/empty-value rows. No writable kind/view getter exists.
+
+The host borrows the session's earlier-constructed presentation snapshot and publishes a copy after each operation. The authoritative view never comes from that snapshot. The host is noncopyable and outlives stash, search, prompts, actions, workspace, active run and submission consumers. Actions expose the shared encapsulated host to the existing active-run overview/session-transition helpers; this replaces the old writable enum accessor without exposing host fields. The frontend/backend authority callbacks retain their access and behavior.
+
+### Integrated consumers and projection exceptions
+
+- Session settings/branch-summary/generic selector paths, action selectors, slash-command settings/hotkeys, stash and transcript search now call host operations. The old session selected-item and visible-values forwarding methods were deleted; selection identity preservation is implemented by the host. Common event classification and feature policy remain in their existing owners pending04/02–04 and05/01.
+- Startup overview helpers, committed-session transition helpers and prompt preemption use the same host. Prompt preemption retains its existing Overview/PromptStash-only policy. `dispatch_tui_selector_authority` now closes the host before painting pending status and invoking synchronous authority, so a hidden hosted view cannot survive that boundary.
+- Subagent workspace uses the same host and the explicit `SubagentWorkspace` kind. Its active query/selection is read from the host. The private `selector_` remains a rebuild/return checkpoint for workspace inspection and cycling, refreshed from the host before use while selector mode is active. Closed workspace cleanup closes only its own hosted selector, leaving unrelated selector cleanup to its owning feature or the committed-session coordinator. This prevents workspace reset from erasing the Overview kind before overview-specific cleanup.
+- Transcript search builds or copies a local view, updates rows with the existing incremental diagnostics, then publishes it in one host operation. Opening search cannot reuse another selector's chrome merely because a projection exists. The search query/projection cache remains feature data for05/02; the host owns the currently displayed query/index.
+- The existing `ScopedTranscriptSearchModalProjection` temporarily suppresses/restores only the rendering projection while computing underlying transcript layout. It never closes or mutates the host. Composer layout helpers also modify local snapshot copies only. These are documented rendering projections, not independently writable selector authority;05/02 will reconcile the renderer seam and11 audits remaining writes.
+
+No unused wrapper, stub implementation, optional workspace host, or legacy enum constructor was added. Test source consumers are adapted to construct one shared host per fixture, seed it through `open` and inspect `kind`; assertions retain their original intent. This is compilation compatibility, not a test run.
+
+### Printing, remaining work and checks
+
+SelectorHost deliberately uses `AVA_DEBUG_PRINT_MEMBERS_OPT_OUT`: hosted rows may contain stashed prompt bodies or transcript excerpts, and the borrowed rendering snapshot contains arbitrary messages. The default ON marker was attempted, but its generated printer tries to stream those deliberately non-printable aggregates. Regenerating did not supply a safe printer; content printing was not added to work around that boundary. This is the specific sensitive-data exception, recorded in the header. All host fields are private, the cpp starts with sys.h, and accepted API-contract assertions explain the caller correction.
+
+| Remaining coupling | Removal/integration goal |
+| --- | --- |
+| Settings navigation, preview and open lifetime still in session | 04/02 |
+| Session selection/archive policy still in session/actions; host only owns generic selection identity | 04/03 |
+| Branch-summary operation state still in session, including prior selector checkpoint | 04/04 |
+| Generic selector input classification and dispatch chain remain in session; no mutable selector aliases remain | 05/01 |
+| Search modal projection suppression and query/projection cache remain in existing search/renderer seams | 05/02 |
+| Workspace rebuild/return checkpoint and presentation lifecycle remain in existing workspace controller | 05/03 |
+| Existing actions-to-host collaborator accessor used by active-run transition helpers | 09–10 integration, final ownership audit11 |
+
+Full configured build, formatting and diff-check evidence is recorded below before commit. No CTest, UI smoke, manual reconfiguration or unrelated configuration workaround is part of this goal.
+
+
+Build sequence for04/01:
+
+- `source /workspace/ava-tools/activate.sh; scripts/build.sh` completed with exit0, including ava_tests linkage. Normal CMake regeneration for SelectorHost.cpp succeeded; no manual reconfiguration. This run exposed GCC16 warnings from whole-optional projection assignment; publication now explicitly copies a present view or resets an absent projection.
+- The new header was staged before `scripts/build.sh --target generate-print-members` so the tracked-source generator included it. The subsequent full build failed in the newly generated ON printer because ComposerSnapshot is deliberately non-streamable. Per repository instructions, the generate-print-members target was retried first and succeeded; the sensitive-content exception above was then applied and printers regenerated successfully. No compiler/configuration workaround was introduced.
+- Final full build uses the same activation/script with cloud execution access enabled, logged in `/workspace/ava-tools/goal0401-build-verified.log`. Its result is recorded below after wrapper completion.
+- Production C++ was formatted with clang-format22; test API adaptations were formatted on changed ranges with the same formatter. `git diff --check` passed. No tests or runtime/TUI smoke were executed.
+
+- Final full build exit0, all34 scheduled steps completed including ava_tests linkage; no warnings/errors in the final log. Compilation and projection-interface integration are verified; runtime behavior remains untested until the planned final gate.

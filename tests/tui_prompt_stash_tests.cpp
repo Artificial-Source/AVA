@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
+#include "ava/tui/SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/prompt_stash_internal.h"
@@ -143,11 +144,11 @@ void test_prompt_stash_runtime_controller()
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  auto active_list = ava::tui::ActiveSelectList::None;
+  ava::tui::SelectorHost active_list(presentation.snapshot);
   ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_list);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_list);
   auto const transcript_unchanged = [&]() {
     return presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().label == "ava" &&
            presentation.snapshot.transcript.front().text == "backend transcript stays unchanged";
@@ -168,12 +169,12 @@ void test_prompt_stash_runtime_controller()
              draft_state.draft_input.empty() && !draft_state.selection_bounds() && transcript_unchanged() && presentation.snapshot.status == "prompt stashed",
          "prompt stash trigger stores and clears a nonempty draft while excluding history-browsing and selection state without transcript mutation");
 
-  expect(controller.trigger() && active_list == ava::tui::ActiveSelectList::PromptStash && presentation.snapshot.select_list.has_value() &&
+  expect(controller.trigger() && active_list.kind() == ava::tui::ActiveSelectList::PromptStash && presentation.snapshot.select_list.has_value() &&
              presentation.snapshot.status == "prompt stash opened",
          "prompt stash trigger opens the newest-first selector when the draft is empty and reports the selector state");
   auto const count_before_cancel = controller.stash().size();
   expect(controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape}).value_or(false) &&
-             active_list == ava::tui::ActiveSelectList::None && controller.stash().size() == count_before_cancel &&
+             active_list.kind() == ava::tui::ActiveSelectList::None && controller.stash().size() == count_before_cancel &&
              presentation.snapshot.status == "view canceled",
          "prompt stash selector Esc closes without mutation and reports cancellation");
 

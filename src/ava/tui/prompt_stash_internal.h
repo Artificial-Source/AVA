@@ -12,7 +12,7 @@
 
 namespace ava::tui {
 
-enum class ActiveSelectList;
+class SelectorHost;
 struct InputEvent;
 struct RuntimeDraftState;
 class RuntimePresentationState;
@@ -82,8 +82,8 @@ class PromptStash final
 class RuntimePromptStashController final
 {
  public:
-  RuntimePromptStashController(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                               ActiveSelectList& active_select_list, TuiKeyBindings const& key_bindings);
+  RuntimePromptStashController(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer, SelectorHost& selectors,
+                               TuiKeyBindings const& key_bindings);
   RuntimePromptStashController(RuntimePromptStashController const&) = delete;
   RuntimePromptStashController& operator=(RuntimePromptStashController const&) = delete;
 
@@ -104,7 +104,7 @@ class RuntimePromptStashController final
   RuntimePresentationState& presentation_state_;
   RuntimeDraftState& draft_state_;
   RuntimeRenderer& renderer_;
-  ActiveSelectList& active_select_list_;
+  SelectorHost& selectors_;
   TuiKeyBindings const& key_bindings_;
   PromptStash stash_;
 };

@@ -24,7 +24,7 @@ class RuntimeActionController final
 {
  public:
   RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                          ActiveSelectList& active_select_list, std::optional<PendingSessionArchiveAction>& session_archive_confirmation);
+                          SelectorHost& selectors, std::optional<PendingSessionArchiveAction>& session_archive_confirmation);
   RuntimeActionController(RuntimeActionController const&) = delete;
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
 
@@ -47,8 +47,8 @@ class RuntimeActionController final
   // Toggle the read-only startup overview select-list. No-op when no snapshot is present.
   [[nodiscard]] bool toggle_startup_overview();
   // Shared with snapshot-apply / prompt-preempt paths that must close or rebuild overview.
-  [[nodiscard]] ActiveSelectList& active_select_list() noexcept { return active_select_list_; }
-  [[nodiscard]] ActiveSelectList const& active_select_list() const noexcept { return active_select_list_; }
+  [[nodiscard]] SelectorHost& selectors() noexcept { return selectors_; }
+  [[nodiscard]] SelectorHost const& selectors() const noexcept { return selectors_; }
   [[nodiscard]] bool open_fork_user_turn_selector(std::string_view initial_query = {});
   [[nodiscard]] bool open_copy_user_turn_selector(std::string_view initial_query = {});
   void cycle_model(bool forward);
@@ -60,7 +60,7 @@ class RuntimeActionController final
   RuntimePresentationState& presentation_state_;
   RuntimeDraftState& draft_state_;
   RuntimeRenderer& renderer_;
-  ActiveSelectList& active_select_list_;
+  SelectorHost& selectors_;
   std::optional<PendingSessionArchiveAction>& session_archive_confirmation_;
   std::chrono::steady_clock::time_point next_display_reload_check_;
   std::optional<ava::core::NoLogString> last_display_reload_error_;

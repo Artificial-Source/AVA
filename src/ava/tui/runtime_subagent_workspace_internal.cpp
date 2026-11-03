@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SelectorHost.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 
@@ -48,8 +49,8 @@ SelectListView unavailable_selector()
 
 }  // namespace
 
-RuntimeSubagentWorkspaceController::RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot)
-    : frontend_(frontend), snapshot_(snapshot)
+RuntimeSubagentWorkspaceController::RuntimeSubagentWorkspaceController(TuiFrontEnd const& frontend, ComposerSnapshot& snapshot, SelectorHost& selectors)
+    : frontend_(frontend), snapshot_(snapshot), selectors_(selectors)
 {
 }
 
@@ -82,19 +83,20 @@ void RuntimeSubagentWorkspaceController::publish()
 {
   if (mode_ == Mode::Closed)
   {
-    snapshot_.select_list.reset();
+    if (selectors_.kind() == ActiveSelectList::SubagentWorkspace)
+      selectors_.close();
     snapshot_.subagent_workspace.reset();
     return;
   }
   if (mode_ == Mode::Selector)
   {
     selector_.selected_item_index = clamp_select_list_selection(selector_, selector_.selected_item_index);
-    snapshot_.select_list = selector_;
+    selectors_.open(ActiveSelectList::SubagentWorkspace, selector_);
     snapshot_.subagent_workspace.reset();
     return;
   }
   workspace_.scroll_offset = std::min(workspace_.scroll_offset, subagent_workspace_max_scroll_offset(workspace_, snapshot_.width, snapshot_.height));
-  snapshot_.select_list.reset();
+  selectors_.close();
   auto published = workspace_;
   published.refresh_unavailable = published.refresh_unavailable || refresh_unavailable_;
   snapshot_.subagent_workspace = std::move(published);
@@ -156,6 +158,8 @@ void RuntimeSubagentWorkspaceController::close_to_selector()
 
 bool RuntimeSubagentWorkspaceController::refresh_selector()
 {
+  if (mode_ == Mode::Selector && selectors_.view())
+    selector_ = *selectors_.view();
   auto listed = frontend_.list_subagents();
   if (!listed)
   {
@@ -277,6 +281,8 @@ bool RuntimeSubagentWorkspaceController::refresh_inspection()
 
 bool RuntimeSubagentWorkspaceController::open_selected_workspace()
 {
+  if (mode_ == Mode::Selector && selectors_.view())
+    selector_ = *selectors_.view();
   if (selector_.selected_item_index >= selector_.items.size())
     return false;
   auto const& item = selector_.items[selector_.selected_item_index];
@@ -368,11 +374,11 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
       auto clicked = select_list_selection_for_screen_position(snapshot_, event.mouse_row, event.mouse_column);
       if (!clicked)
         return result;
-      input = SelectListInputResult{.selected_item_index = *clicked, .query = selector_.query, .action = SelectListInputAction::Resolve};
+      input = SelectListInputResult{.selected_item_index = *clicked, .query = selectors_.view()->query, .action = SelectListInputAction::Resolve};
     }
     else
     {
-      input = handle_select_list_input(selector_, event);
+      input = handle_select_list_input(*selectors_.view(), event);
     }
     if (input.action == SelectListInputAction::Cancel)
     {
@@ -388,9 +394,10 @@ RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_i
     }
     if (input.action == SelectListInputAction::Redraw)
     {
-      selector_.selected_item_index = input.selected_item_index;
-      selector_.query = std::move(input.query);
-      publish();
+      auto view = *selectors_.view();
+      view.query = std::move(input.query);
+      view.selected_item_index = clamp_select_list_selection(view, input.selected_item_index);
+      selectors_.replace(std::move(view));
       result.changed = true;
     }
     return result;

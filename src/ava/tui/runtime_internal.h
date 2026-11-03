@@ -15,6 +15,8 @@
 
 namespace ava::tui {
 
+class SelectorHost;
+
 enum class TuiActiveNonblockingCommandDispatchKind
 {
   Unrecognized,
@@ -41,7 +43,7 @@ struct TuiActiveNonblockingCommandDispatchResult
 // Clears a selector and paints truthful pending authority state before invoking
 // a synchronous model/session callback. The callback remains authoritative;
 // this boundary never applies or claims its result.
-[[nodiscard]] ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, std::string pending_status,
+[[nodiscard]] ava::core::Result<std::string> dispatch_tui_selector_authority(ComposerSnapshot& snapshot, SelectorHost& selectors, std::string pending_status,
                                                                              std::function<bool()> const& render,
                                                                              std::function<ava::core::Result<std::string>()> const& callback);
 

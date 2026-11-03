@@ -21,6 +21,7 @@ namespace ava::tui {
 
 struct RuntimeDraftState;
 class RuntimeRenderer;
+class SelectorHost;
 class RuntimeSubagentWorkspaceController;
 class TranscriptSearchController;
 
@@ -75,7 +76,8 @@ enum class ActiveSelectList
   ForkUserTurn,
   CopyUserTurn,
   PromptStash,
-  Overview
+  Overview,
+  SubagentWorkspace
 };
 
 enum class ComposerJumpMode
@@ -141,8 +143,8 @@ class RuntimePresentationState final
 
 // Shared overview presentation helpers for popup-local display/keybinding changes
 // and competing presentation authority.
-void close_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list);
-void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, ActiveSelectList& active_select_list);
+void close_startup_overview_presentation(ComposerSnapshot& snapshot, SelectorHost& selectors);
+void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, SelectorHost& selectors);
 
 // Applies the local effects of a committed backend session transition. The
 // committed_session_id parameter must be read through
@@ -151,13 +153,13 @@ void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, Activ
 // tracking; same-session refreshes preserve session-scoped presentation.
 [[nodiscard]] bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                                                       TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                      ActiveSelectList& active_select_list, std::string committed_session_id);
+                                                      SelectorHost& selectors, std::string committed_session_id);
 
 // Synchronizes session-scoped presentation before pulling retained backend data.
 [[nodiscard]] bool apply_committed_session_transition_and_refresh(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state,
                                                                   RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
                                                                   TranscriptSearchController& transcript_search,
-                                                                  RuntimeSubagentWorkspaceController& subagent_workspace, ActiveSelectList& active_select_list,
+                                                                  RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors,
                                                                   std::string committed_session_id);
 
 }  // namespace ava::tui
