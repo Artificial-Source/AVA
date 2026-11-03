@@ -32,14 +32,6 @@ bool TuiSession::is_action(TuiAction action, InputEvent const& event) const
   return key_matches_action(frontend_.key_bindings(), action, event.key);
 }
 
-bool TuiSession::apply_composer_result(ComposerInputResult result)
-{
-  presentation_state_.publish_composer_feedback(result);
-  if (result.beep)
-    terminal_context_.beep();
-  return result.handled;
-}
-
 namespace {
 constexpr std::size_t kKeyboardScrollRows = 3;
 constexpr std::size_t kInputBatchLimit = 32;
@@ -554,69 +546,7 @@ TuiInputOutcome TuiSession::handle_transcript_input(runtime_input::RuntimeInput 
   {
     navigation_.scroll_down(kTranscriptWheelScrollRows);
   }
-  else if (event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick || event.key == Key::MouseLeftDrag || event.key == Key::MouseLeftRelease ||
-           event.key == Key::MousePointerCancel)
-  {
-    draft_state_.cancel_escape();
-    auto const begins_click = event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick;
-    bool palette_claimed = false;
-    if (begins_click)
-    {
-      if (auto const clicked = slash_palette_selection_for_screen_position(presentation_state_.screen(), event.mouse_row, event.mouse_column))
-      {
-        renderer_.clear_transcript_selection();
-        draft_state_.clear_selection();
-        draft_state_.select_completion(*clicked);
-        static_cast<void>(apply_composer_result(draft_state_.select_slash_command(presentation_state_.screen())));
-        palette_claimed = true;
-      }
-      else if (auto const clicked = renderer_.file_reference_completion_at(event.mouse_row, event.mouse_column))
-      {
-        renderer_.clear_transcript_selection();
-        draft_state_.clear_selection();
-        draft_state_.select_completion(*clicked);
-        static_cast<void>(apply_composer_result(draft_state_.select_file_reference(navigation_)));
-        palette_claimed = true;
-      }
-      else if (auto const clicked = renderer_.path_completion_at(event.mouse_row, event.mouse_column))
-      {
-        renderer_.clear_transcript_selection();
-        draft_state_.clear_selection();
-        draft_state_.select_completion(*clicked);
-        static_cast<void>(apply_composer_result(draft_state_.select_path_completion(navigation_)));
-        palette_claimed = true;
-      }
-    }
-    if (!palette_claimed)
-    {
-      auto const transcript_mouse =
-          renderer_.handle_transcript_selection_mouse(event, std::bind_front(&RuntimeNavigationController::toggle_tool_details_at, &navigation_),
-                                                      std::bind_front(&RuntimeNavigationController::toggle_thinking_at, &navigation_));
-      if (transcript_mouse == TranscriptSelectionMouseResult::Ignored)
-      {
-        if (begins_click)
-        {
-          if (auto const cursor = composer_input_cursor_for_screen_position(presentation_state_.screen(), event.mouse_row, event.mouse_column))
-          {
-            renderer_.clear_transcript_selection();
-            draft_state_.begin_pointer_selection(*cursor, event.key == Key::MouseLeftPress);
-            presentation_state_.publish_status("cursor moved");
-          }
-        }
-        else if (draft_state_.mouse_selecting())
-        {
-          if (auto const cursor = composer_input_cursor_for_screen_position(presentation_state_.screen(), event.mouse_row, event.mouse_column))
-          {
-            draft_state_.extend_pointer_selection(*cursor);
-            presentation_state_.publish_status(draft_state_.selection_bounds() ? "selection active" : "cursor moved");
-          }
-          if (event.key == Key::MouseLeftRelease)
-            draft_state_.end_pointer_selection();
-        }
-      }
-    }
-  }
-  else
+  else if (!navigation_.handle_pointer_input(event, terminal_context_))
     return TuiInputOutcome::Pass;
   return render_input();
 }

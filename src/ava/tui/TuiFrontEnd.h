@@ -31,8 +31,8 @@ class TuiFrontEnd : public frontend::FrontEnd
 
  public:
   // TUI feature owners request backend actions through these existing virtual
-  // operations. They cannot access startup options or keybinding storage; the
-  // application implementations retain validation and backend authority.
+  // operations without gaining protected-member access. The application
+  // implementations retain validation and backend authority.
 
   // Return the notification bridge while the application-owned renderer is alive.
   virtual TuiMermaidRenderBridge mermaid_bridge() const = 0;

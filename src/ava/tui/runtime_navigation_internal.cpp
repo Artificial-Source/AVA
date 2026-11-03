@@ -87,6 +87,81 @@ FileReferenceSelectionText RuntimeNavigationController::selected_completion_text
   return renderer_.selected_completion_text(selected);
 }
 
+bool RuntimeNavigationController::handle_pointer_input(InputEvent const& event, terminal::Context& terminal_context)
+{
+  using Key = terminal::Key;
+  if (event.key != Key::MouseLeftPress && event.key != Key::MouseLeftClick && event.key != Key::MouseLeftDrag && event.key != Key::MouseLeftRelease &&
+      event.key != Key::MousePointerCancel)
+    return false;
+  // Completion owns a click before the transcript or draft underneath it. Keep
+  // feedback here; the session requests the frame after this dispatch stage.
+  auto apply_feedback = [&](ComposerInputResult result) {
+    presentation_.publish_composer_feedback(result);
+    if (result.beep)
+      terminal_context.beep();
+    return result.handled;
+  };
+  draft_state_.cancel_escape();
+  auto const begins_click = event.key == Key::MouseLeftPress || event.key == Key::MouseLeftClick;
+  bool palette_claimed = false;
+  if (begins_click)
+  {
+    if (auto const clicked = slash_palette_selection_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
+    {
+      renderer_.clear_transcript_selection();
+      draft_state_.clear_selection();
+      draft_state_.select_completion(*clicked);
+      static_cast<void>(apply_feedback(draft_state_.select_slash_command(presentation_.screen())));
+      palette_claimed = true;
+    }
+    else if (auto const clicked = renderer_.file_reference_completion_at(event.mouse_row, event.mouse_column))
+    {
+      renderer_.clear_transcript_selection();
+      draft_state_.clear_selection();
+      draft_state_.select_completion(*clicked);
+      static_cast<void>(apply_feedback(draft_state_.select_file_reference(*this)));
+      palette_claimed = true;
+    }
+    else if (auto const clicked = renderer_.path_completion_at(event.mouse_row, event.mouse_column))
+    {
+      renderer_.clear_transcript_selection();
+      draft_state_.clear_selection();
+      draft_state_.select_completion(*clicked);
+      static_cast<void>(apply_feedback(draft_state_.select_path_completion(*this)));
+      palette_claimed = true;
+    }
+  }
+  if (!palette_claimed)
+  {
+    auto const transcript_mouse =
+        renderer_.handle_transcript_selection_mouse(event, std::bind_front(&RuntimeNavigationController::toggle_tool_details_at, this),
+                                                    std::bind_front(&RuntimeNavigationController::toggle_thinking_at, this));
+    if (transcript_mouse == TranscriptSelectionMouseResult::Ignored)
+    {
+      if (begins_click)
+      {
+        if (auto const cursor = composer_input_cursor_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
+        {
+          renderer_.clear_transcript_selection();
+          draft_state_.begin_pointer_selection(*cursor, event.key == Key::MouseLeftPress);
+          presentation_.publish_status("cursor moved");
+        }
+      }
+      else if (draft_state_.mouse_selecting())
+      {
+        if (auto const cursor = composer_input_cursor_for_screen_position(presentation_.screen(), event.mouse_row, event.mouse_column))
+        {
+          draft_state_.extend_pointer_selection(*cursor);
+          presentation_.publish_status(draft_state_.selection_bounds() ? "selection active" : "cursor moved");
+        }
+        if (event.key == Key::MouseLeftRelease)
+          draft_state_.end_pointer_selection();
+      }
+    }
+  }
+  return true;
+}
+
 void RuntimeNavigationController::scroll_up(std::size_t amount)
 {
   draft_state_.cancel_escape();

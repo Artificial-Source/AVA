@@ -8,6 +8,10 @@
 
 namespace ava::tui {
 
+namespace terminal {
+class Context;
+}
+
 class RuntimePresentationState;
 
 struct ComposerSnapshot;
@@ -38,6 +42,11 @@ class RuntimeNavigationController final
   [[nodiscard]] std::size_t next_completion(std::size_t selected);
   [[nodiscard]] std::optional<std::string> selected_completion_disabled_reason(std::size_t selected);
   [[nodiscard]] FileReferenceSelectionText selected_completion_text(std::size_t selected);
+
+  // TUI thread: route pointer input through completion, transcript, then draft.
+  // The context is borrowed only for this call. The caller paints after a true
+  // result; false leaves non-pointer input to the next dispatcher stage.
+  [[nodiscard]] bool handle_pointer_input(InputEvent const& event, terminal::Context& terminal_context);
 
   void scroll_up(std::size_t amount);
   void scroll_down(std::size_t amount);

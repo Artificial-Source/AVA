@@ -53,7 +53,6 @@ class TuiSession final
   // Resolve configured bindings on the TUI thread without repeating lookup policy.
   [[nodiscard]] bool is_action(TuiAction action, InputEvent const& event) const;
   // TUI thread: consume editor feedback at its dispatch stage before rendering.
-  [[nodiscard]] bool apply_composer_result(ComposerInputResult result);
   // Executes only the cross-owner request after Composer resolves key precedence.
   TuiInputOutcome handle_composer_input(ComposerInputPhase phase, runtime_input::RuntimeInput const& input);
   bool stop_for_branch_summary(BranchSummaryOutcome outcome);
