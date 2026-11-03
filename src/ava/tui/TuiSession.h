@@ -27,7 +27,8 @@
 namespace ava::tui {
 
 // One run's composition. Frontend and application-owned Context outlive this owner.
-// Feature algorithms are extracted from this intermediate owner by goals 04 and 05.
+// Feature owners maintain their own invariants; this owner coordinates lifecycle,
+// decoded input precedence and the sole live terminal event loop.
 class TuiSession final
 {
  public:
@@ -51,7 +52,12 @@ class TuiSession final
   RuntimeSubmitDisposition handle_submit(std::optional<std::string> forced_submission = std::nullopt);
   void settle_opened_session(std::string status);
   bool synchronize_committed_session();
-  TuiInputOutcome handle_signal_input(runtime_input::RuntimeInput const& input);
+  void service_control(TuiEventLoop::Clock::time_point now);
+  [[nodiscard]] bool service_application_updates();
+  void service_presentations();
+  [[nodiscard]] bool service_input_batch();
+  void apply_input_outcome(TuiInputOutcome outcome);
+  TuiInputOutcome handle_signals();
   TuiInputOutcome handle_resize_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_wheel_input(runtime_input::RuntimeInput const& input);
   TuiInputOutcome handle_command_output_input(runtime_input::RuntimeInput const& input);
@@ -78,6 +84,7 @@ class TuiSession final
   RuntimePluginUiCoordinator plugin_ui_;
   bool terminal_write_failed_ = false;
   bool terminal_signal_received_ = false;
+  bool terminal_closing_ = false;
   Composer draft_state_;
   RuntimeRenderer renderer_;
   RuntimeNavigationController navigation_;
@@ -98,6 +105,8 @@ class TuiSession final
   RuntimeSubmitController submit_controller_;
   // Registered targets above outlive the dispatcher; the session cannot move.
   TuiInputDispatcher input_dispatcher_;
+  // This callback target is the session itself; cancel before collaborators retire.
+  TuiTimer control_timer_;
 };
 
 } // namespace ava::tui

@@ -343,7 +343,8 @@ void run_tui_transcript_selection_tests()
     ava::tui::TranscriptPositionIndicatorState indicator;
     auto const started = IndicatorClock::time_point{};
     indicator.show(started);
-    auto const waits_one_second = indicator.time_until_expiry(started) == ava::tui::TranscriptPositionIndicatorState::kVisibleDuration;
+    auto const expiry = indicator.expires_at();
+    auto const waits_one_second = expiry && *expiry - started == ava::tui::TranscriptPositionIndicatorState::kVisibleDuration;
     auto const early_visible = !indicator.expire_if_due(started + std::chrono::milliseconds(999)) && indicator.visible();
     auto const expired = indicator.expire_if_due(started + std::chrono::milliseconds(1000)) && !indicator.visible();
     ava::tui::ComposerSnapshot streaming_snapshot;
@@ -444,10 +445,11 @@ void run_tui_transcript_selection_tests()
                            never_toggle, never_toggle, 0, held_started));
   static_cast<void>(handle(autoscroll_state, mouse_event(ava::tui::terminal::Key::MouseLeftDrag, 1, 2), snapshot, scrolling_cache, &draft, scroll, never_toggle,
                            never_toggle, 0, held_started));
-  auto const held_wait = autoscroll_state.time_until_edge_autoscroll(held_started);
+  auto const held_deadline = autoscroll_state.edge_autoscroll_deadline();
   auto const early_tick = autoscroll_state.tick_edge_autoscroll(snapshot, scrolling_cache, scroll, 0, held_started + std::chrono::milliseconds(49));
   auto const due_tick = autoscroll_state.tick_edge_autoscroll(snapshot, scrolling_cache, scroll, 0, held_started + std::chrono::milliseconds(50));
-  expect(scroll == 2 && autoscroll_state.range() && held_wait == ava::tui::RuntimeTranscriptSelectionState::kEdgeAutoscrollInterval &&
+  expect(scroll == 2 && autoscroll_state.range() && held_deadline &&
+             *held_deadline - held_started == ava::tui::RuntimeTranscriptSelectionState::kEdgeAutoscrollInterval &&
              early_tick == ava::tui::TranscriptSelectionMouseResult::Ignored && due_tick == ava::tui::TranscriptSelectionMouseResult::HandledNeedsRender,
          "transcript selection motion autoscrolls immediately and held-edge selection repeats at a deterministic 50 ms renderer cadence without a thread");
 

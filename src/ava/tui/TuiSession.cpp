@@ -29,7 +29,8 @@
 namespace ava::tui {
 namespace {
 constexpr std::size_t kKeyboardScrollRows = 3;
-constexpr auto kIdleInputPollDelay = std::chrono::milliseconds(250);
+constexpr std::size_t kInputBatchLimit = 32;
+constexpr auto kControlObservationInterval = std::chrono::milliseconds(100);
 } // namespace
 using Key = terminal::Key;
 
@@ -57,24 +58,31 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
                              action_controller_, transcript_search_, subagent_workspace_, session_transitions_, mermaid_presentation_),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
                          transcript_search_, subagent_workspace_, selectors_, settings_, session_selector_),
-      input_dispatcher_({std::bind_front(&TuiSession::handle_signal_input, this), std::bind_front(&TuiSession::handle_resize_input, this),
-                         std::bind_front(&TuiSession::handle_wheel_input, this), std::bind_front(&TuiSession::handle_command_output_input, this),
-                         std::bind_front(&TuiSession::handle_workspace_input, this), std::bind_front(&TuiSession::handle_branch_summary_input, this),
-                         std::bind_front(&TuiSession::handle_search_input, this),
+      input_dispatcher_({std::bind_front(&TuiSession::handle_resize_input, this), std::bind_front(&TuiSession::handle_wheel_input, this),
+                         std::bind_front(&TuiSession::handle_command_output_input, this), std::bind_front(&TuiSession::handle_workspace_input, this),
+                         std::bind_front(&TuiSession::handle_branch_summary_input, this), std::bind_front(&TuiSession::handle_search_input, this),
                          TuiInputDispatcher::event_handler(std::bind_front(&RuntimePromptStashController::handle_selector_input, &prompt_stash_)),
                          std::bind_front(&TuiSession::handle_selector_input, this),
                          TuiInputDispatcher::event_handler(std::bind_front(&RuntimeNavigationController::handle_sidebar_drawer_input, &navigation_)),
                          std::bind_front(&TuiSession::handle_jump_input, this), std::bind_front(&TuiSession::handle_primary_input, this),
                          std::bind_front(&TuiSession::handle_editor_input, this), std::bind_front(&TuiSession::handle_session_input, this),
                          std::bind_front(&TuiSession::handle_transcript_input, this), std::bind_front(&TuiSession::handle_composer_navigation_input, this),
-                         std::bind_front(&TuiSession::handle_tail_input, this)})
+                         std::bind_front(&TuiSession::handle_tail_input, this)}),
+      control_timer_(loop_.member_timer(*this, &TuiSession::service_control))
 {
+  renderer_.attach_loop(loop_);
   plugin_ui_.attach_loop(loop_);
+  action_controller_.attach_loop(loop_);
+  branch_summary_.attach_loop(loop_);
+  subagent_workspace_.attach_loop(loop_, renderer_);
+  mermaid_presentation_.attach_loop(loop_);
+  control_timer_.repeat(kControlObservationInterval);
 }
 
 TuiSession::~TuiSession()
 {
   // Each collaborator is still alive here; shutdown also covers early run returns.
+  control_timer_.cancel();
   active_run_controller_.shutdown();
   mermaid_presentation_.shutdown();
   plugin_ui_.shutdown();
@@ -131,7 +139,7 @@ bool TuiSession::synchronize_committed_session()
   return session_transitions_.apply(std::move(committed_session_id));
 }
 
-TuiInputOutcome TuiSession::handle_signal_input(runtime_input::RuntimeInput const&)
+TuiInputOutcome TuiSession::handle_signals()
 {
   using Signals = core::Signals;
   if (Signals::received(terminal_signals))
@@ -1102,101 +1110,167 @@ TuiInputOutcome TuiSession::render_input()
   return renderer_.request_render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
 }
 
+void TuiSession::apply_input_outcome(TuiInputOutcome outcome)
+{
+  if (outcome == TuiInputOutcome::Failure)
+    terminal_write_failed_ = true;
+  if (outcome == TuiInputOutcome::Failure || outcome == TuiInputOutcome::Exit)
+    loop_.request_stop();
+}
+
+void TuiSession::service_control(TuiEventLoop::Clock::time_point)
+{
+  if (active_run_controller_.active())
+  {
+    if (!active_run_controller_.service_control())
+      apply_input_outcome(TuiInputOutcome::Failure);
+  }
+  else
+    apply_input_outcome(handle_signals());
+
+  if (loop_.notification_failed() || renderer_.render_failed())
+    apply_input_outcome(TuiInputOutcome::Failure);
+  if (loop_.stopped() || terminal_closing_ || (!loop_.terminal_hangup() && !loop_.terminal_error()))
+    return;
+
+  // Stop admission before draining final buffered bytes. HUP is a normal close;
+  // descriptor errors are failures. Neither can remain a level-triggered wait.
+  terminal_closing_ = true;
+  terminal_write_failed_ = terminal_write_failed_ || loop_.terminal_error();
+  if (active_run_controller_.active())
+    static_cast<void>(active_run_controller_.cancel(ActiveRunCancel::Close));
+  if (branch_summary_.active())
+    static_cast<void>(branch_summary_.cancel(BranchSummaryCancelMode::ExitAfterSettlement));
+}
+
+bool TuiSession::service_application_updates()
+{
+  if (!active_run_controller_.active())
+    return false;
+  if (active_run_controller_.consume(256) == RuntimeEventDrainResult::RenderFailed)
+  {
+    apply_input_outcome(TuiInputOutcome::Failure);
+    return false;
+  }
+  if (auto completed = active_run_controller_.complete())
+  {
+    terminal_write_failed_ = terminal_write_failed_ || completed->terminal_write_failed();
+    terminal_signal_received_ = terminal_signal_received_ || completed->terminal_signal_received();
+    // A signal completion must exit; continuing would lose its claimed outcome.
+    ASSERT(!completed->terminal_signal_received() || completed->break_loop());
+    if (completed->break_loop())
+      loop_.request_stop();
+  }
+  return active_run_controller_.has_pending_updates();
+}
+
+void TuiSession::service_presentations()
+{
+  if (loop_.stopped() || terminal_closing_)
+    return;
+  if (auto outcome = branch_summary_.take_service_outcome(); outcome && stop_for_branch_summary(*outcome))
+  {
+    loop_.request_stop();
+    return;
+  }
+  if (subagent_workspace_.take_render_failure() || mermaid_presentation_.take_service_outcome() == MermaidServiceOutcome::RenderFailed ||
+      mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed)
+  {
+    apply_input_outcome(TuiInputOutcome::Failure);
+    return;
+  }
+  auto const display_eligible = !active_run_controller_.active() || (!subagent_workspace_.active() && renderer_.transcript().scroll_offset() == 0);
+  if (display_eligible && !maybe_reload_display_settings())
+    apply_input_outcome(TuiInputOutcome::Failure);
+}
+
+bool TuiSession::service_input_batch()
+{
+  for (std::size_t count = 0; count < kInputBatchLimit && !loop_.stopped(); ++count)
+  {
+    // A published completion and its finite frozen receipt backlog settle before
+    // more input is decoded. Those bytes remain in ncurses/startup buffering.
+    if (!terminal_closing_ && active_run_controller_.active() && !active_run_controller_.accepts_input())
+      return true;
+    auto input = runtime_input::poll_curses_input();
+    if (!input)
+    {
+      if (terminal_closing_)
+        loop_.request_stop();
+      return false;
+    }
+    if (active_run_controller_.active())
+      service_control(TuiEventLoop::Clock::now());
+    else
+    {
+      // Preserve idle dispatch precedence when a signal arrives during decode:
+      // a handled draft clear/branch cancellation consumes this retained input.
+      auto const control = handle_signals();
+      apply_input_outcome(control);
+      if (control != TuiInputOutcome::Pass)
+        continue;
+    }
+    if (terminal_closing_ || loop_.stopped())
+      continue;
+    auto const outcome = active_run_controller_.active() ? (active_run_controller_.handle_input(*input) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure)
+                                                         : input_dispatcher_.dispatch(*input);
+    apply_input_outcome(outcome);
+  }
+  // A full batch may leave bytes in ncurses even without fd readiness. Give
+  // application work and due timers another turn, then poll input without sleep.
+  return !loop_.stopped();
+}
+
 int TuiSession::run(std::function<bool()> const& before_shutdown)
 {
   using Signals = core::Signals;
   if (Signals::received(terminal_signals))
     return 130;
-  if (mermaid_presentation_.service() == MermaidServiceOutcome::RenderFailed || !renderer_.render())
+  if (mermaid_presentation_.service_if_changed() == MermaidServiceOutcome::RenderFailed || !renderer_.paint_for_handoff())
     return 1;
 
-  while (true)
+  while (!loop_.stopped())
   {
-    loop_.service_due();
-    if (loop_.notification_failed())
-    {
-      terminal_write_failed_ = true;
+    service_control(TuiEventLoop::Clock::now());
+    if (loop_.stopped())
       break;
-    }
-    if (active_run_controller_.active())
+    if (terminal_closing_)
     {
-      if (active_run_controller_.consume() == RuntimeEventDrainResult::RenderFailed)
-      {
-        terminal_write_failed_ = true;
-        break;
-      }
-      if (auto completed = active_run_controller_.complete())
-      {
-        terminal_write_failed_ = terminal_write_failed_ || completed->terminal_write_failed();
-        terminal_signal_received_ = terminal_signal_received_ || completed->terminal_signal_received();
-        // A signal completion must exit; otherwise its claimed outcome is lost.
-        ASSERT(!completed->terminal_signal_received() || completed->break_loop());
-        if (completed->break_loop())
-          break;
-      }
-    }
-    if (mermaid_presentation_.service() == MermaidServiceOutcome::RenderFailed)
-    {
-      terminal_write_failed_ = true;
-      break;
-    }
-    if (stop_for_branch_summary(branch_summary_.poll()))
-      break;
-    if (!renderer_.flush_pending_render_if_due())
-    {
-      terminal_write_failed_ = true;
-      break;
-    }
-    if (active_run_controller_.active() && !active_run_controller_.accepts_input())
-      continue; // Final receipt batches remain runnable; preserve buffered terminal bytes.
-    auto const input_poll_started_at = std::chrono::steady_clock::now();
-    if (subagent_workspace_.poll(input_poll_started_at) && !renderer_.request_render())
-    {
-      terminal_write_failed_ = true;
-      break;
-    }
-    // Goal09 services one operation in this existing outer wait. Goal10 replaces
-    // this intermediate polling with the loop's timer/resource wait and batching.
-    auto input_poll_delay = active_run_controller_.active() ? std::chrono::milliseconds(16) : kIdleInputPollDelay;
-    if (active_run_controller_.has_pending_updates())
-      input_poll_delay = std::chrono::milliseconds::zero();
-    if (auto workspace_wait = subagent_workspace_.time_until_poll(input_poll_started_at))
-      input_poll_delay = std::min(input_poll_delay, std::chrono::ceil<std::chrono::milliseconds>(*workspace_wait));
-    if (renderer_.has_pending_render())
-    {
-      input_poll_delay = std::min(input_poll_delay, std::chrono::ceil<std::chrono::milliseconds>(renderer_.time_until_pending_render()));
-    }
-    auto const maybe_input = runtime_input::read_curses_input_with_timeout(input_poll_delay);
-    if (!maybe_input)
-    {
-      if (subagent_workspace_.poll() && !renderer_.request_render())
-      {
-        terminal_write_failed_ = true;
-        break;
-      }
-      auto const display_eligible = !active_run_controller_.active() || (!subagent_workspace_.active() && renderer_.transcript().scroll_offset() == 0);
-      if (!renderer_.flush_pending_render_if_due() || (display_eligible && !maybe_reload_display_settings()))
-      {
-        terminal_write_failed_ = true;
-        break;
-      }
+      // Final buffered input is finite. Do not launch discovery/presentation
+      // work or wait on a permanently ready HUP while draining these bytes.
+      static_cast<void>(service_input_batch());
       continue;
     }
-    auto const input = *maybe_input;
-    auto const outcome = active_run_controller_.active() ? (active_run_controller_.handle_input(input) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure)
-                                                         : input_dispatcher_.dispatch(input);
-    if (outcome == TuiInputOutcome::Failure)
+    loop_.service_due();
+    if (loop_.stopped() || terminal_closing_)
+      continue;
+    auto const application_pending = service_application_updates();
+    service_presentations();
+    auto const input_pending = !loop_.stopped() && service_input_batch();
+    if (loop_.stopped() || terminal_closing_)
+      continue;
+
+    // Existing bounded decoder subreads can cross deadlines. Service due work
+    // even under continuous input, then revisit application callbacks next turn.
+    auto const timer_work = loop_.has_due_work();
+    loop_.service_due();
+    service_presentations();
+    if (loop_.stopped())
+      break;
+    if (!terminal_closing_ && !renderer_.paint_ready_frame())
     {
-      terminal_write_failed_ = true;
+      apply_input_outcome(TuiInputOutcome::Failure);
       break;
     }
-    if (outcome == TuiInputOutcome::Exit)
-      break;
+    auto const runnable =
+        terminal_closing_ || application_pending || input_pending || timer_work || active_run_controller_.has_pending_updates() || loop_.has_due_work();
+    loop_.wait(runnable ? TuiWaitMode::ReadyOnly : TuiWaitMode::Block);
   }
 
-  auto const shutdown_outcome = active_run_controller_.shutdown();
-  terminal_write_failed_ = terminal_write_failed_ || shutdown_outcome.terminal_write_failed();
-  terminal_signal_received_ = terminal_signal_received_ || shutdown_outcome.terminal_signal_received();
+  control_timer_.cancel();
+  auto const stopped = active_run_controller_.shutdown();
+  terminal_write_failed_ = terminal_write_failed_ || stopped.terminal_write_failed();
+  terminal_signal_received_ = terminal_signal_received_ || stopped.terminal_signal_received();
   mermaid_presentation_.shutdown();
   plugin_ui_.shutdown();
   prompt_coordinator_.shutdown();

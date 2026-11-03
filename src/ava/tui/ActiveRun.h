@@ -70,13 +70,17 @@ class ActiveRun final
   ActiveRun& operator=(ActiveRun&&) = delete;
 
   [[nodiscard]] bool start(std::string submitted);
+  // Called once in the session control stage, before timers/application updates.
+  // Inactive operations leave signals for the idle/session policy.
+  [[nodiscard]] bool service_control();
   [[nodiscard]] RuntimeEventDrainResult consume(std::size_t max_events = 256);
   [[nodiscard]] bool handle_input(runtime_input::RuntimeInput const& input);
   [[nodiscard]] std::optional<ActiveRunOutcome> complete();
   [[nodiscard]] bool cancel(ActiveRunCancel reason);
   [[nodiscard]] bool active() const { return phase_ != Phase::Idle; }
-  // Preserve terminal buffering while frozen completion events are drained.
-  [[nodiscard]] bool accepts_input() const { return phase_ == Phase::Running; }
+  // Preserve terminal buffering once completion publishes, including while its
+  // frozen final events are drained over subsequent application turns.
+  [[nodiscard]] bool accepts_input() const;
   [[nodiscard]] bool has_pending_updates();
   ActiveRunOutcome shutdown() noexcept;
 
@@ -100,7 +104,6 @@ class ActiveRun final
   void before_prompt();
   [[nodiscard]] bool service_prompt();
   [[nodiscard]] bool apply_prompt_outcome(PromptServiceOutcome outcome);
-  [[nodiscard]] bool service_control();
   [[nodiscard]] bool refresh_plugin_surface_fit();
   [[nodiscard]] bool render();
   [[nodiscard]] bool poll_plugin_ui();

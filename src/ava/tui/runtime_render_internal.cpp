@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "TuiEventLoop.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/mermaid_projection.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -10,6 +11,7 @@
 #include <chrono>
 #include <csignal>
 #include <string>
+#include <utility>
 
 namespace ava::tui {
 using Signals = core::Signals;
@@ -74,16 +76,14 @@ std::optional<FrameRenderKind> FrameScheduler::pending_kind() const
   return pending_kind_;
 }
 
-FrameScheduler::Clock::duration FrameScheduler::time_until_due(Clock::time_point now) const
+std::optional<FrameScheduler::Clock::time_point> FrameScheduler::deadline() const noexcept
 {
-  if (!deadline_ || now >= *deadline_)
-    return Clock::duration::zero();
-  return *deadline_ - now;
+  return deadline_;
 }
 
 std::optional<FrameRenderKind> FrameScheduler::take_due(Clock::time_point now)
 {
-  if (!pending_kind_ || time_until_due(now) > Clock::duration::zero())
+  if (!pending_kind_ || (deadline_ && now < *deadline_))
     return std::nullopt;
   return take_pending();
 }
@@ -118,6 +118,92 @@ RuntimeRenderer::RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapsh
                                  terminal::Context* terminal_context)
     : snapshot_(snapshot), draft_state_(composer), terminal_context_(terminal_context), transcript_(snapshot, sidebar, composer), frontend_(frontend)
 {
+}
+
+void RuntimeRenderer::attach_loop(TuiEventLoop& loop)
+{
+  // Attach this renderer exactly once, before dispatch, to a loop that outlives it.
+  ASSERT(!loop_attached_);
+  if (loop_attached_)
+    return;
+  frame_timer_ = loop.member_timer(*this, &RuntimeRenderer::frame_due);
+  indicator_timer_ = loop.member_timer(*this, &RuntimeRenderer::indicator_due);
+  autoscroll_timer_ = loop.member_timer(*this, &RuntimeRenderer::autoscroll_due);
+  loop_attached_ = true;
+  synchronize_timers();
+}
+
+void RuntimeRenderer::synchronize_timers()
+{
+  if (!loop_attached_)
+    return;
+  auto lock = lock_ui();
+  if (frame_scheduler_.failed())
+  {
+    frame_timer_.cancel();
+    indicator_timer_.cancel();
+    autoscroll_timer_.cancel();
+    armed_frame_deadline_.reset();
+    armed_indicator_deadline_.reset();
+    armed_autoscroll_deadline_.reset();
+    return;
+  }
+  auto const frame = frame_ready_ ? std::nullopt : frame_scheduler_.deadline();
+  if (frame != armed_frame_deadline_)
+  {
+    armed_frame_deadline_ = frame;
+    if (frame)
+      frame_timer_.arm_at(*frame);
+    else
+      frame_timer_.cancel();
+  }
+  auto const indicator = transcript_.indicator_deadline();
+  if (indicator != armed_indicator_deadline_)
+  {
+    armed_indicator_deadline_ = indicator;
+    if (indicator)
+      indicator_timer_.arm_at(*indicator);
+    else
+      indicator_timer_.cancel();
+  }
+  auto const autoscroll = transcript_.autoscroll_deadline();
+  if (autoscroll != armed_autoscroll_deadline_)
+  {
+    armed_autoscroll_deadline_ = autoscroll;
+    if (autoscroll)
+      autoscroll_timer_.arm_at(*autoscroll);
+    else
+      autoscroll_timer_.cancel();
+  }
+}
+
+void RuntimeRenderer::frame_due(std::chrono::steady_clock::time_point)
+{
+  auto lock = lock_ui();
+  armed_frame_deadline_.reset();
+  frame_ready_ = frame_scheduler_.pending() && !frame_scheduler_.failed();
+}
+
+void RuntimeRenderer::indicator_due(std::chrono::steady_clock::time_point now)
+{
+  auto lock = lock_ui();
+  armed_indicator_deadline_.reset();
+  if (transcript_.expire_position_indicator(now))
+    frame_scheduler_.request(FrameRenderKind::Full, now);
+  synchronize_timers();
+}
+
+void RuntimeRenderer::autoscroll_due(std::chrono::steady_clock::time_point now)
+{
+  auto lock = lock_ui();
+  armed_autoscroll_deadline_.reset();
+  if (auto const deadline = transcript_.autoscroll_deadline(); deadline && now >= *deadline)
+  {
+    auto const authority_ready = prepare_transcript_selection_authority();
+    if (transcript_.service_autoscroll(transcript_layout_cache_, authority_ready, now))
+      frame_scheduler_.request(FrameRenderKind::Full, now);
+  }
+  synchronize_timers();
 }
 
 std::unique_lock<std::recursive_mutex> RuntimeRenderer::lock_ui()
@@ -248,6 +334,7 @@ TranscriptSelectionMouseResult RuntimeRenderer::handle_transcript_selection_mous
   auto const result = transcript_.handle_mouse(event, transcript_layout_cache_, toggle_tool, toggle_thinking);
   if (transcript_.scroll_offset() != before)
     frame_scheduler_.request(FrameRenderKind::Full, std::chrono::steady_clock::now());
+  synchronize_timers();
   return result;
 }
 void RuntimeRenderer::show_transcript_position_indicator(TranscriptPositionIndicatorState::Clock::time_point now)
@@ -255,21 +342,26 @@ void RuntimeRenderer::show_transcript_position_indicator(TranscriptPositionIndic
   auto lock = lock_ui();
   transcript_.show_position_indicator(now);
   frame_scheduler_.request(FrameRenderKind::Full, now);
+  synchronize_timers();
 }
 bool RuntimeRenderer::copy_transcript_selection()
 {
   auto lock = lock_ui();
-  return transcript_.copy_selection(transcript_layout_cache_);
+  auto const copied = transcript_.copy_selection(transcript_layout_cache_);
+  synchronize_timers();
+  return copied;
 }
 void RuntimeRenderer::clear_transcript_selection()
 {
   auto lock = lock_ui();
   transcript_.clear_selection();
+  synchronize_timers();
 }
 void RuntimeRenderer::cancel_pointer_interaction()
 {
   auto lock = lock_ui();
   transcript_.cancel_pointer_interaction();
+  synchronize_timers();
 }
 void RuntimeRenderer::reset_for_session_transition()
 {
@@ -278,11 +370,12 @@ void RuntimeRenderer::reset_for_session_transition()
   transcript_layout_cache_ = {};
   screen_row_cache_.valid = false;
   wheel_governor_.reset();
+  synchronize_timers();
 }
 void RuntimeRenderer::service_auxiliary_timers(std::chrono::steady_clock::time_point now)
 {
   auto lock = lock_ui();
-  if (transcript_.autoscroll_due(now))
+  if (auto const deadline = transcript_.autoscroll_deadline(); deadline && now >= *deadline)
   {
     auto const authority_ready = prepare_transcript_selection_authority();
     if (transcript_.service_autoscroll(transcript_layout_cache_, authority_ready, now))
@@ -294,12 +387,26 @@ void RuntimeRenderer::service_auxiliary_timers(std::chrono::steady_clock::time_p
 
 bool RuntimeRenderer::render()
 {
+  if (loop_attached_)
+    return queue_urgent_frame(FrameRenderKind::Full);
+  return paint_for_handoff();
+}
+
+bool RuntimeRenderer::paint_for_handoff()
+{
+  auto lock = lock_ui();
   if (frame_scheduler_.failed())
     return false;
-  service_auxiliary_timers(std::chrono::steady_clock::now());
+  if (!loop_attached_)
+    service_auxiliary_timers(std::chrono::steady_clock::now());
   frame_scheduler_.discard_pending();
+  frame_timer_.cancel();
+  armed_frame_deadline_.reset();
+  frame_ready_ = false;
+  pending_thaw_ = false;
   auto const succeeded = render_full(false);
   frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
+  synchronize_timers();
   return succeeded;
 }
 
@@ -372,6 +479,9 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
 
 bool RuntimeRenderer::render_processing_frame()
 {
+  if (loop_attached_)
+    return queue_urgent_frame(FrameRenderKind::Footer);
+  auto lock = lock_ui();
   if (frame_scheduler_.failed())
     return false;
   frame_scheduler_.discard_pending();
@@ -382,47 +492,67 @@ bool RuntimeRenderer::render_processing_frame()
 
 bool RuntimeRenderer::request_render(FrameRenderKind kind)
 {
+  auto lock = lock_ui();
   frame_scheduler_.request(kind, std::chrono::steady_clock::now());
+  synchronize_timers();
   return !frame_scheduler_.failed();
 }
 
-bool RuntimeRenderer::flush_pending_render_if_due()
+bool RuntimeRenderer::queue_urgent_frame(FrameRenderKind kind)
 {
-  auto const now = std::chrono::steady_clock::now();
-  service_auxiliary_timers(now);
-  auto const kind = frame_scheduler_.take_due(now);
+  auto lock = lock_ui();
+  if (frame_scheduler_.failed())
+    return false;
+  frame_scheduler_.request(kind, std::chrono::steady_clock::now());
+  frame_ready_ = true;
+  pending_thaw_ = pending_thaw_ || kind == FrameRenderKind::Full;
+  synchronize_timers();
+  return true;
+}
+
+bool RuntimeRenderer::paint_ready_frame()
+{
+  // Attach the production renderer before calling the session's end-of-batch paint hook.
+  ASSERT(loop_attached_);
+  if (!loop_attached_)
+    return false;
+  auto lock = lock_ui();
+  // View operations are deliberately independent of the renderer. Reconcile
+  // their absolute deadlines here even when this batch needs no actual paint.
+  synchronize_timers();
+  if (frame_scheduler_.failed())
+    return false;
+  if (!frame_ready_)
+    return true;
+  frame_ready_ = false;
+  auto const freeze_transcript_layout = !std::exchange(pending_thaw_, false);
+  frame_timer_.cancel();
+  armed_frame_deadline_.reset();
+  auto const kind = frame_scheduler_.take_pending();
   if (!kind)
-    return !frame_scheduler_.failed();
-  auto const succeeded = paint(*kind, true);
+    return true;
+  auto const succeeded = paint(*kind, freeze_transcript_layout);
   frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
+  synchronize_timers();
   return succeeded;
 }
 
 bool RuntimeRenderer::flush_pending_render()
 {
+  // Explicit fixture flushes are for unattached renderers; live composition must batch paint.
+  ASSERT(!loop_attached_);
+  if (loop_attached_)
+    return false;
+  auto lock = lock_ui();
+  if (frame_scheduler_.failed())
+    return false;
   service_auxiliary_timers(std::chrono::steady_clock::now());
   auto const kind = frame_scheduler_.take_pending();
   if (!kind)
-    return !frame_scheduler_.failed();
+    return true;
   auto const succeeded = paint(*kind, true);
   frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
   return succeeded;
-}
-
-bool RuntimeRenderer::has_pending_render() const
-{
-  return frame_scheduler_.pending() || transcript_.time_until_service(std::chrono::steady_clock::now()).has_value();
-}
-
-std::chrono::steady_clock::duration RuntimeRenderer::time_until_pending_render() const
-{
-  auto const now = std::chrono::steady_clock::now();
-  auto wait = std::chrono::steady_clock::duration::max();
-  if (frame_scheduler_.pending())
-    wait = std::min(wait, frame_scheduler_.time_until_due(now));
-  if (auto const service_wait = transcript_.time_until_service(now))
-    wait = std::min(wait, *service_wait);
-  return wait == std::chrono::steady_clock::duration::max() ? std::chrono::steady_clock::duration::zero() : wait;
 }
 
 bool RuntimeRenderer::render_failed() const

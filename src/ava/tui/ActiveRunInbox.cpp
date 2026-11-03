@@ -112,6 +112,12 @@ bool ActiveRunInbox::has_pending() const
   return terminal_.has_value() || events_.has_pending();
 }
 
+bool ActiveRunInbox::terminal_ready() const
+{
+  std::lock_guard lock(mutex_);
+  return terminal_.has_value();
+}
+
 bool ActiveRunInbox::received_any() const
 {
   return events_.received_any();

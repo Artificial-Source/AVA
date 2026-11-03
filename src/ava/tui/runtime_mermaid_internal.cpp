@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "TuiEventLoop.h"
 #include "ava/tui/runtime_mermaid_internal.h"
 #include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
@@ -75,6 +76,51 @@ RuntimeMermaidPresentationController::RuntimeMermaidPresentationController(Compo
 RuntimeMermaidPresentationController::~RuntimeMermaidPresentationController()
 {
   shutdown();
+}
+
+void RuntimeMermaidPresentationController::attach_loop(TuiEventLoop& loop)
+{
+  discovery_timer_ = loop.member_timer(*this, &RuntimeMermaidPresentationController::discover_progress);
+  synchronize_discovery_timer();
+}
+
+bool RuntimeMermaidPresentationController::has_pending_work() const noexcept
+{
+  if (shutdown_)
+    return false;
+  if (bridge_.drain && !outstanding_requests_.empty())
+    return true;
+  if (!enabled_ || config_epoch_ == 0 || !bridge_.enqueue)
+    return false;
+  return std::ranges::any_of(records_, [](Record const& record) { return !record.submitted && !record.failed && !record.accepted_text; });
+}
+
+void RuntimeMermaidPresentationController::synchronize_discovery_timer()
+{
+  if (!has_pending_work())
+    discovery_timer_.cancel();
+  else if (!discovery_timer_.active())
+    discovery_timer_.repeat(std::chrono::milliseconds{16});
+}
+
+void RuntimeMermaidPresentationController::discover_progress(TuiTimer::Clock::time_point)
+{
+  auto const outcome = service();
+  if (service_outcome_ != MermaidServiceOutcome::RenderFailed && outcome != MermaidServiceOutcome::Unchanged)
+    service_outcome_ = outcome;
+}
+
+MermaidServiceOutcome RuntimeMermaidPresentationController::take_service_outcome() noexcept
+{
+  return std::exchange(service_outcome_, MermaidServiceOutcome::Unchanged);
+}
+
+MermaidServiceOutcome RuntimeMermaidPresentationController::service_if_changed()
+{
+  if (shutdown_ || (observed_snapshot_ && observed_transcript_generation_ == snapshot_.transcript_generation && session_id_ == snapshot_.session_id &&
+                    config_epoch_ == snapshot_.mermaid_config_epoch && enabled_ == snapshot_.mermaid_enabled))
+    return MermaidServiceOutcome::Unchanged;
+  return service();
 }
 
 std::uint64_t RuntimeMermaidPresentationController::next_identity() noexcept
@@ -186,12 +232,16 @@ void RuntimeMermaidPresentationController::enqueue_waiting() noexcept
       continue;
     try
     {
+      // Allocate bookkeeping before admission: an accepted backend request must
+      // remain discoverable even if its presentation record is later removed.
+      outstanding_requests_.reserve(outstanding_requests_.size() + 1);
       auto const result =
           bridge_.enqueue(TuiMermaidRenderRequest{.identity = record.request_identity, .config_epoch = config_epoch_, .source = record.block.source});
       if (result == TuiMermaidEnqueueResult::Accepted)
       {
         record.submitted = true;
         record.pending = true;
+        outstanding_requests_.emplace_back(config_epoch_, record.request_identity);
         ++pending;
       }
       else if (result == TuiMermaidEnqueueResult::Rejected)
@@ -223,6 +273,7 @@ void RuntimeMermaidPresentationController::drain_completions() noexcept
   }
   for (auto& completion : completions)
   {
+    std::erase(outstanding_requests_, std::pair{completion.config_epoch, completion.identity});
     if (completion.config_epoch != config_epoch_)
       continue;
     auto record = std::ranges::find(records_, completion.identity, &Record::request_identity);
@@ -283,6 +334,7 @@ MermaidServiceOutcome RuntimeMermaidPresentationController::service()
   if (preserve_viewport && !renderer_.transcript().has_deferred_update())
     old_anchor = renderer_.capture_transcript_viewport();
   auto const changed_item = service_projection();
+  synchronize_discovery_timer();
   if (!changed_item)
     return MermaidServiceOutcome::Unchanged;
   transcript_search_.refresh_after_transcript_mutation(0, *changed_item);
@@ -306,6 +358,10 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
   if (session_changed || configuration_changed)
   {
     cancel_all();
+    // Authoritative reconfiguration drops the backend's prior epoch jobs and
+    // results. Same-epoch session changes still need to drain canceled work.
+    if (config_epoch_ != snapshot.mermaid_config_epoch)
+      outstanding_requests_.clear();
     session_id_ = snapshot.session_id;
     config_epoch_ = snapshot.mermaid_config_epoch;
     enabled_ = snapshot.mermaid_enabled;
@@ -321,9 +377,13 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
     reconcile(snapshot);
   }
 
+  // Retire completions before enqueueing, including canceled records from a
+  // prior session. Disabled presentation still drains its outstanding work.
+  drain_completions();
   if (enabled_ && config_epoch_ != 0)
   {
     enqueue_waiting();
+    // Enqueue can produce an immediate cache/fallback completion.
     drain_completions();
     enforce_result_byte_bound();
   }
@@ -340,6 +400,7 @@ std::optional<std::size_t> RuntimeMermaidPresentationController::service_project
     ++snapshot.transcript_generation;
   }
   observed_transcript_generation_ = snapshot.transcript_generation;
+  observed_snapshot_ = true;
   return visual_changed ? std::optional{earliest_difference(before, after)} : std::nullopt;
 }
 
@@ -348,7 +409,9 @@ void RuntimeMermaidPresentationController::shutdown() noexcept
   if (shutdown_)
     return;
   shutdown_ = true;
+  discovery_timer_.cancel();
   cancel_all();
+  outstanding_requests_.clear();
   bridge_ = {};
 }
 

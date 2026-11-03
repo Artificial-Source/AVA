@@ -90,6 +90,8 @@ std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui:
   auto const deadline = ava::tests::now_plus_seconds(2);
   while (std::chrono::steady_clock::now() < deadline)
   {
+    if (!active_run.service_control())
+      break;
     loop.service_due();
     if (active_run.consume() == ava::tui::RuntimeEventDrainResult::RenderFailed)
       break;
@@ -893,6 +895,7 @@ bool test_transcript_message_boundary_navigation_and_live_tail_reset()
 
 bool test_detached_completion_publish_preserves_numbered_window()
 {
+  EventLoopFixture event_loop;
   static_cast<void>(ava::core::Application::instance().terminal_context());
   static_cast<void>(ava::tui::terminal::Context::resizeterm(32, 120));
 
@@ -982,7 +985,29 @@ bool test_detached_completion_publish_preserves_numbered_window()
                       presentation.snapshot.transcript_scroll_offset == renderer.transcript().scroll_offset() && renderer.transcript().scroll_offset() > 0 &&
                       draft_state.draft().text == draft_before && presentation.snapshot.input == draft_before && !presentation.snapshot.processing;
 
-  return passed;
+  renderer.attach_loop(event_loop.loop());
+  auto const before_attached_paint = renderer.painted_frame().surfaces;
+  renderer.transcript().return_to_live_tail();
+  presentation.snapshot.transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "ATTACHED-FULL-FRAME"});
+  ++presentation.snapshot.transcript_generation;
+  bool const footer_queued = renderer.render_processing_frame();
+  bool const full_queued = renderer.render();
+  bool const later_footer_queued = renderer.render_processing_frame();
+  bool const painting_deferred = renderer.painted_frame().surfaces == before_attached_paint;
+  bool const batch_painted = renderer.paint_ready_frame();
+  bool const full_dominated_footer = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces).find("ATTACHED-FULL-FRAME") != std::string::npos;
+
+  auto const before_handoff = renderer.painted_frame().surfaces;
+  presentation.snapshot.transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "HANDOFF-FULL-FRAME"});
+  ++presentation.snapshot.transcript_generation;
+  bool const handoff_queued = renderer.render();
+  bool const handoff_still_deferred = renderer.painted_frame().surfaces == before_handoff;
+  bool const handoff_painted = renderer.paint_for_handoff();
+  bool const handoff_visible = tui_test_support::join_visible_lines(renderer.painted_frame().surfaces).find("HANDOFF-FULL-FRAME") != std::string::npos;
+  bool const attached_contract = footer_queued && full_queued && later_footer_queued && painting_deferred && batch_painted && full_dominated_footer &&
+                                 handoff_queued && handoff_still_deferred && handoff_painted && handoff_visible;
+  expect(attached_contract, "attached renderer defers urgent painting to the batch, retains Full over Footer, and paints synchronously for a handoff");
+  return passed && attached_contract;
 }
 
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()
@@ -1238,6 +1263,7 @@ bool test_local_slash_completion_composition_tracks_current_ui_facts()
 
 bool test_display_settings_reload_poll_outcome_and_preview_staging()
 {
+  EventLoopFixture event_loop;
   // Reproduces W2-001 through RuntimeActionController + preview reapply: optional snapshot is the
   // applied signal (no value inference), hydrate does not final-render, overlay is staged before paint.
   ScopedEnvVar no_color_guard("NO_COLOR", "");
@@ -1291,6 +1317,8 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
                                              ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector);
+  action_controller.attach_loop(event_loop.loop());
+  auto const discovery_started = std::chrono::steady_clock::now();
 
   using ava::tui::runtime_views::DisplayPresentationBaseline;
   using ava::tui::runtime_views::DisplayPreviewTransaction;
@@ -1330,17 +1358,20 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   bool const esc_restores_new_authority = !preview.active() && !presentation.snapshot.show_images && !ava::tui::tui_theme_preview_active();
 
   // Unchanged poll uses explicit nullopt signal.
-  frontend.hooks().on_maybe_reload_display_settings = []() -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
+  frontend.hooks().on_maybe_reload_display_settings = [&applied_callback_count]() -> ava::core::Result<std::optional<ava::tui::TuiLocalDisplaySettingsResult>> {
+    ++applied_callback_count;
     return std::optional<ava::tui::TuiLocalDisplaySettingsResult>{};
   };
-  // Force the rate limit open for a second poll.
-  std::this_thread::sleep_for(std::chrono::milliseconds(510));
-  auto const unchanged_after_wait = action_controller.maybe_reload_display_settings();
-  bool const unchanged_signal = unchanged_after_wait == ava::tui::DisplaySettingsReloadPollOutcome::Unchanged;
+  auto const before_discovery_tick = action_controller.maybe_reload_display_settings();
+  bool const discovery_waits_for_timer = before_discovery_tick == ava::tui::DisplaySettingsReloadPollOutcome::Unchanged && applied_callback_count == 1;
+  event_loop.loop().service_due(discovery_started + std::chrono::milliseconds(500));
+  auto const unchanged_after_tick = action_controller.maybe_reload_display_settings();
+  bool const unchanged_signal = unchanged_after_tick == ava::tui::DisplaySettingsReloadPollOutcome::Unchanged && applied_callback_count == 2;
 
   ava::tui::clear_tui_theme_preview();
   ava::tui::set_tui_config_theme(std::nullopt);
-  return applied_signal && hydrate_kept_prior_overlay && staged_before_render && rendered && esc_restores_new_authority && unchanged_signal;
+  return applied_signal && hydrate_kept_prior_overlay && staged_before_render && rendered && esc_restores_new_authority && discovery_waits_for_timer &&
+         unchanged_signal;
 }
 
 bool test_display_settings_reload_rebuilds_open_startup_overview()
@@ -1890,12 +1921,13 @@ void run_tui_composer_rendering_tests_part_1()
     ava::tui::FrameScheduler scheduler;
     scheduler.paint_completed(started_at, true);
     scheduler.request(ava::tui::FrameRenderKind::Footer, started_at + std::chrono::milliseconds(1));
-    auto const lone_wait = scheduler.time_until_due(started_at + std::chrono::milliseconds(1));
+    auto const lone_deadline = scheduler.deadline();
     scheduler.request(ava::tui::FrameRenderKind::Full, started_at + std::chrono::milliseconds(2));
     auto const provider_and_input = scheduler.take_due(started_at + std::chrono::milliseconds(16));
     scheduler.paint_completed(started_at + std::chrono::milliseconds(17), false);
     scheduler.request(ava::tui::FrameRenderKind::Full, started_at + std::chrono::milliseconds(18));
-    expect(lone_wait > Clock::duration::zero() && lone_wait <= ava::tui::FrameScheduler::kFrameInterval &&
+    expect(lone_deadline && *lone_deadline - (started_at + std::chrono::milliseconds(1)) > Clock::duration::zero() &&
+               *lone_deadline - (started_at + std::chrono::milliseconds(1)) <= ava::tui::FrameScheduler::kFrameInterval &&
                provider_and_input == ava::tui::FrameRenderKind::Full && scheduler.failed() && !scheduler.pending(),
            "frame scheduler gives lone input a deadline within 16ms, merges provider/footer and input into one full paint, and latches draw failure");
   }

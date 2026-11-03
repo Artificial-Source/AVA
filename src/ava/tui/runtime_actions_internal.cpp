@@ -1,6 +1,7 @@
 #include "sys.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
+#include "TuiEventLoop.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
@@ -97,18 +98,30 @@ RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimeP
       draft_state_(draft_state),
       renderer_(renderer),
       selectors_(selectors),
-      session_selector_(session_selector),
-      // First poll is eligible immediately; later polls stay rate-limited.
-      next_display_reload_check_(std::chrono::steady_clock::time_point{})
+      session_selector_(session_selector)
 {
+}
+
+void RuntimeActionController::attach_loop(TuiEventLoop& loop)
+{
+  // Attach display discovery once before servicing this nonmoving controller.
+  ASSERT(!loop_attached_);
+  if (loop_attached_)
+    return;
+  display_reload_timer_ = loop.member_timer(*this, &RuntimeActionController::mark_display_reload_due);
+  display_reload_timer_.repeat(kDisplayReloadPollInterval);
+  loop_attached_ = true;
+}
+
+void RuntimeActionController::mark_display_reload_due(TuiTimer::Clock::time_point)
+{
+  display_reload_due_ = true;
 }
 
 DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_settings()
 {
-  auto const now = std::chrono::steady_clock::now();
-  if (now < next_display_reload_check_)
+  if (loop_attached_ && !std::exchange(display_reload_due_, false))
     return DisplaySettingsReloadPollOutcome::Unchanged;
-  next_display_reload_check_ = now + kDisplayReloadPollInterval;
 
   // Preserve the frontend owner's optional result as the explicit applied/unchanged signal.
   // Do not infer applied state by comparing presentation values (overlays can mask them).
@@ -159,7 +172,7 @@ bool RuntimeActionController::open_external_editor()
   renderer_.cancel_pointer_interaction();
   terminal_reset_mouse_tracking();
   snapshot.status = "opening external editor";
-  if (!renderer_.render())
+  if (!renderer_.paint_for_handoff())
     return false;
 
   // Balance AVA-owned protocols after leaving curses/alt-screen so the shell
@@ -173,15 +186,15 @@ bool RuntimeActionController::open_external_editor()
   {
     snapshot.status = edited.error().format();
     static_cast<void>(terminal_context.beep());
-    return renderer_.render();
+    return renderer_.paint_for_handoff();
   }
   if (!*edited)
   {
     snapshot.status = "external editor canceled";
-    return renderer_.render();
+    return renderer_.paint_for_handoff();
   }
   snapshot.status = draft_state_.replace_draft(std::move(**edited)) ? "external editor updated draft" : "external editor closed without changes";
-  return renderer_.render();
+  return renderer_.paint_for_handoff();
 }
 
 bool RuntimeActionController::suspend_to_background()
@@ -206,7 +219,7 @@ bool RuntimeActionController::suspend_to_background()
       terminal_context.restore_terminal_after_handoff();
       snapshot.status = std::string("failed to suspend: ") + std::strerror(saved_errno);
       static_cast<void>(terminal_context.beep());
-      return renderer_.render();
+      return renderer_.paint_for_handoff();
     }
     // Continues after fg/SIGCONT. Geometry may have changed while stopped.
     refresh_geometry_from_kernel();
@@ -214,7 +227,7 @@ bool RuntimeActionController::suspend_to_background()
   }
 
   snapshot.status = "resumed from background";
-  return renderer_.render();
+  return renderer_.paint_for_handoff();
 }
 
 bool RuntimeActionController::queue_pending_image_attachment(ava::session::ImageAttachmentRef const& imported, std::string label, std::string status)
@@ -238,7 +251,7 @@ bool RuntimeActionController::paste_clipboard_image()
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.reset_interaction();
   snapshot.status = "reading clipboard image";
-  if (!renderer_.render())
+  if (!renderer_.paint_for_handoff())
     return false;
 
   auto imported = frontend_.on_paste_clipboard_image();

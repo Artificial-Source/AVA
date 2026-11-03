@@ -162,9 +162,9 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
       }
       break;
     case ActiveSelectList::Model: {
-      auto selected =
-          dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "switching model…", std::bind_front(&RuntimeRenderer::render, &renderer_),
-                                          std::bind_front(&TuiFrontEnd::on_model_selected, &frontend_, std::move(selected_value)));
+      auto selected = dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "switching model…",
+                                                      std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
+                                                      std::bind_front(&TuiFrontEnd::on_model_selected, &frontend_, std::move(selected_value)));
       if (selected)
       {
         presentation_state_.refresh_after_backend_action(frontend_);
@@ -178,7 +178,7 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
     case ActiveSelectList::Reasoning: {
       auto level = selected_value == "default" ? std::optional<std::string>{} : std::optional<std::string>{std::move(selected_value)};
       auto selected = dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "setting thinking mode…",
-                                                      std::bind_front(&RuntimeRenderer::render, &renderer_),
+                                                      std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
                                                       std::bind_front(&TuiFrontEnd::on_reasoning_selected, &frontend_, std::move(level)));
       if (selected)
       {
@@ -201,7 +201,7 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
       }
       // Paint truthful pending authority status before the blocking fork callback.
       presentation_state_.snapshot.status = "forking session…";
-      if (!renderer_.render())
+      if (!renderer_.paint_for_handoff())
         return SelectorInputRequest::RenderFailed;
       auto opened = frontend_.on_fork_user_turn_selected(selected_value);
       if (opened)

@@ -168,7 +168,7 @@ class RuntimeTranscriptSelectionState final
                                                             std::size_t& transcript_scroll_offset, std::ptrdiff_t frozen_to_live_item_index_shift,
                                                             std::function<bool(std::size_t)> const& toggle_tool,
                                                             std::function<bool(std::size_t)> const& toggle_thinking, Clock::time_point now = Clock::now());
-  [[nodiscard]] std::optional<Clock::duration> time_until_edge_autoscroll(Clock::time_point now = Clock::now()) const;
+  [[nodiscard]] std::optional<Clock::time_point> edge_autoscroll_deadline() const noexcept;
   [[nodiscard]] TranscriptSelectionMouseResult tick_edge_autoscroll(ComposerSnapshot& snapshot, detail::TranscriptLayoutCache const& layout_cache,
                                                                     std::size_t& transcript_scroll_offset, std::ptrdiff_t frozen_to_live_item_index_shift,
                                                                     Clock::time_point now = Clock::now());

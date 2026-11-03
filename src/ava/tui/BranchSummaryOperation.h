@@ -1,11 +1,13 @@
 #pragma once
 
+#include "TuiTimer.h"
 #include "runtime_state_internal.h"
 
 namespace ava::tui {
 
 class RuntimeRenderer;
 class SelectorHost;
+class TuiEventLoop;
 namespace terminal {
 class Context;
 }
@@ -35,6 +37,10 @@ class BranchSummaryOperation final
   BranchSummaryOperation(BranchSummaryOperation const&) = delete;
   BranchSummaryOperation& operator=(BranchSummaryOperation const&) = delete;
 
+  // The attached loop outlives this stable operation and its registration.
+  // Attach the renderer first so discovery requests only batch invalidation.
+  void attach_loop(TuiEventLoop& loop);
+  [[nodiscard]] std::optional<BranchSummaryOutcome> take_service_outcome();
   [[nodiscard]] bool active() const noexcept;
   [[nodiscard]] BranchSummaryOutcome start(SelectListView session_view, std::size_t selected_index, std::string selected_value);
   [[nodiscard]] BranchSummaryOutcome poll();
@@ -51,6 +57,7 @@ class BranchSummaryOperation final
   [[nodiscard]] BranchSummaryOutcome settle(TuiBranchSummarySnapshot const& operation);
   [[nodiscard]] BranchSummaryOutcome consume(TuiBranchSummarySnapshot const& operation);
   [[nodiscard]] BranchSummaryOutcome confirm();
+  void discover_progress(TuiTimer::Clock::time_point now);
 
   TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
@@ -64,6 +71,8 @@ class BranchSummaryOperation final
   SelectListView prior_session_view_;
   std::size_t prior_selected_index_ = 0;
   ava::core::NoLogString selected_source_value_;
+  std::optional<BranchSummaryOutcome> service_outcome_;
+  TuiTimer discovery_timer_;
 };
 
 } // namespace ava::tui

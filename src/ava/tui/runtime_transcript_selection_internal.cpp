@@ -1084,11 +1084,9 @@ void RuntimeTranscriptSelectionState::update_edge_autoscroll(TranscriptSelection
   edge_autoscroll_due_ = now + kEdgeAutoscrollInterval;
 }
 
-std::optional<RuntimeTranscriptSelectionState::Clock::duration> RuntimeTranscriptSelectionState::time_until_edge_autoscroll(Clock::time_point now) const
+std::optional<RuntimeTranscriptSelectionState::Clock::time_point> RuntimeTranscriptSelectionState::edge_autoscroll_deadline() const noexcept
 {
-  if (!edge_autoscroll_due_)
-    return std::nullopt;
-  return now >= *edge_autoscroll_due_ ? Clock::duration::zero() : *edge_autoscroll_due_ - now;
+  return edge_autoscroll_due_;
 }
 
 TranscriptSelectionMouseResult RuntimeTranscriptSelectionState::tick_edge_autoscroll(ComposerSnapshot& snapshot,

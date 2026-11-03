@@ -2,6 +2,7 @@
 
 #include "ava/tui/Composer.h"
 #include "ava/tui/TranscriptView.h"
+#include "ava/tui/TuiTimer.h"
 #include "ava/tui/composer_internal.h"
 
 #include <chrono>
@@ -16,6 +17,7 @@
 namespace ava::tui {
 
 class TuiFrontEnd;
+class TuiEventLoop;
 
 namespace terminal {
 class Context;
@@ -69,7 +71,7 @@ class FrameScheduler final
   void request(FrameRenderKind kind, Clock::time_point now);
   [[nodiscard]] bool pending() const;
   [[nodiscard]] std::optional<FrameRenderKind> pending_kind() const;
-  [[nodiscard]] Clock::duration time_until_due(Clock::time_point now) const;
+  [[nodiscard]] std::optional<Clock::time_point> deadline() const noexcept;
   [[nodiscard]] std::optional<FrameRenderKind> take_due(Clock::time_point now);
   [[nodiscard]] std::optional<FrameRenderKind> take_pending();
   void paint_completed(Clock::time_point completed_at, bool succeeded);
@@ -92,14 +94,24 @@ class RuntimeRenderer final
   // Render the snapshot and apply cursor settings through Context when provided.
   RuntimeRenderer(TuiFrontEnd* frontend, ComposerSnapshot& snapshot, SidebarSnapshot const& sidebar, Composer& draft_state,
                   terminal::Context* terminal_context = nullptr);
+  RuntimeRenderer(RuntimeRenderer const&) = delete;
+  RuntimeRenderer& operator=(RuntimeRenderer const&) = delete;
+  RuntimeRenderer(RuntimeRenderer&&) = delete;
+  RuntimeRenderer& operator=(RuntimeRenderer&&) = delete;
 
+  // Attach once before live dispatch. The loop outlives this nonmoving owner.
+  // Unattached standalone fixtures retain synchronous render/explicit-flush behavior.
+  void attach_loop(TuiEventLoop& loop);
   [[nodiscard]] bool render();
   [[nodiscard]] bool render_processing_frame();
   [[nodiscard]] bool request_render(FrameRenderKind kind = FrameRenderKind::Full);
-  [[nodiscard]] bool flush_pending_render_if_due();
+  // Composition calls this after each application/input batch and before wait.
+  // It also registers any changed view-owned absolute deadlines.
+  [[nodiscard]] bool paint_ready_frame();
+  // Explicit synchronous terminal/authority handoffs only, never timer callbacks.
+  [[nodiscard]] bool paint_for_handoff();
+  // Standalone fixtures only; live dispatch uses paint_ready_frame.
   [[nodiscard]] bool flush_pending_render();
-  [[nodiscard]] bool has_pending_render() const;
-  [[nodiscard]] std::chrono::steady_clock::duration time_until_pending_render() const;
   [[nodiscard]] bool render_failed() const;
   void synchronize_detached_transcript_layout();
 
@@ -144,6 +156,12 @@ class RuntimeRenderer final
   [[nodiscard]] bool render_full(bool freeze_transcript_layout);
   [[nodiscard]] bool paint(FrameRenderKind kind, bool freeze_transcript_layout);
   [[nodiscard]] bool prepare_transcript_selection_authority();
+  [[nodiscard]] bool queue_urgent_frame(FrameRenderKind kind);
+  void synchronize_timers();
+  void frame_due(std::chrono::steady_clock::time_point now);
+  void indicator_due(std::chrono::steady_clock::time_point now);
+  void autoscroll_due(std::chrono::steady_clock::time_point now);
+  // Explicit-clock semantic servicing for unattached renderer fixtures only.
   void service_auxiliary_timers(std::chrono::steady_clock::time_point now);
 
   ComposerSnapshot& snapshot_;
@@ -157,6 +175,18 @@ class RuntimeRenderer final
   std::recursive_mutex ui_mutex_;
   TuiFrontEnd* frontend_;
   FrameScheduler frame_scheduler_;
+  bool loop_attached_ = false;
+  bool frame_ready_ = false;
+  // Full urgent invalidation synchronizes detached layout; scheduled paints keep
+  // the existing compatible frozen authority. Footer invalidation cannot thaw it.
+  bool pending_thaw_ = false;
+  std::optional<FrameScheduler::Clock::time_point> armed_frame_deadline_;
+  std::optional<FrameScheduler::Clock::time_point> armed_indicator_deadline_;
+  std::optional<FrameScheduler::Clock::time_point> armed_autoscroll_deadline_;
+  // Handles retire before callback target state and the earlier-lived loop.
+  TuiTimer frame_timer_;
+  TuiTimer indicator_timer_;
+  TuiTimer autoscroll_timer_;
 };
 
 } // namespace ava::tui

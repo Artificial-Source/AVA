@@ -24,11 +24,9 @@ bool TranscriptPositionIndicatorState::expire_if_due(Clock::time_point now) noex
   expires_at_.reset();
   return true;
 }
-std::optional<TranscriptPositionIndicatorState::Clock::duration> TranscriptPositionIndicatorState::time_until_expiry(Clock::time_point now) const noexcept
+std::optional<TranscriptPositionIndicatorState::Clock::time_point> TranscriptPositionIndicatorState::expires_at() const noexcept
 {
-  if (!expires_at_)
-    return std::nullopt;
-  return now >= *expires_at_ ? Clock::duration::zero() : *expires_at_ - now;
+  return expires_at_;
 }
 
 TranscriptView::TranscriptView(ComposerSnapshot& snapshot, SidebarSnapshot const& sidebar, Composer& composer)
@@ -267,11 +265,6 @@ bool TranscriptView::copy_selection(detail::TranscriptLayoutCache const& layout)
 {
   return selection_.copy_selection(snapshot_, layout);
 }
-bool TranscriptView::autoscroll_due(Clock::time_point now) const
-{
-  auto const due = selection_.time_until_edge_autoscroll(now);
-  return due && *due <= Clock::duration::zero();
-}
 bool TranscriptView::service_autoscroll(detail::TranscriptLayoutCache const& layout, bool authority_ready, Clock::time_point now)
 {
   auto const before = scroll_offset_;
@@ -304,12 +297,13 @@ bool TranscriptView::expire_position_indicator(Clock::time_point now)
   snapshot_.transcript_position_indicator_visible = false;
   return true;
 }
-std::optional<TranscriptView::Clock::duration> TranscriptView::time_until_service(Clock::time_point now) const
+std::optional<TranscriptView::Clock::time_point> TranscriptView::indicator_deadline() const noexcept
 {
-  auto wait = position_indicator_.time_until_expiry(now);
-  if (auto const autoscroll = selection_.time_until_edge_autoscroll(now))
-    wait = wait ? std::min(*wait, *autoscroll) : autoscroll;
-  return wait;
+  return position_indicator_.expires_at();
+}
+std::optional<TranscriptView::Clock::time_point> TranscriptView::autoscroll_deadline() const noexcept
+{
+  return selection_.edge_autoscroll_deadline();
 }
 void TranscriptView::reset_for_session_transition()
 {

@@ -1,6 +1,8 @@
 #include "sys.h"
 #include "SelectorHost.h"
+#include "TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
+#include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 
 #include <algorithm>
@@ -57,6 +59,25 @@ RuntimeSubagentWorkspaceController::RuntimeSubagentWorkspaceController(TuiFrontE
 RuntimeSubagentWorkspaceController::~RuntimeSubagentWorkspaceController()
 {
   close();
+}
+
+void RuntimeSubagentWorkspaceController::attach_loop(TuiEventLoop& loop, RuntimeRenderer& renderer)
+{
+  discovery_timer_ = loop.member_timer(*this, &RuntimeSubagentWorkspaceController::discover_progress);
+  renderer_ = &renderer;
+  if (active())
+    discovery_timer_.repeat(kPollInterval);
+}
+
+bool RuntimeSubagentWorkspaceController::take_render_failure() noexcept
+{
+  return std::exchange(render_failed_, false);
+}
+
+void RuntimeSubagentWorkspaceController::discover_progress(Clock::time_point)
+{
+  if (refresh() && !renderer_->request_render())
+    render_failed_ = true;
 }
 
 bool RuntimeSubagentWorkspaceController::active() const noexcept
@@ -129,12 +150,14 @@ bool RuntimeSubagentWorkspaceController::open_selector(Clock::time_point now)
   selector_.freeze_underlying_transcript_layout = true;
   selector_.selected_item_index = clamp_select_list_selection(selector_, selector_.selected_item_index);
   next_poll_ = now + kPollInterval;
+  discovery_timer_.repeat(kPollInterval, now);
   publish();
   return true;
 }
 
 void RuntimeSubagentWorkspaceController::close()
 {
+  discovery_timer_.cancel();
   mode_ = Mode::Closed;
   selector_ = {};
   workspace_ = {};
@@ -342,22 +365,22 @@ bool RuntimeSubagentWorkspaceController::scroll_workspace(std::ptrdiff_t delta)
 
 bool RuntimeSubagentWorkspaceController::poll(Clock::time_point now)
 {
-  if (!active() || now < next_poll_)
+  if (renderer_ || !active() || now < next_poll_)
     return false;
   next_poll_ = now + kPollInterval;
+  return refresh();
+}
+
+bool RuntimeSubagentWorkspaceController::refresh()
+{
+  if (!active())
+    return false;
   bool changed = refresh_selector();
   if (mode_ == Mode::Workspace && last_list_refresh_succeeded_)
     changed = refresh_inspection() || changed;
   if (changed)
     publish();
   return changed;
-}
-
-std::optional<RuntimeSubagentWorkspaceController::Clock::duration> RuntimeSubagentWorkspaceController::time_until_poll(Clock::time_point now) const
-{
-  if (!active())
-    return std::nullopt;
-  return now >= next_poll_ ? Clock::duration::zero() : next_poll_ - now;
 }
 
 RuntimeSubagentWorkspaceInputResult RuntimeSubagentWorkspaceController::handle_input(InputEvent const& event, Clock::time_point /*now*/)

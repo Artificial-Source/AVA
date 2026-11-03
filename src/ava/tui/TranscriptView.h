@@ -20,7 +20,7 @@ class TranscriptPositionIndicatorState final
   void hide() noexcept;
   [[nodiscard]] bool visible() const noexcept;
   [[nodiscard]] bool expire_if_due(Clock::time_point now = Clock::now()) noexcept;
-  [[nodiscard]] std::optional<Clock::duration> time_until_expiry(Clock::time_point now = Clock::now()) const noexcept;
+  [[nodiscard]] std::optional<Clock::time_point> expires_at() const noexcept;
   AVA_DEBUG_PRINT_MEMBERS_ON
  private:
   std::optional<Clock::time_point> expires_at_ = std::nullopt;
@@ -91,12 +91,14 @@ class TranscriptView final
                                                             std::function<bool(std::size_t)> const& toggle_tool,
                                                             std::function<bool(std::size_t)> const& toggle_thinking);
   [[nodiscard]] bool copy_selection(detail::TranscriptLayoutCache const& layout);
-  [[nodiscard]] bool autoscroll_due(Clock::time_point now) const;
   [[nodiscard]] bool service_autoscroll(detail::TranscriptLayoutCache const& layout, bool authority_ready, Clock::time_point now);
   void show_position_indicator(Clock::time_point now);
   [[nodiscard]] bool position_indicator_visible() const noexcept;
   [[nodiscard]] bool expire_position_indicator(Clock::time_point now);
-  [[nodiscard]] std::optional<Clock::duration> time_until_service(Clock::time_point now) const;
+  // Absolute semantic deadlines let the renderer register callbacks without
+  // choosing a wait duration or borrowing mutable selection/indicator state.
+  [[nodiscard]] std::optional<Clock::time_point> indicator_deadline() const noexcept;
+  [[nodiscard]] std::optional<Clock::time_point> autoscroll_deadline() const noexcept;
   void reset_for_session_transition();
 
   // Selection authority and frozen sidebar retain arbitrary message/path data.

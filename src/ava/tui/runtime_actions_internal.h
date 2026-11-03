@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TuiTimer.h"
 #include "ava/tui/runtime.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/core/NoLogString.h"
@@ -20,6 +21,7 @@ class Composer;
 class TuiFrontEnd;
 class RuntimeRenderer;
 class SessionSelector;
+class TuiEventLoop;
 
 class RuntimeActionController final
 {
@@ -29,7 +31,10 @@ class RuntimeActionController final
   RuntimeActionController(RuntimeActionController const&) = delete;
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
 
-  // Rate-limited poll. TerminalFailure only when a required render fails.
+  // Attach automatic 500ms discovery once; the loop outlives this stable owner.
+  void attach_loop(TuiEventLoop& loop);
+  // Attached service consumes timer-marked work; unattached calls explicitly
+  // request a check. TerminalFailure only when a required render fails.
   // Applied hydrates the authoritative snapshot without a final render so callers can
   // rebase/reapply settings preview (if any) and paint exactly once afterward.
   [[nodiscard]] DisplaySettingsReloadPollOutcome maybe_reload_display_settings();
@@ -56,14 +61,17 @@ class RuntimeActionController final
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
+  void mark_display_reload_due(TuiTimer::Clock::time_point now);
   TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
   Composer& draft_state_;
   RuntimeRenderer& renderer_;
   SelectorHost& selectors_;
   SessionSelector& session_selector_;
-  std::chrono::steady_clock::time_point next_display_reload_check_;
   std::optional<ava::core::NoLogString> last_display_reload_error_;
+  bool loop_attached_ = false;
+  bool display_reload_due_ = true;
+  TuiTimer display_reload_timer_;
 };
 
 }  // namespace ava::tui

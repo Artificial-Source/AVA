@@ -371,7 +371,7 @@ void ActiveRun::publish_spinner_frame(std::size_t frame)
 
 bool ActiveRun::service_control()
 {
-  if (!Signals::received(terminal_signals))
+  if (!active() || !Signals::received(terminal_signals))
     return true;
   // An active question's automatic answer keeps precedence over signal denial.
   static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::TerminalSignal));
@@ -403,8 +403,7 @@ RuntimeEventDrainResult ActiveRun::consume(std::size_t max_events)
 {
   if (!active())
     return RuntimeEventDrainResult::NoEvents;
-  auto const control_ok = service_control();
-  if (terminal_write_failed_ || !control_ok || (phase_ == Phase::Running && (!service_prompt() || !poll_plugin_ui())))
+  if (terminal_write_failed_ || (phase_ == Phase::Running && (!service_prompt() || !poll_plugin_ui())))
   {
     terminal_write_failed_ = true;
     return RuntimeEventDrainResult::RenderFailed;
@@ -459,6 +458,11 @@ bool ActiveRun::handle_input(runtime_input::RuntimeInput const& input)
   if (prompt != PromptServiceOutcome::None)
     return true; // A raced claim consumes the retained key; it never enters the new modal.
   return dispatch_active_input(input);
+}
+
+bool ActiveRun::accepts_input() const
+{
+  return phase_ == Phase::Running && inbox_ && !inbox_->terminal_ready();
 }
 
 bool ActiveRun::has_pending_updates()

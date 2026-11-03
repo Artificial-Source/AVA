@@ -1,10 +1,14 @@
 #include "sys.h"
 #include "BranchSummaryOperation.h"
 #include "SelectorHost.h"
+#include "TuiEventLoop.h"
 #include "TuiFrontEnd.h"
 #include "runtime_render_internal.h"
 #include "runtime_views_internal.h"
 #include "terminal/Context.h"
+
+#include <chrono>
+#include <utility>
 
 namespace ava::tui {
 
@@ -12,6 +16,27 @@ BranchSummaryOperation::BranchSummaryOperation(TuiFrontEnd& frontend, RuntimePre
                                                RuntimeRenderer& renderer, terminal::Context& terminal_context)
     : frontend_(frontend), presentation_state_(presentation), selectors_(selectors), renderer_(renderer), terminal_context_(terminal_context)
 {
+}
+
+void BranchSummaryOperation::attach_loop(TuiEventLoop& loop)
+{
+  discovery_timer_ = loop.member_timer(*this, &BranchSummaryOperation::discover_progress);
+  if (active_)
+    discovery_timer_.repeat(std::chrono::milliseconds{250});
+}
+
+std::optional<BranchSummaryOutcome> BranchSummaryOperation::take_service_outcome()
+{
+  return std::exchange(service_outcome_, std::nullopt);
+}
+
+void BranchSummaryOperation::discover_progress(TuiTimer::Clock::time_point)
+{
+  auto const outcome = poll();
+  // A terminal/failure result must survive another due batch until composition
+  // consumes it. Settlement cancels discovery before this callback returns.
+  if (!service_outcome_ || (*service_outcome_ != BranchSummaryOutcome::RenderFailed && *service_outcome_ != BranchSummaryOutcome::ExitReady))
+    service_outcome_ = outcome;
 }
 
 bool BranchSummaryOperation::active() const noexcept
@@ -75,6 +100,7 @@ BranchSummaryOutcome BranchSummaryOperation::settle(TuiBranchSummarySnapshot con
   present_status(refresh_failed ? std::string(branch_summary_callback_failure_status(runtime_views::BranchSummaryCallbackFailure::Refresh))
                                 : runtime_views::branch_summary_terminal_status(operation));
   active_ = false;
+  discovery_timer_.cancel();
   phase_ = operation.phase;
   if (exit_requested)
   {
@@ -119,6 +145,7 @@ BranchSummaryOutcome BranchSummaryOperation::poll()
 
 BranchSummaryOutcome BranchSummaryOperation::start(SelectListView session_view, std::size_t selected_index, std::string selected_value)
 {
+  service_outcome_.reset();
   ava::core::Result<TuiBranchSummarySnapshot> prepared =
       std::unexpected(ava::core::Error(ava::core::ErrorCategory::Unknown, "parent summary prepare callback failed"));
   try
@@ -140,7 +167,10 @@ BranchSummaryOutcome BranchSummaryOperation::start(SelectListView session_view, 
   prior_session_view_ = std::move(session_view);
   prior_selected_index_ = selected_index;
   selected_source_value_ = std::move(selected_value);
-  return consume(*prepared);
+  auto const outcome = consume(*prepared);
+  if (active_)
+    discovery_timer_.repeat(std::chrono::milliseconds{250});
+  return outcome;
 }
 
 BranchSummaryOutcome BranchSummaryOperation::cancel(BranchSummaryCancelMode mode)
