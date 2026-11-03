@@ -7,7 +7,7 @@ The review is read-only: nothing on the astra branch was changed. Each finding h
 ## Summary
 
 - **Builds cleanly** here with GCC 13.3 (`cmake --preset dev`, `scripts/build.sh`): no errors, no warnings.
-- **Test results:** see "Test results" below.
+- **Tests:** no regressions. The full suite fails the same 7 environment-related tests on both trees, and all 23 tmux TUI scenarios pass on both (details in "Test results").
 - **Key routing order is preserved.** The idle input precedence matches the old else-if chain, and composer resets, the signal table, exit codes (130 > 1 > 0) and the session-transition reset order all match the baseline.
 - **No deadlock, use-after-free or worker-thread terminal access was found** in the active-run, prompt and plugin code. Some baseline bugs were fixed: an exception escaping a prompt no longer leaves the worker blocked, and the audit sink no longer dangles.
 - **The maintainer's design goals are only partly met.** The giant function is gone, but a writable screen-state accessor is used 214 times, two god objects remain (`TuiSession`, `ActiveRun` with 15 constructor references), friendship is widened, and the code is barely commented.
@@ -249,7 +249,25 @@ More examples of the expected level:
 
 ## Test results
 
-(See below; filled in from the full-suite runs on both trees.)
+Both trees were built and tested on the same machine, so environment failures cancel out:
+- **Machine:** Ubuntu 24.04 container, GCC 13.3, 4 cores.
+- **Build:** `cmake --preset dev` (BetaTest, EnableDebug=ON, libcwd).
+- **Locale:** `LANG=C.UTF-8 LC_ALL=C.UTF-8`. Without it, 11 terminal/UTF-8 tests fail on both trees for environment reasons.
+
+| Check | Baseline `ec4143e` | Astra `ab5189c` |
+| --- | --- | --- |
+| Build | OK, no warnings | OK, no warnings |
+| Full suite (`scripts/run-tests.sh`) | 224/231 pass, 7 fail | 226/233 pass, 7 fail (the 2 extra tests are Astra's new `tui_event_loop` and `tui_pending_requests`, both passing) |
+| Failing tests | `tools`, `command`, `app_rpc`, `lsp`, `containment`, `live_git_self_test`, `live_dogfood_launchers` | the same 7 |
+| tmux TUI scenarios (all 23, `AVA_TUI_TMUX_SMOKE=1`) | 23/23 pass | 23/23 pass |
+
+How the tmux scenarios were run:
+- Each scenario was run directly through `tests/tui_tmux_smoke.py` with a short `--root` under `/tmp`, because the long build path exceeded the Unix socket path limit.
+- The scenarios and binaries are the same ones CTest would use.
+
+What this shows and what it does not:
+- **Shows:** the refactor introduced no test or end-to-end TUI regression that the existing suites can detect.
+- **Does not show:** the suites do not cover B1 (plugin modal during a prompt), B2 (buffered input after a discarded decode), B3/B5 (idle wakeups and extra turns) or the untested loop paths in T4.
 
 ## Decisions for the maintainer
 
