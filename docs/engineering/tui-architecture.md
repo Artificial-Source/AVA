@@ -220,7 +220,10 @@ Use the development build and a UTF-8 locale. Focused tests such as
 `ava_tests.tui_event_loop`, `ava_tests.tui_pending_requests`,
 `ava_tests.plugin_ui`, `ava_tests.tui_composer` and the isolated
 `ava_tests.tui_composer_rendering.*` cases cover different parts of the mechanism.
-The tmux scenarios check whole terminal interactions. A scheduler unit test alone
+The isolated `ava_tests.tui_session.*` cases drive the real session with native
+buffered input, worker queues and test-only call-through linker wrappers. They
+check turn order, budgets, closure, signals and scoped I/O failures. The tmux
+scenarios check whole terminal interactions. A scheduler unit test alone
 does not prove the ordering in `TuiSession::run`, and compiling does not prove
 cancellation or lifetime behavior.
 

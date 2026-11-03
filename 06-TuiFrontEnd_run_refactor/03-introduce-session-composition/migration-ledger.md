@@ -1,5 +1,46 @@
 # 06 migration ledger
 
+## Current status after the review of ab5189c
+
+The review fixes supersede the implementation checkpoints below. Start with
+[the TUI architecture guide](../../docs/engineering/tui-architecture.md) to change
+the code. [The current handoff](../11-review-design-and-close-migration/refactor-handoff.md) records each finding,
+its commit, member-comment counts and final validation evidence.
+
+The maintainer chose named feature publication with const screen/sidebar views,
+retained Runtime class names, and a plain 100 ms control wake. No signal-handler
+policy, terminal-thread assertion, utils submodule or backend authority changed.
+
+| Review work | Current implementation | Commits |
+| --- | --- | --- |
+| B1, B7–B10 | A host prompt holds plugin requests, provider projection and spinner advancement. Prompt paint failure publishes Io before cleanup. One claimed request controls callback retirement; shutdown guards each cleanup step and records failures. Settings cancellation restores preview, handled signals consume retained keys, and selector selection publication avoids row copies. | `74f5209f`, `489ef88c`, `93ffdcb9`, `89b25738`, `2babd336` |
+| B2–B6 | Input distinguishes Empty, Discarded and Input. One turn is control → due timers → application updates → input → paint → wait. Paint consumes its deadline in that turn. The control callback only wakes. Mermaid completions notify; only Busy admission/drain results schedule 100 ms then at most 250 ms retries. | `c5b53a93`, `ed44489e`, `996918eb`, `cd62a2f1` |
+| D1, D2, D4, D5 | State has named feature publication and const views. Renderer owns viewport mutation. Composer, selectors and command output own their algorithms. Existing frontend action callbacks are public; protected storage stays protected, without feature friendships. | `6051b1c3`, `1bc3c6b9`, `baced10b` |
+| D3, D9 | ActiveRunInput owns ordinary run keys; ActiveRun owns one optional Operation. Completion joins, closes publication, drains the finite backlog in 256-event chunks and settles in one call. No Finalizing phase, UI mutex, redundant queue mutex or test-only production polling mode remains. | `2f5b7b52`, `7ad1c02f` |
+| D6–D8, D10 | Plugin transport state is private. Reference printing exposes type/address only; wake printing never locks its weak pointer. View helper classes have separate files; PendingRequest is a shared template. The ineffective wait-state disable gate is deleted. | `325b618f`, `6640df77`, `519b78d7`, `afecb8c7`, `1898d64d` |
+| C | Newcomer guide and comments explain member purpose, ownership, threads and ordering. Corrected misleading lifecycle and timing comments; removed one unused frontend declaration. | `711f4a83` |
+| T1–T5 | Direct owner tests and nine isolated real-session cases cover merge branches, publication, budgets, ordering, readiness, closure, signals and I/O failure. | `7d6c5990` |
+
+The 100 ms control period is a nominal observation cadence, not a response bound.
+Escape continuation defaults to 100 ms; paste continuation uses one second.
+These are per-read limits, not whole-input decoding limits. The old 50 ms Escape
+claim was wrong. A synchronous callback or a large final receipt backlog can
+also delay control. See the guide for timer and worker lifetime requirements.
+
+Build and focused checks passed for every review group; each group was pushed
+and independently reviewed. The handoff distinguishes current final-suite
+results from earlier environment observations. Compilation is not behavior proof.
+
+## Historical implementation checkpoints through ab5189c
+
+Everything below records what was implemented or claimed at that checkpoint.
+It is retained as history, including the original validation results. Statements
+about pending extractions, mutable projections, UI locks, Finalizing, timer
+polling and compile-only checks are not current contracts. The current summary
+above and the handoff supersede them. In particular, the old wait-state disable
+flag never guaranteed that a producer notification had stopped; shared ownership
+of the waiter was the actual lifetime protection.
+
 This is the shared handoff for ordered implementation goals. Required inputs read for goal03: 06/handoff.md, 06/01/inventory.md, 06/02/architecture.md and the goal03 description. Goals01/02 were committed and pushed first. Source paths below are relative to the repository. Compilation is the intermediate gate; no CTest or TUI behavior checks have run during this refactor.
 
 ## 06/03 — Explicit session composition
