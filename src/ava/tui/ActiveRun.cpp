@@ -1,3 +1,4 @@
+// Owns one submission and its worker lifetime; see docs/engineering/tui-architecture.md.
 #include "sys.h"
 #include "PendingAttachments.h"
 #include "SessionTransitionCoordinator.h"
@@ -5,17 +6,14 @@
 #include "ava/tui/ActiveRun.h"
 #include "ava/tui/ActiveRunEvents.h"
 #include "ava/tui/ActiveRunInbox.h"
-#include "ava/tui/Composer.h"
 #include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/event_state.h"
-#include "ava/tui/runtime_actions_internal.h"
 #include "ava/tui/runtime_commands_internal.h"
 #include "ava/tui/runtime_input_internal.h"
 #include "ava/tui/runtime_internal.h"
 #include "ava/tui/runtime_mermaid_internal.h"
-#include "ava/tui/runtime_navigation_internal.h"
 #include "ava/tui/runtime_plugin_ui_internal.h"
 #include "ava/tui/runtime_prompts_internal.h"
 #include "ava/tui/runtime_render_internal.h"
@@ -23,8 +21,8 @@
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/terminal.h"
+#include "ava/tui/terminal/Context.h"
 #include "ava/permissions/permission.h"
-#include "ava/core/Application.h"
 #include "ava/core/ids.h"
 #include "ava/core/thread.h"
 
@@ -45,15 +43,6 @@
 #include <vector>
 
 namespace ava::tui {
-bool ActiveRun::apply_composer_result(ComposerInputResult result)
-{
-  presentation_state_.publish_composer_feedback(result);
-  if (result.beep)
-    ava::core::Application::instance().terminal_context().beep();
-  return result.handled;
-}
-
-using Signals = core::Signals;
 using runtime_commands::is_compact_command;
 using runtime_commands::shell_helper_submission;
 using runtime_transcript::apply_assistant_turn_meta;
@@ -65,25 +54,21 @@ using runtime_transcript::carry_tool_detail_visibility;
 using runtime_transcript::push_fallback_assistant_outputs;
 using runtime_transcript::push_transcript;
 
-ActiveRun::ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
-                     RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
-                     RuntimeNavigationController& navigation, RuntimeActionController& action_controller, TranscriptSearchController& transcript_search,
+ActiveRun::ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
+                     RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui, TranscriptSearchController& transcript_search,
                      RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions,
-                     RuntimeMermaidPresentationController& mermaid, PendingAttachments& attachments)
+                     RuntimeMermaidPresentationController& mermaid, PendingAttachments& attachments, terminal::Context& terminal_context)
     : frontend_(frontend),
       presentation_state_(presentation_state),
-      draft_state_(draft_state),
       renderer_(renderer),
       prompt_coordinator_(prompt_coordinator),
-      prompt_stash_(prompt_stash),
       plugin_ui_(plugin_ui),
-      navigation_(navigation),
-      action_controller_(action_controller),
       transcript_search_(transcript_search),
       subagent_workspace_(subagent_workspace),
       transitions_(transitions),
       mermaid_(mermaid),
       attachments_(attachments),
+      terminal_context_(terminal_context),
       wakeup_(loop.wakeup()),
       spinner_(loop, std::bind_front(&ActiveRun::publish_spinner_frame, this))
 {
@@ -97,9 +82,9 @@ void ActiveRun::upsert_stopping_activity()
 
 void ActiveRun::settle_turn_activity()
 {
-  if (inbox_->stop_requested() || events_->aggregate().run_status == TuiEventRunStatus::Canceled)
+  if (operation_->inbox->stop_requested() || operation_->events->aggregate().run_status == TuiEventRunStatus::Canceled)
     presentation_state_.settle_responding_activity(ToolTimelineStatus::Canceled, "assistant stopped");
-  else if (events_->aggregate().run_status == TuiEventRunStatus::Error)
+  else if (operation_->events->aggregate().run_status == TuiEventRunStatus::Error)
     presentation_state_.settle_responding_activity(ToolTimelineStatus::Error, "assistant failed");
   else
     presentation_state_.settle_responding_activity(ToolTimelineStatus::Success, "assistant responded");
@@ -107,13 +92,23 @@ void ActiveRun::settle_turn_activity()
 
 void ActiveRun::apply_non_transcript_event_authority()
 {
-  auto const& state = events_->aggregate();
+  auto const& state = operation_->events->aggregate();
   presentation_state_.publish_queued_messages(state.queued_messages);
   presentation_state_.publish_run_activity(state.activity);
   presentation_state_.publish_run_todos(state.todos);
-  if (inbox_->stop_requested() && state.run_status == TuiEventRunStatus::Running)
+  if (operation_->inbox->stop_requested() && state.run_status == TuiEventRunStatus::Running)
     upsert_stopping_activity();
   presentation_state_.publish_modified_files(state.modified_files);
+}
+
+ActiveRunOutcome ActiveRun::exit_outcome() const
+{
+  auto outcome = ActiveRunOutcome::close_session();
+  if (active() && operation_->terminal_write_failed)
+    outcome = outcome.with_terminal_write_failure();
+  if (active() && operation_->terminal_signal_received)
+    outcome = outcome.with_terminal_signal();
+  return outcome;
 }
 
 ActiveRun::~ActiveRun()
@@ -161,66 +156,64 @@ bool ActiveRun::start(std::string submitted)
   ASSERT(!active());
   if (active())
     return false;
-  phase_ = Phase::Running;
-  submitted_ = std::move(submitted);
-  is_command_submission_ = submitted_.starts_with('/') || shell_helper_submission(submitted_);
-  close_after_submit_ = false;
-  terminal_write_failed_ = false;
-  terminal_signal_received_ = false;
-  session_changed_ = false;
-  queues_finished_ = false;
-  completion_failed_ = false;
-  final_projection_serviced_ = false;
+  operation_.emplace();
+  operation_->submitted = std::move(submitted);
+  operation_->is_command_submission = operation_->submitted.starts_with('/') || shell_helper_submission(operation_->submitted);
   try
   {
     auto const& snapshot = presentation_state_.screen();
-    if (is_command_submission_ && runtime_commands::session_switching_command(submitted_))
+    if (operation_->is_command_submission && runtime_commands::session_switching_command(operation_->submitted))
       attachments_.clear();
     std::vector<ava::session::ImageAttachmentRef> attachments;
-    if (!is_command_submission_)
+    if (!operation_->is_command_submission)
       attachments = attachments_.take();
-    inbox_ = std::make_shared<ActiveRunInbox>(wakeup_);
-    auto const supports_queue = !is_command_submission_ || is_compact_command(submitted_);
+    operation_->inbox = std::make_shared<ActiveRunInbox>(wakeup_);
+    auto const supports_queue = !operation_->is_command_submission || is_compact_command(operation_->submitted);
     if (supports_queue)
-      active_queues_ = frontend_.create_active_run_queues(inbox_->envelope_sink());
-    auto request_id = active_queues_ ? active_queues_->active_request_id : std::string{};
+      operation_->active_queues = frontend_.create_active_run_queues(operation_->inbox->envelope_sink());
+    auto request_id = operation_->active_queues ? operation_->active_queues->active_request_id : std::string{};
     if (request_id.empty())
       request_id = ava::core::make_id("request");
     else
-      active_queues_->mark_follow_up_started = inbox_->wrap_follow_up_started(std::move(active_queues_->mark_follow_up_started));
-    inbox_->set_request_id(request_id);
-    events_ = std::make_unique<ActiveRunEvents>(is_command_submission_, submitted_, request_id, snapshot.transcript, presentation_state_.sidebar().todos);
-    auto endpoint = plugin_ui_.begin_submission(submitted_, request_id);
-    prompt_coordinator_.set_audit_sink(inbox_->event_sink());
-    turn_started_at_ = std::chrono::steady_clock::now();
-    draft_state_.record_submission(submitted_);
-    presentation_state_.publish_status(is_command_submission_ ? "running command..." : "thinking...");
+      operation_->active_queues->mark_follow_up_started =
+          operation_->inbox->wrap_follow_up_started(std::move(operation_->active_queues->mark_follow_up_started));
+    operation_->inbox->set_request_id(request_id);
+    operation_->events = std::make_unique<ActiveRunEvents>(operation_->is_command_submission, operation_->submitted, request_id, snapshot.transcript,
+                                                           presentation_state_.sidebar().todos);
+    auto endpoint = plugin_ui_.begin_submission(operation_->submitted, request_id);
+    prompt_coordinator_.set_audit_sink(operation_->inbox->event_sink());
+    operation_->turn_started_at = std::chrono::steady_clock::now();
+    presentation_state_.publish_status(operation_->is_command_submission ? "running command..." : "thinking...");
     presentation_state_.publish_processing(true);
     if (!render())
     {
-      terminal_write_failed_ = true;
+      operation_->terminal_write_failed = true;
       shutdown();
       return false;
     }
     prompt_coordinator_.open_admission();
     // The plugin owner and its synchronized deadline state outlive this joined
     // worker. This predicate has no projection or terminal access.
-    auto cancel_requested = [inbox = inbox_, plugin = &plugin_ui_]() { return inbox->stop_requested() || plugin->deadline_reached(); };
+    auto cancel_requested = [inbox = operation_->inbox, plugin = &plugin_ui_]() { return inbox->stop_requested() || plugin->deadline_reached(); };
     TuiSubmitContext context{
         .request_id = std::move(request_id),
         .permission_resolver = prompt_coordinator_.permission_resolver(),
         .question_resolver = prompt_coordinator_.question_resolver(),
-        .event_sink = inbox_->event_sink(),
+        .event_sink = operation_->inbox->event_sink(),
         .cancel_requested = std::move(cancel_requested),
-        .take_steering_messages = active_queues_ ? active_queues_->take_steering_messages : std::function<ava::core::Result<std::vector<std::string>>()>{},
-        .skip_active_steering = active_queues_ ? active_queues_->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{},
-        .take_next_follow_up = active_queues_ ? active_queues_->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{},
-        .mark_follow_up_started = active_queues_ ? active_queues_->mark_follow_up_started : std::function<ava::core::VoidResult(TuiQueuedFollowUp const&)>{},
-        .on_subagent_launch = inbox_->subagent_launch_sink(),
+        .take_steering_messages =
+            operation_->active_queues ? operation_->active_queues->take_steering_messages : std::function<ava::core::Result<std::vector<std::string>>()>{},
+        .skip_active_steering =
+            operation_->active_queues ? operation_->active_queues->skip_active_steering : std::function<ava::core::VoidResult(std::string_view)>{},
+        .take_next_follow_up = operation_->active_queues ? operation_->active_queues->take_next_follow_up : std::function<std::optional<TuiQueuedFollowUp>()>{},
+        .mark_follow_up_started =
+            operation_->active_queues ? operation_->active_queues->mark_follow_up_started : std::function<ava::core::VoidResult(TuiQueuedFollowUp const&)>{},
+        .on_subagent_launch = operation_->inbox->subagent_launch_sink(),
         .plugin_ui = std::move(endpoint),
         .image_attachments = std::move(attachments),
         .key_bindings = frontend_.key_bindings()};
-    worker_ = ava::core::make_async("tui_submit", std::bind_front(&ActiveRun::submit_worker, &frontend_, inbox_, submitted_, std::move(context)));
+    operation_->worker = ava::core::make_async(
+        "tui_submit", std::bind_front(&ActiveRun::submit_worker, &frontend_, operation_->inbox, operation_->submitted, std::move(context)));
     spinner_.start(snapshot.spinner_frame);
     return true;
   }
@@ -231,18 +224,64 @@ bool ActiveRun::start(std::string submitted)
   }
 }
 
+bool ActiveRun::queue_message(std::string message, bool steering)
+{
+  // TUI thread: availability and cancellation are checked before entering the
+  // backend queue. Only accepted messages let the input owner clear its draft.
+  auto& queues = operation_->active_queues;
+  if (operation_->inbox->stop_requested())
+    presentation_state_.publish_status("stop requested; queueing disabled");
+  else if (!queues)
+    presentation_state_.publish_status("active-run queue unavailable");
+  else if (steering && !queues->queue_steering)
+    presentation_state_.publish_status("active-run steering unavailable");
+  else if (!steering && !queues->queue_follow_up)
+    presentation_state_.publish_status("active-run follow-up unavailable");
+  else
+  {
+    auto queued = steering ? queues->queue_steering(std::move(message)) : queues->queue_follow_up(std::move(message));
+    if (queued)
+      return true;
+    presentation_state_.publish_status(queued.error().format());
+    terminal_context_.beep();
+  }
+  return false;
+}
+
+std::optional<TuiRestoredQueuedMessage> ActiveRun::restore_message()
+{
+  if (!operation_->active_queues || !operation_->active_queues->restore_latest)
+  {
+    presentation_state_.publish_status("active-run restore unavailable");
+    return std::nullopt;
+  }
+  auto restored = operation_->active_queues->restore_latest();
+  if (restored)
+    return std::move(*restored);
+  presentation_state_.publish_status(restored.error().format());
+  terminal_context_.beep();
+  return std::nullopt;
+}
+
+TuiActiveNonblockingCommandDispatchResult ActiveRun::dispatch_command(ComposerSnapshot const& completion, std::string const& command)
+{
+  if (!operation_->active_queues || !operation_->active_queues->run_nonblocking_command)
+    return {};
+  return dispatch_tui_active_nonblocking_command_gated(completion, *operation_->active_queues, command);
+}
+
 bool ActiveRun::stop_requested() const
 {
-  return inbox_ && (inbox_->stop_requested() || plugin_ui_.deadline_reached());
+  return active() && operation_->inbox && (operation_->inbox->stop_requested() || plugin_ui_.deadline_reached());
 }
 
 bool ActiveRun::request_stop()
 {
-  auto const newly_requested = inbox_->request_stop();
+  auto const newly_requested = operation_->inbox->request_stop();
   plugin_ui_.cancel_active();
   prompt_coordinator_.fail_pending_requests();
   if (newly_requested)
-    ava::core::Application::instance().terminal_context().beep();
+    terminal_context_.beep();
   {
     presentation_state_.publish_status("stop requested");
     upsert_stopping_activity();
@@ -252,8 +291,8 @@ bool ActiveRun::request_stop()
 
 void ActiveRun::request_close_after_submit()
 {
-  static_cast<void>(inbox_->request_stop());
-  close_after_submit_ = true;
+  static_cast<void>(operation_->inbox->request_stop());
+  operation_->close_after_submit = true;
   plugin_ui_.cancel_active();
   prompt_coordinator_.fail_pending_requests();
 }
@@ -268,7 +307,7 @@ bool ActiveRun::cancel(ActiveRunCancel reason)
     return request_stop();
   request_close_after_submit();
   if (reason == ActiveRunCancel::TerminalSignal)
-    terminal_signal_received_ = true;
+    operation_->terminal_signal_received = true;
   return true;
 }
 
@@ -278,20 +317,15 @@ void ActiveRun::before_prompt()
   // from the displayed frame after the claim retires, preserving baseline cadence.
   spinner_.stop();
   transcript_search_.close_before_prompt();
-  action_controller_.close_startup_overview();
 }
 
-bool ActiveRun::service_prompt()
+void ActiveRun::service_prompt()
 {
-  auto outcome = prompt_coordinator_.service();
-  if (!apply_prompt_outcome(outcome))
-    return false;
+  // Only direct permission input can request stop. Timer/claim service either
+  // retains or completes a prompt and cannot return that input-only outcome.
+  static_cast<void>(prompt_coordinator_.service());
   if (!prompt_coordinator_.has_active())
-  {
-    outcome = prompt_coordinator_.start_pending(std::bind_front(&ActiveRun::stop_requested, this), std::bind_front(&ActiveRun::before_prompt, this));
-    return apply_prompt_outcome(outcome);
-  }
-  return true;
+    static_cast<void>(prompt_coordinator_.start_pending(std::bind_front(&ActiveRun::stop_requested, this), std::bind_front(&ActiveRun::before_prompt, this)));
 }
 
 bool ActiveRun::apply_prompt_outcome(PromptServiceOutcome outcome)
@@ -336,65 +370,53 @@ void ActiveRun::publish_spinner_frame(std::size_t frame)
     presentation_state_.publish_spinner(frame);
   }
   if (!subagent_workspace_.active() && !renderer_.request_render(FrameRenderKind::Footer))
-    terminal_write_failed_ = true;
-}
-
-TuiInputOutcome ActiveRun::service_control()
-{
-  if (!active() || !Signals::received(terminal_signals))
-    return TuiInputOutcome::Pass;
-  // An active question's automatic answer keeps precedence over signal denial.
-  static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::TerminalSignal));
-  bool const exit_requested = Signals::try_obtain(SIGTERM);
-  bool const claimed_sigint = !exit_requested && Signals::try_obtain(SIGINT);
-
-  // ┌─────────────────────┬────────────────┬────────────────────────────────────────────────────────────────────┐
-  // │Successfully claimed │UI state        │Intended action                                                     │
-  // ├─────────────────────┼────────────────┼────────────────────────────────────────────────────────────────────┤
-  // │SIGTERM              │Any draft state │Request run cancellation and close after submit; leave loop (break) │
-  // ├─────────────────────┼────────────────┼────────────────────────────────────────────────────────────────────┤
-  // │SIGINT only          │Empty draft     │Request run cancellation and close after submit; leave loop (break) │
-  // ├─────────────────────┼────────────────┼────────────────────────────────────────────────────────────────────┤
-  // │SIGINT only          │Nonempty draft  │Clear draft, render, and continue; keep the active run running      │
-  // └─────────────────────┴────────────────┴────────────────────────────────────────────────────────────────────┘
-
-  if (exit_requested || (claimed_sigint && draft_state_.draft().text.empty()))
-    return cancel(ActiveRunCancel::TerminalSignal) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
-  if (claimed_sigint)     // If this is true than draft.text.empty() must be false.
-  {
-    static_cast<void>(action_controller_.clear_draft_for_interrupt());
-    presentation_state_.publish_completion(draft_state_);
-    return render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
-  }
-  return TuiInputOutcome::Pass;
+    operation_->terminal_write_failed = true;
 }
 
 RuntimeEventDrainResult ActiveRun::consume(std::size_t max_events)
 {
   if (!active())
     return RuntimeEventDrainResult::NoEvents;
-  if (terminal_write_failed_ || (phase_ == Phase::Running && (!service_prompt() || !poll_plugin_ui())))
+  if (operation_->terminal_write_failed)
+    return RuntimeEventDrainResult::RenderFailed;
+  service_prompt();
+  if (!poll_plugin_ui())
   {
-    terminal_write_failed_ = true;
+    operation_->terminal_write_failed = true;
     return RuntimeEventDrainResult::RenderFailed;
   }
   // Do not project provider events beneath a host prompt. Its worker may borrow
   // the current view; queued events resume after the prompt has retired.
   if (prompt_coordinator_.has_active())
     return RuntimeEventDrainResult::NoEvents;
-  if (phase_ == Phase::Running && !spinner_.active())
+  if (!spinner_.active())
     spinner_.start(presentation_state_.screen().spinner_frame);
   auto const drained = drain_events(max_events);
   if (drained == RuntimeEventDrainResult::RenderFailed)
-    terminal_write_failed_ = true;
-  if (phase_ == Phase::Finalizing && !inbox_->has_pending())
-    final_projection_serviced_ = true;
+    operation_->terminal_write_failed = true;
   return drained;
 }
 
-bool ActiveRun::handle_input(runtime_input::RuntimeInput const& input)
+bool ActiveRun::handle_search_input_event(runtime_input::RuntimeInput const& active_input)
 {
-  if (phase_ != Phase::Running || close_after_submit_)
+  using Key = terminal::Key;
+  if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)
+    renderer_.reset_wheel_input();
+  if (active_input.resize)
+  {
+    transcript_search_.refresh_after_resize();
+    return renderer_.render();
+  }
+  if ((active_input.event.key == Key::MouseWheelUp || active_input.event.key == Key::MouseWheelDown) && !renderer_.accept_wheel_input(active_input.event.key))
+  {
+    return true;
+  }
+  return transcript_search_.handle_input(active_input.event).value_or(true);
+}
+
+std::optional<bool> ActiveRun::handle_modal_input(runtime_input::RuntimeInput const& input)
+{
+  if (!active() || operation_->close_after_submit)
     return true;
   if (prompt_coordinator_.has_active())
   {
@@ -424,74 +446,37 @@ bool ActiveRun::handle_input(runtime_input::RuntimeInput const& input)
     auto const outcome = prompt_coordinator_.dispatch_search_input_with_prompt_precedence(std::bind_front(&ActiveRun::handle_search_input_event, this, input),
                                                                                           std::bind_front(&ActiveRun::stop_requested, this),
                                                                                           std::bind_front(&ActiveRun::before_prompt, this));
-    if (outcome == SearchInputPromptDispatchResult::RequestRunStop)
-      return apply_prompt_outcome(PromptServiceOutcome::RequestRunStop);
     return outcome != SearchInputPromptDispatchResult::InputFailed;
   }
   auto const prompt = prompt_coordinator_.start_pending(std::bind_front(&ActiveRun::stop_requested, this), std::bind_front(&ActiveRun::before_prompt, this));
-  if (prompt == PromptServiceOutcome::RequestRunStop)
-    return apply_prompt_outcome(prompt);
   if (prompt != PromptServiceOutcome::None)
     return true; // A raced claim consumes the retained key; it never enters the new modal.
-  return dispatch_active_input(input);
+  return std::nullopt;
 }
 
 bool ActiveRun::accepts_input() const
 {
-  return phase_ == Phase::Running && !close_after_submit_ && inbox_ && !inbox_->terminal_ready();
+  return active() && !operation_->close_after_submit && operation_->inbox && !operation_->inbox->terminal_ready();
 }
 
 bool ActiveRun::has_pending_updates()
 {
-  return active() && ((!prompt_coordinator_.has_active() && (inbox_->has_pending() || prompt_coordinator_.has_pending_requests())) ||
-                      (phase_ == Phase::Finalizing && !final_projection_serviced_));
+  return active() && !prompt_coordinator_.has_active() && (operation_->inbox->has_pending() || prompt_coordinator_.has_pending_requests());
 }
 
 void ActiveRun::finish_queues()
 {
-  if (queues_finished_)
+  if (operation_->queues_finished)
     return;
-  queues_finished_ = true;
-  if (active_queues_ && active_queues_->finish)
+  operation_->queues_finished = true;
+  if (operation_->active_queues && operation_->active_queues->finish)
   {
-    if (auto finished = active_queues_->finish(inbox_->stop_requested()); !finished)
+    if (auto finished = operation_->active_queues->finish(operation_->inbox->stop_requested()); !finished)
     {
       presentation_state_.publish_status(finished.error().format());
-      completion_failed_ = true;
+      operation_->completion_failed = true;
     }
   }
-}
-
-void ActiveRun::begin_completion(TuiSubmitResult result)
-{
-  result_ = std::move(result);
-  prompt_coordinator_.fail_pending_requests();
-  static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown));
-  plugin_ui_.finish_submission();
-  worker_.get();
-  events_->authorize_receipts(result_->ordinary_turn_request_ids);
-  // Read backend identity/transports after commit, before replacing the projection.
-  auto committed_session_id = frontend_.read_committed_session_id();
-  auto boundary_reads = result_->quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
-  {
-    session_changed_ = transitions_.apply(std::move(committed_session_id));
-    if (!result_->quit)
-      presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
-  }
-  finish_queues();
-  // Freeze admission before discarding an old-session backlog: a retained sink
-  // cannot repopulate that backlog between discard and final bounded draining.
-  inbox_->retire();
-  if (session_changed_)
-  {
-    events_->discard();
-    inbox_->discard();
-  }
-  // Queue finish may publish final receipts. Freeze admission only afterward;
-  // subsequent bounded turns project every accepted event before settlement.
-  prompt_coordinator_.set_audit_sink(nullptr);
-  spinner_.stop();
-  phase_ = Phase::Finalizing;
 }
 
 std::optional<ActiveRunOutcome> ActiveRun::complete()
@@ -500,44 +485,71 @@ std::optional<ActiveRunOutcome> ActiveRun::complete()
     return std::nullopt;
   try
   {
-    if (phase_ == Phase::Running)
-    {
-      auto terminal = inbox_->take_terminal();
-      if (!terminal)
-        return std::nullopt;
-      if (auto error = std::get_if<std::exception_ptr>(&*terminal))
-      {
-        auto exception = *error;
-        shutdown();
-        std::rethrow_exception(exception);
-      }
-      begin_completion(std::move(std::get<TuiSubmitResult>(*terminal)));
+    auto terminal = operation_->inbox->take_terminal();
+    if (!terminal)
       return std::nullopt;
+    if (auto error = std::get_if<std::exception_ptr>(&*terminal))
+    {
+      auto exception = *error;
+      shutdown();
+      std::rethrow_exception(exception);
     }
-    if (!final_projection_serviced_ || inbox_->has_pending())
-      return std::nullopt;
-    if (!session_changed_)
+    auto result = std::move(std::get<TuiSubmitResult>(*terminal));
+    // Retire callbacks which borrow worker data before joining. The terminal
+    // publication says backend callback scopes have ended; get joins its epilogue.
+    prompt_coordinator_.fail_pending_requests();
+    static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown));
+    plugin_ui_.finish_submission();
+    operation_->worker.get();
+    operation_->events->authorize_receipts(result.ordinary_turn_request_ids);
+    auto committed_session_id = frontend_.read_committed_session_id();
+    auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
+    bool const session_changed = transitions_.apply(std::move(committed_session_id));
+    if (!result.quit)
+      presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
+    finish_queues();
+    // Queue finishing can publish receipts. Freeze admission only afterward, so
+    // retained sinks cannot repopulate an old-session backlog after discard.
+    operation_->inbox->retire();
+    if (session_changed)
     {
-      if (is_command_submission_)
+      operation_->events->discard();
+      operation_->inbox->discard();
+    }
+    prompt_coordinator_.set_audit_sink(nullptr);
+    spinner_.stop();
+    // Admission is closed and the worker has joined: the backlog is now finite.
+    // Bound each allocation, but settle it in this call instead of adding a UI
+    // phase. The first drain also publishes newly authorized command receipts.
+    do
+    {
+      if (drain_events(256) == RuntimeEventDrainResult::RenderFailed)
       {
-        auto local_tools = result_->local_command_result ? result_->local_command_result->tool_timeline : std::vector<ToolTimelineItem>{};
-        local_tools = events_->merge_unauthorized_tools(std::move(local_tools));
+        operation_->terminal_write_failed = true;
+        break;
+      }
+    }
+    while (operation_->inbox->has_pending());
+    if (!session_changed)
+    {
+      if (operation_->is_command_submission)
+      {
+        auto local_tools = result.local_command_result ? result.local_command_result->tool_timeline : std::vector<ToolTimelineItem>{};
+        local_tools = operation_->events->merge_unauthorized_tools(std::move(local_tools));
         if (!local_tools.empty())
         {
-          if (!result_->local_command_result)
-            result_->local_command_result = TuiLocalCommandResult{};
-          result_->local_command_result->tool_timeline = std::move(local_tools);
+          if (!result.local_command_result)
+            result.local_command_result = TuiLocalCommandResult{};
+          result.local_command_result->tool_timeline = std::move(local_tools);
         }
       }
-      if (result_->local_command_result)
-      {
-        for (auto const& tool : result_->local_command_result->tool_timeline)
+      if (result.local_command_result)
+        for (auto const& tool : result.local_command_result->tool_timeline)
           presentation_state_.publish_tool(tool, TuiToolIndexOrigin::LocalCommand);
-      }
     }
-    auto const outcome = terminal_signal_received_ || terminal_write_failed_ || completion_failed_
-                             ? ActiveRunOutcome(true, terminal_write_failed_, terminal_signal_received_)
-                             : settle_completion();
+    auto const outcome = operation_->terminal_signal_received || operation_->terminal_write_failed || operation_->completion_failed
+                             ? exit_outcome()
+                             : settle_completion(result, session_changed);
     retire_operation();
     return outcome;
   }
@@ -555,21 +567,16 @@ void ActiveRun::retire_operation()
   static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown));
   prompt_coordinator_.set_audit_sink(nullptr);
   plugin_ui_.finish_submission();
-  if (inbox_)
-    inbox_->retire();
-  active_queues_.reset();
-  result_.reset();
-  events_.reset();
-  inbox_.reset();
-  submitted_.clear();
+  if (operation_->inbox)
+    operation_->inbox->retire();
   presentation_state_.publish_processing(false);
-  phase_ = Phase::Idle;
+  operation_.reset();
 }
 
 ActiveRunOutcome ActiveRun::shutdown() noexcept
 {
   if (!active())
-    return ActiveRunOutcome(true, terminal_write_failed_, terminal_signal_received_);
+    return exit_outcome();
   // A destructor must continue independent cleanup after a failed step. Use
   // fixed stage names only: exceptions can contain prompt or command bodies.
   auto cleanup = [](char const* stage, auto&& operation) noexcept {
@@ -594,40 +601,36 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
   // joining. These cancellation paths avoid allocation; mutex failure remains
   // an unrecoverable platform failure, not a promised liveness guarantee.
   cleanup("stop request", [&] {
-    if (inbox_)
-      static_cast<void>(inbox_->request_stop());
+    if (operation_->inbox)
+      static_cast<void>(operation_->inbox->request_stop());
   });
   cleanup("queued prompts", [&] { prompt_coordinator_.fail_pending_requests(); });
   cleanup("active prompt", [&] { static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::Shutdown)); });
   cleanup("plugin waiters", [&] { plugin_ui_.finish_submission(); });
   cleanup("worker join", [&] {
-    if (worker_.valid())
-      worker_.get();
+    if (operation_->worker.valid())
+      operation_->worker.get();
   });
   cleanup("queue receipts", [&] { finish_queues(); });
   cleanup("audit retirement", [&] { prompt_coordinator_.set_audit_sink(nullptr); });
   cleanup("inbox retirement", [&] {
-    if (inbox_)
-      inbox_->retire();
+    if (operation_->inbox)
+      operation_->inbox->retire();
   });
   // Each local value is now independent of worker execution. Do not call the
   // normal retirement sequence again: it would repeat fallible cleanup steps.
-  active_queues_.reset();
-  result_.reset();
-  events_.reset();
-  inbox_.reset();
-  submitted_.clear();
+  auto const outcome = exit_outcome();
   presentation_state_.publish_processing(false);
-  phase_ = Phase::Idle;
-  return ActiveRunOutcome(true, terminal_write_failed_, terminal_signal_received_);
+  operation_.reset();
+  return outcome;
 }
 
 RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
 {
-  auto batch = inbox_->drain(max_events);
+  auto batch = operation_->inbox->drain(max_events);
   auto const& snapshot = presentation_state_.screen();
-  events_->apply_batch(batch, presentation_state_);
-  auto projection = events_->take_transcript_projection();
+  operation_->events->apply_batch(batch, presentation_state_);
+  auto projection = operation_->events->take_transcript_projection();
   if (!projection)
   {
     if (batch.empty())
@@ -637,7 +640,7 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
     }
     return renderer_.request_render() ? RuntimeEventDrainResult::UpdatedNoRender : RuntimeEventDrainResult::RenderFailed;
   }
-  if (is_command_submission_)
+  if (operation_->is_command_submission)
   {
     for (auto const& item : *projection)
       if (item.tool)
@@ -645,10 +648,11 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
   }
   {
     auto const update = renderer_.begin_transcript_update();
-    apply_assistant_turn_meta(*projection, assistant_meta_for_snapshot(&frontend_, snapshot, std::chrono::steady_clock::now() - turn_started_at_),
+    apply_assistant_turn_meta(*projection, assistant_meta_for_snapshot(&frontend_, snapshot, std::chrono::steady_clock::now() - operation_->turn_started_at),
                               snapshot.thinking_visible);
-    auto const capped = presentation_state_.publish_run_transcript(*events_, std::move(*projection));
-    auto const changed = events_->baseline().size() > capped.leading_evictions ? events_->baseline().size() - capped.leading_evictions : std::size_t{0};
+    auto const capped = presentation_state_.publish_run_transcript(*operation_->events, std::move(*projection));
+    auto const changed =
+        operation_->events->baseline().size() > capped.leading_evictions ? operation_->events->baseline().size() - capped.leading_evictions : std::size_t{0};
     transcript_search_.refresh_after_transcript_mutation(capped.item_index_shift, changed);
     apply_non_transcript_event_authority();
     renderer_.complete_transcript_update(update, capped.item_index_shift, batch.size());
@@ -659,24 +663,24 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
     return RuntimeEventDrainResult::UpdatedNoRender;
   return renderer_.request_render() ? RuntimeEventDrainResult::UpdatedNoRender : RuntimeEventDrainResult::RenderFailed;
 }
-ActiveRunOutcome ActiveRun::settle_completion()
+ActiveRunOutcome ActiveRun::settle_completion(TuiSubmitResult const& result, bool session_changed)
 {
   auto const& snapshot = presentation_state_.screen();
-  auto& result = *result_;
-  auto const& event_state = events_->aggregate();
-  auto const events_received = is_command_submission_ ? events_->authorized_events_received() : inbox_->received_any();
-  auto settlement_event_state = events_->settlement_state();
-  auto const conversation_committed = events_->conversation_committed();
+  auto const& event_state = operation_->events->aggregate();
+  auto const events_received = operation_->is_command_submission ? operation_->events->authorized_events_received() : operation_->inbox->received_any();
+  auto settlement_event_state = operation_->events->settlement_state();
+  auto const conversation_committed = operation_->events->conversation_committed();
   auto local_output = result.local_command_result ? result.local_command_result->output : std::vector<std::string>{};
   auto local_tools = result.local_command_result ? result.local_command_result->tool_timeline : std::vector<ToolTimelineItem>{};
-  if (is_command_submission_ && !conversation_committed && !result.local_command_result)
+  if (operation_->is_command_submission && !conversation_committed && !result.local_command_result)
   {
     local_output = result.output;
     local_tools = result.tool_timeline;
   }
-  auto settlement = settle_tui_submission(events_->baseline(), settlement_event_state, submitted_, is_command_submission_, conversation_committed,
-                                          std::move(local_output), std::move(local_tools), inbox_->stop_requested(), result.local_command_result.has_value());
-  if (settlement.policy.preserve_transcript && !session_changed_)
+  auto settlement = settle_tui_submission(operation_->events->baseline(), settlement_event_state, operation_->submitted, operation_->is_command_submission,
+                                          conversation_committed, std::move(local_output), std::move(local_tools), operation_->inbox->stop_requested(),
+                                          result.local_command_result.has_value());
+  if (settlement.policy.preserve_transcript && !session_changed)
   {
     // Local command event projection is withheld for the entire run. Restore the
     // exact pre-submit sequence defensively so no independent receipt path can leak.
@@ -697,22 +701,22 @@ ActiveRunOutcome ActiveRun::settle_completion()
   }
   if (settlement.policy.project_conversation && !events_received)
   {
-    auto const turn_elapsed = std::chrono::steady_clock::now() - turn_started_at_;
+    auto const turn_elapsed = std::chrono::steady_clock::now() - operation_->turn_started_at;
     auto const assistant_meta = assistant_meta_for_snapshot(&frontend_, snapshot, turn_elapsed);
     auto const transcript_size_before_fallback = snapshot.transcript.size();
     std::ptrdiff_t item_index_shift = 0;
-    if (!is_command_submission_ && !session_changed_)
+    if (!operation_->is_command_submission && !session_changed)
     {
-      item_index_shift += presentation_state_.append_transcript(TranscriptItem{.label = "you", .text = submitted_});
+      item_index_shift += presentation_state_.append_transcript(TranscriptItem{.label = "you", .text = operation_->submitted});
     }
-    if (inbox_->stop_requested() && !session_changed_)
+    if (operation_->inbox->stop_requested() && !session_changed)
     {
       item_index_shift += presentation_state_.append_fallback_outputs({"stopped by user"}, assistant_meta);
     }
     else
     {
-      auto const& conversation_tools = is_command_submission_ ? result.conversation_tool_timeline : result.tool_timeline;
-      auto const& conversation_output = is_command_submission_ ? result.conversation_output : result.output;
+      auto const& conversation_tools = operation_->is_command_submission ? result.conversation_tool_timeline : result.tool_timeline;
+      auto const& conversation_output = operation_->is_command_submission ? result.conversation_output : result.output;
       for (auto const& tool : conversation_tools)
       {
         presentation_state_.publish_tool(tool, TuiToolIndexOrigin::Provider);
@@ -730,7 +734,7 @@ ActiveRunOutcome ActiveRun::settle_completion()
   }
   if (settlement.policy.present_command_output)
   {
-    presentation_state_.publish_local_completion(submitted_, std::move(settlement.command_output), std::move(settlement.command_tools), false);
+    presentation_state_.publish_local_completion(operation_->submitted, std::move(settlement.command_output), std::move(settlement.command_tools), false);
   }
   else
   {
@@ -745,11 +749,11 @@ ActiveRunOutcome ActiveRun::settle_completion()
   presentation_state_.refresh_prompt_metadata();
   if (mermaid_.service() == MermaidServiceOutcome::RenderFailed || !render())
   {
-    terminal_write_failed_ = true;
-    return ActiveRunOutcome(true, true, terminal_signal_received_);
+    operation_->terminal_write_failed = true;
+    return exit_outcome();
   }
 
-  return ActiveRunOutcome(close_after_submit_ || result.quit, terminal_write_failed_, terminal_signal_received_);
+  return operation_->close_after_submit || result.quit ? ActiveRunOutcome::close_session() : ActiveRunOutcome::continue_session();
 }
 std::optional<std::vector<std::string>> dispatch_tui_active_nonblocking_command(TuiActiveRunQueues const& queues, std::string const& submitted)
 {

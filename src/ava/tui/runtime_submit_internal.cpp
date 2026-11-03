@@ -548,6 +548,8 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
       }
       return {.disposition = RuntimeSubmitDisposition::ContinueLoop};
     }
+    // History belongs to the editor boundary; ActiveRun owns only worker lifetime.
+    draft_state_.record_submission(submitted);
     if (!active_run_controller_.start(std::move(submitted)))
       return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
     return {.disposition = RuntimeSubmitDisposition::ContinueLoop};

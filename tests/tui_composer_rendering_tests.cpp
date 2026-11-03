@@ -5,6 +5,8 @@
 #include "ava/app/command_palette.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/ActiveRun.h"
+#include "ava/tui/ActiveRunInput.h"
+#include "ava/tui/CommandOutput.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/PendingAttachments.h"
 #include "ava/tui/SelectorHost.h"
@@ -88,18 +90,23 @@ class EventLoopFixture final
   ava::tui::TuiEventLoop loop_;
 };
 
+// Normal submissions retire in the same complete() call that consumes their published result.
 std::optional<ava::tui::ActiveRunOutcome> complete_active_run_for_test(ava::tui::ActiveRun& active_run, ava::tui::TuiEventLoop& loop)
 {
   auto const deadline = ava::tests::now_plus_seconds(2);
   while (std::chrono::steady_clock::now() < deadline)
   {
-    if (active_run.service_control() == ava::tui::TuiInputOutcome::Failure)
-      break;
     loop.service_due();
     if (active_run.consume() == ava::tui::RuntimeEventDrainResult::RenderFailed)
       break;
-    if (auto outcome = active_run.complete())
+    bool const completion_published = !active_run.accepts_input();
+    auto outcome = active_run.complete();
+    expect(!completion_published || outcome.has_value(), "a published completion settles in one call without a finalizing turn");
+    if (outcome)
+    {
+      expect(!active_run.active(), "completed submission retires its operation before returning the outcome");
       return outcome;
+    }
     std::this_thread::yield();
   }
   active_run.shutdown();
@@ -577,10 +584,21 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                             attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
-  ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
-                                 navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid, attachments);
+  ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
+                                 subagent_workspace, session_transition, mermaid, attachments, ava::core::Application::instance().terminal_context());
 
-  if (!ava::tests::require(active_run.start("OLD SUBMITTED PROMPT"), "start the old-session active submission"))
+  ava::tui::CommandOutput command_output(presentation);
+  ava::tui::ActiveRunInput active_input(*frontend.frontend(), presentation, draft_state, renderer, prompt_stash, navigation, action_controller,
+                                        transcript_search, subagent_workspace, active_run, command_output,
+                                        ava::core::Application::instance().terminal_context());
+  ava::tui::SettingsDialog settings_dialog(*frontend.frontend(), presentation, active_select_list, ava::core::Application::instance().terminal_context());
+  ava::tui::RuntimeSubmitController submit_controller(*frontend.frontend(), presentation, draft_state, renderer, navigation, action_controller, active_run,
+                                                      prompt_stash, transcript_search, subagent_workspace, active_select_list, settings_dialog,
+                                                      session_selector);
+  // Exercise the production history boundary now that lifecycle no longer owns the editor.
+  auto const submitted = submit_controller.submit(std::string("OLD SUBMITTED PROMPT"));
+  if (!ava::tests::require(submitted.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && active_run.active(),
+                           "start the old-session active submission"))
     return false;
   auto const outcome = complete_active_run_for_test(active_run, event_loop.loop());
   if (!outcome)
@@ -617,7 +635,7 @@ bool test_active_run_session_transition_discards_prior_session_events()
   retained_key.event.key = ava::tui::terminal::Key::Character;
   retained_key.event.character = 'x';
   retained_key.text = "x";
-  bool const retained_handled = active_run.handle_input(retained_key);
+  bool const retained_handled = active_input.dispatch(retained_key) == ava::tui::TuiInputOutcome::Handled;
   bool const retained_draft_unchanged = draft_state.draft().text == "retained draft" && draft_state.draft().cursor == 14;
   auto const prompt_outcome = complete_active_run_for_test(active_run, event_loop.loop());
   bool const retained_input_discarded = prompt_outcome && !prompt_outcome->break_loop() && !prompt_outcome->terminal_write_failed() && retained_handled &&
@@ -689,8 +707,8 @@ bool test_active_run_preserves_plugin_modal_during_host_prompt()
       ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                                 attachments, grants);
       ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
-      ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
-                                     navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid, attachments);
+      ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
+                                     subagent_workspace, session_transition, mermaid, attachments, ava::core::Application::instance().terminal_context());
 
       if (!active_run.start("/plugin run demo choose {}"))
         return false;
@@ -1927,8 +1945,8 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list,
                                                             attachments, grants);
   ava::tui::RuntimeMermaidPresentationController mermaid(presentation, renderer, transcript_search, {});
-  ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
-                                 navigation, action_controller, transcript_search, subagent_workspace, session_transition, mermaid, attachments);
+  ava::tui::ActiveRun active_run(event_loop.loop(), *frontend.frontend(), presentation, renderer, prompt_coordinator, plugin_ui, transcript_search,
+                                 subagent_workspace, session_transition, mermaid, attachments, ava::core::Application::instance().terminal_context());
   ava::tui::SettingsDialog settings_dialog(*frontend.frontend(), presentation, active_select_list, ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeSubmitController submit_controller(*frontend.frontend(), presentation, draft_state, renderer, navigation, action_controller, active_run,
                                                       prompt_stash, transcript_search, subagent_workspace, active_select_list, settings_dialog,

@@ -65,8 +65,10 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       subagent_workspace_(frontend, presentation_state_, selectors_),
       session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_, attachments_,
                            command_session_grants_),
-      active_run_controller_(loop_, frontend, presentation_state_, draft_state_, renderer_, prompt_coordinator_, prompt_stash_, plugin_ui_, navigation_,
-                             action_controller_, transcript_search_, subagent_workspace_, session_transitions_, mermaid_presentation_, attachments_),
+      active_run_controller_(loop_, frontend, presentation_state_, renderer_, prompt_coordinator_, plugin_ui_, transcript_search_, subagent_workspace_,
+                             session_transitions_, mermaid_presentation_, attachments_, terminal_context),
+      active_run_input_(frontend, presentation_state_, draft_state_, renderer_, prompt_stash_, navigation_, action_controller_, transcript_search_,
+                        subagent_workspace_, active_run_controller_, command_output_, terminal_context),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
                          transcript_search_, subagent_workspace_, selectors_, settings_, session_selector_),
       // Host modals precede jump/text input. Editor clearing precedes session
@@ -157,6 +159,32 @@ bool TuiSession::synchronize_committed_session()
 TuiInputOutcome TuiSession::handle_signals()
 {
   using Signals = core::Signals;
+  if (active_run_controller_.active())
+  {
+    if (!Signals::received(terminal_signals))
+      return TuiInputOutcome::Pass;
+    // An already answerable question resolves automatically before signal denial.
+    // Claim the signal only after that prompt policy, matching active-run behavior.
+    static_cast<void>(prompt_coordinator_.cancel_active(PromptCancelReason::TerminalSignal));
+    bool const exit_requested = Signals::try_obtain(SIGTERM);
+    bool const claimed_sigint = !exit_requested && Signals::try_obtain(SIGINT);
+    if (exit_requested || (claimed_sigint && draft_state_.draft().text.empty()))
+      return active_run_controller_.cancel(ActiveRunCancel::TerminalSignal) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
+    if (claimed_sigint)
+    {
+      static_cast<void>(action_controller_.clear_draft_for_interrupt());
+      presentation_state_.publish_completion(draft_state_);
+      // Keep plugin geometry retirement before this urgent redraw, including a
+      // signal observed between input decode and the ordinary presentation stage.
+      refresh_geometry_from_kernel();
+      auto const [width, height] = terminal_size();
+      presentation_state_.publish_dimensions(width, height);
+      static_cast<void>(plugin_ui_.cancel_unfittable_surfaces());
+      return renderer_.render() ? TuiInputOutcome::Handled : TuiInputOutcome::Failure;
+    }
+    return TuiInputOutcome::Pass;
+  }
+
   if (Signals::received(terminal_signals))
   {
     bool const exit_requested = Signals::try_obtain(SIGTERM);
@@ -637,12 +665,7 @@ void TuiSession::wake_for_control(TuiEventLoop::Clock::time_point)
 
 void TuiSession::service_control()
 {
-  if (active_run_controller_.active())
-  {
-    apply_input_outcome(active_run_controller_.service_control());
-  }
-  else
-    apply_input_outcome(handle_signals());
+  apply_input_outcome(handle_signals());
 
   if (loop_.notification_failed() || renderer_.render_failed())
     apply_input_outcome(TuiInputOutcome::Failure);
@@ -719,26 +742,15 @@ bool TuiSession::service_input_batch()
     if (polled.kind == runtime_input::InputPollKind::Discarded)
       continue;
     auto const& input = polled.input;
-    if (active_run_controller_.active())
-    {
-      auto const control = active_run_controller_.service_control();
-      apply_input_outcome(control);
-      if (control != TuiInputOutcome::Pass)
-        continue; // A claimed signal consumes the retained key, as in idle dispatch.
-    }
-    else
-    {
-      // Preserve idle dispatch precedence when a signal arrives during decode:
-      // a handled draft clear/branch cancellation consumes this retained input.
-      auto const control = handle_signals();
-      apply_input_outcome(control);
-      if (control != TuiInputOutcome::Pass)
-        continue;
-    }
+    // Claim signals again after decoding: a handled signal consumes the retained
+    // key before either active or idle feature dispatch can use it.
+    auto const control = handle_signals();
+    apply_input_outcome(control);
+    if (control != TuiInputOutcome::Pass)
+      continue;
     if (terminal_closing_ || loop_.stopped())
       continue;
-    auto const outcome = active_run_controller_.active() ? (active_run_controller_.handle_input(input) ? TuiInputOutcome::Handled : TuiInputOutcome::Failure)
-                                                         : input_dispatcher_.dispatch(input);
+    auto const outcome = active_run_controller_.active() ? active_run_input_.dispatch(input) : input_dispatcher_.dispatch(input);
     apply_input_outcome(outcome);
   }
   // A full batch may leave bytes in ncurses even without fd readiness. Give

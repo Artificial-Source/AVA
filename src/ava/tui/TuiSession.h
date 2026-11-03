@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ActiveRun.h"
+#include "ActiveRunInput.h"
 #include "BranchSummaryOperation.h"
 #include "CommandOutput.h"
 #include "Composer.h"
@@ -117,6 +118,8 @@ class TuiSession final
   RuntimeSubagentWorkspaceController subagent_workspace_;
   SessionTransitionCoordinator session_transitions_;
   ActiveRun active_run_controller_;
+  // Ordinary active keys borrow the lifecycle owner, whose worker is joined before teardown.
+  ActiveRunInput active_run_input_;
   RuntimeSubmitController submit_controller_;
   // Registered targets above outlive the dispatcher; the session cannot move.
   TuiInputDispatcher input_dispatcher_;

@@ -3,6 +3,7 @@
 #include "tests/support/test_harness.h"
 #include "tests/support/test_timeout.h"
 #include "ava/tui/ActiveRunInbox.h"
+#include "ava/tui/ActiveRunOutcome.h"
 #include "ava/tui/TuiEventLoop.h"
 #include "ava/tui/TuiInputDispatcher.h"
 #include "ava/tui/runtime_input_internal.h"
@@ -432,11 +433,29 @@ void test_dispatcher_optional_event_handler_adaptation()
   }
 }
 
+// Named settlement decisions retain both failure causes regardless of annotation order.
+void test_active_run_outcomes_preserve_signal_and_write_failure()
+{
+  using ava::tui::ActiveRunOutcome;
+  auto const continued = ActiveRunOutcome::continue_session();
+  auto const closed = ActiveRunOutcome::close_session();
+  auto const failed_then_signal = continued.with_terminal_write_failure().with_terminal_signal();
+  auto const signal_then_failed = closed.with_terminal_signal().with_terminal_write_failure();
+  expect(!continued.break_loop() && !continued.terminal_write_failed() && !continued.terminal_signal_received(),
+         "successful settlement continues without inventing an exit cause");
+  expect(closed.break_loop() && !closed.terminal_write_failed() && !closed.terminal_signal_received(),
+         "ordinary close remains distinct from terminal failure and signal exit");
+  expect(failed_then_signal.break_loop() && failed_then_signal.terminal_write_failed() && failed_then_signal.terminal_signal_received() &&
+             signal_then_failed.break_loop() && signal_then_failed.terminal_write_failed() && signal_then_failed.terminal_signal_received(),
+         "a terminal failure and signal both survive named outcome composition");
+}
+
 } // namespace
 
 // Register the direct owner contracts as one focused test suite.
 void run_tui_runtime_owner_tests()
 {
+  test_active_run_outcomes_preserve_signal_and_write_failure();
   test_inbox_bounded_fifo_and_received_history();
   test_inbox_discard_preserves_terminal();
   test_inbox_retirement_preserves_accepted_work();

@@ -578,6 +578,10 @@ PromptServiceOutcome RuntimePromptCoordinator::start_claimed_request(ClaimedProm
   {
     if (before_prompt)
       before_prompt();
+    // Overview closes even when the new request resolves automatically. Other
+    // competing selectors retain their later visible-prompt closing policy.
+    if (selectors_)
+      close_startup_overview_presentation(presentation_, *selectors_);
     if (auto const* permission = std::get_if<std::shared_ptr<PendingPermissionRequest>>(&active_request_))
     {
       if (auto result = start_permission_prompt((*permission)->prompt()))
@@ -791,8 +795,10 @@ SearchInputPromptDispatchResult RuntimePromptCoordinator::dispatch_search_input_
                                                                                                        std::function<void()> before_prompt)
 {
   if (has_active())
-    return service() == PromptServiceOutcome::RequestRunStop ? SearchInputPromptDispatchResult::RequestRunStop
-                                                             : SearchInputPromptDispatchResult::PromptServiced;
+  {
+    static_cast<void>(service());
+    return SearchInputPromptDispatchResult::PromptServiced;
+  }
   ClaimedPromptRequest request;
   bool input_handled = false;
   {
@@ -805,8 +811,8 @@ SearchInputPromptDispatchResult RuntimePromptCoordinator::dispatch_search_input_
   }
   if (std::holds_alternative<std::monostate>(request))
     return input_handled ? SearchInputPromptDispatchResult::InputHandled : SearchInputPromptDispatchResult::InputFailed;
-  auto const outcome = start_claimed_request(std::move(request), std::move(stop_requested), std::move(before_prompt));
-  return outcome == PromptServiceOutcome::RequestRunStop ? SearchInputPromptDispatchResult::RequestRunStop : SearchInputPromptDispatchResult::PromptServiced;
+  static_cast<void>(start_claimed_request(std::move(request), std::move(stop_requested), std::move(before_prompt)));
+  return SearchInputPromptDispatchResult::PromptServiced;
 }
 
 ava::core::Result<ava::permissions::PermissionResolutionDecision> RuntimePromptCoordinator::request_permission(ava::permissions::PermissionPrompt const& prompt)

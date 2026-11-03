@@ -52,8 +52,6 @@ class RuntimeActionController final
   [[nodiscard]] bool open_scoped_model_selector();
   // Toggle the read-only startup overview select-list. No-op when no snapshot is present.
   [[nodiscard]] bool toggle_startup_overview();
-  // TUI thread: retire the overview before a host prompt claims the modal surface.
-  void close_startup_overview();
   [[nodiscard]] bool open_fork_user_turn_selector(std::string_view initial_query = {});
   [[nodiscard]] bool open_copy_user_turn_selector(std::string_view initial_query = {});
   void cycle_model(bool forward);

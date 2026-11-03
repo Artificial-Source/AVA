@@ -155,11 +155,6 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   return DisplaySettingsReloadPollOutcome::Applied;
 }
 
-void RuntimeActionController::close_startup_overview()
-{
-  close_startup_overview_presentation(presentation_state_, selectors_);
-}
-
 bool RuntimeActionController::clear_draft_for_interrupt()
 {
   draft_state_.reset_interaction();

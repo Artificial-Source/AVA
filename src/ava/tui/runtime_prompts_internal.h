@@ -61,7 +61,6 @@ enum class PromptCancelReason
 enum class SearchInputPromptDispatchResult
 {
   PromptServiced,
-  RequestRunStop,
   InputHandled,
   InputFailed,
 };

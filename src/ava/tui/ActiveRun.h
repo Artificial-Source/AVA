@@ -1,8 +1,8 @@
+// Owns submission lifetime and worker-facing modal arbitration in the TUI architecture.
 #pragma once
 
 #include "ActiveRunOutcome.h"
 #include "Spinner.h"
-#include "TuiInputDispatcher.h"
 #include "TuiWakeup.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime_state_internal.h"
@@ -18,14 +18,13 @@ namespace ava::tui {
 namespace runtime_input {
 struct RuntimeInput;
 }
+namespace terminal {
+class Context;
+}
 class ActiveRunInbox;
 class ActiveRunEvents;
-class Composer;
 class PendingAttachments;
-class RuntimeActionController;
-class RuntimeNavigationController;
 class RuntimePromptCoordinator;
-class RuntimePromptStashController;
 class RuntimePluginUiCoordinator;
 class RuntimeRenderer;
 class RuntimeMermaidPresentationController;
@@ -33,85 +32,103 @@ class RuntimeSubagentWorkspaceController;
 class SessionTransitionCoordinator;
 class TranscriptSearchController;
 class TuiEventLoop;
-enum class TuiAction;
 enum class PromptServiceOutcome;
-struct InputEvent;
+struct TuiActiveNonblockingCommandDispatchResult;
 
+// TUI-thread cancellation policy; only an observed signal produces signal exit status.
 enum class ActiveRunCancel
 {
-  Stop,
-  Close,
-  TerminalSignal
+  Stop, // Stop this run while leaving the session available.
+  Close, // Stop and leave after the worker settles.
+  TerminalSignal // Close after a signal, retaining its distinct exit status.
 };
 
-namespace detail {
-enum class ActiveRunCancelDisposition
-{
-  ClearDraftSelection,
-  ClearTranscriptSelection,
-  RequestStop,
-};
-
-[[nodiscard]] ActiveRunCancelDisposition active_run_cancel_disposition(bool has_draft_selection, bool has_transcript_selection) noexcept;
-
-} // namespace detail
-
-// The session owns this stable TUI-thread operation and all borrowed collaborators.
-// Producers retain only synchronized inbox/request values. Shutdown retires prompt
-// callbacks and plugin waits before joining, while every collaborator is alive.
+// Session owns this stable TUI-thread lifecycle owner. Its collaborators outlive
+// it. ActiveRunInput handles ordinary keys; this owner keeps prompt claims next
+// to worker cancellation so a permission Escape publishes stop before release.
+// Workers retain synchronized inbox/request values, never presentation objects.
 class ActiveRun final
 {
  public:
-  ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
-            RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
-            RuntimeNavigationController& navigation, RuntimeActionController& action_controller, TranscriptSearchController& transcript_search,
+  ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeRenderer& renderer,
+            RuntimePromptCoordinator& prompt_coordinator, RuntimePluginUiCoordinator& plugin_ui, TranscriptSearchController& transcript_search,
             RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid,
-            PendingAttachments& attachments);
+            PendingAttachments& attachments, terminal::Context& terminal_context);
   ~ActiveRun();
   ActiveRun(ActiveRun const&) = delete;
   ActiveRun& operator=(ActiveRun const&) = delete;
   ActiveRun(ActiveRun&&) = delete;
   ActiveRun& operator=(ActiveRun&&) = delete;
 
+  // TUI thread: start only while inactive. Submission history is recorded by the caller.
   [[nodiscard]] bool start(std::string submitted);
-  // Called in the session control stage and again after decoding retained input.
-  // Inactive operations leave signals for the idle/session policy. Never call
-  // from a timer callback: this can retire prompts and release waiting workers.
-  // Handled consumes any input decoded before a claimed signal. Failure means
-  // the control action could not render; Pass leaves retained input available.
-  [[nodiscard]] TuiInputOutcome service_control();
   [[nodiscard]] RuntimeEventDrainResult consume(std::size_t max_events = 256);
-  [[nodiscard]] bool handle_input(runtime_input::RuntimeInput const& input);
+  // TUI thread: arbitrate worker prompts, plugin dialogs and the atomic prompt/search
+  // race before ordinary input. No value leaves the key for ActiveRunInput.
+  [[nodiscard]] std::optional<bool> handle_modal_input(runtime_input::RuntimeInput const& input);
+  // TUI thread: a ready result joins, freezes admission, drains, settles and retires
+  // in this call. No value means the worker has not published completion yet.
   [[nodiscard]] std::optional<ActiveRunOutcome> complete();
   [[nodiscard]] bool cancel(ActiveRunCancel reason);
-  [[nodiscard]] bool active() const { return phase_ != Phase::Idle; }
-  // Preserve terminal buffering once completion publishes, including while its
-  // frozen final events are drained over subsequent application turns.
+  [[nodiscard]] bool active() const { return operation_.has_value(); }
+  // A published completion is consumed before polling another terminal key.
   [[nodiscard]] bool accepts_input() const;
   [[nodiscard]] bool has_pending_updates();
   ActiveRunOutcome shutdown() noexcept;
 
-  // Submission bodies, result/event authority and borrowed projection contain
-  // arbitrary user data; generated traversal must not print those aggregates.
+  // Active input calls these on the TUI thread. No queue or inbox reference escapes.
+  // Stop is published before any queued prompt waiter is released.
+  [[nodiscard]] bool request_stop();
+  // Close retains the worker until completion/shutdown joins it; no new input is admitted.
+  void request_close_after_submit();
+  // Return true only after the backend accepted the text; false publishes the reason.
+  [[nodiscard]] bool queue_message(std::string message, bool steering);
+  // Transfer a restored message to the editor, or publish an unavailable/error status.
+  [[nodiscard]] std::optional<TuiRestoredQueuedMessage> restore_message();
+  // Execute only the backend's permitted active command after completion gating.
+  [[nodiscard]] TuiActiveNonblockingCommandDispatchResult dispatch_command(ComposerSnapshot const& completion, std::string const& command);
+
+  // Submission bodies, result/event authority and borrowed projection contain user data.
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
-  // TUI thread: consume editor feedback at its dispatch stage before rendering.
-  [[nodiscard]] bool apply_composer_result(ComposerInputResult result);
-  enum class Phase
+  // TUI-owned resources for exactly one submission. The worker uses only copied
+  // endpoints. Shutdown/complete must join it before destroying this value.
+  struct Operation
   {
-    Idle,
-    Running,
-    Finalizing
+    // Copied producer endpoints retain this mailbox; retirement rejects late publications.
+    std::shared_ptr<ActiveRunInbox> inbox;
+    // TUI-only reducer accumulates event authority until final settlement.
+    std::unique_ptr<ActiveRunEvents> events;
+    // TUI thread joins after retiring callbacks which can borrow worker-local data.
+    std::future<void> worker;
+    // Immutable submitted text retained for receipt filtering and fallback projection.
+    ava::core::NoLogString submitted;
+    // Backend queue capabilities live until finish receipts have been collected.
+    std::optional<TuiActiveRunQueues> active_queues;
+    // TUI thread records launch time for final assistant metadata.
+    std::chrono::steady_clock::time_point turn_started_at;
+    // Chosen before launch; command receipts decide whether output enters conversation.
+    bool is_command_submission = false;
+    // TUI input/control closes admission while allowing worker settlement.
+    bool close_after_submit = false;
+    // TUI rendering failure survives cleanup until its exit outcome is captured.
+    bool terminal_write_failed = false;
+    // Only real signal cancellation sets this; descriptor closure does not.
+    bool terminal_signal_received = false;
+    // Set before calling finish so exceptional shutdown never invokes it twice.
+    bool queues_finished = false;
+    // Queue receipt failure requires session exit even if terminal writes still work.
+    bool completion_failed = false;
+    // Owned event authority and submitted text must never enter generated diagnostics.
+    AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
   };
+
   [[nodiscard]] bool handle_search_input_event(runtime_input::RuntimeInput const& input);
-  [[nodiscard]] bool dispatch_active_input(runtime_input::RuntimeInput const& input);
   [[nodiscard]] RuntimeEventDrainResult drain_events(std::size_t max_events);
-  [[nodiscard]] bool request_stop();
-  void request_close_after_submit();
   [[nodiscard]] bool stop_requested() const;
   void before_prompt();
-  [[nodiscard]] bool service_prompt();
+  void service_prompt();
   [[nodiscard]] bool apply_prompt_outcome(PromptServiceOutcome outcome);
   [[nodiscard]] bool refresh_plugin_surface_fit();
   [[nodiscard]] bool render();
@@ -121,74 +138,28 @@ class ActiveRun final
   void apply_non_transcript_event_authority();
   void upsert_stopping_activity();
   void settle_turn_activity();
-  [[nodiscard]] ActiveRunOutcome settle_completion();
-  void begin_completion(TuiSubmitResult result);
+  [[nodiscard]] ActiveRunOutcome settle_completion(TuiSubmitResult const& result, bool session_changed);
+  // Capture both signal and terminal failure before operation reset discards flags.
+  [[nodiscard]] ActiveRunOutcome exit_outcome() const;
   void retire_operation();
   void finish_queues();
   static void submit_worker(TuiFrontEnd* frontend, std::shared_ptr<ActiveRunInbox> inbox, std::string submitted, TuiSubmitContext context);
-  // Ordered input-handling decomposition. handle_input() dispatches to these
-  // focused precedence handlers in the exact order listed below; each returns
-  // Unhandled when it does not claim the input so dispatch falls through.
-  enum class InputHandling
-  {
-    Unhandled,
-    Handled,
-    RenderFailed
-  };
-
-  [[nodiscard]] bool is_action(InputEvent const& event, TuiAction action) const;
-  [[nodiscard]] static InputHandling to_input_handling(bool render_result);
-
-  [[nodiscard]] ComposerSnapshot const& completion_snapshot();
-  [[nodiscard]] bool restore_latest_queued_message();
-  [[nodiscard]] std::optional<bool> run_active_command();
-  [[nodiscard]] std::optional<bool> reject_disabled_visible_completion();
-  [[nodiscard]] bool queue_active_draft(bool follow_up_only);
-
-  InputHandling handle_preemptive_input(runtime_input::RuntimeInput const& active_input);
-  InputHandling handle_completion_acceptance(runtime_input::RuntimeInput const& active_input);
-  InputHandling handle_active_command_input(runtime_input::RuntimeInput const& active_input);
-  InputHandling handle_composer_edit(runtime_input::RuntimeInput const& active_input);
-  InputHandling handle_navigation_input(runtime_input::RuntimeInput const& active_input);
-  InputHandling handle_navigation_next_input(runtime_input::RuntimeInput const& active_input);
-  InputHandling handle_mouse_input(runtime_input::RuntimeInput const& active_input);
-  InputHandling handle_restricted_toggle_input(runtime_input::RuntimeInput const& active_input);
 
   TuiFrontEnd& frontend_;
   RuntimePresentationState& presentation_state_;
-  Composer& draft_state_;
   RuntimeRenderer& renderer_;
   RuntimePromptCoordinator& prompt_coordinator_;
-  RuntimePromptStashController& prompt_stash_;
   RuntimePluginUiCoordinator& plugin_ui_;
-  RuntimeNavigationController& navigation_;
-  RuntimeActionController& action_controller_;
   TranscriptSearchController& transcript_search_;
   RuntimeSubagentWorkspaceController& subagent_workspace_;
   SessionTransitionCoordinator& transitions_;
   RuntimeMermaidPresentationController& mermaid_;
   PendingAttachments& attachments_;
-
+  // Session's terminal context outlives this owner; only the TUI thread uses it.
+  terminal::Context& terminal_context_;
   TuiWakeup wakeup_;
-  // Shared ownership lets copied producer/audit endpoints outlive registration;
-  // retirement rejects late publication without exposing any presentation state.
-  std::shared_ptr<ActiveRunInbox> inbox_;
-  std::unique_ptr<ActiveRunEvents> events_;
-  std::future<void> worker_;
-  ava::core::NoLogString submitted_;
-  std::optional<TuiActiveRunQueues> active_queues_;
-  std::optional<TuiSubmitResult> result_;
-  std::chrono::steady_clock::time_point turn_started_at_;
-  Phase phase_ = Phase::Idle;
-  bool is_command_submission_ = false;
-  bool close_after_submit_ = false;
-  bool terminal_write_failed_ = false;
-  bool terminal_signal_received_ = false;
-  bool session_changed_ = false;
-  bool queues_finished_ = false;
-  bool completion_failed_ = false;
-  bool final_projection_serviced_ = false;
+  // Absent while idle. Reset only after callback retirement and worker join.
+  std::optional<Operation> operation_;
   Spinner spinner_;
 };
-
 } // namespace ava::tui
