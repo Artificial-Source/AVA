@@ -50,6 +50,7 @@ add_library(ava_tui
   "tool_card_task_job.cpp"
   "tool_cards.cpp"
   "TuiFrontEnd.cpp"
+  "TuiSession.cpp"
 )
 
 target_link_libraries(ava_tui

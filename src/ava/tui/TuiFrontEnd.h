@@ -14,6 +14,9 @@ struct TuiRuntimeOptions;
 
 class TuiFrontEnd : public frontend::FrontEnd
 {
+  // Composition calls the existing protected frontend authority boundary.
+  friend class TuiSession;
+
  protected:
   TuiKeyBindings key_bindings_;
   TuiRuntimeOptions options_;
