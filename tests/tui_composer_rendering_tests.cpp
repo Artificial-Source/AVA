@@ -1248,7 +1248,18 @@ bool test_detached_completion_publish_preserves_numbered_window()
   bool const attached_contract = footer_queued && full_queued && later_footer_queued && painting_deferred && batch_painted && full_dominated_footer &&
                                  handoff_queued && handoff_still_deferred && handoff_painted && handoff_visible;
   expect(attached_contract, "attached renderer defers urgent painting to the batch, retains Full over Footer, and paints synchronously for a handoff");
-  return passed && attached_contract;
+  // Crossing a frame deadline during input must paint without another service_due pass.
+  presentation.screen().transcript.push_back(ava::tui::TranscriptItem{.label = "ava", .text = "DEADLINE-CROSSED-DURING-INPUT"});
+  ++presentation.screen().transcript_generation;
+  bool const scheduled = renderer.request_render();
+  std::this_thread::sleep_until(std::chrono::steady_clock::now() + ava::tui::FrameScheduler::kFrameInterval);
+  bool const painted_without_timer_dispatch = renderer.paint_ready_frame();
+  bool const deadline_visible =
+      tui_test_support::join_visible_lines(renderer.painted_frame().surfaces).find("DEADLINE-CROSSED-DURING-INPUT") != std::string::npos;
+  bool const no_stale_frame_timer = !event_loop.loop().has_due_work();
+  expect(scheduled && painted_without_timer_dispatch && deadline_visible && no_stale_frame_timer,
+         "end-of-batch paint consumes its elapsed deadline without an extra ready-only turn");
+  return passed && attached_contract && scheduled && painted_without_timer_dispatch && deadline_visible && no_stale_frame_timer;
 }
 
 bool test_message_boundary_navigation_on_empty_or_fitting_transcript_is_harmless()

@@ -154,6 +154,8 @@ class RuntimeRenderer final
   [[nodiscard]] bool paint(FrameRenderKind kind, bool freeze_transcript_layout);
   [[nodiscard]] bool prepare_transcript_selection_authority();
   void synchronize_timers();
+  // TUI timer callback: supplies the wake deadline only. The paint stage checks
+  // the scheduler clock itself, including deadlines crossed during input decode.
   void frame_due(std::chrono::steady_clock::time_point now);
   void indicator_due(std::chrono::steady_clock::time_point now);
   void autoscroll_due(std::chrono::steady_clock::time_point now);
@@ -172,7 +174,6 @@ class RuntimeRenderer final
   TuiFrontEnd* frontend_;
   FrameScheduler frame_scheduler_;
   bool loop_attached_ = false;
-  bool frame_ready_ = false;
   // Full urgent invalidation synchronizes detached layout; scheduled paints keep
   // the existing compatible frozen authority. Footer invalidation cannot thaw it.
   bool pending_thaw_ = false;

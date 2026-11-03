@@ -1269,13 +1269,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
     if (loop_.stopped() || terminal_closing_)
       continue;
 
-    // Existing bounded decoder subreads can cross deadlines. Service due work
-    // even under continuous input, then revisit application callbacks next turn.
-    auto const timer_work = loop_.has_due_work();
-    loop_.service_due();
-    service_presentations();
-    if (loop_.stopped())
-      break;
+    // Painting checks its own deadline, including time spent decoding input.
+    // Other timers that became due get the next control-first turn.
     if (!terminal_closing_ && !renderer_.paint_ready_frame())
     {
       // The renderer only queued prompt paints earlier in this turn. Report the
@@ -1284,8 +1279,7 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       apply_input_outcome(TuiInputOutcome::Failure);
       break;
     }
-    auto const runnable =
-        terminal_closing_ || application_pending || input_pending || timer_work || active_run_controller_.has_pending_updates() || loop_.has_due_work();
+    auto const runnable = terminal_closing_ || application_pending || input_pending || active_run_controller_.has_pending_updates() || loop_.has_due_work();
     loop_.wait(runnable ? TuiWaitMode::ReadyOnly : TuiWaitMode::Block);
   }
 

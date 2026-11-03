@@ -141,7 +141,7 @@ void RuntimeRenderer::synchronize_timers()
     armed_autoscroll_deadline_.reset();
     return;
   }
-  auto const frame = frame_ready_ ? std::nullopt : frame_scheduler_.deadline();
+  auto const frame = pending_thaw_ ? std::nullopt : frame_scheduler_.deadline();
   if (frame != armed_frame_deadline_)
   {
     armed_frame_deadline_ = frame;
@@ -172,9 +172,8 @@ void RuntimeRenderer::synchronize_timers()
 
 void RuntimeRenderer::frame_due(std::chrono::steady_clock::time_point)
 {
-  auto lock = lock_ui();
-  armed_frame_deadline_.reset();
-  frame_ready_ = frame_scheduler_.pending() && !frame_scheduler_.failed();
+  // Waking the loop is sufficient. Keep the registered deadline until paint
+  // consumes it, so intervening invalidations do not re-arm an expired timer.
 }
 
 void RuntimeRenderer::indicator_due(std::chrono::steady_clock::time_point now)
@@ -386,7 +385,6 @@ bool RuntimeRenderer::render()
   if (frame_scheduler_.failed())
     return false;
   frame_scheduler_.request(FrameRenderKind::Full, std::chrono::steady_clock::now());
-  frame_ready_ = true;
   pending_thaw_ = true;
   synchronize_timers();
   return true;
@@ -402,7 +400,6 @@ bool RuntimeRenderer::paint_for_handoff()
   frame_scheduler_.discard_pending();
   frame_timer_.cancel();
   armed_frame_deadline_.reset();
-  frame_ready_ = false;
   pending_thaw_ = false;
   auto const succeeded = render_full(false);
   frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
@@ -497,15 +494,14 @@ bool RuntimeRenderer::paint_ready_frame()
   synchronize_timers();
   if (frame_scheduler_.failed())
     return false;
-  if (!frame_ready_)
+  // An urgent render keeps its existing end-of-batch priority. Ordinary
+  // requests become paintable by time, without another timer-dispatch turn.
+  auto const kind = pending_thaw_ ? frame_scheduler_.take_pending() : frame_scheduler_.take_due(std::chrono::steady_clock::now());
+  if (!kind)
     return true;
-  frame_ready_ = false;
   auto const freeze_transcript_layout = !std::exchange(pending_thaw_, false);
   frame_timer_.cancel();
   armed_frame_deadline_.reset();
-  auto const kind = frame_scheduler_.take_pending();
-  if (!kind)
-    return true;
   auto const succeeded = paint(*kind, freeze_transcript_layout);
   frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
   synchronize_timers();
