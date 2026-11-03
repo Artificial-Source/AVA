@@ -3,6 +3,7 @@
 #include "ActiveRun.h"
 #include "BranchSummaryOperation.h"
 #include "Composer.h"
+#include "PendingAttachments.h"
 #include "SelectorHost.h"
 #include "SelectorInputController.h"
 #include "SessionSelector.h"
@@ -23,6 +24,8 @@
 #include "runtime_submit_internal.h"
 #include "runtime_transcript_search_internal.h"
 #include "runtime_views_internal.h"
+#include "session_grants.h"
+#include "ava/debug/print_members_on.h"
 
 namespace ava::tui {
 
@@ -81,6 +84,8 @@ class TuiSession final
   // Every timer/notification client below retires before the loop resources.
   TuiEventLoop loop_;
   RuntimePresentationState presentation_state_;
+  PendingAttachments attachments_;
+  TuiSessionGrantRegistry command_session_grants_;
   RuntimePluginUiCoordinator plugin_ui_;
   bool terminal_write_failed_ = false;
   bool terminal_signal_received_ = false;

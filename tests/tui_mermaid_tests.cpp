@@ -189,9 +189,9 @@ void test_runtime_projection_reconciliation_and_stale_fail_closed()
   auto state = std::make_shared<FakeBridgeState>();
   tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  auto& snapshot = presentation.snapshot;
+  auto& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, presentation.sidebar, composer);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, presentation.sidebar(), composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), snapshot, composer, renderer);
   ava::tui::SelectorHost selectors(snapshot);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
@@ -240,9 +240,9 @@ void test_runtime_projection_bounds_cap_and_detached_anchor_geometry()
   auto state = std::make_shared<FakeBridgeState>();
   tui_test_support::TuiFrontEndFixture frontend;
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
-  auto& snapshot = presentation.snapshot;
+  auto& snapshot = presentation.screen();
   ava::tui::Composer composer;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, presentation.sidebar, composer);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), snapshot, presentation.sidebar(), composer);
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), snapshot, composer, renderer);
   ava::tui::SelectorHost selectors(snapshot);
   ava::tui::TranscriptSearchController search(presentation, renderer, navigation, selectors);
@@ -268,10 +268,12 @@ void test_runtime_projection_bounds_cap_and_detached_anchor_geometry()
 
   auto anchor_item = ava::tui::TranscriptItem{.label = "ava", .text = "before\n```mermaid\nsource\n```\nafter"};
   std::vector<ava::tui::TranscriptItem> transcript;
-  for (std::size_t index = 0; index < 12; ++index) transcript.push_back({.label = "ava", .text = "older " + std::to_string(index)});
+  for (std::size_t index = 0; index < 12; ++index)
+    transcript.push_back({.label = "ava", .text = "older " + std::to_string(index)});
   auto const anchor_index = transcript.size();
   transcript.push_back(anchor_item);
-  for (std::size_t index = 0; index < 12; ++index) transcript.push_back({.label = "ava", .text = "newer " + std::to_string(index)});
+  for (std::size_t index = 0; index < 12; ++index)
+    transcript.push_back({.label = "ava", .text = "newer " + std::to_string(index)});
   auto const ordinary = ava::tui::detail::render_transcript_layout(transcript, 32);
   auto message = std::ranges::find(ordinary.message_item_indices, anchor_index);
   auto const position = static_cast<std::size_t>(message - ordinary.message_item_indices.begin());

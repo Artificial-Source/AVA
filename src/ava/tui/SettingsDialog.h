@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime_views_internal.h"
+#include "ava/debug/print_members_on.h"
 
 #include <variant>
 

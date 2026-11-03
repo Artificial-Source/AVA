@@ -9,7 +9,6 @@
 #include "ava/tui/theme.h"
 
 #include <algorithm>
-#include <functional>
 #include <utility>
 
 namespace ava::tui {
@@ -95,16 +94,6 @@ QueuedRuntimeEvent::QueuedRuntimeEvent(ava::event::RuntimeEvent event_in, ava::e
 {
 }
 
-ava::event::EventEnvelopeSink RuntimeEventQueue::envelope_sink()
-{
-  return std::bind_front(&RuntimeEventQueue::enqueue_envelope, this);
-}
-
-ava::agent::SubagentLaunchSink RuntimeEventQueue::subagent_launch_sink()
-{
-  return std::bind_front(&RuntimeEventQueue::enqueue_subagent_launch, this);
-}
-
 ava::core::VoidResult RuntimeEventQueue::enqueue_envelope(ava::event::EventEnvelope const& envelope)
 {
   std::lock_guard lock(mutex);
@@ -166,20 +155,20 @@ bool RuntimeEventQueue::received_any() const
 // after the concrete frontend has finished construction, making virtual backend
 // reads safe here.
 RuntimePresentationState::RuntimePresentationState(TuiFrontEnd* frontend, std::string const& initial_keybind_status)
-    : snapshot(initial_snapshot(frontend, initial_keybind_status)),
+    : snapshot_(initial_snapshot(frontend, initial_keybind_status)),
       frontend_(frontend),
       applied_slash_catalog_generation_(frontend->options().slash_catalog_generation),
       applied_workspace_catalog_generation_(frontend->options().workspace_catalog_generation),
-      sidebar{.todos = frontend->read_committed_todos(), .mode = snapshot.mode, .version = frontend->options().app_version}
+      sidebar_{.todos = frontend->read_committed_todos(), .mode = snapshot_.mode, .version = frontend->options().app_version}
 {
-  snapshot.session_id = frontend->read_committed_session_id();
+  snapshot_.session_id = frontend->read_committed_session_id();
 }
 
 void RuntimePresentationState::refresh_prompt_metadata()
 {
   auto const mode = frontend_->prompt_metadata().mode_refresh();
-  snapshot.mode = mode.value;
-  sidebar.mode = mode.value;
+  snapshot_.mode = mode.value;
+  sidebar_.mode = mode.value;
 }
 
 void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& frontend, TuiCatalogDelivery delivery)
@@ -187,21 +176,21 @@ void RuntimePresentationState::apply_catalog_delivery(TuiFrontEnd const& fronten
   bool completion_sources_changed = false;
   if (!delivery.slash_catalog_generation || !applied_slash_catalog_generation_ || *delivery.slash_catalog_generation != *applied_slash_catalog_generation_)
   {
-    snapshot.slash_commands = std::move(delivery.slash_commands);
+    snapshot_.slash_commands = std::move(delivery.slash_commands);
     applied_slash_catalog_generation_ = delivery.slash_catalog_generation;
     completion_sources_changed = true;
   }
   if (!delivery.workspace_catalog_generation || !applied_workspace_catalog_generation_ ||
       *delivery.workspace_catalog_generation != *applied_workspace_catalog_generation_)
   {
-    snapshot.file_references = std::move(delivery.file_references);
+    snapshot_.file_references = std::move(delivery.file_references);
     applied_workspace_catalog_generation_ = delivery.workspace_catalog_generation;
     completion_sources_changed = true;
   }
   if (completion_sources_changed)
   {
-    refresh_local_palette_hints(snapshot, frontend.key_bindings());
-    ++snapshot.file_references_generation;
+    refresh_local_palette_hints(snapshot_, frontend.key_bindings());
+    ++snapshot_.file_references_generation;
   }
 }
 
@@ -220,7 +209,7 @@ void RuntimePresentationState::apply_boundary_data(TuiFrontEnd const& frontend, 
   if (reads.catalog)
     apply_catalog_delivery(frontend, std::move(*reads.catalog));
   if (reads.todos)
-    sidebar.todos = std::move(*reads.todos);
+    sidebar_.todos = std::move(*reads.todos);
 }
 
 void RuntimePresentationState::refresh_after_backend_action(TuiFrontEnd& frontend)
@@ -231,37 +220,37 @@ void RuntimePresentationState::refresh_after_backend_action(TuiFrontEnd& fronten
 void RuntimePresentationState::apply_local_key_bindings(TuiFrontEnd& frontend, TuiKeyBindings bindings)
 {
   frontend.key_bindings() = std::move(bindings);
-  snapshot.active_run_hint = runtime_views::active_run_hint_for(frontend.key_bindings());
-  refresh_local_palette_hints(snapshot, frontend.key_bindings());
-  refresh_local_overview_hints(snapshot, frontend);
+  snapshot_.active_run_hint = runtime_views::active_run_hint_for(frontend.key_bindings());
+  refresh_local_palette_hints(snapshot_, frontend.key_bindings());
+  refresh_local_overview_hints(snapshot_, frontend);
 }
 
 void RuntimePresentationState::apply_local_display_settings(TuiFrontEnd const& frontend, TuiLocalDisplaySettings settings)
 {
-  snapshot.custom_themes = std::move(settings.custom_themes);
-  snapshot.show_images = settings.show_images;
-  snapshot.image_width_cells = settings.image_width_cells;
-  snapshot.cursor = settings.cursor;
-  if (snapshot.mermaid_config_epoch != settings.mermaid_config_epoch || snapshot.mermaid_enabled != settings.mermaid_enabled)
+  snapshot_.custom_themes = std::move(settings.custom_themes);
+  snapshot_.show_images = settings.show_images;
+  snapshot_.image_width_cells = settings.image_width_cells;
+  snapshot_.cursor = settings.cursor;
+  if (snapshot_.mermaid_config_epoch != settings.mermaid_config_epoch || snapshot_.mermaid_enabled != settings.mermaid_enabled)
   {
-    snapshot.mermaid_config_epoch = settings.mermaid_config_epoch;
-    snapshot.mermaid_enabled = settings.mermaid_enabled;
-    snapshot.mermaid_projection.reset();
-    ++snapshot.transcript_generation;
+    snapshot_.mermaid_config_epoch = settings.mermaid_config_epoch;
+    snapshot_.mermaid_enabled = settings.mermaid_enabled;
+    snapshot_.mermaid_projection.reset();
+    ++snapshot_.transcript_generation;
   }
-  if (!snapshot.show_images)
+  if (!snapshot_.show_images)
   {
-    for (auto& attachment : snapshot.pending_attachments)
+    for (auto& attachment : snapshot_.pending_attachments)
       attachment.preview.reset();
   }
-  refresh_local_palette_hints(snapshot, frontend.key_bindings());
-  refresh_local_overview_hints(snapshot, frontend);
+  refresh_local_palette_hints(snapshot_, frontend.key_bindings());
+  refresh_local_overview_hints(snapshot_, frontend);
 }
 
 void RuntimePresentationState::initialize_startup_overview(TuiFrontEnd const& frontend, StartupOverviewSnapshot overview)
 {
-  snapshot.startup_overview = std::move(overview);
-  refresh_local_overview_hints(snapshot, frontend);
+  snapshot_.startup_overview = std::move(overview);
+  refresh_local_overview_hints(snapshot_, frontend);
 }
 
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, SelectorHost& selectors)
@@ -290,52 +279,42 @@ void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, Selec
   selectors.replace(std::move(view));
 }
 
-bool RuntimePresentationState::prepare_session_transition(std::string const& committed_session_id)
-{
-  if (snapshot.session_id == committed_session_id)
-    return false;
-  static_cast<void>(command_session_grants.clear_for_session_transition(snapshot.session_id, committed_session_id));
-  pending_image_attachments.clear();
-  snapshot.pending_attachments.clear();
-  return true;
-}
-
 void RuntimePresentationState::reset_session_projection(bool close_overview)
 {
-  snapshot.transcript.clear();
-  ++snapshot.transcript_generation;
-  snapshot.command_output.reset();
-  snapshot.tool_index.clear();
-  snapshot.evicted_tool_index_identities.clear();
-  snapshot.next_tool_index_sequence = 0;
-  snapshot.queued_messages.clear();
-  snapshot.permission_prompt.reset();
-  snapshot.question_prompt.reset();
-  snapshot.sidebar.reset();
-  snapshot.sidebar_drawer_visible = false;
-  snapshot.sidebar_drawer_scroll_offset = 0;
-  snapshot.input.clear();
-  snapshot.input_cursor = 0;
-  snapshot.input_selection_start = std::string::npos;
-  snapshot.input_selection_end = std::string::npos;
-  snapshot.selected_slash_command_index = 0;
-  snapshot.slash_palette_suppressed = false;
-  snapshot.path_completion_force_active = false;
-  snapshot.draft_scroll_offset = 0;
-  snapshot.reasoning_feedback.reset();
-  snapshot.local_command_feedback.reset();
+  snapshot_.transcript.clear();
+  ++snapshot_.transcript_generation;
+  snapshot_.command_output.reset();
+  snapshot_.tool_index.clear();
+  snapshot_.evicted_tool_index_identities.clear();
+  snapshot_.next_tool_index_sequence = 0;
+  snapshot_.queued_messages.clear();
+  snapshot_.permission_prompt.reset();
+  snapshot_.question_prompt.reset();
+  snapshot_.sidebar.reset();
+  snapshot_.sidebar_drawer_visible = false;
+  snapshot_.sidebar_drawer_scroll_offset = 0;
+  snapshot_.input.clear();
+  snapshot_.input_cursor = 0;
+  snapshot_.input_selection_start = std::string::npos;
+  snapshot_.input_selection_end = std::string::npos;
+  snapshot_.selected_slash_command_index = 0;
+  snapshot_.slash_palette_suppressed = false;
+  snapshot_.path_completion_force_active = false;
+  snapshot_.draft_scroll_offset = 0;
+  snapshot_.reasoning_feedback.reset();
+  snapshot_.local_command_feedback.reset();
   // Expanded overview is process-local presentation; close on session switch.
   if (close_overview)
-    snapshot.startup_overview.reset();
+    snapshot_.startup_overview.reset();
 }
 
 void RuntimePresentationState::finish_session_transition(std::string committed_session_id)
 {
-  sidebar.activity.clear();
-  sidebar.modified_files.clear();
-  sidebar.todos.clear();
-  sidebar.session_entry_count.reset();
-  snapshot.session_id = std::move(committed_session_id);
+  sidebar_.activity.clear();
+  sidebar_.modified_files.clear();
+  sidebar_.todos.clear();
+  sidebar_.session_entry_count.reset();
+  snapshot_.session_id = std::move(committed_session_id);
 }
 
 }  // namespace ava::tui

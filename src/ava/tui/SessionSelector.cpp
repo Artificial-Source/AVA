@@ -20,7 +20,7 @@ bool SessionSelector::open()
 {
   cancel_confirmation();
   selectors_.open(ActiveSelectList::Session, frontend_.session_selector_view());
-  presentation_state_.snapshot.status = "session selector opened";
+  presentation_state_.screen().status = "session selector opened";
   renderer_.transcript().request_live_tail();
   return renderer_.request_render();
 }
@@ -34,7 +34,7 @@ void SessionSelector::preserve_selection(SelectListInputResult const& input, Sel
 {
   cancel_confirmation();
   selectors_.replace_preserving_selection(std::move(view), input.selected_item_index, input.query);
-  presentation_state_.snapshot.status = std::move(status);
+  presentation_state_.screen().status = std::move(status);
 }
 
 void SessionSelector::browse(SelectListInputResult const& input)
@@ -67,13 +67,13 @@ std::optional<std::string> SessionSelector::draft_command(SelectListInputResult 
   auto const* item = selectors_.selected_item(input.selected_item_index);
   if (!item || !item->enabled || item->value.empty())
   {
-    presentation_state_.snapshot.status = rename ? "session cannot be renamed from this row" : "session cannot be labeled from this row";
+    presentation_state_.screen().status = rename ? "session cannot be renamed from this row" : "session cannot be labeled from this row";
     terminal_context_.beep();
     return std::nullopt;
   }
   auto const selected_value = item->value;
   selectors_.close();
-  presentation_state_.snapshot.status = rename ? "session rename draft ready" : "session labels draft ready";
+  presentation_state_.screen().status = rename ? "session rename draft ready" : "session labels draft ready";
   return std::string(rename ? "/sessions rename " : "/sessions labels ") + selected_value + " ";
 }
 
@@ -82,7 +82,7 @@ core::Result<std::string> SessionSelector::resolve(SelectListInputResult const& 
   cancel_confirmation();
   auto const* item = selectors_.selected_item(input.selected_item_index);
   std::string selected_value = item ? item->value : std::string{};
-  return dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "opening session…",
+  return dispatch_tui_selector_authority(presentation_state_.screen(), selectors_, "opening session…",
                                          std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
                                          std::bind_front(&TuiFrontEnd::on_session_selected, &frontend_, std::move(selected_value)));
 }
@@ -93,14 +93,14 @@ std::optional<core::Result<std::string>> SessionSelector::navigate_branch(Select
   auto const* item = selectors_.selected_item(input.selected_item_index);
   if (!item || !item->enabled || item->value.empty())
   {
-    presentation_state_.snapshot.status = "session branch navigation unavailable from this row";
+    presentation_state_.screen().status = "session branch navigation unavailable from this row";
     terminal_context_.beep();
     return std::nullopt;
   }
   auto const selected_value = item->value;
   auto callback =
       input.action == SelectListInputAction::BranchParent ? &TuiFrontEnd::on_session_selector_branch_parent : &TuiFrontEnd::on_session_selector_branch_child;
-  return dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "opening session…",
+  return dispatch_tui_selector_authority(presentation_state_.screen(), selectors_, "opening session…",
                                          std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
                                          std::bind_front(callback, &frontend_, selected_value));
 }
@@ -113,12 +113,12 @@ void SessionSelector::archive(SelectListInputResult const& input)
   {
     selectors_.close();
     archive_confirmation_.reset();
-    presentation_state_.snapshot.status = "view canceled";
+    presentation_state_.screen().status = "view canceled";
   }
   else if (!selected_item || !selected_item->enabled || selected_item->value.empty())
   {
     archive_confirmation_.reset();
-    presentation_state_.snapshot.status = "session cannot be archived or restored from this row";
+    presentation_state_.screen().status = "session cannot be archived or restored from this row";
     terminal_context_.beep();
   }
   else
@@ -127,7 +127,7 @@ void SessionSelector::archive(SelectListInputResult const& input)
     if (archive && selected_item->current)
     {
       archive_confirmation_.reset();
-      presentation_state_.snapshot.status = "switch sessions before archiving the active session";
+      presentation_state_.screen().status = "switch sessions before archiving the active session";
       terminal_context_.beep();
     }
     else if (archive_confirmation_ && archive_confirmation_->session_id == selected_item->value && archive_confirmation_->archive == archive)
@@ -140,14 +140,14 @@ void SessionSelector::archive(SelectListInputResult const& input)
       }
       else
       {
-        presentation_state_.snapshot.status = updated.error().format();
+        presentation_state_.screen().status = updated.error().format();
         terminal_context_.beep();
       }
     }
     else
     {
       archive_confirmation_ = PendingSessionArchiveAction{.session_id = selected_item->value, .archive = archive};
-      presentation_state_.snapshot.status = std::string("press ") + (noninvasive_archive ? "Ctrl+Backspace" : "Ctrl+D") + " again to " +
+      presentation_state_.screen().status = std::string("press ") + (noninvasive_archive ? "Ctrl+Backspace" : "Ctrl+D") + " again to " +
                                             (archive ? "archive " : "restore ") + selected_item->value;
     }
   }

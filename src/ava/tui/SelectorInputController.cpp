@@ -29,7 +29,7 @@ SelectListInputResult SelectorInputController::classify(runtime_input::RuntimeIn
   auto const& view = *selectors_.view();
   if (input.event.key == Key::MouseLeftPress || input.event.key == Key::MouseLeftClick)
   {
-    if (auto const clicked = select_list_selection_for_screen_position(presentation_state_.snapshot, input.event.mouse_row, input.event.mouse_column))
+    if (auto const clicked = select_list_selection_for_screen_position(presentation_state_.screen(), input.event.mouse_row, input.event.mouse_column))
     {
       // Settings mouse clicks change selection/highlight only; Enter confirms.
       // Other selectors keep existing mouse-confirm behavior.
@@ -59,11 +59,11 @@ void SelectorInputController::apply_scoped_update(core::Result<SelectListView> u
   if (updated)
   {
     selectors_.replace_preserving_selection(std::move(*updated), input.selected_item_index, input.query);
-    presentation_state_.snapshot.status = std::move(status);
+    presentation_state_.screen().status = std::move(status);
   }
   else
   {
-    presentation_state_.snapshot.status = updated.error().format();
+    presentation_state_.screen().status = updated.error().format();
     terminal_context_.beep();
   }
 }
@@ -78,7 +78,7 @@ bool SelectorInputController::handle_scoped_models(SelectListInputResult const& 
       auto const* item = selectors_.selected_item(input.selected_item_index);
       if (!item || !item->enabled || item->value.empty())
       {
-        presentation_state_.snapshot.status = "scoped model cannot be toggled from this row";
+        presentation_state_.screen().status = "scoped model cannot be toggled from this row";
         terminal_context_.beep();
       }
       else
@@ -95,7 +95,7 @@ bool SelectorInputController::handle_scoped_models(SelectListInputResult const& 
       auto const* item = selectors_.selected_item(input.selected_item_index);
       if (!item || item->value.empty())
       {
-        presentation_state_.snapshot.status = "provider toggle unavailable from this row";
+        presentation_state_.screen().status = "provider toggle unavailable from this row";
         terminal_context_.beep();
       }
       else
@@ -107,7 +107,7 @@ bool SelectorInputController::handle_scoped_models(SelectListInputResult const& 
       auto const* item = selectors_.selected_item(input.selected_item_index);
       if (!item || item->value.empty())
       {
-        presentation_state_.snapshot.status = "scoped model reorder unavailable from this row";
+        presentation_state_.screen().status = "scoped model reorder unavailable from this row";
         terminal_context_.beep();
       }
       else
@@ -118,10 +118,10 @@ bool SelectorInputController::handle_scoped_models(SelectListInputResult const& 
     case SelectListInputAction::ModelsSave: {
       auto saved = frontend_.on_scoped_model_save();
       if (saved)
-        presentation_state_.snapshot.status = *saved;
+        presentation_state_.screen().status = *saved;
       else
       {
-        presentation_state_.snapshot.status = saved.error().format();
+        presentation_state_.screen().status = saved.error().format();
         terminal_context_.beep();
       }
       return true;
@@ -146,10 +146,10 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
   auto const resolved_list = selectors_.kind();
   selectors_.close();
   if (resolved_list == ActiveSelectList::Overview)
-    presentation_state_.snapshot.startup_overview.reset();
+    presentation_state_.screen().startup_overview.reset();
   if (input.action == SelectListInputAction::Cancel)
   {
-    presentation_state_.snapshot.status = resolved_list == ActiveSelectList::Reasoning ? "thinking mode unchanged" : "view canceled";
+    presentation_state_.screen().status = resolved_list == ActiveSelectList::Reasoning ? "thinking mode unchanged" : "view canceled";
     return SelectorInputRequest::Handled;
   }
   switch (resolved_list)
@@ -157,37 +157,37 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
     case ActiveSelectList::Hotkeys:
       if (!selected_value.empty())
       {
-        presentation_state_.snapshot.status = "keybinding edit command drafted";
+        presentation_state_.screen().status = "keybinding edit command drafted";
         return std::pair{SelectorInputTextKind::DraftCommand, std::string("/keybindings set ") + selected_value + " "};
       }
       break;
     case ActiveSelectList::Model: {
-      auto selected = dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "switching model…",
+      auto selected = dispatch_tui_selector_authority(presentation_state_.screen(), selectors_, "switching model…",
                                                       std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
                                                       std::bind_front(&TuiFrontEnd::on_model_selected, &frontend_, std::move(selected_value)));
       if (selected)
       {
         presentation_state_.refresh_after_backend_action(frontend_);
-        presentation_state_.snapshot.status = std::move(*selected);
+        presentation_state_.screen().status = std::move(*selected);
         return SelectorInputRequest::OpenReasoning;
       }
-      presentation_state_.snapshot.status = selected.error().format();
+      presentation_state_.screen().status = selected.error().format();
       terminal_context_.beep();
       return SelectorInputRequest::Handled;
     }
     case ActiveSelectList::Reasoning: {
       auto level = selected_value == "default" ? std::optional<std::string>{} : std::optional<std::string>{std::move(selected_value)};
-      auto selected = dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "setting thinking mode…",
+      auto selected = dispatch_tui_selector_authority(presentation_state_.screen(), selectors_, "setting thinking mode…",
                                                       std::bind_front(&RuntimeRenderer::paint_for_handoff, &renderer_),
                                                       std::bind_front(&TuiFrontEnd::on_reasoning_selected, &frontend_, std::move(level)));
       if (selected)
       {
         presentation_state_.refresh_after_backend_action(frontend_);
-        presentation_state_.snapshot.status = std::move(*selected);
+        presentation_state_.screen().status = std::move(*selected);
       }
       else
       {
-        presentation_state_.snapshot.status = selected.error().format();
+        presentation_state_.screen().status = selected.error().format();
         terminal_context_.beep();
       }
       return SelectorInputRequest::Handled;
@@ -195,12 +195,12 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
     case ActiveSelectList::ForkUserTurn: {
       if (selected_value.empty())
       {
-        presentation_state_.snapshot.status = "selected user turn is unavailable";
+        presentation_state_.screen().status = "selected user turn is unavailable";
         terminal_context_.beep();
         return SelectorInputRequest::Handled;
       }
       // Paint truthful pending authority status before the blocking fork callback.
-      presentation_state_.snapshot.status = "forking session…";
+      presentation_state_.screen().status = "forking session…";
       if (!renderer_.paint_for_handoff())
         return SelectorInputRequest::RenderFailed;
       auto opened = frontend_.on_fork_user_turn_selected(selected_value);
@@ -213,7 +213,7 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
     case ActiveSelectList::CopyUserTurn: {
       auto decision = evaluate_copy_user_turn_selection(selected_value, std::bind_front(&TuiFrontEnd::on_read_user_turn_text, &frontend_),
                                                         runtime_transcript::copy_text_to_terminal_clipboard);
-      settle_local_command_status(presentation_state_.snapshot, decision.status);
+      settle_local_command_status(presentation_state_.screen(), decision.status);
       if (decision.beep)
         terminal_context_.beep();
       return SelectorInputRequest::Handled;
@@ -221,7 +221,7 @@ SelectorInputOutcome SelectorInputController::handle(SelectListInputResult const
     default:
       break;
   }
-  presentation_state_.snapshot.status = "view closed";
+  presentation_state_.screen().status = "view closed";
   return SelectorInputRequest::Handled;
 }
 

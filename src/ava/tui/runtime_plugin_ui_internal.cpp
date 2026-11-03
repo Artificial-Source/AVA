@@ -25,6 +25,9 @@ struct PendingPluginUiModal
   std::mutex mutex;
   std::condition_variable ready;
   std::optional<TuiPluginUiReply> reply;
+
+  // Internal-linkage synchronization state also contains arbitrary plugin replies.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 enum class PluginUiQueueRecordKind
@@ -38,7 +41,11 @@ struct PluginUiQueueRecord
   PluginUiQueueRecordKind kind = PluginUiQueueRecordKind::Request;
   std::uint64_t generation = 0;
   TuiPluginUiRequest request;
+  // The queue and waiting worker retain independent ownership until resolution.
   std::shared_ptr<PendingPluginUiModal> modal;
+
+  // Internal-linkage records retain arbitrary plugin request/reply content.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 bool callback_canceled(TuiPluginUiCancelCallback const& cancel_requested) noexcept
@@ -225,6 +232,10 @@ struct RuntimePluginUiCoordinatorState
   std::function<void()> after_enqueue_for_test;
   std::function<void(std::size_t)> after_queue_swap_for_test;
   TuiWakeup wakeup;
+
+  // Opaque synchronized transport contains arbitrary plugin messages, callback
+  // captures and mutex resources; it must not become generated debug output.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 namespace {

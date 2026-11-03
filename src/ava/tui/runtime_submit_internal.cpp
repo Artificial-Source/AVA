@@ -68,7 +68,7 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
 
 RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> forced_submission)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
   draft_state_.cancel_escape();
   std::optional<std::string> immediate_slash_submission;

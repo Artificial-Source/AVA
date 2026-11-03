@@ -2,6 +2,7 @@
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/Composer.h"
+#include "ava/tui/PendingAttachments.h"
 #include "ava/tui/SelectorHost.h"
 #include "ava/tui/SessionTransitionCoordinator.h"
 #include "ava/tui/TuiFrontEnd.h"
@@ -15,6 +16,7 @@
 #include "ava/tui/runtime_subagent_workspace_internal.h"
 #include "ava/tui/runtime_transcript_internal.h"
 #include "ava/tui/runtime_transcript_search_internal.h"
+#include "ava/tui/session_grants.h"
 #include "ava/session/attachments.h"
 #include "ava/core/Application.h"
 
@@ -143,41 +145,44 @@ void test_prompt_stash_runtime_controller()
     return ava::tui::TuiSubmitResult{};
   };
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), {});
+  ava::tui::PendingAttachments attachments(presentation.screen());
+  ava::tui::TuiSessionGrantRegistry grants;
   ava::tui::Composer draft_state;
-  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
-  ava::tui::SelectorHost active_list(presentation.snapshot);
-  ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings);
-  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, draft_state, renderer);
+  ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.screen(), presentation.sidebar(), draft_state);
+  ava::tui::SelectorHost active_list(presentation.screen());
+  ava::tui::RuntimePromptStashController controller(presentation, draft_state, renderer, active_list, key_bindings, attachments);
+  ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.screen(), draft_state, renderer);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_list);
-  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_list);
-  ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_list);
+  ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.screen(), active_list);
+  ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_list,
+                                                            attachments, grants);
   auto const transcript_unchanged = [&]() {
-    return presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().label == "ava" &&
-           presentation.snapshot.transcript.front().text == "backend transcript stays unchanged";
+    return presentation.screen().transcript.size() == 1 && presentation.screen().transcript.front().label == "ava" &&
+           presentation.screen().transcript.front().text == "backend transcript stays unchanged";
   };
 
   draft_state.replace_draft("attachment-owned draft", 4);
-  presentation.pending_image_attachments.push_back(ava::session::ImageAttachmentRef{});
+  attachments.stage(ava::session::ImageAttachmentRef{}, ava::tui::PendingAttachmentItem{});
   expect(controller.trigger() && draft_state.draft().text == "attachment-owned draft" && controller.stash().empty() && transcript_unchanged() &&
-             presentation.snapshot.status == "cannot stash a prompt while image attachments are pending",
+             presentation.screen().status == "cannot stash a prompt while image attachments are pending",
          "prompt stash rejects pending image attachments without draft, backend, or transcript mutation and reports the rejection");
-  presentation.pending_image_attachments.clear();
+  attachments.clear();
   draft_state.record_submission("prior submitted prompt");
   draft_state.replace_draft("history browsing scratch");
   expect(draft_state.browse_history(true) && draft_state.history_index() == 0 && draft_state.saved_draft() == "history browsing scratch",
          "prompt stash fixture starts with active history browsing and a saved draft");
   draft_state.replace_draft("attachment-owned draft", 4);
   expect(controller.trigger() && draft_state.draft().text.empty() && controller.stash().size() == 1 && !draft_state.history_index() &&
-             draft_state.saved_draft().empty() && !draft_state.selection_bounds() && transcript_unchanged() && presentation.snapshot.status == "prompt stashed",
+             draft_state.saved_draft().empty() && !draft_state.selection_bounds() && transcript_unchanged() && presentation.screen().status == "prompt stashed",
          "prompt stash trigger stores and clears a nonempty draft while excluding history-browsing and selection state without transcript mutation");
 
-  expect(controller.trigger() && active_list.kind() == ava::tui::ActiveSelectList::PromptStash && presentation.snapshot.select_list.has_value() &&
-             presentation.snapshot.status == "prompt stash opened",
+  expect(controller.trigger() && active_list.kind() == ava::tui::ActiveSelectList::PromptStash && presentation.screen().select_list.has_value() &&
+             presentation.screen().status == "prompt stash opened",
          "prompt stash trigger opens the newest-first selector when the draft is empty and reports the selector state");
   auto const count_before_cancel = controller.stash().size();
   expect(controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::terminal::Key::Escape}).value_or(false) &&
              active_list.kind() == ava::tui::ActiveSelectList::None && controller.stash().size() == count_before_cancel &&
-             presentation.snapshot.status == "view canceled",
+             presentation.screen().status == "view canceled",
          "prompt stash selector Esc closes without mutation and reports cancellation");
 
   draft_state.replace_draft("newest selector draft");
@@ -186,25 +191,25 @@ void test_prompt_stash_runtime_controller()
   expect(controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::terminal::Key::ArrowDown}).value_or(false) &&
              controller.handle_selector_input(ava::tui::InputEvent{.key = ava::tui::terminal::Key::Enter}).value_or(false) &&
              draft_state.draft().text == "attachment-owned draft" && controller.stash().size() == 1 &&
-             presentation.snapshot.status == "stashed prompt restored",
+             presentation.screen().status == "stashed prompt restored",
          "prompt stash selector restores and removes an arbitrary older entry by selected identity and reports success");
 
   draft_state.reset_draft();
   auto const backend_session_replaced = frontend.replace_session_identity();
   auto const session_changed = session_transition.apply_and_refresh(*frontend.frontend(), frontend.frontend()->read_committed_session_id());
   expect(backend_session_replaced && session_changed && controller.stash().size() == 1 && controller.pop_latest() &&
-             draft_state.draft().text == "newest selector draft" && backend_submit_calls == 0 && presentation.snapshot.status == "stashed prompt restored",
+             draft_state.draft().text == "newest selector draft" && backend_submit_calls == 0 && presentation.screen().status == "stashed prompt restored",
          "prompt stash survives a committed session transition in one runtime process, restores LIFO, and never dispatches backend work");
   draft_state.replace_draft("draft to clear from stash");
   expect(controller.trigger() && controller.stash().size() == 1, "prompt stash runtime fixture stores an entry for clear");
-  expect(controller.clear() && controller.stash().empty() && presentation.snapshot.status == "prompt stash cleared",
+  expect(controller.clear() && controller.stash().empty() && presentation.screen().status == "prompt stash cleared",
          "prompt stash clear command path empties runtime-owned memory and reports success");
 
   // Selecting text ends history browsing, so check selection cleanup independently.
   draft_state.replace_draft("selected draft", 0);
-  draft_state.extend_selection_to(4, presentation.snapshot);
+  draft_state.extend_selection_to(4, presentation.screen());
   expect(draft_state.selection_bounds() && controller.trigger() && !draft_state.selection_bounds() && draft_state.draft().text.empty() &&
-             controller.stash().size() == 1 && presentation.snapshot.status == "prompt stashed",
+             controller.stash().size() == 1 && presentation.screen().status == "prompt stashed",
          "prompt stash clears an active composer selection when storing the draft");
 }
 

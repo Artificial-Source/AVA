@@ -20,6 +20,7 @@ add_library(ava_tui
   "prompt_stash_internal.cpp"
   "PendingPermissionRequest.cpp"
   "PendingQuestionRequest.cpp"
+  "PendingAttachments.cpp"
   "runtime.cpp"
   "ActiveRun.cpp"
   "ActiveRunInbox.cpp"

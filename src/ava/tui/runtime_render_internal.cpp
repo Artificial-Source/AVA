@@ -9,13 +9,11 @@
 
 #include <algorithm>
 #include <chrono>
-#include <csignal>
 #include <string>
 #include <utility>
+#include "debug.h"
 
 namespace ava::tui {
-using Signals = core::Signals;
-
 std::pair<std::size_t, std::size_t> terminal_size()
 {
   auto const& terminal_context = ava::core::Application::instance().terminal_context();
@@ -69,11 +67,6 @@ void FrameScheduler::request(FrameRenderKind kind, Clock::time_point now)
 bool FrameScheduler::pending() const
 {
   return pending_kind_.has_value();
-}
-
-std::optional<FrameRenderKind> FrameScheduler::pending_kind() const
-{
-  return pending_kind_;
 }
 
 std::optional<FrameScheduler::Clock::time_point> FrameScheduler::deadline() const noexcept
@@ -387,9 +380,16 @@ void RuntimeRenderer::service_auxiliary_timers(std::chrono::steady_clock::time_p
 
 bool RuntimeRenderer::render()
 {
-  if (loop_attached_)
-    return queue_urgent_frame(FrameRenderKind::Full);
-  return paint_for_handoff();
+  if (!loop_attached_)
+    return paint_for_handoff();
+  auto lock = lock_ui();
+  if (frame_scheduler_.failed())
+    return false;
+  frame_scheduler_.request(FrameRenderKind::Full, std::chrono::steady_clock::now());
+  frame_ready_ = true;
+  pending_thaw_ = true;
+  synchronize_timers();
+  return true;
 }
 
 bool RuntimeRenderer::paint_for_handoff()
@@ -477,37 +477,12 @@ bool RuntimeRenderer::render_full(bool freeze_transcript_layout)
   return wrote;
 }
 
-bool RuntimeRenderer::render_processing_frame()
-{
-  if (loop_attached_)
-    return queue_urgent_frame(FrameRenderKind::Footer);
-  auto lock = lock_ui();
-  if (frame_scheduler_.failed())
-    return false;
-  frame_scheduler_.discard_pending();
-  auto const succeeded = paint(FrameRenderKind::Footer, false);
-  frame_scheduler_.paint_completed(std::chrono::steady_clock::now(), succeeded);
-  return succeeded;
-}
-
 bool RuntimeRenderer::request_render(FrameRenderKind kind)
 {
   auto lock = lock_ui();
   frame_scheduler_.request(kind, std::chrono::steady_clock::now());
   synchronize_timers();
   return !frame_scheduler_.failed();
-}
-
-bool RuntimeRenderer::queue_urgent_frame(FrameRenderKind kind)
-{
-  auto lock = lock_ui();
-  if (frame_scheduler_.failed())
-    return false;
-  frame_scheduler_.request(kind, std::chrono::steady_clock::now());
-  frame_ready_ = true;
-  pending_thaw_ = pending_thaw_ || kind == FrameRenderKind::Full;
-  synchronize_timers();
-  return true;
 }
 
 bool RuntimeRenderer::paint_ready_frame()

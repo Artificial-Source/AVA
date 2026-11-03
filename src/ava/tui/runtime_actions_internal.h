@@ -18,6 +18,7 @@ struct ImageAttachmentRef;
 namespace ava::tui {
 
 class Composer;
+class PendingAttachments;
 class TuiFrontEnd;
 class RuntimeRenderer;
 class SessionSelector;
@@ -27,7 +28,7 @@ class RuntimeActionController final
 {
  public:
   RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
-                          SelectorHost& selectors, SessionSelector& session_selector);
+                          SelectorHost& selectors, SessionSelector& session_selector, PendingAttachments& attachments);
   RuntimeActionController(RuntimeActionController const&) = delete;
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
 
@@ -68,6 +69,7 @@ class RuntimeActionController final
   RuntimeRenderer& renderer_;
   SelectorHost& selectors_;
   SessionSelector& session_selector_;
+  PendingAttachments& attachments_;
   std::optional<ava::core::NoLogString> last_display_reload_error_;
   bool loop_attached_ = false;
   bool display_reload_due_ = true;

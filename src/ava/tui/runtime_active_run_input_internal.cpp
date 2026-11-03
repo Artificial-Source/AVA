@@ -44,7 +44,7 @@ ActiveRun::InputHandling ActiveRun::to_input_handling(bool render_result)
 
 ComposerSnapshot const& ActiveRun::completion_snapshot()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   draft_state_.project_completion(snapshot);
   static_cast<void>(renderer_.refresh_completion_cache());
   return snapshot;
@@ -52,7 +52,7 @@ ComposerSnapshot const& ActiveRun::completion_snapshot()
 
 bool ActiveRun::restore_latest_queued_message()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto& active_queues = active_queues_;
   if (!active_queues || !active_queues->restore_latest)
   {
@@ -74,7 +74,7 @@ bool ActiveRun::restore_latest_queued_message()
 
 std::optional<bool> ActiveRun::run_active_command()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
   auto& active_queues = active_queues_;
   if (draft.text == "/sidebar")
@@ -224,7 +224,7 @@ std::optional<bool> ActiveRun::run_active_command()
 
 std::optional<bool> ActiveRun::reject_disabled_visible_completion()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& current = completion_snapshot();
   if (auto const disabled_status = detail::disabled_visible_completion_selection_status(current, renderer_.completion_cache()))
   {
@@ -237,7 +237,7 @@ std::optional<bool> ActiveRun::reject_disabled_visible_completion()
 
 bool ActiveRun::queue_active_draft(bool follow_up_only)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
   auto& active_queues = active_queues_;
   if (auto handled = reject_disabled_visible_completion())
@@ -313,7 +313,7 @@ bool ActiveRun::handle_search_input_event(runtime_input::RuntimeInput const& act
 bool ActiveRun::dispatch_active_input(runtime_input::RuntimeInput const& active_input)
 {
   using Key = terminal::Key;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   if (snapshot.command_output && !snapshot.permission_prompt && !snapshot.question_prompt)
   {
     if (active_input.event.key != Key::MouseWheelUp && active_input.event.key != Key::MouseWheelDown)

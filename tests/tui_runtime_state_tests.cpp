@@ -1755,7 +1755,6 @@ void test_tui_mixed_runtime_event_queue_preserves_order_and_context()
   second_context.request_id = "request_2";
   second_context.correlation_id = "correlation_2";
   expect(queue.enqueue(first, first_context).has_value(), "mixed TUI event queue accepts a typed runtime event");
-  auto control_sink = queue.envelope_sink();
   auto control_event = ava::event::EventEnvelope{};
   control_event.schema_version = 1;
   control_event.event_id = "control";
@@ -1765,7 +1764,7 @@ void test_tui_mixed_runtime_event_queue_preserves_order_and_context()
   control_event.correlation_id = "permission";
   control_event.name = "permission_replied";
   control_event.payload_json = R"({"decision":"allow"})";
-  expect(control_sink(control_event).has_value(), "mixed TUI event queue accepts a control envelope");
+  expect(queue.enqueue_envelope(control_event).has_value(), "mixed TUI event queue accepts a control envelope");
   expect(queue.enqueue(second, second_context).has_value(), "mixed TUI event queue accepts a second typed runtime event");
 
   auto drained = queue.drain();
@@ -1809,7 +1808,7 @@ void test_tui_private_subagent_launch_queue_and_exact_reducer()
 
   ava::tui::RuntimeEventQueue queue;
   expect(queue.enqueue(task_event(), context).has_value(), "private launch queue accepts the public task Running event");
-  queue.subagent_launch_sink()(notification);
+  queue.enqueue_subagent_launch(notification);
   expect(queue.enqueue(task_event(true), context).has_value(), "private launch queue accepts the later public task result");
   auto drained = queue.drain();
   expect(drained.size() == 3 && std::holds_alternative<ava::tui::QueuedRuntimeEvent>(drained[0]) &&
@@ -1893,7 +1892,7 @@ void test_tui_private_subagent_launch_queue_and_exact_reducer()
   expect(!unmatched.pending_tools.front().item.subagent_launch_display, "unmatched private launch metadata is discarded rather than cached");
 
   ava::tui::RuntimeEventQueue teardown_queue;
-  teardown_queue.subagent_launch_sink()(notification);
+  teardown_queue.enqueue_subagent_launch(notification);
   teardown_queue.discard();
   expect(teardown_queue.drain().empty() && !teardown_queue.received_any(),
          "active-run or session teardown discards queued private launch metadata with ordinary events");
@@ -1928,7 +1927,7 @@ void test_tui_typed_runtime_inherits_session_identity_fields()
          "TUI typed runtime reduction inherits Plan/openai/model-x from session_start while later payloads leave identity unchanged");
 }
 
-}  // namespace
+} // namespace
 
 void test_tui_retry_activity_settles_and_restores_contextual_hint()
 {
@@ -2186,10 +2185,11 @@ void test_tui_todowrite_event_state_and_snapshot_hydration()
   tui_test_support::TuiFrontEndFixture options_frontend;
   options_frontend.seed_committed_todos({ava::agent::TodoItem{.id = "seed", .content = "Hydrated", .status = ava::agent::TodoStatus::Pending}});
   ava::tui::RuntimePresentationState presentation(options_frontend.frontend(), {});
-  expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "seed", "committed backend todos hydrate the sidebar at startup");
+  expect(presentation.sidebar().todos.size() == 1 && presentation.sidebar().todos.front().id == "seed",
+         "committed backend todos hydrate the sidebar at startup");
   options_frontend.seed_committed_todos({ava::agent::TodoItem{.id = "switched", .content = "After switch", .status = ava::agent::TodoStatus::InProgress}});
   presentation.refresh_after_backend_action(*options_frontend.frontend());
-  expect(presentation.sidebar.todos.size() == 1 && presentation.sidebar.todos.front().id == "switched",
+  expect(presentation.sidebar().todos.size() == 1 && presentation.sidebar().todos.front().id == "switched",
          "boundary refresh replaces todos from committed session history");
 }
 
@@ -2260,12 +2260,12 @@ void test_runtime_initialization_preserves_local_and_retained_inputs()
   options.initial_transcript = {{.label = "ava", .text = "onboarding instructions"}};
   tui_test_support::TuiFrontEndFixture frontend(options);
   ava::tui::RuntimePresentationState presentation(frontend.frontend(), "keybinding load warning");
-  expect(presentation.sidebar.version == "boundary-test-version" && presentation.snapshot.status == "keybinding load warning" &&
-             presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().text == "onboarding instructions",
+  expect(presentation.sidebar().version == "boundary-test-version" && presentation.screen().status == "keybinding load warning" &&
+             presentation.screen().transcript.size() == 1 && presentation.screen().transcript.front().text == "onboarding instructions",
          "immutable version, startup diagnostics and retained onboarding content survive initialization without backend-state transport");
   frontend.set_prompt_metadata(ava::agent::Mode::Plan, 2);
   presentation.refresh_prompt_metadata();
-  expect(presentation.snapshot.mode == "plan" && presentation.sidebar.mode == "plan",
+  expect(presentation.screen().mode == "plan" && presentation.sidebar().mode == "plan",
          "canonical mode refresh updates composer and sidebar together without a returned current-mode label");
 }
 

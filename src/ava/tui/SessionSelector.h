@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime_state_internal.h"
+#include "ava/debug/print_members_on.h"
 
 namespace ava::tui {
 

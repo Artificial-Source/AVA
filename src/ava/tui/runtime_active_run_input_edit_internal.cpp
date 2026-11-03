@@ -45,7 +45,7 @@ ActiveRun::InputHandling ActiveRun::handle_composer_edit(runtime_input::RuntimeI
 ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   if (is_action(active_event, TuiAction::TranscriptHalfPageUp))
@@ -154,7 +154,7 @@ ActiveRun::InputHandling ActiveRun::handle_navigation_input(runtime_input::Runti
 ActiveRun::InputHandling ActiveRun::handle_navigation_next_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   if (is_action(active_event, TuiAction::PaletteNext) && navigation_.slash_palette_active())

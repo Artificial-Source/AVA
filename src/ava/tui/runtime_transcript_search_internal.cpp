@@ -694,7 +694,7 @@ bool TranscriptSearchController::is_open() const noexcept
 
 void TranscriptSearchController::refresh_authoritative_layout()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const [width, height] = terminal_size();
   snapshot.width = width;
   snapshot.height = height;
@@ -705,7 +705,7 @@ void TranscriptSearchController::refresh_authoritative_layout()
 
 void TranscriptSearchController::capture_authoritative_layout_settings()
 {
-  auto const& snapshot = presentation_state_.snapshot;
+  auto const& snapshot = presentation_state_.screen();
   auto const& cache = renderer_.prepared_transcript_layout();
   authoritative_terminal_width_ = snapshot.width;
   authoritative_terminal_height_ = snapshot.height;
@@ -718,7 +718,7 @@ void TranscriptSearchController::capture_authoritative_layout_settings()
 
 bool TranscriptSearchController::open(std::string query)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   if (!detail::transcript_search_query_valid(query))
   {
     snapshot.status = query.size() > detail::kMaxTranscriptSearchQueryBytes ? "search query is too long (maximum 1024 bytes)"
@@ -798,7 +798,7 @@ void TranscriptSearchController::refresh_after_transcript_mutation(std::ptrdiff_
   }
   accumulated_item_index_shift_ += item_index_shift;
 
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const [terminal_width, terminal_height] = terminal_size();
   snapshot.width = terminal_width;
   snapshot.height = terminal_height;
@@ -836,13 +836,13 @@ void TranscriptSearchController::refresh_after_resize()
   }
   refresh_authoritative_layout();
   capture_authoritative_layout_settings();
-  auto const update = projection_cache_.rebuild_all(presentation_state_.snapshot, renderer_.prepared_transcript_layout().layout);
+  auto const update = projection_cache_.rebuild_all(presentation_state_.screen(), renderer_.prepared_transcript_layout().layout);
   rebuild(selected_item_index, fallback_selection, update.first_changed_match_row);
 }
 
 void TranscriptSearchController::restore_saved_viewport(std::string status)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   selectors_.close();
   refresh_authoritative_layout();
   auto const max_scroll = renderer_.prepare_transcript_layout();
@@ -865,7 +865,7 @@ std::optional<bool> TranscriptSearchController::handle_input(InputEvent const& e
 {
   if (!is_open())
     return std::nullopt;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   if (!selectors_.view())
   {
     selectors_.close();

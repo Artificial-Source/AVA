@@ -34,7 +34,7 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
 {
   using Key = terminal::Key;
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   if (auto handled = navigation_.handle_sidebar_drawer_input(active_event))
@@ -126,7 +126,7 @@ ActiveRun::InputHandling ActiveRun::handle_preemptive_input(runtime_input::Runti
 ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   if (is_action(active_event, TuiAction::AutocompleteAccept) && navigation_.slash_palette_active())
@@ -185,7 +185,7 @@ ActiveRun::InputHandling ActiveRun::handle_completion_acceptance(runtime_input::
 ActiveRun::InputHandling ActiveRun::handle_active_command_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
 
   if (is_action(active_event, TuiAction::NewLine))
   {

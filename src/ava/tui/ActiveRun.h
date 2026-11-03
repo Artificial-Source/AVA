@@ -3,6 +3,7 @@
 #include "ActiveRunOutcome.h"
 #include "Spinner.h"
 #include "TuiWakeup.h"
+#include "ava/debug/print_members_on.h"
 #include "ava/tui/runtime_state_internal.h"
 #include "ava/core/NoLogString.h"
 
@@ -19,6 +20,7 @@ struct RuntimeInput;
 class ActiveRunInbox;
 class ActiveRunEvents;
 class Composer;
+class PendingAttachments;
 class RuntimeActionController;
 class RuntimeNavigationController;
 class RuntimePromptCoordinator;
@@ -62,7 +64,8 @@ class ActiveRun final
   ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
             RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
             RuntimeNavigationController& navigation, RuntimeActionController& action_controller, TranscriptSearchController& transcript_search,
-            RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid);
+            RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions, RuntimeMermaidPresentationController& mermaid,
+            PendingAttachments& attachments);
   ~ActiveRun();
   ActiveRun(ActiveRun const&) = delete;
   ActiveRun& operator=(ActiveRun const&) = delete;
@@ -158,6 +161,7 @@ class ActiveRun final
   RuntimeSubagentWorkspaceController& subagent_workspace_;
   SessionTransitionCoordinator& transitions_;
   RuntimeMermaidPresentationController& mermaid_;
+  PendingAttachments& attachments_;
 
   TuiWakeup wakeup_;
   // Shared ownership lets copied producer/audit endpoints outlive registration;

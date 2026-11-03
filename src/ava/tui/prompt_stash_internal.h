@@ -15,6 +15,7 @@ namespace ava::tui {
 class SelectorHost;
 struct InputEvent;
 class Composer;
+class PendingAttachments;
 class RuntimePresentationState;
 class RuntimeRenderer;
 struct SelectListView;
@@ -83,7 +84,7 @@ class RuntimePromptStashController final
 {
  public:
   RuntimePromptStashController(RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer, SelectorHost& selectors,
-                               TuiKeyBindings const& key_bindings);
+                               TuiKeyBindings const& key_bindings, PendingAttachments const& attachments);
   RuntimePromptStashController(RuntimePromptStashController const&) = delete;
   RuntimePromptStashController& operator=(RuntimePromptStashController const&) = delete;
 
@@ -105,6 +106,7 @@ class RuntimePromptStashController final
   RuntimeRenderer& renderer_;
   SelectorHost& selectors_;
   TuiKeyBindings const& key_bindings_;
+  PendingAttachments const& attachments_;
   PromptStash stash_;
 };
 

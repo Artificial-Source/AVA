@@ -1,18 +1,17 @@
 #pragma once
 
+#include "ava/debug/print_members_on.h"
 #include "ava/tui/Composer.h"
 #include "ava/tui/TranscriptView.h"
 #include "ava/tui/TuiTimer.h"
 #include "ava/tui/composer_internal.h"
 
 #include <chrono>
-#include <csignal>
 #include <cstddef>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <utility>
-#include "debug.h"
 
 namespace ava::tui {
 
@@ -46,7 +45,7 @@ class WheelBurstGovernor final
   [[nodiscard]] bool accept(WheelDirection direction, Clock::time_point now = Clock::now());
   void reset();
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   std::optional<Clock::time_point> last_accepted_at_ = std::nullopt;
@@ -70,7 +69,6 @@ class FrameScheduler final
 
   void request(FrameRenderKind kind, Clock::time_point now);
   [[nodiscard]] bool pending() const;
-  [[nodiscard]] std::optional<FrameRenderKind> pending_kind() const;
   [[nodiscard]] std::optional<Clock::time_point> deadline() const noexcept;
   [[nodiscard]] std::optional<FrameRenderKind> take_due(Clock::time_point now);
   [[nodiscard]] std::optional<FrameRenderKind> take_pending();
@@ -78,7 +76,7 @@ class FrameScheduler final
   void discard_pending();
   [[nodiscard]] bool failed() const;
 
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  AVA_DEBUG_PRINT_MEMBERS_ON
 
  private:
   std::optional<FrameRenderKind> pending_kind_ = std::nullopt;
@@ -103,7 +101,6 @@ class RuntimeRenderer final
   // Unattached standalone fixtures retain synchronous render/explicit-flush behavior.
   void attach_loop(TuiEventLoop& loop);
   [[nodiscard]] bool render();
-  [[nodiscard]] bool render_processing_frame();
   [[nodiscard]] bool request_render(FrameRenderKind kind = FrameRenderKind::Full);
   // Composition calls this after each application/input batch and before wait.
   // It also registers any changed view-owned absolute deadlines.
@@ -156,7 +153,6 @@ class RuntimeRenderer final
   [[nodiscard]] bool render_full(bool freeze_transcript_layout);
   [[nodiscard]] bool paint(FrameRenderKind kind, bool freeze_transcript_layout);
   [[nodiscard]] bool prepare_transcript_selection_authority();
-  [[nodiscard]] bool queue_urgent_frame(FrameRenderKind kind);
   void synchronize_timers();
   void frame_due(std::chrono::steady_clock::time_point now);
   void indicator_due(std::chrono::steady_clock::time_point now);

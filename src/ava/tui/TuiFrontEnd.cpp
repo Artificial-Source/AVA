@@ -1,27 +1,21 @@
 #include "sys.h"
-#include "Composer.h"
 #include "TuiFrontEnd.h"
 #include "TuiSession.h"
-#include "command_output.h"
 #include "composer_internal.h"
-#include "prompt_stash_internal.h"
-#include "runtime_actions_internal.h"
-#include "ActiveRun.h"
 #include "runtime_input_internal.h"
-#include "runtime_internal.h"
-#include "runtime_mermaid_internal.h"
-#include "runtime_navigation_internal.h"
-#include "runtime_plugin_ui_internal.h"
-#include "runtime_prompts_internal.h"
-#include "runtime_render_internal.h"
-#include "runtime_state_internal.h"
-#include "runtime_subagent_workspace_internal.h"
-#include "runtime_submit_internal.h"
-#include "runtime_transcript_search_internal.h"
-#include "runtime_user_turn_selection_internal.h"
-#include "runtime_views_internal.h"
+#include "terminal.h"
+#include "terminal/Context.h"
+#include "theme.h"
+#include "ava/core/Application.h"
 
+#include <chrono>
+#include <cstdlib>
+#include <functional>
+#include <iostream>
+#include <optional>
+#include <string_view>
 #include <utility>
+#include "debug.h"
 
 namespace ava::tui {
 

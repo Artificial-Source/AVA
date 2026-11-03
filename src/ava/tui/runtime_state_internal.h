@@ -5,8 +5,6 @@
 #include "ava/agent/subagent_launch.h"
 #include "ava/tui/composer.h"
 #include "ava/tui/runtime.h"
-#include "ava/tui/session_grants.h"
-#include "ava/session/attachments.h"
 #include "ava/core/NoLogString.h"
 #include "ava/core/result.h"
 
@@ -43,8 +41,6 @@ using QueuedTuiEvent = std::variant<QueuedRuntimeEvent, ava::event::EventEnvelop
 
 struct RuntimeEventQueue
 {
-  [[nodiscard]] ava::event::EventEnvelopeSink envelope_sink();
-  [[nodiscard]] ava::agent::SubagentLaunchSink subagent_launch_sink();
   [[nodiscard]] ava::core::VoidResult enqueue(ava::event::RuntimeEvent const& event, ava::event::EventEnvelopeContext context = {});
   [[nodiscard]] ava::core::VoidResult enqueue_envelope(ava::event::EventEnvelope const& envelope);
   void enqueue_subagent_launch(ava::agent::SubagentLaunchNotification const& notification);
@@ -53,12 +49,13 @@ struct RuntimeEventQueue
   void discard();
   [[nodiscard]] bool received_any() const;
 
+  // Queued runtime events contain arbitrary messages and authority aggregates.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+
  private:
   mutable std::mutex mutex;
   std::deque<QueuedTuiEvent> events;
   bool received = false;
-
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
 enum class RuntimeEventDrainResult
@@ -132,26 +129,33 @@ class RuntimePresentationState final
   // composes current UI-owned theme and keybinding hints.
   void initialize_startup_overview(TuiFrontEnd const& frontend, StartupOverviewSnapshot overview);
 
-  ComposerSnapshot snapshot;
+  // These existing render DTOs are shared only on the TUI thread. Feature owners
+  // publish their own screen fields here; renderer reads/prepares the projection.
+  // Selector, composer, viewport and attachment authority stays in its owner.
+  // References remain valid for this object's lifetime; nested views expire on
+  // the corresponding feature's next mutation. No backend authority is exposed.
+  [[nodiscard]] ComposerSnapshot& screen() noexcept { return snapshot_; }
+  [[nodiscard]] ComposerSnapshot const& screen() const noexcept { return snapshot_; }
+  // Live sidebar facts are published by backend hydration and ActiveRun; the
+  // renderer/TranscriptView consume them through const references or copies.
+  [[nodiscard]] SidebarSnapshot& sidebar() noexcept { return sidebar_; }
+  [[nodiscard]] SidebarSnapshot const& sidebar() const noexcept { return sidebar_; }
+
+  // Rendering projections retain arbitrary user text and authority aggregates.
+  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 
  private:
   // The composition-level coordinator is the sole owner of transition ordering.
   friend class SessionTransitionCoordinator;
-  [[nodiscard]] bool prepare_session_transition(std::string const& committed_session_id);
   void reset_session_projection(bool close_overview);
   void finish_session_transition(std::string committed_session_id);
 
+  ComposerSnapshot snapshot_;
   TuiFrontEnd* frontend_;
   std::optional<std::size_t> applied_slash_catalog_generation_;
   std::optional<std::size_t> applied_workspace_catalog_generation_;
 
- public:
-  SidebarSnapshot sidebar;
-  std::vector<ava::session::ImageAttachmentRef> pending_image_attachments;
-  TuiSessionGrantRegistry command_session_grants;
-
- private:
-  AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
+  SidebarSnapshot sidebar_;
 };
 
 // Shared overview presentation helpers for popup-local display/keybinding changes

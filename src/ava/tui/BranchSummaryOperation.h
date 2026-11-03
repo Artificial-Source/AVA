@@ -2,6 +2,7 @@
 
 #include "TuiTimer.h"
 #include "runtime_state_internal.h"
+#include "ava/debug/print_members_on.h"
 
 namespace ava::tui {
 
@@ -43,7 +44,6 @@ class BranchSummaryOperation final
   [[nodiscard]] std::optional<BranchSummaryOutcome> take_service_outcome();
   [[nodiscard]] bool active() const noexcept;
   [[nodiscard]] BranchSummaryOutcome start(SelectListView session_view, std::size_t selected_index, std::string selected_value);
-  [[nodiscard]] BranchSummaryOutcome poll();
   [[nodiscard]] BranchSummaryOutcome cancel(BranchSummaryCancelMode mode);
   [[nodiscard]] BranchSummaryOutcome handle_input(InputEvent const& input);
 
@@ -57,6 +57,7 @@ class BranchSummaryOperation final
   [[nodiscard]] BranchSummaryOutcome settle(TuiBranchSummarySnapshot const& operation);
   [[nodiscard]] BranchSummaryOutcome consume(TuiBranchSummarySnapshot const& operation);
   [[nodiscard]] BranchSummaryOutcome confirm();
+  [[nodiscard]] BranchSummaryOutcome poll();
   void discover_progress(TuiTimer::Clock::time_point now);
 
   TuiFrontEnd& frontend_;

@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "PendingAttachments.h"
 #include "SessionTransitionCoordinator.h"
 #include "ava/agent/question.h"
 #include "ava/tui/ActiveRun.h"
@@ -60,7 +61,7 @@ ActiveRun::ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentat
                      RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
                      RuntimeNavigationController& navigation, RuntimeActionController& action_controller, TranscriptSearchController& transcript_search,
                      RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions,
-                     RuntimeMermaidPresentationController& mermaid)
+                     RuntimeMermaidPresentationController& mermaid, PendingAttachments& attachments)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
@@ -74,6 +75,7 @@ ActiveRun::ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentat
       subagent_workspace_(subagent_workspace),
       transitions_(transitions),
       mermaid_(mermaid),
+      attachments_(attachments),
       wakeup_(loop.wakeup()),
       spinner_(loop, std::bind_front(&ActiveRun::publish_spinner_frame, this))
 {
@@ -81,7 +83,7 @@ ActiveRun::ActiveRun(TuiEventLoop& loop, TuiFrontEnd& frontend, RuntimePresentat
 
 void ActiveRun::upsert_stopping_activity()
 {
-  auto& sidebar = presentation_state_.sidebar;
+  auto& sidebar = presentation_state_.sidebar();
   auto item = SidebarActivityItem{
       .id = "stopping", .label = "stopping", .detail = "waiting for active work to stop; queued drafts skip on stop", .status = ToolTimelineStatus::Running};
   auto existing = std::ranges::find_if(sidebar.activity, [&](SidebarActivityItem const& activity) { return activity.id == item.id; });
@@ -97,7 +99,7 @@ void ActiveRun::upsert_stopping_activity()
 
 void ActiveRun::settle_turn_activity()
 {
-  auto& sidebar = presentation_state_.sidebar;
+  auto& sidebar = presentation_state_.sidebar();
   auto responding = std::ranges::find_if(sidebar.activity, [](SidebarActivityItem const& activity) { return activity.id == "responding"; });
   if (responding == sidebar.activity.end() || responding->status != ToolTimelineStatus::Running)
     return;
@@ -119,8 +121,8 @@ void ActiveRun::settle_turn_activity()
 
 void ActiveRun::apply_non_transcript_event_authority()
 {
-  auto& snapshot = presentation_state_.snapshot;
-  auto& sidebar = presentation_state_.sidebar;
+  auto& snapshot = presentation_state_.screen();
+  auto& sidebar = presentation_state_.sidebar();
   auto const& event_state = events_->aggregate();
   snapshot.queued_messages = event_state.queued_messages;
   sidebar.activity = event_state.activity;
@@ -150,8 +152,8 @@ bool ActiveRun::refresh_plugin_surface_fit()
 {
   refresh_geometry_from_kernel();
   auto const [width, height] = terminal_size();
-  presentation_state_.snapshot.width = width;
-  presentation_state_.snapshot.height = height;
+  presentation_state_.screen().width = width;
+  presentation_state_.screen().height = height;
   return plugin_ui_.cancel_unfittable_surfaces();
 }
 
@@ -199,20 +201,12 @@ bool ActiveRun::start(std::string submitted)
   final_projection_serviced_ = false;
   try
   {
-    auto& snapshot = presentation_state_.snapshot;
-    auto& pending_attachments = presentation_state_.pending_image_attachments;
-    if (is_command_submission_ && runtime_commands::session_switching_command(submitted_) && !pending_attachments.empty())
-    {
-      pending_attachments.clear();
-      snapshot.pending_attachments.clear();
-    }
+    auto& snapshot = presentation_state_.screen();
+    if (is_command_submission_ && runtime_commands::session_switching_command(submitted_))
+      attachments_.clear();
     std::vector<ava::session::ImageAttachmentRef> attachments;
-    if (!is_command_submission_ && !pending_attachments.empty())
-    {
-      attachments = std::move(pending_attachments);
-      pending_attachments.clear();
-      snapshot.pending_attachments.clear();
-    }
+    if (!is_command_submission_)
+      attachments = attachments_.take();
     inbox_ = std::make_shared<ActiveRunInbox>(wakeup_);
     auto const supports_queue = !is_command_submission_ || is_compact_command(submitted_);
     if (supports_queue)
@@ -223,7 +217,7 @@ bool ActiveRun::start(std::string submitted)
     else
       active_queues_->mark_follow_up_started = inbox_->wrap_follow_up_started(std::move(active_queues_->mark_follow_up_started));
     inbox_->set_request_id(request_id);
-    events_ = std::make_unique<ActiveRunEvents>(is_command_submission_, submitted_, request_id, snapshot.transcript, presentation_state_.sidebar.todos);
+    events_ = std::make_unique<ActiveRunEvents>(is_command_submission_, submitted_, request_id, snapshot.transcript, presentation_state_.sidebar().todos);
     auto endpoint = plugin_ui_.begin_submission(submitted_, request_id);
     prompt_coordinator_.set_audit_sink(inbox_->event_sink());
     turn_started_at_ = std::chrono::steady_clock::now();
@@ -279,7 +273,7 @@ bool ActiveRun::request_stop()
     ava::core::Application::instance().terminal_context().beep();
   {
     auto lock = renderer_.lock_ui();
-    presentation_state_.snapshot.status = "stop requested";
+    presentation_state_.screen().status = "stop requested";
     upsert_stopping_activity();
   }
   return renderer_.request_render();
@@ -311,7 +305,7 @@ bool ActiveRun::cancel(ActiveRunCancel reason)
 void ActiveRun::before_prompt()
 {
   transcript_search_.close_before_prompt();
-  close_startup_overview_presentation(presentation_state_.snapshot, action_controller_.selectors());
+  close_startup_overview_presentation(presentation_state_.screen(), action_controller_.selectors());
 }
 
 bool ActiveRun::service_prompt()
@@ -340,7 +334,7 @@ bool ActiveRun::apply_prompt_outcome(PromptServiceOutcome outcome)
 
 bool ActiveRun::plugin_host_modal_conflict() const
 {
-  auto const& snapshot = presentation_state_.snapshot;
+  auto const& snapshot = presentation_state_.screen();
   return snapshot.permission_prompt || snapshot.question_prompt || snapshot.command_output || snapshot.select_list || snapshot.subagent_workspace ||
          snapshot.sidebar_drawer_visible || transcript_search_.is_open() ||
          slash_palette_visible(snapshot.input, snapshot.input_cursor, snapshot.slash_commands) ||
@@ -359,11 +353,11 @@ bool ActiveRun::poll_plugin_ui()
 
 void ActiveRun::publish_spinner_frame(std::size_t frame)
 {
-  if (!active() || !presentation_state_.snapshot.processing)
+  if (!active() || !presentation_state_.screen().processing)
     return;
   {
     auto lock = renderer_.lock_ui();
-    presentation_state_.snapshot.spinner_frame = frame;
+    presentation_state_.screen().spinner_frame = frame;
   }
   if (!subagent_workspace_.active() && !renderer_.request_render(FrameRenderKind::Footer))
     terminal_write_failed_ = true;
@@ -393,7 +387,7 @@ bool ActiveRun::service_control()
   if (claimed_sigint)     // If this is true than draft.text.empty() must be false.
   {
     static_cast<void>(action_controller_.clear_draft_for_interrupt());
-    presentation_state_.snapshot.selected_slash_command_index = draft_state_.completion_index();
+    presentation_state_.screen().selected_slash_command_index = draft_state_.completion_index();
     return render();
   }
   return true;
@@ -425,7 +419,7 @@ bool ActiveRun::handle_input(runtime_input::RuntimeInput const& input)
     auto const outcome = prompt_coordinator_.handle_input(input);
     return apply_prompt_outcome(outcome);
   }
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   if (snapshot.plugin_ui_modal)
   {
     auto const geometry_changed = input.event.key != terminal::Key::CtrlC && refresh_plugin_surface_fit();
@@ -481,7 +475,7 @@ void ActiveRun::finish_queues()
     if (auto finished = active_queues_->finish(inbox_->stop_requested()); !finished)
     {
       auto lock = renderer_.lock_ui();
-      presentation_state_.snapshot.status = finished.error().format();
+      presentation_state_.screen().status = finished.error().format();
       completion_failed_ = true;
     }
   }
@@ -558,7 +552,7 @@ std::optional<ActiveRunOutcome> ActiveRun::complete()
       if (result_->local_command_result)
       {
         for (auto const& tool : result_->local_command_result->tool_timeline)
-          record_tui_tool(presentation_state_.snapshot, tool, TuiToolIndexOrigin::LocalCommand);
+          record_tui_tool(presentation_state_.screen(), tool, TuiToolIndexOrigin::LocalCommand);
       }
     }
     auto const outcome = terminal_signal_received_ || terminal_write_failed_ || completion_failed_
@@ -588,7 +582,7 @@ void ActiveRun::retire_operation()
   events_.reset();
   inbox_.reset();
   submitted_.clear();
-  presentation_state_.snapshot.processing = false;
+  presentation_state_.screen().processing = false;
   phase_ = Phase::Idle;
 }
 
@@ -634,7 +628,7 @@ ActiveRunOutcome ActiveRun::shutdown() noexcept
 RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
 {
   auto batch = inbox_->drain(max_events);
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   events_->apply_batch(batch, snapshot);
   auto projection = events_->take_transcript_projection();
   if (!projection)
@@ -677,8 +671,8 @@ RuntimeEventDrainResult ActiveRun::drain_events(std::size_t max_events)
 }
 ActiveRunOutcome ActiveRun::settle_completion()
 {
-  auto& snapshot = presentation_state_.snapshot;
-  auto& sidebar = presentation_state_.sidebar;
+  auto& snapshot = presentation_state_.screen();
+  auto& sidebar = presentation_state_.sidebar();
   auto& result = *result_;
   auto const& event_state = events_->aggregate();
   auto const events_received = is_command_submission_ ? events_->authorized_events_received() : inbox_->received_any();

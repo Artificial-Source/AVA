@@ -14,6 +14,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <functional>
 #include <utility>
 
 namespace ava::tui {
@@ -22,7 +23,7 @@ namespace ava::tui {
 ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const& draft = draft_state_.draft();
 
   using Key = terminal::Key;
@@ -85,9 +86,9 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
       }
     }
 
-    auto const transcript_mouse = renderer_.handle_transcript_selection_mouse(
-        active_event, [&](std::size_t item) { return navigation_.toggle_tool_details_at(item); },
-        [&](std::size_t item) { return navigation_.toggle_thinking_at(item); });
+    auto const transcript_mouse =
+        renderer_.handle_transcript_selection_mouse(active_event, std::bind_front(&RuntimeNavigationController::toggle_tool_details_at, &navigation_),
+                                                    std::bind_front(&RuntimeNavigationController::toggle_thinking_at, &navigation_));
     if (transcript_mouse != TranscriptSelectionMouseResult::Ignored)
       return to_input_handling(renderer_.request_render());
 
@@ -130,7 +131,7 @@ ActiveRun::InputHandling ActiveRun::handle_mouse_input(runtime_input::RuntimeInp
 ActiveRun::InputHandling ActiveRun::handle_restricted_toggle_input(runtime_input::RuntimeInput const& active_input)
 {
   auto const& active_event = active_input.event;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
 
   if (is_action(active_event, TuiAction::DetailsToggle))
   {

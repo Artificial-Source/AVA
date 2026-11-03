@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "PendingAttachments.h"
 #include "SelectorHost.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/Composer.h"
@@ -166,17 +167,22 @@ SelectListView PromptStash::select_list_view() const
 }
 
 RuntimePromptStashController::RuntimePromptStashController(RuntimePresentationState& presentation_state, Composer& draft_state, RuntimeRenderer& renderer,
-                                                           SelectorHost& selectors, TuiKeyBindings const& key_bindings)
-    : presentation_state_(presentation_state), draft_state_(draft_state), renderer_(renderer), selectors_(selectors), key_bindings_(key_bindings)
+                                                           SelectorHost& selectors, TuiKeyBindings const& key_bindings, PendingAttachments const& attachments)
+    : presentation_state_(presentation_state),
+      draft_state_(draft_state),
+      renderer_(renderer),
+      selectors_(selectors),
+      key_bindings_(key_bindings),
+      attachments_(attachments)
 {
 }
 
 bool RuntimePromptStashController::trigger()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   if (draft_state_.draft().text.empty())
     return open_selector();
-  if (!presentation_state_.pending_image_attachments.empty())
+  if (attachments_.has_pending())
   {
     snapshot.status = "cannot stash a prompt while image attachments are pending";
     ava::core::Application::instance().terminal_context().beep();
@@ -208,7 +214,7 @@ bool RuntimePromptStashController::trigger()
 
 bool RuntimePromptStashController::open_selector()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   selectors_.open(ActiveSelectList::PromptStash, stash_.select_list_view());
   snapshot.status = stash_.empty() ? "prompt stash is empty" : "prompt stash opened";
   return renderer_.request_render();
@@ -216,7 +222,7 @@ bool RuntimePromptStashController::open_selector()
 
 bool RuntimePromptStashController::restore(std::uint64_t id)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   switch (draft_state_.restore_stashed(stash_, id))
   {
     case PromptStashRestoreResult::Restored:
@@ -237,7 +243,7 @@ bool RuntimePromptStashController::restore(std::uint64_t id)
 
 bool RuntimePromptStashController::pop_latest()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   if (!draft_state_.draft().text.empty())
   {
     snapshot.status = "cannot restore a stashed prompt over a nonempty draft";
@@ -256,7 +262,7 @@ bool RuntimePromptStashController::pop_latest()
 
 bool RuntimePromptStashController::clear()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const count = stash_.size();
   stash_.clear();
   if (selectors_.kind() == ActiveSelectList::PromptStash)
@@ -269,7 +275,7 @@ bool RuntimePromptStashController::clear()
 
 std::optional<bool> RuntimePromptStashController::handle_selector_input(InputEvent const& event)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   if (selectors_.kind() != ActiveSelectList::PromptStash || !selectors_.view())
     return std::nullopt;
 

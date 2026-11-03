@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "PendingAttachments.h"
 #include "SelectorHost.h"
 #include "SessionSelector.h"
 #include "TuiEventLoop.h"
@@ -92,13 +93,15 @@ std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd con
 }  // namespace
 
 RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, Composer& draft_state,
-                                                 RuntimeRenderer& renderer, SelectorHost& selectors, SessionSelector& session_selector)
+                                                 RuntimeRenderer& renderer, SelectorHost& selectors, SessionSelector& session_selector,
+                                                 PendingAttachments& attachments)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
       renderer_(renderer),
       selectors_(selectors),
-      session_selector_(session_selector)
+      session_selector_(session_selector),
+      attachments_(attachments)
 {
 }
 
@@ -135,7 +138,7 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
     static_cast<void>(core::Application::instance().terminal_context().beep());
     {
       auto lock = renderer_.lock_ui();
-      settle_local_command_status(presentation_state_.snapshot, std::move(status));
+      settle_local_command_status(presentation_state_.screen(), std::move(status));
     }
     // Failure path keeps last-good presentation and still paints the status when possible.
     return renderer_.render() ? DisplaySettingsReloadPollOutcome::Unchanged : DisplaySettingsReloadPollOutcome::TerminalFailure;
@@ -149,8 +152,8 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
   {
     auto lock = renderer_.lock_ui();
     presentation_state_.apply_local_display_settings(frontend_, std::move(result.settings));
-    synchronize_startup_overview_presentation(presentation_state_.snapshot, selectors_);
-    settle_local_command_status(presentation_state_.snapshot, std::move(status));
+    synchronize_startup_overview_presentation(presentation_state_.screen(), selectors_);
+    settle_local_command_status(presentation_state_.screen(), std::move(status));
   }
   return DisplaySettingsReloadPollOutcome::Applied;
 }
@@ -158,14 +161,14 @@ DisplaySettingsReloadPollOutcome RuntimeActionController::maybe_reload_display_s
 bool RuntimeActionController::clear_draft_for_interrupt()
 {
   draft_state_.reset_interaction();
-  presentation_state_.snapshot.status.clear();
+  presentation_state_.screen().status.clear();
   return draft_state_.apply_action(TuiAction::ClearInput);
 }
 
 bool RuntimeActionController::open_external_editor()
 {
   auto& terminal_context = core::Application::instance().terminal_context();
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   draft_state_.reset_interaction();
   // Protocol handoff invalidates any incomplete press/drag/header arm while preserving
   // a committed transcript range.
@@ -200,7 +203,7 @@ bool RuntimeActionController::open_external_editor()
 bool RuntimeActionController::suspend_to_background()
 {
   auto& terminal_context = core::Application::instance().terminal_context();
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   draft_state_.reset_interaction();
   // Suspend handoff cancels in-flight pointer interaction; committed ranges remain.
   renderer_.cancel_pointer_interaction();
@@ -234,21 +237,20 @@ bool RuntimeActionController::queue_pending_image_attachment(ava::session::Image
 {
   if (label.empty())
     label = imported.id;
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const image_capabilities = active_terminal_image_capabilities();
   auto detail = attachment_detail(imported, image_capabilities);
   if (!snapshot.show_images)
     detail += " (hidden)";
   auto const preview = attachment_preview(frontend_, imported, image_capabilities, snapshot.show_images);
-  presentation_state_.pending_image_attachments.push_back(imported);
-  snapshot.pending_attachments.push_back(PendingAttachmentItem{.label = label, .detail = detail, .preview = preview});
+  attachments_.stage(imported, PendingAttachmentItem{.label = label, .detail = detail, .preview = preview});
   settle_local_command_status(snapshot, std::move(status));
   return renderer_.render();
 }
 
 bool RuntimeActionController::paste_clipboard_image()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   draft_state_.reset_interaction();
   snapshot.status = "reading clipboard image";
   if (!renderer_.paint_for_handoff())
@@ -272,7 +274,7 @@ bool RuntimeActionController::paste_clipboard_image()
 
 bool RuntimeActionController::copy_latest_assistant_message()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto const result = runtime_transcript::copy_latest_assistant_message(snapshot.transcript);
   snapshot.status = runtime_transcript::latest_assistant_copy_status(result);
   if (result != runtime_transcript::LatestAssistantCopyResult::RequestSent)
@@ -282,7 +284,7 @@ bool RuntimeActionController::copy_latest_assistant_message()
 
 void RuntimeActionController::cycle_reasoning()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   clear_reasoning_feedback_for_user_input(snapshot);
   auto result = frontend_.on_cycle_reasoning();
   if (!result)
@@ -295,7 +297,7 @@ void RuntimeActionController::cycle_reasoning()
 
 void RuntimeActionController::toggle_thinking_visibility()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   snapshot.thinking_visible = !snapshot.thinking_visible;
   snapshot.status = snapshot.thinking_visible ? "thinking visible" : "thinking hidden";
   renderer_.transcript().request_live_tail();
@@ -303,7 +305,7 @@ void RuntimeActionController::toggle_thinking_visibility()
 
 bool RuntimeActionController::open_model_selector()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Model, frontend_.model_selector_view());
@@ -314,7 +316,7 @@ bool RuntimeActionController::open_model_selector()
 
 bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_selection)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto view = frontend_.reasoning_selector_view(chained_from_model_selection);
   if (!view)
   {
@@ -335,7 +337,7 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
 
 bool RuntimeActionController::open_scoped_model_selector()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ScopedModels, frontend_.scoped_model_selector_view());
@@ -346,7 +348,7 @@ bool RuntimeActionController::open_scoped_model_selector()
 
 bool RuntimeActionController::toggle_startup_overview()
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   draft_state_.cancel_escape();
   session_selector_.cancel_confirmation();
   if (selectors_.kind() == ActiveSelectList::Overview && selectors_.view())
@@ -370,7 +372,7 @@ bool RuntimeActionController::toggle_startup_overview()
 
 bool RuntimeActionController::open_fork_user_turn_selector(std::string_view initial_query)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto opened = frontend_.on_open_fork_user_turn_selector(initial_query);
   if (!opened)
   {
@@ -388,7 +390,7 @@ bool RuntimeActionController::open_fork_user_turn_selector(std::string_view init
 
 bool RuntimeActionController::open_copy_user_turn_selector(std::string_view initial_query)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto opened = frontend_.on_open_copy_user_turn_selector(initial_query);
   if (!opened)
   {
@@ -406,7 +408,7 @@ bool RuntimeActionController::open_copy_user_turn_selector(std::string_view init
 
 void RuntimeActionController::cycle_model(bool forward)
 {
-  auto& snapshot = presentation_state_.snapshot;
+  auto& snapshot = presentation_state_.screen();
   auto result = frontend_.on_cycle_model(forward);
   if (!result)
   {
