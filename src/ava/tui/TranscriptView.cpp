@@ -6,30 +6,6 @@
 
 namespace ava::tui {
 
-void TranscriptPositionIndicatorState::show(Clock::time_point now) noexcept
-{
-  expires_at_ = now + kVisibleDuration;
-}
-void TranscriptPositionIndicatorState::hide() noexcept
-{
-  expires_at_.reset();
-}
-bool TranscriptPositionIndicatorState::visible() const noexcept
-{
-  return expires_at_.has_value();
-}
-bool TranscriptPositionIndicatorState::expire_if_due(Clock::time_point now) noexcept
-{
-  if (!expires_at_ || now < *expires_at_)
-    return false;
-  expires_at_.reset();
-  return true;
-}
-std::optional<TranscriptPositionIndicatorState::Clock::time_point> TranscriptPositionIndicatorState::expires_at() const noexcept
-{
-  return expires_at_;
-}
-
 TranscriptView::TranscriptView(RuntimePresentationState& presentation, Composer& composer) : presentation_(presentation), composer_(composer)
 {
 }
@@ -112,10 +88,10 @@ void TranscriptView::defer_update(detail::TranscriptViewportAnchor anchor, std::
     return;
   if (!deferred_viewport_)
   {
-    deferred_viewport_ = DeferredDetachedViewport{.anchor = anchor, .item_index_shift = item_index_shift};
+    deferred_viewport_.emplace(anchor, item_index_shift);
     return;
   }
-  deferred_viewport_->item_index_shift += item_index_shift;
+  deferred_viewport_->accumulate_shift(item_index_shift);
 }
 void TranscriptView::complete_transcript_update(TranscriptUpdate const& update, std::ptrdiff_t item_index_shift, std::size_t event_count)
 {
@@ -154,11 +130,11 @@ void TranscriptView::synchronize_deferred(detail::TranscriptLayoutCache const& l
     return;
   }
   auto const deferred = *deferred_viewport_;
-  restore_layout_anchor(deferred.anchor, layout, maximum, deferred.item_index_shift);
+  restore_layout_anchor(deferred.anchor(), layout, maximum, deferred.item_index_shift());
   if (scroll_offset_ == 0)
     new_output_count_ = 0;
   publish_chrome();
-  selection_.apply_item_index_shift(deferred.item_index_shift, layout.layout);
+  selection_.apply_item_index_shift(deferred.item_index_shift(), layout.layout);
   static_cast<void>(selection_.ensure_authority(layout, &presentation_.screen()));
   deferred_viewport_.reset();
 }
@@ -250,7 +226,7 @@ TranscriptSelectionMouseResult TranscriptView::handle_mouse(InputEvent const& ev
     cancel_pointer_interaction();
     return had_interaction ? TranscriptSelectionMouseResult::HandledNeedsRender : TranscriptSelectionMouseResult::Ignored;
   }
-  auto const shift = deferred_viewport_ ? deferred_viewport_->item_index_shift : std::ptrdiff_t{0};
+  auto const shift = deferred_viewport_ ? deferred_viewport_->item_index_shift() : std::ptrdiff_t{0};
   auto const before = scroll_offset_;
   auto const result = selection_.handle_mouse(event, presentation_, layout, &composer_, scroll_offset_, shift, toggle_tool, toggle_thinking);
   if (scroll_offset_ != before)
@@ -270,7 +246,7 @@ bool TranscriptView::service_autoscroll(detail::TranscriptLayoutCache const& lay
   auto result = TranscriptSelectionMouseResult::HandledNeedsRender;
   if (authority_ready)
   {
-    auto const shift = deferred_viewport_ ? deferred_viewport_->item_index_shift : std::ptrdiff_t{0};
+    auto const shift = deferred_viewport_ ? deferred_viewport_->item_index_shift() : std::ptrdiff_t{0};
     result = selection_.tick_edge_autoscroll(presentation_, layout, scroll_offset_, shift, now);
   }
   if (scroll_offset_ != before)

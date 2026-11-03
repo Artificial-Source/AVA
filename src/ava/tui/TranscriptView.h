@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DeferredDetachedViewport.h"
+#include "TranscriptPositionIndicatorState.h"
 #include "ava/debug/print_members_on.h"
 #include "ava/tui/TranscriptUpdate.h"
 #include "ava/tui/runtime_transcript_selection_internal.h"
@@ -12,28 +14,6 @@
 namespace ava::tui {
 
 class RuntimePresentationState;
-
-class TranscriptPositionIndicatorState final
-{
- public:
-  using Clock = std::chrono::steady_clock;
-  static constexpr auto kVisibleDuration = std::chrono::milliseconds(1000);
-  void show(Clock::time_point now = Clock::now()) noexcept;
-  void hide() noexcept;
-  [[nodiscard]] bool visible() const noexcept;
-  [[nodiscard]] bool expire_if_due(Clock::time_point now = Clock::now()) noexcept;
-  [[nodiscard]] std::optional<Clock::time_point> expires_at() const noexcept;
-  AVA_DEBUG_PRINT_MEMBERS_ON
- private:
-  std::optional<Clock::time_point> expires_at_ = std::nullopt;
-};
-
-struct DeferredDetachedViewport
-{
-  detail::TranscriptViewportAnchor anchor = {};
-  std::ptrdiff_t item_index_shift = 0;
-  AVA_DEBUG_PRINT_MEMBERS_ON
-};
 
 enum class TranscriptSelectionProjection
 {

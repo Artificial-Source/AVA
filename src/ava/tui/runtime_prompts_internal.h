@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PendingPermissionRequest.h"
+#include "PendingQuestionRequest.h"
 #include "TuiTimer.h"
 #include "TuiWakeup.h"
 #include "runtime_render_internal.h"
@@ -34,8 +36,6 @@ class SelectorHost;
 class RuntimeRenderer;
 class TuiSessionGrantRegistry;
 
-class PendingPermissionRequest;
-class PendingQuestionRequest;
 class TuiEventLoop;
 
 namespace runtime_input {

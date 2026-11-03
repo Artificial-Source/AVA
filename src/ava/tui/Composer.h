@@ -86,9 +86,17 @@ struct ComposerInputResult
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT
 };
 
-class Composer
+// Session owns the TUI-thread draft editor. Its collaborators borrow this stable
+// object; editing and selection state must never be copied into another owner.
+class Composer final
 {
  public:
+  // Construct an empty editor before any renderer or navigation owner borrows it.
+  Composer() = default;
+  // A draft's undo, selection and history belong to one session editor.
+  Composer(Composer const&) = delete;
+  // Keep the identity borrowed by renderer/navigation stable for its lifetime.
+  Composer& operator=(Composer const&) = delete;
   // TUI thread: handle one documented dispatch phase. All inputs are call-scoped;
   // returned requests are performed by the session before its next paint.
   [[nodiscard]] ComposerInputResult handle_key(runtime_input::RuntimeInput const& input, TuiKeyBindings const& bindings, ComposerSnapshot const& snapshot,
