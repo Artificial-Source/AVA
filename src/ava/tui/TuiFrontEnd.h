@@ -17,6 +17,7 @@ class TuiFrontEnd : public frontend::FrontEnd
   // Composition calls the existing protected frontend authority boundary.
   friend class TuiSession;
   friend class SettingsDialog;
+  friend class SessionSelector;
 
  protected:
   TuiKeyBindings key_bindings_;

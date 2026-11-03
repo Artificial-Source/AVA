@@ -22,6 +22,7 @@ namespace ava::tui {
 struct RuntimeDraftState;
 class RuntimeRenderer;
 class SelectorHost;
+class SessionTransitionCoordinator;
 class RuntimeSubagentWorkspaceController;
 class TranscriptSearchController;
 
@@ -128,6 +129,12 @@ class RuntimePresentationState final
   ComposerSnapshot snapshot;
 
  private:
+  // The composition-level coordinator is the sole owner of transition ordering.
+  friend class SessionTransitionCoordinator;
+  [[nodiscard]] bool prepare_session_transition(std::string const& committed_session_id);
+  void reset_session_projection(bool close_overview);
+  void finish_session_transition(std::string committed_session_id);
+
   TuiFrontEnd* frontend_;
   std::optional<std::size_t> applied_slash_catalog_generation_;
   std::optional<std::size_t> applied_workspace_catalog_generation_;
@@ -145,21 +152,5 @@ class RuntimePresentationState final
 // and competing presentation authority.
 void close_startup_overview_presentation(ComposerSnapshot& snapshot, SelectorHost& selectors);
 void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, SelectorHost& selectors);
-
-// Applies the local effects of a committed backend session transition. The
-// committed_session_id parameter must be read through
-// TuiFrontEnd::read_committed_session_id before taking the TUI UI lock.
-// Returns true only when the committed identity differs from local control
-// tracking; same-session refreshes preserve session-scoped presentation.
-[[nodiscard]] bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                                                      TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                      SelectorHost& selectors, std::string committed_session_id);
-
-// Synchronizes session-scoped presentation before pulling retained backend data.
-[[nodiscard]] bool apply_committed_session_transition_and_refresh(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state,
-                                                                  RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                                                                  TranscriptSearchController& transcript_search,
-                                                                  RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors,
-                                                                  std::string committed_session_id);
 
 }  // namespace ava::tui

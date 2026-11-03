@@ -19,12 +19,13 @@ namespace ava::tui {
 struct RuntimeDraftState;
 class TuiFrontEnd;
 class RuntimeRenderer;
+class SessionSelector;
 
 class RuntimeActionController final
 {
  public:
   RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                          SelectorHost& selectors, std::optional<PendingSessionArchiveAction>& session_archive_confirmation);
+                          SelectorHost& selectors, SessionSelector& session_selector);
   RuntimeActionController(RuntimeActionController const&) = delete;
   RuntimeActionController& operator=(RuntimeActionController const&) = delete;
 
@@ -43,7 +44,6 @@ class RuntimeActionController final
   [[nodiscard]] bool open_model_selector();
   [[nodiscard]] bool open_reasoning_selector(bool chained_from_model_selection = false);
   [[nodiscard]] bool open_scoped_model_selector();
-  [[nodiscard]] bool open_session_selector();
   // Toggle the read-only startup overview select-list. No-op when no snapshot is present.
   [[nodiscard]] bool toggle_startup_overview();
   // Shared with snapshot-apply / prompt-preempt paths that must close or rebuild overview.
@@ -61,7 +61,7 @@ class RuntimeActionController final
   RuntimeDraftState& draft_state_;
   RuntimeRenderer& renderer_;
   SelectorHost& selectors_;
-  std::optional<PendingSessionArchiveAction>& session_archive_confirmation_;
+  SessionSelector& session_selector_;
   std::chrono::steady_clock::time_point next_display_reload_check_;
   std::optional<ava::core::NoLogString> last_display_reload_error_;
 };

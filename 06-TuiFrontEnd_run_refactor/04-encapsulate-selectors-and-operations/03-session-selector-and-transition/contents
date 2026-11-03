@@ -1,0 +1,4 @@
+src/ava/tui/SessionSelector.h and .cpp — Session browse, selection preservation, archive confirmation and authority requests.
+src/ava/tui/SessionTransitionCoordinator.h and .cpp — Shared composition-level committed-session reset ordering.
+06/03/migration-ledger.md — Goal04/03 interfaces, transition contracts and build evidence.
+06/02/architecture.md — Explicit coordinator ownership reconciliation.

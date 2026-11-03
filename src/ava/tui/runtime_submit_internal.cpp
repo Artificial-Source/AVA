@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "SelectorHost.h"
+#include "SessionSelector.h"
 #include "SettingsDialog.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
@@ -49,7 +50,7 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
                                                  RuntimeRenderer& renderer, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                  RuntimeActiveRunController& active_run_controller, RuntimePromptStashController& prompt_stash,
                                                  TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                 SelectorHost& selectors, SettingsDialog& settings_dialog)
+                                                 SelectorHost& selectors, SettingsDialog& settings_dialog, SessionSelector& session_selector)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
@@ -61,7 +62,8 @@ RuntimeSubmitController::RuntimeSubmitController(TuiFrontEnd& frontend, RuntimeP
       transcript_search_(transcript_search),
       subagent_workspace_(subagent_workspace),
       selectors_(selectors),
-      settings_dialog_(settings_dialog)
+      settings_dialog_(settings_dialog),
+      session_selector_(session_selector)
 {
 }
 
@@ -249,7 +251,7 @@ RuntimeSubmitOutcome RuntimeSubmitController::submit(std::optional<std::string> 
     if (exact_command(submitted, "/sessions") || exact_command(submitted, "/tree") || exact_command(submitted, "/resume"))
     {
       push_history(input_history, submitted);
-      if (!action_controller_.open_session_selector())
+      if (!session_selector_.open())
       {
         return {.disposition = RuntimeSubmitDisposition::BreakLoop, .terminal_write_failed = true};
       }

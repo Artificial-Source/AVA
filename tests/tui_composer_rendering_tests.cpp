@@ -5,6 +5,8 @@
 #include "ava/app/command_palette.h"
 #include "ava/app/terminal_text.h"
 #include "ava/tui/SelectorHost.h"
+#include "ava/tui/SessionSelector.h"
+#include "ava/tui/SessionTransitionCoordinator.h"
 #include "ava/tui/SettingsDialog.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer.h"
@@ -245,6 +247,7 @@ bool test_changed_session_snapshot_resets_presentation()
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
+  ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list);
 
   auto const search_opened = transcript_search.open("OLD-TRANSCRIPT-MARKER");
   renderer.transcript_scroll_offset = 3;
@@ -257,8 +260,7 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
 
   frontend.seed_committed_todos({{.id = "todo-new", .content = "new todo", .status = ava::agent::TodoStatus::InProgress}});
-  auto changed = ava::tui::apply_committed_session_transition_and_refresh(*frontend.frontend(), presentation, draft_state, renderer, transcript_search,
-                                                                          subagent_workspace, active_select_list, committed_session_id);
+  auto changed = session_transition.apply_and_refresh(*frontend.frontend(), committed_session_id);
 
   auto history_probe = ava::tui::ComposerDraftState{};
   auto history_probe_index = std::optional<std::size_t>{};
@@ -289,9 +291,7 @@ bool test_changed_session_snapshot_resets_presentation()
   presentation.sidebar.activity = {{.id = "activity-new", .label = "tool", .detail = "new activity"}};
   auto const unchanged_generation = presentation.snapshot.transcript_generation;
   frontend.seed_committed_todos({{.id = "todo-same", .content = "same-session todo"}});
-  auto unchanged =
-      ava::tui::apply_committed_session_transition_and_refresh(*frontend.frontend(), presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                               active_select_list, frontend.frontend()->read_committed_session_id());
+  auto unchanged = session_transition.apply_and_refresh(*frontend.frontend(), frontend.frontend()->read_committed_session_id());
   auto const unchanged_state_ok = !unchanged && presentation.snapshot.transcript_generation == unchanged_generation &&
                                   presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().text == "new receipt only" &&
                                   presentation.snapshot.queued_messages.size() == 1 && presentation.sidebar.activity.size() == 1 &&
@@ -309,8 +309,7 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const second_replaced = frontend.replace_session_identity();
   auto const final_identity = frontend.frontend()->read_committed_session_id();
   static_cast<void>(frontend.session_id_metadata());
-  auto const transitioned = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                         active_select_list, final_identity);
+  auto const transitioned = session_transition.apply(final_identity);
   bool const rapid_replacements_ok = first_replaced && second_replaced && intermediate_identity != final_identity && transitioned &&
                                      presentation.snapshot.session_id == final_identity && presentation.snapshot.input.empty() &&
                                      presentation.pending_image_attachments.empty() && presentation.snapshot.transcript_generation == before_replacements + 1;
@@ -322,8 +321,7 @@ bool test_changed_session_snapshot_resets_presentation()
   auto const before_round_trip = presentation.snapshot.transcript_generation;
   frontend.set_session_identity_metadata("intermediate-session");
   frontend.set_session_identity_metadata(final_identity);
-  auto const round_trip_transition = ava::tui::apply_committed_session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                                                  active_select_list, frontend.frontend()->read_committed_session_id());
+  auto const round_trip_transition = session_transition.apply(frontend.frontend()->read_committed_session_id());
   bool const identity_round_trip_ok = !round_trip_transition && presentation.snapshot.session_id == final_identity &&
                                       presentation.snapshot.input == "same-identity draft" && presentation.snapshot.transcript_generation == before_round_trip;
   expect(identity_round_trip_ok, "identity A-to-B-to-A before one boundary preserves the A-bound presentation without a reset");
@@ -423,15 +421,16 @@ bool test_active_run_session_transition_discards_prior_session_events()
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
-  std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
+  ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
+                                             ava::core::Application::instance().terminal_context());
   ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer);
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings());
   ava::tui::RuntimePluginUiCoordinator plugin_ui;
-  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
-                                                      session_archive_confirmation);
+  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
+  ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list);
   ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
-                                                  navigation, action_controller, transcript_search, subagent_workspace);
+                                                  navigation, action_controller, transcript_search, subagent_workspace, session_transition);
 
   auto const outcome = active_run.run("OLD SUBMITTED PROMPT");
   auto const committed_session_id = frontend.frontend()->read_committed_session_id();
@@ -1118,9 +1117,9 @@ bool test_display_settings_reload_poll_outcome_and_preview_staging()
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
-  std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
-  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
-                                                      session_archive_confirmation);
+  ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
+                                             ava::core::Application::instance().terminal_context());
+  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector);
 
   using ava::tui::runtime_views::DisplayPresentationBaseline;
   using ava::tui::runtime_views::DisplayPreviewTransaction;
@@ -1215,9 +1214,9 @@ bool test_display_settings_reload_rebuilds_open_startup_overview()
   ava::tui::RuntimeDraftState draft_state;
   ava::tui::RuntimeRenderer renderer(frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
-  std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
-  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
-                                                      session_archive_confirmation);
+  ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
+                                             ava::core::Application::instance().terminal_context());
+  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector);
 
   bool const no_read_during_snapshot_apply = !presentation.snapshot.startup_overview;
   bool const opened = action_controller.toggle_startup_overview();
@@ -1393,18 +1392,20 @@ bool test_reload_submit_routes_backend_targets_and_keeps_local_hot_reload()
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
   ava::tui::SelectorHost active_select_list(presentation.snapshot);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_select_list);
-  std::optional<ava::tui::PendingSessionArchiveAction> session_archive_confirmation;
+  ava::tui::SessionSelector session_selector(*frontend.frontend(), presentation, active_select_list, renderer,
+                                             ava::core::Application::instance().terminal_context());
   ava::tui::RuntimePromptCoordinator prompt_coordinator(*frontend.frontend(), presentation.snapshot, presentation.command_session_grants, renderer);
   ava::tui::RuntimePromptStashController prompt_stash(presentation, draft_state, renderer, active_select_list, frontend.frontend()->key_bindings());
   ava::tui::RuntimePluginUiCoordinator plugin_ui;
-  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list,
-                                                      session_archive_confirmation);
+  ava::tui::RuntimeActionController action_controller(*frontend.frontend(), presentation, draft_state, renderer, active_select_list, session_selector);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_select_list);
+  ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_select_list);
   ava::tui::RuntimeActiveRunController active_run(*frontend.frontend(), presentation, draft_state, renderer, prompt_coordinator, prompt_stash, plugin_ui,
-                                                  navigation, action_controller, transcript_search, subagent_workspace);
+                                                  navigation, action_controller, transcript_search, subagent_workspace, session_transition);
   ava::tui::SettingsDialog settings_dialog(*frontend.frontend(), presentation, active_select_list, ava::core::Application::instance().terminal_context());
   ava::tui::RuntimeSubmitController submit_controller(*frontend.frontend(), presentation, draft_state, renderer, navigation, action_controller, active_run,
-                                                      prompt_stash, transcript_search, subagent_workspace, active_select_list, settings_dialog);
+                                                      prompt_stash, transcript_search, subagent_workspace, active_select_list, settings_dialog,
+                                                      session_selector);
 
   auto continued = [](ava::tui::RuntimeSubmitOutcome const& outcome) {
     return outcome.disposition == ava::tui::RuntimeSubmitDisposition::ContinueLoop && !outcome.terminal_write_failed;
@@ -4285,8 +4286,8 @@ void run_tui_composer_rendering_tests_part_4()
       ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
       ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active);
       ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active);
-      auto const session_changed = ava::tui::apply_committed_session_transition_and_refresh(
-          *frontend.frontend(), presentation, draft_state, renderer, transcript_search, subagent_workspace, active, "session_overview_other");
+      ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active);
+      auto const session_changed = session_transition.apply_and_refresh(*frontend.frontend(), "session_overview_other");
       expect(session_changed && active.kind() == ava::tui::ActiveSelectList::None && !presentation.snapshot.select_list,
              "session transition closes an open startup overview through the shared presentation path");
     }

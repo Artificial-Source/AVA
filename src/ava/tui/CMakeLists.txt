@@ -53,6 +53,8 @@ add_library(ava_tui
   "TuiSession.cpp"
   "SelectorHost.cpp"
   "SettingsDialog.cpp"
+  "SessionSelector.cpp"
+  "SessionTransitionCoordinator.cpp"
 )
 
 target_link_libraries(ava_tui

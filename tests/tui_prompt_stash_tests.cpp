@@ -2,6 +2,7 @@
 #include "tests/support/test_harness.h"
 #include "tests/support/tui_test_support.h"
 #include "ava/tui/SelectorHost.h"
+#include "ava/tui/SessionTransitionCoordinator.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/composer_editor.h"
 #include "ava/tui/prompt_stash_internal.h"
@@ -149,6 +150,7 @@ void test_prompt_stash_runtime_controller()
   ava::tui::RuntimeNavigationController navigation(*frontend.frontend(), presentation.snapshot, presentation.sidebar, draft_state, renderer);
   ava::tui::TranscriptSearchController transcript_search(presentation, renderer, navigation, active_list);
   ava::tui::RuntimeSubagentWorkspaceController subagent_workspace(*frontend.frontend(), presentation.snapshot, active_list);
+  ava::tui::SessionTransitionCoordinator session_transition(presentation, draft_state, renderer, transcript_search, subagent_workspace, active_list);
   auto const transcript_unchanged = [&]() {
     return presentation.snapshot.transcript.size() == 1 && presentation.snapshot.transcript.front().label == "ava" &&
            presentation.snapshot.transcript.front().text == "backend transcript stays unchanged";
@@ -188,9 +190,7 @@ void test_prompt_stash_runtime_controller()
 
   ava::tui::reset_composer_draft(draft_state.draft);
   auto const backend_session_replaced = frontend.replace_session_identity();
-  auto const session_changed =
-      ava::tui::apply_committed_session_transition_and_refresh(*frontend.frontend(), presentation, draft_state, renderer, transcript_search, subagent_workspace,
-                                                               active_list, frontend.frontend()->read_committed_session_id());
+  auto const session_changed = session_transition.apply_and_refresh(*frontend.frontend(), frontend.frontend()->read_committed_session_id());
   expect(backend_session_replaced && session_changed && controller.stash().size() == 1 && controller.pop_latest() &&
              draft_state.draft.text == "newest selector draft" && backend_submit_calls == 0 && presentation.snapshot.status == "stashed prompt restored",
          "prompt stash survives a committed session transition in one runtime process, restores LIFO, and never dispatches backend work");

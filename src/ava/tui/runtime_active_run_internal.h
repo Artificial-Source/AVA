@@ -25,6 +25,7 @@ class RuntimePromptStashController;
 class RuntimePluginUiCoordinator;
 class RuntimeRenderer;
 class RuntimeSubagentWorkspaceController;
+class SessionTransitionCoordinator;
 class TranscriptSearchController;
 enum class TuiAction;
 struct InputEvent;
@@ -118,10 +119,10 @@ struct RuntimeActiveRunOutcome
 class RuntimeActiveRunController final
 {
  public:
-  RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
-                             RuntimeRenderer& renderer, RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash,
-                             RuntimePluginUiCoordinator& plugin_ui, RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
-                             TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
+  RuntimeActiveRunController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
+                             RuntimePromptCoordinator& prompt_coordinator, RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
+                             RuntimeNavigationController& navigation, RuntimeActionController& action_controller, TranscriptSearchController& transcript_search,
+                             RuntimeSubagentWorkspaceController& subagent_workspace, SessionTransitionCoordinator& transitions,
                              std::function<bool()> service_mermaid_presentation = {});
   RuntimeActiveRunController(RuntimeActiveRunController const&) = delete;
   RuntimeActiveRunController& operator=(RuntimeActiveRunController const&) = delete;
@@ -177,6 +178,7 @@ class RuntimeActiveRunController final
   RuntimeActionController& action_controller_;
   TranscriptSearchController& transcript_search_;
   RuntimeSubagentWorkspaceController& subagent_workspace_;
+  SessionTransitionCoordinator& transitions_;
   std::function<bool()> service_mermaid_presentation_;
 
   AVA_DEBUG_PRINT_MEMBERS_OPT_OUT

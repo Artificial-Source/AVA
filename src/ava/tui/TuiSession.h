@@ -1,6 +1,8 @@
 #pragma once
 
 #include "SelectorHost.h"
+#include "SessionSelector.h"
+#include "SessionTransitionCoordinator.h"
 #include "SettingsDialog.h"
 #include "prompt_stash_internal.h"
 #include "runtime_actions_internal.h"
@@ -51,7 +53,6 @@ class TuiSession final
   bool maybe_reload_display_settings();
   bool toggle_startup_overview();
   RuntimeSubmitDisposition handle_submit(std::optional<std::string> forced_submission = std::nullopt);
-  void preserve_session_selector_state(SelectListInputResult const& input_result, SelectListView next_view, std::string status);
   void settle_opened_session(std::string status);
   bool synchronize_committed_session();
   void select_slash_command();
@@ -74,6 +75,7 @@ class TuiSession final
   RuntimeNavigationController navigation_;
   SelectorHost selectors_;
   SettingsDialog settings_;
+  SessionSelector session_selector_;
   RuntimePromptStashController prompt_stash_;
 
   // Temporary branch-summary ownership, extracted in 04/04.
@@ -86,11 +88,11 @@ class TuiSession final
   std::string branch_summary_selected_source_value_;
   bool branch_summary_exit_ready_ = false;
   TranscriptSearchController transcript_search_;
-  std::optional<PendingSessionArchiveAction> session_archive_confirmation_;
   RuntimePromptCoordinator prompt_coordinator_;
   RuntimeMermaidPresentationController mermaid_presentation_;
   RuntimeActionController action_controller_;
   RuntimeSubagentWorkspaceController subagent_workspace_;
+  SessionTransitionCoordinator session_transitions_;
   RuntimeActiveRunController active_run_controller_;
   RuntimeSubmitController submit_controller_;
 };

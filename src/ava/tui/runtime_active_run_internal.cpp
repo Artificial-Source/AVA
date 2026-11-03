@@ -1,4 +1,5 @@
 #include "sys.h"
+#include "SessionTransitionCoordinator.h"
 #include "ava/agent/question.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
@@ -312,7 +313,7 @@ RuntimeActiveRunController::RuntimeActiveRunController(TuiFrontEnd& frontend, Ru
                                                        RuntimePromptStashController& prompt_stash, RuntimePluginUiCoordinator& plugin_ui,
                                                        RuntimeNavigationController& navigation, RuntimeActionController& action_controller,
                                                        TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                                       std::function<bool()> service_mermaid_presentation)
+                                                       SessionTransitionCoordinator& transitions, std::function<bool()> service_mermaid_presentation)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
@@ -324,6 +325,7 @@ RuntimeActiveRunController::RuntimeActiveRunController(TuiFrontEnd& frontend, Ru
       action_controller_(action_controller),
       transcript_search_(transcript_search),
       subagent_workspace_(subagent_workspace),
+      transitions_(transitions),
       service_mermaid_presentation_(service_mermaid_presentation ? std::move(service_mermaid_presentation) : std::function<bool()>{[] { return true; }})
 {
 }
@@ -873,8 +875,7 @@ RuntimeActiveRunOutcome RuntimeActiveRunController::run(std::string submitted_va
     auto boundary_reads = result.quit ? RuntimePresentationState::BoundaryReads{} : RuntimePresentationState::read_boundary_data(frontend_);
     {
       std::lock_guard<std::recursive_mutex> lock(ui_mutex);
-      session_changed = apply_committed_session_transition(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_,
-                                                           action_controller_.selectors(), std::move(committed_session_id));
+      session_changed = transitions_.apply(std::move(committed_session_id));
       if (!result.quit)
         presentation_state_.apply_boundary_data(frontend_, std::move(boundary_reads));
     }

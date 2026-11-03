@@ -4,11 +4,7 @@
 #include "ava/tui/command_completions.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/runtime.h"
-#include "ava/tui/runtime_draft_internal.h"
-#include "ava/tui/runtime_render_internal.h"
 #include "ava/tui/runtime_state_internal.h"
-#include "ava/tui/runtime_subagent_workspace_internal.h"
-#include "ava/tui/runtime_transcript_search_internal.h"
 #include "ava/tui/runtime_views_internal.h"
 #include "ava/tui/theme.h"
 
@@ -274,68 +270,52 @@ void synchronize_startup_overview_presentation(ComposerSnapshot& snapshot, Selec
   selectors.replace(std::move(view));
 }
 
-bool apply_committed_session_transition(RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state, RuntimeRenderer& renderer,
-                                        TranscriptSearchController& transcript_search, RuntimeSubagentWorkspaceController& subagent_workspace,
-                                        SelectorHost& selectors, std::string committed_session_id)
+bool RuntimePresentationState::prepare_session_transition(std::string const& committed_session_id)
 {
-  auto& snapshot = presentation_state.snapshot;
-  auto& sidebar = presentation_state.sidebar;
-  auto const session_changed = snapshot.session_id != committed_session_id;
-  if (session_changed)
-  {
-    static_cast<void>(presentation_state.command_session_grants.clear_for_session_transition(snapshot.session_id, committed_session_id));
-    presentation_state.pending_image_attachments.clear();
-    snapshot.pending_attachments.clear();
-    transcript_search.reset_for_session_transition();
-    subagent_workspace.reset_for_session_transition();
-    draft_state.reset_for_session_transition();
-    renderer.reset_for_session_transition();
-
-    snapshot.transcript.clear();
-    ++snapshot.transcript_generation;
-    snapshot.command_output.reset();
-    snapshot.tool_index.clear();
-    snapshot.evicted_tool_index_identities.clear();
-    snapshot.next_tool_index_sequence = 0;
-    snapshot.queued_messages.clear();
-    snapshot.permission_prompt.reset();
-    snapshot.question_prompt.reset();
-    snapshot.sidebar.reset();
-    snapshot.sidebar_drawer_visible = false;
-    snapshot.sidebar_drawer_scroll_offset = 0;
-    snapshot.input.clear();
-    snapshot.input_cursor = 0;
-    snapshot.input_selection_start = std::string::npos;
-    snapshot.input_selection_end = std::string::npos;
-    snapshot.selected_slash_command_index = 0;
-    snapshot.slash_palette_suppressed = false;
-    snapshot.path_completion_force_active = false;
-    snapshot.draft_scroll_offset = 0;
-    snapshot.reasoning_feedback.reset();
-    snapshot.local_command_feedback.reset();
-    // Expanded overview is process-local presentation; close on session switch.
-    close_startup_overview_presentation(snapshot, selectors);
-    selectors.close();
-
-    sidebar.activity.clear();
-    sidebar.modified_files.clear();
-    sidebar.todos.clear();
-    sidebar.session_entry_count.reset();
-    snapshot.session_id = std::move(committed_session_id);
-  }
-
-  return session_changed;
+  if (snapshot.session_id == committed_session_id)
+    return false;
+  static_cast<void>(command_session_grants.clear_for_session_transition(snapshot.session_id, committed_session_id));
+  pending_image_attachments.clear();
+  snapshot.pending_attachments.clear();
+  return true;
 }
 
-bool apply_committed_session_transition_and_refresh(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
-                                                    RuntimeRenderer& renderer, TranscriptSearchController& transcript_search,
-                                                    RuntimeSubagentWorkspaceController& subagent_workspace, SelectorHost& selectors,
-                                                    std::string committed_session_id)
+void RuntimePresentationState::reset_session_projection(bool close_overview)
 {
-  auto const session_changed = apply_committed_session_transition(presentation_state, draft_state, renderer, transcript_search, subagent_workspace, selectors,
-                                                                  std::move(committed_session_id));
-  presentation_state.refresh_after_backend_action(frontend);
-  return session_changed;
+  snapshot.transcript.clear();
+  ++snapshot.transcript_generation;
+  snapshot.command_output.reset();
+  snapshot.tool_index.clear();
+  snapshot.evicted_tool_index_identities.clear();
+  snapshot.next_tool_index_sequence = 0;
+  snapshot.queued_messages.clear();
+  snapshot.permission_prompt.reset();
+  snapshot.question_prompt.reset();
+  snapshot.sidebar.reset();
+  snapshot.sidebar_drawer_visible = false;
+  snapshot.sidebar_drawer_scroll_offset = 0;
+  snapshot.input.clear();
+  snapshot.input_cursor = 0;
+  snapshot.input_selection_start = std::string::npos;
+  snapshot.input_selection_end = std::string::npos;
+  snapshot.selected_slash_command_index = 0;
+  snapshot.slash_palette_suppressed = false;
+  snapshot.path_completion_force_active = false;
+  snapshot.draft_scroll_offset = 0;
+  snapshot.reasoning_feedback.reset();
+  snapshot.local_command_feedback.reset();
+  // Expanded overview is process-local presentation; close on session switch.
+  if (close_overview)
+    snapshot.startup_overview.reset();
+}
+
+void RuntimePresentationState::finish_session_transition(std::string committed_session_id)
+{
+  sidebar.activity.clear();
+  sidebar.modified_files.clear();
+  sidebar.todos.clear();
+  sidebar.session_entry_count.reset();
+  snapshot.session_id = std::move(committed_session_id);
 }
 
 }  // namespace ava::tui

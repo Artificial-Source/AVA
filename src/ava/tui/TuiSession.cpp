@@ -40,16 +40,19 @@ TuiSession::TuiSession(TuiFrontEnd& frontend, terminal::Context& terminal_contex
       navigation_(frontend, presentation_state_.snapshot, presentation_state_.sidebar, draft_state_, renderer_),
       selectors_(presentation_state_.snapshot),
       settings_(frontend, presentation_state_, selectors_, terminal_context),
+      session_selector_(frontend, presentation_state_, selectors_, renderer_, terminal_context),
       prompt_stash_(presentation_state_, draft_state_, renderer_, selectors_, frontend.key_bindings()),
       transcript_search_(presentation_state_, renderer_, navigation_, selectors_),
       prompt_coordinator_(frontend, presentation_state_.snapshot, presentation_state_.command_session_grants, renderer_, &selectors_),
       mermaid_presentation_(frontend.mermaid_bridge()),
-      action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_archive_confirmation_),
+      action_controller_(frontend, presentation_state_, draft_state_, renderer_, selectors_, session_selector_),
       subagent_workspace_(frontend, presentation_state_.snapshot, selectors_),
+      session_transitions_(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_),
       active_run_controller_(frontend, presentation_state_, draft_state_, renderer_, prompt_coordinator_, prompt_stash_, plugin_ui_, navigation_,
-                             action_controller_, transcript_search_, subagent_workspace_, std::bind_front(&TuiSession::service_mermaid_presentation, this)),
+                             action_controller_, transcript_search_, subagent_workspace_, session_transitions_,
+                             std::bind_front(&TuiSession::service_mermaid_presentation, this)),
       submit_controller_(frontend, presentation_state_, draft_state_, renderer_, navigation_, action_controller_, active_run_controller_, prompt_stash_,
-                         transcript_search_, subagent_workspace_, selectors_, settings_)
+                         transcript_search_, subagent_workspace_, selectors_, settings_, session_selector_)
 {
 }
 
@@ -259,18 +262,10 @@ RuntimeSubmitDisposition TuiSession::handle_submit(std::optional<std::string> fo
   return outcome.disposition;
 }
 
-void TuiSession::preserve_session_selector_state(SelectListInputResult const& input_result, SelectListView next_view, std::string status)
-{
-  session_archive_confirmation_.reset();
-  selectors_.replace_preserving_selection(std::move(next_view), input_result.selected_item_index, input_result.query);
-  presentation_state_.snapshot.status = std::move(status);
-}
-
 void TuiSession::settle_opened_session(std::string status)
 {
   auto committed_session_id = frontend_.read_committed_session_id();
-  static_cast<void>(apply_committed_session_transition_and_refresh(frontend_, presentation_state_, draft_state_, renderer_, transcript_search_,
-                                                                   subagent_workspace_, selectors_, std::move(committed_session_id)));
+  static_cast<void>(session_transitions_.apply_and_refresh(frontend_, std::move(committed_session_id)));
   if (!status.empty())
     settle_local_command_status(presentation_state_.snapshot, std::move(status));
 }
@@ -278,8 +273,7 @@ void TuiSession::settle_opened_session(std::string status)
 bool TuiSession::synchronize_committed_session()
 {
   auto const committed_session_id = frontend_.read_committed_session_id();
-  return apply_committed_session_transition(presentation_state_, draft_state_, renderer_, transcript_search_, subagent_workspace_, selectors_,
-                                            std::move(committed_session_id));
+  return session_transitions_.apply(std::move(committed_session_id));
 }
 
 void TuiSession::select_slash_command()
@@ -684,11 +678,13 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
     if (selectors_.view())
     {
       settings_.synchronize_selector();
+      if (selectors_.kind() != ActiveSelectList::Session)
+        session_selector_.cancel_confirmation();
 
       auto input_result = classify_selector_input(input);
       if (input_result.action == SelectListInputAction::Redraw && selectors_.view())
       {
-        session_archive_confirmation_.reset();
+        session_selector_.cancel_confirmation();
         if (selectors_.kind() == ActiveSelectList::Settings)
           settings_.highlight(input_result.selected_item_index, std::move(input_result.query));
         else
@@ -749,7 +745,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
           auto updated = frontend_.on_scoped_model_toggled(*selectors_.view(), selected_item->value);
           if (updated)
           {
-            preserve_session_selector_state(input_result, std::move(*updated), "scoped model toggled");
+            selectors_.replace_preserving_selection(std::move(*updated), input_result.selected_item_index, input_result.query);
+            presentation_state_.snapshot.status = "scoped model toggled";
           }
           else
           {
@@ -763,7 +760,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
         auto updated = frontend_.on_scoped_model_enable_all(*selectors_.view(), selectors_.visible_values(input_result.query));
         if (updated)
         {
-          preserve_session_selector_state(input_result, std::move(*updated), "scoped models enabled");
+          selectors_.replace_preserving_selection(std::move(*updated), input_result.selected_item_index, input_result.query);
+          presentation_state_.snapshot.status = "scoped models enabled";
         }
         else
         {
@@ -776,7 +774,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
         auto updated = frontend_.on_scoped_model_clear_all(*selectors_.view(), selectors_.visible_values(input_result.query));
         if (updated)
         {
-          preserve_session_selector_state(input_result, std::move(*updated), "scoped models cleared");
+          selectors_.replace_preserving_selection(std::move(*updated), input_result.selected_item_index, input_result.query);
+          presentation_state_.snapshot.status = "scoped models cleared";
         }
         else
         {
@@ -797,7 +796,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
           auto updated = frontend_.on_scoped_model_toggle_provider(*selectors_.view(), selected_item->value);
           if (updated)
           {
-            preserve_session_selector_state(input_result, std::move(*updated), "scoped provider toggled");
+            selectors_.replace_preserving_selection(std::move(*updated), input_result.selected_item_index, input_result.query);
+            presentation_state_.snapshot.status = "scoped provider toggled";
           }
           else
           {
@@ -821,7 +821,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
               frontend_.on_scoped_model_reorder(*selectors_.view(), selected_item->value, input_result.action == SelectListInputAction::ModelsReorderUp);
           if (updated)
           {
-            preserve_session_selector_state(input_result, std::move(*updated), "scoped model order updated");
+            selectors_.replace_preserving_selection(std::move(*updated), input_result.selected_item_index, input_result.query);
+            presentation_state_.snapshot.status = "scoped model order updated";
           }
           else
           {
@@ -845,7 +846,7 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
       }
       else if (input_result.action == SelectListInputAction::SummarizeParent && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
       {
-        session_archive_confirmation_.reset();
+        session_selector_.cancel_confirmation();
         if (input_result.selected_item_index >= selectors_.view()->items.size() || !selectors_.view()->items[input_result.selected_item_index].enabled ||
             selectors_.view()->items[input_result.selected_item_index].value.empty())
         {
@@ -865,146 +866,54 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
           }
         }
       }
-      else if (input_result.action == SelectListInputAction::CycleSort && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
+      else if (selectors_.kind() == ActiveSelectList::Session &&
+               (input_result.action == SelectListInputAction::CycleSort || input_result.action == SelectListInputAction::ToggleNamedFilter ||
+                input_result.action == SelectListInputAction::TogglePathDisplay || input_result.action == SelectListInputAction::ToggleArchivedFilter ||
+                input_result.action == SelectListInputAction::ToggleLabelTimestamp))
       {
-        preserve_session_selector_state(input_result, frontend_.on_session_selector_sort_cycle(), "session selector sort cycled");
+        session_selector_.browse(input_result);
       }
-      else if (input_result.action == SelectListInputAction::ToggleNamedFilter && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
+      else if (selectors_.kind() == ActiveSelectList::Session &&
+               (input_result.action == SelectListInputAction::Rename || input_result.action == SelectListInputAction::Label))
       {
-        preserve_session_selector_state(input_result, frontend_.on_session_selector_named_filter_toggle(), "session selector filter toggled");
-      }
-      else if (input_result.action == SelectListInputAction::TogglePathDisplay && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
-      {
-        preserve_session_selector_state(input_result, frontend_.on_session_selector_path_display_toggle(), "session selector path display toggled");
-      }
-      else if (input_result.action == SelectListInputAction::ToggleArchivedFilter && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
-      {
-        preserve_session_selector_state(input_result, frontend_.on_session_selector_archived_filter_toggle(), "session selector archived filter toggled");
-      }
-      else if (input_result.action == SelectListInputAction::ToggleLabelTimestamp && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
-      {
-        preserve_session_selector_state(input_result, frontend_.on_session_selector_label_timestamp_toggle(), "session selector label timestamps toggled");
-      }
-      else if (input_result.action == SelectListInputAction::Rename && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
-      {
-        if (input_result.selected_item_index < selectors_.view()->items.size() && selectors_.view()->items[input_result.selected_item_index].enabled &&
-            !selectors_.view()->items[input_result.selected_item_index].value.empty())
+        if (auto command = session_selector_.draft_command(input_result))
         {
-          auto const selected_value = selectors_.view()->items[input_result.selected_item_index].value;
-          selectors_.close();
-          auto draft_text = "/sessions rename " + selected_value + " ";
           draft_state_.clear_selection();
-          static_cast<void>(replace_composer_draft(draft_state_.draft, std::move(draft_text)));
+          static_cast<void>(replace_composer_draft(draft_state_.draft, std::move(*command)));
           draft_state_.draft_input.clear();
           draft_state_.history_index.reset();
           draft_state_.draft_scroll_offset = 0;
-          presentation_state_.snapshot.status = "session rename draft ready";
-        }
-        else
-        {
-          presentation_state_.snapshot.status = "session cannot be renamed from this row";
-          terminal_context_.beep();
-        }
-      }
-      else if (input_result.action == SelectListInputAction::Label && selectors_.kind() == ActiveSelectList::Session && selectors_.view())
-      {
-        if (input_result.selected_item_index < selectors_.view()->items.size() && selectors_.view()->items[input_result.selected_item_index].enabled &&
-            !selectors_.view()->items[input_result.selected_item_index].value.empty())
-        {
-          auto const selected_value = selectors_.view()->items[input_result.selected_item_index].value;
-          selectors_.close();
-          auto draft_text = "/sessions labels " + selected_value + " ";
-          draft_state_.clear_selection();
-          static_cast<void>(replace_composer_draft(draft_state_.draft, std::move(draft_text)));
-          draft_state_.draft_input.clear();
-          draft_state_.history_index.reset();
-          draft_state_.draft_scroll_offset = 0;
-          presentation_state_.snapshot.status = "session labels draft ready";
-        }
-        else
-        {
-          presentation_state_.snapshot.status = "session cannot be labeled from this row";
-          terminal_context_.beep();
         }
       }
       else if ((input_result.action == SelectListInputAction::BranchParent || input_result.action == SelectListInputAction::BranchChild) &&
-               selectors_.kind() == ActiveSelectList::Session && selectors_.view())
+               selectors_.kind() == ActiveSelectList::Session)
       {
-        session_archive_confirmation_.reset();
-        auto const* selected_item = selectors_.selected_item(input_result.selected_item_index);
-        if (!selected_item || !selected_item->enabled || selected_item->value.empty())
+        if (auto opened = session_selector_.navigate_branch(input_result))
         {
-          presentation_state_.snapshot.status = "session branch navigation unavailable from this row";
-          terminal_context_.beep();
-        }
-        else
-        {
-          auto const selected_value = selected_item->value;
-          auto opened = dispatch_tui_selector_authority(
-              presentation_state_.snapshot, selectors_, "opening session…", std::bind_front(&RuntimeRenderer::render, &renderer_), [&]() {
-                return input_result.action == SelectListInputAction::BranchParent ? frontend_.on_session_selector_branch_parent(selected_value)
-                                                                                  : frontend_.on_session_selector_branch_child(selected_value);
-              });
-          if (opened)
-          {
-            selectors_.close();
-            settle_opened_session(std::move(*opened));
-          }
+          if (*opened)
+            settle_opened_session(std::move(**opened));
           else
           {
             static_cast<void>(synchronize_committed_session());
-            presentation_state_.snapshot.status = opened.error().format();
+            presentation_state_.snapshot.status = opened->error().format();
             terminal_context_.beep();
           }
         }
       }
       else if (input_result.action == SelectListInputAction::Archive || input_result.action == SelectListInputAction::ArchiveNoninvasive)
       {
-        bool const noninvasive_archive = input_result.action == SelectListInputAction::ArchiveNoninvasive;
-        auto const* selected_item = selectors_.selected_item(input_result.selected_item_index);
-        if (selectors_.kind() != ActiveSelectList::Session || !selectors_.view())
-        {
-          selectors_.close();
-          session_archive_confirmation_.reset();
-          presentation_state_.snapshot.status = "view canceled";
-        }
-        else if (!selected_item || !selected_item->enabled || selected_item->value.empty())
-        {
-          session_archive_confirmation_.reset();
-          presentation_state_.snapshot.status = "session cannot be archived or restored from this row";
-          terminal_context_.beep();
-        }
+        session_selector_.archive(input_result);
+      }
+      else if (input_result.action == SelectListInputAction::Resolve && selectors_.kind() == ActiveSelectList::Session)
+      {
+        auto opened = session_selector_.resolve(input_result);
+        if (opened)
+          settle_opened_session(std::move(*opened));
         else
         {
-          bool const archive = selected_item->badge != "archived";
-          if (archive && selected_item->current)
-          {
-            session_archive_confirmation_.reset();
-            presentation_state_.snapshot.status = "switch sessions before archiving the active session";
-            terminal_context_.beep();
-          }
-          else if (session_archive_confirmation_ && session_archive_confirmation_->session_id == selected_item->value &&
-                   session_archive_confirmation_->archive == archive)
-          {
-            auto updated =
-                archive ? frontend_.on_session_selector_archive(selected_item->value) : frontend_.on_session_selector_unarchive(selected_item->value);
-            session_archive_confirmation_.reset();
-            if (updated)
-            {
-              preserve_session_selector_state(input_result, std::move(*updated), archive ? "session archived" : "session restored");
-            }
-            else
-            {
-              presentation_state_.snapshot.status = updated.error().format();
-              terminal_context_.beep();
-            }
-          }
-          else
-          {
-            session_archive_confirmation_ = PendingSessionArchiveAction{.session_id = selected_item->value, .archive = archive};
-            presentation_state_.snapshot.status = std::string("press ") + (noninvasive_archive ? "Ctrl+Backspace" : "Ctrl+D") + " again to " +
-                                                  (archive ? "archive " : "restore ") + selected_item->value;
-          }
+          static_cast<void>(synchronize_committed_session());
+          presentation_state_.snapshot.status = opened.error().format();
+          terminal_context_.beep();
         }
       }
       else if (input_result.action == SelectListInputAction::Resolve || input_result.action == SelectListInputAction::Cancel)
@@ -1020,7 +929,7 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
         selectors_.close();
         if (resolved_list == ActiveSelectList::Overview)
           presentation_state_.snapshot.startup_overview.reset();
-        session_archive_confirmation_.reset();
+        session_selector_.cancel_confirmation();
         if (input_result.action == SelectListInputAction::Cancel)
         {
           presentation_state_.snapshot.status = resolved_list == ActiveSelectList::Reasoning ? "thinking mode unchanged" : "view canceled";
@@ -1071,22 +980,6 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
           }
           else
           {
-            presentation_state_.snapshot.status = selected.error().format();
-            terminal_context_.beep();
-          }
-        }
-        else if (resolved_list == ActiveSelectList::Session)
-        {
-          auto selected = dispatch_tui_selector_authority(presentation_state_.snapshot, selectors_, "opening session…",
-                                                          std::bind_front(&RuntimeRenderer::render, &renderer_),
-                                                          [&]() { return frontend_.on_session_selected(selected_value); });
-          if (selected)
-          {
-            settle_opened_session(std::move(*selected));
-          }
-          else
-          {
-            static_cast<void>(synchronize_committed_session());
             presentation_state_.snapshot.status = selected.error().format();
             terminal_context_.beep();
           }
@@ -1469,7 +1362,8 @@ int TuiSession::run(std::function<bool()> const& before_shutdown)
     else if (key_matches_action(frontend_.key_bindings(), TuiAction::SessionResume, event.key) ||
              key_matches_action(frontend_.key_bindings(), TuiAction::SessionTree, event.key))
     {
-      if (!action_controller_.open_session_selector())
+      draft_state_.pending_escape_clear = false;
+      if (!session_selector_.open())
       {
         terminal_write_failed_ = true;
         break;

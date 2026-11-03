@@ -1,5 +1,6 @@
 #include "sys.h"
 #include "SelectorHost.h"
+#include "SessionSelector.h"
 #include "ava/tui/TuiFrontEnd.h"
 #include "ava/tui/command_output.h"
 #include "ava/tui/composer.h"
@@ -90,14 +91,13 @@ std::optional<PendingAttachmentItem::Preview> attachment_preview(TuiFrontEnd con
 }  // namespace
 
 RuntimeActionController::RuntimeActionController(TuiFrontEnd& frontend, RuntimePresentationState& presentation_state, RuntimeDraftState& draft_state,
-                                                 RuntimeRenderer& renderer, SelectorHost& selectors,
-                                                 std::optional<PendingSessionArchiveAction>& session_archive_confirmation)
+                                                 RuntimeRenderer& renderer, SelectorHost& selectors, SessionSelector& session_selector)
     : frontend_(frontend),
       presentation_state_(presentation_state),
       draft_state_(draft_state),
       renderer_(renderer),
       selectors_(selectors),
-      session_archive_confirmation_(session_archive_confirmation),
+      session_selector_(session_selector),
       // First poll is eligible immediately; later polls stay rate-limited.
       next_display_reload_check_(std::chrono::steady_clock::time_point{})
 {
@@ -325,7 +325,7 @@ bool RuntimeActionController::open_model_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
-  session_archive_confirmation_.reset();
+  session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Model, frontend_.model_selector_view());
   snapshot.status = "model selector opened";
   renderer_.transcript_scroll_offset = 0;
@@ -346,7 +346,7 @@ bool RuntimeActionController::open_reasoning_selector(bool chained_from_model_se
     return true;
   }
   draft_state_.pending_escape_clear = false;
-  session_archive_confirmation_.reset();
+  session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::Reasoning, std::move(*view));
   snapshot.status = "thinking mode selector opened";
   renderer_.transcript_scroll_offset = 0;
@@ -357,20 +357,9 @@ bool RuntimeActionController::open_scoped_model_selector()
 {
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
-  session_archive_confirmation_.reset();
+  session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ScopedModels, frontend_.scoped_model_selector_view());
   snapshot.status = "scoped model selector opened";
-  renderer_.transcript_scroll_offset = 0;
-  return renderer_.request_render();
-}
-
-bool RuntimeActionController::open_session_selector()
-{
-  auto& snapshot = presentation_state_.snapshot;
-  draft_state_.pending_escape_clear = false;
-  session_archive_confirmation_.reset();
-  selectors_.open(ActiveSelectList::Session, frontend_.session_selector_view());
-  snapshot.status = "session selector opened";
   renderer_.transcript_scroll_offset = 0;
   return renderer_.request_render();
 }
@@ -379,7 +368,7 @@ bool RuntimeActionController::toggle_startup_overview()
 {
   auto& snapshot = presentation_state_.snapshot;
   draft_state_.pending_escape_clear = false;
-  session_archive_confirmation_.reset();
+  session_selector_.cancel_confirmation();
   if (selectors_.kind() == ActiveSelectList::Overview && selectors_.view())
   {
     selectors_.close();
@@ -410,7 +399,7 @@ bool RuntimeActionController::open_fork_user_turn_selector(std::string_view init
     return renderer_.request_render();
   }
   draft_state_.pending_escape_clear = false;
-  session_archive_confirmation_.reset();
+  session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::ForkUserTurn, std::move(*opened));
   snapshot.status = "fork-from selector opened";
   renderer_.transcript_scroll_offset = 0;
@@ -428,7 +417,7 @@ bool RuntimeActionController::open_copy_user_turn_selector(std::string_view init
     return renderer_.request_render();
   }
   draft_state_.pending_escape_clear = false;
-  session_archive_confirmation_.reset();
+  session_selector_.cancel_confirmation();
   selectors_.open(ActiveSelectList::CopyUserTurn, std::move(*opened));
   snapshot.status = "copy user-turn selector opened";
   renderer_.transcript_scroll_offset = 0;
